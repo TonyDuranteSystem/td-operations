@@ -9,6 +9,7 @@ import RenewalAgreement from './renewal-agreement'
 import ServiceAgreement from './service-agreement'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
+import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -193,6 +194,12 @@ export default function ContractPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [signing, setSigning] = useState(false)
+  // Blocking on a failed write makes RETRY a real path. The PDF-capture step
+  // below DESTRUCTIVELY rewrites the DOM (inputs -> spans, canvases -> imgs),
+  // so a second attempt found `canvas.parentElement` null and threw a raw
+  // TypeError onto a legal-signing screen. Freeze once; a retry reuses the
+  // already-frozen DOM, which captures identically.
+  const frozenForPdfRef = useRef(false)
   const [statusMsg, setStatusMsg] = useState('Complete all required fields and sign both sections above.')
   const [statusType, setStatusType] = useState<'info' | 'error' | 'success'>('info')
   const [ready, setReady] = useState(false)
@@ -442,6 +449,8 @@ export default function ContractPage() {
       // Dynamic import html2pdf
       const html2pdf = (await import('html2pdf.js')).default
 
+      if (!frozenForPdfRef.current) {
+        frozenForPdfRef.current = true
       // Freeze form fields for PDF
       const formEl = document.getElementById('client-form')
       if (formEl) {
@@ -468,6 +477,8 @@ export default function ContractPage() {
         wrap.innerHTML = `<img src="${dataUrl}" style="height:120px;display:block">`
       })
 
+      }
+
       // Hide action bar
       const actionBar = document.getElementById('action-bar')
       if (actionBar) actionBar.style.display = 'none'
@@ -492,11 +503,22 @@ export default function ContractPage() {
       // Upload PDF
       setStatusMsg('Uploading signed contract...')
       const pdfPath = `${offer.token}/contract-signed-${Date.now()}.pdf`
-      await fetch(`${SB_URL}/storage/v1/object/signed-contracts/${pdfPath}`, {
+      // The signed PDF must reach storage BEFORE the contract row is written.
+      // This POST used to be unchecked: a rejected upload (RLS, network, size)
+      // fell straight through to the insert, the "signed" status flip and the
+      // success screen, leaving TD with a signed offer and no signed document.
+      // Ordering invariant for this whole handler: artifact -> record -> status
+      // -> webhook, each one gating the next.
+      const pdfRes = await fetch(`${SB_URL}/storage/v1/object/signed-contracts/${pdfPath}`, {
         method: 'POST',
         headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': 'application/pdf' },
         body: pdfBlob
       })
+      if (storageWriteFailed(pdfRes)) {
+        // Detail goes to us, never to the client (see signing-failures.ts).
+        console.error('[contract] signed PDF upload failed:', pdfRes?.status, await pdfRes.text().catch(() => ''))
+        throw new SigningFailure('document_upload', signingLang(offer.language))
+      }
 
       // Save contract record — include business fields from offer
       // Derive LLC type: prefer offer.entity_type (canonical source since the
@@ -557,7 +579,18 @@ export default function ContractPage() {
         contract_year: contractYear,
         installments: annualFee > 0 ? JSON.stringify({ jan: installmentJan, jun: installmentJun }) : null,
       }
-      await supabasePublic.from('contracts').insert(contractData)
+      // supabase-js RETURNS errors, it does not throw — this insert used to
+      // discard the result entirely, so a rejected write still reached the
+      // status flip, the activation webhook and the success screen. A client
+      // could sign, pay by wire, and leave no contract row at all.
+      // NOTE: contracts.offer_token carries a plain index, NOT a unique
+      // constraint (verified against production 2026-07-20), so a legitimate
+      // re-sign inserts a second row rather than failing here.
+      const { error: contractErr } = await supabasePublic.from('contracts').insert(contractData)
+      if (contractErr) {
+        console.error('[contract] contract row insert failed:', contractErr.message)
+        throw new SigningFailure('record', signingLang(offer.language))
+      }
 
       // Recalculate correct amount from selected_services for bank_details
       const svcList = Array.isArray(offer.services) ? offer.services : []
@@ -587,11 +620,28 @@ export default function ContractPage() {
       const bankUpdate = correctTotal > 0 && offer.bank_details
         ? { bank_details: { ...offer.bank_details, amount: `${correctCurrency}${correctTotal.toLocaleString('en-US')}` } }
         : {}
+      // This loop used to exit NORMALLY when all three attempts failed, which is
+      // worse than an unchecked call because it LOOKS like it handles errors:
+      // the client saw "signed", the offer stayed unsigned, and the activation
+      // webhook below fired anyway. Track success explicitly and stop if it
+      // never happened.
+      let statusUpdated = false
+      let lastStatusErr: string | null = null
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const { error: pErr } = await supabasePublic.from('offers').update({ status: 'signed', payment_links: null, ...bankUpdate }).eq('token', offer.token)
-          if (!pErr) break
-        } catch { /* retry */ }
+          if (!pErr) { statusUpdated = true; break }
+          lastStatusErr = pErr.message
+        } catch (e) { lastStatusErr = e instanceof Error ? e.message : String(e) }
+      }
+      if (!statusUpdated) {
+        // The signature IS saved at this point (PDF stored, contract row
+        // written), so the message must NOT tell the client it is unsigned —
+        // it asks them to contact us to confirm. The webhook below is skipped:
+        // firing it would create a pending activation for an offer we could not
+        // mark signed.
+        console.error('[contract] offer status update failed after 3 attempts:', lastStatusErr)
+        throw new SigningFailure('status', signingLang(offer.language))
       }
 
       // Notify backend that contract was signed → creates pending_activation
@@ -784,11 +834,16 @@ export default function ContractPage() {
       }
     } catch (e: any) {
       setSigning(false)
-      setStatusMsg('Error: ' + e.message + '. Please try again.')
+      // Our signing failures carry finished client copy (and say plainly that
+      // the document is NOT signed) — decorating them would produce a doubled
+      // "Please try again" on a legal-signing screen. Unknown errors keep the
+      // original wrapper.
+      setStatusMsg(isClientFacingError(e) ? e.message : 'Error: ' + e.message + '. Please try again.')
       setStatusType('error')
       // Re-show action bar
       const actionBar = document.getElementById('action-bar')
       if (actionBar) actionBar.style.display = 'block'
+      document.querySelectorAll('.contract-clear-btn').forEach(b => (b as HTMLElement).style.display = '')
     }
   }
 

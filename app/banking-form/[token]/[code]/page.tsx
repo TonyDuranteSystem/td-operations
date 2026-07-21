@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
+import { shouldBlockSubmission, uploadFailureMessage, uploadLang, type FailedUpload } from '@/lib/public-forms/upload-failures'
 import {
   LABELS,
   TOOLTIPS,
@@ -25,9 +26,6 @@ function setVerifiedCookie(token: string) {
   document.cookie = `${COOKIE_NAME}_${token}=1; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
 }
 
-function hasVerifiedCookie(token: string): boolean {
-  return document.cookie.includes(`${COOKIE_NAME}_${token}=1`)
-}
 
 // --- Date Helpers -----------------------------------------------------------
 
@@ -133,6 +131,11 @@ function BankingFormCodeContent() {
       setError('load_error')
       setLoading(false)
     }
+  // `searchParams` is read only for the ?preview=td admin flag. Adding it to the
+  // deps re-runs this loader whenever any query param changes, which would re-fire
+  // trackOpen() and double-count a client's view. Pre-existing warning; deliberately
+  // NOT changed inside the silent-write-failure fix.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, code])
 
   function trackOpen(sub: BankingSubmission) {
@@ -254,13 +257,40 @@ function BankingFormCodeContent() {
     try {
       // 1. Upload files
       const uploadPaths: string[] = []
+      // A file the client ATTACHED that did not reach storage. Collected so the
+      // submission can be blocked below — this used to be `if (!upErr) push`,
+      // which dropped the failure and then reported the form as completed.
+      const uploadFailures: FailedUpload[] = []
+      // Each submit attempt writes to its OWN folder. Blocking on a failed upload
+      // makes RETRY the expected path, and the previous fix (upsert) CANNOT work:
+      // production has NO update policy on storage at all, for any role — so an
+      // overwrite is refused and the client deadlocks on the file that already
+      // succeeded. A fresh folder per attempt needs no update permission,
+      // overwrites nothing, and keeps the Drive filename unchanged because the
+      // downstream copier takes only the LAST path segment.
+      // Cost, accepted: a failed attempt leaves its files behind as orphans.
+      const attemptId = `a${Date.now().toString(36)}`
       for (const [key, file] of Object.entries(uploadFiles)) {
         if (!file) continue
-        const path = `${submission.token}/${key}_${file.name}`
+        const path = `${submission.token}/${attemptId}/${key}_${file.name}`
         const { error: upErr } = await supabasePublic.storage
           .from('banking-uploads')
           .upload(path, file, { cacheControl: '3600', upsert: false })
-        if (!upErr) uploadPaths.push(path)
+        if (upErr) {
+          console.error(`[form] upload failed for ${key}:`, upErr.message)
+          uploadFailures.push({ key, fileName: file.name })
+        } else {
+          uploadPaths.push(path)
+        }
+      }
+
+      // Block ONLY when a file the client attached failed. Not when they chose
+      // to attach nothing — that is an ordinary business gap the review loop
+      // already handles. Their answers stay on screen; this costs one retry.
+      if (shouldBlockSubmission(uploadFailures)) {
+        setSubmitError(uploadFailureMessage(uploadFailures, uploadLang(lang)))
+        setSubmitting(false)
+        return
       }
 
       // 2. Build submitted data

@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
+import { shouldBlockSubmission, uploadFailureMessage, uploadLang, type FailedUpload } from '@/lib/public-forms/upload-failures'
 import {
   LABELS,
   TOOLTIPS,
@@ -249,23 +250,39 @@ export default function FormationFormPage() {
     try {
       // 1. Upload files
       const uploadPaths: string[] = []
-      const uploadErrors: string[] = []
+      const uploadFailures: FailedUpload[] = []
+      // Each submit attempt writes to its OWN folder. Blocking on a failed upload
+      // makes RETRY the expected path, and the previous fix (upsert) CANNOT work:
+      // production has NO update policy on storage at all, for any role — so an
+      // overwrite is refused and the client deadlocks on the file that already
+      // succeeded. A fresh folder per attempt needs no update permission,
+      // overwrites nothing, and keeps the Drive filename unchanged because the
+      // downstream copier takes only the LAST path segment.
+      // Cost, accepted: a failed attempt leaves its files behind as orphans.
+      const attemptId = `a${Date.now().toString(36)}`
       for (const [key, file] of Object.entries(uploadFiles)) {
         if (!file) continue
-        const path = `${submission.token}/${key}_${file.name}`
+        const path = `${submission.token}/${attemptId}/${key}_${file.name}`
         const { error: upErr } = await supabasePublic.storage
           .from('formation-uploads')
           .upload(path, file, { cacheControl: '3600', upsert: false })
         if (upErr) {
           console.error(`Upload failed for ${key}:`, upErr.message)
-          uploadErrors.push(`${file.name}: ${upErr.message}`)
+          uploadFailures.push({ key, fileName: file.name })
         } else {
           uploadPaths.push(path)
         }
       }
-      // Block submission if passport upload failed
-      if (uploadErrors.length > 0 && uploadPaths.length === 0) {
-        setSubmitError(lang === 'it' ? `Errore nel caricamento dei file: ${uploadErrors.join(', ')}. Riprova.` : `File upload failed: ${uploadErrors.join(', ')}. Please try again.`)
+      // Block whenever an ATTACHED file failed. This used to read
+      // `uploadErrors.length > 0 && uploadPaths.length === 0`, so a batch where
+      // ANY file succeeded went through as completed — a 2-of-3 passport upload
+      // filed with a passport missing, right after the code had validated that
+      // passport as mandatory. The `&&` defeated the validation.
+      if (shouldBlockSubmission(uploadFailures)) {
+        // Shared, client-safe copy: the old string pasted the RAW storage error
+        // onto a client-facing page and lacked the "your answers are safe" and
+        // support-email wording the other forms now use.
+        setSubmitError(uploadFailureMessage(uploadFailures, uploadLang(lang)))
         setSubmitting(false)
         return
       }

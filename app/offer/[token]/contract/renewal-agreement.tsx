@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { supabasePublic } from '@/lib/supabase/public-client'
+import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 import type { Offer } from '@/lib/types/offer'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
@@ -27,6 +28,11 @@ interface RenewalAgreementProps {
 
 export default function RenewalAgreement({ offer, token }: RenewalAgreementProps) {
   const [signing, setSigning] = useState(false)
+  // Blocking on a failed write makes RETRY a real path. The PDF-capture step
+  // DESTRUCTIVELY rewrites the DOM (inputs -> spans, canvases -> imgs), so a
+  // second attempt found `canvas.parentElement` null and threw a raw TypeError
+  // onto a legal-signing screen. Freeze once; a retry reuses the frozen DOM.
+  const frozenForPdfRef = useRef(false)
   const [signed, setSigned] = useState(false)
   const [statusMsg, setStatusMsg] = useState('Enter your name, email, and sign below.')
   const [statusType, setStatusType] = useState<'info' | 'error' | 'success'>('info')
@@ -123,6 +129,8 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
     try {
       const html2pdf = (await import('html2pdf.js')).default
 
+      if (!frozenForPdfRef.current) {
+        frozenForPdfRef.current = true
       // Freeze form fields
       const formEl = document.getElementById('renewal-client-form')
       if (formEl) {
@@ -138,6 +146,8 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
         const wrap = canvas.parentElement!
         const dataUrl = sigPadRef.current.toDataURL('image/png')
         wrap.innerHTML = `<img src="${dataUrl}" style="height:120px;display:block">`
+      }
+
       }
 
       // Generate PDF
@@ -156,14 +166,18 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
       // Upload PDF
       setStatusMsg('Uploading signed agreement...')
       const pdfPath = `${token}/annual-agreement-signed-${Date.now()}.pdf`
-      await fetch(`${SB_URL}/storage/v1/object/signed-contracts/${pdfPath}`, {
+      const pdfRes = await fetch(`${SB_URL}/storage/v1/object/signed-contracts/${pdfPath}`, {
         method: 'POST',
         headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': 'application/pdf' },
         body: pdfBlob
       })
+      if (storageWriteFailed(pdfRes)) {
+        console.error('[renewal-agreement] signed PDF upload failed:', pdfRes?.status, await pdfRes.text().catch(() => ''))
+        throw new SigningFailure('document_upload', signingLang(offer.language))
+      }
 
       // Save contract record
-      await supabasePublic.from('contracts').insert({
+      const { error: contractErr } = await supabasePublic.from('contracts').insert({
         offer_token: token,
         client_name: name,
         client_email: email,
@@ -171,16 +185,27 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
         pdf_path: pdfPath,
         status: 'signed',
       })
+      if (contractErr) {
+        console.error('[renewal-agreement] contract row insert failed:', contractErr.message)
+        throw new SigningFailure('record', signingLang(offer.language))
+      }
 
       // Update annual agreement status
+      let statusUpdated = false
+      let lastStatusErr: string | null = null
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const { error: pErr } = await supabasePublic
             .from('annual_agreements')
             .update({ status: 'signed', signed_at: new Date().toISOString() })
             .eq('token', token)
-          if (!pErr) break
-        } catch { /* retry */ }
+          if (!pErr) { statusUpdated = true; break }
+          lastStatusErr = pErr.message
+        } catch (e) { lastStatusErr = e instanceof Error ? e.message : String(e) }
+      }
+      if (!statusUpdated) {
+        console.error('[renewal-agreement] status update failed after 3 attempts:', lastStatusErr)
+        throw new SigningFailure('status', signingLang(offer.language))
       }
 
       // Notify webhook — read response to get invoice number
@@ -234,7 +259,7 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
 
     } catch (e: any) {
       setSigning(false)
-      setStatusMsg('Error: ' + e.message + '. Please try again.')
+      setStatusMsg(isClientFacingError(e) ? e.message : 'Error: ' + e.message + '. Please try again.')
       setStatusType('error')
     }
   }
