@@ -5,6 +5,7 @@ import { Bell, BellOff, Loader2, Send } from 'lucide-react'
 import { toast } from 'sonner'
 import { useLocale } from '@/lib/portal/use-locale'
 import { urlBase64ToUint8Array } from '@/lib/push/dashboard-push'
+import { PORTAL_SW_PATH, PORTAL_SW_SCOPE } from '@/lib/portal/sw-scope'
 
 interface PushToggleProps {
   accountId: string
@@ -30,7 +31,7 @@ export function PushToggle({ accountId, compact = false }: PushToggleProps) {
 
       // Check if already subscribed
       try {
-        const registration = await navigator.serviceWorker.getRegistration('/portal-sw.js')
+        const registration = await navigator.serviceWorker.getRegistration(PORTAL_SW_SCOPE)
         if (registration) {
           const sub = await registration.pushManager.getSubscription()
           setSubscribed(!!sub)
@@ -46,8 +47,14 @@ export function PushToggle({ accountId, compact = false }: PushToggleProps) {
   const handleEnable = async () => {
     setLoading(true)
     try {
-      // Register service worker
-      const registration = await navigator.serviceWorker.register('/portal-sw.js')
+      // Register service worker. The scope MUST match PORTAL_SW_SCOPE used by
+      // components/portal/portal-sw-register.tsx — registering without it defaults
+      // to scope '/', which created a SECOND registration that the update-banner
+      // machinery never polled and never sent SKIP_WAITING to (found by council
+      // review 2026-07-21, dev job 454514f5).
+      const registration = await navigator.serviceWorker.register(PORTAL_SW_PATH, {
+        scope: PORTAL_SW_SCOPE,
+      })
       await navigator.serviceWorker.ready
 
       // Get VAPID public key
@@ -94,7 +101,7 @@ export function PushToggle({ accountId, compact = false }: PushToggleProps) {
   const handleDisable = async () => {
     setLoading(true)
     try {
-      const registration = await navigator.serviceWorker.getRegistration('/portal-sw.js')
+      const registration = await navigator.serviceWorker.getRegistration(PORTAL_SW_SCOPE)
       if (registration) {
         const sub = await registration.pushManager.getSubscription()
         if (sub) {
