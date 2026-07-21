@@ -24,7 +24,7 @@ import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { explainFailure } from "@/lib/errors/explain-failure"
 import { emitUiEvent } from "@/lib/ui-events"
-import { resolveEntityScope } from "@/lib/tasks/entity-scope"
+import { resolveEntityScope } from "@/lib/todo-board/entity-scope"
 
 export const dynamic = "force-dynamic"
 

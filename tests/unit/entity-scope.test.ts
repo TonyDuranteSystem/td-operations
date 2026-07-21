@@ -5,7 +5,7 @@
  * returned every client's cards to the browser.
  */
 import { describe, it, expect } from "vitest"
-import { resolveEntityScope } from "@/lib/tasks/entity-scope"
+import { resolveEntityScope } from "@/lib/todo-board/entity-scope"
 
 const MSG = "11111111-1111-4111-8111-111111111111"
 const ACCT = "22222222-2222-4222-8222-222222222222"
