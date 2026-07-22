@@ -87,7 +87,16 @@ async function mkContact(name: string, email: string, accountId?: string): Promi
   return data.id
 }
 
-async function mkSd(fields: Record<string, unknown>): Promise<string> {
+interface SdFixture {
+  service_name: string
+  service_type: string
+  stage: string
+  stage_order: number
+  account_id: string | null
+  contact_id: string | null
+}
+
+async function mkSd(fields: SdFixture): Promise<string> {
   const { data, error } = await SUP.from("service_deliveries")
     .insert({ status: "active", notes: TAG, ...fields })
     .select("id")
