@@ -279,6 +279,15 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     // the inbox never goes minutes stale, but no longer the 30s churn that, with
     // full-replace, drove the flicker.
     refetchInterval: searchQuery ? false : 75_000,
+    // OPT-OUT of the global refetchOnWindowFocus (turned ON 2026-07-22 in
+    // components/providers.tsx). This list is the single most expensive query in
+    // the app — the default INBOX view still issues ~300 live Gmail metadata
+    // GETs per load, and a bulk action once starved the per-user Gmail quota and
+    // blanked the list. Refetching it every time Antonio tabs back would
+    // reintroduce exactly that. Liveness here already comes from the Gmail push
+    // subscription (debounced 2.5s in inbox-shell) plus the 75s poll above.
+    // Revisit only once this list reads from email_index instead of live Gmail.
+    refetchOnWindowFocus: false,
     // Never flash an empty pane while a refetch (or a mailbox/filter switch)
     // is in flight — keep showing the list we already have (Antonio
     // 2026-07-08: the list "disappeared" on actions/scroll under Gmail load).

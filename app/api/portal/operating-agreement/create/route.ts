@@ -20,6 +20,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
+import { hasCollectedSignatures } from '@/lib/portal/oa-regenerate-guard'
 import { APP_BASE_URL } from '@/lib/config'
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
@@ -135,17 +136,23 @@ export async function POST(request: NextRequest) {
   // ── 5. SILENTLY REPLACE UNSIGNED OA ──
   const { data: existingOAs } = await supabaseAdmin
     .from('oa_agreements')
-    .select('id, status')
+    .select('id, status, signed_count')
     .eq('account_id', account_id)
     .order('created_at', { ascending: false })
     .limit(1)
 
   if (existingOAs && existingOAs.length > 0) {
     const existing = existingOAs[0]
-    if (existing.status === 'signed') {
-      return NextResponse.json({ error: 'This company already has a signed Operating Agreement. Contact support if you need a new one.' }, { status: 409 })
+    // Refuse if ANY signature has already been collected — not just when the OA
+    // is fully signed. A multi-member OA stays 'partially_signed' until the LAST
+    // member signs, so the old `status === 'signed'` guard let a re-generate
+    // hard-delete executed member signatures with no soft-delete and no audit
+    // row (R100). Reported by the Council 2026-07-22; no client was exposed at
+    // the time, but making the nav entry always visible drives more traffic here.
+    if (hasCollectedSignatures(existing)) {
+      return NextResponse.json({ error: 'This Operating Agreement has already been signed, or is waiting on the remaining members to sign. Contact support if you need a new one.' }, { status: 409 })
     }
-    // Delete existing unsigned OA + signatures
+    // Delete existing unsigned OA + signatures (safe: nothing has been signed)
     await supabaseAdmin.from('oa_signatures').delete().eq('oa_id', existing.id)
     await supabaseAdmin.from('oa_agreements').delete().eq('id', existing.id)
   }
@@ -195,7 +202,15 @@ export async function POST(request: NextRequest) {
       registered_agent_address: account.registered_agent_address ?? null,
       principal_address: account.physical_address ?? '10225 Ulmerton Rd, Suite 3D, Largo, FL 33771',
       language: 'en',
-      status: 'draft',
+      // 'sent', NOT 'draft' — this route chats the signing link to every member
+      // in the SAME request (see the portal-message sends below), so the OA has
+      // demonstrably been sent. Filing it as 'draft' was a lie the rest of the
+      // system believed: /portal/sign hides drafts and the home Action Items
+      // exclude them, so the client was sent a link to a document that was
+      // invisible everywhere in their portal until they happened to click it
+      // (which flips it to 'viewed'). 'draft' still means "staff is drafting,
+      // not yet sent" on the MCP oa_create path — do not unify the two writers.
+      status: 'sent',
       total_signers: totalSigners,
       signed_count: 0,
     })

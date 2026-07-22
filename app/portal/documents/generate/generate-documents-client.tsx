@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { FileText, Shield, ArrowLeft, Download, PenLine, Loader2, CheckCircle2, History, ScrollText, Send, AlertTriangle, Check, X } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
 import DistributionResolutionTemplate from '@/components/portal/distribution-resolution-template'
@@ -122,6 +123,7 @@ function docTypeLabel(type: string, lang: string): string {
 export function GenerateDocumentsClient({ account, members, history: initialHistory, locale }: Props) {
   const { locale: ctxLocale } = useLocale()
   const lang = ctxLocale || locale || 'en'
+  const router = useRouter()
 
   const [stage, setStage] = useState<Stage>('selection')
   const [selectedType, setSelectedType] = useState<GeneratedDocumentType | null>(null)
@@ -341,6 +343,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   const handleCreateAndSend = async () => {
     setOaCreateStatus('sending')
     setOaCreateError(null)
+    let succeeded = false
     try {
       const memberAddresses = members.map((_, i) => oaMemberAddresses[i] || '')
       const res = await fetch('/api/portal/operating-agreement/create', {
@@ -357,10 +360,25 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
       setOaCreateStatus('sent')
       await saveToHistory('pending_signatures')
       setStage('done')
+      succeeded = true
     } catch (err) {
       setOaCreateStatus('error')
       setOaCreateError(err instanceof Error ? err.message : 'Something went wrong')
     }
+
+    // COMPLETION IS THE REFRESH SIGNAL (Antonio, 2026-07-22). The portal shell
+    // is server-rendered once per full page load, so generating a document
+    // in-session left the sidebar — including "Sign Documents" — frozen at its
+    // old state. The fix is deliberately NOT a timer or a broadcast: refreshing
+    // a document screen on a schedule would wipe a client's half-filled form.
+    // Instead the client's own explicit "Create & Send for Signing" is what
+    // triggers it, at the one moment nothing is half-typed.
+    //
+    // Placed OUTSIDE the try on purpose: a throw from refresh() inside it would
+    // flip the UI to red AFTER the agreement was created and the signing links
+    // were already sent, and the client's natural retry re-runs create — which
+    // deletes and recreates the agreement.
+    if (succeeded) router.refresh()
   }
 
   const handleReset = () => {

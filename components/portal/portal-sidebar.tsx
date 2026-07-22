@@ -32,6 +32,7 @@ import {
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
+import { useRealtimeChannel } from '@/lib/hooks/use-realtime-channel'
 import { CompanySwitcher } from './company-switcher'
 import { GlobalSearch } from '@/components/shared/global-search'
 import type { PortalAccount } from '@/lib/types'
@@ -145,7 +146,9 @@ const companyItems: NavItem[] = [
   // Bank Applications — self-service guidance to open a business bank account
   // (replaces the old Banking Fintech wizard/SD). Active company clients only.
   { key: 'nav.bankApplications', href: '/portal/banks', icon: Landmark },
-  { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, visibilityKey: 'pendingSignatures' },
+  // Sign Documents is deliberately NOT gated on data presence — see the
+  // nav.signDocuments branch in isItemVisible() below for why.
+  { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine },
   { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FilePen, visibilityKey: 'documentGenerator' },
   { key: 'nav.myClients', href: '/portal/customers', icon: Users, visibilityKey: 'customers' },
   // Invoices belongs under Company per Antonio 2026-05-05 — it's the
@@ -215,6 +218,21 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     }
   }, [pathname])
 
+  // Adopt the SERVER's count whenever it changes. Without this the badge is
+  // seeded once at mount and then driven only by realtime deltas, so a
+  // router.refresh() that recomputes the true count on the server would be
+  // ignored — the reason the wake-from-background catch-up would otherwise
+  // reconnect successfully and still show a stale number. The server value is
+  // authoritative; realtime only nudges it between renders.
+  // Skip while the user is ON the chat page: they are reading right now, the
+  // badge was just zeroed above, and the server count can still be non-zero for
+  // the moment before the read is recorded — adopting it would flash the badge
+  // back on while they read.
+  useEffect(() => {
+    if (pathname === '/portal/chat') return
+    setLiveUnreadCount(unreadChatCount)
+  }, [unreadChatCount, pathname])
+
   // Sync PWA app icon badge with unread count
   useEffect(() => {
     if (!('setAppBadge' in navigator)) return
@@ -225,18 +243,28 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     }
   }, [liveUnreadCount])
 
-  // Subscribe to new admin messages for real-time badge updates
-  useEffect(() => {
-    // PR 2 Step 6 (chat unification): always filter by contact_id, regardless
-    // of whether an account is selected. The pre-PR 2 logic filtered by
-    // account_id when one was set — that meant admin messages tagged
-    // "Personal" (account_id=null) didn't increment the badge for active-tier
-    // clients. Threading is per-contact now, so the unread count is too.
-    if (!contactId) return
-
-    const supabase = createClient()
-    const channel = supabase
-      .channel(`sidebar-unread-${contactId}`)
+  // Subscribe to new admin messages for real-time badge updates.
+  //
+  // PR 2 Step 6 (chat unification): always filter by contact_id, regardless
+  // of whether an account is selected. The pre-PR 2 logic filtered by
+  // account_id when one was set — that meant admin messages tagged
+  // "Personal" (account_id=null) didn't increment the badge for active-tier
+  // clients. Threading is per-contact now, so the unread count is too.
+  //
+  // Handlers are unchanged; only the CONNECTION is now managed (status,
+  // backoff, wake-from-background) and a resync refetches the true count —
+  // these deltas are +1/-1 and a changefeed has no replay, so after any outage
+  // the badge would otherwise stay permanently wrong.
+  useRealtimeChannel({
+    channelName: `sidebar-unread-${contactId}`,
+    enabled: !!contactId,
+    onResync: () => {
+      // router.refresh() re-runs the portal root layout, which recomputes the
+      // authoritative unread count (plus nav visibility, unread docs and
+      // wizard state) and feeds it back through the prop-sync effect above.
+      router.refresh()
+    },
+    setup: (channel) => channel
       .on(
         'postgres_changes',
         {
@@ -273,13 +301,8 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           if (was === now) return
           setLiveUnreadCount(prev => Math.max(0, prev + (now ? 1 : -1)))
         }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [contactId])
+      ),
+  })
 
   const handleLogout = async () => {
     const supabase = createClient()
@@ -358,6 +381,27 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
     if (item.key === 'nav.referrals') {
       return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
+    }
+
+    // Sign Documents — tier-gated ONLY, never gated on "does this client have a
+    // pending document right now". The old navVisibility.pendingSignatures gate
+    // was wrong in four independent ways (2026-07-22, Lorenzo Cassi):
+    //   1. STALE — it is computed once per full page load in the root layout, so
+    //      a client who generated their own OA mid-session never saw the entry
+    //      appear. This is the reported bug.
+    //   2. FAIL-CLOSED — a transient DB error made the count 0, silently hiding
+    //      the only route to the client's signable documents.
+    //   3. INCOMPLETE — it counted 3 document families (OA/lease/SS-4) while
+    //      /portal/sign renders 7 (also MSA, Form 8832, signature_requests,
+    //      e-sign envelopes). A client whose only pending item was an 8879 could
+    //      not reach the page from the nav at all.
+    //   4. MISMATCHED — it counted ALL rows per family; the page renders only the
+    //      NEWEST row per family, so the two could disagree either way.
+    // A stable, always-present entry deletes all four at once and makes support
+    // instructions true ("go to Sign Documents" now always works). The page owns
+    // the empty state.
+    if (item.key === 'nav.signDocuments') {
+      return isTierFeatureVisible(portalTier || null, 'pendingSignatures', accountType, portalRole)
     }
 
     if (item.visibilityKey) {

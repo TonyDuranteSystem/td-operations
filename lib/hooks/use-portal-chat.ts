@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { useEffect, useState, useCallback } from 'react'
 import type { PortalMessage, ChatAttachment } from '@/lib/types'
 import { buildChatQueryPlan, messageVisibleInPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
+import { useRealtimeChannel } from '@/lib/hooks/use-realtime-channel'
 
 /**
  * The thread a client is currently viewing. Per-company scoping (2026-06-24):
@@ -36,7 +36,6 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   const [sending, setSending] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true)
-  const channelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
 
   // Resolve the read query param, the mark-as-read body, the realtime
   // subscription filters, and the drop-filter plan from the active scope.
@@ -119,11 +118,19 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   // drop-filter (messageVisibleInPlan) so a message tagged to a DIFFERENT
   // company of the same contact — or another member's personal NULL — can never
   // slip into the view. The drop-filter mirrors the server GET query exactly.
-  const realtimeKey = JSON.stringify(realtimeFilters)
   const planKey = JSON.stringify(plan)
-  useEffect(() => {
-    const supabase = createClient()
+  // planKey rides in the channel NAME so that a change of viewing plan tears
+  // down and re-subscribes, exactly as the old effect did when it depended on
+  // [realtimeKey, planKey]. The handlers close over `plan` for the privacy
+  // drop-filter, so they MUST NOT outlive the plan they were built for.
+  const chatChannelName = `portal-chat-${realtimeFilters.map(f => `${f.column}:${f.value}`).join('-') || 'none'}-${planKey}`
 
+  useRealtimeChannel({
+    channelName: chatChannelName,
+    // A changefeed has no replay: anything that landed while the phone slept is
+    // never re-delivered. Refetch the thread instead of resuming the stream.
+    onResync: () => { void refresh() },
+    setup: (base) => {
     const belongs = (msg: { account_id: string | null; contact_id: string | null }) =>
       plan ? messageVisibleInPlan(plan, msg) : true
 
@@ -159,23 +166,15 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
     // One subscription per scope filter (account_id and/or contact_id). The
     // drop-filter above keeps overlapping deliveries (and cross-company rows)
     // out; ID-based dedup in handleInsert prevents duplicates.
-    let channel = supabase.channel(`portal-chat-${realtimeFilters.map(f => `${f.column}:${f.value}`).join('-') || 'none'}`)
+    let channel = base
     for (const f of realtimeFilters) {
       channel = channel
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'portal_messages', filter: `${f.column}=eq.${f.value}` }, handleInsert)
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `${f.column}=eq.${f.value}` }, handleUpdate)
     }
-
-    channel.subscribe()
-    channelRef.current = channel
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
-    // realtimeFilters/plan are recomputed each render but fully captured by their
-    // serialized keys; depending on the keys avoids needless re-subscribes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [realtimeKey, planKey])
+    return channel
+    },
+  })
 
   // Send message. Optional senderContext + tagAccountId let the caller
   // override the picker's tag scope (PR 2 Step 6). Default: senderContext
