@@ -1,4 +1,4 @@
-import { isContactScopedWizard } from './wizard-map'
+import { isContactScopedWizard, isPersonOwnedWizard } from './wizard-map'
 
 /**
  * Which column the portal wizard page uses to find a client's saved
@@ -42,6 +42,15 @@ export function resolveWizardProgressScope(params: {
   if (isContactScopedWizard(wizardType) && contactId) {
     return { col: 'contact_id', val: contactId, restrictToNoLead: true }
   }
+  // Person-owned wizard (ITIN): keyed on the person even when they own a
+  // company, matching createSD's rule that an ITIN service delivery never
+  // carries an account_id. `restrictToNoLead` is deliberately FALSE — that flag
+  // is formation's multi-company disambiguation and has no meaning here; an ITIN
+  // sold inside a formation offer can legitimately carry a lead_id, and
+  // inheriting formation's flag would hide that row and re-offer a filed wizard.
+  if (isPersonOwnedWizard(wizardType) && contactId) {
+    return { col: 'contact_id', val: contactId, restrictToNoLead: false }
+  }
   if (accountId) {
     return { col: 'account_id', val: accountId, restrictToNoLead: false }
   }
@@ -67,5 +76,12 @@ export function accountIdForWizardSubmission(
   accountId: string | null | undefined,
 ): string | null {
   if (wizardType === "formation") return null
+  // Person-owned (ITIN): the submission belongs to the person, matching the
+  // service delivery. Without this, two members of one LLC who each buy an ITIN
+  // share one company-keyed submission — the second person loads the first
+  // person's passport and date of birth, and their own submit is a silent
+  // no-op. Note the ITIN completion chain must therefore resolve the client's
+  // Drive folder from the CONTACT's linked account, not from the submission.
+  if (isPersonOwnedWizard(wizardType)) return null
   return accountId ?? null
 }
