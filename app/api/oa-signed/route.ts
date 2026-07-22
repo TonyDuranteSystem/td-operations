@@ -14,6 +14,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { resolveSignedPdfPath, signedPdfPathProblem } from "@/lib/oa/signed-pdf-path"
+import { reportSystemError } from "@/lib/system-errors"
+import { normalizeEntityType } from "@/lib/portal/entity-type"
 
 export async function POST(req: NextRequest) {
   try {
@@ -48,7 +50,11 @@ export async function POST(req: NextRequest) {
       : null
 
     const results: { step: string; status: string; detail?: string }[] = []
-    const isMMLC = (oa.entity_type === "MMLLC") && (oa.total_signers || 1) > 1
+    // Normalize: production still holds legacy long-form values ("Multi Member LLC",
+    // 1 row as of 2026-07-22). A raw compare treats those as single-member, so a
+    // PARTIAL sign would take neither branch below and email support the
+    // FULLY-SIGNED wording — a false "signed" alert on a legal document.
+    const isMMLC = (normalizeEntityType(oa.entity_type) === "MMLLC") && (oa.total_signers || 1) > 1
     const isFullySigned = oa.status === "signed"
     const isPartial = isMMLC && !isFullySigned
 
@@ -215,13 +221,36 @@ export async function POST(req: NextRequest) {
                   })
                 }
               } else {
-                results.push({ step: "drive_upload", status: "error", detail: `Recorded PDF not found in Storage: ${resolved.path}` })
+                const detail = `Recorded PDF not found in Storage: ${resolved.path}`
+                results.push({ step: "drive_upload", status: "error", detail })
+                await reportSystemError({
+                  source: "server",
+                  route: "/api/oa-signed",
+                  method: "POST",
+                  message: `Operating Agreement marked signed but its document could not be filed — ${detail}`,
+                  context: { oa_id: oa.id, token: oa.token, company: oa.company_name, pdf_storage_path: oa.pdf_storage_path },
+                })
               }
             }
           } else {
             // Refuse rather than guess. A missing document is a visible problem;
             // filing the wrong one is an invisible one.
-            results.push({ step: "drive_upload", status: "error", detail: signedPdfPathProblem(resolved.reason) })
+            //
+            // But "visible" has to mean something. Everything else in this route
+            // already asserted success by now — the support email said "OA Signed",
+            // the SD history and action_log say signed — and the only caller
+            // discards this response entirely (the browser fires it and ignores
+            // the body). So the refusal MUST escalate here or the agreement sits
+            // marked signed with nothing filed and nobody alerted.
+            const detail = signedPdfPathProblem(resolved.reason)
+            results.push({ step: "drive_upload", status: "error", detail })
+            await reportSystemError({
+              source: "server",
+              route: "/api/oa-signed",
+              method: "POST",
+              message: `Operating Agreement marked signed but its document could not be filed — ${detail}`,
+              context: { oa_id: oa.id, token: oa.token, company: oa.company_name, pdf_storage_path: oa.pdf_storage_path, reason: resolved.reason },
+            })
           }
         } else {
           results.push({ step: "drive_upload", status: "skipped", detail: "No drive_folder_id on account" })

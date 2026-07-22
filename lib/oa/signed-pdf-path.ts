@@ -72,8 +72,13 @@ export function resolveSignedPdfPath(
   // signing page never creates one, so a nested path is already anomalous).
   const prefix = `${folder}/`
   if (!path.startsWith(prefix)) return { ok: false, path: null, reason: "outside_agreement" }
+  // A single segment only. The `/` check subsumes traversal: `..` cannot escape
+  // the folder without a separator, so there is deliberately no separate `..`
+  // clause — an earlier version had one, and its only reachable effect was to
+  // reject a legitimate filename containing two dots while logging "does not
+  // belong to this agreement's folder", which misdirects whoever investigates.
   const rest = path.slice(prefix.length)
-  if (!rest || rest.includes("/") || rest.includes("..")) {
+  if (!rest || rest.includes("/")) {
     return { ok: false, path: null, reason: "outside_agreement" }
   }
 

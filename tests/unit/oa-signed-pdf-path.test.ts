@@ -25,9 +25,11 @@ describe("resolveSignedPdfPath — the happy path", () => {
     expect(r).toEqual({ ok: true, path: `${TOKEN}/oa-signed-1784676141368.pdf`, reason: null })
   })
 
-  it("tolerates surrounding whitespace on the stored value", () => {
+  it("returns the TRIMMED path, not merely ok, for a padded stored value", () => {
+    // Asserting only `ok` here would miss the single failure mode the trim
+    // exists to prevent: an untrimmed path 404s at the storage download.
     const r = resolveSignedPdfPath(TOKEN, `  ${TOKEN}/oa-signed-1.pdf  `)
-    expect(r.ok).toBe(true)
+    expect(r.path).toBe(`${TOKEN}/oa-signed-1.pdf`)
   })
 
   it("accepts an uppercase extension", () => {
@@ -77,6 +79,13 @@ describe("resolveSignedPdfPath — the path must belong to THIS agreement", () =
     })
   })
 
+  it("ACCEPTS a legitimate filename containing two dots", () => {
+    // Guard against re-adding a `..` substring check: it cannot escape the
+    // folder (the separator check already blocks that) and it would reject
+    // this while logging a reason that misdirects the investigator.
+    expect(resolveSignedPdfPath(TOKEN, `${TOKEN}/oa-signed..pdf`).ok).toBe(true)
+  })
+
   it("rejects a nested subfolder — the signing page never creates one", () => {
     expect(resolveSignedPdfPath(TOKEN, `${TOKEN}/sub/oa-signed.pdf`)).toEqual({
       ok: false,
@@ -119,6 +128,13 @@ describe("signedPdfPathProblem", () => {
       expect(msg.length).toBeGreaterThan(20)
       expect(msg).not.toContain("undefined")
     }
+  })
+
+  it("gives a DISTINCT message per reason", () => {
+    // Collapsing all three to one generic string would pass the assertions
+    // above while destroying the point of the log.
+    const msgs = (["missing", "outside_agreement", "not_pdf"] as const).map(signedPdfPathProblem)
+    expect(new Set(msgs).size).toBe(3)
   })
 
   it("says plainly that nothing was filed when there is no path", () => {

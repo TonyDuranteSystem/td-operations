@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import { generateOASections, type OAData, type OAMember } from '@/lib/types/oa-templates'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
+import { resolveSignedPdfPath } from '@/lib/oa/signed-pdf-path'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -765,10 +766,16 @@ function OperatingAgreementCodeContent() {
                 try {
                   let blob = pdfBlobRef.current
                   if (!blob && (oa.signed_at || allSigned)) {
-                    const { data } = await supabasePublic.storage.from('signed-oa').list(token)
-                    const pdfFile = data?.filter(f => f.name.endsWith('.pdf')).sort((a, b) => b.name.localeCompare(a.name))[0]
-                    if (pdfFile) {
-                      const { data: downloaded } = await supabasePublic.storage.from('signed-oa').download(`${token}/${pdfFile.name}`)
+                    // Download the document the SERVER recorded — never "the
+                    // newest .pdf in the folder", which is what this used to do.
+                    // Anyone can upload into that folder (its only storage policy
+                    // is INSERT for role `public`), so listing-and-sorting served
+                    // the CLIENT whatever an attacker dropped in. Same flaw the
+                    // publish step had, pointed at the client instead of Drive.
+                    // See lib/oa/signed-pdf-path.ts.
+                    const target = resolveSignedPdfPath(token, oa.pdf_storage_path)
+                    if (target.ok && target.path) {
+                      const { data: downloaded } = await supabasePublic.storage.from('signed-oa').download(target.path)
                       if (downloaded) blob = downloaded
                     }
                   }
