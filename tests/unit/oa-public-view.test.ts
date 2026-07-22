@@ -106,8 +106,8 @@ describe("toPublicAgreement", () => {
     expect(out.company_name).toBe("Acme LLC")
     expect(out.ein_number).toBe("83-4299021")
     expect(out.members).toEqual([
-      { name: "Member One", ownership_pct: 50, initial_contribution: "500" },
-      { name: "Member Two", ownership_pct: 50, initial_contribution: "500" },
+      { name: "Member One", address: "1 Main St", ownership_pct: 50, initial_contribution: "500" },
+      { name: "Member Two", address: "9 Oak Rd", ownership_pct: 50, initial_contribution: "500" },
     ])
     expect(out.principal_address).toBe("1 Main St")
     expect(out.registered_agent_name).toBe("RA Inc")
@@ -116,16 +116,23 @@ describe("toPublicAgreement", () => {
     expect(out.entity_type).toBe("MMLLC")
   })
 
-  it("strips every member's email and address from the members blob", () => {
+  it("strips every member's email from the members blob", () => {
     // The nested blob is where a secret rides along unnoticed — this was found
     // by inspecting the route's REAL output, not by reading the mapper.
-    // A co-signer passes the access-code gate legitimately; that does not
-    // entitle them to the other members' contact details.
     const json = JSON.stringify(toPublicAgreement(agreementRow))
     expect(json).not.toContain("one@example.com")
     expect(json).not.toContain("two@example.com")
-    expect(json).not.toContain("9 Oak Rd")
     expect(() => assertNoSecrets(toPublicAgreement(agreementRow))).not.toThrow()
+  })
+
+  it("KEEPS each member's address — the agreement prints it", () => {
+    // Regression guard. Dropping this rendered "As on file with the Company" in
+    // place of every member's address, and that DOM becomes the executed PDF —
+    // a stored legal document materially different from every one signed before.
+    // The pages don't read this field; the agreement template does.
+    const out = toPublicAgreement(agreementRow)
+    expect(out.members[0].address).toBe("1 Main St")
+    expect(out.members[1].address).toBe("9 Oak Rd")
   })
 
   it("survives a members blob that is null or not an array", () => {

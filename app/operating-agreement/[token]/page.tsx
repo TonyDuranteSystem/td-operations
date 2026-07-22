@@ -493,8 +493,14 @@ function OperatingAgreementContent() {
         )}
       </div>
 
-      {/* Action bar — outside the PDF capture area */}
-      {!signed && (
+      {/* Action bar — outside the PDF capture area.
+          `!isAdmin` is load-bearing: admin preview must READ the agreement and
+          never EXECUTE it. Without it a preview click affixes a real signature
+          attributed to the member — applied by TD, on a document TD drafted, and
+          indistinguishable in the record from the member's own. Deriving this
+          from the query flag is safe: it only ever REMOVES the ability to sign.
+          The sibling multi-signer page gates the same way. */}
+      {!signed && !isAdmin && (
         <div id="oa-action-bar" style={{ maxWidth: 800, margin: '24px auto', textAlign: 'center' }}>
           <button
             onClick={handleSign}

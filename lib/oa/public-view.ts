@@ -92,14 +92,24 @@ export const OA_SIGNATURE_SELECT = [
 export const OA_NEVER_EXPOSED = ["access_code", "member_email", "email", "account_id", "contact_id"] as const
 
 /**
- * The members list as the document renders it: name and ownership split only.
+ * The members list as the AGREEMENT ITSELF renders it: name, address, ownership
+ * split, contribution. Email is dropped — nothing prints it.
  *
- * The stored blob also carries each member's email, address and contribution.
- * Neither public page reads any of those (verified: the pages use `m.name` and
- * `m.ownership_pct`, and the agreement template never references a member
- * email), so they are dropped rather than forwarded. A co-signer passes the
- * access-code gate legitimately — that does not make them entitled to the other
- * members' contact details.
+ * ⛔ `address` MUST stay. The multi-member template's Article 2.1 says "The
+ * Members of the Company, THEIR ADDRESSES, and their respective ownership
+ * interests are as follows:" and then prints each member's address. An earlier
+ * revision of this file dropped it on the strength of grepping the two PAGES for
+ * `m.address` — but the pages don't read it, the TEMPLATE does, and the rendered
+ * template is what html2pdf captures into the executed PDF. Every multi-member
+ * agreement signed after that would have shown "As on file with the Company"
+ * where the addresses belong: a stored legal document materially different from
+ * every one signed before it.
+ *
+ * The lesson worth keeping: when deciding whether a field is unused, check every
+ * consumer of the DATA, not just the file you happen to be editing.
+ *
+ * Withholding a co-signer's address from a verified co-signer would be pointless
+ * anyway — it is printed in the agreement they are signing.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toPublicMembers(members: any): any {
@@ -107,6 +117,7 @@ function toPublicMembers(members: any): any {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return members.map((m: any) => ({
     name: m?.name,
+    address: m?.address,
     ownership_pct: m?.ownership_pct,
     initial_contribution: m?.initial_contribution,
   }))

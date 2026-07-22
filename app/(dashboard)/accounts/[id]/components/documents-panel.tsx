@@ -293,7 +293,13 @@ export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLea
                     {doc.data.token && (
                       <a
                         href={
-                          doc.key === 'oa' ? `https://app.tonydurante.us/operating-agreement/${doc.data.token}?preview=td` :
+                          // The access code is REQUIRED. The OA page verifies it
+                          // server-side now, and ?preview=td no longer skips that
+                          // check — the staff session cookie is scoped to the CRM
+                          // host and is absent on the client-facing domain, so
+                          // preview always falls back to the code. The sibling
+                          // ss4 link below already carried it; this one did not.
+                          doc.key === 'oa' ? `https://app.tonydurante.us/operating-agreement/${doc.data.token}/${doc.data.access_code}?preview=td` :
                           doc.key === 'lease' ? `https://app.tonydurante.us/lease/${doc.data.token}?preview=td` :
                           doc.key === 'ss4' ? `https://app.tonydurante.us/ss4/${doc.data.token}/${doc.data.access_code}?preview=td` :
                           '#'

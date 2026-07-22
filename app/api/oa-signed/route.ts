@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     // Fetch OA record
     const { data: oa, error: oaErr } = await supabaseAdmin
       .from("oa_agreements")
-      .select("id, token, company_name, account_id, contact_id, entity_type, manager_name, status, total_signers, signed_count")
+      .select("id, token, access_code, company_name, account_id, contact_id, entity_type, manager_name, status, total_signers, signed_count")
       .eq("id", oa_id)
       .eq("token", token)
       .single()
@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
             ``,
             `The agreement is NOT yet fully executed. Remaining members must still sign.`,
             ``,
-            `Admin Preview: ${APP_BASE_URL}/operating-agreement/${oa.token}?preview=td`,
+            `Admin Preview: ${APP_BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}?preview=td`,
           ]
         : [
             `The Operating Agreement for ${oa.company_name} has been ${isMMLC ? "fully " : ""}signed.`,
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
             isMMLC ? `All ${oa.total_signers} members have signed.` : null,
             `Token: ${oa.token}`,
             ``,
-            `Admin Preview: ${APP_BASE_URL}/operating-agreement/${oa.token}?preview=td`,
+            `Admin Preview: ${APP_BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}?preview=td`,
           ].filter(Boolean)
 
       const emailBody = bodyLines.join("\n")
