@@ -22,6 +22,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { localeFromLanguage } from "@/lib/locale"
 import type { HandlerContext, HandlerResult, WorkflowHandler } from "@/lib/tasks/types"
 
 /** Re-export the central client-safe schema for the workflow editor. */
@@ -42,7 +43,10 @@ async function pickMessageForRecipient(
     .select("language")
     .eq("id", contactId)
     .maybeSingle()
-  const lang = contact?.language === "it" ? "it" : "en"
+  // Free-text column: production stores "Italian", not "it" — a strict compare
+  // sent English to every Italian client. See lib/locale.ts (the single
+  // normalizer) and its sibling chain-send-client-message.ts.
+  const lang = localeFromLanguage(contact?.language)
   return lang === "it" ? (fallbackIt || fallbackEn) : (fallbackEn || fallbackIt)
 }
 

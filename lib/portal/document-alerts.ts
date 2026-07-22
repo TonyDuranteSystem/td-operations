@@ -22,6 +22,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getAppSetting } from '@/lib/settings'
+import { localeFromLanguage, isItalian } from '@/lib/locale'
 import { createPortalNotification } from '@/lib/portal/notifications'
 
 // The new `documents.notify_client` / `documents.client_notified_at` columns and
@@ -139,8 +140,11 @@ export async function isNewDocumentChatEnabled(): Promise<boolean> {
 async function resolveDocLocale(accountId: string | null, contactId: string | null): Promise<'en' | 'it'> {
   if (contactId) {
     const { data } = await supabaseAdmin.from('contacts').select('language').eq('id', contactId).single()
-    if (data?.language === 'it') return 'it'
-    if (data?.language === 'en') return 'en'
+    // contacts.language is free text ("Italian", not "it"). The old strict pair
+    // matched neither spelling, so an Italian contact fell THROUGH to the
+    // account-owner lookup below and could be alerted in the wrong language.
+    // Any value on the contact now decides; only a blank one falls through.
+    if (data?.language?.trim()) return localeFromLanguage(data.language)
   }
   if (accountId) {
     const { data: links } = await supabaseAdmin
@@ -151,7 +155,8 @@ async function resolveDocLocale(accountId: string | null, contactId: string | nu
     const owner = rows.find(l => (l as { role?: string }).role === 'owner' && (l.contacts as { language?: string } | null)?.language)
       ?? rows.find(l => (l.contacts as { language?: string } | null)?.language)
     const lang = (owner?.contacts as { language?: string } | null)?.language
-    if (lang === 'it') return 'it'
+    // Same free-text normalization as the contact branch above.
+    if (isItalian(lang)) return 'it'
   }
   return 'en'
 }

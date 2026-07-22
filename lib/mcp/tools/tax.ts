@@ -5,6 +5,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
+import { localeFromLanguage } from "@/lib/locale"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { listFolder, findTaxFolder, findOrCreateYearFolder as _findOrCreateYearFolder, downloadFileBinary } from "@/lib/google-drive"
@@ -426,7 +427,8 @@ export function registerTaxTools(server: McpServer) {
           .maybeSingle()
 
         // 8. Determine language
-        const formLang = language || (contact.language === "it" ? "it" : "en")
+        // contacts.language is free text ("Italian", not "it") — normalize.
+        const formLang = language || localeFromLanguage(contact.language)
 
         // 9. Insert
         const { data: submission, error: insErr } = await supabaseAdmin

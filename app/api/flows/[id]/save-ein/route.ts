@@ -21,6 +21,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { isItalian } from '@/lib/locale'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { updateAccount } from '@/lib/operations/account'
 import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/portal/notifications'
@@ -118,7 +119,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         .select('language')
         .eq('id', contactId)
         .maybeSingle()
-      if (contact?.language === 'it') language = 'it'
+      // contacts.language is free text ("Italian", not "it") — normalize.
+      if (isItalian(contact?.language)) language = 'it'
     }
 
     const company = account.company_name || 'your company'
