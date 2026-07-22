@@ -31,6 +31,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createWorkflowTask } from "@/lib/operations/task"
+import { OPEN_TASK_STATUSES } from "@/lib/operations/service-delivery"
 import { parseWorkflowSnapshot, buildSnapshotForStorage } from "@/lib/tasks/workflow-snapshot-schema"
 import { getWorkflowSchema } from "@/lib/tasks/workflow-schemas"
 import { parseTriggeredBy, matchesFilter } from "@/lib/tasks/workflow-trigger-schema"
@@ -100,6 +101,8 @@ export type DispatchReason =
   | "spawn_failed"
   /** A workflow task with the same idempotency key already exists. task_id returned. */
   | "already_spawned"
+  /** The dedup query itself failed — we do NOT spawn, rather than risk a duplicate. */
+  | "dedup_check_failed"
 
 export interface DispatchResult {
   spawned: boolean
@@ -130,6 +133,24 @@ export interface DispatchIdempotency {
   field: string
   /** The unique value to match against task_meta[field]. */
   value: string
+  /**
+   * The workflow this dedup is FOR. Required whenever `field` is a value that
+   * more than one workflow can carry.
+   *
+   * Without it the check asks "does ANY workflow task carry this value?", which
+   * silently suppressed a real card for a month: `itin-form-completed` deduped
+   * on `service_delivery_id`, and the `itin_data_collection` task spawned at SD
+   * creation carries the SAME service_delivery_id in its sd_progress_v1 meta.
+   * So the "Send wizard link" card answered for the "Review ITIN documents"
+   * card, and every ITIN client from 2026-07-11 submitted their questionnaire
+   * with nobody being told to review it (Marcell Bogyora ×3, Tamás Fazekas ×1 —
+   * confirmed in action_log; the plain-task fallback did NOT fire either,
+   * because `already_spawned` marks the workflow as handled).
+   *
+   * `submission_id` (banking, tax) is unique per submission and does not
+   * collide — but that is luck, not design, so pass this whenever you know it.
+   */
+  workflow_slug?: string
 }
 
 export interface DispatchFormCompletionParams<T extends Record<string, unknown>> {
@@ -184,15 +205,42 @@ async function dispatchWorkflowForFormCompletionInner<T extends Record<string, u
   // submission. Title-based dedup (used by the legacy fallback path) is not
   // applied on the workflow path, so this check is required there.
   if (params.idempotency) {
-    // workflow_slug + task_meta are typed loosely on `tasks` until
-    // lib/database.types.ts regenerates (same pattern as createWorkflowTask).
-    const { data: existing } = await supabaseAdmin
+    // task_meta is typed loosely on `tasks` until lib/database.types.ts
+    // regenerates (same pattern as createWorkflowTask). `workflow_slug` IS a
+    // real typed column and needs no cast on .eq().
+    let q = supabaseAdmin
       .from("tasks")
-      .select("id, workflow_slug")
+      .select("id, workflow_slug, status")
       .eq(`task_meta->>${params.idempotency.field}` as never, params.idempotency.value as never)
       .not("workflow_slug" as never, "is", null)
-      .limit(1)
-      .maybeSingle()
+
+    // Scope to THIS workflow when the caller knows it — see DispatchIdempotency.
+    if (params.idempotency.workflow_slug) {
+      q = q.eq("workflow_slug", params.idempotency.workflow_slug)
+    }
+
+    // Only an OPEN card suppresses a new one. A CLOSED card must not: a client
+    // who re-submits their wizard overwrites the generated PDFs by stable
+    // filename, so staff need a fresh card telling them to re-review — without
+    // this, they would mail the IRS a form that no longer matches Drive.
+    // OPEN_TASK_STATUSES is exported precisely so nobody hand-rolls this list
+    // again (omitting "Waiting" already caused a duplicate-formation bug).
+    q = q.in("status", [...OPEN_TASK_STATUSES])
+
+    const { data: existing, error: dedupErr } = await q.limit(1).maybeSingle()
+
+    // FAIL CLOSED. The old `{ data }`-only destructure turned any transient
+    // PostgREST failure into "no duplicate found" and spawned a second card.
+    // Same fail-open dedup class that was ruled a blocker in activate-service
+    // and formation-setup on 2026-07-20.
+    if (dedupErr) {
+      return {
+        spawned: false,
+        reason: "dedup_check_failed",
+        spawn_error: dedupErr.message,
+      }
+    }
+
     if (existing) {
       const row = existing as unknown as { id: string; workflow_slug: string | null }
       return {
@@ -265,6 +313,17 @@ async function dispatchWorkflowForFormCompletionInner<T extends Record<string, u
   }
 
   const matched = matches[0]
+
+  // The caller named a workflow for the dedup; if the catalog resolved a
+  // DIFFERENT one, the key we checked is not the key we are about to write —
+  // so every retry would spawn another card. Loud, because this only happens
+  // when catalog data has drifted (a second matching trigger, or a slug
+  // renamed in the workflow editor) and it silently defeats idempotency.
+  if (params.idempotency?.workflow_slug && params.idempotency.workflow_slug !== matched.slug) {
+    console.warn(
+      `[dispatch-workflow] idempotency slug mismatch: caller deduped on "${params.idempotency.workflow_slug}" but the catalog resolved "${matched.slug}". Retries will duplicate until the catalog or the caller is corrected.`,
+    )
+  }
 
   // ── 4. Build task_meta + validate against the workflow's v1 schema ─────
   let taskMeta: Record<string, unknown>
