@@ -12,9 +12,6 @@ const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 interface OAAgreement {
   id: string
   token: string
-  access_code: string
-  account_id: string
-  contact_id: string
   company_name: string
   state_of_formation: string
   formation_date: string
@@ -23,7 +20,9 @@ interface OAAgreement {
   manager_name: string | null
   member_name: string
   member_address: string | null
-  member_email: string | null
+  // NOTE: no `access_code` and no `member_email`. The server never sends them —
+  // the code is checked and the email gate evaluated server-side. Adding either
+  // back here means someone re-opened the leak. See lib/oa/public-view.ts.
   member_ownership_pct: number
   members: OAMember[] | null
   effective_date: string
@@ -85,10 +84,13 @@ function OperatingAgreementContent() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  // Email gate
+  // Email gate. The address is verified SERVER-SIDE and never sent to the
+  // browser, so the gate now needs the address on every load — it lives in the
+  // viewer's own cookie on their own device (it is their address).
   const [verified, setVerified] = useState(false)
   const [emailInput, setEmailInput] = useState('')
   const [emailError, setEmailError] = useState('')
+  const [checkingEmail, setCheckingEmail] = useState(false)
 
   // Signing
   const [signing, setSigning] = useState(false)
@@ -104,63 +106,56 @@ function OperatingAgreementContent() {
   const managerName = oa?.manager_name || oa?.member_name || ''
 
   // ─── LOAD OA ───
-  const loadOA = useCallback(async () => {
+  // Goes through the server route, which verifies the access code BEFORE
+  // returning anything and strips every credential from what it does return.
+  // The page used to select('*') with the anon key and compare the code here,
+  // in the browser — i.e. after the whole row had already arrived. See
+  // lib/oa/public-view.ts.
+  const loadOA = useCallback(async (emailOverride?: string) => {
     if (!token) return
 
     const adminMode = searchParams.get('preview') === 'td'
-    if (adminMode) {
-      setIsAdmin(true)
-      setVerified(true)
-    }
+    if (adminMode) setIsAdmin(true)
 
-    const { data, error: err } = await supabasePublic
-      .from('oa_agreements')
-      .select('*')
-      .eq('token', token)
-      .single()
+    const cookieEmail = document.cookie
+      .split(';')
+      .find(c => c.trim().startsWith(`oa_email_${token}=`))
+      ?.split('=')[1]
+    const email = emailOverride ?? (cookieEmail ? decodeURIComponent(cookieEmail) : '')
 
-    if (err || !data) {
-      setError('Operating Agreement not found.')
+    const qs = new URLSearchParams({ code: accessCode })
+    if (email) qs.set('email', email)
+    if (adminMode) qs.set('preview', 'td')
+
+    let res: Response
+    try {
+      res = await fetch(`/api/operating-agreement/${token}/fetch?${qs.toString()}`)
+    } catch {
+      setError('Could not load the Operating Agreement. Please check your connection and try again.')
       setLoading(false)
       return
     }
 
-    if (!adminMode && data.access_code !== accessCode) {
-      setError('Invalid link.')
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      setError(body?.error || 'Operating Agreement not found.')
       setLoading(false)
       return
     }
 
-    setOa(data)
-    setSigned(!!data.signed_at)
+    if (body.requiresEmail) {
+      setVerified(false)
+      setLoading(false)
+      return
+    }
+
+    setOa(body.agreement)
+    setSigned(!!body.agreement.signed_at)
+    setVerified(true)
     setLoading(false)
-
-    if (adminMode) return
-
-    // Check email gate cookie
-    if (!data.member_email) {
-      setVerified(true)
-    } else {
-      const cookie = document.cookie.split(';').find(c => c.trim().startsWith(`oa_verified_${token}=`))
-      if (cookie) setVerified(true)
-    }
   }, [token, accessCode, searchParams])
 
   useEffect(() => { loadOA() }, [loadOA])
-
-  // Track view
-  useEffect(() => {
-    if (!oa || !verified || signed) return
-    supabasePublic
-      .from('oa_agreements')
-      .update({
-        view_count: (oa.view_count || 0) + 1,
-        viewed_at: new Date().toISOString(),
-        status: ['draft', 'sent'].includes(oa.status) ? 'viewed' : oa.status,
-      })
-      .eq('id', oa.id)
-      .then(() => {})
-  }, [oa?.id, verified]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Init signature pad
   useEffect(() => {
@@ -179,15 +174,35 @@ function OperatingAgreementContent() {
   }, [verified, oa, signed])
 
   // ─── EMAIL GATE ───
-  function handleEmailVerify(e: React.FormEvent) {
+  // The comparison happens on the server (the address never reaches the
+  // browser). A successful check is what returns the document, so "verified"
+  // is now proven by the response rather than asserted locally.
+  async function handleEmailVerify(e: React.FormEvent) {
     e.preventDefault()
-    if (!oa?.member_email) return
-    if (emailInput.trim().toLowerCase() === oa.member_email.toLowerCase()) {
-      document.cookie = `oa_verified_${token}=1; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
+    const candidate = emailInput.trim()
+    if (!candidate) return
+    setCheckingEmail(true)
+    setEmailError('')
+    try {
+      const qs = new URLSearchParams({ code: accessCode, email: candidate })
+      const res = await fetch(`/api/operating-agreement/${token}/fetch?${qs.toString()}`)
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setEmailError(body?.error || 'Could not verify that address. Please try again.')
+        return
+      }
+      if (body.requiresEmail) {
+        setEmailError('The email address does not match. Please try again.')
+        return
+      }
+      document.cookie = `oa_email_${token}=${encodeURIComponent(candidate)}; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
+      setOa(body.agreement)
+      setSigned(!!body.agreement.signed_at)
       setVerified(true)
-      setEmailError('')
-    } else {
-      setEmailError('The email address does not match. Please try again.')
+    } catch {
+      setEmailError('Could not verify that address. Please check your connection and try again.')
+    } finally {
+      setCheckingEmail(false)
     }
   }
 
@@ -309,11 +324,10 @@ function OperatingAgreementContent() {
     )
   }
 
-  if (!oa) return null
-
-  // Email gate
-  const isAdminPreview = searchParams.get('preview') === 'td'
-  if (!verified && !isAdminPreview) {
+  // Email gate — rendered BEFORE the `!oa` bail-out, because an unverified
+  // caller now has no agreement data at all (the server withholds it until the
+  // address matches). Bailing out first would show them a blank page.
+  if (!verified) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', fontFamily: 'Georgia, serif', background: '#f8f8f8' }}>
         <div style={{ background: '#fff', padding: 40, borderRadius: 8, boxShadow: '0 2px 20px rgba(0,0,0,0.08)', maxWidth: 420, width: '100%' }}>
@@ -331,14 +345,16 @@ function OperatingAgreementContent() {
               style={{ width: '100%', padding: '12px 16px', fontSize: 16, border: '1px solid #ddd', borderRadius: 6, marginBottom: 12, boxSizing: 'border-box' }}
             />
             {emailError && <p style={{ color: '#c00', fontSize: 13, margin: '0 0 12px' }}>{emailError}</p>}
-            <button type="submit" style={{ width: '100%', padding: '12px', fontSize: 16, background: '#0A3161', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>
-              View Operating Agreement
+            <button type="submit" disabled={checkingEmail} style={{ width: '100%', padding: '12px', fontSize: 16, background: checkingEmail ? '#999' : '#0A3161', color: '#fff', border: 'none', borderRadius: 6, cursor: checkingEmail ? 'default' : 'pointer', fontWeight: 600 }}>
+              {checkingEmail ? 'Verifying…' : 'View Operating Agreement'}
             </button>
           </form>
         </div>
       </div>
     )
   }
+
+  if (!oa) return null
 
   // Generate OA sections from template
   const oaData: OAData = {

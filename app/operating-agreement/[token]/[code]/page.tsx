@@ -11,11 +11,11 @@ const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
 // --- Types -----------------------------------------------
 interface OAAgreement {
+  // NOTE: no `access_code`, no `member_email`, no `account_id` / `contact_id`.
+  // The server strips them — adding one back here means someone re-opened the
+  // leak this change closed. See lib/oa/public-view.ts.
   id: string
   token: string
-  access_code: string
-  account_id: string
-  contact_id: string
   company_name: string
   state_of_formation: string
   formation_date: string
@@ -24,7 +24,6 @@ interface OAAgreement {
   manager_name: string | null
   member_name: string
   member_address: string | null
-  member_email: string | null
   member_ownership_pct: number
   members: OAMember[] | null
   effective_date: string
@@ -52,9 +51,8 @@ interface OASignature {
   oa_id: string
   member_index: number
   member_name: string
-  member_email: string | null
-  contact_id: string | null
-  access_code: string
+  // No `access_code` — a co-signer's code is the credential that authorises
+  // signing AS that member, and it used to be handed to every visitor.
   status: string
   signed_at: string | null
   signature_image_path: string | null
@@ -101,6 +99,7 @@ function OperatingAgreementCodeContent() {
   const [verified, setVerified] = useState(false)
   const [emailInput, setEmailInput] = useState('')
   const [emailError, setEmailError] = useState('')
+  const [checkingEmail, setCheckingEmail] = useState(false)
 
   // Signing
   const [signing, setSigning] = useState(false)
@@ -129,153 +128,102 @@ function OperatingAgreementCodeContent() {
   const currentSignerAlreadySigned = currentSig?.status === 'signed'
 
   // --- LOAD OA ---
-  const loadOA = useCallback(async () => {
+  // Everything comes from the server route, which verifies the access code
+  // BEFORE returning anything, resolves the current signer from their per-member
+  // code WITHOUT sending anyone's code to the browser, evaluates the email gate
+  // server-side, and records the view.
+  //
+  // What this replaces: a browser-side select('*') on both tables with the anon
+  // key, and a client-side `data.access_code !== accessCode` comparison that ran
+  // after the row had already been delivered. That handed every caller the
+  // agreement's access code, the tax ID, member addresses — and, from the
+  // signatures table, EVERY co-signer's personal signing code, which is the
+  // credential that authorises signing as that member. See lib/oa/public-view.ts.
+  const loadOA = useCallback(async (emailOverride?: string) => {
     if (!token) return
 
     const adminMode = searchParams.get('preview') === 'td'
     const portalMode = searchParams.get('portal') === 'true'
     const signerCode = searchParams.get('signer')
 
-    if (adminMode) {
-      setIsAdmin(true)
-      setVerified(true)
-    }
-    if (portalMode) {
-      setIsPortal(true)
-      setVerified(true)
-    }
-    // signerCode is used below to resolve the member from oa_signatures
+    if (adminMode) setIsAdmin(true)
+    if (portalMode) setIsPortal(true)
 
-    const { data, error: err } = await supabasePublic
-      .from('oa_agreements')
-      .select('*')
-      .eq('token', token)
-      .single()
+    const cookieKey = signerCode ? `oa_email_${token}_s` : `oa_email_${token}`
+    const cookieEmail = document.cookie
+      .split(';')
+      .find(c => c.trim().startsWith(`${cookieKey}=`))
+      ?.split('=')[1]
+    const email = emailOverride ?? (cookieEmail ? decodeURIComponent(cookieEmail) : '')
 
-    if (err || !data) {
-      setError('Operating Agreement not found.')
+    const qs = new URLSearchParams({ code: accessCode })
+    if (signerCode) qs.set('signer', signerCode)
+    if (email) qs.set('email', email)
+    if (adminMode) qs.set('preview', 'td')
+    if (portalMode) qs.set('portal', 'true')
+
+    let res: Response
+    try {
+      res = await fetch(`/api/operating-agreement/${token}/fetch?${qs.toString()}`)
+    } catch {
+      setError('Could not load the Operating Agreement. Please check your connection and try again.')
       setLoading(false)
       return
     }
 
-    if (!adminMode && data.access_code !== accessCode) {
-      setError('Invalid link.')
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      setError(body?.error || 'Operating Agreement not found.')
       setLoading(false)
       return
     }
 
+    if (body.requiresEmail) {
+      setVerified(false)
+      setLoading(false)
+      return
+    }
+
+    const data = body.agreement as OAAgreement
     setOa(data)
-    const isFullySigned = data.status === 'signed' && data.signed_at
-    setAllSigned(!!isFullySigned)
+    setAllSigned(!!(data.status === 'signed' && data.signed_at))
+    setVerified(true)
 
-    // Load signatures for MMLLC
     const isMulti = (normalizeEntityType(data.entity_type) === 'MMLLC') && (data.total_signers || 1) > 1
     if (isMulti) {
-      const { data: sigs } = await supabasePublic
-        .from('oa_signatures')
-        .select('*')
-        .eq('oa_id', data.id)
-        .order('member_index')
+      const sigs = (body.signatures ?? []) as OASignature[]
+      setSignatures(sigs)
 
-      if (sigs) {
-        setSignatures(sigs)
-
-        // Determine current signer from ?signer= access code
-        if (signerCode) {
-          const match = sigs.find(s => s.access_code === signerCode)
-          if (match) {
-            setCurrentSignerIndex(match.member_index)
-            setSigned(match.status === 'signed')
-          } else {
-            setError('Invalid signing link.')
-            setLoading(false)
-            return
-          }
-        }
-
-        // Fetch signature images for already-signed members
-        const signedSigs = sigs.filter(s => s.status === 'signed' && s.signature_image_path)
-        const images: Record<number, string> = {}
-        for (const s of signedSigs) {
-          try {
-            const { data: blob } = await supabasePublic.storage
-              .from('signed-oa')
-              .download(s.signature_image_path!)
-            if (blob) {
-              images[s.member_index] = URL.createObjectURL(blob)
-            }
-          } catch {
-            // Skip failed image loads
-          }
-        }
-        setSigImages(images)
+      if (body.currentSignerIndex !== null && body.currentSignerIndex !== undefined) {
+        setCurrentSignerIndex(body.currentSignerIndex)
+        setSigned(sigs.find(s => s.member_index === body.currentSignerIndex)?.status === 'signed')
       }
+
+      // Fetch signature images for already-signed members
+      const signedSigs = sigs.filter(s => s.status === 'signed' && s.signature_image_path)
+      const images: Record<number, string> = {}
+      for (const s of signedSigs) {
+        try {
+          const { data: blob } = await supabasePublic.storage
+            .from('signed-oa')
+            .download(s.signature_image_path!)
+          if (blob) {
+            images[s.member_index] = URL.createObjectURL(blob)
+          }
+        } catch {
+          // Skip failed image loads
+        }
+      }
+      setSigImages(images)
     } else {
       // SMLLC
       setSigned(!!data.signed_at)
     }
 
     setLoading(false)
-
-    if (adminMode) return
-
-    // Check email gate cookie
-    if (isMulti && signerCode) {
-      // Per-member email gate for MMLLC
-      const matchSig = (await supabasePublic
-        .from('oa_signatures')
-        .select('member_email, member_index')
-        .eq('oa_id', data.id)
-        .eq('access_code', signerCode)
-        .single()).data
-
-      if (!matchSig?.member_email) {
-        setVerified(true)
-      } else if (!portalMode) {
-        const cookie = document.cookie.split(';').find(c => c.trim().startsWith(`oa_verified_${token}_${matchSig.member_index}=`))
-        if (cookie) setVerified(true)
-      }
-    } else {
-      // SMLLC email gate
-      if (!data.member_email) {
-        setVerified(true)
-      } else if (!portalMode) {
-        const cookie = document.cookie.split(';').find(c => c.trim().startsWith(`oa_verified_${token}=`))
-        if (cookie) setVerified(true)
-      }
-    }
   }, [token, accessCode, searchParams])
 
   useEffect(() => { loadOA() }, [loadOA])
-
-  // Track view
-  useEffect(() => {
-    if (!oa || !verified || allSigned) return
-
-    // Update OA view count
-    supabasePublic
-      .from('oa_agreements')
-      .update({
-        view_count: (oa.view_count || 0) + 1,
-        viewed_at: new Date().toISOString(),
-        status: ['draft', 'sent'].includes(oa.status) ? 'viewed' : oa.status,
-      })
-      .eq('id', oa.id)
-      .then(() => {})
-
-    // Update per-member view for MMLLC
-    if (currentSig && currentSig.status !== 'signed') {
-      supabasePublic
-        .from('oa_signatures')
-        .update({
-          view_count: (currentSig.view_count || 0) + 1,
-          viewed_at: new Date().toISOString(),
-          status: ['pending', 'sent'].includes(currentSig.status) ? 'viewed' : currentSig.status,
-        })
-        .eq('id', currentSig.id)
-        .then(() => {})
-    }
-  }, [oa?.id, verified]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Init signature pad
   useEffect(() => {
@@ -297,24 +245,38 @@ function OperatingAgreementCodeContent() {
   }, [verified, oa, signed, currentSignerAlreadySigned, isMultiSigner, currentSignerIndex])
 
   // --- EMAIL GATE ---
-  function handleEmailVerify(e: React.FormEvent) {
+  // Compared on the server. The address is no longer sent to the browser, so
+  // there is nothing here to compare against — and nothing to read out of the
+  // page source. A successful check is what returns the document.
+  async function handleEmailVerify(e: React.FormEvent) {
     e.preventDefault()
+    const candidate = emailInput.trim()
+    if (!candidate) return
 
-    const expectedEmail = isMultiSigner && currentSig
-      ? currentSig.member_email
-      : oa?.member_email
+    setCheckingEmail(true)
+    setEmailError('')
+    try {
+      const signerCode = searchParams.get('signer')
+      const qs = new URLSearchParams({ code: accessCode, email: candidate })
+      if (signerCode) qs.set('signer', signerCode)
 
-    if (!expectedEmail) return
-
-    if (emailInput.trim().toLowerCase() === expectedEmail.toLowerCase()) {
-      const cookieKey = isMultiSigner && currentSignerIndex !== null
-        ? `oa_verified_${token}_${currentSignerIndex}`
-        : `oa_verified_${token}`
-      document.cookie = `${cookieKey}=1; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
-      setVerified(true)
-      setEmailError('')
-    } else {
-      setEmailError('The email address does not match. Please try again.')
+      const res = await fetch(`/api/operating-agreement/${token}/fetch?${qs.toString()}`)
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setEmailError(body?.error || 'Could not verify that address. Please try again.')
+        return
+      }
+      if (body.requiresEmail) {
+        setEmailError('The email address does not match. Please try again.')
+        return
+      }
+      const cookieKey = signerCode ? `oa_email_${token}_s` : `oa_email_${token}`
+      document.cookie = `${cookieKey}=${encodeURIComponent(candidate)}; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
+      await loadOA(candidate)
+    } catch {
+      setEmailError('Could not verify that address. Please check your connection and try again.')
+    } finally {
+      setCheckingEmail(false)
     }
   }
 
@@ -560,11 +522,10 @@ function OperatingAgreementCodeContent() {
     )
   }
 
-  if (!oa) return null
-
-  // Email gate
-  const isAdminPreview = searchParams.get('preview') === 'td'
-  if (!verified && !isAdminPreview && !isPortal) {
+  // Email gate — BEFORE the `!oa` bail-out. An unverified caller now holds no
+  // agreement data at all (the server withholds it until the address matches),
+  // so bailing out first would show them a blank page instead of the gate.
+  if (!verified) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', fontFamily: 'Georgia, serif', background: '#f8f8f8' }}>
         <div style={{ background: '#fff', padding: 40, borderRadius: 8, boxShadow: '0 2px 20px rgba(0,0,0,0.08)', maxWidth: 420, width: '100%' }}>
@@ -582,8 +543,8 @@ function OperatingAgreementCodeContent() {
               style={{ width: '100%', padding: '12px 16px', fontSize: 16, border: '1px solid #ddd', borderRadius: 6, marginBottom: 12, boxSizing: 'border-box' }}
             />
             {emailError && <p style={{ color: '#c00', fontSize: 13, margin: '0 0 12px' }}>{emailError}</p>}
-            <button type="submit" style={{ width: '100%', padding: '12px', fontSize: 16, background: '#0A3161', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>
-              View Operating Agreement
+            <button type="submit" disabled={checkingEmail} style={{ width: '100%', padding: '12px', fontSize: 16, background: checkingEmail ? '#999' : '#0A3161', color: '#fff', border: 'none', borderRadius: 6, cursor: checkingEmail ? 'default' : 'pointer', fontWeight: 600 }}>
+              {checkingEmail ? 'Verifying…' : 'View Operating Agreement'}
             </button>
           </form>
         </div>
@@ -591,10 +552,19 @@ function OperatingAgreementCodeContent() {
     )
   }
 
+  if (!oa) return null
+
   // Can this user sign? (MMLLC: only if they have a signer param and haven't signed yet)
-  const canSign = isMultiSigner
+  //
+  // `!isAdmin` is load-bearing: admin preview must be able to READ the agreement
+  // and never to EXECUTE it. Until this change a preview link could affix a real
+  // signature attributed to a member — a signature TD applied, on a document TD
+  // drafted, indistinguishable in the record from the member's own. Deriving the
+  // restriction from the query flag is safe because it only ever REMOVES the
+  // ability to sign; faking the flag costs you the button.
+  const canSign = !isAdmin && (isMultiSigner
     ? (currentSignerIndex !== null && !currentSignerAlreadySigned && !signed)
-    : (!signed && !allSigned)
+    : (!signed && !allSigned))
 
   // Generate OA sections from template
   const oaData: OAData = {

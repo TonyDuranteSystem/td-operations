@@ -44,6 +44,41 @@ Both follow the same pattern: create a record → send a tokenized link via Gmai
 - Files: `lib/mcp/tools/lease.ts`, `lib/mcp/tools/oa.ts`, `lib/types/oa-templates.ts` (`OA_SUPPORTED_STATES`), `app/api/lease-signed/route.ts`, `app/api/oa-signed/route.ts`, `app/api/lease-regen-drive/route.ts`, `app/lease`, `lib/mcp/safe-send.ts`, PDF generation in `lib/pdf/`.
 - Tables: `leases`, the OA/operating-agreement table, signature/signature-request records, `accounts`, `contacts`.
 
+## OA public pages — how data reaches the browser (2026-07-22)
+
+**The two public OA pages MUST NOT read `oa_agreements` / `oa_signatures` with the anon key.**
+They go through `GET /api/operating-agreement/[token]/fetch`, which holds the service key,
+verifies the access code SERVER-SIDE, and returns the whitelist in `lib/oa/public-view.ts`.
+
+Why (dev job 023c7d06): both pages used to `select('*')` with the anon key and compare the
+access code in the BROWSER — i.e. after the row had already been delivered. Policies were
+`USING (true)` for role `public` and `anon` held SELECT on both tables. Tokens are
+`${companySlug}-oa-${year}`, derivable from a company name that is public in state
+registries. One unauthenticated PostgREST request therefore returned, across ALL agreements:
+`access_code`, `ein_number`, `member_email`, `member_address`, the members blob — and every
+co-signer's personal signing code, which is the credential that authorises signing AS that
+member. Reproduced and then verified closed on an isolated local stack seeded with
+production's exact policy set (`scripts/migrations/20260722-0100-oa-close-public-read.sql`).
+
+Rules that follow:
+- **Never widen `toPublicAgreement` / `toPublicSignature` by spreading a row.** `assertNoSecrets`
+  throws on `access_code` / `member_email` / `email` / `account_id` / `contact_id`, including
+  inside nested JSONB — the `members` blob carried member emails and was caught only by
+  inspecting the route's real output, not by reading the mapper.
+- **`tests/unit/anon-grant-contract.test.ts` is the gate.** It derives the browser's anon
+  privilege needs from the code. If it fails, the code's needs changed — reconcile it
+  deliberately, and never revoke a grant on the strength of a grep.
+- **Admin preview cannot sign.** `canSign` excludes `isAdmin`, and the route requires a real
+  staff session via `isStaffPreview` (2026-07-21 incident) — the query flag alone proves nothing.
+- **New public/token-gated routes need a `middleware.ts` PUBLIC_PREFIXES entry** or they 307 to
+  the staff login. This one did, and only a real request surfaced it.
+
+**STILL OPEN — `anon` retains UPDATE on both tables.** The signing page still writes its
+signature row, the counter and the final status straight from the browser, so an attacker who
+guesses a token can corrupt an agreement. Closing it means moving those writes server-side
+first; the read fix does NOT close it. Separately open: the signing-integrity defects
+(browser-side finalization, no server reconciliation) — see the council review on that job.
+
 ## Gotchas, invariants & past bugs
 - **`lease_send` sends a real email immediately** (not a Gmail draft) — don't call it to "preview." Use `?preview=td` for review.
 - **OA generation is state-gated** — if the company's state isn't in `OA_SUPPORTED_STATES`, there's no template; add the template before generating.

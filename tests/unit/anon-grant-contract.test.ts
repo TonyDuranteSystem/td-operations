@@ -50,8 +50,15 @@ const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
   itin_submissions: ["SELECT", "UPDATE"],
   lease_agreements: ["SELECT", "UPDATE"],
   member_info_requests: ["SELECT"],
-  oa_agreements: ["SELECT", "UPDATE"],
-  oa_signatures: ["SELECT", "UPDATE"],
+  // The OA pages no longer READ with the anon key: both go through
+  // /api/operating-agreement/[token]/fetch, which verifies the access code
+  // server-side and returns a whitelist (lib/oa/public-view.ts). SELECT is
+  // revoked by 20260722-0100-oa-close-public-read.sql.
+  // UPDATE remains ONLY because the signing writes are still browser-side —
+  // moving them server-side and revoking this is the tracked follow-up. Until
+  // then an attacker who guesses a token can still corrupt an agreement.
+  oa_agreements: ["UPDATE"],
+  oa_signatures: ["UPDATE"],
   offers: ["SELECT", "UPDATE"],
   onboarding_submissions: ["SELECT", "UPDATE"],
   signature_requests: ["SELECT", "UPDATE"],

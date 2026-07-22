@@ -44,6 +44,11 @@ const PUBLIC_PREFIXES = [
   '/api/itin-form-completed',
   '/api/lease-signed',
   '/api/oa-signed',
+  // Public OA read route. Token-gated, NOT session-gated: it verifies the
+  // agreement's access code itself (app/api/operating-agreement/.../fetch) and
+  // returns a whitelist. The two public signing pages call it instead of
+  // reading the tables with the anon key.
+  '/api/operating-agreement/',
   '/api/ss4-signed',
   '/api/ss4',
   // Referral landing page (/invitation/[code]) + legacy /r/ redirect
