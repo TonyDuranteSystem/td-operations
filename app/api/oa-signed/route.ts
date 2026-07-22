@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
+import { resolveSignedPdfPath, signedPdfPathProblem } from "@/lib/oa/signed-pdf-path"
 
 export async function POST(req: NextRequest) {
   try {
@@ -26,7 +27,7 @@ export async function POST(req: NextRequest) {
     // Fetch OA record
     const { data: oa, error: oaErr } = await supabaseAdmin
       .from("oa_agreements")
-      .select("id, token, access_code, company_name, account_id, contact_id, entity_type, manager_name, status, total_signers, signed_count")
+      .select("id, token, access_code, pdf_storage_path, company_name, account_id, contact_id, entity_type, manager_name, status, total_signers, signed_count")
       .eq("id", oa_id)
       .eq("token", token)
       .single()
@@ -178,16 +179,21 @@ export async function POST(req: NextRequest) {
           )
           const targetFolderId = companyFolder?.id || acct.drive_folder_id
 
-          const { data: files } = await supabaseAdmin.storage
-            .from("signed-oa")
-            .list(oa.token, { limit: 1, sortBy: { column: "created_at", order: "desc" } })
+          // File the document the SERVER recorded — never "whatever is newest in
+          // the folder", which is what this used to do. The storage bucket
+          // accepts uploads from anyone (its only policy is INSERT for role
+          // `public`), and tokens are derivable from a public company name, so
+          // "newest wins" let an anonymous caller drop a PDF into a guessed
+          // folder, poke this route, and have TD file THEIR document to the
+          // client's Drive (upsert, overwriting the real one) and publish it to
+          // the client portal as executed. See lib/oa/signed-pdf-path.ts.
+          const resolved = resolveSignedPdfPath(oa.token, oa.pdf_storage_path)
 
-          if (files?.length) {
-            const pdfFile = files.find(f => f.name.endsWith('.pdf'))
-            if (pdfFile) {
+          if (resolved.ok) {
+            {
               const { data: blob } = await supabaseAdmin.storage
                 .from("signed-oa")
-                .download(`${oa.token}/${pdfFile.name}`)
+                .download(resolved.path)
 
               if (blob) {
                 const arrayBuffer = await blob.arrayBuffer()
@@ -209,13 +215,13 @@ export async function POST(req: NextRequest) {
                   })
                 }
               } else {
-                results.push({ step: "drive_upload", status: "error", detail: "Could not download PDF from Storage" })
+                results.push({ step: "drive_upload", status: "error", detail: `Recorded PDF not found in Storage: ${resolved.path}` })
               }
-            } else {
-              results.push({ step: "drive_upload", status: "skipped", detail: "No PDF found in Storage" })
             }
           } else {
-            results.push({ step: "drive_upload", status: "skipped", detail: "No files in Storage" })
+            // Refuse rather than guess. A missing document is a visible problem;
+            // filing the wrong one is an invisible one.
+            results.push({ step: "drive_upload", status: "error", detail: signedPdfPathProblem(resolved.reason) })
           }
         } else {
           results.push({ step: "drive_upload", status: "skipped", detail: "No drive_folder_id on account" })
