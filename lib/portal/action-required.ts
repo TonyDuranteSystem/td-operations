@@ -78,7 +78,15 @@ export interface ActionRequiredParams {
    * absolute PORTAL_BASE_URL link in chat/email; stored relative on the
    * bell notification (the portal navigates internally). Also the dedup
    * scope — give per-entity actions a unique link (e.g.
-   * "/portal/invoices?inv=<id>") so two different invoices both notify. */
+   * "/portal/invoices?inv=<id>") so two different invoices both notify.
+   *
+   * An ALREADY-ABSOLUTE url (http/https) is passed through untouched. That is
+   * for recipients who may not be able to use the portal at all: an operating-
+   * agreement co-signer is identified by a row in the members table and need
+   * not be linked to the company as a portal user, so a portal-relative link
+   * can resolve to the wrong company — or to nothing — for them. Their
+   * token+code signing link works with no login. Use this sparingly; the
+   * portal-relative form is right for anyone who does have portal access. */
   link: string
   /** Skip the email channel — for callers that already send their own richer
    * email (e.g. the invoice mailer attaches the PDF). Chat + bell/push still
@@ -221,7 +229,10 @@ export async function notifyClientActionRequired(params: ActionRequiredParams): 
     // recipient couldn't be resolved (message still delivered — a wrong-locale
     // message beats silence).
     const primaryLocale: Locale = recipients[0]?.locale ?? 'en'
-    const absoluteUrl = `${PORTAL_BASE_URL}${params.link}`
+    // Absolute links pass through; relative ones hang off the portal.
+    const absoluteUrl = /^https?:\/\//i.test(params.link)
+      ? params.link
+      : `${PORTAL_BASE_URL}${params.link}`
 
     // ── 1. Portal chat message (clickable) ──────────────────────────────
     try {

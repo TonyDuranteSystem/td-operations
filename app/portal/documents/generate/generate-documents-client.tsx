@@ -140,6 +140,8 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   const [signatureImage, setSignatureImage] = useState<string | null>(null)
   const [history, setHistory] = useState<HistoryItem[]>(initialHistory)
   const [oaCreateStatus, setOaCreateStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
+  const [oaNotified, setOaNotified] = useState(true)
+  const [oaCanSignNow, setOaCanSignNow] = useState(false)
   const [oaCreateError, setOaCreateError] = useState<string | null>(null)
 
   const documentRef = useRef<HTMLDivElement>(null)
@@ -354,6 +356,11 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Failed to create Operating Agreement')
+      // The route tells us whether anyone was actually reached, and whether the
+      // signer identified by THIS login can sign. Ignoring either produced a
+      // confident green screen that was sometimes untrue.
+      setOaNotified(data.notified !== false)
+      setOaCanSignNow(data.canSignNow === true)
       setOaCreateStatus('sent')
       await saveToHistory('pending_signatures')
       setStage('done')
@@ -824,10 +831,14 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
           </h2>
           {oaCreateStatus === 'sent' && (
             <p className="text-sm text-zinc-400 max-w-sm">
-              {isMMLC
+              {!oaNotified
                 ? (lang === 'it'
-                  ? 'Ogni socio ha ricevuto il link personale per firmare l\'Atto Costitutivo. Puoi firmare la tua parte adesso.'
-                  : 'Each member has received their personal signing link. You can sign your part now.')
+                  ? 'L\'Atto Costitutivo è stato creato, ma non siamo riusciti a inviare la notifica. Usa il pulsante qui sotto per firmare, e contatta l\'assistenza se hai bisogno di aiuto.'
+                  : 'Your Operating Agreement was created, but we could not send the notification. Use the button below to sign, and contact support if you need help.')
+                : isMMLC
+                ? (lang === 'it'
+                  ? 'Ogni socio ha ricevuto il proprio link personale per firmare l\'Atto Costitutivo.'
+                  : 'Each member has received their own personal signing link.')
                 : (lang === 'it'
                   ? 'Il tuo Atto Costitutivo è pronto. Firmalo adesso per completare il processo.'
                   : 'Your Operating Agreement is ready. Sign it now to complete the process.')}
@@ -840,7 +851,12 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
               for letting them finish in the moment they are already here. The
               company is carried in the link so a client with more than one
               lands on the right one. */}
-          {oaCreateStatus === 'sent' && (
+          {/* Only when the person looking at this screen is actually a signer.
+              In a multi-member company the creator is not always one of the
+              members — showing them this button sent them to a read-only page
+              with nothing to click, which is the very problem this button was
+              added to solve, recreated somewhere new. */}
+          {oaCreateStatus === 'sent' && oaCanSignNow && (
             <a
               href={`/portal/sign/oa?account=${account.id}`}
               className="mt-4 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold text-sm transition"

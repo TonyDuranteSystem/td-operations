@@ -25,6 +25,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
+import { APP_BASE_URL } from '@/lib/config'
 import { notifyClientActionRequired } from '@/lib/portal/action-required'
 import { reportSystemError } from '@/lib/system-errors'
 
@@ -150,22 +151,38 @@ export async function POST(request: NextRequest) {
     }
 
     // REFUSE if a co-signer has ALREADY SIGNED this agreement. The delete below
-    // removes their signature with it, and the notification that would have told
-    // them can be swallowed by the 10-minute duplicate guard — so a member could
-    // be silently un-signed and never know. Regenerating is a legitimate thing to
-    // want (a wrong date, a wrong address), but it destroys someone else's
-    // executed signature, so it has to be a deliberate act with a human in the
-    // loop rather than a side effect of clicking the button again.
-    const { count: signedCount } = await supabaseAdmin
-      .from('oa_signatures')
-      .select('id', { count: 'exact', head: true })
-      .eq('oa_id', existing.id)
-      .eq('status', 'signed')
+    // removes their signature with it, so regenerating would silently un-sign
+    // someone. That has to be a deliberate act with a human in the loop, not a
+    // side effect of clicking the button again.
+    //
+    // A VOIDED agreement is exempt. Voiding is exactly how staff unblock a stuck
+    // client, and the portal then tells them "this is outdated — generate a new
+    // one" (see the sign page). Counting the dead signatures on a voided record
+    // would refuse the very regeneration the void exists to enable, leaving the
+    // client told to do something the system won't allow. Its signatures are
+    // already legally dead.
+    if (existing.status !== 'voided') {
+      const { count: signedCount, error: countErr } = await supabaseAdmin
+        .from('oa_signatures')
+        .select('id', { count: 'exact', head: true })
+        .eq('oa_id', existing.id)
+        .eq('status', 'signed')
 
-    if ((signedCount ?? 0) > 0) {
-      return NextResponse.json({
-        error: `Cannot regenerate — ${signedCount} member${signedCount === 1 ? ' has' : 's have'} already signed this Operating Agreement. Contact support to have it reissued.`,
-      }, { status: 409 })
+      // FAIL CLOSED. Discarding this error meant a transient database problem
+      // returned a null count, which read as "nobody signed" — so the one guard
+      // protecting an executed signature did nothing precisely when the database
+      // was unhealthy, and the delete below destroyed the signature anyway.
+      if (countErr || signedCount === null) {
+        return NextResponse.json({
+          error: 'Could not verify the signing status of the existing Operating Agreement. Please try again in a moment, or contact support.',
+        }, { status: 503 })
+      }
+
+      if (signedCount > 0) {
+        return NextResponse.json({
+          error: `Cannot regenerate — ${signedCount} member${signedCount === 1 ? ' has' : 's have'} already signed this Operating Agreement. Contact support to have it reissued.`,
+        }, { status: 409 })
+      }
     }
 
     // Delete existing unsigned OA + signatures
@@ -241,6 +258,11 @@ export async function POST(request: NextRequest) {
 
   // ── 8. FOR MMLLC: INSERT OA_SIGNATURES + SEND PORTAL CHAT ──
   const notifyOutcomes: Awaited<ReturnType<typeof notifyClientActionRequired>>[] = []
+  // Is the person who just pressed the button themselves a signer? For a
+  // single-member company they always are. For a multi-member one the creator
+  // may be an administrator who is not among the members — offering them a
+  // "Sign now" button lands them on a read-only page with nothing to click.
+  let callerCanSign = !isMMLC
 
   if (isMMLC) {
     const sigRows = membersRows.map((m, idx) => ({
@@ -270,6 +292,16 @@ export async function POST(request: NextRequest) {
       // the primary signer's.
       for (const sig of insertedSigs) {
         if (!sig.contact_id) continue
+        if (sig.contact_id === contactId) callerCanSign = true
+        // A co-signer's DIRECT signing link, not a portal path. A member is
+        // identified by a row in the members table and need not be linked to
+        // the company as a portal user — for such a member a portal link
+        // resolves to whichever company the portal can see for them, i.e. the
+        // wrong one, or none. This link needs no login and identifies them
+        // specifically. It is also unique per member, so it is a correct dedup
+        // scope. (The previous code sent exactly this; replacing it with a
+        // portal path was a regression for co-signers.)
+        const signerUrl = `${APP_BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}?portal=true&signer=${sig.access_code}`
         const r = await notifyClientActionRequired({
           contact_id: sig.contact_id,
           account_id,
@@ -285,7 +317,7 @@ export async function POST(request: NextRequest) {
             en: `The Operating Agreement for ${account.company_name} is ready for your signature. All ${totalSigners} members must sign before it takes effect.`,
             it: `L'Atto Costitutivo di ${account.company_name} è pronto per la tua firma. Tutti i ${totalSigners} soci devono firmare prima che diventi efficace.`,
           },
-          link: `/portal/sign/oa?account=${account_id}`,
+          link: signerUrl,
         })
         notifyOutcomes.push(r)
       }
@@ -323,16 +355,26 @@ export async function POST(request: NextRequest) {
   // regenerate — caught in end-to-end QA, not by reading this code.
   const reached = (channel: string) =>
     channel.startsWith('ok') || channel.startsWith('skipped: duplicate')
-  const notified = notifyOutcomes.some(r => reached(r.chat) || reached(r.email))
-  if (notifyOutcomes.length > 0 && !notified) {
+  const notified = notifyOutcomes.length > 0 && notifyOutcomes.some(r => reached(r.chat) || reached(r.email))
+  // NOT gated on "we tried at least once". Zero attempts is the WORST case, not
+  // an exempt one: if the signature rows fail to insert, the notify loop never
+  // runs, and gating on length > 0 meant that silence raised no alarm at all —
+  // an agreement marked sent, nobody told, nobody warned. Exactly the incident
+  // this change exists to prevent.
+  if (!notified) {
     await reportSystemError({
       source: 'server',
       route: '/api/portal/operating-agreement/create',
       method: 'POST',
-      message: `Operating Agreement created for ${account.company_name} but NO signer could be notified on any channel`,
+      message: notifyOutcomes.length === 0
+        ? `Operating Agreement created for ${account.company_name} but NO notification was even attempted (signature rows missing?)`
+        : `Operating Agreement created for ${account.company_name} but NO signer could be notified on any channel`,
       context: {
         account_id,
         token: oa.token,
+        entity_type: entityType,
+        total_signers: totalSigners,
+        dispatches_attempted: notifyOutcomes.length,
         outcomes: notifyOutcomes.map(r => ({ chat: r.chat, email: r.email, notification: r.notification })),
       },
     })
@@ -341,6 +383,7 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     success: true,
     notified,
+    canSignNow: callerCanSign,
     token: oa.token,
     total_signers: totalSigners,
   })
