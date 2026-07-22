@@ -147,3 +147,57 @@ describe('buildJourneySteps', () => {
     expect(steps.map(s => s.state)).toEqual(['completed', 'completed', 'current'])
   })
 })
+
+// ── The "start your application" call-to-action gate ────────────────────────
+// The client's ITIN journey shows a Start button ONLY while the FIRST step is
+// the current one. The page computes exactly this predicate, so pin it here.
+//
+// Why positional and not the stage NAME: stage names are editable from the
+// service editor, and that editor DELETES and re-inserts stage rows, so a name
+// is not a safe key. Position survives a rename.
+//
+// Why it matters that it can never fire late: three ITIN clients have
+// applications already AT THE IRS (verified in production 2026-07-22). Showing
+// any of them "start your application" would be worse than showing nothing.
+const ITIN_STAGES: FlowStageRow[] = [
+  { stage_name: 'Data Collection', stage_order: 1, client_label: 'Completing ITIN wizard', client_label_it: 'Compilazione wizard ITIN' },
+  { stage_name: 'Document Preparation', stage_order: 2, client_label: 'Documents being prepared', client_label_it: null },
+  { stage_name: 'Client Signing', stage_order: 3, client_label: 'Print, sign & mail documents', client_label_it: null },
+  { stage_name: 'IRS Processing', stage_order: 7, client_label: 'IRS is processing your application', client_label_it: null },
+  { stage_name: 'ITIN Approved', stage_order: 8, client_label: 'ITIN approved!', client_label_it: null },
+]
+
+/** Mirrors the page's predicate: is the first journey step the current one? */
+const atFirstStep = (stage: string | null) => {
+  const j = buildJourneySteps(ITIN_STAGES, stage, 'en')
+  return j.length > 0 && j[0].state === 'current'
+}
+
+describe('ITIN start-your-application gate', () => {
+  it('shows at the first step — the only stage waiting on the client', () => {
+    expect(atFirstStep('Data Collection')).toBe(true)
+  })
+
+  it('is GONE at every later stage, including after the IRS has the application', () => {
+    expect(atFirstStep('Document Preparation')).toBe(false)
+    expect(atFirstStep('Client Signing')).toBe(false)
+    expect(atFirstStep('IRS Processing')).toBe(false)
+    expect(atFirstStep('ITIN Approved')).toBe(false)
+  })
+
+  it('stays hidden when the stage is unknown or missing — fails closed', () => {
+    // A renamed stage resolves to no current step; the journey renders all
+    // steps as future. Silence is the correct degradation, never a CTA.
+    expect(atFirstStep('Renamed By Someone In The Editor')).toBe(false)
+    expect(atFirstStep(null)).toBe(false)
+  })
+
+  it('survives a rename of the first stage — position is the key, not the name', () => {
+    const renamed: FlowStageRow[] = [
+      { ...ITIN_STAGES[0], stage_name: 'Raccolta Dati' },
+      ...ITIN_STAGES.slice(1),
+    ]
+    const j = buildJourneySteps(renamed, 'Raccolta Dati', 'en')
+    expect(j[0].state).toBe('current')
+  })
+})
