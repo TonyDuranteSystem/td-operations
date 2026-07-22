@@ -89,7 +89,7 @@ describe("wizard labels", () => {
 
   it("resolves tax_return — the service slug that leaks into wizard call sites", () => {
     expect(wizardLabelFor("tax_return").en).toBe("Tax Return")
-    expect(wizardLabelFor("tax_return").it).toBe("Dichiarazione Fiscale")
+    expect(wizardLabelFor("tax_return").it).toBe("Dichiarazione dei redditi annuale")
   })
 
   it("builds the client-facing title in both languages, name first", () => {

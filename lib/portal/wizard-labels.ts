@@ -53,7 +53,7 @@ export const WIZARD_LABELS: Record<WizardType, { en: string; it: string }> = {
   banking_relay: { en: "Relay Bank Account", it: "Conto Bancario Relay" },
   closure: { en: "Company Closure", it: "Chiusura Società" },
   itin: { en: "ITIN Application", it: "Richiesta ITIN" },
-  tax: { en: "Tax Return", it: "Dichiarazione Fiscale" },
+  tax: { en: "Tax Return", it: "Dichiarazione dei redditi annuale" },
   company_info: { en: "Company Information", it: "Informazioni Aziendali" },
   td_communication: { en: "Brand Audit", it: "Brand Audit" },
 }
