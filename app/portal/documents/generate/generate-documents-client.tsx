@@ -416,7 +416,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
               className="text-left p-6 rounded-lg border border-zinc-200 bg-white hover:bg-zinc-50 hover:border-blue-500/50 transition-all group"
             >
               <div className="flex items-start gap-4">
-                <div className="p-2.5 rounded-lg bg-blue-500/10 text-blue-400 group-hover:bg-blue-500/20 transition">
+                <div className="p-2.5 rounded-lg bg-blue-500/10 text-blue-700 group-hover:bg-blue-500/20 transition">
                   <FileText size={24} />
                 </div>
                 <div>
@@ -436,7 +436,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
               className="text-left p-6 rounded-lg border border-zinc-200 bg-white hover:bg-zinc-50 hover:border-emerald-500/50 transition-all group"
             >
               <div className="flex items-start gap-4">
-                <div className="p-2.5 rounded-lg bg-emerald-500/10 text-emerald-400 group-hover:bg-emerald-500/20 transition">
+                <div className="p-2.5 rounded-lg bg-emerald-500/10 text-emerald-700 group-hover:bg-emerald-500/20 transition">
                   <Shield size={24} />
                 </div>
                 <div>
@@ -456,7 +456,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
               className="text-left p-6 rounded-lg border border-zinc-200 bg-white hover:bg-zinc-50 hover:border-violet-500/50 transition-all group"
             >
               <div className="flex items-start gap-4">
-                <div className="p-2.5 rounded-lg bg-violet-500/10 text-violet-400 group-hover:bg-violet-500/20 transition">
+                <div className="p-2.5 rounded-lg bg-violet-500/10 text-violet-700 group-hover:bg-violet-500/20 transition">
                   <ScrollText size={24} />
                 </div>
                 <div>
@@ -500,8 +500,8 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                         <td className="py-2 px-3 text-center">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
                             h.status === 'signed'
-                              ? 'bg-green-500/10 text-green-400'
-                              : 'bg-blue-500/10 text-blue-400'
+                              ? 'bg-green-500/10 text-green-700'
+                              : 'bg-blue-500/10 text-blue-700'
                           }`}>
                             {h.status}
                           </span>
@@ -569,8 +569,8 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                   {account.memberCount != null ? (
                     <div className="flex items-center gap-2 text-sm">
                       {oaPreflight.memberCountOk
-                        ? <Check className="h-4 w-4 text-emerald-400 shrink-0" />
-                        : <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />}
+                        ? <Check className="h-4 w-4 text-emerald-600 shrink-0" />
+                        : <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />}
                       <span className={oaPreflight.memberCountOk ? 'text-zinc-700' : 'text-amber-600'}>
                         {members.length} member{members.length !== 1 ? 's' : ''} in system
                         {!oaPreflight.memberCountOk && ` (SS-4 says ${account.memberCount})`}
@@ -585,8 +585,8 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                   {/* Portal access */}
                   <div className="flex items-start gap-2 text-sm">
                     {oaPreflight.allHavePortal
-                      ? <Check className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
-                      : <X className="h-4 w-4 text-red-400 shrink-0 mt-0.5" />}
+                      ? <Check className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+                      : <X className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />}
                     <span className={oaPreflight.allHavePortal ? 'text-zinc-700' : 'text-red-600'}>
                       {oaPreflight.allHavePortal
                         ? 'All members have portal accounts'
@@ -596,8 +596,8 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                   {/* Ownership */}
                   <div className="flex items-center gap-2 text-sm">
                     {oaPreflight.ownershipOk
-                      ? <Check className="h-4 w-4 text-emerald-400 shrink-0" />
-                      : <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />}
+                      ? <Check className="h-4 w-4 text-emerald-600 shrink-0" />
+                      : <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />}
                     <span className={oaPreflight.ownershipOk ? 'text-zinc-700' : 'text-amber-600'}>
                       Ownership: {members.map(m => `${m.ownershipPct ?? '?'}%`).join(' + ')} = {oaPreflight.ownershipTotal.toFixed(0)}%
                       {!oaPreflight.ownershipOk && ' (should be 100%)'}
@@ -814,7 +814,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                     {oaCreateStatus === 'sending' ? 'Sending...' : (lang === 'it' ? 'Crea e Invia per Firma' : 'Create & Send for Signing')}
                   </button>
                   {oaCreateError && (
-                    <p className="text-xs text-red-400 text-right">{oaCreateError}</p>
+                    <p className="text-xs text-red-600 text-right">{oaCreateError}</p>
                   )}
                 </div>
               ) : (
@@ -834,7 +834,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
       {/* === DONE STAGE === */}
       {stage === 'done' && (
         <div className="flex flex-col items-center justify-center py-16 space-y-4 text-center">
-          <CheckCircle2 size={48} className="text-green-400" />
+          <CheckCircle2 size={48} className="text-green-600" />
           <h2 className="text-xl font-semibold text-zinc-900">
             {oaCreateStatus === 'sent'
               ? (lang === 'it' ? 'Firma avviata!' : 'Signing process started!')
