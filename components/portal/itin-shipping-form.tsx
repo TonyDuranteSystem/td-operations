@@ -1,15 +1,33 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { Truck, ExternalLink, Loader2, Pencil } from 'lucide-react'
 import { COURIERS, courierTrackingUrl } from '@/lib/flows/courier'
+import { confirmItinMailed } from '@/app/portal/itin-documents/actions'
 
 /**
- * Client-facing ITIN shipping-tracking form, embedded in the "Client Signing"
- * card on the portal flow page. The client picks the courier + enters the
- * tracking number for the package they mailed to the TD office. Once saved it
- * collapses to a read-only summary (courier + tracking, with a tracking link
- * where available) plus an Edit button. Surfaces the server's real error (R099).
+ * Client-facing ITIN shipping form, embedded in the "Client Signing" card on
+ * the portal flow page. The client picks the courier, enters the tracking
+ * number for the package they mailed to the TD office, and confirms they have
+ * sent it — ONE action that both records the tracking and moves their
+ * application forward.
+ *
+ * Why it does both (Antonio, 2026-07-22): the client's side of the ITIN had
+ * been split across two pages. This form saved a tracking number and advanced
+ * NOTHING — the stage sat at "Client Signing" forever and nobody was told —
+ * while the only button that actually moved the application ("I have mailed
+ * the documents") lived on a different page, /portal/itin-documents, which had
+ * no tracking field. Worse, the action-required email we send at this exact
+ * moment deep-links HERE. So a client could do everything asked of them, on
+ * the page we sent them to, and from the staff side it looked like they never
+ * did anything. Saving and confirming are one act for the client, so they are
+ * one act here.
+ *
+ * Order matters: the tracking POST runs FIRST and is harmless on its own, so a
+ * failure in the advance leaves a saved tracking number and a retryable button
+ * rather than a half-advanced application. Surfaces the server's real error
+ * (R099) rather than a generic failure.
  */
 export function ItinShippingForm({
   serviceDeliveryId,
@@ -24,30 +42,34 @@ export function ItinShippingForm({
 }) {
   const t = locale === 'it'
     ? {
-        heading: 'Hai spedito i documenti? Inserisci il tracking',
+        heading: 'Hai spedito i documenti? Registra la spedizione',
         courier: 'Corriere',
         choose: 'Seleziona…',
         tracking: 'Numero di tracking',
-        save: 'Salva',
-        saving: 'Salvataggio…',
+        save: 'Ho spedito i documenti',
+        saving: 'Registrazione…',
         edit: 'Modifica',
-        savedHeading: 'Spedizione registrata',
+        savedHeading: 'Spedizione registrata — grazie!',
+        savedNote: 'Ti avviseremo appena il pacco arriva nel nostro ufficio.',
         via: 'Corriere',
         track: 'Traccia il pacco',
         errFallback: 'Impossibile salvare. Riprova.',
+        confirm: 'Confermi di aver firmato e spedito i moduli W-7 e 1040-NR (doppia copia) insieme alle copie del passaporto?',
       }
     : {
-        heading: 'Shipped your documents? Add your tracking',
+        heading: 'Shipped your documents? Record your shipment',
         courier: 'Courier',
         choose: 'Select…',
         tracking: 'Tracking number',
-        save: 'Save',
-        saving: 'Saving…',
+        save: 'I have mailed the documents',
+        saving: 'Recording…',
         edit: 'Edit',
-        savedHeading: 'Shipping recorded',
+        savedHeading: 'Shipment recorded — thank you!',
+        savedNote: 'We’ll let you know as soon as your package reaches our office.',
         via: 'Courier',
         track: 'Track package',
         errFallback: 'Could not save. Please try again.',
+        confirm: 'Confirm you have signed and mailed the W-7 and 1040-NR (double copy) along with copies of your passport pages?',
       }
 
   const [courier, setCourier] = useState(initialCourier ?? '')
@@ -58,11 +80,18 @@ export function ItinShippingForm({
   const [editing, setEditing] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // A tracking number already on the record means this client has confirmed
+  // mailing before — a later Edit is a correction, not a second confirmation.
+  const [alreadyConfirmed, setAlreadyConfirmed] = useState(Boolean(initialTracking))
+  const router = useRouter()
 
   async function handleSave() {
     setError(null)
     if (!courier) { setError(t.choose); return }
     if (!tracking.trim()) { setError(t.tracking); return }
+    // Same confirmation the standalone button asked for — this now moves the
+    // application forward, so it must not fire on a stray click.
+    if (!alreadyConfirmed && !window.confirm(t.confirm)) return
     setSubmitting(true)
     try {
       const res = await fetch(`/api/portal/flows/${serviceDeliveryId}/shipping`, {
@@ -76,6 +105,21 @@ export function ItinShippingForm({
       }
       setSaved({ courier, tracking: tracking.trim() })
       setEditing(false)
+
+      // Then move the application on. Skipped when the client is merely
+      // correcting a tracking number they already confirmed — advancing twice
+      // would be wrong, and the server guards it anyway.
+      if (!alreadyConfirmed) {
+        const advanced = await confirmItinMailed()
+        if (!advanced.success) {
+          // The tracking IS saved; only the advance failed. Say so plainly and
+          // leave the button retryable rather than pretending it all worked.
+          setError(advanced.error || t.errFallback)
+          return
+        }
+        setAlreadyConfirmed(true)
+      }
+      router.refresh()
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : t.errFallback)
     } finally {
@@ -108,6 +152,7 @@ export function ItinShippingForm({
         <p className="text-sm text-zinc-700 break-all">
           <span className="text-zinc-500">{t.tracking}:</span> {saved.tracking}
         </p>
+        <p className="mt-2 text-sm text-emerald-800">{t.savedNote}</p>
         {url && (
           <a
             href={url}

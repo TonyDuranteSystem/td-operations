@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, MessageSquare, Layers } from 'lucide-react'
+import { ArrowLeft, ArrowRight, MessageSquare, Layers, PenSquare } from 'lucide-react'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -44,7 +44,11 @@ function buildItinShippingCard(
         '2 copie firmate del Form 1040-NR (con Schedule OI)',
         '2 copie a colori del passaporto (pagina dati + pagina firma)',
       ],
-      tracking: 'Usa un corriere tracciabile (FedEx, DHL, UPS) e condividi con noi il numero di tracking.',
+      tracking: 'Usa un corriere tracciabile (FedEx, DHL, UPS) e registra qui sotto la spedizione.',
+      // The CAA warning existed ONLY on /portal/itin-documents. A client who
+      // followed the emailed link landed here and never saw it — and mailing an
+      // original passport is not a recoverable mistake.
+      passportWarning: 'NON spedire il passaporto originale — servono solo le fotocopie a colori.',
       documentsHeading: 'I tuoi documenti da stampare:',
       downloadLabel: 'Scarica',
       documents,
@@ -61,7 +65,8 @@ function buildItinShippingCard(
       '2× signed Form 1040-NR (with Schedule OI)',
       '2× color copies of your passport (data page + signature page)',
     ],
-    tracking: 'Use a trackable shipping method (FedEx, DHL, UPS) and share the tracking number with us.',
+    tracking: 'Use a trackable shipping method (FedEx, DHL, UPS) and record your shipment below.',
+    passportWarning: 'Do NOT mail your original passport — colour photocopies only.',
     documentsHeading: 'Your documents to print:',
     downloadLabel: 'Download',
     documents,
@@ -177,9 +182,43 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
       locale,
     }
   }
+  // Only at Client Signing. Previously this card was built for EVERY ITIN
+  // stage (only the tracking form inside it was gated), so a client still at
+  // Data Collection could expand "Print, sign & mail your documents" and find
+  // an empty document list — an instruction they cannot act on, sitting next
+  // to the one they actually need. Antonio, 2026-07-22.
   const shipping: ShippingCard | null =
-    sd.service_type === 'ITIN'
+    sd.service_type === 'ITIN' && sd.stage === 'Client Signing'
       ? buildItinShippingCard(locale, docs.map(d => ({ id: d.id, file_name: d.file_name })), shippingForm)
+      : null
+
+  // ── "Do this now" call-to-action ──
+  // The client's journey was read-only, so at the FIRST step — the one that
+  // waits on THEM — they saw "Completing ITIN wizard / We need your personal
+  // information and passport to start" and had nothing to press. The form was
+  // reachable only via a sidebar item labelled "Complete Setup", which names
+  // neither the service nor the task. Pietro De Pellegrino sat there; Antonio
+  // could only identify it by recognising the W-7 on screen.
+  //
+  // Keyed POSITIONALLY (is the first journey step the current one?), never on
+  // the stage NAME: stage names are editable from the service editor, and that
+  // editor deletes and re-inserts stage rows, so a name is not a safe key.
+  // Positional also makes the wrong-time case impossible — once the client has
+  // moved on, the first step is no longer current and the button is gone. That
+  // matters: three clients have applications already at the IRS, and telling
+  // any of them to "start your application" would be worse than saying nothing.
+  const atFirstStep = journey !== null && journey.length > 0 && journey[0].state === 'current'
+  const itinCta =
+    sd.service_type === 'ITIN' && atFirstStep
+      ? {
+          title: locale === 'it' ? 'Compila la tua richiesta ITIN' : 'Complete your ITIN application',
+          body:
+            locale === 'it'
+              ? 'Per iniziare ci servono i tuoi dati personali e il passaporto. Bastano circa 10 minuti.'
+              : 'To get started we need your personal details and passport. It takes about 10 minutes.',
+          cta: locale === 'it' ? 'Inizia ora' : 'Start now',
+          href: '/portal/wizard?type=itin',
+        }
       : null
 
   // ── Flow chat messages (read-only) — same scoping as the portal chat client
@@ -233,6 +272,28 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
           </span>
         )}
       </div>
+
+      {/* The one thing the client must do now. Sits ABOVE the progress ladder
+          so it is the first thing read — the ladder describes where they are,
+          this says what to do. Rendered only while the first step is current. */}
+      {itinCta && (
+        <Link
+          href={itinCta.href}
+          className="block rounded-xl border-2 border-blue-500 bg-blue-50 p-4 sm:p-5 hover:bg-blue-100 transition-colors"
+        >
+          <div className="flex items-start gap-3">
+            <PenSquare className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-blue-900">{itinCta.title}</h2>
+              <p className="mt-1 text-sm text-blue-800">{itinCta.body}</p>
+              <span className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white">
+                {itinCta.cta}
+                <ArrowRight className="h-4 w-4" />
+              </span>
+            </div>
+          </div>
+        </Link>
+      )}
 
       {/* Progress — rich clickable journey for contact flows (ITIN), the compact
           stepper for account flows, or a neutral state when neither applies. */}

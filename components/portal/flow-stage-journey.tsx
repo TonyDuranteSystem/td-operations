@@ -26,6 +26,8 @@ export interface ShippingCard {
   addressLines: string[]
   checklist: string[]
   tracking: string
+  /** CAA safety line — mailing an ORIGINAL passport is unrecoverable. */
+  passportWarning?: string
   /** Heading above the embedded download list (e.g. "Your documents to print:"). */
   documentsHeading: string
   /** Per-document download button label (e.g. "Download"). */
@@ -158,6 +160,11 @@ export function FlowStageJourney({
                         ))}
                       </ul>
                       <p className="mt-3 text-xs font-medium text-amber-800">{shipping.tracking}</p>
+                      {shipping.passportWarning && (
+                        <p className="mt-2 rounded-md bg-amber-100 px-3 py-2 text-xs font-semibold text-amber-900">
+                          {shipping.passportWarning}
+                        </p>
+                      )}
 
                       {shipping.documents.length > 0 && (
                         <div className="mt-4 border-t border-amber-200 pt-3">
