@@ -33,12 +33,12 @@ describe('buildWizardReminderTitle', () => {
 
   it('omits the company suffix when no company name is known (e.g. formation before an account exists)', () => {
     const title = buildWizardReminderTitle({ urgency: '7d', wizardType: 'formation', companyName: null })
-    expect(title).toBe('Action needed: Complete your Formation form')
+    expect(title).toBe('Action needed: Complete your LLC Formation form')
   })
 
   it('omits the company suffix when companyName is undefined', () => {
     const title = buildWizardReminderTitle({ urgency: '7d', wizardType: 'formation' })
-    expect(title).toBe('Action needed: Complete your Formation form')
+    expect(title).toBe('Action needed: Complete your LLC Formation form')
   })
 
   it('uses the "Action needed" prefix for 7-day and "Reminder" for 3-day, matching current copy', () => {

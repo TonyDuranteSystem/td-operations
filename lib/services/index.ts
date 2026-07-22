@@ -335,7 +335,7 @@ export const SERVICES_STATIC: readonly StaticServiceEntry[] = [
   {
     slug: "tax_return",
     display_name: "Tax Return",
-    display_name_translations: { it: "Dichiarazione Fiscale" },
+    display_name_translations: { it: "Dichiarazione dei redditi annuale" },
     status: "active",
     tags: ["service", "sd", "sellable", "auto_bundled_with_management"],
   },

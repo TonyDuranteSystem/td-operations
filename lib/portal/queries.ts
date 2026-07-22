@@ -7,6 +7,7 @@ import type { FlowStageRow, FlowStep } from '@/lib/flows/flow-progress'
 import type { FormationStageRow } from '@/lib/portal/formation-progress'
 import { normalizeStageHistory } from '@/lib/stage-history-helpers'
 import { resolveTaxWizardEligibility } from '@/lib/tax/wizard-eligibility'
+import { completeWizardFormTitle, startWizardFormTitle } from '@/lib/portal/wizard-labels'
 
 /**
  * Portal data queries. All use supabaseAdmin (service role, bypasses RLS)
@@ -1275,27 +1276,11 @@ function wizardTypeForServiceType(serviceType: string): string | null {
   return SD_WIZARD_TYPE_BY_SERVICE_TYPE[serviceType] ?? null
 }
 
-function labelForWizardType(wizardType: string): string {
-  switch (wizardType) {
-    case 'formation': return 'Formation'
-    case 'closure': return 'Company Closure'
-    case 'itin': return 'ITIN Application'
-    case 'tax': return 'Tax Return'
-    case 'onboarding': return 'Onboarding'
-    default: return wizardType
-  }
-}
-
-function labelForWizardTypeIt(wizardType: string): string {
-  switch (wizardType) {
-    case 'formation': return 'Costituzione'
-    case 'closure': return 'Chiusura Società'
-    case 'itin': return 'Richiesta ITIN'
-    case 'tax': return 'Dichiarazione dei Redditi'
-    case 'onboarding': return 'Onboarding'
-    default: return wizardType
-  }
-}
+// The two local label switches that used to live here are gone. They knew
+// itin/closure but not the banking types, so a banking wizard fell through to
+// `default` and rendered its internal code to the client. Every title on this
+// page is now built by completeWizardFormTitle / startWizardFormTitle in
+// ./wizard-labels, which own the sentence as well as the noun.
 
 function daysSince(dateStr: string): number {
   return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000)
@@ -1447,11 +1432,10 @@ export async function getPortalActionItems(
 
     const age = daysSince(w.created_at)
     const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
-    const typeLabel = w.wizard_type === 'formation' ? 'Formation' : w.wizard_type === 'onboarding' ? 'Onboarding' : w.wizard_type
     items.push({
       type: 'form',
-      title: `Complete ${typeLabel} Form`,
-      titleIt: `Completa il modulo di ${typeLabel === 'Formation' ? 'Costituzione' : typeLabel === 'Onboarding' ? 'Onboarding' : typeLabel}`,
+      title: completeWizardFormTitle(w.wizard_type, 'en'),
+      titleIt: completeWizardFormTitle(w.wizard_type, 'it'),
       description: 'Your data collection form is in progress. Please complete it.',
       descriptionIt: 'Il tuo modulo di raccolta dati è in corso. Completalo.',
       href: `/portal/wizard?type=${w.wizard_type}`,
@@ -1516,12 +1500,12 @@ export async function getPortalActionItems(
 
     const age = daysSince(sd.created_at)
     const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
-    const label = labelForWizardType(wt)
-    const labelIt = labelForWizardTypeIt(wt)
     items.push({
       type: 'form',
-      title: `Start ${label} Form`,
-      titleIt: `Inizia il modulo di ${labelIt}`,
+      // sd.service_type distinguishes ITIN Renewal from ITIN Application —
+      // both open the same wizard, but the card must name what they bought.
+      title: startWizardFormTitle(wt, 'en', sd.service_type),
+      titleIt: startWizardFormTitle(wt, 'it', sd.service_type),
       description: 'Click to begin your data collection form.',
       descriptionIt: 'Clicca per iniziare il modulo di raccolta dati.',
       href: `/portal/wizard?type=${wt}`,
@@ -1751,11 +1735,10 @@ export async function getPortalActionItemsByContact(contactId: string): Promise<
     inProgressWizardTypesByContact.add(w.wizard_type)
     const age = daysSince(w.created_at)
     const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
-    const typeLabel = w.wizard_type === 'formation' ? 'Formation' : w.wizard_type === 'onboarding' ? 'Onboarding' : w.wizard_type
     items.push({
       type: 'form',
-      title: `Complete ${typeLabel} Form`,
-      titleIt: `Completa il modulo di ${typeLabel === 'Formation' ? 'Costituzione' : typeLabel === 'Onboarding' ? 'Onboarding' : typeLabel}`,
+      title: completeWizardFormTitle(w.wizard_type, 'en'),
+      titleIt: completeWizardFormTitle(w.wizard_type, 'it'),
       description: 'Your data collection form is in progress. Please complete it.',
       descriptionIt: 'Il tuo modulo di raccolta dati è in corso. Completalo.',
       href: `/portal/wizard?type=${w.wizard_type}`,
@@ -1796,12 +1779,12 @@ export async function getPortalActionItemsByContact(contactId: string): Promise<
 
     const age = daysSince(sd.created_at)
     const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
-    const label = labelForWizardType(wt)
-    const labelIt = labelForWizardTypeIt(wt)
     items.push({
       type: 'form',
-      title: `Start ${label} Form`,
-      titleIt: `Inizia il modulo di ${labelIt}`,
+      // sd.service_type distinguishes ITIN Renewal from ITIN Application —
+      // both open the same wizard, but the card must name what they bought.
+      title: startWizardFormTitle(wt, 'en', sd.service_type),
+      titleIt: startWizardFormTitle(wt, 'it', sd.service_type),
       description: 'Click to begin your data collection form.',
       descriptionIt: 'Clicca per iniziare il modulo di raccolta dati.',
       href: `/portal/wizard?type=${wt}`,

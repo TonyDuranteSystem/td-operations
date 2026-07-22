@@ -30,7 +30,7 @@ export function TaxProgressTracker({
   }, [])
   const title =
     locale === 'it'
-      ? `Dichiarazione dei Redditi ${taxYear} — Avanzamento`
+      ? `Dichiarazione dei redditi annuale ${taxYear} — Avanzamento`
       : `${taxYear} Tax Return — Progress`
 
   return (

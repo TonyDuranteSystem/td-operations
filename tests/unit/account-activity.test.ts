@@ -66,7 +66,7 @@ describe('getAccountActivity', () => {
     const offerEvent = result.find((e) => e.id === 'offer-created-off-1')
     expect(offerEvent).toBeDefined()
     expect(offerEvent?.type).toBe('offer')
-    expect(offerEvent?.title).toBe('Offer created — formation')
+    expect(offerEvent?.title).toBe('Offer created — LLC Formation')
     expect(offerEvent?.body).toBe('Test Client')
     expect(offerEvent?.timestamp).toBe('2026-05-01T10:00:00.000Z')
   })
@@ -263,7 +263,10 @@ describe('getAccountActivity', () => {
     const wizardEvents = result.filter((e) => e.source === 'wizard_progress')
     // only "started" — status is in_progress, not submitted
     expect(wizardEvents).toHaveLength(1)
-    expect(wizardEvents[0].title).toBe('Wizard started — formation')
+    // This assertion used to read 'Wizard started — formation' — it was pinning
+    // the RAW wizard_type. That feed is client-visible (portal chat "Log" tab),
+    // so the raw code was reaching clients; see lib/portal/wizard-labels.ts.
+    expect(wizardEvents[0].title).toBe('Wizard started — LLC Formation')
   })
 
   it('respects limit option', async () => {

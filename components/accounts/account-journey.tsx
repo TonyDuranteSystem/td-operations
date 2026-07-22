@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
+import type { WizardType } from '@/lib/portal/wizard-map'
 import { CheckCircle2, Download, Clock, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { BankReferralsPanel, type BankReferralEntry } from './bank-referrals-panel'
@@ -462,7 +463,17 @@ export function AccountJourney(props: AccountJourneyProps) {
 
 // --- Wizard helpers ---
 
-const WIZARD_LABELS: Record<string, string> = {
+/**
+ * STAFF labels — deliberately more specific than the client's ("Banking (Payset
+ * EUR)" tells Luca the currency at a glance; the client's portal says "Payset
+ * Bank Account"). Kept separate on purpose; do NOT collapse into the client map.
+ *
+ * Typed `Record<WizardType, string>` so the compiler forces every wizard type to
+ * have one. It was `Record<string, string>` and silently missing `company_info`
+ * and `td_communication`, so both fell through to `?? w.wizard_type` and staff
+ * read the raw code on the account page.
+ */
+const WIZARD_LABELS: Record<WizardType, string> = {
   onboarding: 'Onboarding',
   formation: 'LLC Formation',
   banking: 'Banking',
@@ -471,6 +482,8 @@ const WIZARD_LABELS: Record<string, string> = {
   itin: 'ITIN Application',
   tax: 'Tax Return',
   closure: 'Company Closure',
+  company_info: 'Company Information',
+  td_communication: 'Brand Audit',
 }
 
 // One active SD can expect MULTIPLE wizards — Banking Fintech sets up both
@@ -506,7 +519,7 @@ function WizardCards({ wizards, serviceDeliveries }: {
     coveredTypes.add(w.wizard_type)
     entries.push({
       wizard_type: w.wizard_type,
-      label: WIZARD_LABELS[w.wizard_type] ?? w.wizard_type,
+      label: WIZARD_LABELS[w.wizard_type as WizardType] ?? w.wizard_type,
       status: w.status === 'submitted' ? 'submitted' : 'in_progress',
       updated_at: w.updated_at,
       data: w.data,
@@ -524,7 +537,7 @@ function WizardCards({ wizards, serviceDeliveries }: {
       coveredTypes.add(mappedType)
       entries.push({
         wizard_type: mappedType,
-        label: WIZARD_LABELS[mappedType] ?? mappedType,
+        label: WIZARD_LABELS[mappedType as WizardType] ?? mappedType,
         status: 'pending',
         updated_at: null,
         data: null,

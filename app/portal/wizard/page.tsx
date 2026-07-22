@@ -16,6 +16,7 @@ import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
 import { isValidWizardType, isContactScopedWizard, isFlexibleWizardType, isPersonOwnedWizard, getContactScopedDiscoveryServiceTypes, type WizardType } from '@/lib/portal/wizard-map'
+import { wizardLabelFor } from '@/lib/portal/wizard-labels'
 import { getInProgressFormations, getPortalAccounts } from '@/lib/portal/queries'
 import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
 import { getStartAtWizardServiceTypes } from '@/lib/services'
@@ -182,7 +183,16 @@ export default async function WizardPage({
   let isItinRenewal = false
 
   // Collect ALL pending wizard types from service deliveries
-  const pendingWizardTypes: { type: WizardType; label: string; serviceType: string }[] = []
+  // `label` / `labelIt` come from lib/portal/wizard-labels (the shared client
+  // vocabulary) so this tab strip says the same thing as the home card that
+  // links here. They were hardcoded and English-only: a client clicked
+  // "Complete your Payset Bank Account form" and landed on a tab reading
+  // "Payset (EUR)", in English even with the portal set to Italian.
+  const pendingWizardTypes: { type: WizardType; label: string; labelIt: string; serviceType: string }[] = []
+  const wizardLabels = (t: WizardType, serviceType?: string) => ({
+    label: wizardLabelFor(t, serviceType).en,
+    labelIt: wizardLabelFor(t, serviceType).it,
+  })
 
   if (!forcedType && !formationLeadId && (accountId || contactId)) {
     // Look up service deliveries by account_id OR contact_id (formation clients have no account yet)
@@ -250,20 +260,23 @@ export default async function WizardPage({
 
     // Build list of ALL applicable wizard types (both pending and submitted)
     if (types.includes('Company Formation')) {
-      pendingWizardTypes.push({ type: 'formation', label: 'LLC Formation', serviceType: 'Company Formation' })
+      pendingWizardTypes.push({ type: 'formation', ...wizardLabels('formation'), serviceType: 'Company Formation' })
     }
     if (types.includes('Banking Fintech')) {
-      pendingWizardTypes.push({ type: 'banking_payset', label: 'Payset (EUR)', serviceType: 'Banking Fintech' })
-      pendingWizardTypes.push({ type: 'banking_relay', label: 'Relay (USD)', serviceType: 'Banking Fintech' })
+      pendingWizardTypes.push({ type: 'banking_payset', ...wizardLabels('banking_payset'), serviceType: 'Banking Fintech' })
+      pendingWizardTypes.push({ type: 'banking_relay', ...wizardLabels('banking_relay'), serviceType: 'Banking Fintech' })
     }
     if (types.includes('Company Closure')) {
-      pendingWizardTypes.push({ type: 'closure', label: 'Company Closure', serviceType: 'Company Closure' })
+      pendingWizardTypes.push({ type: 'closure', ...wizardLabels('closure'), serviceType: 'Company Closure' })
     }
     if (types.includes('ITIN Renewal')) {
-      pendingWizardTypes.push({ type: 'itin', label: 'ITIN Renewal', serviceType: 'ITIN Renewal' })
+      // Renewal label comes from the shared SERVICE_LABEL_OVERRIDES so this tab
+      // and the home card that links to it cannot disagree — they did: the card
+      // said "ITIN Application" while this tab said "ITIN Renewal".
+      pendingWizardTypes.push({ type: 'itin', ...wizardLabels('itin', 'ITIN Renewal'), serviceType: 'ITIN Renewal' })
       isItinRenewal = true
     } else if (types.includes('ITIN')) {
-      pendingWizardTypes.push({ type: 'itin', label: 'ITIN Application', serviceType: 'ITIN' })
+      pendingWizardTypes.push({ type: 'itin', ...wizardLabels('itin'), serviceType: 'ITIN' })
     }
     if (types.includes('Tax Return') || types.includes('Tax Return One-Time')) {
       // Eligibility comes from the shared resolver (lib/tax/wizard-eligibility):
@@ -276,12 +289,12 @@ export default async function WizardPage({
       const serviceType = taxReturnSd?.service_type === 'Tax Return One-Time' ? 'Tax Return One-Time' : 'Tax Return'
       const gate = await getTaxGate()
       if (gate.mode === 'company_info') {
-        pendingWizardTypes.push({ type: 'company_info', label: 'Company Information', serviceType })
+        pendingWizardTypes.push({ type: 'company_info', ...wizardLabels('company_info'), serviceType })
       } else if (taxWizardSurfaceVisible(gate)) {
         // open / review / review-LOCKED (under_review, confirmed): the locked
         // states keep the tab so the client can still VIEW their submitted
         // data read-only (isLocked below) — only submitting is gated.
-        pendingWizardTypes.push({ type: 'tax', label: 'Tax Return', serviceType })
+        pendingWizardTypes.push({ type: 'tax', ...wizardLabels('tax'), serviceType })
       }
       // otherwise closed → no tax tab: nothing to collect (pre-wizard stage,
       // no open season, or no filing requirement).
@@ -808,7 +821,11 @@ export default async function WizardPage({
       {(() => {
         const nonBankingWizards = wizardList.filter(w => w.type !== 'banking_payset' && w.type !== 'banking_relay')
         const hasBanking = wizardList.some(w => w.type === 'banking_payset' || w.type === 'banking_relay')
-        const showableTabs = hasBanking ? [...nonBankingWizards, { type: 'banking_payset' as const, label: locale === 'it' ? 'Banking' : 'Banking', serviceType: 'Banking Fintech', submitted: wizardList.filter(w => w.type === 'banking_payset' || w.type === 'banking_relay').some(w => w.submitted) }] : nonBankingWizards
+        // The merged tab that opens the Payset/Relay picker. Its label comes
+        // from the shared map's 'banking' entry (that IS this concept — the
+        // chooser), so it is localized like every other tab; it previously had
+        // an English-only 'Banking' behind a no-op ternary.
+        const showableTabs = hasBanking ? [...nonBankingWizards, { type: 'banking_payset' as const, label: wizardLabelFor('banking').en, labelIt: wizardLabelFor('banking').it, serviceType: 'Banking Fintech', submitted: wizardList.filter(w => w.type === 'banking_payset' || w.type === 'banking_relay').some(w => w.submitted) }] : nonBankingWizards
         return showableTabs.length > 1 && !forcedType ? (
         <div className="mb-6 border rounded-lg bg-white p-4">
           <p className="text-sm font-medium text-zinc-700 mb-3">
@@ -833,7 +850,7 @@ export default async function WizardPage({
                   }`}
                 >
                   {w.submitted && <span>&#10003;</span>}
-                  {w.label}
+                  {locale === 'it' ? w.labelIt : w.label}
                 </a>
               )
             })}

@@ -1128,7 +1128,7 @@ const ARTICLES_IT: Article[] = [
     keywords: ['servizio', 'richiesta', 'ordine', 'nuovo', 'llc', 'tasse', 'itin', 'banking', 'relay', 'ein', 'spedizione', 'notaio', 'consulenza', 'costituzione', 'conto', 'banca', 'service', 'request'],
     steps: [
       { text: 'Clicca "Richiedi Servizio" nel menu a sinistra.' },
-      { text: 'Scegli la categoria di servizio che ti serve:', sub: 'Costituzione LLC · Dichiarazione dei Redditi · ITIN · Banking (Relay USD o Payset EUR) · EIN · Spedizioni · Notaio/Apostille · Chiusura Società · Consulenza' },
+      { text: 'Scegli la categoria di servizio che ti serve:', sub: 'Costituzione LLC · Dichiarazione dei redditi annuale · ITIN · Banking (Relay USD o Payset EUR) · EIN · Spedizioni · Notaio/Apostille · Chiusura Società · Consulenza' },
       { text: 'Descrivi nel box di testo cosa hai bisogno. Sii il più specifico possibile.', sub: 'Esempio: "Ho bisogno di aprire un conto Relay USD per la mia LLC Wyoming".' },
       { text: "Seleziona l'urgenza: Normale o Urgente." },
       { text: 'Clicca Invia. Il nostro team riceve la richiesta come task e risponderà in chat con un preventivo o i passi successivi.' },

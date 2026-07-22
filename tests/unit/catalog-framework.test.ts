@@ -316,7 +316,7 @@ interface SeedEntry {
 const SERVICES_SEED: SeedEntry[] = [
   { slug: "llc_formation", display_name: "LLC Formation", status: "active", tags: ["service", "sellable", "entry_to_management"], display_name_translations: { it: "Costituzione LLC" } },
   { slug: "onboarding", display_name: "Onboarding", status: "active", tags: ["service", "sellable", "entry_to_management"], display_name_translations: { it: "Onboarding LLC esistente" } },
-  { slug: "tax_return", display_name: "Tax Return", status: "active", tags: ["service", "sd", "sellable", "auto_bundled_with_management"], display_name_translations: { it: "Dichiarazione Fiscale" } },
+  { slug: "tax_return", display_name: "Tax Return", status: "active", tags: ["service", "sd", "sellable", "auto_bundled_with_management"], display_name_translations: { it: "Dichiarazione dei redditi annuale" } },
   { slug: "itin", display_name: "ITIN Application", status: "active", tags: ["service", "sd", "sellable", "per_person"], display_name_translations: { it: "Richiesta ITIN" } },
   { slug: "ein", display_name: "EIN Application", status: "active", tags: ["service", "sd", "sellable"], display_name_translations: { it: "Richiesta EIN" } },
   { slug: "banking", display_name: "Banking", status: "active", tags: ["service", "sd", "sellable"], display_name_translations: { it: "Apertura conto bancario" } },
@@ -460,7 +460,7 @@ describe("labelFor / slugFor", () => {
   it("labelFor returns Italian when present", async () => {
     const e = await getEntry("services", "tax_return")
     expect(e).not.toBeNull()
-    expect(labelFor(e!, "it")).toBe("Dichiarazione Fiscale")
+    expect(labelFor(e!, "it")).toBe("Dichiarazione dei redditi annuale")
   })
 
   it("labelFor falls back to English when translation absent", async () => {
@@ -690,7 +690,7 @@ describe("resolveExternalValue", () => {
   it("matches by translation value", async () => {
     const result = await resolveExternalValue(
       "services",
-      "Dichiarazione Fiscale",
+      "Dichiarazione dei redditi annuale",
       "whop_webhook",
       {},
     )
@@ -996,7 +996,7 @@ describe("lib/services/index", () => {
   })
 
   it("labelForService returns Italian when present, English when absent", async () => {
-    expect(await labelForService("tax_return", "it")).toBe("Dichiarazione Fiscale")
+    expect(await labelForService("tax_return", "it")).toBe("Dichiarazione dei redditi annuale")
     expect(await labelForService("consulting", "it")).toBe("Consulting Call")
     expect(await labelForService("tax_return")).toBe("Tax Return")
   })
@@ -1085,7 +1085,7 @@ describe("SERVICES_STATIC", () => {
   })
 
   it("labelForServiceStatic returns Italian when present, English otherwise", () => {
-    expect(labelForServiceStatic("tax_return", "it")).toBe("Dichiarazione Fiscale")
+    expect(labelForServiceStatic("tax_return", "it")).toBe("Dichiarazione dei redditi annuale")
     expect(labelForServiceStatic("consulting", "it")).toBe("Consulting Call")
     expect(labelForServiceStatic("tax_return")).toBe("Tax Return")
     expect(labelForServiceStatic("unknown_slug")).toBe("unknown_slug")
