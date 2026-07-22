@@ -331,11 +331,32 @@ function FloatingChatInner() {
               setSheetOpen(true)
             }
           }}
-          className="fixed bottom-4 right-20 z-[46] flex items-center gap-2 rounded-full bg-emerald-500 px-4 py-2 text-sm font-medium text-white shadow-lg hover:bg-emerald-400"
+          /* Bigger than a notification pill on purpose. The first cut was a
+             small pill and Antonio could not find it at all ("I don't see
+             anything anywhere to activate a message") — it read as another
+             status chip rather than a control. Now: a 56px circular button with
+             a ring, the standard chat-launcher shape people already look for in
+             a bottom corner, with the unread count as a badge rather than as the
+             label (a bare number in a pill looked like a counter, not a door).
+
+             DELIBERATE TRADE-OFF, do not "fix" silently: the sticky-notes layer
+             documents that the toast stack owns bottom-right, which is why the
+             notes pill went bottom-LEFT. This button takes bottom-right anyway,
+             because that is where every user on earth looks for a chat launcher
+             and discoverability was the actual reported failure. Toasts are
+             transient and will briefly cover it; the button is permanent. If
+             that overlap turns out to be annoying in daily use, move it UP
+             (bottom-24) rather than back into a corner nobody checks. */
+          className="group fixed bottom-5 right-5 z-[46] flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500 text-white shadow-xl ring-4 ring-emerald-500/20 transition-transform hover:scale-105 hover:bg-emerald-400 lg:bottom-6 lg:right-6"
           aria-label={unread > 0 ? `Team chat, ${unread} unread direct messages` : 'Team chat'}
+          title="Team chat"
         >
-          <MessageSquare className="h-4 w-4" />
-          {unread > 0 ? unread : 'Chat'}
+          <MessageSquare className="h-6 w-6" />
+          {unread > 0 && (
+            <span className="absolute -right-0.5 -top-0.5 flex h-6 min-w-6 items-center justify-center rounded-full border-2 border-white bg-red-500 px-1 text-xs font-bold">
+              {unread > 9 ? '9+' : unread}
+            </span>
+          )}
         </button>
       )}
 

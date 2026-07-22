@@ -8,7 +8,7 @@
  */
 import 'server-only'
 import { listAllAuthUsers } from '@/lib/auth-admin-helpers'
-import { parseMentionHandles, CLAUDE_MENTION_ID } from '@/lib/team/workspace'
+import { parseMentionHandles, CLAUDE_MENTION_ID, isStaffAuthRole } from '@/lib/team/workspace'
 
 export interface TeamMember {
   id: string
@@ -41,13 +41,30 @@ function handlesFor(email: string | null, name: string): string[] {
 }
 
 /**
- * List all dashboard (non-client) staff as team members with mention handles.
+ * List all TD STAFF as team members with mention handles.
  * Excludes banned/disabled users so a revoked teammate isn't mentionable.
+ *
+ * ⚠️ PARTNERS ARE NOT STAFF, AND THIS IS WHERE THAT IS ENFORCED.
+ * This used to exclude only `role === 'client'` and then coerce every survivor
+ * to 'admin' | 'team' — so a partner (`role === 'partner'`, e.g. Cris, who is a
+ * partner in TD Communication and not a member of the team) came back RELABELLED
+ * AS STAFF. Every caller treats this list as staff, so that one omission reached:
+ * the floating chat's person picker, team-chat @mention autocomplete AND its push
+ * targeting, DM creation, thread assignee, /api/team/share — and, worst,
+ * staff-notes sharing, which would hand a PRIVATE post-it (and a push carrying
+ * its body) to a partner. Note that the notes route filters `admin|team`
+ * believing that excludes partners; it never did, because of the coercion below.
+ * Found in production 2026-07-22.
+ *
+ * Callers filtering on `role` are therefore NOT a second line of defence — the
+ * role is derived here. Keep the exclusion at THIS level.
  */
 export async function listTeamMembers(): Promise<TeamMember[]> {
   const users = await listAllAuthUsers()
   return users
-    .filter(u => u.app_metadata?.role !== 'client' && !u.banned_until)
+    // isStaffAuthRole is the ONE definition of "is this person TD staff",
+    // shared with the UI so the two can never drift apart.
+    .filter(u => isStaffAuthRole(u.app_metadata?.role) && !u.banned_until)
     .map(u => {
       const email = u.email ?? null
       const name = (u.user_metadata?.full_name as string) || email?.split('@')[0] || 'User'

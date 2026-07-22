@@ -1,9 +1,24 @@
 /**
  * Floating chat window — who can be messaged, and what the badge counts.
  *
- * The partner case is a real-world one: Cris is a partner in TD Communication,
- * not a member of staff, and the endpoint the window reads returns the directory
- * unfiltered.
+ * ⚠️ READ THIS BEFORE TRUSTING THE PARTNER CASES BELOW.
+ *
+ * These tests originally gave FALSE CONFIDENCE and a partner reached production
+ * in the picker. The fixture below hands `selectableChatMembers` a member with
+ * `role: 'partner'` and asserts it is dropped — which passes. But the real
+ * directory NEVER EMITTED 'partner': it excluded only clients and then coerced
+ * every survivor to 'admin' | 'team'. So the branch these tests exercise was
+ * unreachable in production, and the actual partner arrived labelled 'team' and
+ * sailed straight through. Green tests, live bug.
+ *
+ * The REAL defence now lives at the source, in `isStaffAuthRole`, and is tested
+ * against the genuine production role values in tests/unit/team-workspace.test.ts.
+ * What remains here is belt-and-braces: it proves this function does not RE-ADMIT
+ * someone the directory already excluded. Do not read it as proof that a partner
+ * cannot appear — that proof is the other file's.
+ *
+ * The transferable lesson: a test whose fixture is shaped by what you ASSUME the
+ * caller sends, rather than what it actually sends, tests your assumption.
  */
 import { describe, it, expect } from 'vitest'
 import {
