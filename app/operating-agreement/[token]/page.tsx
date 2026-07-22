@@ -124,12 +124,14 @@ function OperatingAgreementContent() {
     const email = emailOverride ?? (cookieEmail ? decodeURIComponent(cookieEmail) : '')
 
     const qs = new URLSearchParams({ code: accessCode })
-    if (email) qs.set('email', email)
     if (adminMode) qs.set('preview', 'td')
 
     let res: Response
     try {
-      res = await fetch(`/api/operating-agreement/${token}/fetch?${qs.toString()}`)
+      // The address goes in a header, never the query string — a query param
+      // would land the client's email in every access log.
+      res = await fetch(`/api/operating-agreement/${token}/fetch?${qs.toString()}`,
+        email ? { headers: { 'x-oa-email': email } } : undefined)
     } catch {
       setError('Could not load the Operating Agreement. Please check your connection and try again.')
       setLoading(false)
@@ -184,8 +186,9 @@ function OperatingAgreementContent() {
     setCheckingEmail(true)
     setEmailError('')
     try {
-      const qs = new URLSearchParams({ code: accessCode, email: candidate })
-      const res = await fetch(`/api/operating-agreement/${token}/fetch?${qs.toString()}`)
+      const qs = new URLSearchParams({ code: accessCode })
+      const res = await fetch(`/api/operating-agreement/${token}/fetch?${qs.toString()}`,
+        { headers: { 'x-oa-email': candidate } })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) {
         setEmailError(body?.error || 'Could not verify that address. Please try again.')

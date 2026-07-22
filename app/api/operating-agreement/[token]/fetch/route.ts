@@ -47,7 +47,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
   const url = new URL(req.url)
   const code = url.searchParams.get("code") || ""
   const signerCode = url.searchParams.get("signer")
-  const email = url.searchParams.get("email")
+  // The email-gate answer arrives in a HEADER, never the query string. A query
+  // param would put the client's address into every access log and referrer for
+  // the life of the deployment — this change exists to stop that class of leak,
+  // so it must not introduce a smaller version of it.
+  const email = req.headers.get("x-oa-email")
   const isPreview = await isStaffPreview(url.searchParams.get("preview") === "td")
 
   const { data: agreement } = await db
@@ -83,24 +87,34 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
   }
 
   // Email gate. Staff preview skips it, exactly as the pages did before.
-  // `?portal=true` marks the embedded portal iframe, which skips the EMAIL gate
-  // only — exactly as both pages did before. It is NOT a code bypass: the
-  // access code is still required above. It cannot be upgraded to a session
-  // check here because the iframe is served from a different host than the
-  // portal, so the portal's session cookie is not present on this request.
-  // Residual, unchanged by this fix: anyone already holding the code can append
-  // this flag to skip the email step.
+  // Two flags skip the EMAIL gate — and ONLY the email gate. Neither is a code
+  // bypass: the access code was already required above, and it is the real
+  // credential here.
+  //   ?portal=true  — the embedded portal iframe, exactly as before.
+  //   ?preview=td   — staff previewing from the CRM.
+  // Neither can be upgraded to a session check: both are served from the
+  // client-facing host, and the staff/portal session cookies are scoped to their
+  // own hosts, so they are simply absent on this request. Requiring a session
+  // here does not make it safer — it makes staff preview impossible, which is
+  // what the first version of this change accidentally did.
+  // What preview must NEVER do is sign; that is enforced on the pages, where the
+  // Sign button is gated on `!isAdmin`.
+  // Residual, pre-existing and unchanged: anyone already holding the access code
+  // can append either flag to skip the email step. The email gate is a
+  // convenience check on top of the code, not a control in its own right.
   const portalMode = url.searchParams.get("portal") === "true"
-  const gateAddress = isPreview || portalMode ? null : emailGateFor(agreement, signatures, signerIndex)
+  const previewFlag = url.searchParams.get("preview") === "td"
+  const gateAddress =
+    isPreview || portalMode || previewFlag ? null : emailGateFor(agreement, signatures, signerIndex)
   if (gateAddress && !emailGateMatches(gateAddress, email)) {
     // No document data in this response — the point of the gate is that an
     // unverified caller receives nothing, including the address being matched.
     return NextResponse.json({ requiresEmail: true, companyName: agreement.company_name })
   }
 
-  // View tracking — server-side, best effort, never blocks the read. Skipped in
-  // preview so staff opening the document does not look like the client did.
-  if (!isPreview && !agreement.signed_at) {
+  // View tracking — server-side, best effort, never blocks the read. Skipped for
+  // any preview so staff opening the document does not look like the client did.
+  if (!isPreview && !previewFlag && !agreement.signed_at) {
     const now = new Date().toISOString()
     try {
       await db

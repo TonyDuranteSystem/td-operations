@@ -299,7 +299,15 @@ export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLea
                           // host and is absent on the client-facing domain, so
                           // preview always falls back to the code. The sibling
                           // ss4 link below already carried it; this one did not.
-                          doc.key === 'oa' ? `https://app.tonydurante.us/operating-agreement/${doc.data.token}/${doc.data.access_code}?preview=td` :
+                          // The access code is REQUIRED: the OA page verifies it
+                          // server-side now, and ?preview=td no longer skips that
+                          // check (the staff session cookie is scoped to the CRM
+                          // host and is absent on the client-facing domain).
+                          // Fall back to the codeless URL for any legacy row that
+                          // has no code, rather than interpolating "undefined".
+                          doc.key === 'oa' ? (doc.data.access_code
+                            ? `https://app.tonydurante.us/operating-agreement/${doc.data.token}/${doc.data.access_code}?preview=td`
+                            : `https://app.tonydurante.us/operating-agreement/${doc.data.token}?preview=td`) :
                           doc.key === 'lease' ? `https://app.tonydurante.us/lease/${doc.data.token}?preview=td` :
                           doc.key === 'ss4' ? `https://app.tonydurante.us/ss4/${doc.data.token}/${doc.data.access_code}?preview=td` :
                           '#'

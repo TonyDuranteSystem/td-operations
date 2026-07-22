@@ -139,8 +139,10 @@ function OperatingAgreementCodeContent() {
   // agreement's access code, the tax ID, member addresses — and, from the
   // signatures table, EVERY co-signer's personal signing code, which is the
   // credential that authorises signing as that member. See lib/oa/public-view.ts.
-  const loadOA = useCallback(async (emailOverride?: string) => {
-    if (!token) return
+  // Returns the outcome so the email gate can report a mismatch without issuing
+  // a second request (see handleEmailVerify).
+  const loadOA = useCallback(async (emailOverride?: string): Promise<'ok' | 'requires-email' | 'error'> => {
+    if (!token) return 'error'
 
     const adminMode = searchParams.get('preview') === 'td'
     const portalMode = searchParams.get('portal') === 'true'
@@ -158,30 +160,32 @@ function OperatingAgreementCodeContent() {
 
     const qs = new URLSearchParams({ code: accessCode })
     if (signerCode) qs.set('signer', signerCode)
-    if (email) qs.set('email', email)
     if (adminMode) qs.set('preview', 'td')
     if (portalMode) qs.set('portal', 'true')
 
     let res: Response
     try {
-      res = await fetch(`/api/operating-agreement/${token}/fetch?${qs.toString()}`)
+      // The address goes in a header, never the query string — a query param
+      // would land the client's email in every access log.
+      res = await fetch(`/api/operating-agreement/${token}/fetch?${qs.toString()}`,
+        email ? { headers: { 'x-oa-email': email } } : undefined)
     } catch {
       setError('Could not load the Operating Agreement. Please check your connection and try again.')
       setLoading(false)
-      return
+      return 'error'
     }
 
     const body = await res.json().catch(() => ({}))
     if (!res.ok) {
       setError(body?.error || 'Operating Agreement not found.')
       setLoading(false)
-      return
+      return 'error'
     }
 
     if (body.requiresEmail) {
       setVerified(false)
       setLoading(false)
-      return
+      return 'requires-email'
     }
 
     const data = body.agreement as OAAgreement
@@ -221,6 +225,7 @@ function OperatingAgreementCodeContent() {
     }
 
     setLoading(false)
+    return 'ok'
   }, [token, accessCode, searchParams])
 
   useEffect(() => { loadOA() }, [loadOA])
@@ -256,23 +261,18 @@ function OperatingAgreementCodeContent() {
     setCheckingEmail(true)
     setEmailError('')
     try {
+      // ONE fetch, not two. Verifying used to call the route and then call
+      // loadOA, which called it again — so a single gate pass counted two views
+      // on the agreement and on the member's signature row.
       const signerCode = searchParams.get('signer')
-      const qs = new URLSearchParams({ code: accessCode, email: candidate })
-      if (signerCode) qs.set('signer', signerCode)
-
-      const res = await fetch(`/api/operating-agreement/${token}/fetch?${qs.toString()}`)
-      const body = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        setEmailError(body?.error || 'Could not verify that address. Please try again.')
-        return
-      }
-      if (body.requiresEmail) {
+      const outcome = await loadOA(candidate)
+      if (outcome === 'requires-email') {
         setEmailError('The email address does not match. Please try again.')
         return
       }
+      if (outcome === 'error') return
       const cookieKey = signerCode ? `oa_email_${token}_s` : `oa_email_${token}`
       document.cookie = `${cookieKey}=${encodeURIComponent(candidate)}; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
-      await loadOA(candidate)
     } catch {
       setEmailError('Could not verify that address. Please check your connection and try again.')
     } finally {

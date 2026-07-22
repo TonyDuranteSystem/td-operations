@@ -109,8 +109,36 @@ GRANT SELECT (id) ON public.oa_signatures TO anon;
 CREATE POLICY "Row visible to anon for signing writes"
   ON public.oa_signatures FOR SELECT TO anon USING (true);
 
--- "Public update by id" / "Allow anon update" are INTENTIONALLY LEFT IN PLACE —
--- removing either without moving the signing writes server-side breaks signing.
+-- ── Scope the WRITE grant (R4) ────────────────────────────────────────────
+-- Table-wide UPDATE means EVERY column is writable, including access_code. With
+-- the id column now readable, that turned the new fetch route into a read
+-- channel — PROVEN, not theorised:
+--   1. GET  /oa_agreements?select=id                       → every agreement id
+--   2. PATCH /oa_agreements?id=eq.<id> {"access_code":"X"} → 204, code overwritten
+--   3. GET  /api/operating-agreement/<token>/fetch?code=X&portal=true
+--      → the service-key route happily returns ein_number, member_address,
+--        members[].address, every name and ownership split.
+-- Two reviewers found this independently; step 2 was then executed against a live
+-- stack and returned 204 with the code actually changed.
+--
+-- So the UPDATE grant is scoped to exactly the columns the signing pages write —
+-- enumerated from the pages, not guessed. access_code, member_email, token,
+-- ein_number, members and every other column become unwritable, which closes the
+-- escalation without touching a line of application code.
+-- view_count / viewed_at are deliberately NOT granted: view tracking moved to the
+-- server in this same change, so the browser no longer writes them.
+REVOKE UPDATE ON public.oa_agreements FROM anon, authenticated;
+GRANT UPDATE (status, signed_at, signature_data, pdf_storage_path, signed_count)
+  ON public.oa_agreements TO anon;
+
+REVOKE UPDATE ON public.oa_signatures FROM anon, authenticated;
+GRANT UPDATE (status, signed_at, signature_image_path, updated_at)
+  ON public.oa_signatures TO anon;
+
+-- The UPDATE POLICIES ("Public update by id" / "Allow anon update") stay — they
+-- decide WHICH ROWS may be written, and removing them breaks signing outright.
+-- Row-level scoping still needs the writes moved server-side; this only stops the
+-- write from reaching columns it never had any business touching.
 
 -- ── VERIFY — run ALL FOUR. The write test is not optional. ─────────────────
 --
@@ -139,9 +167,20 @@ CREATE POLICY "Row visible to anon for signing writes"
 --    -- expect: anon/SELECT on column `id` only, and NOTHING for authenticated.
 --
 -- 4. THE WRITE TEST — the one revision 1 skipped. With the ANON key:
---    curl -s "$URL/rest/v1/oa_agreements?select=access_code,ein_number&limit=1" \
---         -H "apikey: $ANON" -H "Authorization: Bearer $ANON"
---    -- expect: permission denied.
+--    A column privilege must hold on EVERY reference to the column, not just the
+--    select list. Test all four routes to it — R2 was wrong because one axis was
+--    checked and another was not:
+--      ?select=access_code,ein_number                    (select list)
+--      ?select=id&access_code=eq.AAAA                    (filter — an oracle if it resolves)
+--      ?select=id&order=access_code.asc                  (ordering)
+--      PATCH ...?id=eq.<id>&select=access_code  with  Prefer: return=representation
+--                                                       (RETURNING — the likeliest bypass,
+--                                                        since anon still holds UPDATE)
+--    -- expect: permission denied on ALL FOUR.
+--    And the write scoping (R4) — this MUST be denied or the read channel is open:
+--      PATCH ...?id=eq.<id>  {"access_code":"X"}
+--    -- expect: permission denied. If it returns 204, STOP: the fetch route can
+--    -- then be called with the attacker's own code and it will return the EIN.
 --    curl -s -X PATCH "$URL/rest/v1/oa_agreements?id=eq.<a real id>" \
 --         -H "apikey: $ANON" -H "Authorization: Bearer $ANON" \
 --         -H "Content-Type: application/json" -d '{"status":"viewed"}' -w "%{http_code}"
