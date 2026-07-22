@@ -674,11 +674,21 @@ support@tonydurante.us`
         const result = await safeSend<{ id: string; threadId: string }>({
           idempotencyCheck: async () => {
             if (oa.status === "sent") {
+              // Scope the probe to THIS agreement. The subject+recipient match is
+              // not OA-specific, so without the created_at bound an email sent for
+              // a PREVIOUS agreement for the same company would suppress the send
+              // for a newly created one — and the client would wait forever for a
+              // link that never went out. This matters now that the portal
+              // self-service route creates OAs at 'sent' (see create/route.ts):
+              // re-generating deletes the old row and inserts a new one, so a
+              // prior email for the same company is the normal case, not the
+              // exception.
               const { data: existing } = await supabaseAdmin
                 .from("email_tracking")
                 .select("tracking_id, created_at")
                 .eq("recipient", oa.member_email!)
                 .ilike("subject", `%Operating Agreement%${oa.company_name}%`)
+                .gte("created_at", oa.created_at)
                 .limit(1)
               if (existing?.length) {
                 return {

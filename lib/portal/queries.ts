@@ -986,6 +986,37 @@ export async function getItinAtClientSigning(contactId: string): Promise<ItinAtC
   }
 }
 
+/**
+ * Count helper for nav visibility that FAILS OPEN.
+ *
+ * Every count in getPortalNavVisibility used to be `.then(r => r.count ?? 0)`,
+ * which discarded `r.error` — so a transient PostgREST failure was indistinguishable
+ * from "this client has nothing", and the nav entry silently disappeared with no
+ * log line anywhere. Hiding a section is the EXPENSIVE failure (the client loses
+ * the only route to their documents/invoices); showing an empty section is the
+ * cheap one. So on error we log and return 1, not 0.
+ *
+ * Never throw: getPortalNavVisibility is awaited directly inside the portal root
+ * layout, and a throw there escalates to the error boundary and blanks the whole
+ * portal for the client.
+ */
+export async function countOrFailOpen(
+  label: string,
+  q: PromiseLike<{ count: number | null; error: { message: string } | null }>,
+): Promise<number> {
+  try {
+    const { count, error } = await q
+    if (error) {
+      console.error(`[portal-nav] ${label} count failed — failing OPEN (nav entry stays visible):`, error.message)
+      return 1
+    }
+    return count ?? 0
+  } catch (err) {
+    console.error(`[portal-nav] ${label} count threw — failing OPEN (nav entry stays visible):`, err)
+    return 1
+  }
+}
+
 export async function getPortalNavVisibility(accountId: string, contactId?: string): Promise<PortalNavVisibility> {
   // Run all checks in parallel
   const [
@@ -1005,19 +1036,17 @@ export async function getPortalNavVisibility(accountId: string, contactId?: stri
         names: [] as string[],
       })),
     // TD LLC invoices sent to client
-    supabaseAdmin
+    countOrFailOpen('billing', supabaseAdmin
       .from('payments')
       .select('id', { count: 'exact', head: true })
       .eq('account_id', accountId)
-      .not('invoice_status', 'is', null)
-      .then(r => r.count ?? 0),
+      .not('invoice_status', 'is', null)),
     // Pending deadlines
-    supabaseAdmin
+    countOrFailOpen('deadlines', supabaseAdmin
       .from('deadlines')
       .select('id', { count: 'exact', head: true })
       .eq('account_id', accountId)
-      .in('status', ['Pending', 'Overdue'])
-      .then(r => r.count ?? 0),
+      .in('status', ['Pending', 'Overdue'])),
     // Tax returns (need company_name lookup)
     supabaseAdmin
       .from('accounts')
@@ -1032,24 +1061,29 @@ export async function getPortalNavVisibility(accountId: string, contactId?: stri
           .eq('company_name', acct.company_name)
         return count ?? 0
       }),
-    // Unsigned OA, Lease, or SS-4 agreements
+    // Unsigned OA, Lease, or SS-4 agreements.
+    // NOTE: this no longer gates the "Sign Documents" nav entry — that entry is
+    // now tier-gated only (see portal-sidebar.tsx), because this count covered
+    // just 3 of the 7 document families /portal/sign renders and went stale
+    // mid-session. It is kept because `pendingSignatures` is part of the public
+    // PortalNavVisibility shape; treat it as advisory, not as a gate.
     Promise.all([
-      supabaseAdmin
+      countOrFailOpen('oa', supabaseAdmin
         .from('oa_agreements')
         .select('id', { count: 'exact', head: true })
         .eq('account_id', accountId)
-        .neq('status', 'signed'),
-      supabaseAdmin
+        .neq('status', 'signed')),
+      countOrFailOpen('lease', supabaseAdmin
         .from('lease_agreements')
         .select('id', { count: 'exact', head: true })
         .eq('account_id', accountId)
-        .neq('status', 'signed'),
-      supabaseAdmin
+        .neq('status', 'signed')),
+      countOrFailOpen('ss4', supabaseAdmin
         .from('ss4_applications')
         .select('id', { count: 'exact', head: true })
         .eq('account_id', accountId)
-        .in('status', ['awaiting_signature', 'draft']),
-    ]).then(([oa, lease, ss4]) => (oa.count ?? 0) + (lease.count ?? 0) + (ss4.count ?? 0)),
+        .in('status', ['awaiting_signature', 'draft'])),
+    ]).then(([oa, lease, ss4]) => oa + lease + ss4),
   ])
 
   // Also check if any SD is tax-related
