@@ -21,6 +21,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
 import { formatCountyAndState } from "@/lib/addresses"
+import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
 
 export interface CreateSS4Params {
   account_id: string
@@ -277,8 +278,8 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
   // ─── 7. MAILING ADDRESS ───
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ma = (account as any).mailing_address ?? null
-  const TD_FALLBACK_STREET = "11125 Park Blvd, Suite 104-153"
-  const TD_FALLBACK_CITY_STATE_ZIP = "Seminole, FL 33772"
+  const TD_FALLBACK_STREET = CLIENT_ADDRESS_FALLBACK.street
+  const TD_FALLBACK_CITY_STATE_ZIP = CLIENT_ADDRESS_FALLBACK.cityStateZip
   let mailingStreet: string
   let mailingCityStateZip: string
   if (ma && (ma.address_line1 || ma.city)) {

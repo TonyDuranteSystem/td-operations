@@ -57,6 +57,7 @@
  */
 
 import { PDFDocument } from "pdf-lib"
+import { CAA_IDENTITY_ADDRESS } from "@/lib/td-address"
 import { embedUnicodeFonts } from "./unicode-fonts"
 
 const W7_PDF_URL = "https://www.irs.gov/pub/irs-pdf/fw7.pdf"
@@ -70,8 +71,8 @@ const AGENT = {
   officeCode: "00000015",
   phone: "+1 (727) 452-1093",
   fax: "(727) 513-5584",
-  mailingStreet: "11125 Park Blvd, Suite 104-153",
-  mailingCityStateZip: "Seminole, FL 33772, United States",
+  mailingStreet: CAA_IDENTITY_ADDRESS.mailingStreet,
+  mailingCityStateZip: CAA_IDENTITY_ADDRESS.mailingCityStateZip,
 }
 
 export interface W7FillData {

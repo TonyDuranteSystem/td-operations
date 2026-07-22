@@ -33,6 +33,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { formatCountyAndState } from "@/lib/addresses"
+import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
 import {
   decideSs4Signer,
   ss4SignerAlertMessage,
@@ -52,8 +53,8 @@ const STATE_MAP: Record<string, string> = {
   "DELAWARE": "DE", "DE": "DE",
 }
 
-const TD_FALLBACK_STREET = "11125 Park Blvd, Suite 104-153"
-const TD_FALLBACK_CITY_STATE_ZIP = "Seminole, FL 33772"
+const TD_FALLBACK_STREET = CLIENT_ADDRESS_FALLBACK.street
+const TD_FALLBACK_CITY_STATE_ZIP = CLIENT_ADDRESS_FALLBACK.cityStateZip
 
 /** The ss4_applications columns the refresh reads and may rewrite. */
 export interface Ss4RowSnapshot {

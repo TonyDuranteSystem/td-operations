@@ -16,6 +16,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
+import { TD_OFFICE, TD_CITY_STATE_ZIP } from '@/lib/td-address'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getItinAtClientSigning } from '@/lib/portal/queries'
@@ -24,13 +25,12 @@ import { ConfirmMailedButton } from './confirm-mailed-button'
 
 export const dynamic = 'force-dynamic'
 
-// CAA mailing address — Antonio's office. Hardcoded because this is a fixed
-// regulatory destination, not a per-account value.
+// Where clients post their signed documents. Single source: lib/td-address.
 const CAA_ADDRESS = {
-  name: 'Tony Durante LLC',
-  line1: '11125 Park Blvd, Suite 104-153',
-  line2: 'Seminole, FL 33772',
-  country: 'USA',
+  name: TD_OFFICE.company,
+  line1: TD_OFFICE.street,
+  line2: TD_CITY_STATE_ZIP,
+  country: TD_OFFICE.country,
 }
 
 function isItalian(language: string | null | undefined): boolean {

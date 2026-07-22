@@ -14,6 +14,7 @@ import type { DecisionRequest } from '@/lib/decisions'
 import { buildFlowSteps, buildJourneySteps, type FlowStageRow } from '@/lib/flows/flow-progress'
 import { deriveFlowYear, buildFlowTopic, ALL_FLOW_TYPES, CONTACT_FLOW_TYPES } from '@/lib/flows/resolve-flows'
 import { isClientSafeFlowDoc } from '@/lib/flows/flow-doc-visibility'
+import { MAILING_DESTINATION_LINES } from '@/lib/td-address'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,7 +33,7 @@ function buildItinShippingCard(
   documents: { id: string; file_name: string }[],
   shippingForm: ShippingCard['shippingForm'],
 ): ShippingCard {
-  const addressLines = ['Tony Durante LLC', '11125 Park Blvd, Suite 104-153', 'Seminole, FL 33772', 'United States']
+  const addressLines = [...MAILING_DESTINATION_LINES]
   if (locale === 'it') {
     return {
       stageName: 'Client Signing',
