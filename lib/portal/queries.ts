@@ -1502,8 +1502,10 @@ export async function getPortalActionItems(
     const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
     items.push({
       type: 'form',
-      title: startWizardFormTitle(wt, 'en'),
-      titleIt: startWizardFormTitle(wt, 'it'),
+      // sd.service_type distinguishes ITIN Renewal from ITIN Application —
+      // both open the same wizard, but the card must name what they bought.
+      title: startWizardFormTitle(wt, 'en', sd.service_type),
+      titleIt: startWizardFormTitle(wt, 'it', sd.service_type),
       description: 'Click to begin your data collection form.',
       descriptionIt: 'Clicca per iniziare il modulo di raccolta dati.',
       href: `/portal/wizard?type=${wt}`,
@@ -1779,8 +1781,10 @@ export async function getPortalActionItemsByContact(contactId: string): Promise<
     const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
     items.push({
       type: 'form',
-      title: startWizardFormTitle(wt, 'en'),
-      titleIt: startWizardFormTitle(wt, 'it'),
+      // sd.service_type distinguishes ITIN Renewal from ITIN Application —
+      // both open the same wizard, but the card must name what they bought.
+      title: startWizardFormTitle(wt, 'en', sd.service_type),
+      titleIt: startWizardFormTitle(wt, 'it', sd.service_type),
       description: 'Click to begin your data collection form.',
       descriptionIt: 'Clicca per iniziare il modulo di raccolta dati.',
       href: `/portal/wizard?type=${wt}`,

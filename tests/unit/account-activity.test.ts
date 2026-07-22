@@ -66,7 +66,7 @@ describe('getAccountActivity', () => {
     const offerEvent = result.find((e) => e.id === 'offer-created-off-1')
     expect(offerEvent).toBeDefined()
     expect(offerEvent?.type).toBe('offer')
-    expect(offerEvent?.title).toBe('Offer created — formation')
+    expect(offerEvent?.title).toBe('Offer created — LLC Formation')
     expect(offerEvent?.body).toBe('Test Client')
     expect(offerEvent?.timestamp).toBe('2026-05-01T10:00:00.000Z')
   })

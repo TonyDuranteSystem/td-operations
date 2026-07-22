@@ -189,7 +189,10 @@ export default async function WizardPage({
   // "Complete your Payset Bank Account form" and landed on a tab reading
   // "Payset (EUR)", in English even with the portal set to Italian.
   const pendingWizardTypes: { type: WizardType; label: string; labelIt: string; serviceType: string }[] = []
-  const wizardLabels = (t: WizardType) => ({ label: wizardLabelFor(t).en, labelIt: wizardLabelFor(t).it })
+  const wizardLabels = (t: WizardType, serviceType?: string) => ({
+    label: wizardLabelFor(t, serviceType).en,
+    labelIt: wizardLabelFor(t, serviceType).it,
+  })
 
   if (!forcedType && !formationLeadId && (accountId || contactId)) {
     // Look up service deliveries by account_id OR contact_id (formation clients have no account yet)
@@ -261,7 +264,10 @@ export default async function WizardPage({
       pendingWizardTypes.push({ type: 'closure', ...wizardLabels('closure'), serviceType: 'Company Closure' })
     }
     if (types.includes('ITIN Renewal')) {
-      pendingWizardTypes.push({ type: 'itin', label: 'ITIN Renewal', labelIt: 'Rinnovo ITIN', serviceType: 'ITIN Renewal' })
+      // Renewal label comes from the shared SERVICE_LABEL_OVERRIDES so this tab
+      // and the home card that links to it cannot disagree — they did: the card
+      // said "ITIN Application" while this tab said "ITIN Renewal".
+      pendingWizardTypes.push({ type: 'itin', ...wizardLabels('itin', 'ITIN Renewal'), serviceType: 'ITIN Renewal' })
       isItinRenewal = true
     } else if (types.includes('ITIN')) {
       pendingWizardTypes.push({ type: 'itin', ...wizardLabels('itin'), serviceType: 'ITIN' })

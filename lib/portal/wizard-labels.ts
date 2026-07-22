@@ -32,15 +32,8 @@
 import type { WizardType } from "./wizard-map"
 
 /**
- * `en` / `it` are the STANDALONE name (a tab, a chip, an activity line).
- *
- * `itOf` is the fragment that follows "il modulo …", and it exists because
- * Italian needs a preposition that English does not, and the right preposition
- * differs per label: "il modulo DI Costituzione" but "il modulo PER IL Conto
- * Bancario Payset". Building the sentence as "il modulo ${it}" produced
- * "Completa il modulo Costituzione" — wrong, and worse than the copy it
- * replaced. Both sentence frames below consume `itOf`, so the two cards on the
- * portal home can never disagree with each other again.
+ * The client-facing name of each form, standalone. Used for a tab, an activity
+ * line, and — via the builders below — the start of every action-card title.
  *
  * VOCABULARY RULE: these strings must match what the rest of the product
  * already calls the thing (the services catalog, the guide, the wizard page).
@@ -49,20 +42,62 @@ import type { WizardType } from "./wizard-map"
  * a vocabulary fork created by the very commit meant to end vocabulary forks.
  * Do not rename a service here. Rename it in the catalog, then follow.
  */
-export const WIZARD_LABELS: Record<WizardType, { en: string; it: string; itOf: string }> = {
+export const WIZARD_LABELS: Record<WizardType, { en: string; it: string }> = {
   // Italian follows the catalog exactly ("Onboarding LLC esistente" — onboarding
   // an EXISTING LLC, which is what the client actually bought). Shortening it to
   // "Onboarding" here was a fork; the catalog guard below caught it.
-  onboarding: { en: "Onboarding", it: "Onboarding LLC esistente", itOf: "di Onboarding LLC esistente" },
-  formation: { en: "LLC Formation", it: "Costituzione LLC", itOf: "di Costituzione LLC" },
-  banking: { en: "Banking Setup", it: "Apertura Conto", itOf: "di Apertura Conto" },
-  banking_payset: { en: "Payset Bank Account", it: "Conto Bancario Payset", itOf: "per il Conto Bancario Payset" },
-  banking_relay: { en: "Relay Bank Account", it: "Conto Bancario Relay", itOf: "per il Conto Bancario Relay" },
-  closure: { en: "Company Closure", it: "Chiusura Società", itOf: "di Chiusura Società" },
-  itin: { en: "ITIN Application", it: "Richiesta ITIN", itOf: "ITIN" },
-  tax: { en: "Tax Return", it: "Dichiarazione Fiscale", itOf: "di Dichiarazione Fiscale" },
-  company_info: { en: "Company Information", it: "Informazioni Aziendali", itOf: "di Informazioni Aziendali" },
-  td_communication: { en: "Brand Audit", it: "Brand Audit", itOf: "di Brand Audit" },
+  onboarding: { en: "Onboarding", it: "Onboarding LLC esistente" },
+  formation: { en: "LLC Formation", it: "Costituzione LLC" },
+  banking: { en: "Banking Setup", it: "Apertura Conto" },
+  banking_payset: { en: "Payset Bank Account", it: "Conto Bancario Payset" },
+  banking_relay: { en: "Relay Bank Account", it: "Conto Bancario Relay" },
+  closure: { en: "Company Closure", it: "Chiusura Società" },
+  itin: { en: "ITIN Application", it: "Richiesta ITIN" },
+  tax: { en: "Tax Return", it: "Dichiarazione Fiscale" },
+  company_info: { en: "Company Information", it: "Informazioni Aziendali" },
+  td_communication: { en: "Brand Audit", it: "Brand Audit" },
+}
+
+/**
+ * Some SERVICE types share a wizard but are not the same product, and the card
+ * must say what the client actually bought. ITIN Renewal and ITIN Application
+ * both open the `itin` wizard; naming both "ITIN Application" told a renewal
+ * client to start an application, and disagreed with the wizard page they
+ * landed on (which had its own hardcoded renewal label). Keyed by
+ * service_deliveries.service_type.
+ */
+export const SERVICE_LABEL_OVERRIDES: Record<string, { en: string; it: string }> = {
+  "ITIN Renewal": { en: "ITIN Renewal", it: "Rinnovo ITIN" },
+}
+
+/**
+ * Offer contract types, for the CLIENT-VISIBLE journey feed. A separate
+ * vocabulary from wizards — it lives here because this file is where the portal
+ * keeps the names clients read, and scattering these is what caused the bug
+ * twice already.
+ *
+ * The feed rendered these raw: "Offer created — tax_return", and "renewal" as
+ * the sub-line under "Contract signed". Verified against production 2026-07-21:
+ * renewal 162, formation 59, onboarding 14, tax_return 4, itin 1 — so the most
+ * common offer in the business was showing clients an internal code.
+ *
+ * English only, deliberately: that whole feed is English for every event type,
+ * which is a separate job.
+ */
+export const OFFER_TYPE_LABELS: Record<string, string> = {
+  formation: "LLC Formation",
+  onboarding: "Onboarding",
+  tax_return: "Tax Return",
+  itin: "ITIN Application",
+  // "Annual Renewal" is the service-type name the codebase already uses.
+  renewal: "Annual Renewal",
+  banking: "Banking",
+}
+
+/** Falls back to nothing rather than to a raw code — the suffix is optional. */
+export function offerTypeLabel(contractType: string | null | undefined): string | null {
+  if (!contractType) return null
+  return OFFER_TYPE_LABELS[contractType] ?? null
 }
 
 /**
@@ -81,33 +116,55 @@ const LABEL_ALIASES: Record<string, WizardType> = {
  * legitimate value is covered by the compiler, so a fallback here means the
  * stored value is wrong, not that a label is missing.
  */
-export function wizardLabelFor(wizardType: string): { en: string; it: string; itOf: string } {
+export function wizardLabelFor(wizardType: string, serviceType?: string | null): { en: string; it: string } {
+  if (serviceType && SERVICE_LABEL_OVERRIDES[serviceType]) return SERVICE_LABEL_OVERRIDES[serviceType]
   const resolved = LABEL_ALIASES[wizardType] ?? wizardType
-  return WIZARD_LABELS[resolved as WizardType] ?? { en: wizardType, it: wizardType, itOf: wizardType }
+  return WIZARD_LABELS[resolved as WizardType] ?? { en: wizardType, it: wizardType }
 }
 
 /**
- * "Complete your Payset Bank Account form" — the phrasing the reminder email,
- * the push notification and the portal card all share, so a client who gets the
- * email and then opens the portal sees the same words for the same thing.
+ * ⛔ THE NAME COMES FIRST. Do not reorder these.
+ *
+ * The card title is `truncate`d in a ~196px column on a 380px phone — and the
+ * whole CRM/portal is used as a phone app. The first version read "Completa il
+ * modulo per il Conto Bancario Payset", which clipped to "Completa il modulo
+ * per il C…": a client holding both bank forms saw TWO CARDS THAT READ THE
+ * SAME, with no way to tell Payset from Relay. Measured on the real page:
+ * 322px of text in a 196px box.
+ *
+ * Leading with the label fixes that, and it also removed a whole class of bug —
+ * the earlier shape put the label inside a prepositional phrase, so each label
+ * had to carry its own Italian preposition ("di Costituzione" but "per il Conto
+ * Bancario"). Getting one wrong shipped bad Italian. Here the name stands
+ * alone, so there is no preposition to get wrong.
+ *
+ * Wording chosen by Antonio (2026-07-21): "Conto Bancario Payset — completa il
+ * modulo".
  */
-export function completeWizardFormTitle(wizardType: string, lang: "en" | "it"): string {
-  const label = wizardLabelFor(wizardType)
+export function completeWizardFormTitle(
+  wizardType: string,
+  lang: "en" | "it",
+  serviceType?: string | null,
+): string {
+  const label = wizardLabelFor(wizardType, serviceType)
   return lang === "it"
-    ? `Completa il modulo ${label.itOf}`
-    : `Complete your ${label.en} form`
+    ? `${label.it} — completa il modulo`
+    : `${label.en} — complete your form`
 }
 
 /**
- * The sibling card, for a form the client has not opened yet. It lives here
- * rather than inline at its call sites because the two cards render in the SAME
- * list: when this template and the one above drifted apart, an Italian client
- * saw "Completa il modulo Costituzione" directly above "Inizia il modulo di
- * Chiusura Società" — two grammars for the same kind of thing, side by side.
+ * The sibling card, for a form the client has not opened yet. It lives beside
+ * the one above because the two render in the SAME list: when the templates
+ * drifted apart, an Italian client saw two different grammars stacked on top of
+ * each other. Same name-first rule — see above.
  */
-export function startWizardFormTitle(wizardType: string, lang: "en" | "it"): string {
-  const label = wizardLabelFor(wizardType)
+export function startWizardFormTitle(
+  wizardType: string,
+  lang: "en" | "it",
+  serviceType?: string | null,
+): string {
+  const label = wizardLabelFor(wizardType, serviceType)
   return lang === "it"
-    ? `Inizia il modulo ${label.itOf}`
-    : `Start your ${label.en} form`
+    ? `${label.it} — inizia il modulo`
+    : `${label.en} — start your form`
 }

@@ -16,7 +16,7 @@
  */
 import { describe, it, expect } from "vitest"
 import { readFileSync } from "fs"
-import { WIZARD_LABELS, wizardLabelFor, completeWizardFormTitle, startWizardFormTitle } from "@/lib/portal/wizard-labels"
+import { WIZARD_LABELS, wizardLabelFor, completeWizardFormTitle, startWizardFormTitle, offerTypeLabel } from "@/lib/portal/wizard-labels"
 import { VALID_WIZARD_TYPES } from "@/lib/portal/wizard-map"
 import { SERVICES_STATIC } from "@/lib/services"
 
@@ -24,11 +24,10 @@ describe("wizard labels", () => {
   it("every wizard type the portal accepts has a real label in both languages", () => {
     const leaking: string[] = []
     for (const type of VALID_WIZARD_TYPES) {
-      const { en, it: itLabel, itOf } = wizardLabelFor(type)
+      const { en, it: itLabel } = wizardLabelFor(type)
       if (en === type) leaking.push(`${type} (en)`)
       if (itLabel === type) leaking.push(`${type} (it)`)
-      if (itOf === type) leaking.push(`${type} (itOf)`)
-      if (!en.trim() || !itLabel.trim() || !itOf.trim()) leaking.push(`${type} (empty)`)
+      if (!en.trim() || !itLabel.trim()) leaking.push(`${type} (empty)`)
     }
     expect(
       leaking,
@@ -38,19 +37,54 @@ describe("wizard labels", () => {
 
   it("no label is an internal-looking code (snake_case leaks past a human eye)", () => {
     const suspicious = Object.entries(WIZARD_LABELS)
-      .filter(([, l]) => l.en.includes("_") || l.it.includes("_") || l.itOf.includes("_"))
+      .filter(([, l]) => l.en.includes("_") || l.it.includes("_"))
       .map(([t]) => t)
     expect(suspicious, "A label containing '_' is almost certainly the raw type.").toEqual([])
   })
 
-  it("every Italian fragment starts with a preposition — the grammar bug", () => {
-    // "Completa il modulo Costituzione" is wrong; "…il modulo DI Costituzione"
-    // is right. Shipped once, caught in QA. The fragment must slot into
-    // "il modulo ___" and read as Italian.
-    const bad = Object.entries(WIZARD_LABELS)
-      .filter(([t, l]) => !/^(di |per |dell|ITIN$)/.test(l.itOf) && t !== "itin")
-      .map(([t, l]) => `${t}: "il modulo ${l.itOf}"`)
-    expect(bad, `These read wrong in Italian:\n  ${bad.join("\n  ")}`).toEqual([])
+  it("THE NAME COMES FIRST — the card must be distinguishable when truncated", () => {
+    // Measured on the real page at 380px (Antonio runs the whole thing as a
+    // phone app): the title sits in a ~196px truncating column. The first
+    // version led with the verb — "Completa il modulo per il Conto Bancario
+    // Payset" — which clipped to "Completa il modulo per il C…", so a client
+    // holding BOTH bank forms saw two cards that read identically. The name
+    // must therefore appear inside the first ~25 characters.
+    const VISIBLE = 25
+    const collisions: string[] = []
+    const seen = new Map<string, string>()
+    for (const type of VALID_WIZARD_TYPES) {
+      for (const lang of ["en", "it"] as const) {
+        for (const build of [completeWizardFormTitle, startWizardFormTitle]) {
+          const head = build(type, lang).slice(0, VISIBLE)
+          const key = `${lang}:${build.name}:${head}`
+          const prev = seen.get(key)
+          if (prev && prev !== type) collisions.push(`${prev} vs ${type} both start "${head}"`)
+          seen.set(key, type)
+        }
+      }
+    }
+    expect(
+      collisions,
+      `Two cards would look IDENTICAL on a phone:\n  ${collisions.join("\n  ")}\nLead the title with the form name.`,
+    ).toEqual([])
+  })
+
+  it("an ITIN Renewal client is not told to start an ITIN Application", () => {
+    expect(startWizardFormTitle("itin", "en", "ITIN Renewal")).toBe("ITIN Renewal — start your form")
+    expect(startWizardFormTitle("itin", "en", "ITIN")).toBe("ITIN Application — start your form")
+    expect(wizardLabelFor("itin", "ITIN Renewal").it).toBe("Rinnovo ITIN")
+  })
+
+  it("offer types never reach the client's journey feed as a raw code", () => {
+    // Verified against production 2026-07-21: renewal 162, formation 59,
+    // onboarding 14, tax_return 4, itin 1.
+    for (const t of ["renewal", "formation", "onboarding", "tax_return", "itin", "banking"]) {
+      expect(offerTypeLabel(t), `no label for offer type "${t}"`).toBeTruthy()
+      expect(offerTypeLabel(t)).not.toBe(t)
+    }
+    // An unknown type yields NO suffix rather than a raw code.
+    expect(offerTypeLabel("something_new")).toBeNull()
+    expect(offerTypeLabel(null)).toBeNull()
   })
 
   it("resolves tax_return — the service slug that leaks into wizard call sites", () => {
@@ -58,26 +92,28 @@ describe("wizard labels", () => {
     expect(wizardLabelFor("tax_return").it).toBe("Dichiarazione Fiscale")
   })
 
-  it("builds the client-facing title in both languages", () => {
-    expect(completeWizardFormTitle("banking_payset", "en")).toBe("Complete your Payset Bank Account form")
-    expect(completeWizardFormTitle("banking_payset", "it")).toBe("Completa il modulo per il Conto Bancario Payset")
-    expect(completeWizardFormTitle("formation", "it")).toBe("Completa il modulo di Costituzione LLC")
-    // the exact string the three affected clients were seeing
+  it("builds the client-facing title in both languages, name first", () => {
+    // Wording chosen by Antonio 2026-07-21.
+    expect(completeWizardFormTitle("banking_payset", "it")).toBe("Conto Bancario Payset — completa il modulo")
+    expect(completeWizardFormTitle("banking_payset", "en")).toBe("Payset Bank Account — complete your form")
+    expect(startWizardFormTitle("banking_relay", "it")).toBe("Conto Bancario Relay — inizia il modulo")
+    expect(completeWizardFormTitle("formation", "it")).toBe("Costituzione LLC — completa il modulo")
+    // the exact codes the three affected clients were seeing
     expect(completeWizardFormTitle("banking_payset", "en")).not.toContain("banking_payset")
     expect(completeWizardFormTitle("banking_relay", "en")).not.toContain("banking_relay")
   })
 
   it("the two cards that render in the SAME list agree with each other", () => {
     // An Italian client saw "Completa il modulo Costituzione" directly above
-    // "Inizia il modulo di Chiusura Società" — two grammars, one list.
+    // "Inizia il modulo di Chiusura Società" — two shapes, one list.
     for (const type of VALID_WIZARD_TYPES) {
-      const done = completeWizardFormTitle(type, "it")
-      const start = startWizardFormTitle(type, "it")
-      expect(done.replace(/^Completa /, ""), `grammar drift on ${type}`).toBe(start.replace(/^Inizia /, ""))
-      expect(
-        startWizardFormTitle(type, "en").replace(/^Start your /, ""),
-        `grammar drift on ${type} (en)`,
-      ).toBe(completeWizardFormTitle(type, "en").replace(/^Complete your /, ""))
+      for (const lang of ["en", "it"] as const) {
+        const done = completeWizardFormTitle(type, lang)
+        const start = startWizardFormTitle(type, lang)
+        const label = lang === "it" ? wizardLabelFor(type).it : wizardLabelFor(type).en
+        expect(done.startsWith(`${label} — `), `${type}/${lang} complete-card must lead with the name`).toBe(true)
+        expect(start.startsWith(`${label} — `), `${type}/${lang} start-card must lead with the name`).toBe(true)
+      }
     }
   })
 

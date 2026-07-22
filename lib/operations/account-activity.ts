@@ -11,7 +11,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 // This feed is CLIENT-VISIBLE: 'wizard' events are whitelisted in
 // lib/portal/journey-events.ts and rendered verbatim in the portal chat Log
 // tab, so these titles must never contain an internal wizard_type code.
-import { wizardLabelFor } from "@/lib/portal/wizard-labels"
+import { wizardLabelFor, offerTypeLabel } from "@/lib/portal/wizard-labels"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -383,7 +383,7 @@ function buildEvents(
       id: `offer-created-${o.id}`,
       timestamp: o.created_at,
       type: 'offer',
-      title: `Offer created${o.contract_type ? ` — ${o.contract_type}` : ''}`,
+      title: `Offer created${offerTypeLabel(o.contract_type) ? ` — ${offerTypeLabel(o.contract_type)}` : ''}`,
       body: o.client_name ?? undefined,
       source: 'offers',
     })
@@ -404,7 +404,7 @@ function buildEvents(
         timestamp: signedAt,
         type: 'activation',
         title: 'Contract signed',
-        body: o.contract_type ?? undefined,
+        body: offerTypeLabel(o.contract_type) ?? undefined,
         source: 'pending_activations',
       })
     }
