@@ -28,7 +28,7 @@ export interface SignableDocument {
   documentName?: string  // for generic signature_requests
 }
 
-export default async function PortalSignPage() {
+export default async function PortalSignPage({ searchParams }: { searchParams?: Promise<{ account?: string }> }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -52,8 +52,18 @@ export default async function PortalSignPage() {
   const accounts = await getPortalAccounts(contactId)
   const cookieStore = cookies()
   const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
+  // ?account= wins over the cookie. A client with more than one company reaches
+  // this page from a notification about ONE of them; without it they land on
+  // whichever company the switcher last left in the cookie — potentially a
+  // "You have already signed" screen for the wrong company, right after being
+  // told to sign. The id is only honoured if it is genuinely theirs (it is
+  // matched against getPortalAccounts), so it cannot be used to reach another
+  // client's company.
+  const requestedAccountId = (await searchParams)?.account
   const selectedAccountId = accounts.length > 0
-    ? (accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0].id)
+    ? (accounts.find(a => a.id === requestedAccountId)?.id
+        ?? accounts.find(a => a.id === cookieAccountId)?.id
+        ?? accounts[0].id)
     : ''
 
   if (!selectedAccountId) {

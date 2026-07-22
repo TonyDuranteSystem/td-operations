@@ -826,16 +826,31 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
             <p className="text-sm text-zinc-400 max-w-sm">
               {isMMLC
                 ? (lang === 'it'
-                  ? 'Ogni socio ha ricevuto il link personale per firmare l\'Atto Costitutivo nel portale.'
-                  : 'Each member has received their personal signing link in the portal. You will be notified once all members have signed.')
+                  ? 'Ogni socio ha ricevuto il link personale per firmare l\'Atto Costitutivo. Puoi firmare la tua parte adesso.'
+                  : 'Each member has received their personal signing link. You can sign your part now.')
                 : (lang === 'it'
-                  ? 'Il tuo Atto Costitutivo è pronto per la firma. Vai alla sezione Firma per completare il processo.'
-                  : 'Your Operating Agreement is ready to sign. Go to the Sign section to complete the process.')}
+                  ? 'Il tuo Atto Costitutivo è pronto. Firmalo adesso per completare il processo.'
+                  : 'Your Operating Agreement is ready. Sign it now to complete the process.')}
             </p>
+          )}
+          {/* THE fix for the incident this flow caused: a client who had just
+              built their agreement landed here with only "Generate another" and
+              had to ask where to sign. The notification we now send is the
+              fallback for someone who closes the tab — it is not a substitute
+              for letting them finish in the moment they are already here. The
+              company is carried in the link so a client with more than one
+              lands on the right one. */}
+          {oaCreateStatus === 'sent' && (
+            <a
+              href={`/portal/sign/oa?account=${account.id}`}
+              className="mt-4 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold text-sm transition"
+            >
+              {lang === 'it' ? 'Firma adesso' : 'Sign now'}
+            </a>
           )}
           <button
             onClick={handleReset}
-            className="mt-4 px-6 py-2.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg font-medium text-sm transition"
+            className={`${oaCreateStatus === 'sent' ? 'mt-2' : 'mt-4'} px-6 py-2.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg font-medium text-sm transition`}
           >
             {l('generateAnother', lang)}
           </button>

@@ -1655,7 +1655,11 @@ export async function getPortalActionItems(
       descriptionIt: isMultiSigner
         ? `${oaAny.signed_count || 0} di ${oaAny.total_signers} membri hanno firmato. La tua firma è necessaria.`
         : 'Documento in attesa della tua firma.',
-      href: '/portal/sign',
+      // Same destination as the email/chat notification for this agreement, and
+      // carrying the company — the two used to disagree (dashboard sent you to
+      // the list, the email to the document), and neither said which company,
+      // so a client with more than one could land on the wrong one.
+      href: `/portal/sign/oa?account=${accountId}`,
       priority,
       createdAt: oaDoc.created_at,
     })

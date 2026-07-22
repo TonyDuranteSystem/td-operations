@@ -26,6 +26,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { notifyClientActionRequired } from '@/lib/portal/action-required'
+import { reportSystemError } from '@/lib/system-errors'
 
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -147,6 +148,26 @@ export async function POST(request: NextRequest) {
     if (existing.status === 'signed') {
       return NextResponse.json({ error: 'This company already has a signed Operating Agreement. Contact support if you need a new one.' }, { status: 409 })
     }
+
+    // REFUSE if a co-signer has ALREADY SIGNED this agreement. The delete below
+    // removes their signature with it, and the notification that would have told
+    // them can be swallowed by the 10-minute duplicate guard — so a member could
+    // be silently un-signed and never know. Regenerating is a legitimate thing to
+    // want (a wrong date, a wrong address), but it destroys someone else's
+    // executed signature, so it has to be a deliberate act with a human in the
+    // loop rather than a side effect of clicking the button again.
+    const { count: signedCount } = await supabaseAdmin
+      .from('oa_signatures')
+      .select('id', { count: 'exact', head: true })
+      .eq('oa_id', existing.id)
+      .eq('status', 'signed')
+
+    if ((signedCount ?? 0) > 0) {
+      return NextResponse.json({
+        error: `Cannot regenerate — ${signedCount} member${signedCount === 1 ? ' has' : 's have'} already signed this Operating Agreement. Contact support to have it reissued.`,
+      }, { status: 409 })
+    }
+
     // Delete existing unsigned OA + signatures
     await supabaseAdmin.from('oa_signatures').delete().eq('oa_id', existing.id)
     await supabaseAdmin.from('oa_agreements').delete().eq('id', existing.id)
@@ -219,6 +240,8 @@ export async function POST(request: NextRequest) {
   }
 
   // ── 8. FOR MMLLC: INSERT OA_SIGNATURES + SEND PORTAL CHAT ──
+  const notifyOutcomes: Awaited<ReturnType<typeof notifyClientActionRequired>>[] = []
+
   if (isMMLC) {
     const sigRows = membersRows.map((m, idx) => ({
       oa_id: oa.id,
@@ -247,20 +270,24 @@ export async function POST(request: NextRequest) {
       // the primary signer's.
       for (const sig of insertedSigs) {
         if (!sig.contact_id) continue
-        await notifyClientActionRequired({
+        const r = await notifyClientActionRequired({
           contact_id: sig.contact_id,
           account_id,
           topic: 'Operating Agreement',
           title: {
-            en: 'Sign your Operating Agreement',
-            it: 'Firma il tuo Atto Costitutivo',
+            // Name the company. A client with more than one LLC gets one of
+            // these per company; an unqualified subject leaves them unable to
+            // tell which is which.
+            en: `Sign the Operating Agreement for ${account.company_name}`,
+            it: `Firma l'Atto Costitutivo di ${account.company_name}`,
           },
           message: {
             en: `The Operating Agreement for ${account.company_name} is ready for your signature. All ${totalSigners} members must sign before it takes effect.`,
             it: `L'Atto Costitutivo di ${account.company_name} è pronto per la tua firma. Tutti i ${totalSigners} soci devono firmare prima che diventi efficace.`,
           },
-          link: '/portal/sign/oa',
+          link: `/portal/sign/oa?account=${account_id}`,
         })
+        notifyOutcomes.push(r)
       }
     }
   } else {
@@ -269,24 +296,51 @@ export async function POST(request: NextRequest) {
     // rather than an announcement — but it still has to exist: the create screen
     // ends on "Signing process started!" with only a "Generate another" button,
     // and the agreement previously never reached the action-required list.
-    await notifyClientActionRequired({
+    notifyOutcomes.push(await notifyClientActionRequired({
       contact_id: contactId,
       account_id,
       topic: 'Operating Agreement',
       title: {
-        en: 'Sign your Operating Agreement',
-        it: 'Firma il tuo Atto Costitutivo',
+        en: `Sign the Operating Agreement for ${account.company_name}`,
+        it: `Firma l'Atto Costitutivo di ${account.company_name}`,
       },
       message: {
         en: `The Operating Agreement for ${account.company_name} is ready for your signature.`,
         it: `L'Atto Costitutivo di ${account.company_name} è pronto per la tua firma.`,
       },
-      link: '/portal/sign/oa',
+      link: `/portal/sign/oa?account=${account_id}`,
+    }))
+  }
+
+  // Report honestly whether the client was actually told. The helper never
+  // throws — a dead Gmail token yields "0 sent" — so without this the create
+  // screen shows a green "Signing process started!" while nobody was notified:
+  // the same silent-success failure this whole change exists to remove.
+  // A duplicate-suppressed dispatch COUNTS AS NOTIFIED. The client regenerating
+  // within the 10-minute window was already told a minute ago, and the link is
+  // per-company so it still resolves to the new agreement. Treating that as a
+  // failure raised a false "nobody was notified" alarm on every legitimate
+  // regenerate — caught in end-to-end QA, not by reading this code.
+  const reached = (channel: string) =>
+    channel.startsWith('ok') || channel.startsWith('skipped: duplicate')
+  const notified = notifyOutcomes.some(r => reached(r.chat) || reached(r.email))
+  if (notifyOutcomes.length > 0 && !notified) {
+    await reportSystemError({
+      source: 'server',
+      route: '/api/portal/operating-agreement/create',
+      method: 'POST',
+      message: `Operating Agreement created for ${account.company_name} but NO signer could be notified on any channel`,
+      context: {
+        account_id,
+        token: oa.token,
+        outcomes: notifyOutcomes.map(r => ({ chat: r.chat, email: r.email, notification: r.notification })),
+      },
     })
   }
 
   return NextResponse.json({
     success: true,
+    notified,
     token: oa.token,
     total_signers: totalSigners,
   })
