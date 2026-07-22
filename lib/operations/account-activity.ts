@@ -8,6 +8,10 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+// This feed is CLIENT-VISIBLE: 'wizard' events are whitelisted in
+// lib/portal/journey-events.ts and rendered verbatim in the portal chat Log
+// tab, so these titles must never contain an internal wizard_type code.
+import { wizardLabelFor } from "@/lib/portal/wizard-labels"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -484,7 +488,7 @@ function buildEvents(
       id: `wizard-started-${w.id}`,
       timestamp: w.created_at,
       type: 'wizard',
-      title: `Wizard started — ${w.wizard_type}`,
+      title: `Wizard started — ${wizardLabelFor(w.wizard_type).en}`,
       source: 'wizard_progress',
     })
     if (w.status === 'submitted' && w.updated_at !== w.created_at) {
@@ -492,7 +496,7 @@ function buildEvents(
         id: `wizard-submitted-${w.id}`,
         timestamp: w.updated_at,
         type: 'wizard',
-        title: `Wizard submitted — ${w.wizard_type}`,
+        title: `Wizard submitted — ${wizardLabelFor(w.wizard_type).en}`,
         source: 'wizard_progress',
       })
     }

@@ -31,17 +31,38 @@
  */
 import type { WizardType } from "./wizard-map"
 
-export const WIZARD_LABELS: Record<WizardType, { en: string; it: string }> = {
-  onboarding: { en: "Onboarding", it: "Onboarding" },
-  formation: { en: "Formation", it: "Costituzione" },
-  banking: { en: "Banking Setup", it: "Apertura Conto" },
-  banking_payset: { en: "Payset Bank Account", it: "Conto Bancario Payset" },
-  banking_relay: { en: "Relay Bank Account", it: "Conto Bancario Relay" },
-  closure: { en: "LLC Closure", it: "Chiusura LLC" },
-  itin: { en: "ITIN Application", it: "Richiesta ITIN" },
-  tax: { en: "Tax Return", it: "Dichiarazione Fiscale" },
-  company_info: { en: "Company Information", it: "Informazioni Aziendali" },
-  td_communication: { en: "Brand Audit", it: "Brand Audit" },
+/**
+ * `en` / `it` are the STANDALONE name (a tab, a chip, an activity line).
+ *
+ * `itOf` is the fragment that follows "il modulo …", and it exists because
+ * Italian needs a preposition that English does not, and the right preposition
+ * differs per label: "il modulo DI Costituzione" but "il modulo PER IL Conto
+ * Bancario Payset". Building the sentence as "il modulo ${it}" produced
+ * "Completa il modulo Costituzione" — wrong, and worse than the copy it
+ * replaced. Both sentence frames below consume `itOf`, so the two cards on the
+ * portal home can never disagree with each other again.
+ *
+ * VOCABULARY RULE: these strings must match what the rest of the product
+ * already calls the thing (the services catalog, the guide, the wizard page).
+ * An earlier version of this file invented "LLC Closure"/"Chiusura LLC" while
+ * every other client-facing surface said "Company Closure"/"Chiusura Società" —
+ * a vocabulary fork created by the very commit meant to end vocabulary forks.
+ * Do not rename a service here. Rename it in the catalog, then follow.
+ */
+export const WIZARD_LABELS: Record<WizardType, { en: string; it: string; itOf: string }> = {
+  // Italian follows the catalog exactly ("Onboarding LLC esistente" — onboarding
+  // an EXISTING LLC, which is what the client actually bought). Shortening it to
+  // "Onboarding" here was a fork; the catalog guard below caught it.
+  onboarding: { en: "Onboarding", it: "Onboarding LLC esistente", itOf: "di Onboarding LLC esistente" },
+  formation: { en: "LLC Formation", it: "Costituzione LLC", itOf: "di Costituzione LLC" },
+  banking: { en: "Banking Setup", it: "Apertura Conto", itOf: "di Apertura Conto" },
+  banking_payset: { en: "Payset Bank Account", it: "Conto Bancario Payset", itOf: "per il Conto Bancario Payset" },
+  banking_relay: { en: "Relay Bank Account", it: "Conto Bancario Relay", itOf: "per il Conto Bancario Relay" },
+  closure: { en: "Company Closure", it: "Chiusura Società", itOf: "di Chiusura Società" },
+  itin: { en: "ITIN Application", it: "Richiesta ITIN", itOf: "ITIN" },
+  tax: { en: "Tax Return", it: "Dichiarazione Fiscale", itOf: "di Dichiarazione Fiscale" },
+  company_info: { en: "Company Information", it: "Informazioni Aziendali", itOf: "di Informazioni Aziendali" },
+  td_communication: { en: "Brand Audit", it: "Brand Audit", itOf: "di Brand Audit" },
 }
 
 /**
@@ -60,9 +81,9 @@ const LABEL_ALIASES: Record<string, WizardType> = {
  * legitimate value is covered by the compiler, so a fallback here means the
  * stored value is wrong, not that a label is missing.
  */
-export function wizardLabelFor(wizardType: string): { en: string; it: string } {
+export function wizardLabelFor(wizardType: string): { en: string; it: string; itOf: string } {
   const resolved = LABEL_ALIASES[wizardType] ?? wizardType
-  return WIZARD_LABELS[resolved as WizardType] ?? { en: wizardType, it: wizardType }
+  return WIZARD_LABELS[resolved as WizardType] ?? { en: wizardType, it: wizardType, itOf: wizardType }
 }
 
 /**
@@ -73,6 +94,20 @@ export function wizardLabelFor(wizardType: string): { en: string; it: string } {
 export function completeWizardFormTitle(wizardType: string, lang: "en" | "it"): string {
   const label = wizardLabelFor(wizardType)
   return lang === "it"
-    ? `Completa il modulo ${label.it}`
+    ? `Completa il modulo ${label.itOf}`
     : `Complete your ${label.en} form`
+}
+
+/**
+ * The sibling card, for a form the client has not opened yet. It lives here
+ * rather than inline at its call sites because the two cards render in the SAME
+ * list: when this template and the one above drifted apart, an Italian client
+ * saw "Completa il modulo Costituzione" directly above "Inizia il modulo di
+ * Chiusura Società" — two grammars for the same kind of thing, side by side.
+ */
+export function startWizardFormTitle(wizardType: string, lang: "en" | "it"): string {
+  const label = wizardLabelFor(wizardType)
+  return lang === "it"
+    ? `Inizia il modulo ${label.itOf}`
+    : `Start your ${label.en} form`
 }

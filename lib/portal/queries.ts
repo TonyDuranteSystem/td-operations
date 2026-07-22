@@ -7,7 +7,7 @@ import type { FlowStageRow, FlowStep } from '@/lib/flows/flow-progress'
 import type { FormationStageRow } from '@/lib/portal/formation-progress'
 import { normalizeStageHistory } from '@/lib/stage-history-helpers'
 import { resolveTaxWizardEligibility } from '@/lib/tax/wizard-eligibility'
-import { wizardLabelFor, completeWizardFormTitle } from '@/lib/portal/wizard-labels'
+import { completeWizardFormTitle, startWizardFormTitle } from '@/lib/portal/wizard-labels'
 
 /**
  * Portal data queries. All use supabaseAdmin (service role, bypasses RLS)
@@ -1276,16 +1276,11 @@ function wizardTypeForServiceType(serviceType: string): string | null {
   return SD_WIZARD_TYPE_BY_SERVICE_TYPE[serviceType] ?? null
 }
 
-// Both delegate to the single compiler-checked map in ./wizard-labels. These
-// switches knew itin/closure but not the banking types, so a banking wizard
-// fell through to `default` and rendered its internal code to the client.
-function labelForWizardType(wizardType: string): string {
-  return wizardLabelFor(wizardType).en
-}
-
-function labelForWizardTypeIt(wizardType: string): string {
-  return wizardLabelFor(wizardType).it
-}
+// The two local label switches that used to live here are gone. They knew
+// itin/closure but not the banking types, so a banking wizard fell through to
+// `default` and rendered its internal code to the client. Every title on this
+// page is now built by completeWizardFormTitle / startWizardFormTitle in
+// ./wizard-labels, which own the sentence as well as the noun.
 
 function daysSince(dateStr: string): number {
   return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000)
@@ -1505,12 +1500,10 @@ export async function getPortalActionItems(
 
     const age = daysSince(sd.created_at)
     const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
-    const label = labelForWizardType(wt)
-    const labelIt = labelForWizardTypeIt(wt)
     items.push({
       type: 'form',
-      title: `Start ${label} Form`,
-      titleIt: `Inizia il modulo di ${labelIt}`,
+      title: startWizardFormTitle(wt, 'en'),
+      titleIt: startWizardFormTitle(wt, 'it'),
       description: 'Click to begin your data collection form.',
       descriptionIt: 'Clicca per iniziare il modulo di raccolta dati.',
       href: `/portal/wizard?type=${wt}`,
@@ -1784,12 +1777,10 @@ export async function getPortalActionItemsByContact(contactId: string): Promise<
 
     const age = daysSince(sd.created_at)
     const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
-    const label = labelForWizardType(wt)
-    const labelIt = labelForWizardTypeIt(wt)
     items.push({
       type: 'form',
-      title: `Start ${label} Form`,
-      titleIt: `Inizia il modulo di ${labelIt}`,
+      title: startWizardFormTitle(wt, 'en'),
+      titleIt: startWizardFormTitle(wt, 'it'),
       description: 'Click to begin your data collection form.',
       descriptionIt: 'Clicca per iniziare il modulo di raccolta dati.',
       href: `/portal/wizard?type=${wt}`,
