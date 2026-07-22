@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, AlertTriangle } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, AlertTriangle, StickyNote } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -23,6 +23,7 @@ import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-
 import { subscribeToDashboardPush } from '@/lib/push/dashboard-push'
 import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
 import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
+import { NoteComposeDialog } from '@/components/dashboard/note-quick-create'
 import { MessageReactions } from '@/components/chat/message-reactions'
 import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-team-dialog'
 import type { MessageReaction } from '@/lib/portal/reactions'
@@ -238,6 +239,8 @@ export default function PortalChatsPage() {
   // "To Do" quick action opens this small dialog (pre-filled with the message
   // text) so staff can write/trim the note before the card is created.
   const [todoNote, setTodoNote] = useState<{ messageId: string; note: string } | null>(null)
+  // seed for the "Make a note" post-it dialog raised from a message's menu
+  const [noteSeed, setNoteSeed] = useState<{ accountId: string | null; contactId: string | null; prefill: string } | null>(null)
   const [shareItems, setShareItems] = useState<ShareItem[] | null>(null)
   const [pendingAdminFiles, setPendingAdminFiles] = useState<PendingAdminFile[]>([])
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
@@ -3045,6 +3048,18 @@ export default function PortalChatsPage() {
                           >
                             <ClipboardList className="h-3.5 w-3.5 text-violet-500" /> To Do
                           </DropdownMenu.Item>
+                          {/* Make a post-it about this message — pre-filled with the message text,
+                              tied to this client, and linking back to this exact message. */}
+                          <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-amber-700 hover:bg-amber-50 cursor-pointer outline-none"
+                            onSelect={() => setNoteSeed({
+                              accountId: selectedCompanyId || selectedAccountId || null,
+                              contactId: selectedContactId || selectedThreadContactId || null,
+                              prefill: msg.message,
+                            })}
+                          >
+                            <StickyNote className="h-3.5 w-3.5 text-amber-500" /> Make a note
+                          </DropdownMenu.Item>
                           <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
                           <DropdownMenu.Label className="px-3 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
                             Tag Message
@@ -3935,6 +3950,15 @@ export default function PortalChatsPage() {
 
       {/* To-Do note dialog — opened by the per-message "To Do" action. Pre-filled
           with the message text; staff can edit/trim before creating the card. */}
+      {noteSeed && (
+        <NoteComposeDialog
+          accountId={noteSeed.accountId}
+          contactId={noteSeed.contactId}
+          prefill={noteSeed.prefill}
+          onClose={() => setNoteSeed(null)}
+        />
+      )}
+
       {todoNote && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setTodoNote(null)}>
           <div className="w-full max-w-md rounded-lg bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
