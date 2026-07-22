@@ -1,4 +1,5 @@
 import type { PortalIdentity } from '@/lib/portal/resolve-portal-identity'
+import { isPersonOwnedWizard } from '@/lib/portal/wizard-map'
 
 /**
  * Whether the logged-in portal identity may submit a wizard for this subject.
@@ -25,6 +26,7 @@ export function canSubmitWizard(
   identity: PortalIdentity,
   accountId: string | null,
   contactId: string | null,
+  wizardType?: string,
 ): boolean {
   if (identity.kind === 'contact') {
     // If an account is targeted, the contact must be linked to it.
@@ -34,6 +36,14 @@ export function canSubmitWizard(
     return true
   }
   if (identity.kind === 'teammate') {
+    // A person-owned wizard (ITIN) files a federal application in a named
+    // INDIVIDUAL's name and writes that person's identity fields onto their
+    // contact record. A teammate is scoped to a company and has no contact
+    // identity of their own, so there is no person they could legitimately
+    // submit one for. The company scope check below cannot help here either:
+    // these submissions deliberately carry no account_id, so it would pass
+    // unconditionally. Deny outright.
+    if (isPersonOwnedWizard(wizardType)) return false
     // Teammates are scoped to exactly one company.
     if (accountId && accountId !== identity.accountId) return false
     return true

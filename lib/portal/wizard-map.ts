@@ -153,6 +153,64 @@ export function getFlexibleServiceTypes(): string[] {
 }
 
 /**
+ * Wizard types for a service that belongs to the PERSON, never the company.
+ *
+ * ITIN is the case: an ITIN is issued to an individual, is one-per-person for
+ * life, and is sold standalone as often as it is bundled with a formation. The
+ * write side already encodes this — `createSD` (lib/operations/service-delivery.ts)
+ * strips `account_id` from every ITIN service delivery, "the ITIN belongs to the
+ * person, not the company". This map is the READ side of that same rule, so the
+ * portal looks where the writer actually put the row.
+ *
+ * Distinct from CONTACT_SCOPED_WIZARD_TYPES (formation), which is about an
+ * entity that does not exist yet and is routed by the ?lead= switcher. A
+ * person-owned wizard has no lead dimension — see resolveWizardProgressScope,
+ * which must NOT inherit formation's `restrictToNoLead`.
+ *
+ * Distinct from FLEXIBLE_WIZARD_TYPES (closure), which genuinely runs EITHER
+ * scope depending on the SD. ITIN has no such duality: it is always the person.
+ *
+ * NOT included: "ITIN Renewal". `createSD` forces contact scope for
+ * `service_type === "ITIN"` exactly, so a renewal SD keeps its account_id
+ * (pinned by tests/unit/operations-service-delivery.test.ts). Listing it here
+ * would discover nothing (the discovery query filters account_id IS NULL) and
+ * would route renewal clients into the ITIN-application chain. Bringing
+ * renewals onto this rail is a separate, deliberate change.
+ */
+export const PERSON_OWNED_WIZARD_TYPES = ["itin"] as const
+
+export type PersonOwnedWizardType = (typeof PERSON_OWNED_WIZARD_TYPES)[number]
+
+export function isPersonOwnedWizard(type: string | undefined): boolean {
+  return PERSON_OWNED_WIZARD_TYPES.includes(type as PersonOwnedWizardType)
+}
+
+export const PERSON_OWNED_SERVICE_TYPES_BY_WIZARD: Record<PersonOwnedWizardType, readonly string[]> = {
+  itin: ["ITIN"],
+} as const
+
+export function getPersonOwnedServiceTypes(): string[] {
+  return Object.values(PERSON_OWNED_SERVICE_TYPES_BY_WIZARD).flatMap((arr) => [...arr])
+}
+
+/**
+ * Service types whose CONTACT-SCOPED service deliveries must be discovered even
+ * when the client also owns an account: flexible (closure) ∪ person-owned (ITIN).
+ *
+ * Both portal discovery surfaces read this one accessor — the wizard page and
+ * the sidebar "Complete Setup" visibility check — so they cannot drift apart
+ * again (they already had, differing in row limit and status filter).
+ *
+ * Company Formation is deliberately absent: it is selected by the company
+ * switcher / ?lead= flow, and surfacing it here would leak a second company's
+ * formation into the portal of a client operating a different company (the
+ * bb54680b class, prevented identically in lib/portal/queries.ts).
+ */
+export function getContactScopedDiscoveryServiceTypes(): string[] {
+  return [...getFlexibleServiceTypes(), ...getPersonOwnedServiceTypes()]
+}
+
+/**
  * wizard_type → submission table name. Null for types with no submission
  * table (must be in BANKING_INLINE_TYPES, UI_ONLY_TYPES, or the
  * wizard-submit route silently drops the submission).

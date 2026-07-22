@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
       let allowed = false
       if (rowAccountId || rowContactId) {
         // Account- or contact-scoped row → standard subject check.
-        allowed = canSubmitWizard(identity, rowAccountId, rowContactId)
+        allowed = canSubmitWizard(identity, rowAccountId, rowContactId, wizard_type)
       } else if (rowLeadId) {
         // Lead-scoped formation row → re-prove lead ownership.
         allowed = await ownsLeadScopedRow(identity, user, rowLeadId)
@@ -114,7 +114,7 @@ export async function POST(req: NextRequest) {
       // ─── OWNERSHIP CHECK BEFORE CREATE (default-deny) ───
       // CREATE previously accepted client-supplied account_id/contact_id/lead_id
       // unverified. Gate the subject the same way wizard-submit does.
-      if (!canSubmitWizard(identity, account_id, contact_id ?? null)) {
+      if (!canSubmitWizard(identity, account_id, contact_id ?? null, wizard_type)) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 })
       }
       if (lead_id && wizard_type === 'formation') {

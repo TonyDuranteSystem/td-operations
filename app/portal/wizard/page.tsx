@@ -15,7 +15,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
-import { isValidWizardType, isContactScopedWizard, isFlexibleWizardType, getFlexibleServiceTypes, type WizardType } from '@/lib/portal/wizard-map'
+import { isValidWizardType, isContactScopedWizard, isFlexibleWizardType, isPersonOwnedWizard, getContactScopedDiscoveryServiceTypes, type WizardType } from '@/lib/portal/wizard-map'
 import { getInProgressFormations, getPortalAccounts } from '@/lib/portal/queries'
 import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
 import { getStartAtWizardServiceTypes } from '@/lib/services'
@@ -192,14 +192,16 @@ export default async function WizardPage({
 
     const { data: primarySds } = await sdQuery
 
-    // Flexible-types union: when the client has an account AND a contactId,
-    // ALSO look up contact-scoped SDs of flexible types (Closure today).
+    // Contact-scoped union: when the client has an account AND a contactId,
+    // ALSO look up contact-scoped SDs — flexible types (Closure) and
+    // person-owned types (ITIN, which is ALWAYS contact-scoped).
     // Without this, a managed-account holder closing an EXTERNAL LLC (SD on
     // contact_id only, account_id NULL) is invisible because the primary
-    // query above only sees account-scoped SDs.
+    // query above only sees account-scoped SDs — and so is the ITIN of anyone
+    // who already owns a company (Pietro De Pellegrino, 2026-07-21).
     let flexibleSds: Array<{ service_type: string; stage: string | null }> = []
     if (accountId && contactId) {
-      const flexibleTypes = getFlexibleServiceTypes()
+      const flexibleTypes = getContactScopedDiscoveryServiceTypes()
       if (flexibleTypes.length > 0) {
         const { data: flex } = await supabaseAdmin
           .from('service_deliveries')
@@ -238,7 +240,11 @@ export default async function WizardPage({
         .eq('contact_id', contactId)
         .in('status', ['submitted'])
       for (const w of byContact || []) {
-        if (isContactScopedWizard(w.wizard_type) || isFlexibleWizardType(w.wizard_type)) submittedTypes.add(w.wizard_type)
+        if (
+          isContactScopedWizard(w.wizard_type) ||
+          isFlexibleWizardType(w.wizard_type) ||
+          isPersonOwnedWizard(w.wizard_type)
+        ) submittedTypes.add(w.wizard_type)
       }
     }
 

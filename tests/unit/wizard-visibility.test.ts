@@ -207,6 +207,53 @@ describe("computeHasWizardPending — tier-based onboarding fallback (Commit C)"
   })
 })
 
+// ─── Contact-scoped fallback: person-owned ITIN alongside a company ───
+// Pietro De Pellegrino (2026-07-21): bought an ITIN standalone while already
+// owning a company. The ITIN service delivery is contact-scoped (createSD
+// strips account_id), so the account branch above cannot see it and the
+// contact branch never fires — he got no entrance to the questionnaire at all.
+
+describe("computeHasWizardPending — person-owned ITIN with a company selected", () => {
+  it("returns true for an account holder whose ITIN is contact-scoped and not yet submitted", async () => {
+    sdAccountFixture = [] // nothing wizard-eligible on the company
+    sdContactFixture = [{ service_type: "ITIN" }] // the personal ITIN
+    wizardProgressFixture = [] // never filled it in
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "acc-1",
+      portalTier: "active",
+    })
+    expect(result).toBe(true)
+  })
+
+  it("returns false once that ITIN questionnaire has been submitted", async () => {
+    // The service delivery stays `active` for months while the IRS processes
+    // it. Treating "active" as "still owes us the form" would nag the client
+    // forever and let them re-open their own filed application.
+    sdAccountFixture = []
+    sdContactFixture = [{ service_type: "ITIN" }]
+    wizardProgressFixture = [{ id: "wp-itin" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "acc-1",
+      portalTier: "active",
+    })
+    expect(result).toBe(false)
+  })
+
+  it("a submitted ITIN does NOT suppress a genuinely pending flexible wizard (closure)", async () => {
+    sdAccountFixture = []
+    sdContactFixture = [{ service_type: "ITIN" }, { service_type: "Company Closure" }]
+    wizardProgressFixture = [{ id: "wp-itin" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "acc-1",
+      portalTier: "active",
+    })
+    expect(result).toBe(true)
+  })
+})
+
 // ─── Branch precedence (SD branch wins before tier fallback) ───
 
 describe("computeHasWizardPending — branch precedence", () => {

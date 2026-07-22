@@ -70,10 +70,29 @@ export async function POST(req: NextRequest) {
       if (contact) { clientName = contact.full_name }
     }
 
-    // Get company name if linked
+    // Get company name if linked.
+    //
+    // An ITIN submission is keyed on the PERSON and carries no account_id (see
+    // accountIdForWizardSubmission — two members of one LLC must not share one
+    // submission). The client's company is therefore resolved from the CONTACT's
+    // linked account, not from the submission. Without this fallback an ITIN
+    // bought by someone who owns a company loses the company label here and
+    // files into a Leads folder below instead of the company folder.
     let companyName: string | null = null
-    if (sub.account_id) {
-      const { data: acc } = await supabaseAdmin.from("accounts").select("company_name").eq("id", sub.account_id).single()
+    let driveAccountId: string | null = sub.account_id ?? null
+    if (!driveAccountId && sub.contact_id) {
+      const { data: link } = await supabaseAdmin
+        .from("account_contacts")
+        .select("account_id")
+        .eq("contact_id", sub.contact_id)
+        .order("is_primary", { ascending: false })
+        .order("account_id", { ascending: true })
+        .limit(1)
+        .maybeSingle()
+      driveAccountId = link?.account_id ?? null
+    }
+    if (driveAccountId) {
+      const { data: acc } = await supabaseAdmin.from("accounts").select("company_name").eq("id", driveAccountId).single()
       if (acc) companyName = acc.company_name
     }
     const displayName = companyName ? `${clientName} (${companyName})` : clientName
@@ -155,9 +174,13 @@ export async function POST(req: NextRequest) {
       const { listFolder, createFolder } = await import("@/lib/google-drive")
       const { saveFormToDrive } = await import("@/lib/form-to-drive")
 
-      if (sub.account_id) {
-        // Account-linked: use account's Drive folder
-        const { data: acc } = await supabaseAdmin.from("accounts").select("drive_folder_id").eq("id", sub.account_id).single()
+      // Use the client's company Drive folder when they have one. `driveAccountId`
+      // is the submission's account when present, else the contact's linked
+      // account — an ITIN submission is person-keyed and carries no account_id,
+      // so reading sub.account_id alone would send every ITIN package of a
+      // company-owning client into a Leads folder.
+      if (driveAccountId) {
+        const { data: acc } = await supabaseAdmin.from("accounts").select("drive_folder_id").eq("id", driveAccountId).single()
         if (acc?.drive_folder_id) driveFolderId = acc.drive_folder_id
       }
 
