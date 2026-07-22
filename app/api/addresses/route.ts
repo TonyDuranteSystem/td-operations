@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isValidKind, freshAddressClient, linkedAccountCount, nearDupeCheck } from '@/lib/addresses'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 // GET /api/addresses?kind=registered_agent&active=true
 export async function GET(req: NextRequest) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const { searchParams } = req.nextUrl
   const kind = searchParams.get('kind')
   const activeParam = searchParams.get('active')
@@ -37,6 +41,9 @@ export async function GET(req: NextRequest) {
 
 // POST /api/addresses
 export async function POST(req: NextRequest) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const body = await req.json()
   const { kind, name, address_line1, city, state, zip } = body
 

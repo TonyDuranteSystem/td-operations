@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createDecision, approveDecision, rejectDecision } from '@/lib/agent-decisions'
 import { NextRequest, NextResponse } from 'next/server'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 /**
  * GET /api/agent-decisions?status=pending|approved|rejected
@@ -9,6 +10,9 @@ import { NextRequest, NextResponse } from 'next/server'
  * Protected by auth middleware (dashboard routes require session).
  */
 export async function GET(request: NextRequest) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const { searchParams } = new URL(request.url)
   const status = searchParams.get('status') ?? 'pending'
   const limit = Math.min(Number(searchParams.get('limit') ?? '20'), 50)
@@ -19,12 +23,20 @@ export async function GET(request: NextRequest) {
     .order('created_at', { ascending: false })
     .limit(limit)
 
+  // An UNRECOGNISED status must never mean "no filter". Before this, ?status=all fell past all
+  // three branches and returned every client's decisions unfiltered — the same shape as the
+  // To-Do card leak (see lib/todo-board/entity-scope.ts). Refuse instead of over-returning.
   if (status === 'pending') {
     query = query.is('approved', null)
   } else if (status === 'approved') {
     query = query.eq('approved', true)
   } else if (status === 'rejected') {
     query = query.eq('approved', false)
+  } else {
+    return NextResponse.json(
+      { error: "status must be 'pending', 'approved' or 'rejected'." },
+      { status: 400 },
+    )
   }
 
   const { data, error } = await query
@@ -41,6 +53,9 @@ export async function GET(request: NextRequest) {
  * Create a new pending decision.
  */
 export async function POST(request: NextRequest) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   try {
     const body = await request.json()
     const { situation, action_taken, tools_used, account_id, contact_id, task_id } = body
@@ -74,6 +89,9 @@ export async function POST(request: NextRequest) {
  * Body: { id: string, approved: boolean }
  */
 export async function PATCH(request: NextRequest) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   try {
     const body = await request.json()
     const { id, approved } = body

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { freshAddressClient, linkedAccountCount } from '@/lib/addresses'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -12,6 +13,9 @@ const MUTABLE_FIELDS = new Set([
 
 // PATCH /api/addresses/[id]
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const body = await req.json()
 
   const updates: Record<string, unknown> = {}
@@ -51,6 +55,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 // DELETE /api/addresses/[id]
 // Soft-delete: sets active=false. Blocked with 409 if any active accounts are linked.
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const db = freshAddressClient()
   const count = await linkedAccountCount(db, params.id)
 
