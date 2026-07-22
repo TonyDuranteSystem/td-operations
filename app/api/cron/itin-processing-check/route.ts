@@ -24,6 +24,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
 import { decideReminder, buildReminderMessage } from "@/lib/tasks/itin-processing-reminder"
+import { localeFromLanguage } from "@/lib/locale"
 import { updateTask } from "@/lib/operations/task"
 
 export const maxDuration = 60
@@ -111,7 +112,11 @@ export async function GET(req: NextRequest) {
         .eq("id", contactId)
         .maybeSingle()
       const firstName = (contact?.full_name ?? "").split(" ")[0] || "there"
-      const language = contact?.language === "it" ? "it" : "en"
+      // Free-text column: production stores "Italian", not "it". The strict
+      // compare here meant every Italian client waiting on the IRS got their
+      // 7–11 week progress reminders in English. lib/locale.ts is the single
+      // normalizer — never hand-roll the comparison.
+      const language = localeFromLanguage(contact?.language)
 
       const messageBody = buildReminderMessage({
         first_name: firstName,

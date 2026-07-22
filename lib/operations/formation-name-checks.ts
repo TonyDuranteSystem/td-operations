@@ -6,6 +6,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { isItalian } from '@/lib/locale'
 import {
   initNameChecksFromWizard,
   parseProposedNames,
@@ -106,7 +107,8 @@ async function sendNameProposalChatMessage(row: SdRow, displayName: string, stat
         .select('language')
         .eq('id', row.contact_id)
         .maybeSingle()
-      if (contact?.language === 'it') language = 'it'
+      // contacts.language is free text ("Italian", not "it") — normalize.
+      if (isItalian(contact?.language)) language = 'it'
     }
 
     const message =

@@ -14,6 +14,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { localeFromLanguage } from "@/lib/locale"
 import type { HandlerContext, HandlerResult, WorkflowHandler } from "@/lib/tasks/types"
 
 /** Re-export the central client-safe schema for the workflow editor. */
@@ -28,7 +29,15 @@ async function pickLanguage(contactId: string | null): Promise<"en" | "it"> {
     .select("language")
     .eq("id", contactId)
     .maybeSingle()
-  return data?.language === "it" ? "it" : "en"
+  // `contacts.language` is free text — production stores "Italian", not "it".
+  // A strict `=== "it"` check therefore matched almost nobody and sent ENGLISH
+  // to every Italian client this handler serves, including the ITIN
+  // "Send wizard link to client" action (Pietro De Pellegrino, 2026-07-21:
+  // language "Italian", received the English body; staff had to re-write it by
+  // hand in Italian a minute later). lib/locale.ts is the single normalizer and
+  // its own header documents this exact bug being fixed in five other places —
+  // this was the sixth. Never re-hand-roll the comparison.
+  return localeFromLanguage(data?.language)
 }
 
 export const chainSendClientMessage: WorkflowHandler = async (
