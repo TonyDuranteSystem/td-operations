@@ -127,11 +127,18 @@ export function NotesCalendar({ notes, onOpen }: { notes: CalendarNote[]; onOpen
             const dayNotes = byDay.get(c.key) ?? []
             const isSel = selected === c.key
             return (
-              <button
+              // The CELL is a div, not a button, so each note inside it can be its own button
+              // (nested buttons are invalid HTML). Clicking the empty part of a day selects it;
+              // clicking a NOTE opens that note — Antonio, 2026-07-21: "when I click on the date
+              // in the calendar, when there is a note, the note doesn't open."
+              <div
                 key={c.key}
+                role="button"
+                tabIndex={0}
                 onClick={() => setSelected(c.key)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSelected(c.key) }}
                 className={[
-                  'min-h-[5.5rem] bg-white p-1.5 text-left align-top transition',
+                  'min-h-[5.5rem] cursor-pointer bg-white p-1.5 text-left align-top transition',
                   c.inMonth ? '' : 'bg-zinc-50 text-zinc-400',
                   isSel ? 'ring-2 ring-inset ring-amber-400' : 'hover:bg-amber-50',
                 ].join(' ')}
@@ -144,16 +151,21 @@ export function NotesCalendar({ notes, onOpen }: { notes: CalendarNote[]; onOpen
                 </span>
                 <div className="mt-1 flex flex-col gap-0.5">
                   {dayNotes.slice(0, 3).map((n) => (
-                    <span key={n.id} className="flex items-center gap-1 truncate text-[11px] leading-tight">
+                    <button
+                      key={n.id}
+                      onClick={(e) => { e.stopPropagation(); onOpen?.(n) }}
+                      title="Open this note"
+                      className="flex w-full items-center gap-1 truncate rounded text-left text-[11px] leading-tight hover:bg-black/10"
+                    >
                       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT[n.color] || DOT.yellow}`} />
                       <span className="truncate">{n.body}</span>
-                    </span>
+                    </button>
                   ))}
                   {dayNotes.length > 3 && (
                     <span className="text-[11px] text-zinc-500">+{dayNotes.length - 3} more</span>
                   )}
                 </div>
-              </button>
+              </div>
             )
           })}
         </div>
