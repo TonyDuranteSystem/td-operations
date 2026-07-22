@@ -18,9 +18,23 @@ type FilterCall = { method: 'eq' | 'is' | 'in' | 'order' | 'limit'; column: stri
 let captured: FilterCall[] = []
 let lastTable = ''
 let mockData: unknown = null
+/**
+ * Per-table fixtures. The original harness returned the SAME `mockData` for
+ * every branch of the builder's Promise.all, which made item generation
+ * untestable — the file said so in a comment, and a real defect hid there:
+ * a tax service for a client with no company produced a card promising a
+ * "Tax Return" form they could never reach. Keyed by table name; falls back
+ * to `mockData` so the existing filter-shape tests are unaffected.
+ */
+let mockByTable: Record<string, unknown> = {}
+
+function dataFor(table: string): unknown {
+  return table in mockByTable ? mockByTable[table] : mockData
+}
 
 function makeChain(table: string) {
   lastTable = table
+  const settle = () => Promise.resolve({ data: dataFor(table), error: null })
   const chain = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn(function (this: unknown, column: string, value: unknown) {
@@ -41,9 +55,14 @@ function makeChain(table: string) {
     }),
     limit: vi.fn(function (this: unknown, n: number) {
       captured.push({ method: 'limit', column: '', value: n })
-      // limit terminates the chain — return the data wrapped as a thenable
-      return Promise.resolve({ data: mockData, error: null })
+      return settle()
     }),
+    maybeSingle: vi.fn(() => settle()),
+    single: vi.fn(() => settle()),
+    // Thenable so a query that never calls .limit() still resolves — without
+    // this the builder saw `undefined` for those branches and produced nothing.
+    then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+      settle().then(resolve, reject),
   }
   return chain
 }
@@ -64,6 +83,7 @@ beforeEach(() => {
   captured = []
   lastTable = ''
   mockData = []
+  mockByTable = {}
 })
 
 // ─── getPortalPaymentsByContact ────────────────────────────
@@ -173,11 +193,39 @@ describe('getPortalActionItemsByContact', () => {
     )
   })
 
-  // The item-generation logic is harder to test here because the mock
-  // returns the same `mockData` for every Promise.all branch. Pure logic
-  // tests for priority/sort/translation belong in a separate test that
-  // exercises only the item-shaping helpers — kept narrow on purpose to
-  // avoid coupling to Supabase chain quirks.
+  // ── The tax card for a client with no company yet ──────────────────────
+  // A client who bought a tax return but has no company in the portal was
+  // shown "Tax Return — start your form". They could never reach that form:
+  // this builder only ever runs for a client with NO account, and
+  // decideTaxWizardEligibility returns `company_info` for every accountless
+  // subject, so the wizard page rewrote ?type=tax and served them a page
+  // headed "Company Information". Right destination, wrong promise.
+  it('names a tax service Company Information — the form a company-less client actually gets', async () => {
+    mockByTable = {
+      service_deliveries: [{ service_type: 'Tax Return', created_at: new Date().toISOString() }],
+      wizard_progress: [],
+      payments: [],
+    }
+    const result = await getPortalActionItemsByContact('contact-tax-no-company')
+    const card = result.items.find(i => i.type === 'form')
+    expect(card, 'the client must still get an entry point — suppressing the card strands them').toBeDefined()
+    expect(card!.href, 'must link to the form they will actually be served').toBe('/portal/wizard?type=company_info')
+    expect(card!.title).toBe('Company Information — start your form')
+    expect(card!.title).not.toContain('Tax Return')
+    expect(card!.titleIt).not.toContain('Dichiarazione')
+  })
+
+  it('leaves a non-tax service alone (ITIN keeps its own wizard and name)', async () => {
+    mockByTable = {
+      service_deliveries: [{ service_type: 'ITIN', created_at: new Date().toISOString() }],
+      wizard_progress: [],
+      payments: [],
+    }
+    const result = await getPortalActionItemsByContact('contact-itin')
+    const card = result.items.find(i => i.type === 'form')
+    expect(card!.href).toBe('/portal/wizard?type=itin')
+    expect(card!.title).toBe('ITIN Application — start your form')
+  })
 })
 
 // ─── Priority + label logic (pure helpers extracted from the body) ────

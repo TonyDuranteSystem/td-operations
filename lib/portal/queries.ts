@@ -1770,8 +1770,22 @@ export async function getPortalActionItemsByContact(contactId: string): Promise<
   const sdSurfacedWizardsByContact = new Set<string>()
 
   for (const sd of contactSdsRes.data ?? []) {
-    const wt = wizardTypeForServiceType(sd.service_type)
+    let wt = wizardTypeForServiceType(sd.service_type)
     if (!wt) continue
+    // ── Tax, for a client with no company yet, is ALWAYS company_info ────────
+    // This loop is accountless by construction (the query above filters
+    // `account_id IS NULL`), and `decideTaxWizardEligibility` returns
+    // `company_info` for every accountless subject — unconditionally, before any
+    // other check (lib/tax/wizard-eligibility.ts). The wizard page knows this and
+    // rewrites `?type=tax` to company_info, so the client DID land on the right
+    // form; the card just promised them a different one ("Tax Return — start
+    // your form" → a page headed "Company Information").
+    //
+    // Mapping it here rather than gating it out is deliberate: suppressing the
+    // card would leave these clients with NO entry point at all. It also fixes
+    // the dedup below, which was asking whether a `tax` wizard was already in
+    // progress when the wizard they actually fill in is `company_info`.
+    if (wt === 'tax') wt = 'company_info'
     if (inProgressWizardTypesByContact.has(wt)) continue
     if (submittedWizardTypesByContact.has(wt)) continue
     if (sdSurfacedWizardsByContact.has(wt)) continue
