@@ -6,7 +6,19 @@
  *
  * The renderer (components/flows/stage-renderer.tsx) maps each component's
  * `type` to a React component. Unknown/missing layouts degrade gracefully.
+ *
+ * Author-facing text (`label`, `description`) may reference a system token such
+ * as `{td_mailing_address}`, resolved here at parse time so the stored row never
+ * carries its own copy of a value that lives in code. See lib/td-address.ts.
  */
+
+import { interpolateString } from '@/lib/template-interpolation'
+import { STAGE_LAYOUT_TOKENS } from '@/lib/td-address'
+
+/** Fill system tokens; unknown ones are left literal so the gap is visible. */
+function resolveTokens(text: string): string {
+  return interpolateString(text, STAGE_LAYOUT_TOKENS)
+}
 
 export const STAGE_COMPONENT_TYPES = [
   'info_panel',
@@ -97,7 +109,7 @@ export function parseStageLayout(value: unknown): StageLayout | null {
     const rawComp = comp as { autoAdvance?: unknown; folder?: unknown; rename?: unknown }
     components.push({
       type: comp.type as StageComponentType,
-      label: typeof comp.label === 'string' ? comp.label : undefined,
+      label: typeof comp.label === 'string' ? resolveTokens(comp.label) : undefined,
       url: typeof comp.url === 'string' ? comp.url : undefined,
       actions: Array.isArray(comp.actions)
         ? comp.actions.map(parseStageAction).filter((a): a is StageAction => a !== null)
@@ -109,6 +121,6 @@ export function parseStageLayout(value: unknown): StageLayout | null {
   }
   return {
     components,
-    description: typeof raw.description === 'string' ? raw.description : undefined,
+    description: typeof raw.description === 'string' ? resolveTokens(raw.description) : undefined,
   }
 }

@@ -61,6 +61,20 @@ export const MAILING_DESTINATION_TEXT = MAILING_DESTINATION_LINES.join("\n")
 /** Same block as HTML, for email templates. */
 export const MAILING_DESTINATION_HTML = `<strong>${TD_OFFICE.company}</strong><br/>${TD_OFFICE.street}<br/>${TD_CITY_STATE_ZIP}<br/>${TD_OFFICE.country}`
 
+/** The mailing address on ONE line, for prose ("Mail to: ..."). */
+export const MAILING_DESTINATION_ONE_LINE = `${TD_OFFICE.company}, ${TD_OFFICE.street}, ${TD_CITY_STATE_ZIP}`
+
+/**
+ * Tokens a catalog-authored stage-layout label may reference, so a note stored
+ * in the database renders the address from HERE instead of carrying its own
+ * copy. A stored copy drifts — the ITIN "Client Signing" note had already
+ * drifted to "Suite" without a comma and "Florida" spelled out before this
+ * existed. Resolved by `parseStageLayout`; unknown tokens are left as-is.
+ */
+export const STAGE_LAYOUT_TOKENS: Record<string, string> = {
+  td_mailing_address: MAILING_DESTINATION_ONE_LINE,
+}
+
 // ── 2. TD as Certified Acceptance Agent, on the W-7 ─────────────────────────
 
 export const CAA_IDENTITY_ADDRESS = {
