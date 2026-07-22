@@ -35,6 +35,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "OA not found" }, { status: 404 })
     }
 
+    // The preview link must carry the access code: ?preview=td no longer skips
+    // the server-side code check, because the staff session cookie is scoped to
+    // the CRM host and is absent on the client-facing domain.
+    // A row with NO code has no working preview URL at all — the codeless form
+    // 403s too, on the same guard. So omit the line rather than email a link
+    // that cannot work. (An earlier version of this fallback claimed to solve
+    // that and did not: both branches 403.)
+    const previewUrl = oa.access_code
+      ? `${APP_BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}?preview=td`
+      : null
+
     const results: { step: string; status: string; detail?: string }[] = []
     const isMMLC = (oa.entity_type === "MMLLC") && (oa.total_signers || 1) > 1
     const isFullySigned = oa.status === "signed"
@@ -70,8 +81,8 @@ export async function POST(req: NextRequest) {
             ``,
             `The agreement is NOT yet fully executed. Remaining members must still sign.`,
             ``,
-            `Admin Preview: ${APP_BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}?preview=td`,
-          ]
+            previewUrl ? `Admin Preview: ${previewUrl}` : null,
+          ].filter(Boolean)
         : [
             `The Operating Agreement for ${oa.company_name} has been ${isMMLC ? "fully " : ""}signed.`,
             ``,
@@ -80,7 +91,7 @@ export async function POST(req: NextRequest) {
             isMMLC ? `All ${oa.total_signers} members have signed.` : null,
             `Token: ${oa.token}`,
             ``,
-            `Admin Preview: ${APP_BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}?preview=td`,
+            previewUrl ? `Admin Preview: ${previewUrl}` : null,
           ].filter(Boolean)
 
       const emailBody = bodyLines.join("\n")

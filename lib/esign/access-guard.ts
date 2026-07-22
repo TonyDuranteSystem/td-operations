@@ -30,6 +30,27 @@ export function accessCodeError(
   opts: { token: string; expected: string; provided: string; isPreview: boolean },
 ): { status: number; error: string } | null {
   if (opts.isPreview) return null
+
+  // FAIL CLOSED when the record has no usable code on file. Without this, an
+  // empty or NULL `expected` compares equal to an empty `provided` — both become
+  // a zero-length Buffer and timingSafeEqual returns true — so such a record
+  // would be readable by anyone holding only the token, with no credential at
+  // all. `.trim()` closes the same hole for a whitespace-only code, which is
+  // reachable by a manual staff edit and would otherwise still compare equal.
+  //
+  // Nothing legitimate has a blank code (verified on production: zero across
+  // oa_agreements 0/187 and esign_signers 0/26), so refusing is never a false
+  // denial. The branch can only ever DENY — it adds no path that returns null.
+  //
+  // Scope note, because the first version of this comment overstated it: the
+  // ONLY callers of this guard are the operating-agreement fetch route and the
+  // four e-sign routes. SS-4, Form 8832 and signature-request do their own bare
+  // `!==` compare and are NOT covered here — nor were they ever exposed this
+  // way, since `null !== ""` is true and already blocked those rows.
+  if (!opts.expected?.trim()) {
+    return { status: 403, error: "This signing link is not available. Please contact support@tonydurante.us." }
+  }
+
   const key = `esign:${clientIp(req) || "unknown"}:${opts.token}`
 
   const rl = checkLoginRateLimit(key)
