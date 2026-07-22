@@ -313,3 +313,29 @@ describe("syncTaxReturnToSD", () => {
     expect(args.service_name).toContain(String(currentYear))
   })
 })
+
+/**
+ * The extension tool lives inside a large MCP registration and cannot be
+ * imported standalone, so this guards the one line that stranded a client.
+ */
+describe("tax_extension_update: the SD advance gate", () => {
+  it("includes 'Company Data Pending' — the stage that stranded Bcom LLC", async () => {
+    const { readFileSync } = await import("fs")
+    const src = readFileSync("lib/mcp/tools/tax.ts", "utf8")
+    const gate = src.match(/if_current_stage:\s*\[([^\]]*)\]/)
+    expect(gate, "the extension tool no longer has an if_current_stage gate").toBeTruthy()
+    expect(
+      gate![1],
+      [
+        "'Company Data Pending' must stay in the extension advance gate.",
+        "It is the LOWEST tax stage (order -1) and the one the SD-bridge assigns",
+        "for 'Payment Pending' / 'Not Invoiced', i.e. exactly where a client sits",
+        "before their first payment. Without it, recording an extension moves the",
+        "tax RECORD but silently leaves the SERVICE behind — and that stage makes",
+        "the portal serve the Company Information form, so a company that already",
+        "has its EIN gets asked for its company details and never sees its tax",
+        "questionnaire. That is what happened to Bcom LLC for three months.",
+      ].join(" "),
+    ).toContain("Company Data Pending")
+  })
+})

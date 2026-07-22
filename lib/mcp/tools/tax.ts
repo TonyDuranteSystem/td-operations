@@ -895,8 +895,25 @@ export function registerTaxTools(server: McpServer) {
             } else {
               updated++
               // Advance the Tax Return SD chain to "Extension Filed" — only
-              // from the January waiting stages; later stages are untouched
-              // (advanceStageIfAt skips when the gate doesn't match).
+              // from the pre-extension waiting stages; later stages are
+              // untouched (advanceStageIfAt skips when the gate doesn't match).
+              //
+              // "Company Data Pending" MUST be in the gate. It is the LOWEST
+              // tax stage (order -1) and the one the SD-bridge assigns for the
+              // pre-payment statuses "Payment Pending" / "Not Invoiced"
+              // (lib/operations/tax-return-sd-bridge.ts), so it is exactly
+              // where a client sits before their first payment lands. Omitting
+              // it stranded Bcom LLC for three months: their return went to
+              // "Extension Filed" on 2026-04-12 while the SD silently stayed
+              // put, and that stage makes the portal serve the COMPANY
+              // INFORMATION form — so a company that already had its EIN was
+              // asked for its company details and its tax questionnaire never
+              // appeared. Found 2026-07-22.
+              //
+              // Safe for genuine standalone intake: those clients have a
+              // CONTACT-scoped SD with account_id NULL and therefore no
+              // tax_returns row, so this block never sees them (it is gated on
+              // trRow.account_id and queries by account_id).
               if (trRow.account_id) {
                 try {
                   const { data: sd } = await supabaseAdmin
@@ -911,7 +928,7 @@ export function registerTaxTools(server: McpServer) {
                   if (sd) {
                     await advanceStageIfAt({
                       delivery_id: sd.id,
-                      if_current_stage: ["1st Installment Paid", "Paid - Awaiting Data"],
+                      if_current_stage: ["Company Data Pending", "1st Installment Paid", "Paid - Awaiting Data"],
                       target_stage: "Extension Filed",
                       actor: "tax-extension-update",
                       notes: `Extension filed for ${tax_year} (confirmation ${ext.submission_id})`,
