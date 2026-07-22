@@ -15,6 +15,7 @@ import { getGreeting } from "@/lib/greeting"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { APP_BASE_URL } from "@/lib/config"
+import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
 
@@ -139,10 +140,16 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
         }
 
         // ─── 4. CHECK DUPLICATE ───
+        // ORDER BY created_at DESC is load-bearing, not cosmetic: without it an
+        // account with more than one OA row returned an ARBITRARY row, while
+        // oa_get and /portal/sign both read the NEWEST. force_recreate could
+        // therefore delete a different agreement than the one staff were looking
+        // at. (Council, 2026-07-22.)
         const { data: existing } = await supabaseAdmin
           .from("oa_agreements")
-          .select("id, token, status")
+          .select("id, token, status, signed_count")
           .eq("account_id", params.account_id)
+          .order("created_at", { ascending: false })
           .limit(1)
 
         if (existing?.length && !params.force_recreate) {
@@ -150,6 +157,36 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
         }
 
         // ─── 5. FORCE RECREATE: delete existing OA ───
+        // REFUSE if ANY signature has already been collected. Replacing an
+        // UNSIGNED agreement is fine and expected — a new one supersedes the old
+        // draft. Destroying a SIGNED one is not: the delete below removes the
+        // oa_signatures rows and the agreement itself with no soft-delete and no
+        // audit record (R100), so there is afterwards no evidence the client ever
+        // signed — no signature, no date, nothing to show a bank or the IRS.
+        //
+        // The old guard was `status === 'signed'` only (and it lived on the
+        // portal route, never here). That is wrong for a multi-member LLC, which
+        // stays 'partially_signed' until the LAST member signs: a re-generate at
+        // 2-of-3 erased two executed signatures and forced those members to sign
+        // again with no trace they already had. Prod carries 73 signed OAs.
+        // Same predicate as the client-facing route — one rule, both doors.
+        if (existing?.length && params.force_recreate && hasCollectedSignatures(existing[0])) {
+          return { content: [{ type: "text" as const, text: [
+            `❌ Refusing to re-create: this Operating Agreement already carries a signature.`,
+            ``,
+            `  Company: ${account.company_name}`,
+            `  Token:   ${existing[0].token}`,
+            `  Status:  ${existing[0].status}${(existing[0].signed_count ?? 0) > 0 ? ` (${existing[0].signed_count} signature(s) collected)` : ""}`,
+            ``,
+            `force_recreate DELETES the agreement and every signature on it, with no`,
+            `undo and no audit record. A signed OA is an executed legal document —`,
+            `deleting it destroys the only proof the client signed.`,
+            ``,
+            `If the client genuinely needs a different agreement: void this one`,
+            `(keeping the record), then create the new one.`,
+          ].join("\n") }] }
+        }
+
         if (existing?.length && params.force_recreate) {
           await supabaseAdmin.from("oa_signatures").delete().eq("oa_id", existing[0].id)
           const { error: delErr } = await supabaseAdmin.from("oa_agreements").delete().eq("id", existing[0].id)
