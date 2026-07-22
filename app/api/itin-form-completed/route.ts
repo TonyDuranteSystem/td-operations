@@ -537,10 +537,20 @@ export async function POST(req: NextRequest) {
             contact_id: contactId || null,
             delivery_id: deliveryId,
             actor: "itin-form-completed:auto-chain",
-            // Dedup on the SD (one itin_review pointer per ITIN SD). Must be a
-            // field PRESENT in the pinned task_meta (sd_progress_v1) — the
+            // Dedup on the SD (one OPEN itin_review pointer per ITIN SD). Must
+            // be a field PRESENT in the pinned task_meta (sd_progress_v1) — the
             // dispatcher checks task_meta->>service_delivery_id on retry.
-            idempotency: { field: "service_delivery_id", value: deliveryId },
+            //
+            // workflow_slug is REQUIRED here: service_delivery_id is carried by
+            // other ITIN workflows too. Without it the `itin_data_collection`
+            // task ("Send wizard link to client", spawned at SD creation)
+            // matched, the dispatcher reported already_spawned, and the review
+            // card was never created — for every ITIN client from 2026-07-11
+            // (Marcell Bogyora ×3, Tamás Fazekas ×1). The plain-task fallback
+            // did not fire either, because already_spawned sets workflowSpawned,
+            // so their submissions generated documents that nobody was told to
+            // review. Confirmed in action_log before this fix.
+            idempotency: { field: "service_delivery_id", value: deliveryId, workflow_slug: "itin_review" },
           })
           if (dispatch.spawned) {
             workflowSpawned = true
