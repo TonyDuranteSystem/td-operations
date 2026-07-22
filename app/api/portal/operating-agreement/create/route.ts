@@ -9,8 +9,13 @@
  * 2. Fetch account details + members table rows
  * 3. Silently replace any existing unsigned OA
  * 4. Insert oa_agreements with correct entity_type + total_signers + members JSON
- * 5. For MMLLC: insert oa_signatures (one per member) + send portal chat to each
- * 6. For SMLLC: send portal chat to primary contact with signing link
+ * 5. For MMLLC: insert oa_signatures (one per member) + notify EVERY member
+ * 6. For SMLLC: notify the sole signer
+ *
+ * Notification is the shared action-required dispatch (portal chat + immediate
+ * bilingual email + bell + push), pointing at the Sign section. The agreement is
+ * stored as 'sent', not 'draft', or it never reaches the portal's action-required
+ * list — see the comment on the status field.
  *
  * Body: { account_id: string, effective_date: string, member_addresses: string[] }
  */
@@ -20,10 +25,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
-import { APP_BASE_URL } from '@/lib/config'
-
-const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
-const SYSTEM_SENDER_ID = '00000000-0000-0000-0000-000000000000'
+import { notifyClientActionRequired } from '@/lib/portal/action-required'
 
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -195,7 +197,17 @@ export async function POST(request: NextRequest) {
       registered_agent_address: account.registered_agent_address ?? null,
       principal_address: account.physical_address ?? '10225 Ulmerton Rd, Suite 3D, Largo, FL 33771',
       language: 'en',
-      status: 'draft',
+      // 'sent', NOT 'draft'. This route IS the send — the client built the
+      // agreement and is notified in the same breath. Stored as 'draft' it was
+      // invisible to the portal's "action required" list, which matches only
+      // sent / viewed / awaiting_signature / partially_signed. So a client who
+      // generated their own agreement was never reminded to sign it, and the
+      // chat message told them to "go to the Sign section" where nothing
+      // prompted them. (Lorenzo Cassi, 2026-07-22: created it, saw a success
+      // screen, then asked "dove firmo?" — three other live clients are stuck
+      // the same way.) The CRM send path has always written 'sent' here, which
+      // is why this only ever bit self-service clients.
+      status: 'sent',
       total_signers: totalSigners,
       signed_count: 0,
     })
@@ -225,41 +237,52 @@ export async function POST(request: NextRequest) {
       // OA was created — partial failure, don't block
       console.error('OA signatures insert failed:', sigErr.message)
     } else if (insertedSigs) {
-      // Send portal chat to each member
+      // Notify EVERY member: portal chat + immediate email + bell + push, each
+      // in their own language. Previously this inserted a chat message only —
+      // a member who did not open the portal had no idea they were holding up
+      // the agreement. The shared helper is the same one the SS-4 flow uses
+      // (born from a client who had to ask why nothing happened), and it points
+      // at the Sign section, where /portal/sign/oa resolves each member's own
+      // signature row from their contact — so every member gets THEIR link, not
+      // the primary signer's.
       for (const sig of insertedSigs) {
         if (!sig.contact_id) continue
-        const sigUrl = `${OA_BASE_URL}/${oa.token}/${oa.access_code}?portal=true&signer=${sig.access_code}`
-        const message = `Your Operating Agreement for **${account.company_name}** is ready for your signature.\n\n[Sign Operating Agreement →](${sigUrl})\n\nAll ${totalSigners} members must sign for the agreement to take effect.`
-        try {
-          await supabaseAdmin
-            .from('portal_messages')
-            .insert({
-              contact_id: sig.contact_id,
-              account_id,
-              sender_type: 'system',
-              sender_id: SYSTEM_SENDER_ID,
-              message,
-              topic: 'Operating Agreement',
-            })
-        } catch { /* non-blocking */ }
+        await notifyClientActionRequired({
+          contact_id: sig.contact_id,
+          account_id,
+          topic: 'Operating Agreement',
+          title: {
+            en: 'Sign your Operating Agreement',
+            it: 'Firma il tuo Atto Costitutivo',
+          },
+          message: {
+            en: `The Operating Agreement for ${account.company_name} is ready for your signature. All ${totalSigners} members must sign before it takes effect.`,
+            it: `L'Atto Costitutivo di ${account.company_name} è pronto per la tua firma. Tutti i ${totalSigners} soci devono firmare prima che diventi efficace.`,
+          },
+          link: '/portal/sign/oa',
+        })
       }
     }
   } else {
-    // ── SMLLC: SEND PORTAL CHAT TO PRIMARY CONTACT ──
-    const sigUrl = `${OA_BASE_URL}/${oa.token}/${oa.access_code}?portal=true`
-    const message = `Your Operating Agreement for **${account.company_name}** is ready for your signature.\n\n[Sign Operating Agreement →](${sigUrl})`
-    try {
-      await supabaseAdmin
-        .from('portal_messages')
-        .insert({
-          contact_id: contactId,
-          account_id,
-          sender_type: 'system',
-          sender_id: SYSTEM_SENDER_ID,
-          message,
-          topic: 'Operating Agreement',
-        })
-    } catch { /* non-blocking */ }
+    // ── SMLLC: NOTIFY THE SOLE SIGNER ──
+    // The sole member IS the person who just created it, so this is a reminder
+    // rather than an announcement — but it still has to exist: the create screen
+    // ends on "Signing process started!" with only a "Generate another" button,
+    // and the agreement previously never reached the action-required list.
+    await notifyClientActionRequired({
+      contact_id: contactId,
+      account_id,
+      topic: 'Operating Agreement',
+      title: {
+        en: 'Sign your Operating Agreement',
+        it: 'Firma il tuo Atto Costitutivo',
+      },
+      message: {
+        en: `The Operating Agreement for ${account.company_name} is ready for your signature.`,
+        it: `L'Atto Costitutivo di ${account.company_name} è pronto per la tua firma.`,
+      },
+      link: '/portal/sign/oa',
+    })
   }
 
   return NextResponse.json({

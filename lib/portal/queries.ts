@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { resolveMailingAddress } from '@/lib/addresses'
 import { mayIncludePersonalNull } from '@/lib/portal/chat-scope'
 import { isClientVisiblePayment, filterClientVisibleExpenseMirrors } from '@/lib/portal/payment-visibility'
@@ -1622,7 +1623,12 @@ export async function getPortalActionItems(
   // ── Unsigned OA (per-member aware for MMLLC) ──
   for (const oaDoc of oaRes.data ?? []) {
     const oaAny = oaDoc as typeof oaDoc & { total_signers?: number; signed_count?: number; entity_type?: string }
-    const isMultiSigner = (oaAny.entity_type === 'MMLLC') && (oaAny.total_signers || 1) > 1
+    // Normalize: production still stores the legacy long form ("Multi Member
+    // LLC") on some rows. Compared raw, such a company reads as single-member
+    // here — so the "has THIS member already signed?" skip below never runs and
+    // a member who has signed keeps being told their signature is needed, while
+    // the description omits the "x of y members have signed" progress.
+    const isMultiSigner = normalizeEntityType(oaAny.entity_type) === 'MMLLC' && (oaAny.total_signers || 1) > 1
 
     if (isMultiSigner && contactId) {
       // Check if THIS member has already signed
