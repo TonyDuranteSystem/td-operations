@@ -27,6 +27,15 @@ export interface ChatThreadRow {
   dm_key?: string | null
   unread_count?: number | null
   last_activity_at?: string | null
+  /** Client conversations carry a label, a topic and the client they are about. */
+  label?: string | null
+  title?: string | null
+  topic?: string | null
+  account_id?: string | null
+  contact_id?: string | null
+  client_label?: string | null
+  resolved_at?: string | null
+  archived_at?: string | null
 }
 
 /**
@@ -92,6 +101,56 @@ export function dmUnreadCount(
 ): number {
   let n = 0
   for (const t of myDmThreads(threads, myId)) n += Number(t.unread_count) || 0
+  return n
+}
+
+/**
+ * The client conversations the window can open — live ones only, newest first.
+ *
+ * These are ordinary top-level threads, each already carrying its own title,
+ * its own read pointer and its own place in Team Workspace. That is the whole
+ * reason this shape was chosen over chats-nested-inside-a-direct-message:
+ * nothing here is a new kind of object, so nothing downstream has to learn
+ * about it.
+ *
+ * Resolved and archived ones are dropped — the window shows what is live now;
+ * the full Team Chat page is where you go digging.
+ */
+export function openConversations(
+  threads: readonly ChatThreadRow[] | null | undefined,
+  limit = 20,
+): ChatThreadRow[] {
+  return (threads ?? [])
+    .filter((t) => t?.thread_type === 'discussion' && !t.resolved_at && !t.archived_at)
+    .slice()
+    .sort((a, b) => (b.last_activity_at ?? '').localeCompare(a.last_activity_at ?? ''))
+    .slice(0, limit)
+}
+
+/** A conversation's display name, preferring what the server already resolved. */
+export function conversationLabel(t: ChatThreadRow | null | undefined): string {
+  return (t?.label || t?.title || t?.topic || t?.client_label || 'Conversation').trim() || 'Conversation'
+}
+
+/**
+ * The badge number: unread across everything the window can actually OPEN.
+ *
+ * THE GRAIN RULE, learned the hard way twice on this feature: a badge must
+ * count exactly what its surface can show. Counting less under-reports and the
+ * user misses messages; counting more sends them hunting for something that
+ * isn't there. Both numbers here come from the SAME thread-list rows the
+ * sidebar reads, so the two can disagree only if one is stale — never because
+ * they measure different things.
+ *
+ * Still never derived from a message's own read flag: the send route stamps
+ * that at insert, so any such count is permanently zero.
+ */
+export function windowUnreadCount(
+  threads: readonly ChatThreadRow[] | null | undefined,
+  myId: string | null | undefined,
+): number {
+  let n = dmUnreadCount(threads, myId)
+  for (const t of openConversations(threads, Number.MAX_SAFE_INTEGER)) n += Number(t.unread_count) || 0
   return n
 }
 

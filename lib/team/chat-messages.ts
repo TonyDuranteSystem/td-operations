@@ -64,6 +64,33 @@ export function isDeleted(m: ChatMessage | null | undefined): boolean {
   return !!m?.deleted_at
 }
 
+/**
+ * Group a message's reactions into one chip per emoji, with who reacted.
+ *
+ * Tolerant of shape: reactions are stored as a JSON array written by a database
+ * function, so a malformed or half-written row must render as "no reactions"
+ * rather than throwing inside the message list — a crash there takes the whole
+ * floating window down.
+ */
+export function summarizeReactions(
+  m: ChatMessage | null | undefined,
+): Array<{ emoji: string; count: number; names: string[] }> {
+  const raw = (m as { reactions?: unknown } | null | undefined)?.reactions
+  if (!Array.isArray(raw)) return []
+  const byEmoji = new Map<string, { emoji: string; count: number; names: string[] }>()
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue
+    const emoji = (entry as { emoji?: unknown }).emoji
+    if (typeof emoji !== 'string' || !emoji) continue
+    const name = (entry as { reactor_name?: unknown }).reactor_name
+    const row = byEmoji.get(emoji) ?? { emoji, count: 0, names: [] }
+    row.count += 1
+    if (typeof name === 'string' && name) row.names.push(name)
+    byEmoji.set(emoji, row)
+  }
+  return Array.from(byEmoji.values())
+}
+
 /** How many files ride along. Never returns their URLs — the window shows count and name only. */
 export function attachmentCount(m: ChatMessage | null | undefined): number {
   const a = m?.attachments
