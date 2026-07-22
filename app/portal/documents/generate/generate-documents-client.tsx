@@ -831,10 +831,17 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
           </h2>
           {oaCreateStatus === 'sent' && (
             <p className="text-sm text-zinc-400 max-w-sm">
+              {/* Only point at the button when there IS one — this message can
+                  fire for someone who is not a signer, and telling them to press
+                  a button that does not render is its own dead end. */}
               {!oaNotified
-                ? (lang === 'it'
-                  ? 'L\'Atto Costitutivo è stato creato, ma non siamo riusciti a inviare la notifica. Usa il pulsante qui sotto per firmare, e contatta l\'assistenza se hai bisogno di aiuto.'
-                  : 'Your Operating Agreement was created, but we could not send the notification. Use the button below to sign, and contact support if you need help.')
+                ? oaCanSignNow
+                  ? (lang === 'it'
+                    ? 'L\'Atto Costitutivo è stato creato, ma non siamo riusciti a inviare la notifica. Usa il pulsante qui sotto per firmare, e contatta l\'assistenza se hai bisogno di aiuto.'
+                    : 'Your Operating Agreement was created, but we could not send the notification. Use the button below to sign, and contact support if you need help.')
+                  : (lang === 'it'
+                    ? 'L\'Atto Costitutivo è stato creato, ma non siamo riusciti a inviare la notifica ai soci. Contatta l\'assistenza a support@tonydurante.us così possiamo avvisarli.'
+                    : 'Your Operating Agreement was created, but we could not notify the members. Please contact support@tonydurante.us so we can reach them.')
                 : isMMLC
                 ? (lang === 'it'
                   ? 'Ogni socio ha ricevuto il proprio link personale per firmare l\'Atto Costitutivo.'

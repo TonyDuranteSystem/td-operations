@@ -1639,8 +1639,16 @@ export async function getPortalActionItems(
         .eq('contact_id', contactId)
         .maybeSingle()
 
+      // No signature row at all = NOT A SIGNER, not "hasn't signed yet". In a
+      // multi-member company the person linked to the account is not always one
+      // of the members — an administrator who set it up for two partners, say.
+      // Showing them "your signature is needed" sends them to a read-only page
+      // with nothing to click, permanently and undismissably. The create screen
+      // already withholds its Sign button from this person; this is the same
+      // rule for the dashboard.
+      if (!memberSig) continue
       // If this member already signed, don't show the action item
-      if (memberSig?.status === 'signed') continue
+      if (memberSig.status === 'signed') continue
     }
 
     const age = daysSince(oaDoc.created_at)

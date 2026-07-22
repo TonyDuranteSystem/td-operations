@@ -185,8 +185,39 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Delete existing unsigned OA + signatures
-    await supabaseAdmin.from('oa_signatures').delete().eq('oa_id', existing.id)
+    // Delete UNSIGNED signature rows only, and prove none were signed after.
+    //
+    // The count check above is a read, and this is a separate round trip: a
+    // co-signer submitting in the gap between them would have their signature
+    // destroyed by the unconditional delete that used to be here. Excluding
+    // signed rows from the delete means the race can no longer destroy one; the
+    // re-count then catches the case and refuses, leaving both the signature and
+    // the agreement intact rather than half-removed. (Same guard-on-write shape
+    // the codebase mandates elsewhere for exactly this class.)
+    await supabaseAdmin
+      .from('oa_signatures')
+      .delete()
+      .eq('oa_id', existing.id)
+      .neq('status', 'signed')
+
+    const { count: survivors, error: survivorErr } = await supabaseAdmin
+      .from('oa_signatures')
+      .select('id', { count: 'exact', head: true })
+      .eq('oa_id', existing.id)
+
+    if (survivorErr || survivors === null) {
+      return NextResponse.json({
+        error: 'Could not verify the signing status of the existing Operating Agreement. Please try again in a moment, or contact support.',
+      }, { status: 503 })
+    }
+    if (survivors > 0) {
+      // Someone signed while we were working. Their signature survived the
+      // delete; leave the agreement standing with it.
+      return NextResponse.json({
+        error: `Cannot regenerate — a member signed this Operating Agreement while it was being replaced. Contact support to have it reissued.`,
+      }, { status: 409 })
+    }
+
     await supabaseAdmin.from('oa_agreements').delete().eq('id', existing.id)
   }
 
@@ -279,8 +310,25 @@ export async function POST(request: NextRequest) {
       .select('member_index, member_name, contact_id, access_code')
 
     if (sigErr) {
-      // OA was created — partial failure, don't block
+      // ROLL BACK. The agreement row is already committed as 'sent', and with no
+      // signature rows NOBODY can sign it: the sign page finds no signer for any
+      // member and shows a read-only view, while the reminder tells every member
+      // their signature is needed — permanently. Leaving it was survivable when
+      // the row was born 'draft' and therefore invisible; now that it is 'sent'
+      // and visible, a half-built agreement is worse than none.
       console.error('OA signatures insert failed:', sigErr.message)
+      await supabaseAdmin.from('oa_signatures').delete().eq('oa_id', oa.id)
+      await supabaseAdmin.from('oa_agreements').delete().eq('id', oa.id)
+      await reportSystemError({
+        source: 'server',
+        route: '/api/portal/operating-agreement/create',
+        method: 'POST',
+        message: `Operating Agreement for ${account.company_name} rolled back — signature rows could not be created`,
+        context: { account_id, token, members: membersRows.length, db_error: sigErr.message },
+      })
+      return NextResponse.json({
+        error: 'Could not set up the signature records for this Operating Agreement. Nothing was created — please try again, or contact support.',
+      }, { status: 500 })
     } else if (insertedSigs) {
       // Notify EVERY member: portal chat + immediate email + bell + push, each
       // in their own language. Previously this inserted a chat message only —
@@ -293,14 +341,19 @@ export async function POST(request: NextRequest) {
       for (const sig of insertedSigs) {
         if (!sig.contact_id) continue
         if (sig.contact_id === contactId) callerCanSign = true
-        // A co-signer's DIRECT signing link, not a portal path. A member is
-        // identified by a row in the members table and need not be linked to
-        // the company as a portal user — for such a member a portal link
-        // resolves to whichever company the portal can see for them, i.e. the
-        // wrong one, or none. This link needs no login and identifies them
-        // specifically. It is also unique per member, so it is a correct dedup
-        // scope. (The previous code sent exactly this; replacing it with a
-        // portal path was a regression for co-signers.)
+        // The co-signer's DIRECT signing link — EMAIL ONLY.
+        //
+        // A member is identified by a row in the members table and need not be
+        // linked to the company as a portal user, so a portal-relative link can
+        // resolve to the wrong company or to nothing for them. This one needs no
+        // login and identifies them specifically.
+        //
+        // But it CARRIES THEIR SIGNING CODE — the credential that authorises
+        // signing as them — so it must never touch an account-scoped channel.
+        // The portal chat thread and the bell list are both readable by every
+        // linked contact on the company, so putting it there would hand member B
+        // the ability to sign as member A. Email is per-recipient; that is the
+        // only safe place for it. Chat and bell get the plain portal path below.
         const signerUrl = `${APP_BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}?portal=true&signer=${sig.access_code}`
         const r = await notifyClientActionRequired({
           contact_id: sig.contact_id,
@@ -317,7 +370,8 @@ export async function POST(request: NextRequest) {
             en: `The Operating Agreement for ${account.company_name} is ready for your signature. All ${totalSigners} members must sign before it takes effect.`,
             it: `L'Atto Costitutivo di ${account.company_name} è pronto per la tua firma. Tutti i ${totalSigners} soci devono firmare prima che diventi efficace.`,
           },
-          link: signerUrl,
+          link: `/portal/sign/oa?account=${account_id}`,
+          emailLink: signerUrl,
         })
         notifyOutcomes.push(r)
       }
@@ -355,7 +409,10 @@ export async function POST(request: NextRequest) {
   // regenerate — caught in end-to-end QA, not by reading this code.
   const reached = (channel: string) =>
     channel.startsWith('ok') || channel.startsWith('skipped: duplicate')
-  const notified = notifyOutcomes.length > 0 && notifyOutcomes.some(r => reached(r.chat) || reached(r.email))
+  // EVERY recipient, not just one. With `some`, a three-member company where two
+  // dispatches failed still read as success — no alarm, and the screen told the
+  // creator that every member had received their link.
+  const notified = notifyOutcomes.length > 0 && notifyOutcomes.every(r => reached(r.chat) || reached(r.email))
   // NOT gated on "we tried at least once". Zero attempts is the WORST case, not
   // an exempt one: if the signature rows fail to insert, the notify loop never
   // runs, and gating on length > 0 meant that silence raised no alarm at all —

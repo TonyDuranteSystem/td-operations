@@ -88,6 +88,16 @@ export interface ActionRequiredParams {
    * token+code signing link works with no login. Use this sparingly; the
    * portal-relative form is right for anyone who does have portal access. */
   link: string
+  /** OPTIONAL link used for the EMAIL ONLY, overriding `link` on that channel.
+   *
+   * ⛔ This exists for links that ARE a credential. An operating-agreement
+   * co-signer's URL carries their personal signing code — the thing that
+   * authorises signing AS them. Email is per-recipient, so it is the only safe
+   * channel for it. The chat thread and the bell list are ACCOUNT-scoped: every
+   * linked contact on the company can read them, so a credential placed there
+   * hands one member the ability to sign as another. Put the credential-bearing
+   * URL here and a plain portal path in `link`. */
+  emailLink?: string
   /** Skip the email channel — for callers that already send their own richer
    * email (e.g. the invoice mailer attaches the PDF). Chat + bell/push still
    * dispatch. */
@@ -169,6 +179,12 @@ function buildActionEmailHtml(opts: {
   footerText: string
 }): string {
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  // The URL goes inside an href attribute, so it needs the quote escaped too —
+  // every sibling field was escaped and this one was not. Harmless with today's
+  // callers (all pass generated slugs and hex codes), but the contract now
+  // invites absolute URLs, and the next caller with a user-supplied segment
+  // would inject into a branded client email.
+  const escAttr = (s: string) => esc(s).replace(/"/g, '&quot;')
   return `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
       <div style="background:#0A3161;padding:20px;border-radius:12px 12px 0 0;">
@@ -177,7 +193,7 @@ function buildActionEmailHtml(opts: {
       <div style="border:1px solid #e5e7eb;border-top:none;padding:24px;border-radius:0 0 12px 12px;">
         <p style="margin:0 0 16px;">${esc(opts.greeting)}</p>
         <p style="margin:0 0 24px;color:#27272a;">${esc(opts.message)}</p>
-        <a href="${opts.ctaUrl}" style="display:inline-block;padding:12px 28px;background:#0A3161;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold;font-family:Georgia,serif;">
+        <a href="${escAttr(opts.ctaUrl)}" style="display:inline-block;padding:12px 28px;background:#0A3161;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold;font-family:Georgia,serif;">
           ${esc(opts.ctaLabel)}
         </a>
         <p style="color:#9ca3af;font-size:12px;margin-top:24px;">${esc(opts.footerText)}</p>
@@ -230,9 +246,12 @@ export async function notifyClientActionRequired(params: ActionRequiredParams): 
     // message beats silence).
     const primaryLocale: Locale = recipients[0]?.locale ?? 'en'
     // Absolute links pass through; relative ones hang off the portal.
-    const absoluteUrl = /^https?:\/\//i.test(params.link)
-      ? params.link
-      : `${PORTAL_BASE_URL}${params.link}`
+    const toAbsolute = (l: string) =>
+      /^https?:\/\//i.test(l) ? l : `${PORTAL_BASE_URL}${l}`
+    // `absoluteUrl` goes on the ACCOUNT-scoped channels (chat thread, bell list)
+    // — never a credential. `emailUrl` is per-recipient and may carry one.
+    const absoluteUrl = toAbsolute(params.link)
+    const emailUrl = toAbsolute(params.emailLink ?? params.link)
 
     // ── 1. Portal chat message (clickable) ──────────────────────────────
     try {
@@ -291,7 +310,7 @@ export async function notifyClientActionRequired(params: ActionRequiredParams): 
             greeting,
             message: params.message[r.locale],
             ctaLabel: params.ctaLabel ? params.ctaLabel[r.locale] : (isIt ? 'Vai all’azione' : 'Take action'),
-            ctaUrl: absoluteUrl,
+            ctaUrl: emailUrl,
             footerText: isIt ? 'Tony Durante LLC — Portale Clienti' : 'Tony Durante LLC — Client Portal',
           })
           try {
