@@ -24,7 +24,10 @@ import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/clie
 const UI_EVENT_QUERY_KEYS: Record<string, string[]> = {
   todo: ['open-message-actions', 'action-board-columns', 'portal-chat-whats-new-counts'],
   tasks: ['portal-chat-thread-tasks'],
-  notes: ['staff-notes-active'],
+  // BOTH note feeds. 'staff-notes-active' alone left the Notes page (which reads
+  // 'staff-notes-all') stale on a change made in another tab or by a teammate —
+  // local mutations invalidated both by hand, the bus only the first.
+  notes: ['staff-notes-active', 'staff-notes-all'],
 }
 
 /** kinds that also refresh server-rendered pages (throttled) */
