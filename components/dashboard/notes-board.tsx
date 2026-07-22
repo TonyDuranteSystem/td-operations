@@ -5,10 +5,12 @@
  * Reuses the SAME visibility rule as the floating layer (the server decides; this only groups).
  */
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Lock, Share2, Users, Building2, Clock, RotateCcw, Check } from 'lucide-react'
+import { Loader2, Lock, Share2, Users, Building2, Clock, RotateCcw, Check, List, CalendarDays } from 'lucide-react'
 import { noteClientName } from '@/components/dashboard/sticky-notes-layer'
+import { NotesCalendar } from '@/components/dashboard/notes-calendar'
+import { NoteEditor, type EditableNote, type Member } from '@/components/dashboard/note-editor'
 
 interface Note {
   id: string
@@ -39,7 +41,7 @@ const COLORS: Record<string, string> = {
   purple: 'bg-violet-100 border-violet-300',
 }
 
-async function fetchAll(): Promise<{ notes: Note[] }> {
+async function fetchAll(): Promise<{ notes: Note[]; members?: Member[] }> {
   const res = await fetch(`${API}?scope=all`)
   if (!res.ok) {
     const d = await res.json().catch(() => ({}))
@@ -53,8 +55,29 @@ function whenText(iso: string) {
   return d.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })
 }
 
+function ViewSwitch({ view, setView }: { view: 'list' | 'calendar'; setView: (v: 'list' | 'calendar') => void }) {
+  return (
+    <div className="inline-flex overflow-hidden rounded border border-zinc-300 text-sm">
+      <button
+        onClick={() => setView('list')}
+        className={`flex items-center gap-1.5 px-3 py-1.5 ${view === 'list' ? 'bg-zinc-900 text-white' : 'bg-white hover:bg-zinc-50'}`}
+      >
+        <List className="h-4 w-4" />List
+      </button>
+      <button
+        onClick={() => setView('calendar')}
+        className={`flex items-center gap-1.5 border-l border-zinc-300 px-3 py-1.5 ${view === 'calendar' ? 'bg-zinc-900 text-white' : 'bg-white hover:bg-zinc-50'}`}
+      >
+        <CalendarDays className="h-4 w-4" />Calendar
+      </button>
+    </div>
+  )
+}
+
 export function NotesBoard() {
   const qc = useQueryClient()
+  const [view, setView] = useState<'list' | 'calendar'>('list')
+  const [editing, setEditing] = useState<Note | null>(null)
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['staff-notes-all'],
     queryFn: fetchAll,
@@ -62,7 +85,14 @@ export function NotesBoard() {
   })
 
   const notes = useMemo(() => data?.notes ?? [], [data])
+  const members = useMemo(() => data?.members ?? [], [data])
   const now = Date.now()
+
+  /** Refresh BOTH note feeds — the tab and the floating layer must never disagree. */
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['staff-notes-all'] })
+    qc.invalidateQueries({ queryKey: ['staff-notes-active'] })
+  }
 
   const { active, snoozed, done } = useMemo(() => {
     const a: Note[] = [], s: Note[] = [], d: Note[] = []
@@ -97,22 +127,52 @@ export function NotesBoard() {
     return <p className="py-10 text-sm text-red-700">{error instanceof Error ? error.message : 'Could not load your notes.'}</p>
   }
 
+  if (view === 'calendar') {
+    return (
+      <div>
+        <ViewSwitch view={view} setView={setView} />
+        {/* The calendar only declares the fields it renders, but it is handed the FULL note
+            objects from the feed — so the value coming back is a complete Note. */}
+        <NotesCalendar notes={notes} onOpen={(n) => setEditing(n as unknown as Note)} />
+        {editing && (
+          <NoteEditor
+            note={editing as unknown as EditableNote}
+            members={members}
+            onClose={() => setEditing(null)}
+            onChanged={refresh}
+          />
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col gap-6">
+      <ViewSwitch view={view} setView={setView} />
+
       <Section title="On your screen" count={active.length} empty="Nothing on screen right now.">
-        {active.map((n) => <Card key={n.id} n={n} onAct={act} showDone />)}
+        {active.map((n) => <Card key={n.id} n={n} onAct={act} showDone onOpen={setEditing} />)}
       </Section>
 
       <Section title="Snoozed" count={snoozed.length} empty="Nothing snoozed.">
         {snoozed.map((n) => (
-          <Card key={n.id} n={n} onAct={act} showUnsnooze
+          <Card key={n.id} n={n} onAct={act} showUnsnooze onOpen={setEditing}
             footer={<span className="flex items-center gap-1 text-xs opacity-70"><Clock className="h-3 w-3" />Back {whenText(n.snoozed_until!)}</span>} />
         ))}
       </Section>
 
       <Section title="Done" count={done.length} empty="Nothing cleared yet.">
-        {done.map((n) => <Card key={n.id} n={n} onAct={act} showRestore />)}
+        {done.map((n) => <Card key={n.id} n={n} onAct={act} showRestore onOpen={setEditing} />)}
       </Section>
+
+      {editing && (
+        <NoteEditor
+          note={editing as unknown as EditableNote}
+          members={members}
+          onClose={() => setEditing(null)}
+          onChanged={refresh}
+        />
+      )}
     </div>
   )
 }
@@ -128,18 +188,23 @@ function Section({ title, count, empty, children }: { title: string; count: numb
   )
 }
 
-function Card({ n, onAct, showDone, showUnsnooze, showRestore, footer }: {
+function Card({ n, onAct, showDone, showUnsnooze, showRestore, footer, onOpen }: {
   n: Note
   onAct: (id: string, payload: Record<string, unknown>) => void
   showDone?: boolean
   showUnsnooze?: boolean
   showRestore?: boolean
   footer?: React.ReactNode
+  onOpen?: (n: Note) => void
 }) {
   const client = noteClientName(n as never)
   return (
     <div className={`rounded-md border p-3 ${COLORS[n.color] || COLORS.yellow}`}>
-      <p className="whitespace-pre-wrap break-words text-sm leading-snug">{n.body}</p>
+      <p
+        onClick={() => onOpen?.(n)}
+        title="Open"
+        className="cursor-pointer whitespace-pre-wrap break-words text-sm leading-snug hover:underline"
+      >{n.body}</p>
 
       {client && (
         <p className="mt-1 flex items-center gap-1 text-xs font-medium opacity-80">

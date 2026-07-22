@@ -15,6 +15,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { StickyNote, Plus, X, Clock, Share2, Check, Loader2, Users, Lock, Building2 } from 'lucide-react'
 import { readPositions, writePosition, prunePositions, cascadePos, clampFrac } from '@/lib/notes/note-position'
 import { AccountCombobox } from '@/components/shared/account-combobox'
+import { NoteEditor } from '@/components/dashboard/note-editor'
 
 interface Note {
   id: string
@@ -98,6 +99,7 @@ function StickyNotesInner() {
 
   const [composing, setComposing] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [editing, setEditing] = useState<Note | null>(null)
 
   // Re-sync when the tab wakes (sleep/PWA freeze) or the network returns — realtime replays nothing.
   useEffect(() => {
@@ -134,7 +136,7 @@ function StickyNotesInner() {
       {/* DESKTOP: floating draggable notes */}
       <div className="hidden lg:block">
         {notes.map((n, i) => (
-          <DesktopNote key={n.id} note={n} index={i} members={members} onChange={invalidate} />
+          <DesktopNote key={n.id} note={n} index={i} members={members} onChange={invalidate} onOpen={setEditing} />
         ))}
       </div>
 
@@ -167,6 +169,16 @@ function StickyNotesInner() {
           onClose={() => setSheetOpen(false)}
           onNew={() => { setSheetOpen(false); setComposing(true) }}
           onChange={invalidate}
+          onOpen={(n) => { setSheetOpen(false); setEditing(n) }}
+        />
+      )}
+
+      {editing && (
+        <NoteEditor
+          note={editing}
+          members={members}
+          onClose={() => setEditing(null)}
+          onChanged={invalidate}
         />
       )}
     </>
@@ -175,7 +187,7 @@ function StickyNotesInner() {
 
 /* ─────────────────────────── desktop draggable note ─────────────────────────── */
 
-function DesktopNote({ note, index, members, onChange }: { note: Note; index: number; members: Member[]; onChange: () => void }) {
+function DesktopNote({ note, index, members, onChange, onOpen }: { note: Note; index: number; members: Member[]; onChange: () => void; onOpen: (n: Note) => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ x: number; y: number }>(() => {
     const stored = readPositions()[note.id]
@@ -208,17 +220,19 @@ function DesktopNote({ note, index, members, onChange }: { note: Note; index: nu
       style={{ left: `${pos.x * 100}vw`, top: `${pos.y * 100}vh` }}
       className={`fixed z-[45] w-60 cursor-grab active:cursor-grabbing rounded-md border shadow-lg ${COLORS[note.color] || COLORS.yellow}`}
     >
-      <NoteCardBody note={note} members={members} onChange={onChange} />
+      <NoteCardBody note={note} members={members} onChange={onChange} onOpen={onOpen} />
     </div>
   )
 }
 
 /* ─────────────────────────── shared card body + actions ─────────────────────────── */
 
-function NoteCardBody({ note, members, onChange }: { note: Note; members: Member[]; onChange: () => void }) {
+function NoteCardBody({ note, members, onChange, onOpen }: { note: Note; members: Member[]; onChange: () => void; onOpen?: (n: Note) => void }) {
   const [busy, setBusy] = useState(false)
   const [menu, setMenu] = useState<'none' | 'snooze' | 'share'>('none')
   const [err, setErr] = useState<string | null>(null)
+  // held until Save — see the picker below
+  const [customWhen, setCustomWhen] = useState('')
 
   const act = async (payload: Record<string, unknown>) => {
     setBusy(true); setErr(null)
@@ -244,7 +258,16 @@ function NoteCardBody({ note, members, onChange }: { note: Note; members: Member
   return (
     <div className="p-3">
       <div className="flex items-start justify-between gap-2">
-        <p className="whitespace-pre-wrap break-words text-sm leading-snug line-clamp-6">{note.body}</p>
+        {/* Tap the text to open the full note (read + edit). Not the whole card — the card is
+            the drag handle on desktop, so only the body opens the editor. */}
+        <p
+          data-no-drag
+          onClick={() => onOpen?.(note)}
+          title="Open"
+          className="cursor-pointer whitespace-pre-wrap break-words text-sm leading-snug line-clamp-6 hover:underline"
+        >
+          {note.body}
+        </p>
         <button data-no-drag onClick={() => act({ action: 'archive' })} disabled={busy}
           className="shrink-0 rounded p-0.5 hover:bg-black/10" title="Done" aria-label="Mark done">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
@@ -277,21 +300,30 @@ function NoteCardBody({ note, members, onChange }: { note: Note; members: Member
           <button onClick={() => act({ action: 'snooze', preset: '10min' })} className="rounded bg-black/10 px-2 py-1">10 min</button>
           <button onClick={() => act({ action: 'snooze', preset: '1hour' })} className="rounded bg-black/10 px-2 py-1">1 hour</button>
           <button onClick={() => act({ action: 'snooze', preset: 'tomorrow' })} className="col-span-2 rounded bg-black/10 px-2 py-1">Tomorrow 9am</button>
-          {/* Pick your own moment. datetime-local gives a native picker on desktop AND phone;
-              the value is local time, converted to a real instant before it's sent. */}
+          {/* Pick your own moment. The value is HELD until Save is pressed — saving on change
+              fired the moment the DATE was picked, before a time could be set, and the note
+              vanished mid-edit (Antonio, 2026-07-21). Never save a datetime-local on change. */}
           <label className="col-span-2 mt-1 flex flex-col gap-1">
             <span className="opacity-70">Or pick a date &amp; time</span>
-            <input
-              type="datetime-local"
-              className="w-full rounded border border-black/20 bg-white/60 px-2 py-1"
-              onChange={(e) => {
-                const v = e.target.value
-                if (!v) return
-                const when = new Date(v)
-                if (isNaN(when.getTime())) return
-                act({ action: 'snooze', preset: 'custom', custom: when.toISOString() })
-              }}
-            />
+            <div className="flex gap-1">
+              <input
+                type="datetime-local"
+                value={customWhen}
+                onChange={(e) => setCustomWhen(e.target.value)}
+                className="w-full rounded border border-black/20 bg-white/60 px-2 py-1"
+              />
+              <button
+                disabled={!customWhen}
+                onClick={() => {
+                  const when = new Date(customWhen)
+                  if (isNaN(when.getTime())) return
+                  act({ action: 'snooze', preset: 'custom', custom: when.toISOString() })
+                }}
+                className="shrink-0 rounded bg-black/20 px-2 py-1 font-medium disabled:opacity-40"
+              >
+                Save
+              </button>
+            </div>
           </label>
         </div>
       )}
@@ -381,8 +413,8 @@ function Composer({ onClose, onCreated }: { onClose: () => void; onCreated: () =
 
 /* ─────────────────────────── mobile bottom sheet ─────────────────────────── */
 
-function MobileSheet({ notes, members, onClose, onNew, onChange }: {
-  notes: Note[]; members: Member[]; onClose: () => void; onNew: () => void; onChange: () => void
+function MobileSheet({ notes, members, onClose, onNew, onChange, onOpen }: {
+  notes: Note[]; members: Member[]; onClose: () => void; onNew: () => void; onChange: () => void; onOpen: (n: Note) => void
 }) {
   return (
     <div className="lg:hidden fixed inset-0 z-[46] flex flex-col justify-end bg-black/30" onClick={onClose}>
@@ -397,7 +429,7 @@ function MobileSheet({ notes, members, onClose, onNew, onChange }: {
         <div className="flex flex-col gap-2">
           {notes.map((n) => (
             <div key={n.id} className={`rounded-md border ${COLORS[n.color] || COLORS.yellow}`}>
-              <NoteCardBody note={n} members={members} onChange={onChange} />
+              <NoteCardBody note={n} members={members} onChange={onChange} onOpen={onOpen} />
             </div>
           ))}
         </div>

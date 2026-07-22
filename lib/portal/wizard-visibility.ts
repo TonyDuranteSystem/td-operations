@@ -22,7 +22,11 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { getFlexibleServiceTypes } from "@/lib/portal/wizard-map"
+import {
+  getContactScopedDiscoveryServiceTypes,
+  getPersonOwnedServiceTypes,
+  PERSON_OWNED_WIZARD_TYPES,
+} from "@/lib/portal/wizard-map"
 
 export const WIZARD_SERVICE_TYPES = [
   "Company Formation",
@@ -65,14 +69,17 @@ export async function computeHasWizardPending(
     if ((data?.length ?? 0) > 0) return true
   }
 
-  // Flexible-types fallback: a contact may be a managed-account holder AND
-  // also have a contact-scoped SD of a flexible type (Closure today — e.g.
-  // closing an external LLC that isn't a CRM account). The two account/contact
-  // branches above miss this case because the account branch only queries
-  // account-scoped SDs and the contact branch only fires when no account is
-  // selected. Check explicitly when contactId is set.
+  // Contact-scoped fallback: a contact may be a managed-account holder AND also
+  // have a contact-scoped SD — a flexible type (Closure — closing an external
+  // LLC that isn't a CRM account) or a person-owned one (ITIN, which is ALWAYS
+  // contact-scoped). The two account/contact branches above miss this case
+  // because the account branch only queries account-scoped SDs and the contact
+  // branch only fires when no account is selected. Check explicitly when
+  // contactId is set. Without this, a client who owns a company and buys an
+  // ITIN standalone gets no "Complete Setup" entrance at all (Pietro De
+  // Pellegrino, 2026-07-21).
   if (contactId) {
-    const flexibleTypes = getFlexibleServiceTypes()
+    const flexibleTypes = getContactScopedDiscoveryServiceTypes()
     if (flexibleTypes.length > 0) {
       const { data: flex } = await supabaseAdmin
         .from("service_deliveries")
@@ -81,8 +88,28 @@ export async function computeHasWizardPending(
         .is("account_id", null)
         .in("status", ["active"])
         .in("service_type", flexibleTypes)
-        .limit(1)
-      if ((flex?.length ?? 0) > 0) return true
+        .limit(10)
+      const found = flex ?? []
+      // An ITIN service delivery stays `active` for the whole application — it
+      // is only marked complete when the IRS letter arrives, months later. So
+      // "an active ITIN exists" does NOT mean "the client still owes us the
+      // questionnaire": once they have submitted it, keeping the entrance up
+      // nags them forever and lets them re-open their own filed application.
+      // Suppress the person-owned SDs whose wizard is already submitted, and
+      // decide on what remains. Flexible (closure) behaviour is unchanged.
+      const personOwnedServiceTypes = new Set(getPersonOwnedServiceTypes())
+      const stillPending = found.filter((r) => !personOwnedServiceTypes.has(r.service_type))
+      if (found.length > stillPending.length) {
+        const { data: submittedItin } = await supabaseAdmin
+          .from("wizard_progress")
+          .select("id")
+          .eq("contact_id", contactId)
+          .in("wizard_type", [...PERSON_OWNED_WIZARD_TYPES])
+          .eq("status", "submitted")
+          .limit(1)
+        if (!submittedItin?.length) return true
+      }
+      if (stillPending.length > 0) return true
     }
   }
 

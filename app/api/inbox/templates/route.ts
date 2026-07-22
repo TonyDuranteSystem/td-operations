@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { Database } from "@/lib/database.types"
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export const dynamic = "force-dynamic"
 
@@ -22,6 +23,9 @@ function isUuid(value: string): boolean {
 }
 
 export async function GET(req: NextRequest) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const includeInactive = req.nextUrl.searchParams.get("include_inactive") === "true"
   let query = supabaseAdmin
     .from("email_templates")
@@ -36,6 +40,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const body = (await req.json()) as TemplatePayload
   if (!body.template_name || !body.subject_template || !body.body_template) {
     return NextResponse.json(
@@ -68,6 +75,9 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const body = (await req.json()) as TemplatePayload
   if (!body.id || !isUuid(body.id)) {
     return NextResponse.json({ error: "id (uuid) is required" }, { status: 400 })
@@ -100,6 +110,9 @@ export async function PATCH(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const id = req.nextUrl.searchParams.get("id")
   if (!id || !isUuid(id)) {
     return NextResponse.json({ error: "id (uuid) query param is required" }, { status: 400 })

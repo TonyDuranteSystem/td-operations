@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
   // submit wizard data onto it. Mirrors the access checks on the other portal
   // routes (chat / payment-links / customers). dev_task b41cc66f.
   const identity = await resolvePortalIdentity(user)
-  if (!canSubmitWizard(identity, account_id, contact_id ?? null)) {
+  if (!canSubmitWizard(identity, account_id, contact_id ?? null, wizard_type)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 

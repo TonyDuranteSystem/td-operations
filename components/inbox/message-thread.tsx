@@ -10,6 +10,7 @@ import { splitQuotedText } from '@/lib/inbox/email-quote'
 import { printEmailThread } from '@/lib/inbox/print-email'
 import { resolveAttachmentType, shouldOpenInTab } from '@/lib/inbox/attachment-open'
 import { EmailHtmlFrame } from './email-html-frame'
+import { NoteQuickCreate } from '@/components/dashboard/note-quick-create'
 
 type ThreadAttachment = NonNullable<InboxMessage['attachments']>[number]
 
@@ -301,13 +302,20 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
 
   return (
     <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-      {data?.subject && (
-        <div className="text-center py-2">
+      {/* Subject + "make a note about this email". The note picks up the client this thread is
+          linked to and a link back to this page, so it can find its way home later. */}
+      <div className="flex items-center justify-center gap-2 py-2">
+        {data?.subject && (
           <span className="inline-block max-w-full break-words text-xs font-medium text-zinc-500 bg-zinc-100 px-3 py-1 rounded-xl">
             {data.subject}
           </span>
-        </div>
-      )}
+        )}
+        <NoteQuickCreate
+          accountId={conversation.accountId}
+          contactId={conversation.contactId}
+          prefill={data?.subject || conversation.subject || conversation.name}
+        />
+      </div>
 
       {messages.map((msg) => {
         const isOutbound = msg.direction === 'outbound'

@@ -1,0 +1,81 @@
+# Staff Sticky Notes (floating post-its)
+_Last verified against code: 2026-07-21c — Claude (**MAKE A NOTE FROM PORTAL CHATS + INBOX; calendar-day notes now open.** (a) Portal Chats: a "Make a note" item in the per-MESSAGE dropdown (beside "To Do"), pre-filled with the message text and tied to that client. (b) Inbox: a "Note" button next to the email subject, pre-filled with the subject and tied to the thread's linked client. Both capture `origin_url` (pathname+search) so the note links back to the exact place. Shared `components/dashboard/note-quick-create.tsx` exports BOTH `NoteComposeDialog` (controlled — raised by the portal-chats menu item, which has no button of its own) and `NoteQuickCreate` (button+dialog — the Inbox header). Deliberately NOT a portal-chats catalog quick-action: the Inbox cannot use that mechanism at all, so one shared component gives both surfaces identical behaviour instead of two mechanisms to maintain. (c) BUGFIX: clicking a note inside a calendar DAY CELL did nothing — the cell was a single `<button>`, so the note previews inside it were inert text. The cell is now a keyboard-accessible `div` and each note preview is its own button that `stopPropagation()`s and opens the editor; clicking the empty part of a day still selects it. Nested buttons are invalid HTML, which is why the cell had to stop being one.)_
+_Prior: 2026-07-21b — Claude (**NOTE EDITOR + custom-date SAVE BUTTON.** Three things Antonio hit in real use: (1) the custom date/time picker saved on CHANGE, so it fired the moment the DATE was picked — before a time could be set — and the note snoozed away mid-edit. It now HOLDS the value and only writes when **Save** is pressed. **Never save a `datetime-local` on change.** (2) Notes could be created and acted on but never re-read or re-worded — "Now I can't do anything". (3) Calendar days showed their notes but nothing was openable. FIX: one shared `components/dashboard/note-editor.tsx` opened by tapping a note's TEXT on EVERY surface — floating card, mobile sheet, Notes list, calendar day. It edits body + client + come-back date behind a single Save (body carries `expectedUpdatedAt` for the stale-edit guard), and offers visibility + done/put-back as immediate actions. On the floating card only the BODY opens it, never the whole card — the card is the drag handle on desktop, so the body carries `data-no-drag`. No new API: it composes the existing edit / set_client / snooze / unsnooze / share / team / private / archive / unarchive actions. The Notes tab feed already returns `members`, so the share buttons work there too.)_
+_Prior: 2026-07-21 — Claude (CALENDAR VIEW added to the Notes tab: month grid Mon-first with month/year arrows + Today + today highlighted, click a day for its notes; mobile falls back to an upcoming LIST because a 7-column grid at ~380px gives unreadable ~50px cells. Calendar maths is pure + unit-tested in `lib/notes/note-calendar.ts` (21 tests) — the bug class it guards is UTC-vs-local day bucketing: a note set for 09:00 local must land on the LOCAL day. Antonio's settled model, in his words: the floating layer shows "what we want to have and what is aspiring today", the Notes tab holds "the summary of all notes" — so a dated note DISAPPEARS from the screen until its time and stays visible in the tab. That is why there is NO separate due-date column: the come-back instant IS the calendar date.)_
+_Prior: 2026-07-21 — Claude (round 2: custom snooze date/time picker; `/notes` page + sidebar entry placed 2nd under Home; attach-a-client via the shared `AccountCombobox` + a `set_client` action that verifies the id exists; client NAME resolved at READ time via the FK nested select so a renamed company can't leave a stale label.)_
+_Prior: 2026-07-21 — Claude (pass 1 shipped: `staff_notes` table, floating layer, API, three-level visibility, snooze, share-to-person with phone push, archive.)_
+
+## What it is
+Private-by-default post-its for STAFF (Antonio + Luca). They float on the CRM dashboard, follow
+you across pages, and can be handed to a teammate. Internal only — a client must never see one.
+
+This is the CRM dashboard, not the client portal.
+
+## Business rules
+- **Three visibility levels, switchable with a click:**
+  - `private` — only the author (the DEFAULT for every new note)
+  - `shared` — the author + exactly ONE named teammate (`shared_with_user_id`); this is
+    "hand it to Luca" and it pushes to that person's phone
+  - `team` — every staff member
+- **THE ONE visibility rule** (`isNoteVisibleTo` / `visibleToOrClause` in `lib/notes/staff-notes.ts`):
+  visible to U iff `author_user_id = U` OR `visibility='team'` OR
+  (`visibility='shared'` AND `shared_with_user_id = U`). Every reader imports it — never hand-roll.
+  **Antonio explicitly declined an owner-override: he does NOT see Luca's private notes.**
+- **Snooze = scheduling, not just hiding.** Presets are 10 min / 1 hour / tomorrow 9am / pick a
+  date & time. A snoozed note leaves the floating layer and reappears at its time. Antonio's
+  model: screen = now, Notes tab = everything.
+- **Done** is `archived_at` (soft) — recoverable from the Notes tab's Done section.
+- A note optionally carries the client it's about (`account_id` / `contact_id`), auto-captured
+  from the page you were on and changeable via the client picker.
+
+## How it's built
+- **Table `staff_notes`** (migration `20260721-1400-staff-notes.sql`): `body`, `color`,
+  `author_user_id`/`author_name`, `visibility`, `shared_with_user_id`/`shared_with_name`,
+  `account_id`, `contact_id`, `origin_url`, `snoozed_until`, `archived_at`, timestamps.
+  CHECKs: non-empty body, body ≤ 4000, visibility in the three values, and a **coherence check**
+  — `shared` MUST name a person and non-`shared` must NOT, so un-sharing can never leave a stale
+  recipient that keeps the note visible.
+- **RLS is ENABLED with NO policy** → a direct anon/authenticated PostgREST read returns ZERO
+  rows. The app reads via the service-role client behind `requireStaff()` + the predicate above.
+  A client can never reach a staff note.
+- **Key files:** `lib/notes/staff-notes.ts` (the rule + feeds), `lib/notes/note-calendar.ts`
+  (pure calendar maths), `lib/notes/note-position.ts` (per-device fractional positions),
+  `app/api/crm/staff-notes/route.ts` (GET/POST/PATCH), `components/dashboard/sticky-notes-layer.tsx`
+  (the global floating layer), `components/dashboard/notes-board.tsx` (Notes tab, List/Calendar
+  switch), `components/dashboard/notes-calendar.tsx`, `app/(dashboard)/notes/page.tsx`.
+- **Feeds:** `?scope=active` = floating layer (live, not snoozed) and also returns `me` + the
+  shareable staff `members`; `?scope=all` = the Notes tab (incl. snoozed + done);
+  `?account_id=` / `?contact_id=` = per-record.
+- **Realtime** reuses the existing `ui_events` bus with a `notes` kind. **NO PAYLOAD, ever** —
+  the bus re-dispatches to every staff tab, so a note body in the payload would broadcast a
+  private note.
+- **Positions are per-device** in localStorage as viewport FRACTIONS (never pixels — a spot set
+  on a 27" iMac is off-screen at 380px), clamped, pruned against live notes, all reads/writes
+  wrapped so a throwing localStorage can't crash the layer.
+
+## Gotchas, invariants & past bugs
+- **`staff_notes` is NOT in the generated DB types** — access goes through `notesTable()`
+  (`(supabaseAdmin as any).from('staff_notes')`). A direct typed `.from('staff_notes')` FAILS
+  THE BUILD. This already broke one sandbox deploy.
+- **Client names are resolved at READ time** via the FK nested select — deliberately not stored,
+  so renaming a company can't leave a stale label on old notes.
+- **Calendar bucketing is LOCAL-day, never UTC.** `localDayKey()` uses local date parts; using
+  `toISOString()` would shift a 09:00-local note onto the wrong day for anyone off UTC.
+- **The floating layer mounts OUTSIDE `<main>`** (next to the AI panel) so it never fights
+  pull-to-refresh, at z-index 45 — above the mobile top bar, BELOW every modal so a note can
+  never trap a dialog's buttons. It has its OWN error boundary: an unhandled throw there would
+  otherwise white-screen the whole CRM (there is no global error boundary).
+- **Mobile has no dragging.** Floating cards collapse to a bottom-LEFT pill + sheet (bottom-right
+  belongs to toasts), and the calendar falls back to a list.
+- **Do NOT merge notes into `/calendar`** — that page is the CLIENT-COMPLIANCE calendar
+  (renewals, annual reports, tax returns, payments). It uses a plain user-scoped client with no
+  visibility predicate, so notes there would either return nothing or leak private ones.
+
+## How to verify current state
+- Visibility rule: `npx vitest run tests/unit/staff-notes.test.ts` (16 tests) — private/shared/team.
+- Calendar maths: `npx vitest run tests/unit/note-calendar.test.ts` (21 tests) — local-day
+  bucketing, Mon-first 42-cell grid, month/year rollover, overdue.
+- Live gate: an unauthenticated `GET /api/crm/staff-notes?scope=active` must return 401 and
+  create nothing.
+- Privacy end-to-end (sandbox): insert a private note as A and a private note as B, then run the
+  predicate as each — A must not see B's, and vice versa.
