@@ -198,6 +198,44 @@ async function main() {
   check("the other tab's step was NOT deleted", survived.some(r => r.stage_name === "Added Elsewhere"))
   check("all seven steps present", survived.length === 7, `${survived.length}`)
 
+  // ═══ 7b. A BLOCKED client is live work too ═══════════════════════════════
+  scenario("7b. Deleting a step that a BLOCKED client sits on (135 such rows exist)")
+  await seedGapped()
+  loaded = await getStagesForService(SVC)
+  await supabaseAdmin.from("service_deliveries").insert({
+    service_type: SVC, service_name: SVC, stage: "S4", status: "blocked",
+  })
+  let blockedRefused = false
+  let blockedMsg = ""
+  try {
+    await replaceStagesForService(SVC, loaded.filter(s => s.stage_name !== "S4"))
+  } catch (e) { blockedRefused = true; blockedMsg = e instanceof Error ? e.message : String(e) }
+  check("a BLOCKED client also blocks the delete", blockedRefused, "blocked clients were ignored")
+  check("the message names the step", blockedMsg.includes("S4"), blockedMsg.slice(0, 100))
+
+  // A capitalised status must not slip through either.
+  await supabaseAdmin.from("service_deliveries").delete().eq("service_type", SVC)
+  await supabaseAdmin.from("service_deliveries").insert({
+    service_type: SVC, service_name: SVC, stage: "S4", status: "Active",
+  })
+  let capRefused = false
+  try {
+    await replaceStagesForService(SVC, loaded.filter(s => s.stage_name !== "S4"))
+  } catch { capRefused = true }
+  check('a capitalised "Active" status is not missed', capRefused)
+
+  // A genuinely finished client must NOT block the delete.
+  await supabaseAdmin.from("service_deliveries").delete().eq("service_type", SVC)
+  await supabaseAdmin.from("service_deliveries").insert({
+    service_type: SVC, service_name: SVC, stage: "S4", status: "completed",
+  })
+  let completedBlocked = false
+  try {
+    await replaceStagesForService(SVC, loaded.filter(s => s.stage_name !== "S4"))
+  } catch { completedBlocked = true }
+  check("a COMPLETED client does not block the delete", !completedBlocked)
+  await supabaseAdmin.from("service_deliveries").delete().eq("service_type", SVC)
+
   // ═══ 8. Without the known-ids the delete still works (deliberate) ════════
   scenario("8. A deliberate delete still works when no stale-guard data is sent")
   await seedGapped()

@@ -1566,12 +1566,14 @@ export async function renameStageAcrossDeliveries(
   if (!serviceType?.trim() || !fromStage?.trim() || !toStage?.trim()) return 0
   if (fromStage === toStage) return 0
 
+  // Every non-terminal delivery must follow the rename — a "blocked" delivery is
+  // stuck, not finished, and would be stranded on a stage that no longer exists.
   const { data, error } = await supabaseAdmin
     .from("service_deliveries")
     .update({ stage: toStage })
     .eq("service_type", serviceType)
     .eq("stage", fromStage)
-    .eq("status", "active")
+    .not("status", "in", "(completed,cancelled,canceled,inactive)")
     .select("id")
   if (error) {
     throw new Error(`renameStageAcrossDeliveries(${serviceType}: ${fromStage} -> ${toStage}): ${error.message}`)

@@ -116,6 +116,22 @@ export async function resolveSecondInstallmentAdvance(
  */
 const PARK_FLOOR = 100000
 
+/**
+ * Statuses that mean the delivery is FINISHED. Anything else is live work that
+ * would be stranded if its stage disappeared.
+ *
+ * Defined as "not terminal" rather than a list of live values on purpose: the
+ * table currently holds active, completed, cancelled, blocked, inactive AND two
+ * rows spelled "Active" with a capital A. A guard that matched only "active"
+ * exactly would have missed all 135 blocked deliveries and those two rows.
+ */
+const TERMINAL_DELIVERY_STATUSES = new Set(["completed", "cancelled", "canceled", "inactive"])
+
+export function isLiveDeliveryStatus(status: string | null | undefined): boolean {
+  if (!status) return true // unknown state — treat as live and refuse to destroy
+  return !TERMINAL_DELIVERY_STATUSES.has(status.trim().toLowerCase())
+}
+
 /** Validation that must happen BEFORE anything is written. */
 export function validateStageDraft(stages: StageRow[]): string | null {
   const seen = new Set<string>()
@@ -254,16 +270,16 @@ export async function replaceStagesForService(
   if (removed.length > 0) {
     const { data: blockers, error: blockErr } = await supabaseAdmin
       .from("service_deliveries")
-      .select("stage")
+      .select("stage, status")
       .eq("service_type", serviceType)
-      .eq("status", "active")
       .in("stage", removed.map(r => r.stage_name))
     if (blockErr) {
       throw new Error(`replaceStagesForService(${serviceType}) delivery check: ${blockErr.message}`)
     }
-    if (blockers && blockers.length > 0) {
+    const live = (blockers ?? []).filter(b => isLiveDeliveryStatus((b as { status: string }).status))
+    if (live.length > 0) {
       const counts = new Map<string, number>()
-      for (const b of blockers as Array<{ stage: string }>) {
+      for (const b of live as Array<{ stage: string }>) {
         counts.set(b.stage, (counts.get(b.stage) ?? 0) + 1)
       }
       const detail = Array.from(counts.entries())
