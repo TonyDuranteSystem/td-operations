@@ -9,7 +9,19 @@
 -- Airtable/Fireflies comms log, conv_search, /conversations page). To avoid
 -- collision these tables are namespaced `comm_*`.
 --
--- REALTIME + RLS — unlike the older portal_messages (RLS off), this channel is
+-- ⚠️ CORRECTION 2026-07-22 (do not delete — this comment misled two reviewers):
+-- the parenthetical below, "(RLS off)", is WRONG about portal_messages and has
+-- been wrong since this migration was written. Verified against PRODUCTION on
+-- 2026-07-22: portal_messages has relrowsecurity = TRUE with FOUR policies, and
+-- the client-facing one is properly scoped —
+--   "Clients view own messages": account_id IN (SELECT get_client_account_ids())
+--                                OR contact_id = get_client_contact_id()
+-- So a portal client CANNOT subscribe to another client's chat: realtime runs
+-- the table's RLS per subscriber, and that predicate admits only their own rows.
+-- Two independent Council reviewers read this line and concluded the portal had
+-- a live cross-client chat leak. It does not. Trust the live DB, not this file.
+--
+-- REALTIME + RLS — this channel is
 -- partner-facing, so it uses RLS ON with a participant-scoped SELECT policy on
 -- comm_messages and adds comm_messages to the supabase_realtime publication.
 -- The browser subscribes with the user's JWT; postgres_changes only delivers

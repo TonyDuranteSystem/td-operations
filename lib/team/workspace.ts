@@ -6,6 +6,44 @@
  * Backs the internal_threads / internal_messages Slack-replacement workspace.
  */
 
+/**
+ * Auth roles that are NOT TD staff and must never appear in a team surface.
+ *
+ * `client` is obvious. `partner` is the one that bit us: a managed partner
+ * (Cris, in TD Communication) authenticates with `app_metadata.role='partner'`
+ * and is confined to /collab by middleware — but the staff directory used to
+ * exclude only clients and then relabel everyone else 'team', so partners were
+ * offered as teammates for @mentions, DMs, thread assignment, share targets and
+ * — worst — staff sticky-note sharing, which pushes the note's body to the
+ * recipient. Found in production 2026-07-22.
+ *
+ * Kept here, pure and client-safe, so the server directory and any UI filter
+ * apply the SAME rule instead of two lists that can drift.
+ */
+export const NON_STAFF_AUTH_ROLES = ['client', 'partner'] as const
+
+/**
+ * Is this auth role a TD staff member?
+ *
+ * This is a DENY-LIST, not an allow-list, and that is a deliberate trade-off:
+ * an unknown or absent role counts as staff, which preserves the existing
+ * behaviour for legacy accounts that predate the role being set (the previous
+ * rule was simply `role !== 'client'`). So this fixes the partner hole and
+ * changes nothing else.
+ *
+ * THE RISK IT LEAVES, stated plainly: a FUTURE outsider role — say 'contractor'
+ * or 'auditor' — would again arrive as staff until it is added above. If a new
+ * non-employee role is ever introduced, it must be added to NON_STAFF_AUTH_ROLES
+ * in the same change. A strict allow-list would close that permanently, but it
+ * would also silently lock out any account whose role is unset, which is a
+ * different outage and a bigger behavioural change than this incident warrants.
+ */
+export function isStaffAuthRole(role: string | null | undefined): boolean {
+  const r = (role ?? '').toLowerCase()
+  if (!r) return true // legacy staff accounts predate the role being set
+  return !(NON_STAFF_AUTH_ROLES as readonly string[]).includes(r)
+}
+
 /** Sentinel reactor/mention id for the AI worker. */
 export const CLAUDE_MENTION_ID = 'claude'
 

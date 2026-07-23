@@ -16,6 +16,8 @@ import { StickyNote, Plus, X, Clock, Share2, Check, Loader2, Users, Lock, Buildi
 import { readPositions, writePosition, prunePositions, cascadePos, clampFrac } from '@/lib/notes/note-position'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { NoteEditor } from '@/components/dashboard/note-editor'
+import { useDraggableFab } from '@/components/ui/use-draggable-fab'
+import { FAB_KEYS } from '@/lib/ui/draggable-fab'
 
 interface Note {
   id: string
@@ -100,6 +102,10 @@ function StickyNotesInner() {
   const [composing, setComposing] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [editing, setEditing] = useState<Note | null>(null)
+  // Both entry points are draggable (Antonio, 2026-07-23) — separate keys so the
+  // desktop + button and the mobile pill remember their own spots per device.
+  const deskFab = useDraggableFab(`${FAB_KEYS.notes}-desktop`)
+  const mobileFab = useDraggableFab(FAB_KEYS.notes)
 
   // Re-sync when the tab wakes (sleep/PWA freeze) or the network returns — realtime replays nothing.
   useEffect(() => {
@@ -143,20 +149,31 @@ function StickyNotesInner() {
       {/* Composer (both desktop + mobile) */}
       {composing && <Composer onClose={() => setComposing(false)} onCreated={invalidate} />}
 
-      {/* DESKTOP: + button, bottom-left */}
+      {/* DESKTOP: + button, bottom-left. Draggable (double-click resets). */}
       <button
-        onClick={() => setComposing(true)}
-        className="hidden lg:flex fixed bottom-4 left-4 z-[45] h-11 w-11 items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-lg hover:bg-amber-300"
-        title="New note"
+        ref={deskFab.ref}
+        {...deskFab.dragProps}
+        style={deskFab.style}
+        onClick={() => { if (!deskFab.dragging) setComposing(true) }}
+        className="hidden lg:flex fixed bottom-4 left-4 z-[45] h-11 w-11 touch-none items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-lg hover:bg-amber-300"
+        title="New note — drag to move, double-click to reset"
         aria-label="New note"
       >
         <Plus className="h-5 w-5" />
       </button>
 
-      {/* MOBILE: a pill (bottom-left) that opens a sheet */}
+      {/* MOBILE: a pill that opens a sheet.
+          RAISED above the composer band (bottom-24). At bottom-4 it sat exactly
+          on the Attach button of every chat composer — on Portal Chats that is
+          how a client gets an attachment, so the phone could not do the job.
+          Draggable too (Antonio, 2026-07-23); double-tap resets.
+          `touch-none` is required or the browser gives the drag to the scroller. */}
       <button
-        onClick={() => setSheetOpen(true)}
-        className="lg:hidden fixed bottom-4 left-4 z-[45] flex items-center gap-2 rounded-full bg-amber-400 px-4 py-2 text-sm font-medium text-amber-950 shadow-lg"
+        ref={mobileFab.ref}
+        {...mobileFab.dragProps}
+        style={mobileFab.style}
+        onClick={() => { if (!mobileFab.dragging) setSheetOpen(true) }}
+        className="lg:hidden fixed bottom-24 left-4 z-[45] flex touch-none items-center gap-2 rounded-full bg-amber-400 px-4 py-2 text-sm font-medium text-amber-950 shadow-lg"
       >
         <StickyNote className="h-4 w-4" />
         {notes.length > 0 ? notes.length : 'Notes'}

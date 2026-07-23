@@ -11,6 +11,8 @@ import {
   isValidWorkStatus,
   TEAM_WORK_STATUSES,
   TEAM_WORK_STATUS_LABELS,
+  isStaffAuthRole,
+  NON_STAFF_AUTH_ROLES,
 } from '@/lib/team/workspace'
 
 describe('work status', () => {
@@ -168,5 +170,49 @@ describe('validateTeamCard', () => {
   })
   it('accepts a good color', () => {
     expect(validateTeamCard({ kind: 'invoice', title: 'INV-000123', color: '#10b981' })).toBeNull()
+  })
+})
+
+describe('isStaffAuthRole — who counts as TD staff', () => {
+  // THE INCIDENT (production, 2026-07-22): the staff directory excluded only
+  // 'client' and then relabelled every survivor 'admin'|'team', so a PARTNER
+  // came back as staff and was offered for @mentions, DMs, thread assignment,
+  // share targets and staff sticky-note sharing (which pushes the note body).
+  // These are the REAL role values from production auth, not invented ones.
+  it('THE BUG: a partner is NOT staff', () => {
+    expect(isStaffAuthRole('partner')).toBe(false)
+  })
+
+  it('a client is not staff', () => {
+    expect(isStaffAuthRole('client')).toBe(false)
+  })
+
+  it('admin and team are staff', () => {
+    expect(isStaffAuthRole('admin')).toBe(true)
+    expect(isStaffAuthRole('team')).toBe(true)
+  })
+
+  it('is case-insensitive, so a stray capital cannot readmit a partner', () => {
+    expect(isStaffAuthRole('Partner')).toBe(false)
+    expect(isStaffAuthRole('CLIENT')).toBe(false)
+  })
+
+  it('treats an absent role as staff — legacy accounts predate the field', () => {
+    // Documents the deliberate deny-list trade-off: this preserves the old
+    // `role !== "client"` behaviour for accounts with no role set.
+    expect(isStaffAuthRole(null)).toBe(true)
+    expect(isStaffAuthRole(undefined)).toBe(true)
+    expect(isStaffAuthRole('')).toBe(true)
+  })
+
+  it('every listed non-staff role is rejected', () => {
+    for (const role of NON_STAFF_AUTH_ROLES) {
+      expect(isStaffAuthRole(role)).toBe(false)
+    }
+  })
+
+  it('names partner explicitly, so removing it from the list is a visible change', () => {
+    expect(NON_STAFF_AUTH_ROLES).toContain('partner')
+    expect(NON_STAFF_AUTH_ROLES).toContain('client')
   })
 })

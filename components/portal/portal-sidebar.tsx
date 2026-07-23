@@ -145,7 +145,9 @@ const companyItems: NavItem[] = [
   // Bank Applications — self-service guidance to open a business bank account
   // (replaces the old Banking Fintech wizard/SD). Active company clients only.
   { key: 'nav.bankApplications', href: '/portal/banks', icon: Landmark },
-  { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, visibilityKey: 'pendingSignatures' },
+  // Sign Documents is deliberately NOT gated on data presence — see the
+  // nav.signDocuments branch in isItemVisible() below for why.
+  { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine },
   { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FilePen, visibilityKey: 'documentGenerator' },
   { key: 'nav.myClients', href: '/portal/customers', icon: Users, visibilityKey: 'customers' },
   // Invoices belongs under Company per Antonio 2026-05-05 — it's the
@@ -358,6 +360,36 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
     if (item.key === 'nav.referrals') {
       return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
+    }
+
+    // Sign Documents — tier-gated ONLY, never gated on "does this client have a
+    // pending document right now". Antonio, 2026-07-22: "this tab must be there
+    // even though there is nothing. It doesn't make sense to have a tab that
+    // disappears if there is no document, or if there is a document."
+    //
+    // The old navVisibility.pendingSignatures gate was wrong in four independent
+    // ways (found via Lorenzo Cassi, who was told "go to Sign Documents" and had
+    // no such entry):
+    //   1. STALE — computed once per full page load in the portal ROOT layout, so
+    //      a client who generated their own OA mid-session never saw the entry
+    //      appear. This was the reported bug.
+    //   2. FAIL-CLOSED — a transient DB error made the count 0, silently hiding
+    //      the only route to the client's signable documents.
+    //   3. INCOMPLETE — it counted 3 document families (OA/lease/SS-4) while
+    //      /portal/sign renders 7 (also MSA, Form 8832, signature_requests such
+    //      as the 8879, and e-sign envelopes). A client whose only pending item
+    //      was an 8879 could not reach the page from the nav at all.
+    //   4. MISMATCHED — it counted ALL rows per family; the page renders only the
+    //      NEWEST row per family, so the two could disagree in either direction.
+    // And the mirror-image failure: once a client SIGNED everything, the count
+    // went to zero and the entry vanished — taking away the route to their own
+    // signed documents.
+    //
+    // A stable, always-present entry deletes all of that and makes support
+    // instructions true. The page owns the empty state (it already had a
+    // bilingual "No documents to sign").
+    if (item.key === 'nav.signDocuments') {
+      return isTierFeatureVisible(portalTier || null, 'pendingSignatures', accountType, portalRole)
     }
 
     if (item.visibilityKey) {

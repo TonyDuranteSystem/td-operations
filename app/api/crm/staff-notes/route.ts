@@ -38,6 +38,32 @@ async function currentStaff(): Promise<User | null> {
   return user
 }
 
+/**
+ * Record MY done/snooze for a note, leaving everyone else's alone.
+ *
+ * A note is one thing; "I have dealt with it" is per person. Writing this to the
+ * note's own columns is what made Antonio's Done clear the note off Luca's
+ * screen too (2026-07-23).
+ *
+ * Upsert on the (note, person) pair, and pass ONLY the field being changed —
+ * an upsert writes exactly the columns in the payload, so including both would
+ * let "snooze" silently wipe an existing "done" and vice versa.
+ */
+async function setMyNoteState(
+  noteId: string,
+  userId: string,
+  patch: { archived_at?: string | null; snoozed_until?: string | null },
+): Promise<string | null> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabaseAdmin as any)
+    .from("staff_note_state")
+    .upsert(
+      { note_id: noteId, user_id: userId, ...patch, updated_at: new Date().toISOString() },
+      { onConflict: "note_id,user_id" },
+    )
+  return error ? error.message : null
+}
+
 function fail(error: string, status = 400) {
   return NextResponse.json({ error }, { status })
 }
@@ -141,9 +167,17 @@ export async function PATCH(req: NextRequest) {
   } else if (action === "snooze") {
     const { iso, error } = computeSnoozeUntil(p.preset, new Date(), p.custom)
     if (error || !iso) return fail(error ?? "Pick when to bring it back.")
-    patch = { snoozed_until: iso }
+    // PER PERSON — see setMyNoteState. Snoozing a shared note used to pull it off
+    // the other person's screen too, and bring it back at a time they never chose.
+    const err = await setMyNoteState(id, user.id, { snoozed_until: iso })
+    if (err) return fail(err, 500)
+    await emitUiEvent("notes")
+    return NextResponse.json({ ok: true })
   } else if (action === "unsnooze") {
-    patch = { snoozed_until: null }
+    const err = await setMyNoteState(id, user.id, { snoozed_until: null })
+    if (err) return fail(err, 500)
+    await emitUiEvent("notes")
+    return NextResponse.json({ ok: true })
   } else if (action === "share") {
     const targetId = typeof p.shared_with_user_id === "string" ? p.shared_with_user_id : ""
     if (!targetId) return fail("Who do you want to share it with?")
@@ -177,9 +211,17 @@ export async function PATCH(req: NextRequest) {
     }
     patch = { account_id: accountId, contact_id: contactId }
   } else if (action === "archive") {
-    patch = { archived_at: new Date().toISOString() }
+    // Done is MINE. Clicking it used to clear the note for everyone it was
+    // shared with — Antonio's report, 2026-07-23.
+    const err = await setMyNoteState(id, user.id, { archived_at: new Date().toISOString() })
+    if (err) return fail(err, 500)
+    await emitUiEvent("notes")
+    return NextResponse.json({ ok: true })
   } else if (action === "unarchive") {
-    patch = { archived_at: null }
+    const err = await setMyNoteState(id, user.id, { archived_at: null })
+    if (err) return fail(err, 500)
+    await emitUiEvent("notes")
+    return NextResponse.json({ ok: true })
   } else {
     return fail("Unknown action.")
   }

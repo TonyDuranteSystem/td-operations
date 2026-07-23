@@ -25,6 +25,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
+import { hasCollectedSignatures } from '@/lib/portal/oa-regenerate-guard'
 import { APP_BASE_URL } from '@/lib/config'
 import { notifyClientActionRequired } from '@/lib/portal/action-required'
 import { reportSystemError } from '@/lib/system-errors'
@@ -147,7 +148,7 @@ export async function POST(request: NextRequest) {
   // inert row and now five channels point them at a dead page.
   const { data: existingOAs } = await supabaseAdmin
     .from('oa_agreements')
-    .select('id, status')
+    .select('id, status, signed_count')
     .eq('account_id', account_id)
     .order('created_at', { ascending: false })
 
@@ -155,8 +156,14 @@ export async function POST(request: NextRequest) {
     // Guard against the NEWEST row (the one a client could be mid-signature on);
     // the sweep below then clears every sibling so no token collision survives.
     const existing = existingOAs[0]
-    if (existing.status === 'signed') {
-      return NextResponse.json({ error: 'This company already has a signed Operating Agreement. Contact support if you need a new one.' }, { status: 409 })
+    // Refuse if ANY signature has already been collected — not just when the OA
+    // is fully signed. A multi-member OA stays 'partially_signed' until the LAST
+    // member signs, so the old `status === 'signed'` guard let a re-generate
+    // hard-delete executed member signatures with no soft-delete and no audit
+    // row (R100). Reported by the Council 2026-07-22; no client was exposed at
+    // the time, but making the nav entry always visible drives more traffic here.
+    if (hasCollectedSignatures(existing)) {
+      return NextResponse.json({ error: 'This Operating Agreement has already been signed, or is waiting on the remaining members to sign. Contact support if you need a new one.' }, { status: 409 })
     }
 
     // REFUSE if a co-signer has ALREADY SIGNED this agreement. The delete below
@@ -296,16 +303,16 @@ export async function POST(request: NextRequest) {
       registered_agent_address: account.registered_agent_address ?? null,
       principal_address: account.physical_address ?? '10225 Ulmerton Rd, Suite 3D, Largo, FL 33771',
       language: 'en',
-      // 'sent', NOT 'draft'. This route IS the send — the client built the
-      // agreement and is notified in the same breath. Stored as 'draft' it was
-      // invisible to the portal's "action required" list, which matches only
-      // sent / viewed / awaiting_signature / partially_signed. So a client who
-      // generated their own agreement was never reminded to sign it, and the
-      // chat message told them to "go to the Sign section" where nothing
-      // prompted them. (Lorenzo Cassi, 2026-07-22: created it, saw a success
-      // screen, then asked "dove firmo?" — three other live clients are stuck
-      // the same way.) The CRM send path has always written 'sent' here, which
-      // is why this only ever bit self-service clients.
+      // 'sent', NOT 'draft' — this route chats the signing link to every member
+      // in the SAME request (see the portal-message sends below), so the OA has
+      // demonstrably been sent. Filing it as 'draft' was a lie the rest of the
+      // system believed: /portal/sign hides drafts and the home Action Items
+      // exclude them, so the client was sent a link to a document that was
+      // invisible everywhere in their portal until they happened to click it
+      // (which flips it to 'viewed'). 'draft' still means "staff is drafting,
+      // not yet sent" on the MCP oa_create path — do not unify the two writers.
+      // (Lorenzo Cassi, 2026-07-22: created it, saw a success screen, then asked
+      // "dove firmo?" — the self-service clients this bit.)
       status: 'sent',
       total_signers: totalSigners,
       signed_count: 0,

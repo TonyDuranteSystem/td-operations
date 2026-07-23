@@ -56,7 +56,44 @@ export async function GET(request: NextRequest) {
     .select('id', { count: 'exact', head: true })
     .is('read_at', null)
 
-  if (accountId) {
+  // Scope the read.
+  //
+  // This used to be a strict either/or — `if (accountId) … else if (contactId)`
+  // — which meant an active-tier client with a company selected NEVER saw their
+  // person-scoped notifications. The portal layout always passes the selected
+  // account, so for those clients the contact branch was unreachable. Measured
+  // on production 2026-07-23 before the fix: 262 unread notifications hidden
+  // from 55 clients — 128 chat alerts, 71 service updates, 51 form reminders
+  // (chase-ups asking them to complete a form they were never shown), 5 decision
+  // requests. Oldest April, newest the day before. The mark-as-read path below
+  // already accepted BOTH scopes, which is what gives away that the either/or
+  // was an oversight rather than a decision.
+  //
+  // SECURITY: the OR uses `authContactId` — derived server-side from the
+  // session — never `contactIdParam`. A client passing someone else's contact
+  // id is already rejected above, but this way the widened query cannot become
+  // a hole even if that check is ever relaxed. Both halves are the caller's own
+  // data: `accountId` is verified to be theirs, `authContactId` is them.
+  //
+  // A TEAMMATE (Portal Team Access, no contact id of their own) keeps the
+  // account-only scope — they must not see the owner's personal notifications.
+  //
+  // Multi-company clients see the SELECTED company plus their personal items,
+  // never another company's. That matches how the sidebar and chat already scope.
+  // The personal half MUST also require account_id IS NULL. Most notifications
+  // carry BOTH an account and a contact (39 of 56 for the QA fixture), so a bare
+  // `contact_id.eq.X` matches every company's items for that person — selecting
+  // company B would list company A's notifications. Caught in sandbox testing of
+  // the first version of this fix, not in review. It is not a cross-client leak
+  // (a foreign account_id is still rejected with 403 above), but it merges
+  // companies, which is precisely the model the portal moved AWAY from when chat
+  // was re-scoped per-company in 2026-06-24. "Personal" means addressed to the
+  // person and tied to no company.
+  if (accountId && authContactId) {
+    const scope = `account_id.eq.${accountId},and(contact_id.eq.${authContactId},account_id.is.null)`
+    dataQuery = dataQuery.or(scope)
+    countQuery = countQuery.or(scope)
+  } else if (accountId) {
     dataQuery = dataQuery.eq('account_id', accountId)
     countQuery = countQuery.eq('account_id', accountId)
   } else if (contactIdParam) {

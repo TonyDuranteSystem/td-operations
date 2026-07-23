@@ -60,6 +60,7 @@
  */
 
 import { PDFDocument } from "pdf-lib"
+import { CAA_ADDRESS_ONE_LINE, TD_OFFICE } from "@/lib/td-address"
 import { embedUnicodeFonts } from "./unicode-fonts"
 
 const F1040NR_URL = "https://www.irs.gov/pub/irs-pdf/f1040nr.pdf"
@@ -71,17 +72,17 @@ const PREPARER = {
   ein: "83-4299021",
   ptin: "P02389222",
   phone: "+1 (727) 452-1093",
-  address: "11125 Park Blvd, Suite 104-153, Seminole, FL 33772",
+  address: CAA_ADDRESS_ONE_LINE,
 }
 
 // CAA mailing address used as the taxpayer's "home address" for ITIN apps —
 // the IRS routes correspondence to the CAA. No "c/o" prefix per 2026-05-13.
 const CAA_HOME = {
-  street: "11125 Park Blvd",
+  street: TD_OFFICE.streetNoSuite,
   apt: "104-153",
-  city: "Seminole",
-  state: "FL",
-  zip: "33772",
+  city: TD_OFFICE.city,
+  state: TD_OFFICE.state,
+  zip: TD_OFFICE.zip,
 }
 
 export interface F1040NRFillData {

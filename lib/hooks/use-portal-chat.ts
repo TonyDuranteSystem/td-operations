@@ -37,6 +37,14 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true)
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
+  // Mirror of `messages` so refresh() can size its refetch to what we already
+  // hold WITHOUT taking `messages` as a dependency (that would rebuild the
+  // callback on every incoming message).
+  const messagesRef = useRef<PortalMessage[]>([])
+  // Ref to the current refresh() so the realtime subscribe callback can call it
+  // without making refresh a dependency of the subscription effect — that would
+  // tear down and rebuild the channel on every render.
+  const refreshRef = useRef<(o?: { markRead?: boolean }) => Promise<void>>(async () => {})
 
   // Resolve the read query param, the mark-as-read body, the realtime
   // subscription filters, and the drop-filter plan from the active scope.
@@ -72,20 +80,50 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
     load()
   }, [load])
 
-  // Refresh without blanking the message list (keeps existing messages visible)
-  const refresh = useCallback(async () => {
+  useEffect(() => { messagesRef.current = messages }, [messages])
+
+  // Refresh without blanking the message list (keeps existing messages visible).
+  //
+  // REPLACES the list rather than merging into it, deliberately. A merge cannot
+  // express an ABSENCE: if staff soft-delete a message while the client's socket
+  // is down, the row is simply missing from the response, and a union would keep
+  // showing it on the client's screen forever — an R100 violation (the client
+  // view must FULLY hide a deleted message). Replacement is what expresses the
+  // deletion. Two reviewers landed on this independently; do not "optimise" it
+  // into a merge.
+  //
+  // `markRead` exists because the wake path needs it: pulling a new message onto
+  // screen without marking it read leaves the client looking at the message AND
+  // at an unread badge for it — including on their phone's home-screen icon.
+  // Only `load()` used to do this, so a wake refresh alone would light the badge
+  // for something visibly on screen (found only by combining two changes).
+  const refresh = useCallback(async (opts?: { markRead?: boolean }) => {
     try {
-      const res = await fetch(`/api/portal/chat?${queryParam}&limit=50`)
+      // Refetch at least as many as we already hold, so a client who paged back
+      // through history doesn't have it collapse to the newest 50 on every wake.
+      const limit = Math.max(50, messagesRef.current.length)
+      const res = await fetch(`/api/portal/chat?${queryParam}&limit=${limit}`)
       if (res.ok) {
         const data = await res.json()
         const msgs = data.messages ?? []
         setMessages(msgs)
-        setHasMore(msgs.length >= 50)
+        setHasMore(msgs.length >= limit)
+        if (opts?.markRead) {
+          fetch('/api/portal/chat/read', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(readBody),
+          }).catch(() => {})
+        }
       }
     } catch {
       // silent
     }
+    // readBody is derived from the same inputs as queryParam.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryParam])
+
+  useEffect(() => { refreshRef.current = refresh }, [refresh])
 
   // Load older messages
   const loadMore = useCallback(async () => {
@@ -166,7 +204,23 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `${f.column}=eq.${f.value}` }, handleUpdate)
     }
 
-    channel.subscribe()
+    // Status callback, no retry ladder. supabase-js rejoins on its own (the
+    // channel schedules a rejoin timer on error/timeout; the socket reconnects
+    // with stepped backoff), and a rejoin re-fires SUBSCRIBED on this same
+    // channel because its receive hooks survive the resend. An earlier attempt
+    // added a custom ladder here and it FOUGHT the library — tearing the channel
+    // down on each retry can leave the socket manually disconnected forever.
+    channel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        // postgres_changes has NO REPLAY: whatever arrived while we were
+        // disconnected is gone, and this hook appends deltas. So refetch
+        // authoritative state on every (re)subscribe. Idempotent by design —
+        // SUBSCRIBED can fire more than once per rejoin.
+        void refreshRef.current({ markRead: true })
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        console.warn(`[portal-chat] channel ${status}`)
+      }
+    })
     channelRef.current = channel
 
     return () => {

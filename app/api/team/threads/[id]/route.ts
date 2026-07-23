@@ -10,6 +10,15 @@ import { NextRequest, NextResponse } from 'next/server'
  * Full message history for a thread (newest 500), reply previews enriched, and
  * the caller's read pointer advanced (upsert internal_thread_reads.last_read_at).
  * Staff-only. Soft-deleted rows are returned so the UI can render tombstones.
+ *
+ * `?mark_read=0` fetches WITHOUT advancing the pointer. Reading is otherwise a
+ * WRITE here, which is fine for the Team Chat page (you opened it, you read it)
+ * but wrong for any surface that can render a thread you did not ask to see: a
+ * window that auto-opens, or polls, or sits minimized would clear the badge —
+ * and `manual_unread` with it — for a message no human ever looked at. The push
+ * has already fired by then, so the message is simply lost. Such a surface must
+ * pass mark_read=0 and call POST .../read on a real human signal instead.
+ * Default stays ON so every existing caller is byte-identical.
  */
 export async function GET(
   request: NextRequest,
@@ -235,14 +244,18 @@ export async function GET(
     }
   })
 
-  // Advance the caller's read pointer (per-user unread model).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (supabaseAdmin as any)
-    .from('internal_thread_reads')
-    .upsert(
-      { thread_id: threadId, user_id: user.id, last_read_at: new Date().toISOString(), manual_unread: false, updated_at: new Date().toISOString() },
-      { onConflict: 'thread_id,user_id' },
-    )
+  // Advance the caller's read pointer (per-user unread model) — unless the caller
+  // explicitly opted out with ?mark_read=0. See the route doc: a surface that can
+  // show a thread the user never asked for must not mark it read by looking at it.
+  if (request.nextUrl.searchParams.get('mark_read') !== '0') {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabaseAdmin as any)
+      .from('internal_thread_reads')
+      .upsert(
+        { thread_id: threadId, user_id: user.id, last_read_at: new Date().toISOString(), manual_unread: false, updated_at: new Date().toISOString() },
+        { onConflict: 'thread_id,user_id' },
+      )
+  }
 
   return NextResponse.json({
     thread,

@@ -3,6 +3,7 @@
  * Follows the same pattern as formation form tools (formation.ts).
  */
 
+import { MAILING_DESTINATION_HTML, MAILING_DESTINATION_TEXT } from "@/lib/td-address"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -717,10 +718,7 @@ INSTRUCTIONS:
 3. Sign the 1040-NR on page 2 "Your signature" line (wet ink signature required)
 4. Mail all signed documents to:
 
-   Tony Durante LLC
-   11125 Park Blvd, Suite 104-153
-   Seminole, FL 33772
-   United States
+${MAILING_DESTINATION_TEXT.split('\n').map(l => '   ' + l).join('\n')}
 
 Please use a trackable shipping method (FedEx, DHL, UPS) and share the tracking number with us.
 
@@ -965,7 +963,7 @@ ${hr}
 
 <p style="font-size:16px"><strong>Indirizzo di spedizione</strong></p>
 <div style="background:#f7f8fa;border:1px solid #d1d5db;border-radius:8px;padding:16px 20px;margin:12px 0">
-<strong>Tony Durante LLC</strong><br/>11125 Park Blvd, Suite 104-153<br/>Seminole, FL 33772<br/>United States
+${MAILING_DESTINATION_HTML}
 </div>
 <p style="color:#b8292f;font-weight:600">Utilizza un metodo di spedizione tracciabile (FedEx, DHL, UPS) e condividi il numero di tracking con noi.</p>
 
@@ -1048,7 +1046,7 @@ ${hr}
 
 <p style="font-size:16px"><strong>Mailing address</strong></p>
 <div style="background:#f7f8fa;border:1px solid #d1d5db;border-radius:8px;padding:16px 20px;margin:12px 0">
-<strong>Tony Durante LLC</strong><br/>11125 Park Blvd, Suite 104-153<br/>Seminole, FL 33772<br/>United States
+${MAILING_DESTINATION_HTML}
 </div>
 <p style="color:#b8292f;font-weight:600">Please use a trackable shipping method (FedEx, DHL, UPS) and share the tracking number with us.</p>
 

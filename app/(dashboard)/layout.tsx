@@ -14,6 +14,7 @@ import { RealtimeNotifications } from '@/components/dashboard/realtime-notificat
 import { UiEventListener } from '@/components/dashboard/ui-event-listener'
 import { DashboardPullToRefresh } from '@/components/dashboard/pull-to-refresh'
 import StickyNotesLayer from '@/components/dashboard/sticky-notes-layer'
+import FloatingChat from '@/components/team-chat/floating-chat'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -162,6 +163,12 @@ export default async function DashboardLayout({
         <CommandPalette />
         <AiAgentPanel enabled={showAiAgent} />
         <StickyNotesLayer />
+        {/* Mounted AFTER the notes layer so the chat wins a same-corner overlap
+            (it also sits one z-step above), and OUTSIDE <main> so it never
+            fights pull-to-refresh. It carries its own crash guard: the
+            dashboard error boundary is a page-segment one and would not catch a
+            throw from here, which would white-screen the whole CRM. */}
+        <FloatingChat />
       </div>
     </Providers>
   )

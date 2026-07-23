@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isStaffPreview } from "@/lib/auth/staff-preview"
 import { fillSS4, type SS4FillData } from "@/lib/pdf/ss4-fill"
+import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
 
 export async function GET(
   request: NextRequest,
@@ -38,8 +39,8 @@ export async function GET(
   }
 
   // Mailing address — fall back to TD Park Blvd for legacy rows without stored address
-  const TD_FALLBACK_STREET = "11125 Park Blvd, Suite 104-153"
-  const TD_FALLBACK_CITY_STATE_ZIP = "Seminole, FL 33772"
+  const TD_FALLBACK_STREET = CLIENT_ADDRESS_FALLBACK.street
+  const TD_FALLBACK_CITY_STATE_ZIP = CLIENT_ADDRESS_FALLBACK.cityStateZip
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ss4Any = ss4 as any
   const mailingStreet: string = ss4Any.mailing_street || TD_FALLBACK_STREET

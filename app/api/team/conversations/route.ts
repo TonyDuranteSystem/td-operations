@@ -1,8 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, getUserDisplayName } from '@/lib/auth'
-import { parseClientRef, clientRefColumn, conversationTitle } from '@/lib/team/conversations'
-import { channelSlug } from '@/lib/team/workspace'
+import { parseClientRef } from '@/lib/team/conversations'
+import { findOrCreateConversation } from '@/lib/team/find-conversation'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -25,25 +25,7 @@ export async function POST(request: NextRequest) {
   if (!ref) return NextResponse.json({ error: 'A valid client is required.' }, { status: 400 })
 
   const topic: string | null = (body.topic ?? '').toString().trim() || null
-  const topicSlug = topic ? channelSlug(topic) || null : null
   const channelId: string | null = (body.channel_id ?? '').toString().trim() || null
-  const col = clientRefColumn(ref.kind)
-
-  // Resolve client display name.
-  let clientName = 'Client'
-  if (ref.kind === 'account') {
-    const { data } = await supabaseAdmin.from('accounts').select('company_name').eq('id', ref.id).single()
-    if (!data) return NextResponse.json({ error: 'Account not found.' }, { status: 404 })
-    clientName = data.company_name ?? clientName
-  } else if (ref.kind === 'contact') {
-    const { data } = await supabaseAdmin.from('contacts').select('full_name').eq('id', ref.id).single()
-    if (!data) return NextResponse.json({ error: 'Contact not found.' }, { status: 404 })
-    clientName = data.full_name ?? clientName
-  } else {
-    const { data } = await supabaseAdmin.from('leads').select('full_name').eq('id', ref.id).single()
-    if (!data) return NextResponse.json({ error: 'Lead not found.' }, { status: 404 })
-    clientName = data.full_name ?? clientName
-  }
 
   const now = new Date().toISOString()
 
@@ -64,64 +46,46 @@ export async function POST(request: NextRequest) {
     channelRow = ch
   }
 
-  // Reuse an OPEN discussion for the same client + topic if present.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let reuseQuery: any = (supabaseAdmin as any)
-    .from('internal_threads')
-    .select('*')
-    .eq('thread_type', 'discussion')
-    .eq(col, ref.id)
-    .is('resolved_at', null)
-    .is('archived_at', null)
-  reuseQuery = topicSlug ? reuseQuery.eq('topic_slug', topicSlug) : reuseQuery.is('topic_slug', null)
-  const { data: existing } = await reuseQuery.order('created_at', { ascending: false }).limit(1).maybeSingle()
+  // Find-or-create through the SHARED helper — never a second predicate.
+  //
+  // This route used to hand-roll its own reuse query keyed on `resolved_at IS
+  // NULL`. That is exactly the predicate find-conversation.ts documents as
+  // WRONG: it forks a duplicate the moment a conversation is marked Solved, so
+  // starting a chat about a solved client+topic created a SECOND live thread
+  // while Share reused and reopened the first — messages split across two
+  // conversations with identical labels, invisibly. The helper's header says
+  // in as many words "do not add a third"; this was the third. (2026-07-23)
+  //
+  // `forceNew` is the caller's escape hatch when they genuinely want a separate
+  // conversation rather than continuing the open one.
+  const found = await findOrCreateConversation({
+    ref,
+    topic,
+    createdBy: user.id,
+    createdByName: getUserDisplayName(user),
+    forceNew: body.force_new === true,
+  })
+  // The helper reports a missing client / DB failure rather than throwing —
+  // surface it verbatim so the caller sees the real reason (R099).
+  if ('error' in found) {
+    return NextResponse.json({ error: found.error }, { status: found.status })
+  }
+  let thread = found.thread
+  const reused = found.reused
+  const clientName = found.clientName
 
-  let thread = existing
-  let reused = false
-  if (thread) {
-    reused = true
-    // Reused with a channel selected → file it there (moves an unfiled or
-    // differently-filed conversation to the chosen channel, per user intent).
-    if (channelId && thread.parent_channel_id !== channelId) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabaseAdmin as any)
-        .from('internal_threads')
-        .update({ parent_channel_id: channelId })
-        .eq('id', thread.id)
-      thread = { ...thread, parent_channel_id: channelId }
-    }
-  } else {
-    // Slack parity: the channel picked in the modal is WHERE THE CONVERSATION
-    // LIVES — file it under that channel folder (parent_channel_id), exactly
-    // like Slack's /client modal puts the thread IN the channel. (The card
-    // dropped below is the visible "conversation started" marker, mirroring
-    // Slack's 🗂️ root message.) Fix for the Tamás Fazekas incident 2026-07-08.
+  // Filing: the channel picked in the modal is WHERE THE CONVERSATION LIVES,
+  // exactly like Slack's /client modal puts the thread IN the channel. Applies
+  // to a reused conversation too — moving an unfiled or differently-filed one
+  // to the chosen channel is the user's intent. (Tamás Fazekas incident,
+  // 2026-07-08.)
+  if (channelId && thread.parent_channel_id !== channelId) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: created, error } = await (supabaseAdmin as any)
+    await (supabaseAdmin as any)
       .from('internal_threads')
-      .insert({
-        thread_type: 'discussion',
-        [col]: ref.id,
-        topic,
-        topic_slug: topicSlug,
-        title: conversationTitle(clientName, topic),
-        created_by: user.id,
-        parent_channel_id: channelId || null,
-        last_activity_at: now,
-      })
-      .select()
-      .single()
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    thread = created
-
-    // Seed the opening message.
-    await supabaseAdmin.from('internal_messages').insert({
-      thread_id: thread.id,
-      sender_id: user.id,
-      sender_name: getUserDisplayName(user),
-      message: `🗂️ Conversation started: ${conversationTitle(clientName, topic)}`,
-      read_at: now,
-    })
+      .update({ parent_channel_id: channelId })
+      .eq('id', thread.id)
+    thread = { ...thread, parent_channel_id: channelId }
   }
 
   // Drop a "conversation started" card into the channel (the visible marker in
