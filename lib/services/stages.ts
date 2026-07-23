@@ -291,15 +291,23 @@ export async function replaceStagesForService(
   }
 
   // Final orders, preserving the pipeline's scale (see planStageOrders).
-  const plannedOrders = planStageOrders(submitted.length, existing.map(r => r.stage_order))
+  //
+  // Values in the park band are NOT part of the scale — they are debris from a
+  // save that died mid-reorder. Feeding them back in would adopt them as the
+  // pipeline's real numbering, leaving steps numbered 100001 for ever. Drop
+  // them and let planStageOrders extend the surviving scale instead.
+  const livePool = existing.map(r => r.stage_order).filter(o => o < PARK_FLOOR)
+  const plannedOrders = planStageOrders(submitted.length, livePool)
   const needsOrderChange = submitted.some((s, i) => {
     if (!s.id) return true // a new row must be written anyway
     return existingById.get(s.id)!.stage_order !== plannedOrders[i]
   })
+  // Debris from an interrupted save must be cleared even if nothing else moved.
+  const hasParkDebris = existing.some(r => r.stage_order >= PARK_FLOOR)
 
   // 1. PARK — only when an order actually moves, and always above everything
   //    currently in the table so a half-finished park can never block a retry.
-  if (needsOrderChange && existing.length > 0) {
+  if ((needsOrderChange || hasParkDebris) && existing.length > 0) {
     const base = Math.max(PARK_FLOOR, ...existing.map(r => r.stage_order)) + 1
     for (let idx = 0; idx < existing.length; idx++) {
       const row = existing[idx]
