@@ -30,7 +30,29 @@ export async function GET() {
   // one query) — the old per-thread lookups here were an N+1 that would degrade
   // first as client count grows (panel review of Luca's proposal, 2026-07-08).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const enriched = (threads ?? []).map((t: any) => ({ ...t, label: t.label ?? 'Thread' }))
+  // "Later" now lives in its own sparse table (parking a thread must never mark
+  // it read — see the later route). get_team_threads still projects the OLD
+  // column, which is frozen and no longer written, so overlay the real value
+  // here rather than rewriting the function. When that column is finally
+  // dropped, this overlay becomes the function's own job and can go.
+  const laterSet = new Set<string>()
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: rows } = await (supabaseAdmin as any)
+      .from('internal_thread_later')
+      .select('thread_id')
+      .eq('user_id', user.id)
+    for (const r of rows ?? []) if (r?.thread_id) laterSet.add(r.thread_id)
+  } catch {
+    // Best-effort: a Later lookup failure must not empty the whole sidebar.
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const enriched = (threads ?? []).map((t: any) => ({
+    ...t,
+    label: t.label ?? 'Thread',
+    later: laterSet.has(t.id),
+  }))
 
   const members = await listTeamMembers()
 
