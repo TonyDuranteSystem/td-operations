@@ -112,6 +112,23 @@ describe('no stray wake implementations', () => {
     }
   })
 
+  it('the notification bell catches up on wake', () => {
+    // The bell holds its OWN fetch state, so the portal's page-level wake
+    // refresh cannot reach it (router.refresh() re-runs server components; this
+    // is a client one). Without its own wake handling a returning client saw a
+    // current chat badge beside a bell up to 30s stale — two unread indicators
+    // disagreeing on the same screen.
+    const src = readFileSync('components/portal/notification-bell.tsx', 'utf8')
+    // Assert the CALL, not the import. Checking for the bare identifier passes
+    // on the import line alone — verified by deleting the call and watching an
+    // earlier version of this test still go green. Same weak-guard mistake that
+    // let a Gmail query sit in the wake list undetected a round ago.
+    expect(src, 'the bell must CALL useWakeSignal, not merely import it')
+      .toMatch(/useWakeSignal\s*\(\s*\{/)
+    // The poll must SURVIVE: it is the fallback for what the wake cannot see.
+    expect(src, 'the 30s poll is the fallback and must stay').toContain('30000')
+  })
+
   it('the shared hook exists and exports its decision function', () => {
     const p = 'lib/hooks/use-wake-signal.ts'
     expect(existsSync(p)).toBe(true)
