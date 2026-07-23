@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Bell, MessageCircle, FileText, Activity, Calendar, Receipt } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import Link from 'next/link'
+import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
 
 interface Notification {
   id: string
@@ -39,23 +40,39 @@ export function NotificationBell({ accountId, contactId }: { accountId?: string;
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
 
-  // Fetch notifications
-  useEffect(() => {
-    async function load() {
-      try {
-        const queryParam = accountId ? `account_id=${accountId}` : `contact_id=${contactId}`
-        const res = await fetch(`/api/portal/notifications?${queryParam}&limit=10`)
-        if (res.ok) {
-          const data = await res.json()
-          setNotifications(data.notifications ?? [])
-          setUnread(data.unread_count ?? 0)
-        }
-      } catch { /* silent */ }
-    }
-    load()
-    const interval = setInterval(load, 30000) // Refresh every 30s
-    return () => clearInterval(interval)
+  // Fetch notifications.
+  //
+  // This component keeps its own fetch state, so the portal's page-level wake
+  // refresh (components/portal/portal-wake-refresh.tsx) cannot reach it —
+  // router.refresh() re-runs SERVER components, and this is a client one. Same
+  // reason the chat hook needed its own wake handling.
+  //
+  // Without this, a client returning to the portal saw a current chat badge
+  // sitting next to a bell that was up to 30s stale — two unread indicators
+  // disagreeing on the same screen.
+  const load = useCallback(async () => {
+    try {
+      const queryParam = accountId ? `account_id=${accountId}` : `contact_id=${contactId}`
+      const res = await fetch(`/api/portal/notifications?${queryParam}&limit=10`)
+      if (res.ok) {
+        const data = await res.json()
+        setNotifications(data.notifications ?? [])
+        setUnread(data.unread_count ?? 0)
+      }
+    } catch { /* silent */ }
   }, [accountId, contactId])
+
+  useEffect(() => {
+    load()
+    // The poll STAYS. It is the fallback for everything the wake signal cannot
+    // see, and browsers freeze it while the app is backgrounded anyway — which
+    // is exactly the gap the wake below covers.
+    const interval = setInterval(load, 30000)
+    return () => clearInterval(interval)
+  }, [load])
+
+  // Catch up the moment the client returns to the app.
+  useWakeSignal({ onWake: () => { void load() } })
 
   const markAllRead = async () => {
     const unreadIds = notifications.filter(n => !n.read_at).map(n => n.id)
