@@ -1,3 +1,25 @@
+-- ⛔ SUPERSEDED — DO NOT REPLAY THIS FILE (annotated 2026-07-22).
+--
+-- The SQL below is left byte-identical on purpose: rewriting an already-applied
+-- migration means "what production actually received" no longer matches the
+-- file, with no trace that it changed. So this is a warning, not an edit.
+--
+-- Each UPDATE here writes a WHOLE stage_layout, so re-running the file silently
+-- REVERTS every later fix to these stages:
+--   * 20260616-2300 — adds shipping_info to Client Signing (staff would lose
+--     the courier + tracking number the client submitted)
+--   * 20260625-1444 — adds the "Documents Reviewed" advance button to Document
+--     Preparation (the stage becomes a dead end again)
+--   * 20260701-1700 — removes fax_irs from Submitted to IRS; ITIN is MAIL-ONLY
+--
+-- It would ALSO re-plant the TD office address as a hardcoded literal on Client
+-- Signing. That copy had already drifted from the code constant ("Suite" with
+-- no comma, "Florida" spelled out) — which is the whole reason the address is
+-- now a {td_mailing_address} token resolved at render from lib/td-address.ts.
+-- The current row content lives in 20260722-2100-itin-client-signing-address-token.sql.
+--
+-- To repair ONE stage, write a NEW targeted migration against that stage only.
+
 -- ITIN Workspace — stage_layout for the 8 ITIN pipeline stages (service_type='ITIN').
 --
 -- Data migration (DML): fills stage_layout for the ITIN flow so /flows/[id]
