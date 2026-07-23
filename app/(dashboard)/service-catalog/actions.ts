@@ -16,7 +16,13 @@ import { revalidatePath } from "next/cache"
 import { createClient } from "@/lib/supabase/server"
 import { isAdmin } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { getStagesForService, replaceStagesForService, type StageRow } from "@/lib/services/stages"
+import {
+  getStagesForService,
+  replaceStagesForService,
+  renameServiceTypeForStages,
+  validateStageDraft,
+  type StageRow,
+} from "@/lib/services/stages"
 import {
   addEntry,
   getEntry,
@@ -180,6 +186,15 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
       return { ok: false, error: "Could not derive a slug from the name." }
     }
 
+    // Validate the stages BEFORE the service row is written. This used to run
+    // afterwards, inside the stage save — so a rejected save had ALREADY
+    // committed the name, price and currency while telling the admin the save
+    // had failed. A wrong price could go live behind an error message.
+    const stageProblem = validateStageDraft(draft.stages)
+    if (stageProblem) {
+      return { ok: false, error: stageProblem }
+    }
+
     const row = {
       name: basics.name.trim(),
       slug,
@@ -196,6 +211,18 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
 
     let serviceId: string
     let serviceSlug: string
+
+    // Read the pipeline name as it stands BEFORE we overwrite it, so a rename
+    // can be detected and the stages moved with it.
+    let previousPipeline: string | null = null
+    if (basics.id) {
+      const { data: prior } = await supabaseAdmin
+        .from("service_catalog")
+        .select("pipeline")
+        .eq("id", basics.id)
+        .maybeSingle()
+      previousPipeline = (prior as { pipeline?: string | null } | null)?.pipeline ?? null
+    }
 
     if (basics.id) {
       // service_catalog is a view (INSTEAD OF trigger handles DML); cast past generated view types — see af35ebac
@@ -230,6 +257,15 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
       }
       serviceId = data.id
       serviceSlug = data.slug
+    }
+
+    // The pipeline name IS the stages' key. If the admin renamed it, move the
+    // existing rows across FIRST — otherwise the write below looks for stages
+    // under a name that has none, inserts a fresh bare set, and orphans the
+    // real ones (with every in-flight service delivery still pointing at the
+    // old name).
+    if (basics.id && previousPipeline && row.pipeline && previousPipeline !== row.pipeline) {
+      await renameServiceTypeForStages(previousPipeline, row.pipeline)
     }
 
     // Stages — only persist when a pipeline name is set. Services without a

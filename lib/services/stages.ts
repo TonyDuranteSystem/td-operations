@@ -22,6 +22,14 @@ export { SECOND_INSTALLMENT_TARGET_ACTION, stageHasAction } from "@/lib/services
 export type { StageAction } from "@/lib/services/stage-actions"
 
 export interface StageRow {
+  /**
+   * Row identity, present for a stage that already exists and absent for one
+   * the admin just added. This ONE field is why the editor can rename, reorder
+   * and delete stages safely: without it the write path could only match old
+   * row to new row by NAME, which cannot tell a rename from a delete-plus-add.
+   * See the note on `replaceStagesForService`.
+   */
+  id?: string
   stage_order: number
   stage_name: string
   stage_description?: string | null
@@ -41,7 +49,7 @@ export async function getStagesForService(serviceType: string): Promise<StageRow
   const { data, error } = await supabaseAdmin
     .from("pipeline_stages")
     .select(
-      "stage_order, stage_name, stage_description, sla_days, auto_advance, notify_client_email, client_description, auto_actions",
+      "id, stage_order, stage_name, stage_description, sla_days, auto_advance, notify_client_email, client_description, auto_actions",
     )
     .eq("service_type", serviceType)
     .order("stage_order", { ascending: true })
@@ -93,15 +101,61 @@ export async function resolveSecondInstallmentAdvance(
 }
 
 /**
- * Replace ALL stages for a service_type atomically (delete-then-insert).
+ * Stage orders are UNIQUE per service_type (`pipeline_stages_service_type_stage_order_key`,
+ * verified on production). Reordering therefore cannot be done by assigning final
+ * positions one row at a time — an intermediate state collides. Every row is first
+ * parked at an order far outside the real range (which runs -10..90 in production;
+ * negative orders are legitimately used for standalone-intake stages), then given
+ * its final position.
+ */
+const PARK_OFFSET = 100000
+
+/** Validation that must happen BEFORE anything is written. */
+export function validateStageDraft(stages: StageRow[]): string | null {
+  const seen = new Set<string>()
+  for (let idx = 0; idx < stages.length; idx++) {
+    const name = (stages[idx].stage_name ?? "").trim()
+    if (!name) {
+      return `Stage ${idx + 1} has no name. Every stage needs a name before you can save.`
+    }
+    if (seen.has(name.toLowerCase())) {
+      return `Two stages are both called "${name}". Stage names must be unique within a service.`
+    }
+    seen.add(name.toLowerCase())
+  }
+  return null
+}
+
+/**
+ * Reconcile a service's stages against what the editor submitted.
  *
- * Why replace rather than diff: stage_order is critical and indexed; a partial
- * update with reordering means temporary unique-constraint violations. Delete
- * + bulk insert avoids that and matches existing migration patterns.
+ * WHY THIS IS NOT delete-then-insert ANY MORE (2026-07-22). It used to delete
+ * every row for the service_type and re-insert only the nine columns the editor
+ * authors. The row has twenty-three. Everything else — the entire staff
+ * workspace descriptor (its components, buttons and advance targets), the
+ * client-facing labels the portal renders, the board/portal display settings —
+ * was silently destroyed on every Save. One Save on the ITIN service, even just
+ * changing an SLA day count, would have erased all eight ITIN workspaces.
  *
- * Concurrency: the editor isn't multi-user-per-row (admin-only, low volume).
- * If two admins edit the same service's stages concurrently, last-write wins.
- * Acceptable at our scale.
+ * A first attempt kept the delete and tried to read those columns back
+ * beforehand and re-attach them. Council review rejected it, correctly: matching
+ * an old row to a new one by NAME cannot distinguish a rename from a delete, so
+ * it had to refuse renames outright; a failed insert left the table empty, and
+ * the admin's natural "Save failed, try again" then wiped everything with the
+ * guard asleep; and renaming the pipeline itself bypassed the whole thing.
+ *
+ * The actual defect was upstream: `getStagesForService` did not select the row
+ * id, so identity was thrown away at LOAD time and the write path had nothing
+ * but names to match on. With the id carried through, rows are UPDATED IN
+ * PLACE. Columns the editor does not author are never named in any statement,
+ * so they cannot be lost — not by oversight, not by a future column nobody
+ * remembers to protect. There is nothing to "preserve" because nothing is
+ * destroyed.
+ *
+ * Order of operations is chosen so that a failure part-way through never loses
+ * a stage: park, then delete what the admin removed, then update, then insert.
+ * A crash mid-sequence leaves rows with parked order values — visibly wrong
+ * order, fully recoverable by saving again — rather than an empty pipeline.
  */
 export async function replaceStagesForService(
   serviceType: string,
@@ -111,35 +165,122 @@ export async function replaceStagesForService(
     throw new Error("replaceStagesForService: serviceType is required")
   }
 
-  // Delete existing rows for this service_type.
-  const { error: delErr } = await supabaseAdmin
+  // Nothing is written until the draft is known-good. A blank or duplicated
+  // stage name used to be accepted and only became a problem later.
+  const invalid = validateStageDraft(stages)
+  if (invalid) throw new Error(invalid)
+
+  const { data: existingRaw, error: readErr } = await supabaseAdmin
     .from("pipeline_stages")
-    .delete()
+    .select("id, stage_name, stage_order")
     .eq("service_type", serviceType)
-  if (delErr) {
-    throw new Error(`replaceStagesForService(${serviceType}) delete: ${delErr.message}`)
+    .order("stage_order", { ascending: true })
+  if (readErr) {
+    throw new Error(`replaceStagesForService(${serviceType}) read: ${readErr.message}`)
+  }
+  const existing = (existingRaw ?? []) as Array<{ id: string; stage_name: string; stage_order: number }>
+  const existingIds = new Set(existing.map(r => r.id))
+
+  // A submitted id that no longer exists means the row was deleted by someone
+  // else since the page loaded. Treat it as new rather than updating nothing.
+  const submitted = stages.map(s => ({ ...s, id: s.id && existingIds.has(s.id) ? s.id : undefined }))
+  const keptIds = new Set(submitted.map(s => s.id).filter(Boolean))
+
+  // 1. Park every existing row clear of the final range so reordering cannot
+  //    collide on the (service_type, stage_order) unique index.
+  for (let idx = 0; idx < existing.length; idx++) {
+    const row = existing[idx]
+    const { error } = await supabaseAdmin
+      .from("pipeline_stages")
+      .update({ stage_order: PARK_OFFSET + idx })
+      .eq("id", row.id)
+    if (error) {
+      throw new Error(`replaceStagesForService(${serviceType}) reorder: ${error.message}`)
+    }
   }
 
-  if (stages.length === 0) return
+  // 2. Remove the stages the admin deleted. Explicit act, so no guard here —
+  //    but it happens BEFORE the updates so a later failure cannot strand a
+  //    half-written pipeline behind rows that should be gone.
+  const removed = existing.filter(r => !keptIds.has(r.id))
+  if (removed.length > 0) {
+    const { error } = await supabaseAdmin
+      .from("pipeline_stages")
+      .delete()
+      .in("id", removed.map(r => r.id))
+    if (error) {
+      throw new Error(`replaceStagesForService(${serviceType}) delete: ${error.message}`)
+    }
+  }
 
-  // Insert new rows. Stage_order is set from the array index + 1 to guarantee
-  // density (no gaps), regardless of what the editor passed.
-  const insertRows = stages.map((s, idx) => ({
-    service_type: serviceType,
-    stage_order: idx + 1,
-    stage_name: s.stage_name,
-    stage_description: s.stage_description ?? null,
-    sla_days: s.sla_days ?? null,
-    auto_advance: s.auto_advance ?? false,
-    notify_client_email: s.notify_client_email ?? false,
-    client_description: s.client_description ?? null,
-    // Preserve the generic rule bag (e.g. second_installment_target) so a
-    // full re-author of a service's stages does not silently drop it.
-    auto_actions: (s.auto_actions ?? null) as Json,
-  }))
+  // 3. Update surviving rows in place. ONLY editor-authored columns appear
+  //    here — that is what makes the workspace layout and client labels
+  //    untouchable by a Save.
+  for (let idx = 0; idx < submitted.length; idx++) {
+    const s = submitted[idx]
+    if (!s.id) continue
+    const { error } = await supabaseAdmin
+      .from("pipeline_stages")
+      .update({
+        stage_order: idx + 1,
+        stage_name: s.stage_name.trim(),
+        stage_description: s.stage_description ?? null,
+        sla_days: s.sla_days ?? null,
+        auto_advance: s.auto_advance ?? false,
+        notify_client_email: s.notify_client_email ?? false,
+        client_description: s.client_description ?? null,
+        auto_actions: (s.auto_actions ?? null) as Json,
+      })
+      .eq("id", s.id)
+    if (error) {
+      throw new Error(`replaceStagesForService(${serviceType}) update: ${error.message}`)
+    }
+  }
 
-  const { error: insErr } = await supabaseAdmin.from("pipeline_stages").insert(insertRows)
-  if (insErr) {
-    throw new Error(`replaceStagesForService(${serviceType}) insert: ${insErr.message}`)
+  // 4. Insert the genuinely new stages.
+  const insertRows = submitted
+    .map((s, idx) => ({ s, idx }))
+    .filter(({ s }) => !s.id)
+    .map(({ s, idx }) => ({
+      service_type: serviceType,
+      stage_order: idx + 1,
+      stage_name: s.stage_name.trim(),
+      stage_description: s.stage_description ?? null,
+      sla_days: s.sla_days ?? null,
+      auto_advance: s.auto_advance ?? false,
+      notify_client_email: s.notify_client_email ?? false,
+      client_description: s.client_description ?? null,
+      auto_actions: (s.auto_actions ?? null) as Json,
+    }))
+  if (insertRows.length > 0) {
+    const { error } = await supabaseAdmin.from("pipeline_stages").insert(insertRows)
+    if (error) {
+      throw new Error(`replaceStagesForService(${serviceType}) insert: ${error.message}`)
+    }
+  }
+}
+
+/**
+ * Re-key a service's stages when the admin renames the pipeline itself.
+ *
+ * The pipeline name IS the `service_type` key. Without this, renaming it made
+ * the write path look for rows under a name that has none: it would insert a
+ * fresh bare set and leave the real rows orphaned under the old name, with
+ * every in-flight service delivery still pointing at it. That is the same total
+ * loss the rest of this file exists to prevent, through a different door.
+ */
+export async function renameServiceTypeForStages(
+  oldServiceType: string,
+  newServiceType: string,
+): Promise<void> {
+  if (!oldServiceType?.trim() || !newServiceType?.trim()) return
+  if (oldServiceType === newServiceType) return
+
+  const { error } = await supabaseAdmin
+    .from("pipeline_stages")
+    .update({ service_type: newServiceType })
+    .eq("service_type", oldServiceType)
+  if (error) {
+    throw new Error(`renameServiceTypeForStages(${oldServiceType} -> ${newServiceType}): ${error.message}`)
   }
 }
