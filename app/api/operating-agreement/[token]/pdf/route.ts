@@ -69,6 +69,19 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
   })
   if (codeErr) return NextResponse.json({ error: codeErr.error }, { status: codeErr.status })
 
+  // A VOIDED agreement is superseded — staff void one precisely so the client
+  // stops using it. The portal sign page already refuses it ("this is outdated,
+  // generate a new one"); without the same check here a client holding the old
+  // link downloads a clean, current-looking copy of a dead document and can hand
+  // it to a bank. Nothing on the page would tell them, because a voided
+  // agreement renders identically to a live one.
+  if (agreement.status === "voided") {
+    return NextResponse.json(
+      { error: "This Operating Agreement has been superseded. Please generate a new one from the portal, or contact support@tonydurante.us." },
+      { status: 410 },
+    )
+  }
+
   const isMMLLC = normalizeEntityType(agreement.entity_type) === "MMLLC"
   const members: OAMember[] = Array.isArray(agreement.members) ? agreement.members : []
 
@@ -109,10 +122,20 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rows: any[] = sigRows ?? []
 
-  // Fetch each signature image with the SERVICE key. The browser cannot read this
-  // bucket (no anon read policy), which is why a multi-member document rendered
-  // in the browser fell back to text — here the server can, so the executed copy
-  // shows the real signatures.
+  // Fetch each signature image with the SERVICE key.
+  //
+  // CORRECTION (Security, 2026-07-23): an earlier version of this comment said
+  // the browser "cannot read this bucket (no anon read policy)". That was FALSE
+  // and I asserted it without checking. The signed-oa bucket IS anon-readable by
+  // token today — the signing page downloads signature images and the executed
+  // PDF with the anon key right now, and the lockdown migration says so in its
+  // own scope note. It is tracked as an open storage-audit item.
+  //
+  // What that means here: this route is NOT a widening. Everything it serves is
+  // already reachable with a weaker credential (token alone, no access code),
+  // so requiring token PLUS code makes it strictly stronger than the path that
+  // exists. Closing the bucket needs the signing page's two anon reads moved
+  // onto a server route first; this is the first half of that work.
   async function imageFor(path: string | null): Promise<Uint8Array | null> {
     if (!path) return null
     try {
