@@ -5,7 +5,9 @@
  * - 3 days: Push notification reminder
  * - 7 days: Push notification + create task for Antonio
  *
- * Idempotent: tracks last_reminded_at on wizard_progress to avoid spam.
+ * Idempotent per FORM (not per client): dedupes on the notification title, which
+ * encodes the form type + company. An earlier header claimed it tracked
+ * last_reminded_at on wizard_progress — it never did; the column is unused here.
  *
  * Schedule: Daily via Vercel Cron
  */
@@ -15,9 +17,66 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { logCron } from "@/lib/cron-log"
 import { wizardLabelFor, buildWizardReminderTitle } from "@/lib/portal/wizard-reminder-copy"
+import { isFormationDoneForAccounts } from "@/lib/portal/wizard-reminder-rules"
 
 const REMINDER_3D_MS = 3 * 24 * 60 * 60 * 1000
 const REMINDER_7D_MS = 7 * 24 * 60 * 60 * 1000
+
+// How long to wait before repeating a reminder the client has not acted on, and
+// how many times to repeat it at all.
+//
+// The old code used a flat 2-day lookback for BOTH levels and no cap, so a
+// "7-day reminder" actually re-fired every 2-3 days, forever. Filippo Bernardini
+// received the same Formation reminder 22 times between April and July. That is
+// not a reminder, it is noise, and it trains clients to ignore the bell.
+//
+// A 7-day reminder now genuinely repeats weekly, and stops after MAX_REPEATS.
+// Staff are not left blind when it stops: the 7d branch already opens a task so
+// someone follows up by hand.
+const REPEAT_AFTER_3D_MS = 3 * 24 * 60 * 60 * 1000
+const REPEAT_AFTER_7D_MS = 7 * 24 * 60 * 60 * 1000
+const MAX_REPEATS = 4
+
+/**
+ * Has this client already been reminded about THIS form recently, or too often?
+ *
+ * Keyed on the notification TITLE, not just the recipient. The old check asked
+ * "did this account/contact get any reminder of this level in the window?" — so a
+ * client with three in-progress forms had them dedupe against each other, and
+ * (because a wizard WITH an account dedupes on account_id while one WITHOUT
+ * dedupes on contact_id) two different keys meant two notifications per run.
+ * That is the second half of how Filippo reached 22. The title encodes the form
+ * type and company, so it identifies the FORM — which is what we mean.
+ */
+async function alreadyRemindedForThisForm(opts: {
+  accountId: string | null
+  contactId: string | null
+  type: string
+  title: string
+  repeatAfterMs: number
+  now: number
+}): Promise<boolean> {
+  const { accountId, contactId, type, title, repeatAfterMs, now } = opts
+  const scope = accountId ? `account_id.eq.${accountId}` : `contact_id.eq.${contactId}`
+
+  const { data: recent } = await supabaseAdmin
+    .from("portal_notifications")
+    .select("id")
+    .or(scope)
+    .eq("type", type)
+    .eq("title", title)
+    .gte("created_at", new Date(now - repeatAfterMs).toISOString())
+    .limit(1)
+  if (recent && recent.length > 0) return true
+
+  const { count } = await supabaseAdmin
+    .from("portal_notifications")
+    .select("id", { count: "exact", head: true })
+    .or(scope)
+    .eq("type", type)
+    .eq("title", title)
+  return (count ?? 0) >= MAX_REPEATS
+}
 
 type WizardRow = {
   id: string
@@ -33,15 +92,46 @@ type WizardRow = {
 // Onboarding: account portal_tier is 'active' (post-EIN).
 // Tax: no tax_returns row with data_received=false exists for the account (all years already received).
 // Banking (payset/relay), ITIN, closure: no canonical signal — let the normal reminder logic run.
+/**
+ * The accounts this wizard should be judged against.
+ *
+ * A wizard row often has NO account_id — it was started before the company
+ * existed, or it is a stray second copy. Every check below used to bail out on
+ * `if (!w.account_id) return false`, i.e. "cannot tell, so keep reminding".
+ * That disqualified exactly the rows most likely to be stale, and the result was
+ * clients chased for months for work they had already finished: Filippo
+ * Bernardini received 45 reminders (22 for one stale Formation form) after
+ * submitting that form in April; Michele Cotti and Alessandro Federici the same.
+ * Measured on production 2026-07-23.
+ *
+ * So when the wizard has no account, fall back to the CONTACT's accounts and run
+ * the identical check against those. This widens how the account is FOUND; it
+ * does not weaken what is checked.
+ */
+async function accountIdsForWizard(w: WizardRow): Promise<string[]> {
+  if (w.account_id) return [w.account_id]
+  if (!w.contact_id) return []
+  const { data } = await supabaseAdmin
+    .from("account_contacts")
+    .select("account_id")
+    .eq("contact_id", w.contact_id)
+  return (data ?? []).map(r => r.account_id).filter(Boolean) as string[]
+}
+
 async function isWizardCompletedElsewhere(w: WizardRow): Promise<boolean> {
+  const accountIds = await accountIdsForWizard(w)
+  if (accountIds.length === 0) return false
+
   if (w.wizard_type === "formation") {
-    if (!w.account_id) return false
+    // Done when EVERY linked company already has a formation date. If any is
+    // still forming, the client genuinely has something to complete — which is
+    // what keeps a legitimate SECOND company formation being reminded (verified:
+    // one client on production has two submitted formation wizards).
     const { data } = await supabaseAdmin
       .from("accounts")
-      .select("formation_date")
-      .eq("id", w.account_id)
-      .maybeSingle()
-    return !!data?.formation_date
+      .select("id, formation_date")
+      .in("id", accountIds)
+    return isFormationDoneForAccounts(data ?? [])
   }
 
   if (w.wizard_type === "onboarding") {
@@ -142,31 +232,22 @@ export async function GET(req: NextRequest) {
 
     // 7-day reminder: push + create task
     if (ageMs >= REMINDER_7D_MS) {
-      // Check if we already reminded at 7d level
-      const { data: existing } = await supabaseAdmin
-        .from("portal_notifications")
-        .select("id")
-        .or(
-          w.account_id
-            ? `account_id.eq.${w.account_id}`
-            : `contact_id.eq.${w.contact_id}`
-        )
-        .eq("type", "form_reminder_7d")
-        .gte("created_at", new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString())
-        .limit(1)
+      const companyName = await getCompanyName(w.account_id)
+      const title = buildWizardReminderTitle({ urgency: "7d", wizardType: w.wizard_type, companyName })
 
-      if (existing && existing.length > 0) {
+      if (await alreadyRemindedForThisForm({
+        accountId: w.account_id, contactId: w.contact_id,
+        type: "form_reminder_7d", title, repeatAfterMs: REPEAT_AFTER_7D_MS, now,
+      })) {
         results.skipped++
         continue
       }
-
-      const companyName = await getCompanyName(w.account_id)
 
       await createPortalNotification({
         account_id: w.account_id || undefined,
         contact_id: w.contact_id || undefined,
         type: "form_reminder_7d",
-        title: buildWizardReminderTitle({ urgency: "7d", wizardType: w.wizard_type, companyName }),
+        title,
         body: "Your data collection form has been pending for over a week. Please complete it to avoid delays.",
         link: "/portal/wizard",
       })
@@ -200,31 +281,22 @@ export async function GET(req: NextRequest) {
     }
     // 3-day reminder: push only
     else if (ageMs >= REMINDER_3D_MS) {
-      // Check if we already reminded at 3d level
-      const { data: existing } = await supabaseAdmin
-        .from("portal_notifications")
-        .select("id")
-        .or(
-          w.account_id
-            ? `account_id.eq.${w.account_id}`
-            : `contact_id.eq.${w.contact_id}`
-        )
-        .eq("type", "form_reminder_3d")
-        .gte("created_at", new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString())
-        .limit(1)
+      const companyName = await getCompanyName(w.account_id)
+      const title = buildWizardReminderTitle({ urgency: "3d", wizardType: w.wizard_type, companyName })
 
-      if (existing && existing.length > 0) {
+      if (await alreadyRemindedForThisForm({
+        accountId: w.account_id, contactId: w.contact_id,
+        type: "form_reminder_3d", title, repeatAfterMs: REPEAT_AFTER_3D_MS, now,
+      })) {
         results.skipped++
         continue
       }
-
-      const companyName = await getCompanyName(w.account_id)
 
       await createPortalNotification({
         account_id: w.account_id || undefined,
         contact_id: w.contact_id || undefined,
         type: "form_reminder_3d",
-        title: buildWizardReminderTitle({ urgency: "3d", wizardType: w.wizard_type, companyName }),
+        title,
         body: "Don't forget to complete your data collection form. It only takes a few minutes.",
         link: "/portal/wizard",
       })
