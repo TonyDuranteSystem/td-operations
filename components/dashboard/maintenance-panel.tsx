@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Wrench, Loader2, AlertTriangle, Banknote, EyeOff, Mail } from 'lucide-react'
+import { Wrench, Loader2, AlertTriangle, Banknote, EyeOff, Mail, MessageSquare } from 'lucide-react'
 
 type Result =
   | { kind: 'ok'; message: string }
@@ -24,6 +24,15 @@ export function MaintenancePanel() {
   const [emailSaving, setEmailSaving] = useState(false)
   const [emailResult, setEmailResult] = useState<Result | null>(null)
 
+  // Floating chat kill switch (app_settings.floating_chat_enabled).
+  // The window mounts in the always-on dashboard shell, so this is the way to
+  // remove it without a deploy if it ever misbehaves.
+  const CHAT_KEY = 'floating_chat_enabled'
+  const [chatOn, setChatOn] = useState(true)
+  const [chatLoaded, setChatLoaded] = useState(false)
+  const [chatSaving, setChatSaving] = useState(false)
+  const [chatResult, setChatResult] = useState<Result | null>(null)
+
   useEffect(() => {
     let cancelled = false
     fetch('/api/admin/renewal-banner-year')
@@ -44,6 +53,46 @@ export function MaintenancePanel() {
       .finally(() => { if (!cancelled) setEmailLoaded(true) })
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/app-settings?key=${CHAT_KEY}`)
+      .then(r => r.json())
+      // default ON: only off when explicitly stored false
+      .then(d => { if (!cancelled) setChatOn(d.value !== false) })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setChatLoaded(true) })
+    return () => { cancelled = true }
+  }, [])
+
+  const handleToggleChat = async () => {
+    const next = !chatOn
+    setChatSaving(true)
+    setChatResult(null)
+    try {
+      const res = await fetch('/api/app-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: CHAT_KEY, value: next }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setChatResult({ kind: 'error', message: data.error || 'Save failed' })
+        return
+      }
+      setChatOn(next)
+      setChatResult({
+        kind: 'ok',
+        message: next
+          ? 'Chat window is back — reload any CRM page to see it.'
+          : 'Chat window is off. Reload any CRM page; Team Chat itself is unaffected.',
+      })
+    } catch {
+      setChatResult({ kind: 'error', message: 'Save failed' })
+    } finally {
+      setChatSaving(false)
+    }
+  }
 
   const handleToggleEmail = async () => {
     const next = !emailOn
@@ -235,6 +284,44 @@ export function MaintenancePanel() {
                 : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
             }`}>
               {emailResult.message}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-blue-100 pt-3 mt-2">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <MessageSquare className="h-3.5 w-3.5 text-blue-600" />
+            <span className="text-xs font-medium text-blue-900">Floating chat window</span>
+          </div>
+          <p className="text-xs text-muted-foreground mb-2">
+            The green chat button on every CRM page. Turning it off removes it completely —
+            no button, nothing running in the background. The Team Chat page itself is not
+            affected, and nothing is lost. Takes effect on the next page load.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleToggleChat}
+              disabled={!chatLoaded || chatSaving}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border transition-colors disabled:opacity-50 ${
+                chatOn
+                  ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'
+                  : 'bg-zinc-100 text-zinc-600 border-zinc-300 hover:bg-zinc-200'
+              }`}
+            >
+              {chatSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {chatOn ? 'On' : 'Off'}
+            </button>
+            <span className="text-xs text-muted-foreground">
+              {chatLoaded ? (chatOn ? 'Chat window is showing' : 'Chat window is hidden') : 'Loading…'}
+            </span>
+          </div>
+          {chatResult && (
+            <div className={`mt-2 text-xs p-2.5 rounded-md ${
+              chatResult.kind === 'error'
+                ? 'bg-red-50 text-red-700 border border-red-200'
+                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+            }`}>
+              {chatResult.message}
             </div>
           )}
         </div>
