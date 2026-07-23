@@ -190,20 +190,73 @@ async function main() {
   check("nothing was changed by the refused save", stillThere.length === 6)
   check("workspaces intact", await layoutsIntact())
 
-  // ═══ 6. Renaming a step is refused (names are matched literally in code) ══
-  scenario("6. Renaming a step is refused, and nothing changes")
+  // ═══ 6. Renaming: allowed when inert, refused when anything depends on it ══
+  scenario("6. A plain step with nothing depending on it CAN be renamed")
+  await cleanup()
+  await supabaseAdmin.from("pipeline_stages").insert(
+    [10, 20, 30].map((o, i) => ({
+      service_type: SVC, stage_order: o, stage_name: `Plain ${i + 1}`,
+      stage_layout: LAYOUT, client_label: `L${i + 1}`, board_visible: true, client_visible: true,
+    })),
+  )
   loaded = await getStagesForService(SVC)
-  let renameRefused = false
-  let renameMsg = ""
+  await replaceStagesForService(SVC, loaded.map(s => s.stage_name === "Plain 2" ? { ...s, stage_name: "Renamed Step" } : s))
+  const renamedRows = await orders()
+  check("the rename succeeded", renamedRows.some(r => r.stage_name === "Renamed Step"))
+  check("its workspace came with it", await layoutsIntact())
+  check("the numbering did not move", renamedRows.map(r => r.stage_order).join(",") === "10,20,30")
+
+  scenario("6a. A step the CODE depends on cannot be renamed")
+  await cleanup()
+  await supabaseAdmin.from("pipeline_stages").insert([{
+    service_type: SVC, stage_order: 10, stage_name: "Wizard Available",
+    stage_layout: LAYOUT, board_visible: true, client_visible: true,
+  }])
+  loaded = await getStagesForService(SVC)
+  let protRefused = false
+  let protMsg = ""
   try {
-    await replaceStagesForService(SVC, loaded.map(s => s.stage_name === "S3" ? { ...s, stage_name: "S3 Renamed" } : s))
-  } catch (e) { renameRefused = true; renameMsg = e instanceof Error ? e.message : String(e) }
-  check("the rename is refused", renameRefused)
-  check("the message explains why", renameMsg.includes("matched by name"), renameMsg.slice(0, 120))
-  const afterRename = await orders()
-  check("the step kept its original name", afterRename.some(r => r.stage_name === "S3"))
-  check("workspaces intact", await layoutsIntact())
+    await replaceStagesForService(SVC, loaded.map(s => ({ ...s, stage_name: "Wizard Ready" })))
+  } catch (e) { protRefused = true; protMsg = e instanceof Error ? e.message : String(e) }
+  check("the rename is refused", protRefused)
+  check("the message says WHY in plain words", protMsg.includes("wizard opens"), protMsg.slice(0, 130))
+
+  scenario("6a2. A step with a live client on it cannot be renamed")
+  await cleanup()
+  await supabaseAdmin.from("pipeline_stages").insert([{
+    service_type: SVC, stage_order: 10, stage_name: "Plain Step",
+    stage_layout: LAYOUT, board_visible: true, client_visible: true,
+  }])
+  await supabaseAdmin.from("service_deliveries").insert({
+    service_type: SVC, service_name: SVC, stage: "Plain Step", status: "blocked",
+  })
+  loaded = await getStagesForService(SVC)
+  let liveRefused = false
+  let liveMsg = ""
+  try {
+    await replaceStagesForService(SVC, loaded.map(s => ({ ...s, stage_name: "Other Name" })))
+  } catch (e) { liveRefused = true; liveMsg = e instanceof Error ? e.message : String(e) }
+  check("the rename is refused while a client sits there", liveRefused)
+  check("the message names the step and the count", liveMsg.includes("Plain Step") && liveMsg.includes("(1)"), liveMsg.slice(0, 130))
   await supabaseAdmin.from("service_deliveries").delete().eq("service_type", SVC)
+
+  scenario("6a3. A step another step's button points at cannot be renamed")
+  await cleanup()
+  await supabaseAdmin.from("pipeline_stages").insert([
+    { service_type: SVC, stage_order: 10, stage_name: "First",
+      stage_layout: { components: [{ type: "action_buttons", actions: [{ key: "advance_next", target: "Second" }] }] },
+      board_visible: true, client_visible: true },
+    { service_type: SVC, stage_order: 20, stage_name: "Second",
+      stage_layout: LAYOUT, board_visible: true, client_visible: true },
+  ])
+  loaded = await getStagesForService(SVC)
+  let refRefused = false
+  let refMsg = ""
+  try {
+    await replaceStagesForService(SVC, loaded.map(s => s.stage_name === "Second" ? { ...s, stage_name: "Second Renamed" } : s))
+  } catch (e) { refRefused = true; refMsg = e instanceof Error ? e.message : String(e) }
+  check("the rename is refused while a button points at it", refRefused)
+  check("the message names the step holding the button", refMsg.includes("First"), refMsg.slice(0, 140))
 
   // ═══ 6b. The ordinary editing loop: add, save, tweak, save again ══════════
   scenario("6b. Add a step, save, then save again (the loop that false-refused)")

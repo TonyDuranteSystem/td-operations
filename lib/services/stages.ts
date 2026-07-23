@@ -11,6 +11,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { protectedStageReason } from "@/lib/services/protected-stage-names"
 import type { Json } from "@/lib/database.types"
 import {
   type StageAction,
@@ -340,18 +341,20 @@ export async function replaceStagesForService(
   // them in the same operation. Narrow by design: exact old name, this service
   // only, active rows only. History rows are deliberately NOT rewritten — they
   // must keep saying what they said at the time.
-  // RENAMING A STEP IS NOT AVAILABLE FROM THIS SCREEN, deliberately (2026-07-23).
+  // RENAMING is allowed only when it is provably inert (2026-07-23).
   //
-  // Stage names are not just labels: they are matched literally by code that
-  // decides real client outcomes. "Wizard Available" gates whether a paying tax
-  // client's wizard opens, and that check is fail-closed — rename the stage and
-  // the wizard silently shuts for everyone. "Client Signing" is what surfaces a
-  // client's ITIN documents in the portal. "SS-4 Prepared" drives a reminder
-  // sweep. Moving the deliveries and the buttons is not enough while those
-  // literals exist in code, and a warning cannot undo a closed wizard.
+  // A stage name is normally a label, but some are matched literally by code
+  // that decides real client outcomes — "Wizard Available" gates whether a
+  // paying tax client's wizard opens, and it fails CLOSED. Those are declared in
+  // protected-stage-names.ts, kept honest by a test that scans the codebase and
+  // fails on any literal nobody declared.
   //
-  // This was never safe — before this change a rename also destroyed every
-  // workspace. Refusing is a capability cut, not a regression.
+  // Beyond that, a rename is refused while anything still points at the old
+  // name: a live client sitting on the step (their delivery records the stage by
+  // NAME and could not be advanced or reverted), or another step's advance
+  // button naming it as its destination. Refusing in those cases means no
+  // re-keying is needed at all — the rename only happens when nothing depends
+  // on the old name, so nothing can be left behind.
   const renames: Array<{ from: string; to: string }> = []
   for (const s of submitted) {
     if (!s.id) continue
@@ -360,13 +363,50 @@ export async function replaceStagesForService(
       renames.push({ from: before.stage_name, to: s.stage_name })
     }
   }
+  for (const r of renames) {
+    const why = protectedStageReason(r.from)
+    if (why) {
+      throw new Error(
+        `"${r.from}" cannot be renamed — ${why}. Renaming it would break that ` +
+          `silently, with no error anywhere. Nothing has been changed.`,
+      )
+    }
+  }
   if (renames.length > 0) {
-    throw new Error(
-      `Renaming a step is not available yet — ${renames.map(r => `"${r.from}"`).join(", ")} ` +
-        `${renames.length === 1 ? "is" : "are"} matched by name elsewhere in the system, and ` +
-        `renaming can silently close a client's wizard or hide their documents. ` +
-        `Nothing has been changed.`,
-    )
+    // Live clients on the old name.
+    const { data: onOldName, error: onErr } = await supabaseAdmin
+      .from("service_deliveries")
+      .select("stage, status")
+      .eq("service_type", serviceType)
+      .in("stage", renames.map(r => r.from))
+    if (onErr) {
+      throw new Error(`replaceStagesForService(${serviceType}) rename check: ${onErr.message}`)
+    }
+    const liveOnOld = (onOldName ?? []).filter(d => isLiveDeliveryStatus((d as { status: string }).status))
+    if (liveOnOld.length > 0) {
+      const counts = new Map<string, number>()
+      for (const d of liveOnOld as Array<{ stage: string }>) {
+        counts.set(d.stage, (counts.get(d.stage) ?? 0) + 1)
+      }
+      const detail = Array.from(counts.entries()).map(([st, n]) => `"${st}" (${n})`).join(", ")
+      throw new Error(
+        `Cannot rename ${detail}: clients are on ${counts.size === 1 ? "that step" : "those steps"} right now ` +
+          `and would be left pointing at a name that no longer exists. Move them on first, ` +
+          `or rename it when nobody is there. Nothing has been changed.`,
+      )
+    }
+    // Another step's button naming the old name as its destination.
+    for (const r of renames) {
+      const refs = await stagesReferencing(serviceType, r.from)
+      if (refs.length > 0) {
+        throw new Error(
+          `Cannot rename "${r.from}": ${refs.length === 1 ? "the step" : "the steps"} ` +
+            `"${refs.join('", "')}" ${refs.length === 1 ? "has a button" : "have buttons"} that ` +
+            `send clients to it by that name, and ${refs.length === 1 ? "it" : "they"} would stop ` +
+            `working. Nothing has been changed.`,
+        )
+      }
+    }
   }
 
   // Final orders, preserving the pipeline's scale (see planStageOrders).

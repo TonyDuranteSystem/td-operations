@@ -177,15 +177,15 @@ describe("the columns the editor does not own are never touched", () => {
 })
 
 describe("the unsafe capabilities are refused, not silently mishandled", () => {
-  it("REFUSES a rename — stage names are matched literally by code elsewhere", async () => {
-    // "Wizard Available" gates whether a paying tax client's wizard opens, and
-    // that check is fail-closed. Moving the deliveries is not enough while such
-    // literals exist, and a warning cannot reopen a closed wizard.
+  it("REFUSES renaming a stage the CODE matches literally", async () => {
+    // "Client Signing" is how a client's ITIN documents are found for the
+    // portal. Renaming it would break that silently, so it is declared pinned
+    // and the editor refuses — with the reason, not just a refusal.
     existingRows = [realRow({ id: "a", stage_name: "Client Signing", stage_order: 1 })]
 
     await expect(
       replaceStagesForService("ITIN", [{ id: "a", stage_order: 1, stage_name: "Signing" }]),
-    ).rejects.toThrow(/matched by name/)
+    ).rejects.toThrow(/cannot be renamed/)
 
     expect(ops.filter(o => o.kind !== "select")).toEqual([]) // nothing written
   })
