@@ -32,6 +32,7 @@ import {
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
+import { useRealtimeChannel } from '@/lib/hooks/use-realtime-channel'
 import { CompanySwitcher } from './company-switcher'
 import { GlobalSearch } from '@/components/shared/global-search'
 import type { PortalAccount } from '@/lib/types'
@@ -217,6 +218,18 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     }
   }, [pathname])
 
+  // Adopt the SERVER's count whenever it changes. Without this the badge is
+  // seeded once at mount and then driven only by realtime deltas — so a
+  // resync that recomputed the true count server-side would be IGNORED, and
+  // the wake-from-background catch-up would reconnect successfully and still
+  // show a stale number. Skipped while ON the chat page: the badge was just
+  // zeroed above and the server count can still be non-zero for the moment
+  // before the read is recorded, which would flash it back on mid-read.
+  useEffect(() => {
+    if (pathname === '/portal/chat') return
+    setLiveUnreadCount(unreadChatCount)
+  }, [unreadChatCount, pathname])
+
   // Sync PWA app icon badge with unread count
   useEffect(() => {
     if (!('setAppBadge' in navigator)) return
@@ -227,18 +240,29 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     }
   }, [liveUnreadCount])
 
-  // Subscribe to new admin messages for real-time badge updates
-  useEffect(() => {
-    // PR 2 Step 6 (chat unification): always filter by contact_id, regardless
-    // of whether an account is selected. The pre-PR 2 logic filtered by
-    // account_id when one was set — that meant admin messages tagged
-    // "Personal" (account_id=null) didn't increment the badge for active-tier
-    // clients. Threading is per-contact now, so the unread count is too.
-    if (!contactId) return
-
-    const supabase = createClient()
-    const channel = supabase
-      .channel(`sidebar-unread-${contactId}`)
+  // Subscribe to new admin messages for real-time badge updates.
+  //
+  // PR 2 Step 6 (chat unification): always filter by contact_id, regardless
+  // of whether an account is selected. The pre-PR 2 logic filtered by
+  // account_id when one was set — that meant admin messages tagged
+  // "Personal" (account_id=null) didn't increment the badge for active-tier
+  // clients. Threading is per-contact now, so the unread count is too.
+  //
+  // The handlers below are unchanged; only the CONNECTION is now managed
+  // (subscribe status, backoff, wake-from-background) and a resync refetches
+  // the authoritative count. That last part is not optional: these deltas are
+  // +1/-1 and a Postgres changefeed has NO REPLAY, so after any dropped socket
+  // the badge would otherwise stay permanently wrong while looking healthy.
+  useRealtimeChannel({
+    channelName: `sidebar-unread-${contactId}`,
+    enabled: !!contactId,
+    onResync: () => {
+      // Re-runs the portal root layout, which recomputes the true unread count
+      // (plus nav visibility, unread docs and wizard state) and feeds it back
+      // through the prop-sync effect above.
+      router.refresh()
+    },
+    setup: (channel) => channel
       .on(
         'postgres_changes',
         {
@@ -275,13 +299,8 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           if (was === now) return
           setLiveUnreadCount(prev => Math.max(0, prev + (now ? 1 : -1)))
         }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [contactId])
+      ),
+  })
 
   const handleLogout = async () => {
     const supabase = createClient()
