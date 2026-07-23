@@ -13,11 +13,14 @@
  * test passing. So this mock records each operation's table, filter and payload,
  * and the assertions are about the STATEMENTS ISSUED, not just the end state:
  *
- *   - `never names a column the editor does not own` is the load-bearing test.
- *     Re-introduce the old delete-and-reinsert and it fails, because a bare
- *     insert silently drops those columns to NULL.
- *   - `never deletes by service_type` fails the moment anyone reaches for the
- *     wholesale delete again.
+ *   - `never deletes by service_type` and `an unchanged stage is updated, never
+ *     deleted` are the tests that actually catch a revert to the old shape.
+ *   - `never names a column the editor does not own` does NOT catch that revert,
+ *     and an earlier version of this comment wrongly claimed it did. The old
+ *     code named exactly the same nine columns; the damage was in the fourteen
+ *     it OMITTED, and an assertion that inspects the keys present is blind to a
+ *     missing one. It is still worth keeping — it catches someone ADDING a
+ *     non-editor column to a write — but it is not the revert-catcher.
  *
  * Fixtures carry the NOT NULL columns (client_visible, board_visible) that every
  * real row has. The previous suite used a bare fixture the database can never
