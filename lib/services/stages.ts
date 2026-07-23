@@ -24,10 +24,10 @@ export type { StageAction } from "@/lib/services/stage-actions"
 export interface StageRow {
   /**
    * Row identity, present for a stage that already exists and absent for one
-   * the admin just added. This ONE field is why the editor can rename, reorder
-   * and delete stages safely: without it the write path could only match old
-   * row to new row by NAME, which cannot tell a rename from a delete-plus-add.
-   * See the note on `replaceStagesForService`.
+   * the admin just added. This ONE field is what lets a Save UPDATE the row in
+   * place instead of deleting and recreating it — which is why a Save can no
+   * longer destroy the workspace and labels the editor never displays. Without
+   * it the write path could only match old row to new row by NAME.
    */
   id?: string
   stage_order: number
@@ -540,32 +540,4 @@ async function stagesReferencing(serviceType: string, target: string): Promise<s
     }
   }
   return hits
-}
-
-/**
- * Re-key a service's stages when the admin renames the pipeline itself.
- *
- * The pipeline name IS the `service_type` key. Without this, the write path
- * looks for rows under a name that has none: it inserts a fresh bare set and
- * leaves the real rows orphaned under the old name, with every in-flight
- * delivery still pointing at it.
- */
-export async function renameServiceTypeForStages(
-  oldServiceType: string,
-  newServiceType: string,
-): Promise<void> {
-  if (!oldServiceType?.trim() || !newServiceType?.trim()) return
-  if (oldServiceType === newServiceType) return
-
-  const { error } = await supabaseAdmin
-    .from("pipeline_stages")
-    .update({ service_type: newServiceType })
-    .eq("service_type", oldServiceType)
-  if (error) {
-    throw new Error(`renameServiceTypeForStages(${oldServiceType} -> ${newServiceType}): ${error.message}`)
-  }
-
-  // Live deliveries key off service_type too.
-  const { renameServiceTypeAcrossDeliveries } = await import("@/lib/operations/service-delivery")
-  await renameServiceTypeAcrossDeliveries(oldServiceType, newServiceType)
 }

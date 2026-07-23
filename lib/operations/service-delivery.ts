@@ -52,7 +52,6 @@ import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import { updateTasksBulk } from "@/lib/operations/task"
 import { updateAccount } from "@/lib/operations/account"
 import { logAction } from "@/lib/mcp/action-log"
-import { TERMINAL_DELIVERY_STATUSES } from "@/lib/services/stages"
 
 // Re-export so existing import paths keep working.
 export { VALID_SERVICE_TYPES, isValidServiceType }
@@ -1545,68 +1544,3 @@ export async function setServiceDeliveryShipping(
   )
 }
 
-/**
- * Follow a catalog stage RENAME through to the live deliveries sitting on it.
- *
- * A delivery records its stage by NAME. When the Service Catalog editor renames
- * a stage, any delivery still holding the old name fails the current-stage
- * lookup in `moveServiceDeliveryToStage` and can no longer be advanced OR
- * reverted by any UI path — it is stuck until someone edits the database.
- *
- * Deliberately narrow: one service_type, the exact old name, active rows only.
- * History rows (`flow_stage` on the timeline) are NOT rewritten — they must keep
- * saying what they said at the time.
- *
- * Returns the number of deliveries moved so the caller can tell the admin.
- */
-export async function renameStageAcrossDeliveries(
-  serviceType: string,
-  fromStage: string,
-  toStage: string,
-): Promise<number> {
-  if (!serviceType?.trim() || !fromStage?.trim() || !toStage?.trim()) return 0
-  if (fromStage === toStage) return 0
-
-  // Every non-terminal delivery must follow the rename — a "blocked" delivery is
-  // stuck, not finished, and would be stranded on a stage that no longer exists.
-  const { data, error } = await supabaseAdmin
-    .from("service_deliveries")
-    .update({ stage: toStage })
-    .eq("service_type", serviceType)
-    .eq("stage", fromStage)
-    // A NULL status is unknown, not finished — SQL NOT IN excludes NULLs, which
-    // would silently leave those deliveries behind on a stage name that no
-    // longer exists. The delete guard already treats unknown as live; these two
-    // predicates must agree.
-    .or(`status.is.null,status.not.in.(${TERMINAL_DELIVERY_STATUSES.join(",")})`)
-    .select("id")
-  if (error) {
-    throw new Error(`renameStageAcrossDeliveries(${serviceType}: ${fromStage} -> ${toStage}): ${error.message}`)
-  }
-  return data?.length ?? 0
-}
-
-/**
- * Follow a PIPELINE rename through to its live deliveries.
- *
- * The pipeline name is the `service_type` key. Renaming it in the catalog
- * without moving the deliveries leaves every one of them pointing at a pipeline
- * that no longer exists.
- */
-export async function renameServiceTypeAcrossDeliveries(
-  fromServiceType: string,
-  toServiceType: string,
-): Promise<number> {
-  if (!fromServiceType?.trim() || !toServiceType?.trim()) return 0
-  if (fromServiceType === toServiceType) return 0
-
-  const { data, error } = await supabaseAdmin
-    .from("service_deliveries")
-    .update({ service_type: toServiceType })
-    .eq("service_type", fromServiceType)
-    .select("id")
-  if (error) {
-    throw new Error(`renameServiceTypeAcrossDeliveries(${fromServiceType} -> ${toServiceType}): ${error.message}`)
-  }
-  return data?.length ?? 0
-}
