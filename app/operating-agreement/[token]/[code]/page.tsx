@@ -835,6 +835,27 @@ function OperatingAgreementCodeContent() {
         </div>
       )}
 
+      {/* Read a copy BEFORE signing.
+          The agreement was visible on screen but could not be taken away: the
+          only PDF that ever existed was the one produced at the moment of
+          signing, so a client who closed the tab had to SIGN a legal document to
+          get a copy of it. This asks the server to render one on demand — no
+          stored file, so the unsigned copy and the executed copy cannot drift.
+          Placed OUTSIDE the capture area and outside `canSign`, so it is there
+          for a member who has already signed and for the read-only view too. */}
+      {verified && !isPortal && (
+        <div style={{ maxWidth: 800, margin: '0 auto 24px', textAlign: 'center' }}>
+          <a
+            href={`/api/operating-agreement/${token}/pdf?code=${encodeURIComponent(accessCode)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ fontSize: 14, color: '#0A3161', textDecoration: 'underline', fontFamily: 'Georgia, serif' }}
+          >
+            {oa.language === 'it' ? 'Scarica una copia da leggere' : 'Download a copy to read'}
+          </a>
+        </div>
+      )}
+
       {/* MMLLC: read-only view without signer param */}
       {isMultiSigner && currentSignerIndex === null && !allSigned && verified && (
         <div style={{ maxWidth: 800, margin: '24px auto', textAlign: 'center' }}>
