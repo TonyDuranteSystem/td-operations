@@ -137,14 +137,23 @@ export async function POST(request: NextRequest) {
   const token = `${companySlug}-oa-${year}`
 
   // ── 5. SILENTLY REPLACE UNSIGNED OA ──
+  // ALL rows for this account, not just the newest. The token is
+  // `<company-slug>-oa-<year>`, so a second row for the same year collides — and
+  // the public fetch resolves a token expecting ONE row, so two makes BOTH
+  // unreachable: the emailed link, the portal iframe, the Sign-now button and the
+  // dashboard reminder all 404. Replacing only the newest left any older sibling
+  // in place. That lands hardest on exactly the accounts carrying old drafts —
+  // the ones this change is meant to rescue — where before they merely saw an
+  // inert row and now five channels point them at a dead page.
   const { data: existingOAs } = await supabaseAdmin
     .from('oa_agreements')
     .select('id, status')
     .eq('account_id', account_id)
     .order('created_at', { ascending: false })
-    .limit(1)
 
   if (existingOAs && existingOAs.length > 0) {
+    // Guard against the NEWEST row (the one a client could be mid-signature on);
+    // the sweep below then clears every sibling so no token collision survives.
     const existing = existingOAs[0]
     if (existing.status === 'signed') {
       return NextResponse.json({ error: 'This company already has a signed Operating Agreement. Contact support if you need a new one.' }, { status: 409 })
@@ -194,16 +203,24 @@ export async function POST(request: NextRequest) {
     // re-count then catches the case and refuses, leaving both the signature and
     // the agreement intact rather than half-removed. (Same guard-on-write shape
     // the codebase mandates elsewhere for exactly this class.)
-    await supabaseAdmin
-      .from('oa_signatures')
-      .delete()
-      .eq('oa_id', existing.id)
-      .neq('status', 'signed')
+    // A VOIDED agreement's signatures go too — they are legally dead and the
+    // whole point of a void is to let the client start over. For any LIVE
+    // agreement, signed rows are excluded so the race below cannot destroy one.
+    const sigDelete = supabaseAdmin.from('oa_signatures').delete().eq('oa_id', existing.id)
+    await (existing.status === 'voided' ? sigDelete : sigDelete.neq('status', 'signed'))
 
+    // Re-count SIGNED rows only. Counting ALL rows here silently undid the
+    // voided exemption above: a voided agreement carrying a signed signature
+    // kept that row through the delete, so the count came back > 0 and this
+    // refused — permanently, since retrying could never clear it. The portal
+    // meanwhile tells that client "this is outdated, generate a new one". The
+    // client was trapped, with a message blaming a race that never happened.
+    // Caught in round 5 by a reviewer who re-ran the round-3 fixture I did not.
     const { count: survivors, error: survivorErr } = await supabaseAdmin
       .from('oa_signatures')
       .select('id', { count: 'exact', head: true })
       .eq('oa_id', existing.id)
+      .eq('status', 'signed')
 
     if (survivorErr || survivors === null) {
       return NextResponse.json({
@@ -218,7 +235,20 @@ export async function POST(request: NextRequest) {
       }, { status: 409 })
     }
 
-    await supabaseAdmin.from('oa_agreements').delete().eq('id', existing.id)
+    // Sweep every OTHER row for this account too — an older sibling would collide
+    // on the token and make the new agreement unreachable on every channel.
+    //
+    // NEVER a signed one. I first wrote this relying on an argument that a signed
+    // older row could not exist; that is reasoning, not a guarantee, and the cost
+    // of being wrong is deleting an executed agreement. Excluding them by filter
+    // makes it structural. (Checked production: no account currently holds more
+    // than one row and no token is shared, so this is defensive today — it stops
+    // the collision arising, rather than repairing one.)
+    const staleIds = existingOAs.filter(o => o.status !== 'signed').map(o => o.id)
+    if (staleIds.length > 0) {
+      await supabaseAdmin.from('oa_signatures').delete().in('oa_id', staleIds)
+      await supabaseAdmin.from('oa_agreements').delete().in('id', staleIds)
+    }
   }
 
   // ── 6. BUILD MEMBERS JSON FOR MMLLC ──
