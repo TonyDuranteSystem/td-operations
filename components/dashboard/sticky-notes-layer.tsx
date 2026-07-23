@@ -147,7 +147,7 @@ function StickyNotesInner() {
       </div>
 
       {/* Composer (both desktop + mobile) */}
-      {composing && <Composer onClose={() => setComposing(false)} onCreated={invalidate} />}
+      {composing && <Composer members={members} onClose={() => setComposing(false)} onCreated={invalidate} />}
 
       {/* DESKTOP: + button, bottom-left. Draggable (double-click resets). */}
       <button
@@ -363,7 +363,22 @@ function NoteCardBody({ note, members, onChange, onOpen }: { note: Note; members
 
 /* ─────────────────────────── composer ─────────────────────────── */
 
-function Composer({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+/** One "Who's it for?" pill. */
+function RecipientChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+        active ? 'bg-amber-500 text-white' : 'bg-amber-200 text-amber-900 hover:bg-amber-300'
+      }`}
+    >
+      {label}
+    </button>
+  )
+}
+
+function Composer({ members, onClose, onCreated }: { members: Member[]; onClose: () => void; onCreated: () => void }) {
   const [body, setBody] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -371,6 +386,9 @@ function Composer({ onClose, onCreated }: { onClose: () => void; onCreated: () =
   const fromPage = subjectFromPath()
   const [accountId, setAccountId] = useState<string | undefined>(fromPage.account_id)
   const [accountName, setAccountName] = useState<string | undefined>(undefined)
+  // Who's it for? 'me' (default) | 'team' | a teammate's id. Chosen up-front now
+  // instead of created-private-then-shared from the card.
+  const [recipient, setRecipient] = useState<string>('me')
 
   const save = async () => {
     if (!body.trim()) { onClose(); return }
@@ -381,7 +399,7 @@ function Composer({ onClose, onCreated }: { onClose: () => void; onCreated: () =
       const res = await fetch(API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body, origin_url: window.location.pathname, ...subject }),
+        body: JSON.stringify({ body, origin_url: window.location.pathname, recipient, ...subject }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
@@ -406,6 +424,16 @@ function Composer({ onClose, onCreated }: { onClose: () => void; onCreated: () =
           placeholder="e.g. call IRS about the EIN"
           className="h-28 w-full resize-none rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-950 outline-none focus:border-amber-500"
         />
+        <div className="mt-2">
+          <label className="mb-1 block text-xs font-medium text-amber-900">Who&apos;s it for?</label>
+          <div className="flex flex-wrap gap-1">
+            <RecipientChip label="Just me" active={recipient === 'me'} onClick={() => setRecipient('me')} />
+            {members.map((m) => (
+              <RecipientChip key={m.id} label={m.name} active={recipient === m.id} onClick={() => setRecipient(m.id)} />
+            ))}
+            <RecipientChip label="Whole team" active={recipient === 'team'} onClick={() => setRecipient('team')} />
+          </div>
+        </div>
         <div className="mt-2">
           <label className="mb-1 block text-xs font-medium text-amber-900">About a client (optional)</label>
           <AccountCombobox

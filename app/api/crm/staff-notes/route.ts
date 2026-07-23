@@ -117,12 +117,39 @@ export async function POST(req: NextRequest) {
   const origin = payload.origin_url != null ? safeOriginPath(payload.origin_url) : null
   const color = typeof payload.color === "string" && payload.color.trim() ? payload.color.trim() : "yellow"
 
+  // WHO'S IT FOR? — chosen at creation (Antonio, 2026-07-23). Previously every
+  // note was born private and had to be shared in a second step from the card.
+  // `recipient` is 'me' (default) | 'team' | a staff user id. The shape mirrors
+  // the existing share/team/private PATCH actions AND the DB coherence CHECK:
+  // 'shared' MUST name a person, the other two MUST NOT.
+  const recipient = typeof payload.recipient === "string" ? payload.recipient : "me"
+  let visibility: "private" | "shared" | "team" = "private"
+  let sharedWithId: string | null = null
+  let sharedWithName: string | null = null
+  let pushTargetId: string | null = null
+  if (recipient === "team") {
+    visibility = "team"
+  } else if (recipient !== "me") {
+    // A specific staff member. Validate the SAME way share does — never a
+    // partner/client, never yourself.
+    if (recipient === user.id) return fail("That's you — leave it as 'just me'.")
+    const members = (await listTeamMembers()).filter((m) => m.role === "admin" || m.role === "team")
+    const target = members.find((m) => m.id === recipient)
+    if (!target) return fail("That person isn't a staff member.")
+    visibility = "shared"
+    sharedWithId = target.id
+    sharedWithName = target.name
+    pushTargetId = target.id
+  }
+
   const insert = {
     body,
     color,
     author_user_id: user.id,
     author_name: getUserDisplayName(user),
-    visibility: "private" as const,
+    visibility,
+    shared_with_user_id: sharedWithId,
+    shared_with_name: sharedWithName,
     account_id: typeof payload.account_id === "string" ? payload.account_id : null,
     contact_id: typeof payload.contact_id === "string" ? payload.contact_id : null,
     origin_url: origin,
@@ -130,6 +157,16 @@ export async function POST(req: NextRequest) {
 
   const { data, error } = await notesTable().insert(insert).select(NOTE_COLUMNS).single()
   if (error) return fail(error.message || "Could not save the note.", 500)
+
+  // Tell the recipient, same push the share action sends. Best-effort.
+  if (pushTargetId) {
+    void sendPushToAdminUsers([pushTargetId], {
+      title: `${getUserDisplayName(user)} shared a note`,
+      body: body.slice(0, 120),
+      url: `/`,
+      tag: `staff-note-${data.id}`,
+    }).catch(() => {})
+  }
 
   emitUiEvent("notes") // NO payload — the bus reaches every staff tab
   return NextResponse.json({ note: data })
