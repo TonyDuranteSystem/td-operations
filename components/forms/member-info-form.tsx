@@ -331,6 +331,7 @@ export function MemberInfoForm({
             <li><strong>Individual member</strong> — fill out only the individual fields (name, email, address, ownership %).</li>
             <li><strong>Company member</strong> — fill out both the company details (company name, EIN, address) AND the representative fields (the individual person who acts on behalf of the company).</li>
             <li><strong>SS-4 Responsible Party</strong> — select one member as the responsible party. This is the person who will sign the SS-4 form to obtain the EIN (tax identification number) for the company. Only one member can be selected.</li>
+            <li><strong>Shared email</strong> — members may use the same email address (for example, a family company). Just make sure each member has their own name.</li>
           </ul>
         </div>
 
