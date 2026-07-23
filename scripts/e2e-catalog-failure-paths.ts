@@ -95,15 +95,19 @@ async function main() {
   check("the negative intake steps kept their sign", after.startsWith("-10,0,"), after)
   check("workspaces intact", await layoutsIntact())
 
-  // ═══ 2. Reorder keeps the scale rather than flattening it ════════════════
-  scenario("2. Reordering reuses the pipeline's own numbers")
+  // ═══ 2. Reordering is refused ════════════════════════════════════════════
+  scenario("2. Reordering steps is refused, and nothing changes")
   await seedGapped()
   loaded = await getStagesForService(SVC)
-  await replaceStagesForService(SVC, [...loaded].reverse())
-  const rev = await orders()
-  check("the SET of numbers is unchanged", rev.map(r => r.stage_order).join(",") === "-10,0,10,20,35,90")
-  check("the sequence actually reversed", rev[0].stage_name === "S6" && rev[5].stage_name === "S1",
-    rev.map(r => r.stage_name).join(","))
+  const beforeSeq = (await orders()).map(o => `${o.stage_name}:${o.stage_order}`).join(" ")
+  let reorderRefused = false
+  let reorderMsg = ""
+  try { await replaceStagesForService(SVC, [...loaded].reverse()) }
+  catch (e) { reorderRefused = true; reorderMsg = e instanceof Error ? e.message : String(e) }
+  check("the reorder is refused", reorderRefused)
+  check("the message explains why", reorderMsg.includes("not available yet"), reorderMsg.slice(0, 100))
+  check("the pipeline is byte-identical afterwards",
+    (await orders()).map(o => `${o.stage_name}:${o.stage_order}`).join(" ") === beforeSeq)
   check("workspaces intact", await layoutsIntact())
 
   // ═══ 3. A new step extends the scale, it does not compress it ════════════
@@ -114,6 +118,29 @@ async function main() {
   const added = await orders()
   check("existing numbers untouched", added.slice(0, 6).map(r => r.stage_order).join(",") === "-10,0,10,20,35,90")
   check("the new step extends past the maximum", added[6].stage_order === 100, `got ${added[6].stage_order}`)
+
+  // ═══ 3b. Deleting a step must NOT slide the others onto new numbers ══════
+  scenario("3b. Deleting a step leaves the survivors' numbers alone (payment-rule safety)")
+  await cleanup()
+  // A shape with the intake boundary in the middle: -10 and -5 are intake,
+  // 1 and up are auto-advance eligible.
+  await supabaseAdmin.from("pipeline_stages").insert(
+    [-10, -5, 1, 10, 20].map((o, i) => ({
+      service_type: SVC, stage_order: o, stage_name: `B${i + 1}`,
+      stage_layout: LAYOUT, board_visible: true, client_visible: true,
+    })),
+  )
+  loaded = await getStagesForService(SVC)
+  const ownBefore = new Map((await orders()).map(r => [r.stage_name, r.stage_order]))
+  // Delete the FIRST step — the worst case for a positional shift.
+  await replaceStagesForService(SVC, loaded.filter(s => s.stage_name !== "B1"))
+  const ownAfter = await orders()
+  check("every surviving step kept its OWN number",
+    ownAfter.every(r => ownBefore.get(r.stage_name) === r.stage_order),
+    ownAfter.map(r => `${r.stage_name}:${r.stage_order}`).join(" "))
+  check("no step crossed the intake boundary",
+    ownAfter.filter(r => r.stage_order >= 1).length === 3,
+    `${ownAfter.filter(r => r.stage_order >= 1).length} steps at >= 1, expected 3`)
 
   // ═══ 4. THE DEADLOCK: a save interrupted mid-reorder, then retried ═══════
   scenario("4. A save interrupted half-way through reordering")
@@ -130,18 +157,18 @@ async function main() {
   const wrecked = (await orders()).map(o => `${o.stage_name}:${o.stage_order}`).join(" ")
   check("the interrupted state is as expected", wrecked.includes("100001"), wrecked)
 
-  let retryOk = true
-  let retryErr = ""
+  let retryRefused = false
+  let retryMsg = ""
   try {
     const reloaded = await getStagesForService(SVC)
     await replaceStagesForService(SVC, reloaded)
-  } catch (e) { retryOk = false; retryErr = e instanceof Error ? e.message : String(e) }
-  check("the admin's retry SUCCEEDS (this used to deadlock forever)", retryOk, retryErr)
+  } catch (e) { retryRefused = true; retryMsg = e instanceof Error ? e.message : String(e) }
+  check("a wrecked pipeline REFUSES the save rather than silently renumbering it",
+    retryRefused, "it accepted the save and rewrote the numbering")
+  check("the refusal explains itself", retryMsg.includes("not available yet"), retryMsg.slice(0, 100))
   const healed = await orders()
-  check("no parked number survived the retry", healed.every(r => r.stage_order < 100000),
-    healed.map(r => r.stage_order).join(","))
   check("all six steps still present", healed.length === 6, `${healed.length}`)
-  check("workspaces intact after the retry", await layoutsIntact())
+  check("workspaces intact", await layoutsIntact())
 
   // ═══ 5. Deleting a step with live clients on it must be REFUSED ══════════
   scenario("5. Deleting a step that live clients are sitting on")
@@ -163,19 +190,52 @@ async function main() {
   check("nothing was changed by the refused save", stillThere.length === 6)
   check("workspaces intact", await layoutsIntact())
 
-  // ═══ 6. Renaming a step moves the live clients with it ═══════════════════
-  scenario("6. Renaming a step that live clients are sitting on")
+  // ═══ 6. Renaming a step is refused (names are matched literally in code) ══
+  scenario("6. Renaming a step is refused, and nothing changes")
   loaded = await getStagesForService(SVC)
-  const res = await replaceStagesForService(
-    SVC, loaded.map(s => s.stage_name === "S3" ? { ...s, stage_name: "S3 Renamed" } : s),
-  )
-  const { data: sdAfter } = await supabaseAdmin
-    .from("service_deliveries").select("stage").eq("service_type", SVC)
-  const sdStage = (sdAfter ?? [])[0] as { stage: string } | undefined
-  check("the live client moved to the new name", sdStage?.stage === "S3 Renamed", sdStage?.stage)
-  check("the admin is told the client moved", res.warnings.some(w => w.includes("Moved 1 active client")),
-    JSON.stringify(res.warnings))
+  let renameRefused = false
+  let renameMsg = ""
+  try {
+    await replaceStagesForService(SVC, loaded.map(s => s.stage_name === "S3" ? { ...s, stage_name: "S3 Renamed" } : s))
+  } catch (e) { renameRefused = true; renameMsg = e instanceof Error ? e.message : String(e) }
+  check("the rename is refused", renameRefused)
+  check("the message explains why", renameMsg.includes("matched by name"), renameMsg.slice(0, 120))
+  const afterRename = await orders()
+  check("the step kept its original name", afterRename.some(r => r.stage_name === "S3"))
   check("workspaces intact", await layoutsIntact())
+  await supabaseAdmin.from("service_deliveries").delete().eq("service_type", SVC)
+
+  // ═══ 6b. The ordinary editing loop: add, save, tweak, save again ══════════
+  scenario("6b. Add a step, save, then save again (the loop that false-refused)")
+  await seedGapped()
+  loaded = await getStagesForService(SVC)
+  const frozenIds = loaded.map(s => s.id!).filter(Boolean)
+  await replaceStagesForService(SVC, [...loaded, { stage_order: 999, stage_name: "Added" }], {
+    knownStageIds: frozenIds,
+  })
+  // The page does NOT remount, so it still holds the ORIGINAL id list.
+  const reloaded = await getStagesForService(SVC)
+  let secondSaveOk = true
+  let secondErr = ""
+  try {
+    await replaceStagesForService(
+      SVC,
+      reloaded.map(s => s.stage_name === "Added" ? { ...s, sla_days: 4 } : s),
+      { knownStageIds: frozenIds },
+    )
+  } catch (e) { secondSaveOk = false; secondErr = e instanceof Error ? e.message : String(e) }
+  check("the second save SUCCEEDS (it used to blame a tab that does not exist)", secondSaveOk, secondErr)
+  const loopRows = await orders()
+  check("no duplicate step was created", loopRows.filter(r => r.stage_name === "Added").length === 1)
+  check("the edit applied", loopRows.length === 7, `${loopRows.length}`)
+
+  // ═══ 6c. Clearing every step is refused ═══════════════════════════════════
+  scenario("6c. Removing every step at once")
+  await seedGapped()
+  let wipeRefused = false
+  try { await replaceStagesForService(SVC, []) } catch { wipeRefused = true }
+  check("clearing the whole pipeline is refused", wipeRefused)
+  check("all six steps survive", (await orders()).length === 6)
 
   // ═══ 7. Stale tab: a step appeared since this page loaded ════════════════
   scenario("7. A second tab added a step while this page was open")
@@ -236,6 +296,28 @@ async function main() {
   check("a COMPLETED client does not block the delete", !completedBlocked)
   await supabaseAdmin.from("service_deliveries").delete().eq("service_type", SVC)
 
+  // ═══ 7c. A step deleted elsewhere must not silently come back EMPTY ══════
+  scenario("7c. A step this page loaded was deleted elsewhere")
+  await seedGapped()
+  loaded = await getStagesForService(SVC)
+  const known2 = loaded.map(s => s.id!).filter(Boolean)
+  // Another session deletes S2 entirely.
+  const { data: victim } = await supabaseAdmin
+    .from("pipeline_stages").select("id").eq("service_type", SVC).eq("stage_name", "S2").maybeSingle()
+  await supabaseAdmin.from("pipeline_stages").delete().eq("id", (victim as { id: string }).id)
+
+  let vanishRefused = false
+  let vanishMsg = ""
+  try {
+    // This page still has S2 in its draft and would re-insert it BARE.
+    await replaceStagesForService(SVC, loaded, { knownStageIds: known2 })
+  } catch (e) { vanishRefused = true; vanishMsg = e instanceof Error ? e.message : String(e) }
+  check("the save is refused rather than recreating it empty", vanishRefused)
+  check("the message names the vanished step", vanishMsg.includes("S2"), vanishMsg.slice(0, 130))
+  const afterVanish = await orders()
+  check("no bare replacement was inserted", afterVanish.length === 5, `${afterVanish.length}`)
+  check("the remaining workspaces are untouched", await layoutsIntact())
+
   // ═══ 8. Without the known-ids the delete still works (deliberate) ════════
   scenario("8. A deliberate delete still works when no stale-guard data is sent")
   await seedGapped()
@@ -252,6 +334,29 @@ async function main() {
   })())
 
   // ═══ 9. planStageOrders is pure — check it directly ══════════════════════
+  // ═══ 8b. The real ITIN shape: eight steps, an ordinary edit ══════════════
+  scenario("8b. The real ITIN pipeline — the exact reported bug")
+  await cleanup()
+  const ITIN = ["Data Collection", "Document Preparation", "Client Signing", "Documents Received",
+                "CAA Review", "Submitted to IRS", "IRS Processing", "ITIN Approved"]
+  await supabaseAdmin.from("pipeline_stages").insert(
+    ITIN.map((n, i) => ({
+      service_type: SVC, stage_order: i + 1, stage_name: n, stage_layout: LAYOUT,
+      client_label: `Client view of ${n}`, board_visible: true, client_visible: true,
+    })),
+  )
+  loaded = await getStagesForService(SVC)
+  await replaceStagesForService(SVC, loaded.map(s => s.stage_name === "CAA Review" ? { ...s, sla_days: 21 } : s))
+  const itinRows = await orders()
+  check("all eight steps survive an SLA edit", itinRows.length === 8, `${itinRows.length}`)
+  check("every workspace survives", await layoutsIntact())
+  check("the numbering is untouched", itinRows.map(r => r.stage_order).join(",") === "1,2,3,4,5,6,7,8")
+  const { data: lbl } = await supabaseAdmin
+    .from("pipeline_stages").select("client_label").eq("service_type", SVC)
+    .eq("stage_name", "CAA Review").maybeSingle()
+  check("the client-facing label survives",
+    (lbl as { client_label: string } | null)?.client_label === "Client view of CAA Review")
+
   scenario("9. The order planner itself")
   check("same count reuses the same numbers",
     planStageOrders(3, [10, 20, 30]).join(",") === "10,20,30")

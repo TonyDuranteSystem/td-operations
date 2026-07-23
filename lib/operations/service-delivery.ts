@@ -52,6 +52,7 @@ import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import { updateTasksBulk } from "@/lib/operations/task"
 import { updateAccount } from "@/lib/operations/account"
 import { logAction } from "@/lib/mcp/action-log"
+import { TERMINAL_DELIVERY_STATUSES } from "@/lib/services/stages"
 
 // Re-export so existing import paths keep working.
 export { VALID_SERVICE_TYPES, isValidServiceType }
@@ -1573,7 +1574,11 @@ export async function renameStageAcrossDeliveries(
     .update({ stage: toStage })
     .eq("service_type", serviceType)
     .eq("stage", fromStage)
-    .not("status", "in", "(completed,cancelled,canceled,inactive)")
+    // A NULL status is unknown, not finished — SQL NOT IN excludes NULLs, which
+    // would silently leave those deliveries behind on a stage name that no
+    // longer exists. The delete guard already treats unknown as live; these two
+    // predicates must agree.
+    .or(`status.is.null,status.not.in.(${TERMINAL_DELIVERY_STATUSES.join(",")})`)
     .select("id")
   if (error) {
     throw new Error(`renameStageAcrossDeliveries(${serviceType}: ${fromStage} -> ${toStage}): ${error.message}`)

@@ -176,57 +176,57 @@ describe("the columns the editor does not own are never touched", () => {
   })
 })
 
-describe("rename, reorder and delete all work", () => {
-  it("RENAMES a stage in place, keeping its workspace", async () => {
-    // The whole point of carrying the row id: this used to be impossible.
+describe("the unsafe capabilities are refused, not silently mishandled", () => {
+  it("REFUSES a rename — stage names are matched literally by code elsewhere", async () => {
+    // "Wizard Available" gates whether a paying tax client's wizard opens, and
+    // that check is fail-closed. Moving the deliveries is not enough while such
+    // literals exist, and a warning cannot reopen a closed wizard.
     existingRows = [realRow({ id: "a", stage_name: "Client Signing", stage_order: 1 })]
 
-    await replaceStagesForService("ITIN", [{ id: "a", stage_order: 1, stage_name: "Signing" }])
+    await expect(
+      replaceStagesForService("ITIN", [{ id: "a", stage_order: 1, stage_name: "Signing" }]),
+    ).rejects.toThrow(/matched by name/)
 
-    const upd = ops.find(o => o.kind === "update" && (o.payload as Record<string, unknown>)?.stage_name === "Signing")
-    expect(upd).toBeDefined()
-    expect(upd?.filters).toContainEqual(["id", "a"])
-    expect(ops.some(o => o.kind === "delete")).toBe(false)
+    expect(ops.filter(o => o.kind !== "select")).toEqual([]) // nothing written
   })
 
-  it("SWAPS two stage names without cross-wiring their workspaces", async () => {
-    // Name-keyed matching gave each stage the OTHER's buttons. Id-keyed cannot.
+  it("REFUSES a reorder — deliveries hold their own copy of the step number", async () => {
     existingRows = [
       realRow({ id: "a", stage_name: "Alpha", stage_order: 1 }),
       realRow({ id: "b", stage_name: "Beta", stage_order: 2 }),
     ]
 
-    await replaceStagesForService("ITIN", [
-      { id: "a", stage_order: 1, stage_name: "Beta" },
-      { id: "b", stage_order: 2, stage_name: "Alpha" },
-    ])
+    await expect(
+      replaceStagesForService("ITIN", [
+        { id: "b", stage_order: 1, stage_name: "Beta" },
+        { id: "a", stage_order: 2, stage_name: "Alpha" },
+      ]),
+    ).rejects.toThrow(/order of steps is not available/i)
 
-    const finals = ops.filter(o => o.kind === "update" && (o.payload as Record<string, unknown>)?.stage_name)
-    const byId = new Map(finals.map(o => [o.filters.find(f => f[0] === "id")?.[1], o.payload as Record<string, unknown>]))
-    expect(byId.get("a")?.stage_name).toBe("Beta")
-    expect(byId.get("b")?.stage_name).toBe("Alpha")
-    // Neither row's layout was written at all, so nothing could be swapped.
-    for (const p of byId.values()) expect(p.stage_layout).toBeUndefined()
+    expect(ops.filter(o => o.kind !== "select")).toEqual([])
   })
 
-  it("parks orders before assigning final ones — reorder cannot collide", async () => {
+  it("REFUSES clearing every step of a pipeline that has some", async () => {
     existingRows = [
-      realRow({ id: "a", stage_name: "First", stage_order: 1 }),
-      realRow({ id: "b", stage_name: "Second", stage_order: 2 }),
+      realRow({ id: "a", stage_name: "Keep", stage_order: 1 }),
+      realRow({ id: "b", stage_name: "Also", stage_order: 2 }),
     ]
 
+    await expect(replaceStagesForService("ITIN", [])).rejects.toThrow(/would remove all 2 steps/)
+
+    expect(ops.filter(o => o.kind !== "select")).toEqual([])
+  })
+
+  it("still allows what IS safe: editing a step's own fields", async () => {
+    existingRows = [realRow({ id: "a", stage_name: "Keep", stage_order: 1 })]
+
     await replaceStagesForService("ITIN", [
-      { id: "b", stage_order: 1, stage_name: "Second" },
-      { id: "a", stage_order: 2, stage_name: "First" },
+      { id: "a", stage_order: 1, stage_name: "Keep", sla_days: 14 },
     ])
 
-    const orderWrites = ops.filter(o => o.kind === "update").map(o => (o.payload as Record<string, unknown>).stage_order as number)
-    const parked = orderWrites.filter(n => n >= 100000)
-    expect(parked.length).toBe(2) // both parked first
-    // Every parked write happens before any final write.
-    const lastPark = orderWrites.lastIndexOf(parked[parked.length - 1])
-    const firstFinal = orderWrites.findIndex(n => n < 100000)
-    expect(lastPark).toBeLessThan(firstFinal)
+    const upd = ops.find(o => o.kind === "update")
+    expect((upd?.payload as Record<string, unknown>)?.sla_days).toBe(14)
+    expect(ops.some(o => o.kind === "delete")).toBe(false)
   })
 
   it("deletes only the removed stage, by id", async () => {
@@ -257,8 +257,6 @@ describe("rename, reorder and delete all work", () => {
   })
 
   it("treats a submitted id that no longer exists as a new stage", async () => {
-    // Another admin deleted the row since this page loaded. Updating by that id
-    // would silently affect nothing.
     existingRows = []
 
     await replaceStagesForService("ITIN", [{ id: "ghost", stage_order: 1, stage_name: "S" }])

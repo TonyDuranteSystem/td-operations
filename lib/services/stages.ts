@@ -125,11 +125,12 @@ const PARK_FLOOR = 100000
  * rows spelled "Active" with a capital A. A guard that matched only "active"
  * exactly would have missed all 135 blocked deliveries and those two rows.
  */
-const TERMINAL_DELIVERY_STATUSES = new Set(["completed", "cancelled", "canceled", "inactive"])
+export const TERMINAL_DELIVERY_STATUSES = ["completed", "cancelled", "canceled", "inactive"] as const
+const TERMINAL_SET = new Set<string>(TERMINAL_DELIVERY_STATUSES)
 
 export function isLiveDeliveryStatus(status: string | null | undefined): boolean {
   if (!status) return true // unknown state — treat as live and refuse to destroy
-  return !TERMINAL_DELIVERY_STATUSES.has(status.trim().toLowerCase())
+  return !TERMINAL_SET.has(status.trim().toLowerCase())
 }
 
 /** Validation that must happen BEFORE anything is written. */
@@ -167,16 +168,23 @@ export function validateStageDraft(stages: StageRow[]): string | null {
  * original implementation and the first rewrite did) silently moves intake
  * stages to positive numbers and changes what a money event does.
  *
- * So: reuse the order values the pipeline already uses, assigned by the admin's
- * chosen sequence. Stages added on top extend the scale beyond the current
- * maximum. When the sequence has not changed, every row keeps the exact value it
- * already had and no order is written at all.
+ * So: reuse the order values the SURVIVING stages already hold, assigned in the
+ * admin's chosen sequence. Stages added on top extend the scale beyond the
+ * current maximum.
+ *
+ * The pool MUST come from the stages that remain, never from every stage that
+ * existed. Pooling the deleted ones too makes every surviving stage slide down
+ * one slot: with orders -10,-5,1,10,20,30 and the first stage deleted, the stage
+ * that sat at 1 lands on -5 and drops out of the `>= 1` set that decides whether
+ * a second installment may auto-advance a client. Deleting an unrelated stage
+ * would silently change what a payment does. Leaving gaps is correct — the
+ * scale is already gapped by design.
  */
 export function planStageOrders(
   submittedCount: number,
-  existingOrders: number[],
+  survivingOrders: number[],
 ): number[] {
-  const pool = [...existingOrders].sort((a, b) => a - b)
+  const pool = [...survivingOrders].sort((a, b) => a - b)
   const out: number[] = []
   let next = pool.length > 0 ? pool[pool.length - 1] : 0
   for (let i = 0; i < submittedCount; i++) {
@@ -249,10 +257,25 @@ export async function replaceStagesForService(
   }))
   const keptIds = new Set(submitted.map(s => s.id).filter(Boolean) as string[])
 
-  // STALE EDIT. Refuse rather than delete work this editor never saw.
+  // STALE EDIT — both directions.
+  //
+  // APPEARED: a stage exists now that this page never saw. Saving would delete
+  // it as "absent from the submission".
+  //
+  // VANISHED: a stage this page loaded has been deleted elsewhere, but is still
+  // in the draft. Its id no longer resolves, so it would fall through to INSERT
+  // and come back as a BARE row — no workspace, no client label. That is the
+  // exact loss this whole change exists to prevent, arriving through the back
+  // door. Refuse both.
   if (opts.knownStageIds) {
     const known = new Set(opts.knownStageIds)
-    const appeared = existing.filter(r => !known.has(r.id))
+    // A row whose id is in THIS submission is one we just created ourselves —
+    // the page's frozen load-time list will not contain it, but it is not
+    // another session's work. Without this, the ordinary loop "add a step, save,
+    // fix a typo, save again" refuses the second save and blames a tab that does
+    // not exist.
+    const submittedIds = new Set(stages.map(x => x.id).filter(Boolean) as string[])
+    const appeared = existing.filter(r => !known.has(r.id) && !submittedIds.has(r.id))
     if (appeared.length > 0) {
       throw new Error(
         `This service's stages were changed somewhere else while this page was open ` +
@@ -260,9 +283,29 @@ export async function replaceStagesForService(
           `Nothing has been changed here — reload the page and make your edit again.`,
       )
     }
+    const vanished = stages.filter(s => s.id && known.has(s.id) && !existingById.has(s.id))
+    if (vanished.length > 0) {
+      throw new Error(
+        `${vanished.map(s => `"${s.stage_name}"`).join(", ")} ${vanished.length === 1 ? "was" : "were"} ` +
+          `deleted somewhere else while this page was open. Saving would recreate ` +
+          `${vanished.length === 1 ? "it" : "them"} without the staff workspace. ` +
+          `Nothing has been changed here — reload the page.`,
+      )
+    }
   }
 
   const removed = existing.filter(r => !keptIds.has(r.id))
+
+  // Clearing EVERY step of a pipeline that has some is almost certainly a form
+  // that failed to load, not an intention. The workspaces it would destroy
+  // cannot be retyped.
+  if (existing.length > 0 && submitted.length === 0) {
+    throw new Error(
+      `This save would remove all ${existing.length} steps from ${serviceType} and delete ` +
+        `their staff workspaces. If that is really what you want, remove them one at a ` +
+        `time. Nothing has been changed.`,
+    )
+  }
 
   // A stage cannot be deleted while live work sits on it: service deliveries
   // record their stage by NAME, so the delivery would be stranded on a stage
@@ -297,6 +340,18 @@ export async function replaceStagesForService(
   // them in the same operation. Narrow by design: exact old name, this service
   // only, active rows only. History rows are deliberately NOT rewritten — they
   // must keep saying what they said at the time.
+  // RENAMING A STEP IS NOT AVAILABLE FROM THIS SCREEN, deliberately (2026-07-23).
+  //
+  // Stage names are not just labels: they are matched literally by code that
+  // decides real client outcomes. "Wizard Available" gates whether a paying tax
+  // client's wizard opens, and that check is fail-closed — rename the stage and
+  // the wizard silently shuts for everyone. "Client Signing" is what surfaces a
+  // client's ITIN documents in the portal. "SS-4 Prepared" drives a reminder
+  // sweep. Moving the deliveries and the buttons is not enough while those
+  // literals exist in code, and a warning cannot undo a closed wizard.
+  //
+  // This was never safe — before this change a rename also destroyed every
+  // workspace. Refusing is a capability cut, not a regression.
   const renames: Array<{ from: string; to: string }> = []
   for (const s of submitted) {
     if (!s.id) continue
@@ -305,6 +360,14 @@ export async function replaceStagesForService(
       renames.push({ from: before.stage_name, to: s.stage_name })
     }
   }
+  if (renames.length > 0) {
+    throw new Error(
+      `Renaming a step is not available yet — ${renames.map(r => `"${r.from}"`).join(", ")} ` +
+        `${renames.length === 1 ? "is" : "are"} matched by name elsewhere in the system, and ` +
+        `renaming can silently close a client's wizard or hide their documents. ` +
+        `Nothing has been changed.`,
+    )
+  }
 
   // Final orders, preserving the pipeline's scale (see planStageOrders).
   //
@@ -312,12 +375,39 @@ export async function replaceStagesForService(
   // save that died mid-reorder. Feeding them back in would adopt them as the
   // pipeline's real numbering, leaving steps numbered 100001 for ever. Drop
   // them and let planStageOrders extend the surviving scale instead.
-  const livePool = existing.map(r => r.stage_order).filter(o => o < PARK_FLOOR)
+  // Only the SURVIVING stages contribute their numbers — see planStageOrders.
+  const livePool = existing
+    .filter(r => keptIds.has(r.id))
+    .map(r => r.stage_order)
+    .filter(o => o < PARK_FLOOR)
   const plannedOrders = planStageOrders(submitted.length, livePool)
-  const needsOrderChange = submitted.some((s, i) => {
-    if (!s.id) return true // a new row must be written anyway
-    return existingById.get(s.id)!.stage_order !== plannedOrders[i]
-  })
+  // REORDERING IS NOT AVAILABLE FROM THIS SCREEN, deliberately (2026-07-23).
+  //
+  // Moving a step needs three things this change does not do: live deliveries
+  // store their own copy of the step NUMBER and use it to resolve "the next
+  // step", so a reorder makes Advance skip or repeat stages unless those are
+  // re-synced (every past renumbering migration did that by hand); inserting a
+  // step anywhere but the end slides its neighbours onto other numbers, which
+  // can push an intake step across the boundary that decides whether a payment
+  // auto-advances a client; and a save interrupted mid-reorder cannot restore
+  // the original sequence, because the parked numbers carry no record of where
+  // each step came from.
+  //
+  // None of that was safe before this change either — reordering used to
+  // renumber the whole pipeline and destroy every workspace with it. Refusing is
+  // a capability cut, not a regression. Renaming, editing and appending are
+  // safe and remain available.
+  const movedRows = submitted
+    .map((s, i) => ({ s, i }))
+    .filter(({ s, i }) => s.id && existingById.get(s.id)!.stage_order !== plannedOrders[i])
+  if (movedRows.length > 0) {
+    throw new Error(
+      `Changing the ORDER of steps is not available yet — moving a step would leave ` +
+        `clients already on it pointing at the wrong place. You can edit a step's ` +
+        `details, add a step at the end, or remove one. Nothing has been changed.`,
+    )
+  }
+  const needsOrderChange = submitted.some(s => !s.id) // only genuinely new rows
   // Debris from an interrupted save must be cleared even if nothing else moved.
   const hasParkDebris = existing.some(r => r.stage_order >= PARK_FLOOR)
 
@@ -352,6 +442,17 @@ export async function replaceStagesForService(
       throw new Error(`replaceStagesForService(${serviceType}) delete: ${error.message}`)
     }
     await logStageDeletion(serviceType, doomed ?? [])
+
+    // Same hazard as a rename: another stage's advance button may name this one.
+    for (const r of removed) {
+      const refs = await stagesReferencing(serviceType, r.stage_name)
+      if (refs.length > 0) {
+        warnings.push(
+          `"${refs.join('", "')}" still ${refs.length === 1 ? "has a button" : "have buttons"} ` +
+            `pointing at the deleted stage "${r.stage_name}". Those buttons will fail until the workspace is updated.`,
+        )
+      }
+    }
   }
 
   // 3. UPDATE survivors in place. ONLY editor-authored columns appear here —
@@ -396,32 +497,6 @@ export async function replaceStagesForService(
     const { error } = await supabaseAdmin.from("pipeline_stages").insert(insertRows)
     if (error) {
       throw new Error(`replaceStagesForService(${serviceType}) insert: ${error.message}`)
-    }
-  }
-
-  // 5. Follow the renames through to live work, and report what moved.
-  for (const r of renames) {
-    let moved = 0
-    try {
-      const { renameStageAcrossDeliveries } = await import("@/lib/operations/service-delivery")
-      moved = await renameStageAcrossDeliveries(serviceType, r.from, r.to)
-    } catch (err) {
-      warnings.push(
-        `Renamed "${r.from}" to "${r.to}", but could not move the clients currently on it ` +
-          `(${err instanceof Error ? err.message : String(err)}). They may be stuck — check before advancing them.`,
-      )
-      continue
-    }
-    if (moved > 0) {
-      warnings.push(`Moved ${moved} active client${moved === 1 ? "" : "s"} from "${r.from}" to "${r.to}".`)
-    }
-    // A renamed stage may still be named by another stage's advance button.
-    const stillReferenced = await stagesReferencing(serviceType, r.from)
-    if (stillReferenced.length > 0) {
-      warnings.push(
-        `"${stillReferenced.join('", "')}" still ${stillReferenced.length === 1 ? "has a button" : "have buttons"} ` +
-          `pointing at the old name "${r.from}". Those buttons will fail until the workspace is updated.`,
-      )
     }
   }
 

@@ -19,7 +19,6 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import {
   getStagesForService,
   replaceStagesForService,
-  renameServiceTypeForStages,
   validateStageDraft,
   type StageRow,
 } from "@/lib/services/stages"
@@ -224,16 +223,20 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
     // hands that pipeline's stages to the new service — and an empty stage list
     // then deletes every one of them while reporting success.
     if (row.pipeline) {
-      const { data: clash, error: clashErr } = await supabaseAdmin
+      // NOT maybeSingle: if two services somehow already share a name, that
+      // errors and locks BOTH of them out of saving at all. Take the first
+      // match instead — the point is to stop a NEW collision, not to punish an
+      // existing one.
+      const { data: clashes, error: clashErr } = await supabaseAdmin
         .from("service_catalog")
         .select("id, name")
         .eq("pipeline", row.pipeline)
-        .maybeSingle()
       if (clashErr) {
         return { ok: false, error: `Could not check the pipeline name: ${clashErr.message}` }
       }
-      const other = clash as { id: string; name: string } | null
-      if (other && other.id !== basics.id) {
+      const other = ((clashes ?? []) as Array<{ id: string; name: string }>)
+        .find(c => c.id !== basics.id) ?? null
+      if (other) {
         return {
           ok: false,
           error:
@@ -304,8 +307,21 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
     // under a name that has none, inserts a fresh bare set, and orphans the
     // real ones (with every in-flight service delivery still pointing at the
     // old name).
+    // RENAMING THE PIPELINE IS NOT AVAILABLE, deliberately (2026-07-23). The
+    // pipeline name keys the stages AND every live delivery. Re-keying both is
+    // two writes with no transaction between them: if the second fails, the
+    // stages move and the deliveries do not, and the retry is a silent no-op
+    // because the catalog row already reads the new name — leaving every
+    // in-flight client on a pipeline that no longer exists, with a success
+    // message. Refusing until that is atomic.
     if (basics.id && previousPipeline && row.pipeline && previousPipeline !== row.pipeline) {
-      await renameServiceTypeForStages(previousPipeline, row.pipeline)
+      return {
+        ok: false,
+        error:
+          `Renaming the pipeline is not available yet — "${previousPipeline}" is the key its ` +
+          `steps and every live client are stored under, and moving them is not yet safe to ` +
+          `interrupt. Nothing has been changed.`,
+      }
     }
 
     // Stages — only persist when a pipeline name is set. Services without a
