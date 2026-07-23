@@ -15,6 +15,7 @@ import { UiEventListener } from '@/components/dashboard/ui-event-listener'
 import { DashboardPullToRefresh } from '@/components/dashboard/pull-to-refresh'
 import StickyNotesLayer from '@/components/dashboard/sticky-notes-layer'
 import FloatingChat from '@/components/team-chat/floating-chat'
+import { isFloatingChatEnabled } from '@/lib/settings'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -137,6 +138,10 @@ export default async function DashboardLayout({
     showAiAgent = (aiSetting?.value as Record<string, unknown> | null)?.enabled_for_team === true
   }
 
+  // Kill switch for the floating chat window (Dev Tools → Maintenance).
+  // Defaults on and fails open — see isFloatingChatEnabled.
+  const floatingChatEnabled = await isFloatingChatEnabled()
+
   const isSandbox = process.env.SANDBOX_MODE === '1'
 
   return (
@@ -167,8 +172,14 @@ export default async function DashboardLayout({
             (it also sits one z-step above), and OUTSIDE <main> so it never
             fights pull-to-refresh. It carries its own crash guard: the
             dashboard error boundary is a page-segment one and would not catch a
-            throw from here, which would white-screen the whole CRM. */}
-        <FloatingChat />
+            throw from here, which would white-screen the whole CRM.
+
+            KILL SWITCH: `floating_chat_enabled` (Dev Tools → Maintenance), a
+            runtime setting so turning it off needs no deploy. Gated HERE rather
+            than inside the component, so "off" means it never mounts at all —
+            no fetches, no realtime subscription, no listeners. Defaults ON and
+            fails OPEN, so a settings hiccup cannot silently remove it. */}
+        {floatingChatEnabled && <FloatingChat />}
       </div>
     </Providers>
   )

@@ -25,6 +25,7 @@ export type AppSettingKey =
   | "portal_digest_type_labels" // object — per-notification-type display overrides for the digest email, merged over code defaults in lib/portal/digest-render.ts. Shape: { "<type>": { icon?: string, label_en?: string, label_it?: string, show_body?: boolean } }. Lets ops rename sections / toggle item detail lines without a deploy.
   | "td_communication_settings" // object — TD Communication admin panel system settings. Shape: { enabled: boolean (portal tab visibility), disclaimer_en/it: string, default_sla_days: number }. Read/written via lib/td-communication/comm-settings.ts; edited in the CRM TD Communication → Settings tab.
   | "td_communication_landing" // object — TD Communication landing page content (Phase 9). Shape: TdCommLandingState { draft, published: LandingContent, published_at/by, updated_at/by }. Two snapshots (draft/published); Publish promotes draft→published. Read/written via lib/td-communication/landing.ts; edited in the CRM TD Communication → Landing Page tab AND /collab.
+  | "floating_chat_enabled" // boolean — when true (DEFAULT), the green floating chat window mounts on every CRM dashboard page. The kill switch the council asked for: the window lives in the always-on shell, so a bad render there has nowhere to fail safely. Set false to unmount it entirely (the Team Chat page is unaffected). Toggled in Dev Tools → Maintenance; consumed in app/(dashboard)/layout.tsx.
   | "slack_mirror_enabled" // boolean — when true, the Team Workspace mirrors Slack channels the bot is in (webhook ingest + conversations.history backfill) into slack_channels/slack_messages and shows a read-only "Slack" section with Open-in-Slack links. Default FALSE (dormant). Consumed in lib/team/slack-mirror.ts + the workspace UI. Toggle when ready to run Slack alongside the CRM.
   | "support_person_user_id" // string (auth user UUID) — the staff member whose DM receives "Send to Support" shares from Inbox + Portal Chats. Stores the ACTUAL user id (no name-resolution at runtime — brittle). Seeded to Luca. Read via getSupportPersonUserId(); consumed in app/api/team/share. If unset, the share endpoint returns a "no support person configured" error rather than guessing.
   | "worker_model" // string (a model id from WORKER_MODEL_OPTIONS in lib/ai-agent/worker-models.ts) — the model the WORKER runs on, shared by EVERY worker surface (Portal Chats tab, Inbox panel, dashboard sidebar, Slack, team chat). Antonio 2026-07-18: one setting, changeable from the gear on any worker panel, so the same question can't get different answers per screen. Read via resolveWorkerModelAsync() (stored → env WORKER_MODEL → built-in default), validated against the curated list so a typo'd/retired id can't take the worker down everywhere at once. Written by app/api/ai-agent/model (admin-only).
@@ -66,6 +67,24 @@ export async function isTaxSeasonPaused(): Promise<boolean> {
 export async function isPortalAdminEmailEnabled(): Promise<boolean> {
   const v = await getAppSetting<boolean>("portal_admin_email_on_client_message", true)
   return v !== false
+}
+
+/** Whether the floating chat window mounts at all.
+ *
+ *  Default TRUE, so nothing changes until it is deliberately switched off.
+ *
+ *  FAILS OPEN on purpose: if the settings read throws, the window still mounts.
+ *  The alternative — a transient database blip silently removing the chat from
+ *  every page — is the worse failure, and the window already carries its own
+ *  crash guard for the "it is broken" case. The trade-off is that this switch
+ *  cannot be relied on during a database outage. */
+export async function isFloatingChatEnabled(): Promise<boolean> {
+  try {
+    const v = await getAppSetting<boolean>("floating_chat_enabled", true)
+    return v !== false
+  } catch {
+    return true
+  }
 }
 
 /** Whether the Team Workspace Slack mirror is on. Default false (dormant) so it
