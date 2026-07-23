@@ -370,7 +370,15 @@ export async function POST(request: NextRequest) {
             en: `The Operating Agreement for ${account.company_name} is ready for your signature. All ${totalSigners} members must sign before it takes effect.`,
             it: `L'Atto Costitutivo di ${account.company_name} è pronto per la tua firma. Tutti i ${totalSigners} soci devono firmare prima che diventi efficace.`,
           },
-          link: `/portal/sign/oa?account=${account_id}`,
+          // The agreement id is in the link so the DEDUP SCOPE changes whenever
+          // the agreement does. Without it, a client regenerating within the
+          // 10-minute window had the replacement suppressed on every channel —
+          // including the email that carries the only working link — while the
+          // old agreement had just been deleted and its codes regenerated. The
+          // co-signer was left holding a dead link and the screen said everyone
+          // had been notified. The id is not a credential: it is already
+          // readable by anyone with the anon key.
+          link: `/portal/sign/oa?account=${account_id}&oa=${oa.id}`,
           emailLink: signerUrl,
         })
         notifyOutcomes.push(r)
@@ -394,7 +402,9 @@ export async function POST(request: NextRequest) {
         en: `The Operating Agreement for ${account.company_name} is ready for your signature.`,
         it: `L'Atto Costitutivo di ${account.company_name} è pronto per la tua firma.`,
       },
-      link: `/portal/sign/oa?account=${account_id}`,
+      // Agreement id in the link — same reason as the multi-member branch: the
+      // dedup scope has to change when the agreement is replaced.
+      link: `/portal/sign/oa?account=${account_id}&oa=${oa.id}`,
     }))
   }
 
@@ -412,7 +422,16 @@ export async function POST(request: NextRequest) {
   // EVERY recipient, not just one. With `some`, a three-member company where two
   // dispatches failed still read as success — no alarm, and the screen told the
   // creator that every member had received their link.
-  const notified = notifyOutcomes.length > 0 && notifyOutcomes.every(r => reached(r.chat) || reached(r.email))
+  //
+  // And for a MULTI-MEMBER agreement the EMAIL specifically must land: chat and
+  // the bell deliberately carry only a plain portal path (the working per-member
+  // link is a credential, so it is email-only), and a co-signer need not be a
+  // portal user at all. "Chat succeeded" tells us nothing about whether that
+  // person can reach the document. For a single-member agreement the signer is
+  // the person on the screen, who has the Sign-now button in front of them, so
+  // either channel is genuine.
+  const notified = notifyOutcomes.length > 0 && notifyOutcomes.every(r =>
+    isMMLC ? reached(r.email) : (reached(r.chat) || reached(r.email)))
   // NOT gated on "we tried at least once". Zero attempts is the WORST case, not
   // an exempt one: if the signature rows fail to insert, the notify loop never
   // runs, and gating on length > 0 meant that silence raised no alarm at all —
@@ -423,9 +442,14 @@ export async function POST(request: NextRequest) {
       source: 'server',
       route: '/api/portal/operating-agreement/create',
       method: 'POST',
+      // Say WHICH case it is. "NO signer could be notified" was written when the
+      // check required only one recipient; now that every signer must be reached
+      // — and a co-signer must be reached BY EMAIL — the common trigger is one
+      // member out of several, and that wording sends whoever reads the alarm
+      // looking for a total outage that did not happen.
       message: notifyOutcomes.length === 0
         ? `Operating Agreement created for ${account.company_name} but NO notification was even attempted (signature rows missing?)`
-        : `Operating Agreement created for ${account.company_name} but NO signer could be notified on any channel`,
+        : `Operating Agreement created for ${account.company_name} but ${notifyOutcomes.filter(r => !(isMMLC ? reached(r.email) : (reached(r.chat) || reached(r.email)))).length} of ${notifyOutcomes.length} signer(s) could not be reached${isMMLC ? ' by email — a co-signer cannot sign without it' : ''}`,
       context: {
         account_id,
         token: oa.token,

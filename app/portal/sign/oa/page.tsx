@@ -25,7 +25,18 @@ import { PortalOAClient } from './portal-oa-client'
 import { cookies } from 'next/headers'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 
-export default async function PortalSignOAPage({ searchParams }: { searchParams?: Promise<{ account?: string }> }) {
+/**
+ * `?account=` selects the company (validated against the caller's own accounts).
+ *
+ * `?oa=` may also be present. This page deliberately IGNORES it and always shows
+ * the company's most recent agreement, which is the only one that can be signed —
+ * a regenerate deletes and replaces the previous row. The id is in the link
+ * purely so the notification's duplicate-suppression scope changes when the
+ * agreement is replaced: without it, a client regenerating within ten minutes had
+ * the replacement notification suppressed while the old emailed link had already
+ * been invalidated, leaving a co-signer with a dead link and no warning.
+ */
+export default async function PortalSignOAPage({ searchParams }: { searchParams?: Promise<{ account?: string; oa?: string }> }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
