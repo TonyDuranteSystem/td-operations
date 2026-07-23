@@ -60,6 +60,7 @@ import { ChatErrorBoundary } from '@/components/team-chat/chat-error-boundary'
 import { useDraggableFab } from '@/components/ui/use-draggable-fab'
 import { FAB_KEYS } from '@/lib/ui/draggable-fab'
 import { NoteComposeDialog } from '@/components/dashboard/note-quick-create'
+import { OPEN_TEAM_CHAT_EVENT } from '@/lib/team/open-team-chat'
 
 const QUIET_KEY = 'td-floating-chat-quiet'
 
@@ -228,6 +229,51 @@ function FloatingChatInner() {
       lastMark.current = null
     }
   }, [qc])
+
+  // ─── external "open this thread" ───
+  //
+  // Lets another surface (the "Discuss this note" button) open a specific
+  // conversation here, the same way the sidebar opens the AI panel by event.
+  //
+  // Two things the council insisted on:
+  //  - HANDLED SIGNAL. The event is cancelable; we preventDefault ONLY when we
+  //    can actually show it. The dispatcher reads that: if nobody handled it
+  //    (this window is switched off and unmounted, or we bail below) it falls
+  //    back to navigating to the full Team Chat page. So the button is never a
+  //    dead click.
+  //  - RIGHT SURFACE. Desktop opens the floating window; mobile opens the sheet
+  //    (they are separate state — a desktop-only window is `hidden` at 380px).
+  //  - Opening from a deliberate click IS engagement, so marking read here is
+  //    correct and does NOT break the "reading is a write" invariant, which only
+  //    bans marking read on opens the human did not ask for.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const detail = (e as CustomEvent).detail ?? {}
+      const threadId = detail.threadId
+      if (!threadId || typeof threadId !== 'string') return
+      // We render null on the full chat page — let the dispatcher navigate there
+      // instead, rather than claiming to handle it and showing nothing.
+      const p = pathnameRef.current
+      if (p === '/team-chat' || p.startsWith('/team-chat/')) return
+      e.preventDefault() // tell the dispatcher we've got it
+      // Seed the composer draft, but never clobber a message already half-typed.
+      if (typeof detail.draft === 'string' && detail.draft && !drafts.get(threadId)) {
+        drafts.set(threadId, detail.draft)
+      }
+      setOpenThreadId(threadId)
+      if (window.matchMedia('(min-width: 1024px)').matches) {
+        setWindowOpen(true)
+        setMinimized(false)
+      } else {
+        setSheetOpen(true)
+      }
+      // A freshly-created conversation may not be in the cached list yet.
+      qc.invalidateQueries({ queryKey: ['floating-chat-threads'] })
+      markRead(threadId)
+    }
+    document.addEventListener(OPEN_TEAM_CHAT_EVENT, onOpen)
+    return () => document.removeEventListener(OPEN_TEAM_CHAT_EVENT, onOpen)
+  }, [qc, markRead])
 
   // ─── realtime ───
   // Own channel topic. The full chat page owns 'team-workspace'; a second

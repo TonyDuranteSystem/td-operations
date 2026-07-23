@@ -12,12 +12,14 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { StickyNote, Plus, X, Clock, Share2, Check, Loader2, Users, Lock, Building2 } from 'lucide-react'
+import { StickyNote, Plus, X, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { readPositions, writePosition, prunePositions, cascadePos, clampFrac } from '@/lib/notes/note-position'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { NoteEditor } from '@/components/dashboard/note-editor'
 import { useDraggableFab } from '@/components/ui/use-draggable-fab'
 import { FAB_KEYS } from '@/lib/ui/draggable-fab'
+import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 
 interface Note {
   id: string
@@ -245,11 +247,42 @@ function DesktopNote({ note, index, members, onChange, onOpen }: { note: Note; i
 /* ─────────────────────────── shared card body + actions ─────────────────────────── */
 
 function NoteCardBody({ note, members, onChange, onOpen }: { note: Note; members: Member[]; onChange: () => void; onOpen?: (n: Note) => void }) {
+  const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [menu, setMenu] = useState<'none' | 'snooze' | 'share'>('none')
   const [err, setErr] = useState<string | null>(null)
+  const [discussing, setDiscussing] = useState(false)
   // held until Save — see the picker below
   const [customWhen, setCustomWhen] = useState('')
+
+  /**
+   * "Discuss this note" — ask the server WHERE the conversation lives (the
+   * client's chat for a client note, the teammate DM otherwise), then open the
+   * floating chat there. If the floating chat can't show it (switched off, or
+   * we're already on the Team Chat page), fall back to the full page — the
+   * button is never a dead click.
+   */
+  const discuss = async () => {
+    setDiscussing(true); setErr(null)
+    try {
+      const res = await fetch(`${API}/discuss`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note_id: note.id }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not open a chat for this note.')
+      }
+      const { threadId, draft } = await res.json()
+      const handled = requestOpenTeamChat({ threadId, draft })
+      if (!handled) router.push(`/team-chat?thread=${threadId}`)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not open a chat for this note.')
+    } finally {
+      setDiscussing(false)
+    }
+  }
 
   const act = async (payload: Record<string, unknown>) => {
     setBusy(true); setErr(null)
@@ -303,6 +336,11 @@ function NoteCardBody({ note, members, onChange, onOpen }: { note: Note; members
         {note.visibility === 'shared' && <><Share2 className="h-3 w-3" />{note.shared_with_name}</>}
         {note.visibility === 'team' && <><Users className="h-3 w-3" />Team</>}
         <span className="ml-auto flex gap-1">
+          <button data-no-drag onClick={discuss} disabled={discussing}
+            className="rounded p-0.5 hover:bg-black/10 disabled:opacity-40"
+            title={noteClientName(note) ? `Discuss ${noteClientName(note)} in chat` : 'Discuss this note with your teammate'}>
+            {discussing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5" />}
+          </button>
           <button data-no-drag onClick={() => setMenu(menu === 'snooze' ? 'none' : 'snooze')}
             className="rounded p-0.5 hover:bg-black/10" title="Snooze"><Clock className="h-3.5 w-3.5" /></button>
           <button data-no-drag onClick={() => setMenu(menu === 'share' ? 'none' : 'share')}
