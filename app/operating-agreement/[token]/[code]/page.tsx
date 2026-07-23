@@ -380,9 +380,13 @@ function OperatingAgreementCodeContent() {
           const actionBar = document.getElementById('oa-action-bar')
           if (actionBar) actionBar.style.display = 'none'
 
+          // Hide the signing controls (label + Clear link) that live inside the
+          // captured area, so they do not print inside the executed agreement.
+          const element = oaBodyRef.current
+          element?.querySelectorAll<HTMLElement>('[data-hide-in-pdf]').forEach(el => { el.style.display = 'none' })
+
           // Generate PDF with ALL signatures
           const html2pdf = (await import('html2pdf.js')).default
-          const element = oaBodyRef.current
           if (element) {
             const pdfBlob: Blob = await html2pdf()
               .set({
@@ -466,9 +470,14 @@ function OperatingAgreementCodeContent() {
         const actionBar = document.getElementById('oa-action-bar')
         if (actionBar) actionBar.style.display = 'none'
 
-        const html2pdf = (await import('html2pdf.js')).default
         const element = oaBodyRef.current
         if (!element) throw new Error('OA body not found')
+
+        // Hide the signing controls (label + Clear link) that live inside the
+        // captured area, so they do not print inside the executed agreement.
+        element.querySelectorAll<HTMLElement>('[data-hide-in-pdf]').forEach(el => { el.style.display = 'none' })
+
+        const html2pdf = (await import('html2pdf.js')).default
 
         const pdfBlob: Blob = await html2pdf()
           .set({
@@ -737,12 +746,18 @@ function OperatingAgreementCodeContent() {
                   {/* Current signer — active signature pad */}
                   {isCurrent && !isSigned && !signed && (
                     <div style={{ marginTop: 12 }}>
-                      <p style={{ fontSize: 12, color: '#0A3161', fontWeight: 600, marginBottom: 6 }}>Your Signature:</p>
+                      {/* data-hide-in-pdf: the label and the Clear link are signing
+                          controls, not part of the agreement. They sit inside the
+                          captured area, so they are hidden the instant before the
+                          PDF is taken (see handleSign) — the signature image itself
+                          stays. Without this they printed inside the executed OA. */}
+                      <p data-hide-in-pdf="true" style={{ fontSize: 12, color: '#0A3161', fontWeight: 600, marginBottom: 6 }}>Your Signature:</p>
                       <canvas
                         ref={sigCanvasRef}
                         style={{ width: '100%', height: 100, border: '2px solid #0A3161', borderRadius: 4, background: '#fff', cursor: 'crosshair' }}
                       />
                       <button
+                        data-hide-in-pdf="true"
                         onClick={() => sigPadRef.current?.clear()}
                         style={{ marginTop: 4, fontSize: 12, color: '#888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
                       >
@@ -771,12 +786,14 @@ function OperatingAgreementCodeContent() {
           <>
             {!signed && (
               <div style={{ marginTop: 16 }}>
-                <p style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Member / Manager Signature:</p>
+                {/* data-hide-in-pdf: see the note on the multi-member block above. */}
+                <p data-hide-in-pdf="true" style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Member / Manager Signature:</p>
                 <canvas
                   ref={sigCanvasRef}
                   style={{ width: '100%', maxWidth: 400, height: 100, border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'crosshair' }}
                 />
                 <button
+                  data-hide-in-pdf="true"
                   onClick={() => sigPadRef.current?.clear()}
                   style={{ marginTop: 4, fontSize: 12, color: '#888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
                 >
