@@ -101,18 +101,25 @@ export async function resolveSecondInstallmentAdvance(
 }
 
 /**
- * Stage orders are UNIQUE per service_type (`pipeline_stages_service_type_stage_order_key`,
- * verified on production). Reordering therefore cannot be done by assigning final
- * positions one row at a time — an intermediate state collides. Every row is first
- * parked at an order far outside the real range (which runs -10..90 in production;
- * negative orders are legitimately used for standalone-intake stages), then given
- * its final position.
+ * Stage order is UNIQUE per service_type (`pipeline_stages_service_type_stage_order_key`,
+ * verified on both production and sandbox), so a reorder cannot assign final
+ * positions one row at a time — an intermediate state collides. Rows whose order
+ * must change are parked clear of the live range first.
+ *
+ * The park base is computed from the data, never a constant. A fixed constant
+ * deadlocks: if a save dies part-way through parking, the leftovers occupy the
+ * bottom of the park band, and the next save — which reads rows ordered by
+ * stage_order, so the unparked rows now sort FIRST — tries to park a row onto a
+ * value a leftover still holds. Every retry then fails identically and the
+ * service can never be saved again without hand-editing the database.
+ * Reproduced before this was fixed.
  */
-const PARK_OFFSET = 100000
+const PARK_FLOOR = 100000
 
 /** Validation that must happen BEFORE anything is written. */
 export function validateStageDraft(stages: StageRow[]): string | null {
   const seen = new Set<string>()
+  const seenIds = new Set<string>()
   for (let idx = 0; idx < stages.length; idx++) {
     const name = (stages[idx].stage_name ?? "").trim()
     if (!name) {
@@ -122,53 +129,89 @@ export function validateStageDraft(stages: StageRow[]): string | null {
       return `Two stages are both called "${name}". Stage names must be unique within a service.`
     }
     seen.add(name.toLowerCase())
+    // Two entries sharing an id would silently merge into one row.
+    const id = stages[idx].id
+    if (id) {
+      if (seenIds.has(id)) return `The same stage appears twice in this draft. Reload the page and try again.`
+      seenIds.add(id)
+    }
   }
   return null
 }
 
 /**
+ * Choose the stage_order for each submitted stage, PRESERVING the pipeline's own
+ * numbering scale.
+ *
+ * Stage order is not cosmetic and it is not dense. Tax Return runs -10..90 with
+ * deliberate gaps, and `resolveSecondInstallmentAdvance` above filters on
+ * `stage_order >= 1` — that filter is the ONLY thing preventing a second
+ * installment payment from auto-advancing a delivery past the intake stages that
+ * carry negative orders. Renumbering every save to a dense 1..n (which both the
+ * original implementation and the first rewrite did) silently moves intake
+ * stages to positive numbers and changes what a money event does.
+ *
+ * So: reuse the order values the pipeline already uses, assigned by the admin's
+ * chosen sequence. Stages added on top extend the scale beyond the current
+ * maximum. When the sequence has not changed, every row keeps the exact value it
+ * already had and no order is written at all.
+ */
+export function planStageOrders(
+  submittedCount: number,
+  existingOrders: number[],
+): number[] {
+  const pool = [...existingOrders].sort((a, b) => a - b)
+  const out: number[] = []
+  let next = pool.length > 0 ? pool[pool.length - 1] : 0
+  for (let i = 0; i < submittedCount; i++) {
+    if (i < pool.length) out.push(pool[i])
+    else {
+      next += 10 // extend the scale rather than compressing it
+      out.push(next)
+    }
+  }
+  return out
+}
+
+/**
  * Reconcile a service's stages against what the editor submitted.
  *
- * WHY THIS IS NOT delete-then-insert ANY MORE (2026-07-22). It used to delete
- * every row for the service_type and re-insert only the nine columns the editor
- * authors. The row has twenty-three. Everything else — the entire staff
- * workspace descriptor (its components, buttons and advance targets), the
- * client-facing labels the portal renders, the board/portal display settings —
- * was silently destroyed on every Save. One Save on the ITIN service, even just
- * changing an SLA day count, would have erased all eight ITIN workspaces.
+ * WHY THIS IS NOT delete-then-insert (2026-07-22). It used to delete every row
+ * for the service_type and re-insert only the nine columns the editor authors.
+ * The row has twenty-three. Everything else — the entire staff workspace
+ * descriptor (components, buttons, advance targets), the client-facing labels
+ * the portal renders, the board and portal display settings — was destroyed on
+ * every Save. One Save on ITIN, even just an SLA day count, would have erased
+ * all eight ITIN workspaces.
  *
- * A first attempt kept the delete and tried to read those columns back
- * beforehand and re-attach them. Council review rejected it, correctly: matching
- * an old row to a new one by NAME cannot distinguish a rename from a delete, so
- * it had to refuse renames outright; a failed insert left the table empty, and
- * the admin's natural "Save failed, try again" then wiped everything with the
- * guard asleep; and renaming the pipeline itself bypassed the whole thing.
+ * The defect was upstream of the write: the loader did not select the row id, so
+ * identity was discarded before the editor ever saw the stages and the write had
+ * nothing but names to match on. Carrying the id through means rows are UPDATED
+ * IN PLACE, and columns the editor does not author are never named in any
+ * statement — so they cannot be lost by oversight, nor by a future column nobody
+ * remembers to protect.
  *
- * The actual defect was upstream: `getStagesForService` did not select the row
- * id, so identity was thrown away at LOAD time and the write path had nothing
- * but names to match on. With the id carried through, rows are UPDATED IN
- * PLACE. Columns the editor does not author are never named in any statement,
- * so they cannot be lost — not by oversight, not by a future column nobody
- * remembers to protect. There is nothing to "preserve" because nothing is
- * destroyed.
+ * `knownStageIds` is the set of row ids the editor had when the page loaded. A row
+ * that exists now but was NOT in that set was created by someone else since —
+ * a second tab, another admin, the /config stage editor — and saving would
+ * delete it as "absent from the submission". That is refused instead.
  *
- * Order of operations is chosen so that a failure part-way through never loses
- * a stage: park, then delete what the admin removed, then update, then insert.
- * A crash mid-sequence leaves rows with parked order values — visibly wrong
- * order, fully recoverable by saving again — rather than an empty pipeline.
+ * Order of operations: validate, read, refuse-if-unsafe, park, delete, update,
+ * insert. Every failure point leaves stages present, never an empty pipeline.
  */
 export async function replaceStagesForService(
   serviceType: string,
   stages: StageRow[],
-): Promise<void> {
+  opts: { knownStageIds?: string[] } = {},
+): Promise<{ warnings: string[] }> {
   if (!serviceType || !serviceType.trim()) {
     throw new Error("replaceStagesForService: serviceType is required")
   }
 
-  // Nothing is written until the draft is known-good. A blank or duplicated
-  // stage name used to be accepted and only became a problem later.
   const invalid = validateStageDraft(stages)
   if (invalid) throw new Error(invalid)
+
+  const warnings: string[] = []
 
   const { data: existingRaw, error: readErr } = await supabaseAdmin
     .from("pipeline_stages")
@@ -179,31 +222,104 @@ export async function replaceStagesForService(
     throw new Error(`replaceStagesForService(${serviceType}) read: ${readErr.message}`)
   }
   const existing = (existingRaw ?? []) as Array<{ id: string; stage_name: string; stage_order: number }>
-  const existingIds = new Set(existing.map(r => r.id))
+  const existingById = new Map(existing.map(r => [r.id, r]))
 
-  // A submitted id that no longer exists means the row was deleted by someone
-  // else since the page loaded. Treat it as new rather than updating nothing.
-  const submitted = stages.map(s => ({ ...s, id: s.id && existingIds.has(s.id) ? s.id : undefined }))
-  const keptIds = new Set(submitted.map(s => s.id).filter(Boolean))
+  // A submitted id that no longer exists was deleted by someone else; treat it
+  // as new rather than updating nothing.
+  const submitted = stages.map(s => ({
+    ...s,
+    stage_name: s.stage_name.trim(),
+    id: s.id && existingById.has(s.id) ? s.id : undefined,
+  }))
+  const keptIds = new Set(submitted.map(s => s.id).filter(Boolean) as string[])
 
-  // 1. Park every existing row clear of the final range so reordering cannot
-  //    collide on the (service_type, stage_order) unique index.
-  for (let idx = 0; idx < existing.length; idx++) {
-    const row = existing[idx]
-    const { error } = await supabaseAdmin
-      .from("pipeline_stages")
-      .update({ stage_order: PARK_OFFSET + idx })
-      .eq("id", row.id)
-    if (error) {
-      throw new Error(`replaceStagesForService(${serviceType}) reorder: ${error.message}`)
+  // STALE EDIT. Refuse rather than delete work this editor never saw.
+  if (opts.knownStageIds) {
+    const known = new Set(opts.knownStageIds)
+    const appeared = existing.filter(r => !known.has(r.id))
+    if (appeared.length > 0) {
+      throw new Error(
+        `This service's stages were changed somewhere else while this page was open ` +
+          `(${appeared.map(r => `"${r.stage_name}"`).join(", ")} ${appeared.length === 1 ? "was" : "were"} added). ` +
+          `Nothing has been changed here — reload the page and make your edit again.`,
+      )
     }
   }
 
-  // 2. Remove the stages the admin deleted. Explicit act, so no guard here —
-  //    but it happens BEFORE the updates so a later failure cannot strand a
-  //    half-written pipeline behind rows that should be gone.
   const removed = existing.filter(r => !keptIds.has(r.id))
+
+  // A stage cannot be deleted while live work sits on it: service deliveries
+  // record their stage by NAME, so the delivery would be stranded on a stage
+  // that no longer exists and could not be advanced or reverted by any UI path.
   if (removed.length > 0) {
+    const { data: blockers, error: blockErr } = await supabaseAdmin
+      .from("service_deliveries")
+      .select("stage")
+      .eq("service_type", serviceType)
+      .eq("status", "active")
+      .in("stage", removed.map(r => r.stage_name))
+    if (blockErr) {
+      throw new Error(`replaceStagesForService(${serviceType}) delivery check: ${blockErr.message}`)
+    }
+    if (blockers && blockers.length > 0) {
+      const counts = new Map<string, number>()
+      for (const b of blockers as Array<{ stage: string }>) {
+        counts.set(b.stage, (counts.get(b.stage) ?? 0) + 1)
+      }
+      const detail = Array.from(counts.entries())
+        .map(([stage, n]) => `"${stage}" (${n} active)`)
+        .join(", ")
+      throw new Error(
+        `Cannot delete ${detail}: clients are currently on ${counts.size === 1 ? "that stage" : "those stages"} and ` +
+          `would be stranded with no way to move them forward. Move them to another stage first. ` +
+          `Nothing has been changed.`,
+      )
+    }
+  }
+
+  // Renaming a stage leaves live deliveries pointing at the old name, so re-key
+  // them in the same operation. Narrow by design: exact old name, this service
+  // only, active rows only. History rows are deliberately NOT rewritten — they
+  // must keep saying what they said at the time.
+  const renames: Array<{ from: string; to: string }> = []
+  for (const s of submitted) {
+    if (!s.id) continue
+    const before = existingById.get(s.id)
+    if (before && before.stage_name !== s.stage_name) {
+      renames.push({ from: before.stage_name, to: s.stage_name })
+    }
+  }
+
+  // Final orders, preserving the pipeline's scale (see planStageOrders).
+  const plannedOrders = planStageOrders(submitted.length, existing.map(r => r.stage_order))
+  const needsOrderChange = submitted.some((s, i) => {
+    if (!s.id) return true // a new row must be written anyway
+    return existingById.get(s.id)!.stage_order !== plannedOrders[i]
+  })
+
+  // 1. PARK — only when an order actually moves, and always above everything
+  //    currently in the table so a half-finished park can never block a retry.
+  if (needsOrderChange && existing.length > 0) {
+    const base = Math.max(PARK_FLOOR, ...existing.map(r => r.stage_order)) + 1
+    for (let idx = 0; idx < existing.length; idx++) {
+      const row = existing[idx]
+      const { error } = await supabaseAdmin
+        .from("pipeline_stages")
+        .update({ stage_order: base + idx })
+        .eq("id", row.id)
+      if (error) {
+        throw new Error(`replaceStagesForService(${serviceType}) reorder: ${error.message}`)
+      }
+    }
+  }
+
+  // 2. DELETE what the admin removed — recording it first, because the row
+  //    carries content the editor never showed and cannot be retyped.
+  if (removed.length > 0) {
+    const { data: doomed } = await supabaseAdmin
+      .from("pipeline_stages")
+      .select("*")
+      .in("id", removed.map(r => r.id))
     const { error } = await supabaseAdmin
       .from("pipeline_stages")
       .delete()
@@ -211,19 +327,19 @@ export async function replaceStagesForService(
     if (error) {
       throw new Error(`replaceStagesForService(${serviceType}) delete: ${error.message}`)
     }
+    await logStageDeletion(serviceType, doomed ?? [])
   }
 
-  // 3. Update surviving rows in place. ONLY editor-authored columns appear
-  //    here — that is what makes the workspace layout and client labels
-  //    untouchable by a Save.
+  // 3. UPDATE survivors in place. ONLY editor-authored columns appear here —
+  //    that is what makes the workspace and client labels untouchable by a Save.
   for (let idx = 0; idx < submitted.length; idx++) {
     const s = submitted[idx]
     if (!s.id) continue
     const { error } = await supabaseAdmin
       .from("pipeline_stages")
       .update({
-        stage_order: idx + 1,
-        stage_name: s.stage_name.trim(),
+        stage_order: plannedOrders[idx],
+        stage_name: s.stage_name,
         stage_description: s.stage_description ?? null,
         sla_days: s.sla_days ?? null,
         auto_advance: s.auto_advance ?? false,
@@ -237,14 +353,14 @@ export async function replaceStagesForService(
     }
   }
 
-  // 4. Insert the genuinely new stages.
+  // 4. INSERT the genuinely new stages.
   const insertRows = submitted
     .map((s, idx) => ({ s, idx }))
     .filter(({ s }) => !s.id)
     .map(({ s, idx }) => ({
       service_type: serviceType,
-      stage_order: idx + 1,
-      stage_name: s.stage_name.trim(),
+      stage_order: plannedOrders[idx],
+      stage_name: s.stage_name,
       stage_description: s.stage_description ?? null,
       sla_days: s.sla_days ?? null,
       auto_advance: s.auto_advance ?? false,
@@ -258,16 +374,82 @@ export async function replaceStagesForService(
       throw new Error(`replaceStagesForService(${serviceType}) insert: ${error.message}`)
     }
   }
+
+  // 5. Follow the renames through to live work, and report what moved.
+  for (const r of renames) {
+    let moved = 0
+    try {
+      const { renameStageAcrossDeliveries } = await import("@/lib/operations/service-delivery")
+      moved = await renameStageAcrossDeliveries(serviceType, r.from, r.to)
+    } catch (err) {
+      warnings.push(
+        `Renamed "${r.from}" to "${r.to}", but could not move the clients currently on it ` +
+          `(${err instanceof Error ? err.message : String(err)}). They may be stuck — check before advancing them.`,
+      )
+      continue
+    }
+    if (moved > 0) {
+      warnings.push(`Moved ${moved} active client${moved === 1 ? "" : "s"} from "${r.from}" to "${r.to}".`)
+    }
+    // A renamed stage may still be named by another stage's advance button.
+    const stillReferenced = await stagesReferencing(serviceType, r.from)
+    if (stillReferenced.length > 0) {
+      warnings.push(
+        `"${stillReferenced.join('", "')}" still ${stillReferenced.length === 1 ? "has a button" : "have buttons"} ` +
+          `pointing at the old name "${r.from}". Those buttons will fail until the workspace is updated.`,
+      )
+    }
+  }
+
+  return { warnings }
+}
+
+/** Record what a stage deletion destroyed — the row carries content the editor never showed. */
+async function logStageDeletion(serviceType: string, rows: unknown[]): Promise<void> {
+  if (rows.length === 0) return
+  try {
+    await supabaseAdmin.from("action_log").insert(
+      rows.map(row => {
+        const r = row as { id?: string; stage_name?: string; stage_layout?: unknown }
+        return {
+          action_type: "delete",
+          table_name: "pipeline_stages",
+          record_id: r.id ?? null,
+          summary:
+            `Deleted stage "${r.stage_name ?? "?"}" from the ${serviceType} pipeline` +
+            (r.stage_layout ? " (its staff workspace was deleted with it)" : ""),
+          details: { service_type: serviceType, deleted_row: row } as unknown as Json,
+        }
+      }),
+    )
+  } catch {
+    // Never let the audit write fail the save — the deletion already happened.
+  }
+}
+
+/** Stage names whose stage_layout still names `target` in an action button. */
+async function stagesReferencing(serviceType: string, target: string): Promise<string[]> {
+  const { data } = await supabaseAdmin
+    .from("pipeline_stages")
+    .select("stage_name, stage_layout")
+    .eq("service_type", serviceType)
+  const hits: string[] = []
+  for (const row of (data ?? []) as Array<{ stage_name: string; stage_layout: unknown }>) {
+    if (JSON.stringify(row.stage_layout ?? "").includes(`"target":"${target}"`) ||
+        JSON.stringify(row.stage_layout ?? "").includes(`"target": "${target}"`)) {
+      hits.push(row.stage_name)
+    }
+  }
+  return hits
 }
 
 /**
  * Re-key a service's stages when the admin renames the pipeline itself.
  *
- * The pipeline name IS the `service_type` key. Without this, renaming it made
- * the write path look for rows under a name that has none: it would insert a
- * fresh bare set and leave the real rows orphaned under the old name, with
- * every in-flight service delivery still pointing at it. That is the same total
- * loss the rest of this file exists to prevent, through a different door.
+ * The pipeline name IS the `service_type` key. Without this, the write path
+ * looks for rows under a name that has none: it inserts a fresh bare set and
+ * leaves the real rows orphaned under the old name, with every in-flight
+ * delivery still pointing at it.
  */
 export async function renameServiceTypeForStages(
   oldServiceType: string,
@@ -283,4 +465,8 @@ export async function renameServiceTypeForStages(
   if (error) {
     throw new Error(`renameServiceTypeForStages(${oldServiceType} -> ${newServiceType}): ${error.message}`)
   }
+
+  // Live deliveries key off service_type too.
+  const { renameServiceTypeAcrossDeliveries } = await import("@/lib/operations/service-delivery")
+  await renameServiceTypeAcrossDeliveries(oldServiceType, newServiceType)
 }

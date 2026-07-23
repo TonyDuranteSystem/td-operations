@@ -61,6 +61,13 @@ export interface ServiceDraft {
   basics: ServiceBasicsDraft
   stages: StageRow[]
   workflow: ServiceWorkflowDraft | null
+  /**
+   * The stage row ids this editor had when the page loaded. Lets the save
+   * refuse when someone else added a stage in the meantime, instead of deleting
+   * it as "absent from the submission" — Antonio runs the CRM on desktop and
+   * phone at once, and /config edits the same rows.
+   */
+  knownStageIds?: string[]
 }
 
 export interface ServiceWorkflowDraft {
@@ -190,6 +197,8 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
     // afterwards, inside the stage save — so a rejected save had ALREADY
     // committed the name, price and currency while telling the admin the save
     // had failed. A wrong price could go live behind an error message.
+    const stageWarnings: string[] = []
+
     const stageProblem = validateStageDraft(draft.stages)
     if (stageProblem) {
       return { ok: false, error: stageProblem }
@@ -209,18 +218,49 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
       updated_at: new Date().toISOString(),
     }
 
+    // The pipeline name IS the key its stages are stored under, so two services
+    // must never share one. Without this check, creating a service named after
+    // an existing pipeline (the natural thing to do on an "Add Service" screen)
+    // hands that pipeline's stages to the new service — and an empty stage list
+    // then deletes every one of them while reporting success.
+    if (row.pipeline) {
+      const { data: clash, error: clashErr } = await supabaseAdmin
+        .from("service_catalog")
+        .select("id, name")
+        .eq("pipeline", row.pipeline)
+        .maybeSingle()
+      if (clashErr) {
+        return { ok: false, error: `Could not check the pipeline name: ${clashErr.message}` }
+      }
+      const other = clash as { id: string; name: string } | null
+      if (other && other.id !== basics.id) {
+        return {
+          ok: false,
+          error:
+            `The pipeline name "${row.pipeline}" already belongs to "${other.name}". ` +
+            `Two services cannot share a pipeline — pick a different name. Nothing has been changed.`,
+        }
+      }
+    }
+
     let serviceId: string
     let serviceSlug: string
 
     // Read the pipeline name as it stands BEFORE we overwrite it, so a rename
-    // can be detected and the stages moved with it.
+    // can be detected and the stages moved with it. A failure here must NOT be
+    // swallowed: treating a transient read error as "no previous pipeline"
+    // skips the re-key, orphans every stage under the old name and reports
+    // success.
     let previousPipeline: string | null = null
     if (basics.id) {
-      const { data: prior } = await supabaseAdmin
+      const { data: prior, error: priorErr } = await supabaseAdmin
         .from("service_catalog")
         .select("pipeline")
         .eq("id", basics.id)
         .maybeSingle()
+      if (priorErr) {
+        return { ok: false, error: `Could not read the current pipeline name: ${priorErr.message}` }
+      }
       previousPipeline = (prior as { pipeline?: string | null } | null)?.pipeline ?? null
     }
 
@@ -270,11 +310,11 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
 
     // Stages — only persist when a pipeline name is set. Services without a
     // pipeline are "addon" billing-only items with no lifecycle.
-    if (row.pipeline && draft.stages.length > 0) {
-      await replaceStagesForService(row.pipeline, draft.stages)
-    } else if (row.pipeline && draft.stages.length === 0) {
-      // Pipeline declared but no stages: clear any existing stages.
-      await replaceStagesForService(row.pipeline, [])
+    if (row.pipeline) {
+      const res = await replaceStagesForService(row.pipeline, draft.stages, {
+        knownStageIds: draft.knownStageIds,
+      })
+      stageWarnings.push(...res.warnings)
     }
 
     // Workflow — only persist when defined AND pipeline name is set (workflow
@@ -292,7 +332,9 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
       }
     }
 
-    const warnings = buildSemanticWarnings(draft.stages, draft.workflow)
+    // Stage-level warnings (clients moved by a rename, buttons left pointing at
+    // an old name) matter more than the semantic ones — surface them first.
+    const warnings = [...stageWarnings, ...buildSemanticWarnings(draft.stages, draft.workflow)]
 
     revalidatePath("/service-catalog")
     revalidatePath(`/service-catalog/${serviceSlug}/edit`)

@@ -250,6 +250,10 @@ export function ServiceEditClient({ mode, initial }: Props) {
     initial?.basics ?? blankBasics(),
   )
   const [stages, setStages] = useState<StageRow[]>(initial?.stages ?? [])
+  /** Frozen at first render — the stage ids this page loaded with. */
+  const [loadedStageIds] = useState<string[]>(() =>
+    (initial?.stages ?? []).map(s => s.id).filter((id): id is string => !!id),
+  )
   const [workflow, setWorkflow] = useState<WorkflowState>(() =>
     initial?.workflow ? workflowFromInitial(initial.workflow) : blankWorkflow(),
   )
@@ -293,7 +297,14 @@ export function ServiceEditClient({ mode, initial }: Props) {
     setWarnings([])
     try {
       const workflowDraft = workflow.enabled ? workflowToDraft(workflow, publish) : null
-      const draft: ServiceDraft = { basics, stages, workflow: workflowDraft }
+      const draft: ServiceDraft = {
+        basics,
+        stages,
+        workflow: workflowDraft,
+        // What this page saw at load. The server refuses the save if a stage
+        // appeared since, rather than deleting work another tab just added.
+        knownStageIds: loadedStageIds,
+      }
       const result = await saveServiceComplete(draft)
       if (!result.ok) {
         if (result.workflowIssues && result.workflowIssues.length > 0) {
