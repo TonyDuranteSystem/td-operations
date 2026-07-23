@@ -57,6 +57,8 @@ import {
   type ChatMessage,
 } from '@/lib/team/chat-messages'
 import { ChatErrorBoundary } from '@/components/team-chat/chat-error-boundary'
+import { useDraggableFab } from '@/components/ui/use-draggable-fab'
+import { FAB_KEYS } from '@/lib/ui/draggable-fab'
 import { NoteComposeDialog } from '@/components/dashboard/note-quick-create'
 
 const QUIET_KEY = 'td-floating-chat-quiet'
@@ -147,6 +149,8 @@ function FloatingChatInner() {
   const [sheetOpen, setSheetOpen] = useState(false)
   const [newChatOpen, setNewChatOpen] = useState(false)
   const [quiet, setQuiet] = useState(false)
+  // Antonio moves this himself — desktop and phone. Double-click resets it.
+  const launcher = useDraggableFab(FAB_KEYS.chat)
   // Read after mount, never during render — reading storage while rendering
   // desyncs hydration.
   useEffect(() => { setQuiet(store.get(QUIET_KEY) === '1') }, [])
@@ -333,7 +337,12 @@ function FloatingChatInner() {
       {/* Launcher — desktop when closed/minimized, and always on mobile */}
       {(!windowOpen || minimized) && (
         <button
+          ref={launcher.ref}
+          {...launcher.dragProps}
+          style={launcher.style}
           onClick={() => {
+            // A drag that ends on the button must not also open it.
+            if (launcher.dragging) return
             if (window.matchMedia('(min-width: 1024px)').matches) {
               setWindowOpen(true)
               setMinimized(false)
@@ -349,15 +358,17 @@ function FloatingChatInner() {
              a bottom corner, with the unread count as a badge rather than as the
              label (a bare number in a pill looked like a counter, not a door).
 
-             DELIBERATE TRADE-OFF, do not "fix" silently: the sticky-notes layer
-             documents that the toast stack owns bottom-right, which is why the
-             notes pill went bottom-LEFT. This button takes bottom-right anyway,
-             because that is where every user on earth looks for a chat launcher
-             and discoverability was the actual reported failure. Toasts are
-             transient and will briefly cover it; the button is permanent. If
-             that overlap turns out to be annoying in daily use, move it UP
-             (bottom-24) rather than back into a corner nobody checks. */
-          className="group fixed bottom-5 right-5 z-[46] flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500 text-white shadow-xl ring-4 ring-emerald-500/20 transition-transform hover:scale-105 hover:bg-emerald-400 lg:bottom-6 lg:right-6"
+             PLACEMENT, corrected 2026-07-23. The first version sat at the very
+             bottom-right — the corner the codebase already reserves for toasts,
+             which is WHY the notes pill went bottom-LEFT. On a phone that put it
+             exactly on top of the composer's Send button, and on Portal Chats
+             that Send is how you answer a real client. So: raised above the
+             composer band by default on mobile (bottom-24), back in the corner on
+             desktop where there is no composer to fight. Antonio can also DRAG it
+             anywhere — double-click/tap resets it here.
+             `touch-none` is required: without it the browser hands a drag to the
+             page scroller instead of the button. */
+          className="group fixed bottom-24 right-4 z-[46] flex h-14 w-14 touch-none items-center justify-center rounded-full bg-emerald-500 text-white shadow-xl ring-4 ring-emerald-500/20 transition-transform hover:scale-105 hover:bg-emerald-400 lg:bottom-6 lg:right-6"
           aria-label={unread > 0 ? `Team chat, ${unread} unread messages` : 'Team chat'}
           title="Team chat"
         >
