@@ -63,6 +63,13 @@ import { NoteComposeDialog } from '@/components/dashboard/note-quick-create'
 
 const QUIET_KEY = 'td-floating-chat-quiet'
 
+/**
+ * Don't re-mark the same conversation read more often than this. Gestures come
+ * in bursts (a single wheel scroll is many events) and each mark is a POST plus
+ * a thread-list refetch.
+ */
+const MARK_READ_THROTTLE_MS = 3_000
+
 interface ThreadsPayload {
   threads: ChatThreadRow[]
   members: ChatMember[]
@@ -195,17 +202,31 @@ function FloatingChatInner() {
   }, [openThreadId, loadMessages])
 
   /**
-   * Advance the read pointer — ONLY from real engagement (opening the composer,
-   * scrolling the list, sending). Never on mount, never on poll, never while
-   * minimized. Best-effort: a failure here must not break the chat, it just
-   * means the badge clears a moment later.
+   * Advance the read pointer — ONLY from real human engagement: opening a chat,
+   * touching the message list, focusing the composer, sending. Never on mount,
+   * never on poll, never from a programmatic scroll, never while minimized.
+   * Best-effort: a failure here must not break the chat, it just means the badge
+   * clears a moment later.
+   *
+   * THROTTLED, because the engagement signals are gestures: one wheel scroll
+   * emits a burst of events, and each unthrottled call was a POST *plus* a
+   * refetch of the whole thread list (which re-reads the staff directory
+   * server-side). Same thread within the window → skip.
    */
+  const lastMark = useRef<{ threadId: string; at: number } | null>(null)
   const markRead = useCallback(async (threadId: string | null) => {
     if (!threadId || minimizedRef.current) return
+    const now = Date.now()
+    const prev = lastMark.current
+    if (prev && prev.threadId === threadId && now - prev.at < MARK_READ_THROTTLE_MS) return
+    lastMark.current = { threadId, at: now }
     try {
       await fetch(`/api/team/threads/${threadId}/read`, { method: 'POST' })
       qc.invalidateQueries({ queryKey: ['floating-chat-threads'] })
-    } catch { /* best-effort */ }
+    } catch {
+      // Let the next gesture retry rather than staying silent for the window.
+      lastMark.current = null
+    }
   }, [qc])
 
   // ─── realtime ───
@@ -322,7 +343,7 @@ function FloatingChatInner() {
           quiet={quiet}
           pathname={pathname}
           onToggleQuiet={toggleQuiet}
-          onPickThread={(id) => { setOpenThreadId(id); setMinimized(false) }}
+          onPickThread={(id) => { setOpenThreadId(id); setMinimized(false); markRead(id) }}
           onBack={() => setOpenThreadId(null)}
           onNewChat={() => setNewChatOpen(true)}
           onMinimize={() => setMinimized(true)}
@@ -395,7 +416,7 @@ function FloatingChatInner() {
           loading={loadingMsgs}
           error={msgError}
           pathname={pathname}
-          onPickThread={(id) => { setOpenThreadId(id); setMinimized(false) }}
+          onPickThread={(id) => { setOpenThreadId(id); setMinimized(false); markRead(id) }}
           onBack={() => setOpenThreadId(null)}
           onNewChat={() => setNewChatOpen(true)}
           onEngage={() => markRead(openThreadIdRef.current)}
@@ -601,8 +622,11 @@ function NewChatDialog(props: {
   const [personId, setPersonId] = useState<string>(props.people[0]?.id ?? '')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  /** Set when the server continued an existing chat instead of starting one. */
+  const [reusedThread, setReusedThread] = useState<{ id: string; label: string } | null>(null)
 
-  const start = async () => {
+  /** `forceNew` is passed in, never read from state — state would lag the click. */
+  const start = async (forceNew = false) => {
     setBusy(true); setErr(null)
     try {
       if (accountId) {
@@ -610,13 +634,26 @@ function NewChatDialog(props: {
         const res = await fetch('/api/team/conversations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ client: `account:${accountId}`, topic: subject.trim() || undefined }),
+          body: JSON.stringify({
+            client: `account:${accountId}`,
+            topic: subject.trim() || undefined,
+            force_new: forceNew,
+          }),
         })
         if (!res.ok) {
           const d = await res.json().catch(() => ({}))
           throw new Error(d.error || 'Could not start that chat.')
         }
         const d = await res.json()
+        // CONTINUING is not the same as STARTING, and the server tells us which.
+        // Dropping this flag (as the first version did) meant "New chat" could
+        // land you silently in a days-old conversation while looking like a
+        // fresh one. Say so, and offer the escape hatch rather than just
+        // labelling the trap.
+        if (d.reused && !forceNew) {
+          setReusedThread({ id: d.thread.id, label: subject.trim() || accountName || 'this client' })
+          return
+        }
         props.onOpenThread(d.thread.id)
       } else {
         // No client → a direct message.
@@ -649,6 +686,34 @@ function NewChatDialog(props: {
           <button onClick={props.onClose} className="rounded p-1 hover:bg-zinc-100"><X className="h-4 w-4" /></button>
         </div>
 
+        {reusedThread ? (
+          <>
+            <p className="text-sm text-zinc-700">
+              There&apos;s already an open chat about <strong>{reusedThread.label}</strong>.
+            </p>
+            <p className="mt-1 text-xs text-zinc-500">
+              Continuing it keeps everything in one place. Start a separate one only if this
+              is a different matter.
+            </p>
+            <div className="mt-4 flex flex-col gap-2">
+              <button
+                onClick={() => { props.onOpenThread(reusedThread.id); props.onClose() }}
+                className="rounded bg-emerald-500 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-400"
+              >
+                Continue that chat
+              </button>
+              <button
+                onClick={() => { setReusedThread(null); start(true) }}
+                disabled={busy}
+                className="rounded border px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-40"
+              >
+                Start a separate one
+              </button>
+            </div>
+            {err && <p className="mt-2 text-xs text-red-700">{err}</p>}
+          </>
+        ) : (
+        <>
         <label className="mb-1 block text-xs font-medium text-zinc-600">About a client (optional)</label>
         <AccountCombobox
           value={accountId}
@@ -690,11 +755,13 @@ function NewChatDialog(props: {
 
         <div className="mt-4 flex justify-end gap-2">
           <button onClick={props.onClose} className="rounded px-3 py-1.5 text-sm hover:bg-zinc-100">Cancel</button>
-          <button onClick={start} disabled={busy || (!accountId && !personId)}
+          <button onClick={() => start()} disabled={busy || (!accountId && !personId)}
             className="flex items-center gap-1 rounded bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-400 disabled:opacity-40">
             {busy && <Loader2 className="h-4 w-4 animate-spin" />} Start
           </button>
         </div>
+        </>
+        )}
       </div>
     </div>
   )
@@ -800,7 +867,29 @@ function MessageList(props: {
   return (
     <div
       data-no-drag
-      onScroll={props.onEngage}
+      /**
+       * ENGAGEMENT IS A HUMAN GESTURE, NEVER A SCROLL.
+       *
+       * This used to be `onScroll={onEngage}`, and that quietly broke the one
+       * rule this whole feature exists to protect. An arriving message changes
+       * the message count, the effect above scrolls to the bottom, and that
+       * PROGRAMMATIC scroll fires onScroll — so a message that landed while
+       * nobody was at the desk marked ITSELF read and cleared its own badge,
+       * after the phone alert had already been and gone.
+       *
+       * A timestamp window to "ignore the scroll we caused" was considered and
+       * rejected: it needs a tuned constant, it breaks if anyone adds smooth
+       * scrolling, and it throws away a genuine read that lands inside the
+       * window. Pointer/wheel/key events are unforgeable instead — scrollIntoView
+       * produces none of them, a human produces one every time.
+       *
+       * Opening a chat marks it read explicitly at the call site (onPickThread),
+       * which is what makes removing the scroll signal safe: without that, the
+       * badge would never clear at all.
+       */
+      onPointerDown={props.onEngage}
+      onWheel={props.onEngage}
+      onKeyDown={props.onEngage}
       className="flex-1 overflow-y-auto bg-zinc-50 p-2"
     >
       {props.loading && props.messages.length === 0 && (

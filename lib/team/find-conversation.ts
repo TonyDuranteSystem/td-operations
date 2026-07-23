@@ -19,6 +19,7 @@
  */
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { channelSlug } from '@/lib/team/workspace'
+import { listTeamMembers } from '@/lib/team/directory'
 import {
   clientRefColumn,
   conversationTitle,
@@ -138,6 +139,45 @@ export async function findOrCreateConversation(
     message: `🗂️ Conversation started: ${conversationTitle(clientName, topic)}`,
     read_at: now,
   })
+
+  // SEED THE OTHER STAFF AS PARTICIPANTS — otherwise the conversation is silent.
+  //
+  // A client discussion notifies its PARTICIPANTS, and participation is simply
+  // "you have a read row" (see the discussion branch of the send route). A newly
+  // created conversation had no rows at all except the creator's, so starting a
+  // chat about a client pushed to nobody and lit no badge — the message just sat
+  // there. Found 2026-07-23.
+  //
+  // Seeded at the EPOCH, exactly like the share route, so everything said from
+  // here on counts as unread for them; `ignoreDuplicates` so we can never clobber
+  // a teammate who has already read further. Only on CREATE — re-seeding a reused
+  // conversation would dump its entire history back onto them as unread.
+  //
+  // NOTE the one cosmetic consequence, accepted deliberately: the 🗂️ opening
+  // marker above is authored by the creator, so the other person sees a "1" for
+  // it even if nothing else is ever typed. Suppressing that would mean seeding
+  // AFTER the marker insert, which then races the first real message.
+  try {
+    const others = (await listTeamMembers())
+      .map((m) => m.id)
+      .filter((id) => id && id !== createdBy)
+    if (others.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabaseAdmin as any)
+        .from('internal_thread_reads')
+        .upsert(
+          others.map((uid) => ({
+            thread_id: created.id,
+            user_id: uid,
+            last_read_at: '1970-01-01T00:00:00Z',
+            updated_at: now,
+          })),
+          { onConflict: 'thread_id,user_id', ignoreDuplicates: true },
+        )
+    }
+  } catch {
+    // Best-effort: a seeding failure must not lose the conversation itself.
+  }
 
   return { thread: created, reused: false, clientName }
 }
