@@ -226,7 +226,7 @@ export async function replaceStagesForService(
   // a caller that genuinely means it.
   if (!opts.allowContentLoss) {
     const incoming = new Set(stages.map(s => s.stage_name))
-    const stranded = [...carried.keys()].filter(name => !incoming.has(name))
+    const stranded = Array.from(carried.keys()).filter(name => !incoming.has(name))
     if (stranded.length > 0) {
       throw new Error(
         `replaceStagesForService(${serviceType}): this save would permanently delete the ` +
