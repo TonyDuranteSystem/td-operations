@@ -56,7 +56,41 @@ export interface OperatingAgreementPdfInput {
   /** Single-member agreements carry one signature and no member blocks. */
   soleSignaturePng?: Uint8Array | null
   soleSignedAt?: string | null
+  /**
+   * Render the UNSIGNED reading copy.
+   *
+   * ⛔ This is not cosmetic. Read the DRAFT_* constants below before changing it.
+   */
+  draft?: boolean
 }
+
+/**
+ * DRAFT MODE — why the wording changes, not just the banner.
+ *
+ * The legal reviewer's blocker on the read-before-you-sign copy was NOT the
+ * missing signature. It was that the document's own text asserts it was already
+ * executed, in TD's own words, on paper a client can hand to a bank:
+ *
+ *   preamble — "is entered into and effective as of {date}"
+ *   recital  — "IN WITNESS WHEREOF, the Member has executed this Operating
+ *               Agreement as of the date first written above."
+ *
+ * Both print unconditionally. A banner alone leaves a document that contradicts
+ * itself: a stamp on top saying unsigned, a sentence inside saying executed. So
+ * draft mode changes the two sentences to their ordinary unexecuted form AND
+ * marks every page.
+ *
+ * What it deliberately does NOT touch: the clause bodies. Those are the terms of
+ * the agreement and they come from the same source the signing page renders, so
+ * the draft a client reads and the agreement they sign carry identical terms —
+ * which is the whole point of letting them read it first. "The undersigned
+ * Members hereby form…" inside Article 1 is standard drafting language and reads
+ * correctly on a document stamped DRAFT.
+ */
+const DRAFT_BANNER = "DRAFT — NOT SIGNED"
+const DRAFT_NOTICE =
+  "This is a draft copy of your Operating Agreement. It has not been signed and is not in effect. " +
+  "Sign it online in your portal, or print it, sign it by hand, and confirm in the portal that you have done so."
 
 const PAGE_WIDTH = 595.28 // A4 — same as the intercompany agreement
 const PAGE_HEIGHT = 841.89
@@ -96,7 +130,7 @@ export function formatSignedDate(iso: string | null | undefined): string {
 export async function generateOperatingAgreementPDF(
   input: OperatingAgreementPdfInput,
 ): Promise<Uint8Array> {
-  const { data } = input
+  const { data, draft = false } = input
   const doc = await PDFDocument.create()
   const { regular: font, bold, oblique } = await embedUnicodeFonts(doc, { oblique: true })
   const italic = (oblique as PDFFont) ?? font
@@ -174,10 +208,23 @@ export async function generateOperatingAgreementPDF(
   drawCentered("Manager-Managed", 9, font, rgb(0.67, 0.67, 0.67))
   y -= 10
 
+  // ── Draft notice ──────────────────────────────────────────────────────────
+  // Sits under the title, before the terms, so it is read before anything else.
+  // The per-page stamp is drawn at the end (see the page loop) — it has to run
+  // after pagination or pages added mid-document would be missed.
+  if (draft) {
+    y -= 4
+    drawCentered(DRAFT_BANNER, 13, bold, rgb(0.72, 0.11, 0.11))
+    drawWrapped(DRAFT_NOTICE, 9, italic)
+    y -= 12
+  }
+
   // ── Preamble ──────────────────────────────────────────────────────────────
   const preambleSigners = isMMLLC ? "the Members listed herein" : `${data.member_name} (the "Member")`
   drawWrapped(
-    `This Operating Agreement ("Agreement") of ${data.company_name} (the "Company") is entered into and effective as of ${formatAgreementDate(data.effective_date)}, by ${preambleSigners}.`,
+    `This Operating Agreement ("Agreement") of ${data.company_name} (the "Company") ${
+      draft ? "is to be entered into and effective as of" : "is entered into and effective as of"
+    } ${formatAgreementDate(data.effective_date)}, by ${preambleSigners}.`,
     9.5,
     italic,
   )
@@ -196,7 +243,9 @@ export async function generateOperatingAgreementPDF(
   check(60)
   y -= 6
   drawWrapped(
-    `IN WITNESS WHEREOF, the ${isMMLLC ? "Members have" : "Member has"} executed this Operating Agreement as of the date first written above.`,
+    draft
+      ? `IN WITNESS WHEREOF, the ${isMMLLC ? "Members intend" : "Member intends"} to execute this Operating Agreement as of the date first written above. THIS COPY HAS NOT BEEN SIGNED.`
+      : `IN WITNESS WHEREOF, the ${isMMLLC ? "Members have" : "Member has"} executed this Operating Agreement as of the date first written above.`,
     10.5,
     bold,
   )
@@ -286,7 +335,11 @@ export async function generateOperatingAgreementPDF(
     y -= LINE_HEIGHT
   }
 
-  // ── Page numbers ──────────────────────────────────────────────────────────
+  // ── Page numbers + draft stamp ────────────────────────────────────────────
+  // Runs AFTER the body so it covers every page, including ones `newPage()`
+  // added mid-clause. A stamp drawn inline would miss exactly the pages a long
+  // agreement spills onto — and a draft marked on page 1 only is a draft that
+  // can be handed over as an eight-page executed agreement minus its cover.
   const pages = doc.getPages()
   for (let i = 0; i < pages.length; i++) {
     const label = `Page ${i + 1} of ${pages.length}`
@@ -298,6 +351,24 @@ export async function generateOperatingAgreementPDF(
       font,
       color: rgb(0.6, 0.6, 0.6),
     })
+
+    if (draft) {
+      const stampW = bold.widthOfTextAtSize(DRAFT_BANNER, 9)
+      pages[i].drawText(DRAFT_BANNER, {
+        x: (PAGE_WIDTH - stampW) / 2,
+        y: PAGE_HEIGHT - MARGIN + 14,
+        size: 9,
+        font: bold,
+        color: rgb(0.72, 0.11, 0.11),
+      })
+      pages[i].drawText(DRAFT_BANNER, {
+        x: (PAGE_WIDTH - stampW) / 2,
+        y: MARGIN - 32,
+        size: 9,
+        font: bold,
+        color: rgb(0.72, 0.11, 0.11),
+      })
+    }
   }
 
   return doc.save()

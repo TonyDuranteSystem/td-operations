@@ -111,8 +111,12 @@ export const OA_NEVER_EXPOSED = ["access_code", "member_email", "email", "accoun
  * Withholding a co-signer's address from a verified co-signer would be pointless
  * anyway — it is printed in the agreement they are signing.
  */
+// Exported so every path that hands the members blob onward strips it the same
+// way. The PDF route renders from the raw row rather than from `toPublicAgreement`,
+// so without this it would carry each member's email into the renderer — dropped
+// on the floor today only because the template happens not to print it.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function toPublicMembers(members: any): any {
+export function toPublicMembers(members: any): any {
   if (!Array.isArray(members)) return members ?? null
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return members.map((m: any) => ({

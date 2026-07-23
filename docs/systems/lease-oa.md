@@ -1,5 +1,6 @@
 # Lease & Operating Agreement (OA)
-_Last verified against code: 2026-07-07b — Claude (MMLLC entity-type normalization fix + portal self-service OA + Intercompany Agreement wiring — see the OA/ICA sections below; branch `claude/optimistic-dhawan-f7595e`)_
+_Last verified against code: 2026-07-23 — Claude (OA read-before-signing DRAFT download + "I signed by hand" path with optional scan upload — see "OA draft download & sign-by-hand" below; branch `claude/oa-filing-uses-recorded-path`)_
+_Prior: 2026-07-07b — Claude (MMLLC entity-type normalization fix + portal self-service OA + Intercompany Agreement wiring — see the OA/ICA sections below; branch `claude/optimistic-dhawan-f7595e`)_
 _Prior: 2026-07-07 — Claude (Drive duplicate-upload sweep, LT Program incident class — the lease-signed and oa-signed webhooks' signed-PDF uploads (+ both lease-regen routes) switched from `uploadBinaryToDrive` to `uploadBinaryToDriveUpsert` (stable file name → a retry/re-run refreshes the ONE existing Drive file in place instead of adding a copy). No other behavior in this subsystem touched; full sweep rationale in `documents.md` (2026-07-07b). Branch `claude/objective-cohen-b75f61`.)_
 _Prior: 2026-06-24 — Claude (oa-signed webhook: corrected stale v2 stage name "Post-Formation" → "Articles Received" in the post-formation milestone breadcrumb; prior full read 2026-05-29 of lib/mcp/tools/lease.ts, lib/mcp/tools/oa.ts)_
 
@@ -78,6 +79,16 @@ signature row, the counter and the final status straight from the browser, so an
 guesses a token can corrupt an agreement. Closing it means moving those writes server-side
 first; the read fix does NOT close it. Separately open: the signing-integrity defects
 (browser-side finalization, no server reconciliation) — see the council review on that job.
+
+## OA draft download & sign-by-hand (2026-07-23)
+A client can complete an Operating Agreement three ways from the signing page (all three render **inside the portal iframe** too — the download used to be hidden whenever `?portal=true` was set, i.e. on every route a client actually uses):
+1. **Sign online** — the existing e-sign flow.
+2. **Download the draft** — `GET /api/operating-agreement/[token]/pdf?code=<code>`. Renders the agreement ON DEMAND (nothing stored) and is **DRAFT ONLY, never executed**. That single rule dissolves the whole class of review blockers: it reads no signature images (so it never touches the anon-writable `signed-oa` bucket with the service key), it is not a second producer of the signed instrument, and `generateOperatingAgreementPDF({ draft: true })` stamps every page + rewrites the preamble and the IN WITNESS WHEREOF recital to their **unexecuted** form so the copy cannot be passed off as signed. Gates (all AFTER the code check): voided → 410, signed → 409, plus a per-request rate limit.
+3. **"I signed it by hand"** — `POST /api/operating-agreement/[token]/hand-signed` (multipart; optional `file`). Marks the agreement `signed` with **`signature_method='by_hand'`** and leaves `pdf_storage_path` NULL (TD holds no executed instrument unless the client uploads a scan). Files the unsigned draft named "(Unsigned Copy — client signed by hand)"; when a scan is uploaded THAT is filed as the signed copy. Emails support either "scan received" or "NO SIGNED COPY ON FILE — chase it". Filing is best-effort and escalates via `reportSystemError`; the client's confirmation is never undone by a Drive hiccup.
+
+**`signature_method`** (`electronic` | `by_hand` | NULL) distinguishes an agreement TD holds a real signature for from one the client only *declared*. NULL = signed before the distinction existed (74 legacy rows, deliberately NOT backfilled). Migration `20260723-1200-oa-signature-method.sql`.
+
+**Design note for the next session:** the on-screen SIGNED render still uses the browser html2pdf capture (pre-existing), so the executed PDF and this server draft are still two renderers — the draft download deliberately sidesteps that by refusing signed agreements rather than re-rendering them. Retiring the browser capture (have the sign POST call `generateOperatingAgreementPDF` server-side) is the follow-up that makes it one renderer; see `lib/operations/esign.ts` `flattenEnvelopeToSignedPdf` for the pattern.
 
 ## Gotchas, invariants & past bugs
 - **`lease_send` sends a real email immediately** (not a Gmail draft) — don't call it to "preview." Use `?preview=td` for review.

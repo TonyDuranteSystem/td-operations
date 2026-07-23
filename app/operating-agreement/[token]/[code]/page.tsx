@@ -106,6 +106,14 @@ function OperatingAgreementCodeContent() {
   const [signing, setSigning] = useState(false)
   const [signed, setSigned] = useState(false)
   const [allSigned, setAllSigned] = useState(false)
+
+  // "I signed by hand" — the client printed the draft, signed on paper, and is
+  // telling us so. `handMode` reveals the confirm panel; the file is optional.
+  const [handMode, setHandMode] = useState(false)
+  const [handFile, setHandFile] = useState<File | null>(null)
+  const [handSubmitting, setHandSubmitting] = useState(false)
+  const [handError, setHandError] = useState('')
+  const [handDone, setHandDone] = useState<'with-scan' | 'no-scan' | null>(null)
   const sigCanvasRef = useRef<HTMLCanvasElement>(null)
   const sigPadRef = useRef<any>(null) // eslint-disable-line @typescript-eslint/no-explicit-any
   const oaBodyRef = useRef<HTMLDivElement>(null)
@@ -282,6 +290,36 @@ function OperatingAgreementCodeContent() {
   }
 
   // --- SIGN ---
+  async function handleHandSigned() {
+    if (!oa) return
+    setHandError('')
+    setHandSubmitting(true)
+    try {
+      const fd = new FormData()
+      fd.set('code', accessCode)
+      const signerCode = searchParams.get('signer')
+      if (signerCode) fd.set('signer', signerCode)
+      if (handFile) fd.set('file', handFile)
+
+      const res = await fetch(`/api/operating-agreement/${token}/hand-signed`, { method: 'POST', body: fd })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        // Surface the server's real reason (file too big, wrong type, voided),
+        // not a generic failure — the client needs to know what to fix.
+        throw new Error(data?.error || 'Could not record your confirmation. Please try again.')
+      }
+      setHandDone(handFile ? 'with-scan' : 'no-scan')
+      setHandMode(false)
+      // Reflect the completed state without a full reload.
+      setSigned(true)
+      setAllSigned(true)
+    } catch (err) {
+      setHandError(err instanceof Error && err.message ? err.message : 'Could not record your confirmation. Please try again.')
+    } finally {
+      setHandSubmitting(false)
+    }
+  }
+
   async function handleSign() {
     if (!oa || !sigPadRef.current) return
     if (sigPadRef.current.isEmpty()) {
@@ -835,24 +873,104 @@ function OperatingAgreementCodeContent() {
         </div>
       )}
 
-      {/* Read a copy BEFORE signing.
-          The agreement was visible on screen but could not be taken away: the
-          only PDF that ever existed was the one produced at the moment of
-          signing, so a client who closed the tab had to SIGN a legal document to
-          get a copy of it. This asks the server to render one on demand — no
-          stored file, so the unsigned copy and the executed copy cannot drift.
-          Placed OUTSIDE the capture area and outside `canSign`, so it is there
-          for a member who has already signed and for the read-only view too. */}
-      {verified && !isPortal && (
-        <div style={{ maxWidth: 800, margin: '0 auto 24px', textAlign: 'center' }}>
-          <a
-            href={`/api/operating-agreement/${token}/pdf?code=${encodeURIComponent(accessCode)}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ fontSize: 14, color: '#0A3161', textDecoration: 'underline', fontFamily: 'Georgia, serif' }}
-          >
-            {oa.language === 'it' ? 'Scarica una copia da leggere' : 'Download a copy to read'}
-          </a>
+      {/* Other ways to complete — download a DRAFT to read or print, or declare
+          you signed on paper.
+
+          Shown in the portal too (this used to be hidden whenever the agreement
+          was opened inside the portal iframe, i.e. on every route a client
+          actually uses — so the feature reached nobody). Placed OUTSIDE the PDF
+          capture area. The download is a DRAFT: it is stamped and its recital is
+          in the unexecuted form, so it can never be passed off as signed. */}
+      {verified && oa.status !== 'voided' && oa.status !== 'signed' && !allSigned && !handDone && (
+        <div style={{ maxWidth: 800, margin: '0 auto 24px', padding: '16px 20px', background: '#faf9f5', border: '1px solid #e6e2d6', borderRadius: 8 }}>
+          <p style={{ margin: '0 0 12px', fontSize: 13, color: '#666', textAlign: 'center' }}>
+            {oa.language === 'it'
+              ? 'Preferisci firmare a mano? Scarica una bozza da leggere o stampare.'
+              : 'Prefer to sign on paper? Download a draft to read or print.'}
+          </p>
+          <div style={{ textAlign: 'center', marginBottom: canSign ? 16 : 0 }}>
+            <a
+              href={`/api/operating-agreement/${token}/pdf?code=${encodeURIComponent(accessCode)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ fontSize: 14, color: '#0A3161', textDecoration: 'underline', fontFamily: 'Georgia, serif' }}
+            >
+              {oa.language === 'it' ? 'Scarica la bozza (non firmata)' : 'Download the draft (unsigned)'}
+            </a>
+          </div>
+
+          {canSign && !handMode && (
+            <div style={{ textAlign: 'center' }}>
+              <button
+                onClick={() => { setHandError(''); setHandMode(true) }}
+                style={{ padding: '10px 24px', fontSize: 14, fontWeight: 600, background: '#fff', color: '#0A3161', border: '1px solid #0A3161', borderRadius: 6, cursor: 'pointer', fontFamily: 'Georgia, serif' }}
+              >
+                {oa.language === 'it' ? 'Ho firmato a mano' : 'I signed it by hand'}
+              </button>
+            </div>
+          )}
+
+          {canSign && handMode && (
+            <div style={{ marginTop: 8, padding: '16px', background: '#fff', border: '1px solid #e6e2d6', borderRadius: 6 }}>
+              <p style={{ margin: '0 0 12px', fontSize: 13, color: '#444', lineHeight: 1.6 }}>
+                {oa.language === 'it'
+                  ? 'Confermi di aver stampato e firmato a mano questo Operating Agreement. Se puoi, carica una copia firmata — è il documento che conserveremo per te.'
+                  : 'You are confirming you have printed and signed this Operating Agreement by hand. If you can, upload a copy of the signed document — that is the copy we keep on file for you.'}
+              </p>
+              <input
+                type="file"
+                accept="application/pdf,image/*"
+                onChange={e => setHandFile(e.target.files?.[0] ?? null)}
+                style={{ display: 'block', marginBottom: 12, fontSize: 13 }}
+              />
+              {!handFile && (
+                <p style={{ margin: '0 0 12px', fontSize: 12, color: '#a06a00' }}>
+                  {oa.language === 'it'
+                    ? 'Nessun file selezionato — puoi confermare comunque e inviarci la copia firmata più tardi.'
+                    : 'No file chosen — you can still confirm and send us the signed copy later.'}
+                </p>
+              )}
+              {handError && <p style={{ margin: '0 0 12px', fontSize: 13, color: '#c00' }}>{handError}</p>}
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+                <button
+                  onClick={handleHandSigned}
+                  disabled={handSubmitting}
+                  style={{ padding: '10px 24px', fontSize: 14, fontWeight: 700, background: handSubmitting ? '#999' : '#0A3161', color: '#fff', border: 'none', borderRadius: 6, cursor: handSubmitting ? 'default' : 'pointer', fontFamily: 'Georgia, serif' }}
+                >
+                  {handSubmitting
+                    ? (oa.language === 'it' ? 'Invio…' : 'Submitting…')
+                    : handFile
+                      ? (oa.language === 'it' ? 'Conferma e carica' : 'Confirm & upload')
+                      : (oa.language === 'it' ? 'Conferma senza copia' : 'Confirm without a copy')}
+                </button>
+                <button
+                  onClick={() => { setHandMode(false); setHandFile(null); setHandError('') }}
+                  disabled={handSubmitting}
+                  style={{ padding: '10px 24px', fontSize: 14, background: 'transparent', color: '#666', border: '1px solid #ccc', borderRadius: 6, cursor: handSubmitting ? 'default' : 'pointer', fontFamily: 'Georgia, serif' }}
+                >
+                  {oa.language === 'it' ? 'Annulla' : 'Cancel'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Hand-signed confirmation */}
+      {handDone && (
+        <div style={{ maxWidth: 800, margin: '0 auto 24px', background: '#f0f7f0', border: '1px solid #cfe6cf', borderRadius: 8, padding: 20, textAlign: 'center' }}>
+          <p style={{ color: '#2f6b2f', fontWeight: 700, fontSize: 16, margin: 0 }}>
+            {oa.language === 'it' ? 'Grazie — registrato' : 'Thank you — recorded'}
+          </p>
+          <p style={{ color: '#4a8a4a', fontSize: 14, marginTop: 8 }}>
+            {handDone === 'with-scan'
+              ? (oa.language === 'it'
+                  ? 'Abbiamo ricevuto la tua copia firmata ed è salvata nel tuo portale.'
+                  : 'We received your signed copy and it is saved in your portal.')
+              : (oa.language === 'it'
+                  ? 'Abbiamo registrato la tua conferma. Quando puoi, inviaci la copia firmata da conservare.'
+                  : 'We recorded your confirmation. When you can, send us the signed copy to keep on file.')}
+          </p>
         </div>
       )}
 

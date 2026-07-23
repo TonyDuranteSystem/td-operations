@@ -1,7 +1,8 @@
 /**
  * GET /api/operating-agreement/[token]/pdf?code=<accessCode>[&preview=td]
  *
- * Streams the Operating Agreement as a PDF for the client to READ BEFORE SIGNING.
+ * Streams the UNSIGNED DRAFT of the Operating Agreement, for the client to READ
+ * BEFORE SIGNING — or to print and sign by hand.
  *
  * ⛔ WHY THIS EXISTS.
  *
@@ -14,20 +15,32 @@
  * building: the portal documents list is display-only with no file behind it, and
  * the CRM has no "send the client a copy" action either.)
  *
- * The document is RENDERED ON DEMAND from the agreement row — nothing is stored.
- * That means the unsigned copy and the executed copy come from the same source
- * and cannot drift apart, and there is no file to go stale when the agreement is
- * regenerated.
+ * ⛔ DRAFT ONLY. THIS ROUTE NEVER SERVES AN EXECUTED AGREEMENT.
  *
- * ANTONIO'S DECISION, 2026-07-23: no "DRAFT — NOT EXECUTED" watermark. The
- * unsigned copy is the agreement, with the signature blocks blank. Recorded here
- * because it is a deliberate choice with a consequence: an unsigned copy is
- * distinguishable from an executed one only by those blank blocks, so someone
- * could present it as though it were signed. That was raised and accepted.
+ * That single constraint is what makes this route safe, and three separate
+ * reviewers' blockers dissolve into it. Do not relax it:
+ *
+ *   1. It renders NO signatures, so it never reads the signature-image bucket.
+ *      That bucket accepts uploads from anyone (its only policy is INSERT for
+ *      role `public`) and the image path lives on a row anon can UPDATE, so a
+ *      version of this route that fetched images had the SERVER pulling an
+ *      attacker-chosen object with the service key. Nothing to fetch, nothing to
+ *      exploit.
+ *   2. There is no second rendering of the executed instrument. The signed PDF
+ *      keeps exactly one producer and one download path (`resolveSignedPdfPath`,
+ *      surfaced by the page's own "Download Signed PDF" button), so the two
+ *      cannot disagree about what a client signed.
+ *   3. The document says what it is. `draft: true` stamps every page and puts the
+ *      preamble and the IN WITNESS WHEREOF recital into their unexecuted form —
+ *      the legal reviewer's blocker was never the missing signature, it was that
+ *      TD's own text asserted the document HAD been executed when it had not.
+ *
+ * A signed agreement asking for this route gets 409 and a pointer to its real
+ * signed copy.
  *
  * ACCESS: the same gate as the signing page itself — token plus access code,
- * verified server-side by the shared guard (constant-time, rate-limited).
- * Whoever can open the agreement to sign it can download it; nobody else.
+ * verified server-side by the shared guard. Whoever can open the agreement to
+ * sign it can download the draft; nobody else.
  */
 
 export const dynamic = "force-dynamic"
@@ -35,16 +48,15 @@ export const dynamic = "force-dynamic"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { accessCodeError } from "@/lib/esign/access-guard"
+import { checkRateLimit, getRateLimitKey } from "@/lib/portal/rate-limit"
 import { isStaffPreview } from "@/lib/auth/staff-preview"
 import { normalizeEntityType } from "@/lib/portal/entity-type"
-import { generateOperatingAgreementPDF, type OASignatureBlock } from "@/lib/pdf/operating-agreement-pdf"
-import { OA_AGREEMENT_SELECT, OA_SIGNATURE_SELECT } from "@/lib/oa/public-view"
+import { generateOperatingAgreementPDF } from "@/lib/pdf/operating-agreement-pdf"
+import { OA_AGREEMENT_SELECT, toPublicMembers } from "@/lib/oa/public-view"
 import type { OAData, OAMember } from "@/lib/types/oa-templates"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
-
-const SIGNATURE_BUCKET = "signed-oa"
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params
@@ -52,11 +64,38 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
   const code = url.searchParams.get("code") || ""
   const isPreview = await isStaffPreview(url.searchParams.get("preview") === "td")
 
-  const { data: agreement } = await db
+  // Throughput limit. The shared access guard throttles WRONG codes; it does not
+  // throttle a caller holding a correct one — a success actively CLEARS the
+  // failure counter. Every other route in this family streams a stored file,
+  // while this one lays out a nine-article document and subsets two fonts per
+  // request, so an unmetered loop on one valid link is real CPU. Nobody
+  // legitimate downloads their own agreement ten times a minute.
+  const rl = checkRateLimit(`${getRateLimitKey(req)}:oa-pdf`, 10, 60_000)
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: "Too many requests. Please wait a moment and try again." },
+      { status: 429 },
+    )
+  }
+
+  const { data: agreement, error: agreementErr } = await db
     .from("oa_agreements")
     .select(OA_AGREEMENT_SELECT)
     .eq("token", token)
     .maybeSingle()
+
+  // Separate "the read failed" from "there is no such agreement". Collapsing them
+  // tells a client holding a valid link that their legal document does not exist,
+  // which is both alarming and false. A DUPLICATE token also lands here —
+  // maybeSingle errors on multiple matches — so this is what surfaces the known
+  // token-collision case instead of silently 404ing both agreements.
+  if (agreementErr) {
+    console.error("[oa/pdf] agreement lookup failed:", agreementErr)
+    return NextResponse.json(
+      { error: "Could not load the Operating Agreement. Please try again, or contact support@tonydurante.us." },
+      { status: 503 },
+    )
+  }
   if (!agreement) {
     return NextResponse.json({ error: "Operating Agreement not found." }, { status: 404 })
   }
@@ -69,21 +108,54 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
   })
   if (codeErr) return NextResponse.json({ error: codeErr.error }, { status: codeErr.status })
 
-  // A VOIDED agreement is superseded — staff void one precisely so the client
-  // stops using it. The portal sign page already refuses it ("this is outdated,
-  // generate a new one"); without the same check here a client holding the old
-  // link downloads a clean, current-looking copy of a dead document and can hand
-  // it to a bank. Nothing on the page would tell them, because a voided
-  // agreement renders identically to a live one.
+  // ── Status gates ──────────────────────────────────────────────────────────
+  // Both sit AFTER the access-code check, so neither can be used to probe which
+  // agreements exist.
+
+  // A VOIDED agreement is dead — staff void one precisely so the client stops
+  // using it. Without this check a client holding the old link downloads a clean,
+  // current-looking copy of a dead document and can hand it to a bank.
+  //
+  // The wording matters: "voided", not "superseded". Verified on production
+  // 2026-07-23 — 21 agreements are voided and NOT ONE has a replacement, because
+  // voiding is how staff unblock a stuck client, not how they reissue. Telling a
+  // client their agreement "has been superseded" asserts a successor document
+  // that does not exist. The portal already says the accurate thing.
   if (agreement.status === "voided") {
     return NextResponse.json(
-      { error: "This Operating Agreement has been superseded. Please generate a new one from the portal, or contact support@tonydurante.us." },
+      {
+        error:
+          "This Operating Agreement has been voided and is no longer valid. Please generate a new one from your portal, or contact support@tonydurante.us.",
+      },
       { status: 410 },
     )
   }
 
-  const isMMLLC = normalizeEntityType(agreement.entity_type) === "MMLLC"
-  const members: OAMember[] = Array.isArray(agreement.members) ? agreement.members : []
+  // A SIGNED agreement has a real executed copy; this route only makes drafts.
+  // Rendering a blank one here would put two different documents behind the same
+  // page — this one, and the executed PDF the signing page already offers.
+  if (agreement.status === "signed") {
+    return NextResponse.json(
+      {
+        error:
+          "This Operating Agreement has been signed. Open your signed copy from the portal, or contact support@tonydurante.us.",
+      },
+      { status: 409 },
+    )
+  }
+
+  // Multi-member is entity type AND more than one signer — the same test the
+  // signing page and the filing route apply. Entity type alone is not enough:
+  // production carries rows marked multi-member that hold NO member list and one
+  // signer (a legacy generator still produces them), and treating those as
+  // multi-member renders an agreement headed "Multi-Member LLC" with an empty
+  // member table whose execution block reads "Sole Member / Manager".
+  const isMMLLC =
+    normalizeEntityType(agreement.entity_type) === "MMLLC" && (agreement.total_signers || 1) > 1
+  // Strip the members blob the same way every other outbound path does. It
+  // carries each member's email, dropped on the floor today only because the
+  // template happens not to print it.
+  const members: OAMember[] = isMMLLC ? (toPublicMembers(agreement.members) ?? []) : []
 
   const data: OAData = {
     company_name: agreement.company_name,
@@ -106,66 +178,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
     principal_address: agreement.principal_address,
   }
 
-  // Signatures, when there are any. An unsigned agreement simply renders with the
-  // blocks blank — the renderer already leaves an unsigned member's date empty
-  // rather than inventing one, and never describes them as signed.
-  let signatures: OASignatureBlock[] = []
-  let soleSignaturePng: Uint8Array | null = null
-  let soleSignedAt: string | null = agreement.signed_at ?? null
-
-  const { data: sigRows } = await db
-    .from("oa_signatures")
-    .select(OA_SIGNATURE_SELECT)
-    .eq("oa_id", agreement.id)
-    .order("member_index")
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rows: any[] = sigRows ?? []
-
-  // Fetch each signature image with the SERVICE key.
-  //
-  // CORRECTION (Security, 2026-07-23): an earlier version of this comment said
-  // the browser "cannot read this bucket (no anon read policy)". That was FALSE
-  // and I asserted it without checking. The signed-oa bucket IS anon-readable by
-  // token today — the signing page downloads signature images and the executed
-  // PDF with the anon key right now, and the lockdown migration says so in its
-  // own scope note. It is tracked as an open storage-audit item.
-  //
-  // What that means here: this route is NOT a widening. Everything it serves is
-  // already reachable with a weaker credential (token alone, no access code),
-  // so requiring token PLUS code makes it strictly stronger than the path that
-  // exists. Closing the bucket needs the signing page's two anon reads moved
-  // onto a server route first; this is the first half of that work.
-  async function imageFor(path: string | null): Promise<Uint8Array | null> {
-    if (!path) return null
-    try {
-      const { data: blob } = await supabaseAdmin.storage.from(SIGNATURE_BUCKET).download(path)
-      if (!blob) return null
-      return new Uint8Array(await blob.arrayBuffer())
-    } catch {
-      return null
-    }
-  }
-
-  if (isMMLLC && rows.length > 0) {
-    signatures = await Promise.all(
-      rows.map(async r => ({
-        memberIndex: r.member_index,
-        signedAt: r.status === "signed" ? r.signed_at : null,
-        signaturePng: r.status === "signed" ? await imageFor(r.signature_image_path) : null,
-      })),
-    )
-  } else if (!isMMLLC) {
-    const sole = rows[0]
-    if (sole?.status === "signed") {
-      soleSignedAt = sole.signed_at ?? soleSignedAt
-      soleSignaturePng = await imageFor(sole.signature_image_path)
-    }
-  }
-
   let pdf: Uint8Array
   try {
-    pdf = await generateOperatingAgreementPDF({ data, signatures, soleSignaturePng, soleSignedAt })
+    // No signatures, ever — see the DRAFT ONLY note at the top.
+    pdf = await generateOperatingAgreementPDF({ data, draft: true })
   } catch (err) {
     console.error("[oa/pdf] render failed:", err)
     return NextResponse.json(
@@ -179,8 +195,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
     headers: {
       "Content-Type": "application/pdf",
       // `inline` so a click opens it in the browser's viewer — the client is
-      // reading it, not filing it. They can still save from there.
-      "Content-Disposition": `inline; filename="Operating_Agreement_${safeName}.pdf"`,
+      // reading it, not filing it. They can still save or print from there.
+      "Content-Disposition": `inline; filename="Operating_Agreement_DRAFT_${safeName}.pdf"`,
       "Cache-Control": "no-store",
     },
   })

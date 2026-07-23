@@ -185,6 +185,56 @@ describe("signature dates — each member by their OWN date", () => {
   })
 })
 
+describe("draft mode — the reading copy must not read as executed", () => {
+  it("multi-member: stamps DRAFT, and the recital says NOT signed rather than 'have executed'", async () => {
+    const text = norm(await extractText(await generateOperatingAgreementPDF({ data: MM, draft: true })))
+    expect(text).toContain("DRAFT — NOT SIGNED")
+    // The legal blocker was TD's own text asserting execution. In draft it must
+    // NOT say the members "have executed", and must say it is not signed.
+    expect(text).not.toContain("Members have executed this Operating Agreement")
+    expect(text).toContain("intend to execute")
+    expect(text).toContain("THIS COPY HAS NOT BEEN SIGNED")
+  })
+
+  it("single-member: draft recital is singular-intent, not 'has executed'", async () => {
+    const text = norm(await extractText(await generateOperatingAgreementPDF({ data: SM, draft: true })))
+    expect(text).toContain("DRAFT — NOT SIGNED")
+    expect(text).not.toContain("Member has executed this Operating Agreement")
+    expect(text).toContain("intends to execute")
+  })
+
+  it("the preamble drops the flat 'is entered into and effective' assertion", async () => {
+    const text = norm(await extractText(await generateOperatingAgreementPDF({ data: MM, draft: true })))
+    expect(text).toContain("is to be entered into and effective as of")
+    expect(text).not.toContain("is entered into and effective as of")
+  })
+
+  it("still carries every clause — a draft is the SAME agreement, only unsigned", async () => {
+    const text = norm(await extractText(await generateOperatingAgreementPDF({ data: MM, draft: true })))
+    for (const section of generateOASections(MM)) {
+      expect(text, `missing section title: ${section.title}`).toContain(norm(section.title))
+    }
+    expect(text).toContain("Acme Holdings LLC")
+    expect(text).toContain("Member Two")
+  })
+
+  it("marks EVERY page, not just the first", async () => {
+    const bytes = await generateOperatingAgreementPDF({ data: MM, draft: true })
+    const raw = await extractText(bytes)
+    const pageCount = Number(raw.match(/Page 1 of (\d+)/)?.[1] ?? "0")
+    expect(pageCount).toBeGreaterThan(1)
+    const stamps = (raw.match(/DRAFT — NOT SIGNED/g) ?? []).length
+    // Top and bottom stamp per page, plus the banner + notice on page 1.
+    expect(stamps).toBeGreaterThanOrEqual(pageCount)
+  })
+
+  it("the normal (non-draft) render is unchanged — still asserts execution, no DRAFT", async () => {
+    const text = norm(await extractText(await generateOperatingAgreementPDF({ data: MM })))
+    expect(text).toContain("Members have executed this Operating Agreement")
+    expect(text).not.toContain("DRAFT — NOT SIGNED")
+  })
+})
+
 describe("formatAgreementDate — no timezone shift", () => {
   it("renders a stored date as the SAME calendar day", () => {
     // `new Date("2026-01-10")` is UTC midnight and prints as Jan 9 west of
