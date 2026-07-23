@@ -3,7 +3,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { emitClientChatEvent } from '@/lib/portal/chat-events'
 import { refreshSS4 } from '@/lib/operations/ss4-refresh'
 import { explainFailure } from '@/lib/errors/explain-failure'
-import { firstDuplicateIndividualIdentity, matchContactByName } from '@/lib/members/member-identity'
+import { firstDuplicateIndividualIdentity } from '@/lib/members/member-identity'
+import { resolveMemberContactId } from '@/lib/members/resolve-member-contact'
 
 interface MemberPayload {
   member_type: 'individual' | 'company'
@@ -284,71 +285,28 @@ async function provisionMemberContacts({
     }
 
     try {
-      // Find or create the contact for this member. Match on email AND name,
-      // not email alone: two members can legitimately share one email (a family
-      // LLC), so we fetch EVERY contact on this email and pick the one whose
-      // name matches this member. Matching by email alone would hand both
-      // members the same contact and violate the members unique index (or reuse
-      // the wrong person). If no same-email contact has a matching name, we
-      // create a new contact — biased toward keeping distinct people distinct.
-      const { data: sameEmailContacts } = await supabaseAdmin
-        .from('contacts')
-        .select('id, full_name')
-        .eq('email', personEmail)
-
-      const matchedContactId = matchContactByName(sameEmailContacts || [], personName)
-      const existingContact = matchedContactId ? { id: matchedContactId } : null
-
-      // The address/phone the member just provided — used for both creating a
-      // new contact AND refreshing an existing one.
+      // Resolve this member to their own contact by email + name via the shared
+      // resolver (same procedure used by the onboarding + formation flows), so
+      // two members sharing one email stay distinct people. The address/phone the
+      // member just provided refreshes the matched (or newly-created) contact.
       const personPhone = m.member_type === 'company' ? (m.representative_phone?.trim() || null) : (m.phone?.trim() || null)
-      const personAddress = {
-        address_line1: m.member_type === 'company' ? (m.representative_address_street?.trim() || null) : (m.address_street?.trim() || null),
-        address_city: m.member_type === 'company' ? (m.representative_address_city?.trim() || null) : (m.address_city?.trim() || null),
-        address_state: m.member_type === 'company' ? (m.representative_address_state?.trim() || null) : (m.address_state?.trim() || null),
-        address_zip: m.member_type === 'company' ? (m.representative_address_zip?.trim() || null) : (m.address_zip?.trim() || null),
-        address_country: m.member_type === 'company' ? (m.representative_address_country?.trim() || null) : (m.address_country?.trim() || null),
-      }
+      const contactId = await resolveMemberContactId({
+        email: personEmail,
+        name: personName,
+        now,
+        refresh: {
+          phone: personPhone,
+          address_line1: m.member_type === 'company' ? (m.representative_address_street?.trim() || null) : (m.address_street?.trim() || null),
+          address_city: m.member_type === 'company' ? (m.representative_address_city?.trim() || null) : (m.address_city?.trim() || null),
+          address_state: m.member_type === 'company' ? (m.representative_address_state?.trim() || null) : (m.address_state?.trim() || null),
+          address_zip: m.member_type === 'company' ? (m.representative_address_zip?.trim() || null) : (m.address_zip?.trim() || null),
+          address_country: m.member_type === 'company' ? (m.representative_address_country?.trim() || null) : (m.address_country?.trim() || null),
+        },
+      })
 
-      let contactId: string
-
-      if (existingContact) {
-        contactId = existingContact.id
-        // Sync the address/phone the member just submitted back onto their
-        // existing contact record. Previously only NEWLY-created contacts got
-        // the address, so an existing member's contact card kept a stale
-        // address even though the member updated it (Luca / B&P, 2026-06-26).
-        // Only write fields the member actually provided, so we never blank
-        // out good data.
-        const contactUpdates: Record<string, unknown> = {}
-        if (personPhone) contactUpdates.phone = personPhone
-        for (const [k, v] of Object.entries(personAddress)) { if (v) contactUpdates[k] = v }
-        if (Object.keys(contactUpdates).length > 0) {
-          contactUpdates.updated_at = now
-          // eslint-disable-next-line no-restricted-syntax -- member form provisioning; deferred migration per dev_task 7ebb1e0c
-          await supabaseAdmin.from('contacts').update(contactUpdates).eq('id', contactId)
-        }
-      } else {
-        // eslint-disable-next-line no-restricted-syntax -- member form provisioning; deferred migration per dev_task 7ebb1e0c
-        const { data: created, error: createErr } = await supabaseAdmin
-          .from('contacts')
-          .insert({
-            full_name: personName,
-            email: personEmail,
-            phone: personPhone,
-            ...personAddress,
-            created_at: now,
-            updated_at: now,
-          })
-          .select('id')
-          .single()
-
-        if (createErr || !created) {
-          console.error(`[member-info] contact create failed for ${personEmail}:`, createErr?.message)
-          contactIds.push(null)
-          continue
-        }
-        contactId = created.id
+      if (!contactId) {
+        contactIds.push(null)
+        continue
       }
 
       // Link to account as Member (upsert — safe if already linked)
