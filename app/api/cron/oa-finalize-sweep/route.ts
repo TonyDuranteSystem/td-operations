@@ -35,6 +35,10 @@ export async function GET(req: NextRequest) {
       .select("id, token, company_name, status, signed_count, total_signers, signature_method")
       .neq("status", "signed")
       .neq("status", "voided")
+      // Only rows that actually collected a signature. A stuck row always has
+      // signed_count >= 1; the unsigned draft/sent majority has 0. Without this the
+      // limit could fill with unsigned agreements and never reach the stuck one.
+      .gte("signed_count", 1)
       .limit(50)
 
     const stuck = (rows ?? []).filter(
