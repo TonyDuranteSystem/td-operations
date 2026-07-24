@@ -279,3 +279,39 @@ export async function PATCH(req: NextRequest) {
   emitUiEvent("notes")
   return NextResponse.json({ note: data })
 }
+
+/**
+ * DELETE /api/crm/staff-notes?id=<uuid> — remove a note COMPLETELY, for everyone.
+ *
+ * Distinct from "Done", which is a per-person soft archive (staff_note_state).
+ * This is a real hard delete: the note is gone for the author and anyone it was
+ * shared with. AUTHOR-ONLY — a recipient can clear it from their own screen with
+ * Done, but destroying it for both people is the author's call.
+ *
+ * Hard delete is correct here and does NOT violate R100 (soft-delete for
+ * CLIENT-visible content): staff_notes is internal-only (RLS deny-all, a client
+ * can never reach it) with no FK chain to client-visible state, which R100
+ * explicitly permits to hard-delete. The per-person state rows cascade
+ * (staff_note_state ON DELETE CASCADE). Any chat conversation opened from the
+ * note is NOT linked to it and is deliberately left untouched (Antonio,
+ * 2026-07-23: "just delete the note; leave the chat alone").
+ */
+export async function DELETE(req: NextRequest) {
+  const user = await currentStaff()
+  if (!user) return fail("Not authorized", 403)
+
+  const id = req.nextUrl.searchParams.get("id") ?? ""
+  if (!id) return fail("Which note?")
+
+  const { data: note } = await notesTable().select("author_user_id").eq("id", id).single()
+  if (!note) return fail("That note no longer exists.", 404)
+  if (note.author_user_id !== user.id) {
+    return fail("Only the person who wrote a note can delete it. Use Done to clear it from your screen.", 403)
+  }
+
+  const { error } = await notesTable().delete().eq("id", id)
+  if (error) return fail(error.message || "Could not delete the note.", 500)
+
+  emitUiEvent("notes")
+  return NextResponse.json({ ok: true })
+}

@@ -9,8 +9,10 @@
  */
 
 import { useState } from 'react'
-import { X, Loader2, Check, Lock, Share2, Users, RotateCcw } from 'lucide-react'
+import { X, Loader2, Check, Lock, Share2, Users, RotateCcw, MessageSquare, Trash2 } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { AccountCombobox } from '@/components/shared/account-combobox'
+import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 
 const API = '/api/crm/staff-notes'
 
@@ -56,6 +58,47 @@ export function NoteEditor({
   )
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [discussing, setDiscussing] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const router = useRouter()
+
+  /** Open the chat about this note — the client's conversation, or the teammate DM. */
+  const discuss = async () => {
+    setDiscussing(true); setErr(null)
+    try {
+      const res = await fetch(`${API}/discuss`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note_id: note.id }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not open a chat for this note.')
+      }
+      const { threadId, draft } = await res.json()
+      if (!requestOpenTeamChat({ threadId, draft })) router.push(`/team-chat?thread=${threadId}`)
+      onClose()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not open a chat for this note.')
+      setDiscussing(false)
+    }
+  }
+
+  /** Delete the note COMPLETELY (for everyone) — author-only, enforced server-side.
+   *  Distinct from "Mark done", which only clears it from your own screen. */
+  const del = async () => {
+    setBusy(true); setErr(null)
+    try {
+      const res = await fetch(`${API}?id=${note.id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not delete the note.')
+      }
+      onChanged(); onClose()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not delete the note.')
+      setBusy(false)
+    }
+  }
 
   const call = async (payload: Record<string, unknown>) => {
     const res = await fetch(API, {
@@ -181,15 +224,38 @@ export function NoteEditor({
             </button>
           </div>
 
-          {note.archived_at
-            ? <button onClick={() => quick({ action: 'unarchive' })} disabled={busy}
-                className="flex items-center gap-1 rounded bg-black/10 px-2 py-1 text-xs">
-                <RotateCcw className="h-3 w-3" />Put it back
+          <div className="flex items-center gap-2">
+            {note.archived_at
+              ? <button onClick={() => quick({ action: 'unarchive' })} disabled={busy}
+                  className="flex items-center gap-1 rounded bg-black/10 px-2 py-1 text-xs">
+                  <RotateCcw className="h-3 w-3" />Put it back
+                </button>
+              : <button onClick={() => quick({ action: 'archive' })} disabled={busy}
+                  className="flex items-center gap-1 rounded bg-black/10 px-2 py-1 text-xs">
+                  <Check className="h-3 w-3" />Mark done
+                </button>}
+
+            <button onClick={discuss} disabled={discussing || busy}
+              className="flex items-center gap-1 rounded bg-emerald-100 px-2 py-1 text-xs text-emerald-800 hover:bg-emerald-200 disabled:opacity-50">
+              {discussing ? <Loader2 className="h-3 w-3 animate-spin" /> : <MessageSquare className="h-3 w-3" />}
+              Discuss
+            </button>
+
+            {/* Delete COMPLETELY — for everyone, author-only. Two taps: a
+                deleted note doesn't come back, unlike Done which is per-person. */}
+            {confirmDelete ? (
+              <button onClick={del} disabled={busy}
+                className="ml-auto flex items-center gap-1 rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50">
+                {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                Delete forever?
               </button>
-            : <button onClick={() => quick({ action: 'archive' })} disabled={busy}
-                className="flex items-center gap-1 rounded bg-black/10 px-2 py-1 text-xs">
-                <Check className="h-3 w-3" />Mark done
-              </button>}
+            ) : (
+              <button onClick={() => setConfirmDelete(true)} disabled={busy}
+                className="ml-auto flex items-center gap-1 rounded px-2 py-1 text-xs text-red-600 hover:bg-red-50">
+                <Trash2 className="h-3 w-3" />Delete
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
