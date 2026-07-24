@@ -19,6 +19,7 @@ import { canPerform } from "@/lib/permissions"
 import { formatCountyAndState } from "@/lib/addresses"
 import { decideSs4Signer, ss4SignerAlertMessage, type Ss4SignerMember } from "@/lib/operations/ss4-signer"
 import { refreshSS4 } from "@/lib/operations/ss4-refresh"
+import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
 const LEASE_BASE_URL = `${APP_BASE_URL}/lease`
@@ -105,15 +106,36 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
     return { error: `Effective date cannot be more than 60 days in the past. Earliest allowed: ${cutoff}` }
   }
 
-  // Check duplicate
+  // Check duplicate. ORDER matters: without it PostgREST returns an ARBITRARY
+  // row, while oa_get and /portal/sign both read the NEWEST — so Recreate could
+  // delete a different agreement than the one staff are looking at. Same trap
+  // already closed in lib/mcp/tools/oa.ts.
   const { data: existing } = await supabaseAdmin
     .from("oa_agreements")
-    .select("id, token, status, effective_date")
+    .select("id, token, status, effective_date, signed_count")
     .eq("account_id", accountId)
+    .order("created_at", { ascending: false })
     .limit(1)
 
   if (existing?.length && !params.force_recreate) {
     return { exists: true, token: existing[0].token, status: existing[0].status, effective_date: existing[0].effective_date }
+  }
+
+  // ⛔ THE THIRD DOOR. force_recreate hard-deletes the agreement AND every
+  // signature on it — no soft-delete, no audit record (R100). That is only safe
+  // while NOTHING has been signed. The shared rule was wired into the portal
+  // route and the MCP tool but NOT here, leaving a two-click path in the CRM
+  // that destroys an executed legal document and the only proof the client ever
+  // signed it. Same predicate as both other doors — one rule, three doors.
+  if (existing?.length && params.force_recreate && hasCollectedSignatures(existing[0])) {
+    const collected = (existing[0].signed_count ?? 0) > 0 ? ` (${existing[0].signed_count} signature(s) collected)` : ""
+    return {
+      error:
+        `Refusing to recreate: this Operating Agreement already carries a signature ` +
+        `(status: ${existing[0].status}${collected}). Recreating deletes the agreement and every ` +
+        `signature on it, with no undo — destroying the only proof the client signed. ` +
+        `VOID the existing agreement instead (which keeps the record), then create a new one.`,
+    }
   }
 
   // force_recreate: delete existing OA (and MMLLC signatures) before recreating
@@ -130,6 +152,14 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
   // truth for ownership. Never fabricate percentages: an OA with invented
   // splits is a legally incorrect document (Datavora incident, 2026-05-25).
   let membersJson = null
+  // Seeds for the per-member signature rows. WITHOUT these (and without
+  // total_signers below) a multi-member agreement is stored as a ONE-signer row:
+  // every server consumer treats "multi-member" as entity_type AND
+  // total_signers > 1, so the draft and the executed PDF both render the
+  // SINGLE-member document ("the sole Member ... 100%") while the on-screen page
+  // — which keys on entity type alone — shows all the members. The client also
+  // cannot e-sign at all, because there is no signer row to resolve them to.
+  let signerSeeds: Array<{ name: string; email: string | null; contact_id: string | null }> = []
   if (entityType === "MMLLC") {
     const { data: memberRows } = await supabaseAdmin
       .from("members")
@@ -165,6 +195,15 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
         initial_contribution: "$0.00",
       }
     })
+
+    signerSeeds = memberRows.map(m => {
+      const c = m.contact_id ? contactById.get(m.contact_id) : undefined
+      return {
+        name: m.full_name ?? m.company_name ?? "Unknown",
+        email: m.email ?? c?.email ?? null,
+        contact_id: m.contact_id ?? null,
+      }
+    })
   }
 
   const { data: oa, error: insertErr } = await supabaseAdmin
@@ -192,12 +231,37 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
       principal_address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
       language: "en",
       status: "draft",
+      // Load-bearing: the whole system decides "multi-member" from entity_type
+      // AND this count. Leaving it at the default of 1 makes a multi-member
+      // agreement render and file as a single-member one.
+      total_signers: entityType === "MMLLC" ? Math.max(signerSeeds.length, 1) : 1,
     })
     .select("id, token, access_code")
     .single()
 
   if (insertErr || !oa) {
     return { error: `Insert failed: ${insertErr?.message || "no data"}` }
+  }
+
+  // One signature row per member, or nobody can sign: the signing page resolves
+  // WHICH member is signing from their per-member code, and with no rows there is
+  // no signer to resolve — the client gets a Sign button with nothing to sign.
+  // Roll the agreement back rather than leave a half-built one behind.
+  if (entityType === "MMLLC" && signerSeeds.length) {
+    const { error: sigErr } = await supabaseAdmin.from("oa_signatures").insert(
+      signerSeeds.map((s, idx) => ({
+        oa_id: oa.id,
+        member_index: idx,
+        member_name: s.name,
+        member_email: s.email,
+        contact_id: s.contact_id,
+      })),
+    )
+    if (sigErr) {
+      await supabaseAdmin.from("oa_signatures").delete().eq("oa_id", oa.id)
+      await supabaseAdmin.from("oa_agreements").delete().eq("id", oa.id)
+      return { error: `Could not create the member signature rows: ${sigErr.message}. Nothing was saved — please try again.` }
+    }
   }
 
   logAction({
@@ -444,9 +508,18 @@ async function sendOA(token: string) {
   if (error || !oa) return { error: `OA not found: ${token}` }
   if (!oa.member_email) return { error: "No member email on OA record" }
   if (oa.status === "sent" || oa.status === "signed") return { already_sent: true, status: oa.status }
+  // A voided agreement is cancelled deliberately — marking it 'sent' makes it
+  // live and actionable again in the client's portal.
+  if (oa.status === "voided") {
+    return { error: `This Operating Agreement is voided (cancelled). Create a new one instead of re-sending it.` }
+  }
 
-  // Update status to sent (the actual email sending is done by MCP oa_send which uses Gmail API)
-  // For CRM, we mark as sent and let the admin know to use MCP or the external page handles it
+  // ⚠️ THIS DOES NOT SEND AN EMAIL. It marks the agreement ready and returns the
+  // client link; the actual email goes out through the oa_send tool (Gmail +
+  // tracking + idempotency). Until this is wired to a shared send helper, it must
+  // NOT report a send — staff were being told "Sent to <client>" while nothing
+  // left the building, and the status flip then satisfied oa_send's own
+  // "already sent" probe, suppressing the real email too.
   const { error: updateErr } = await supabaseAdmin
     .from("oa_agreements")
     .update({ status: "sent" })
@@ -460,13 +533,15 @@ async function sendOA(token: string) {
     table_name: "oa_agreements",
     record_id: oa.id,
     account_id: oa.account_id,
-    summary: `Sent OA to ${oa.member_email} for ${oa.company_name}`,
-    details: { token: oa.token, email: oa.member_email, source: "crm-button" },
+    summary: `Marked OA ready to send for ${oa.company_name} (no email sent from the CRM button)`,
+    details: { token: oa.token, email: oa.member_email, source: "crm-button", emailed: false },
   })
 
   return {
     success: true,
-    sent_to: oa.member_email,
+    emailed: false,
+    recipient: oa.member_email,
+    notice: `Marked ready — no email was sent. Send the link to ${oa.member_email} (or use the OA send tool).`,
     client_url: `${OA_BASE_URL}/${oa.token}/${oa.access_code}`,
   }
 }

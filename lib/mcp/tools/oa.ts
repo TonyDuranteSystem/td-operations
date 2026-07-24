@@ -440,7 +440,17 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           `Principal Office: ${data.principal_address}`,
           ``,
           `Views: ${data.view_count}${data.viewed_at ? ` (last: ${data.viewed_at})` : ""}`,
-          data.signed_at ? `✅ Signed: ${data.signed_at}` : "⏳ Not signed yet",
+          // Distinguish an executed electronic signature (we hold the signature,
+          // the IP/device/consent trail and a certificate) from the client merely
+          // telling us they signed on paper (we hold nothing unless they uploaded
+          // a scan). Printing "✅ Signed" for both was the exact question
+          // signature_method was added to answer, and no staff surface answered it.
+          data.signed_at
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- signature_method is newer than the generated DB types
+            ? (data as any).signature_method === "by_hand"
+              ? `✍️ Signed ON PAPER (client-declared): ${data.signed_at} — TD holds no electronic signature; the signed copy exists only if the client uploaded a scan (check the account's documents).`
+              : `✅ Signed electronically: ${data.signed_at} — signature, device/IP trail and certificate on file.`
+            : "⏳ Not signed yet",
           data.pdf_storage_path ? `PDF: ${data.pdf_storage_path}` : null,
           ...signerLines,
           ``,
@@ -475,6 +485,36 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
 
         if (err || !oa) {
           return { content: [{ type: "text" as const, text: `❌ OA not found: ${err?.message || "no data"}` }] }
+        }
+
+        // ⛔ Never re-send a TERMINAL agreement. The send unconditionally flips the
+        // row back to 'sent' (see the postSendStep below), so without this a
+        // routine "resend it, they say they never got it" would:
+        //   • VOIDED  → resurrect a cancelled agreement, making it reachable and
+        //     actionable again in the client's portal;
+        //   • SIGNED  → email "ready for your review and signature" for an already
+        //     EXECUTED document and make it read as unsigned everywhere.
+        if (oa.status === "voided") {
+          return { content: [{ type: "text" as const, text: [
+            `❌ Refusing to send: OA "${params.token}" is VOIDED.`,
+            ``,
+            `  Company: ${oa.company_name}`,
+            ``,
+            `A voided agreement is cancelled on purpose. Sending it would make it live`,
+            `again in the client's portal. Create a NEW agreement instead.`,
+          ].join("\n") }] }
+        }
+        if (oa.status === "signed") {
+          return { content: [{ type: "text" as const, text: [
+            `❌ Refusing to send: OA "${params.token}" is already SIGNED.`,
+            ``,
+            `  Company: ${oa.company_name}`,
+            `  Signed:  ${oa.signed_at ?? "—"}`,
+            ``,
+            `This is an executed document. Sending it would ask the client to sign again`,
+            `and make the signed agreement read as unsigned across the portal and CRM.`,
+            `Use oa_get to fetch the signed copy.`,
+          ].join("\n") }] }
         }
 
         const entityType = oa.entity_type || "SMLLC"

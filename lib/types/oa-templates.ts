@@ -182,7 +182,7 @@ function generateSMLLCSections(data: OAData, state: string, stateName: string): 
   return [
     {
       title: "Article I — Formation",
-      content: `1.1 Formation. ${data.member_name} (the "Member") hereby forms a single-member limited liability company (the "Company") under the laws of the State of ${stateName}. The Company was formed by filing Articles of Organization with the ${stateName} filing office on ${data.formation_date}.
+      content: `1.1 Formation. ${data.member_name} (the "Member") hereby forms a single-member limited liability company (the "Company") under the laws of the State of ${stateName}. The Company was formed by filing Articles of Organization with the ${stateName} filing office on ${data.formation_date || data.effective_date}.
 
 1.2 Name. The name of the Company is ${data.company_name}.${data.ein_number ? ` The Company's Employer Identification Number (EIN) is ${data.ein_number}.` : ""}
 
@@ -288,7 +288,7 @@ function generateMMLLCSections(data: OAData, state: string, stateName: string): 
   return [
     {
       title: "Article I — Formation",
-      content: `1.1 Formation. The undersigned Members hereby form a multi-member limited liability company (the "Company") under the laws of the State of ${stateName}. The Company was formed by filing Articles of Organization with the ${stateName} filing office on ${data.formation_date}.
+      content: `1.1 Formation. The undersigned Members hereby form a multi-member limited liability company (the "Company") under the laws of the State of ${stateName}. The Company was formed by filing Articles of Organization with the ${stateName} filing office on ${data.formation_date || data.effective_date}.
 
 1.2 Name. The name of the Company is ${data.company_name}.${data.ein_number ? ` The Company's Employer Identification Number (EIN) is ${data.ein_number}.` : ""}
 

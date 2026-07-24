@@ -48,13 +48,28 @@ describe('appendCertificatePage', () => {
     expect(reloaded.getPageCount()).toBe(2)
   })
 
-  it('handles many signers without throwing (page-overflow guard)', async () => {
+  it('spills onto more pages for many signers instead of dropping them', async () => {
+    // This used to assert exactly 1 page — pinning the old behaviour, where the
+    // draw helper simply RETURNED at the page bottom. That silently dropped the
+    // later signers' IP / consent / signature-hash rows AND the closing consent
+    // statement off the end of the Certificate of Completion, while the
+    // certificate still looked complete. For a legal artifact, losing a signer's
+    // audit trail is worse than a longer document: it must paginate, not truncate.
     const many: CertificateInfo = {
       ...info,
       signers: Array.from({ length: 20 }, (_, i) => ({ ...info.signers[0], name: `Signer ${i}`, email: `s${i}@x.com` })),
     }
     const pdf = await PDFDocument.create()
-    await appendCertificatePage(pdf, many) // must not throw even if content exceeds the page
+    await appendCertificatePage(pdf, many)
+    expect(pdf.getPageCount()).toBeGreaterThan(1)
+    // Still a valid, reloadable PDF once paginated.
+    const reloaded = await PDFDocument.load(await pdf.save())
+    expect(reloaded.getPageCount()).toBe(pdf.getPageCount())
+  })
+
+  it('keeps a single-signer certificate to one page (no gratuitous pagination)', async () => {
+    const pdf = await PDFDocument.create()
+    await appendCertificatePage(pdf, info)
     expect(pdf.getPageCount()).toBe(1)
   })
 })

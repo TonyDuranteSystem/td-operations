@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { execSync } from 'child_process'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import { hasCollectedSignatures } from '@/lib/portal/oa-regenerate-guard'
 
 // Regression pin: re-generating an OA hard-deletes the prior agreement AND its
@@ -35,6 +38,42 @@ describe('hasCollectedSignatures', () => {
 
   it('does not crash on a null status', () => {
     expect(hasCollectedSignatures({ status: null })).toBe(false)
+  })
+
+  // ⛔ THE RULE EXISTING IS NOT ENOUGH — EVERY DOOR MUST CALL IT.
+  //
+  // The predicate below was written and unit-tested, and wired into the portal
+  // route and the staff MCP tool. A THIRD door — the CRM account "Recreate"
+  // button — was missed entirely and deleted a signed agreement plus every
+  // signature with no status check, no soft-delete and no audit record (R100),
+  // in two clicks, from the panel staff use daily. 74 executed agreements were
+  // exposed. Tests that pin only the predicate cannot catch that.
+  //
+  // So: find EVERY file that hard-deletes from oa_agreements and require it to
+  // reference the shared guard. A new fourth door fails here instead of in
+  // production.
+  describe('every door that deletes an agreement uses the shared guard', () => {
+    it('has no unguarded oa_agreements delete anywhere in app/ or lib/', () => {
+      const files = execSync(`find app lib -name "*.ts" -o -name "*.tsx"`, {
+        cwd: process.cwd(), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+      }).trim().split('\n').filter(Boolean)
+
+      const offenders: string[] = []
+      for (const f of files) {
+        const src = readFileSync(join(process.cwd(), f), 'utf8')
+        // A hard delete of the agreement row itself (not oa_signatures).
+        const deletesAgreement = /from\(\s*["']oa_agreements["']\s*\)\s*[\s\S]{0,80}?\.delete\(\)/.test(src)
+        if (!deletesAgreement) continue
+        if (!src.includes('hasCollectedSignatures')) offenders.push(f)
+      }
+
+      expect(
+        offenders,
+        `These files hard-delete an Operating Agreement without the shared ` +
+        `hasCollectedSignatures guard. A signed OA is an executed legal document — ` +
+        `deleting it destroys the only proof the client signed. Guard it, or void instead.`,
+      ).toEqual([])
+    })
   })
 
   // Both doors must use this ONE predicate. The client-facing portal route was

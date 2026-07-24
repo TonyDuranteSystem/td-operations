@@ -246,8 +246,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       ...sigFields,
     })
     if (insErr) {
-      // Most likely a unique-violation from a concurrent submit — treat as done.
-      console.warn("[oa/sign] signature insert failed (likely double-submit):", insErr?.message)
+      // ONLY a unique-violation means "someone else already inserted this
+      // signer's row" (a concurrent double-submit) — that is genuinely done.
+      // Any OTHER error is a real failure, and reporting it as success is the
+      // exact silent-write failure this whole path exists to eliminate: the
+      // client sees "Signed", nothing is stored, the counter never moves, and
+      // the reconciliation sweep cannot see it either (it looks for a count of
+      // at least one). Surface it so they retry.
+      const isDuplicate = insErr.code === "23505"
+      if (!isDuplicate) {
+        console.error("[oa/sign] signature insert failed:", insErr)
+        return NextResponse.json(
+          { error: "Could not record your signature. Please try again, or contact support@tonydurante.us." },
+          { status: 503 },
+        )
+      }
+      console.warn("[oa/sign] duplicate signature insert (concurrent submit) — treating as already signed")
       return NextResponse.json({ ok: true, alreadySigned: true })
     }
   }

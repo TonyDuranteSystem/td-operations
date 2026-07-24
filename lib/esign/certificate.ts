@@ -62,7 +62,7 @@ export function wrapText(text: string, maxChars: number): string[] {
 export async function appendCertificatePage(pdf: PDFDocument, info: CertificateInfo): Promise<void> {
   const { embedUnicodeFonts } = await import("@/lib/pdf/unicode-fonts")
   const { regular, bold } = await embedUnicodeFonts(pdf)
-  const page = pdf.addPage([612, 792])
+  let page = pdf.addPage([612, 792])
   const margin = 54
   const bottom = margin
   let y = 792 - margin
@@ -73,9 +73,17 @@ export async function appendCertificatePage(pdf: PDFDocument, info: CertificateI
     text: string,
     opts: { size?: number; bold?: boolean; x?: number; gap?: number; color?: ReturnType<typeof rgb> } = {},
   ) => {
-    if (y < bottom) return // never overflow the page (TD-first = 1 signer; guard anyway)
     const size = opts.size ?? 10
     const font: PDFFont = opts.bold ? bold : regular
+    // Spill onto a new page rather than silently dropping the line. This used to
+    // `return` at the page bottom, so a larger multi-member agreement (roughly 6+
+    // signers) lost the later signers' IP / consent / hash rows AND the closing
+    // consent statement off the end of the legal artifact — invisibly, with the
+    // certificate still looking complete.
+    if (y < bottom + size) {
+      page = pdf.addPage([612, 792])
+      y = 792 - margin
+    }
     page.drawText(text, { x: opts.x ?? margin, y, size, font, color: opts.color ?? ink })
     y -= opts.gap ?? size + 6
   }

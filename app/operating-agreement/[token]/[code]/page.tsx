@@ -320,9 +320,20 @@ function OperatingAgreementCodeContent() {
       }
       setHandDone(handFile ? 'with-scan' : 'no-scan')
       setHandMode(false)
-      // Reflect the completed state without a full reload.
-      setSigned(true)
-      setAllSigned(true)
+      // Deliberately do NOT set `signed`/`allSigned` here. Those drive the
+      // electronic-signature confirmation panel, which announces "All Members
+      // Have Signed" and offers a Download button — and a paper-signed agreement
+      // never gets a system-generated PDF, so that button always failed with
+      // "PDF not available yet. It will be ready once all members sign." The
+      // hand-signed panel below says the right thing instead.
+      // Tell the portal shell so its banner/checklist refresh instead of still
+      // reading "Awaiting Your Signature" behind the iframe.
+      if (isPortal && window.parent !== window) {
+        window.parent.postMessage(
+          { type: 'oa-signed', token, member_index: currentSignerIndex ?? undefined },
+          'https://portal.tonydurante.us',
+        )
+      }
     } catch (err) {
       setHandError(err instanceof Error && err.message ? err.message : 'Could not record your confirmation. Please try again.')
     } finally {
@@ -949,8 +960,8 @@ function OperatingAgreementCodeContent() {
                   ? 'Abbiamo ricevuto la tua copia firmata ed è salvata nel tuo portale.'
                   : 'We received your signed copy and it is saved in your portal.')
               : (oa.language === 'it'
-                  ? 'Abbiamo registrato la tua conferma. Quando puoi, inviaci la copia firmata da conservare.'
-                  : 'We recorded your confirmation. When you can, send us the signed copy to keep on file.')}
+                  ? 'Abbiamo registrato la tua conferma. Se vuoi conservarne una copia, puoi caricare il documento firmato nella sezione Documenti del tuo portale.'
+                  : 'We recorded your confirmation. If you would like a copy kept for you, you can upload the signed document in the Documents section of your portal.')}
           </p>
         </div>
       )}

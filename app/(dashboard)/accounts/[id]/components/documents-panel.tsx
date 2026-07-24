@@ -104,8 +104,13 @@ export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLea
       }
       if (data.message) {
         toast.info(data.message)
+      } else if (data.emailed === false) {
+        // The OA button marks the agreement ready but does NOT email — saying
+        // "Sent" here made staff believe a client had been contacted when
+        // nothing had gone out.
+        toast.warning(data.notice || 'Marked ready — no email was sent.', { duration: 8000 })
       } else {
-        toast.success(`Sent to ${data.sent_to}`)
+        toast.success(`Sent to ${data.sent_to ?? data.recipient ?? 'client'}`)
       }
       fetchStatuses()
       router.refresh()

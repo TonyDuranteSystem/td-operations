@@ -285,7 +285,12 @@ export async function POST(request: NextRequest) {
       contact_id: contactId,
       company_name: account.company_name,
       state_of_formation: account.state_of_formation ?? null,
-      formation_date: account.formation_date ?? null,
+      // Never null: the templates interpolate this straight into Article 1.1
+      // ("...filing office on ${formation_date}."), so a missing date printed the
+      // literal word "null" in the executed agreement. Accounts imported or
+      // created for clients who already owned their company routinely lack it.
+      // Fall back to the effective date, then today — same as the staff paths.
+      formation_date: account.formation_date || effective_date || new Date().toISOString().split('T')[0],
       ein_number: account.ein_number ?? null,
       entity_type: entityType,
       manager_name: contact.full_name,
