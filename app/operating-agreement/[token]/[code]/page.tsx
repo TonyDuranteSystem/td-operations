@@ -432,6 +432,14 @@ function OperatingAgreementCodeContent() {
       setSigned(true)
       if (data.allSigned) setAllSigned(true)
 
+      // Refresh the agreement so the confirmation panel's "Download Signed PDF"
+      // has the freshly-filed path. Without this, `oa` still holds the pre-sign
+      // snapshot (pdf_storage_path = null) and the download wrongly reports the
+      // PDF "not available yet." Only matters once the doc is fully signed+filed.
+      if (data.allSigned) {
+        await loadOA().catch(() => {})
+      }
+
       if (isPortal && window.parent !== window) {
         window.parent.postMessage(
           { type: 'oa-signed', token, member_index: currentSignerIndex ?? undefined },
