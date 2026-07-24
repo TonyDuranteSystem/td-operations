@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { emitClientChatEvent } from '@/lib/portal/chat-events'
 import { refreshSS4 } from '@/lib/operations/ss4-refresh'
+import { explainFailure } from '@/lib/errors/explain-failure'
+import { firstDuplicateIndividualIdentity, matchContactByName } from '@/lib/members/member-identity'
 
 interface MemberPayload {
   member_type: 'individual' | 'company'
@@ -114,6 +116,22 @@ export async function POST(
     )
   }
 
+  // 4c. Two individual members can SHARE one email (a family LLC), but they
+  //     must be distinguishable — the database forbids the same individual
+  //     person as a member of one company twice. If two individual members
+  //     have the same name AND the same email we cannot tell them apart, so
+  //     reject up front with a plain message (before creating any contact),
+  //     rather than letting it surface as a raw duplicate-key error at save.
+  const duplicateName = firstDuplicateIndividualIdentity(members)
+  if (duplicateName) {
+    return NextResponse.json(
+      {
+        error: `Two members have the same name and email (${duplicateName}). Members can share one email address, but each member must have a different name. If two members really do have the same name, please contact us and we'll finish the setup for you.`,
+      },
+      { status: 400 },
+    )
+  }
+
   const now = new Date().toISOString()
   const accountId = request.account_id
 
@@ -124,8 +142,11 @@ export async function POST(
 
   // 6. Replace members atomically: submit_member_info() DELETEs existing rows
   //    then INSERTs the new set inside one transaction. If the INSERT fails
-  //    (e.g. two 'individual' rows resolve to the same contact_id) the whole
-  //    operation rolls back, so the account never ends up memberless.
+  //    (e.g. two 'individual' rows resolve to the same contact_id) the members
+  //    DELETE+INSERT rolls back, so the account never ends up memberless.
+  //    NOTE: the contact provisioning in step 5 runs BEFORE this and is NOT
+  //    part of this transaction — a failure here does not roll those back.
+  //    Step 4c prevents the only known trigger for such a failure.
   const insertRows = members.map((m, idx) => ({
     account_id: accountId,
     member_type: m.member_type,
@@ -162,7 +183,12 @@ export async function POST(
   })
 
   if (submitErr) {
-    return NextResponse.json({ error: `Failed to save members: ${submitErr.message}` }, { status: 500 })
+    // Translate the raw database failure into a plain-language reason
+    // (explainFailure already has friendly wording for the members
+    // unique-constraint) instead of leaking Postgres internals to the client.
+    const explained = explainFailure(submitErr)
+    console.error('[member-info] submit_member_info failed:', explained.technical)
+    return NextResponse.json({ error: explained.message }, { status: 500 })
   }
 
   // 7. Mark request as submitted
@@ -258,13 +284,20 @@ async function provisionMemberContacts({
     }
 
     try {
-      // Find or create contact by email
-      const { data: existingContact } = await supabaseAdmin
+      // Find or create the contact for this member. Match on email AND name,
+      // not email alone: two members can legitimately share one email (a family
+      // LLC), so we fetch EVERY contact on this email and pick the one whose
+      // name matches this member. Matching by email alone would hand both
+      // members the same contact and violate the members unique index (or reuse
+      // the wrong person). If no same-email contact has a matching name, we
+      // create a new contact — biased toward keeping distinct people distinct.
+      const { data: sameEmailContacts } = await supabaseAdmin
         .from('contacts')
-        .select('id')
+        .select('id, full_name')
         .eq('email', personEmail)
-        .limit(1)
-        .maybeSingle()
+
+      const matchedContactId = matchContactByName(sameEmailContacts || [], personName)
+      const existingContact = matchedContactId ? { id: matchedContactId } : null
 
       // The address/phone the member just provided — used for both creating a
       // new contact AND refreshing an existing one.
