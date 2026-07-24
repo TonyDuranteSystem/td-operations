@@ -63,6 +63,9 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/memory-digest": "0 9 * * 0",
   "/api/cron/memory-decay": "0 9 1 * *",
   "/api/cron/esign-reminders": "0 */6 * * *",
+  // OA server-side signing safety net — finalizes any agreement fully signed but
+  // not filed (a last-signer render/store hiccup); excludes by_hand.
+  "/api/cron/oa-finalize-sweep": "*/10 * * * *",
   "/api/cron/action-required-reminders": "0 13 * * *",
 }
 
