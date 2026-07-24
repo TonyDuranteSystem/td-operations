@@ -95,6 +95,56 @@ def log(event, **fields):
         pass
 
 
+# Net-status flag — "is the reviewer actually running?" The reviewer fails OPEN
+# (lets the turn pass) whenever its independent auditor can't run — most
+# importantly when the auditor's command-line login is revoked/expired. That is
+# INVISIBLE: the safety net silently steps aside on every turn (this is exactly
+# what happened 2026-07-24). This flag makes it visible. We flip it DOWN only on
+# an AUTHENTICATION failure (not on benign skips or one-off timeouts), and clear
+# it the moment the auditor runs cleanly again. SessionStart hook
+# reviewer-health.sh reads it and warns loudly while DOWN. Override path with
+# R093_NET_STATUS.
+NET_STATUS_PATH = os.environ.get("R093_NET_STATUS", "/tmp/r093-verifier-DOWN")
+
+
+def looks_like_auth_failure(text):
+    return bool(
+        re.search(
+            r"(not logged in|please run /login|invalid api key|oauth|"
+            r"authenticat|unauthorized|token (has been )?(revoked|expired)|"
+            r"\b401\b)",
+            text or "",
+            re.I,
+        )
+    )
+
+
+def mark_net_down(reason):
+    try:
+        with open(NET_STATUS_PATH, "w") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "since": datetime.datetime.now().isoformat(
+                            timespec="seconds"
+                        ),
+                        "reason": (reason or "")[:300],
+                    }
+                )
+            )
+    except Exception:
+        pass
+
+
+def clear_net_down():
+    try:
+        os.remove(NET_STATUS_PATH)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
 def fail_open(msg=None):
     log("fail_open", reason=msg or "")
     if msg:
@@ -344,6 +394,16 @@ def main():
         stdout_len=len((r.stdout or "")),
         stderr=(r.stderr or "")[:400],
     )
+    # NET DOWN detection: a non-zero exit whose output looks like an auth failure
+    # means the auditor can't sign in — the net is silently disabled. Flag it so
+    # SessionStart can warn. Benign timeouts/parse issues do NOT flip this.
+    if r.returncode != 0 and looks_like_auth_failure(
+        (r.stdout or "") + " " + (r.stderr or "")
+    ):
+        detail = ((r.stdout or "") or (r.stderr or "")).strip()[:120]
+        mark_net_down("auditor could not authenticate — run `claude auth login` (" + detail + ")")
+        log("net_down", reason="auth failure")
+        fail_open("auditor auth failure — net marked DOWN")
     out = (r.stdout or "").strip()
     if not out:
         fail_open("auditor empty output")
@@ -358,6 +418,10 @@ def main():
             parsed = json.loads(out[out.index("{"): out.rindex("}") + 1])
         except Exception as e:
             fail_open(f"auditor json parse: {e}")
+
+    # Auditor ran and returned valid JSON → the reviewer is UP. Clear any stale
+    # DOWN flag so SessionStart stops warning once a login self-heals.
+    clear_net_down()
 
     violations = parsed.get("violations") or []
     if not isinstance(violations, list) or not violations:
