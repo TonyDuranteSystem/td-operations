@@ -544,12 +544,12 @@ async function sendOA(token: string) {
     return { error: `This Operating Agreement is partly signed — some owners have already signed it. Re-sending would reset its status. Send each remaining owner their personal signing link instead.` }
   }
 
-  // ⚠️ THIS DOES NOT SEND AN EMAIL. It marks the agreement ready and returns the
-  // client link; the actual email goes out through the oa_send tool (Gmail +
-  // tracking + idempotency). Until this is wired to a shared send helper, it must
-  // NOT report a send — staff were being told "Sent to <client>" while nothing
-  // left the building, and the status flip then satisfied oa_send's own
-  // "already sent" probe, suppressing the real email too.
+  // What this actually does: marks the agreement ready, which is what makes it
+  // appear in the client's PORTAL to sign. Agreements reach clients through the
+  // portal — not by email (portal notifications vastly outnumber OA link emails,
+  // the last of which went out in April). This button never emailed anyone, so it
+  // must not claim it did: staff were shown "Sent to <client>" while nothing had
+  // happened on the client's side at all.
   const { error: updateErr } = await supabaseAdmin
     .from("oa_agreements")
     .update({ status: "sent" })
@@ -563,15 +563,15 @@ async function sendOA(token: string) {
     table_name: "oa_agreements",
     record_id: oa.id,
     account_id: oa.account_id,
-    summary: `Marked OA ready to send for ${oa.company_name} (no email sent from the CRM button)`,
-    details: { token: oa.token, email: oa.member_email, source: "crm-button", emailed: false },
+    summary: `Made OA available in the client portal for ${oa.company_name}`,
+    details: { token: oa.token, contact_email: oa.member_email, source: "crm-button", emailed: false, channel: "portal" },
   })
 
   return {
     success: true,
     emailed: false,
     recipient: oa.member_email,
-    notice: `Marked ready — no email was sent. Send the link to ${oa.member_email} (or use the OA send tool).`,
+    notice: `Ready — the Operating Agreement now appears in the client's portal to sign. No email is sent.`,
     client_url: `${OA_BASE_URL}/${oa.token}/${oa.access_code}`,
   }
 }
