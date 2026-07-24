@@ -1992,6 +1992,15 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
           summary: `Portal chat message sent: "${msgText.substring(0, 80)}${msgText.length > 80 ? "..." : ""}"`,
         })
 
+        // Staff reply = read (WhatsApp semantics): clear this conversation's
+        // client unread so the staff red dot goes away. Same helper the reply
+        // API uses, so every send surface behaves identically.
+        const { markClientMessagesReadForStaffReply } = await import("@/lib/portal/mark-thread-read")
+        await markClientMessagesReadForStaffReply({
+          account_id: account_id || null,
+          contact_id: resolvedContactId || null,
+        }).catch(() => 0)
+
         // In-app notification + email to client (fire-and-forget)
         const { createPortalNotification, notifyClientOfAdminMessage } = await import("@/lib/portal/notifications")
         createPortalNotification({

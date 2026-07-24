@@ -374,6 +374,18 @@ export async function POST(request: NextRequest) {
   const { contacts: _contacts, ...msgData } = data
   const responseMsg = { ...msgData, sender_name: pickChatSenderName(contact?.full_name, (msgData as { sender_name?: string | null }).sender_name) }
 
+  // Staff reply = read (WhatsApp semantics): clear this conversation's client
+  // unread so the staff red dot goes away the moment we answer — reliably, on
+  // every surface, because it runs here in the reply write itself. Awaited so
+  // the sender's post-send refetch already sees the cleared state.
+  if (senderType === 'admin') {
+    const { markClientMessagesReadForStaffReply } = await import('@/lib/portal/mark-thread-read')
+    await markClientMessagesReadForStaffReply({
+      account_id: account_id || null,
+      contact_id: resolvedContactId || null,
+    }).catch(() => 0)
+  }
+
   // Notify client when admin sends a message
   if (senderType === 'admin') {
     createPortalNotification({
