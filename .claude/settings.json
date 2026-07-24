@@ -21,6 +21,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash .claude/hooks/worktree-write-guard.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "bash .claude/hooks/verify-before-edit.sh",
             "timeout": 5
           }
@@ -54,6 +59,16 @@
             "type": "command",
             "command": "bash .claude/hooks/checkpoint-counter.sh",
             "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/main-repo-change-detector.sh",
+            "timeout": 10
           }
         ]
       }
