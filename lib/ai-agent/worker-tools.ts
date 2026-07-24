@@ -1535,6 +1535,15 @@ export async function sendPortalMessageFromWorker(input: {
   if (error) return `❌ Failed to send portal message: ${error.message ?? "unknown error"}`
   if (!msg) return "❌ Portal message insert returned no row."
 
+  // Staff reply = read (WhatsApp semantics): the assistant answering on our
+  // behalf is a reply, so clear this conversation's client unread and drop the
+  // staff red dot. Same helper the dashboard reply and the MCP send tool use.
+  const { markClientMessagesReadForStaffReply } = await import("@/lib/portal/mark-thread-read")
+  await markClientMessagesReadForStaffReply({
+    account_id: accountId ?? null,
+    contact_id: resolvedContactId ?? null,
+  }).catch(() => 0)
+
   // Resolve the recipient's display name for the confirmation, so staff always
   // see WHO the message went to (on the unpinned Slack path a model-resolved id
   // could silently be the wrong client — the name makes that visible).
