@@ -142,6 +142,23 @@ export function GenerateOADialog({
         {/* Body */}
         <div className="px-6 py-4 space-y-4">
 
+          {/* Standing rule (Antonio, 2026-07-24): TD does not generate Operating
+              Agreements for clients — the client generates their own from their
+              portal, because the agreement has to carry THEIR information.
+              The button stays for the rare case that needs it, but it should
+              never be the first move. (The lease is the document TD generates.) */}
+          <div className="rounded-lg bg-blue-50 border border-blue-200 p-4 space-y-1">
+            <div className="flex items-center gap-2 text-blue-900 font-medium text-sm">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              Ask the client to do this from their portal first
+            </div>
+            <p className="text-xs text-blue-800 leading-relaxed">
+              Clients generate their own Operating Agreement in the portal, so it carries the
+              details they entered themselves. Point the client there before creating one here —
+              only continue if they genuinely cannot.
+            </p>
+          </div>
+
           {/* ── Existing OA conflict ── */}
           {existingOA && !result && (
             <div className="space-y-4">
