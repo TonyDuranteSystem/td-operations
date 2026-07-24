@@ -26,6 +26,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { hasCollectedSignatures } from '@/lib/portal/oa-regenerate-guard'
+import { OA_SUPPORTED_STATES } from '@/lib/types/oa-templates'
 import { APP_BASE_URL } from '@/lib/config'
 import { notifyClientActionRequired } from '@/lib/portal/action-required'
 import { reportSystemError } from '@/lib/system-errors'
@@ -64,6 +65,21 @@ export async function POST(request: NextRequest) {
     .single()
 
   if (!account) return NextResponse.json({ error: 'Account not found' }, { status: 404 })
+
+  // Both STAFF doors refuse an unsupported state; this client-facing one did not.
+  // The templates only carry state-specific clauses (charging-order protection,
+  // annual-report duty, governing law) for the supported states — outside them a
+  // client would silently self-generate a materially weaker agreement that staff
+  // would have been blocked from producing.
+  const oaState = (account.state_of_formation ?? '').toUpperCase()
+  if (!OA_SUPPORTED_STATES.includes(oaState as (typeof OA_SUPPORTED_STATES)[number])) {
+    return NextResponse.json(
+      {
+        error: `We can't generate an Operating Agreement for ${account.state_of_formation || 'this state'} automatically yet. Please contact support@tonydurante.us and we'll prepare it for you.`,
+      },
+      { status: 400 },
+    )
+  }
 
   // The DB stores "Multi Member LLC" (long form) — normalize before comparing,
   // and let member_structure catch entity types the normalizer passes through

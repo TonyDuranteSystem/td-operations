@@ -157,6 +157,28 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
         { status: 400 },
       )
     }
+    // The type above is what the BROWSER claims — it is caller-supplied and
+    // therefore not a check at all. Sniff the actual leading bytes so an
+    // arbitrary binary cannot be filed into the client's Drive and published to
+    // their portal as their signed agreement. (The electronic path already
+    // verifies PNG magic bytes; this one verified nothing about the content.)
+    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer())
+    const startsWith = (...bytes: number[]) => bytes.every((b, i) => head[i] === b)
+    const ftyp = String.fromCharCode(...Array.from(head.slice(4, 12)))
+    const looksLikeDocument =
+      startsWith(0x25, 0x50, 0x44, 0x46) ||           // %PDF
+      startsWith(0xff, 0xd8, 0xff) ||                  // JPEG
+      startsWith(0x89, 0x50, 0x4e, 0x47) ||            // PNG
+      startsWith(0x47, 0x49, 0x46, 0x38) ||            // GIF8
+      ftyp.startsWith("ftyp") ||                       // HEIC/HEIF/MP4-family (iPhone photos)
+      (startsWith(0x52, 0x49, 0x46, 0x46) &&           // RIFF....WEBP
+        String.fromCharCode(...Array.from(head.slice(8, 12))) === "WEBP")
+    if (!looksLikeDocument) {
+      return NextResponse.json(
+        { error: `That file does not look like a PDF or a photo. Please upload a scan or a picture of the signed agreement.` },
+        { status: 400 },
+      )
+    }
   }
 
   // Who is declaring? For a multi-signer agreement, resolve them from their

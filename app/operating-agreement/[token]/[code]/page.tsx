@@ -329,8 +329,11 @@ function OperatingAgreementCodeContent() {
       // Tell the portal shell so its banner/checklist refresh instead of still
       // reading "Awaiting Your Signature" behind the iframe.
       if (isPortal && window.parent !== window) {
+        // A paper declaration completes the whole agreement (the client's own
+        // document, their responsibility — Antonio 2026-07-24), so this one is
+        // genuinely complete.
         window.parent.postMessage(
-          { type: 'oa-signed', token, member_index: currentSignerIndex ?? undefined },
+          { type: 'oa-signed', token, member_index: currentSignerIndex ?? undefined, allSigned: true },
           'https://portal.tonydurante.us',
         )
       }
@@ -452,8 +455,11 @@ function OperatingAgreementCodeContent() {
       }
 
       if (isPortal && window.parent !== window) {
+        // allSigned tells the portal shell whether the agreement is COMPLETE. A
+        // multi-owner agreement with one owner signed is not — without this the
+        // portal announced "signed and saved" to a partial signer.
         window.parent.postMessage(
-          { type: 'oa-signed', token, member_index: currentSignerIndex ?? undefined },
+          { type: 'oa-signed', token, member_index: currentSignerIndex ?? undefined, allSigned: !!data.allSigned },
           'https://portal.tonydurante.us',
         )
       }

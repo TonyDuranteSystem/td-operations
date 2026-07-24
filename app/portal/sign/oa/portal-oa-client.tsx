@@ -32,9 +32,19 @@ export function PortalOAClient({ oaUrl, status, companyName, language }: PortalO
   const lang = (language === 'it' ? 'it' : 'en') as 'en' | 'it'
   const subtitle = SUBTITLES[currentStatus] || SUBTITLES.default
 
-  // Listen for postMessage from embedded OA page when signing completes
+  // Listen for postMessage from embedded OA page when signing completes.
   const handleMessage = useCallback((event: MessageEvent) => {
+    // Only trust our own signing page. Without this any embedded/opener frame
+    // could flip the client's agreement banner to "Signed".
+    if (event.origin !== window.location.origin && !event.origin.endsWith('.tonydurante.us')) return
     if (event.data?.type === 'oa-signed') {
+      // A multi-owner agreement is NOT signed when one owner signs — announcing
+      // "signed and saved" to a partial signer was wrong (it self-corrected on
+      // the refresh a second and a half later, but the client saw it).
+      if (event.data?.allSigned === false) {
+        setTimeout(() => router.refresh(), 1200)
+        return
+      }
       setCurrentStatus('signed')
       // Refresh the dashboard after a short delay to update checklist
       setTimeout(() => router.refresh(), 1500)

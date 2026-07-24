@@ -98,7 +98,18 @@ export function FormationDashboard({
   // Determine current active CTA
   const needsWizard = !wizardSubmitted
   const needsSS4Signature = !needsWizard && ss4AwaitingSignature
-  const needsOA = einReceived && !oaSigned && oaData && oaData.status !== 'signed'
+  // Only nag about an agreement the client can actually act on. `voided` is a
+  // cancelled agreement and `draft` has not been sent — the portal's own
+  // "To sign" list deliberately hides both, but this banner used to include
+  // them, sending the client to a page that then tells them the agreement is
+  // outdated. 21 voided agreements exist in production.
+  const needsOA =
+    einReceived &&
+    !oaSigned &&
+    oaData &&
+    oaData.status !== 'signed' &&
+    oaData.status !== 'voided' &&
+    oaData.status !== 'draft'
   const needsLease = einReceived && !leaseSigned && leaseData && leaseData.status !== 'signed'
   // Closure is INDEPENDENT of the formation milestone chain — it surfaces
   // whenever an active Closure SD exists on the contact, regardless of the
