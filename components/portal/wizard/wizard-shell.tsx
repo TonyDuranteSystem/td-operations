@@ -138,10 +138,16 @@ export function WizardShell({
           )}
         </div>
 
+        {/* Clarify fix (2026-07-24): Next/Submit stay ENABLED even when the step
+            is incomplete — clicking runs validation in the parent, which
+            HIGHLIGHTS the exact missing fields and explains them, instead of a
+            silent greyed-out button the client can't understand. `canProceed`
+            is still passed (for styling) but no longer disables the control. */}
         {isLastStep ? (
           <button
             onClick={onSubmit}
-            disabled={!canProceed || isSubmitting}
+            disabled={isSubmitting}
+            aria-disabled={!canProceed}
             className="flex items-center gap-1 px-6 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
           >
             {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
@@ -149,9 +155,9 @@ export function WizardShell({
           </button>
         ) : (
           <button
-            onClick={() => canProceed && onStepChange(currentStep + 1)}
-            disabled={!canProceed}
-            className="flex items-center gap-1 px-6 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
+            onClick={() => onStepChange(currentStep + 1)}
+            aria-disabled={!canProceed}
+            className="flex items-center gap-1 px-6 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
           >
             {t.next}
             <ChevronRight className="h-4 w-4" />

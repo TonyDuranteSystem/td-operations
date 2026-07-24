@@ -4,7 +4,7 @@ import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
 import { WizardShell, type WizardStep } from '@/components/portal/wizard/wizard-shell'
 import { WizardField, type FieldConfig } from '@/components/portal/wizard/wizard-field'
-import { getWizardConfig, wizardCollectsOwnerMembers, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD } from '@/components/portal/wizard/wizard-configs'
+import { getWizardConfig, wizardCollectsOwnerMembers, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
 import { createClient } from '@/lib/supabase/client'
 import { AlertCircle, CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
 
@@ -485,19 +485,30 @@ export function WizardClient({
 
 
   // Validate current step
-  const validateStep = useCallback(() => {
+  // Clarify fix (2026-07-24): instead of a SILENT disabled "Next" button, we
+  // collect WHICH required fields on the step are empty/invalid and WHY, keyed
+  // by their real formData key, so the UI can highlight each one and explain it
+  // in the client's language (Matteo / Luca's 5 MMLLC clients — they hit blank
+  // required questions the old form never had and would otherwise stare at a
+  // dead grey button). validateStep is derived from this (empty errors = valid),
+  // so there is ONE source of truth for step completeness.
+  const reqMsg = locale === 'it' ? 'Campo obbligatorio' : 'Required field'
+  const minMsg = locale === 'it' ? 'Il valore non è valido' : 'Value is not valid'
+
+  const getStepErrors = useCallback((): Record<string, string> => {
+    const errs: Record<string, string> = {}
     const stepId = steps[currentStep].id
     const stepFields = fields[stepId] || []
 
-    // "Before You Start": the client must tick the acknowledgement checkbox
-    // (they prepared/downloaded all bank statements) before they can proceed.
-    if (stepId === 'prepare') return formData['prepare_acknowledged'] === true
+    if (stepId === 'prepare') {
+      if (formData['prepare_acknowledged'] !== true) {
+        errs['prepare_acknowledged'] = locale === 'it'
+          ? 'Conferma di aver letto e scaricato gli estratti conto per continuare'
+          : 'Confirm you have read the above and downloaded your statements to continue'
+      }
+      return errs
+    }
 
-    // Members step: every field lives under an indexed key (member_{idx}_{name}),
-    // so validate each of the memberCount members against the indexed keys.
-    // The generic loop below checks bare field.name keys (which are always empty
-    // here) and would wrongly block the step — that bug only surfaced once the
-    // MMLLC members step started rendering.
     if (stepId === 'members') {
       for (let idx = 0; idx < memberCount; idx++) {
         const rawType = formData[`member_${idx}_member_type`]
@@ -509,49 +520,98 @@ export function WizardClient({
               : formData[`member_${idx}_${field.conditional.field}`]
             if (String(refValue) !== field.conditional.value) continue
           }
-          if (field.required && isEmptyValue(formData[`member_${idx}_${field.name}`])) return false
-          if (belowFieldMin(field, formData[`member_${idx}_${field.name}`])) return false
+          const key = `member_${idx}_${field.name}`
+          if (field.required && isEmptyValue(formData[key])) errs[key] = reqMsg
+          else if (belowFieldMin(field, formData[key])) errs[key] = minMsg
         }
       }
-      // Tax MMLLC: members are the full roster — ownership must total 100%
-      // before they can leave this step (early gate, not a surprise at Submit).
       if (wizardType === 'tax' && isMMLLC) {
         let pctSum = 0
         for (let idx = 0; idx < memberCount; idx++) {
           const v = Number(formData[`member_${idx}_member_ownership_pct`])
           if (!Number.isNaN(v)) pctSum += v
         }
-        if (Math.abs(pctSum - 100) > 0.5) return false
+        if (Math.abs(pctSum - 100) > 0.5) {
+          errs['__members_ownership'] = locale === 'it'
+            ? `Le quote dei soci devono sommare al 100% (ora: ${pctSum}%)`
+            : `Ownership shares must total 100% (currently ${pctSum}%)`
+        }
       }
-      return true
+      return errs
     }
 
     for (const field of stepFields) {
-      // Skip validation for hidden conditional fields (applies to repeaters
-      // too — e.g. the related-party repeater only when its gate is "Yes").
-      // Full ancestor-chain check: a stale child answer must not keep a
-      // field required after its grandparent flipped.
       if (!isFieldVisible(field, stepFields, formData)) continue
-      // Repeater gate (merged from both wizard features 2026-06-11): a
-      // required repeater (`required` — SMLLC related-party — OR
-      // `repeaterRequired` — MMLLC bank accounts) needs ≥1 row, and every
-      // row must fill its required sub-fields (mirrors the members logic).
       if (field.type === 'repeater') {
         const count = repeaterCounts[field.name] ?? (Number(formData[`${field.name}_count`]) || 0)
-        if ((field.required || field.repeaterRequired) && count < 1) return false
+        if ((field.required || field.repeaterRequired) && count < 1) {
+          errs[field.name] = locale === 'it' ? 'Aggiungi almeno una voce' : 'Add at least one entry'
+        }
         for (let idx = 0; idx < count; idx++) {
           for (const rf of field.repeaterFields ?? []) {
-            if (rf.required && isEmptyValue(formData[`${field.name}_${idx}_${rf.name}`])) return false
-            if (belowFieldMin(rf, formData[`${field.name}_${idx}_${rf.name}`])) return false
+            const key = `${field.name}_${idx}_${rf.name}`
+            if (rf.required && isEmptyValue(formData[key])) errs[key] = reqMsg
+            else if (belowFieldMin(rf, formData[key])) errs[key] = minMsg
           }
         }
         continue
       }
-      if (field.required && isEmptyValue(formData[field.name])) return false
-      if (belowFieldMin(field, formData[field.name])) return false
+      if (field.required && isEmptyValue(formData[field.name])) errs[field.name] = reqMsg
+      else if (belowFieldMin(field, formData[field.name])) errs[field.name] = minMsg
+    }
+    return errs
+  }, [currentStep, steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, locale, reqMsg, minMsg])
+
+  const validateStep = useCallback(() => Object.keys(getStepErrors()).length === 0, [getStepErrors])
+
+  // Resolve a flattened formData key to a human, localized field label so the
+  // error list + the highlighted field read plainly (not `member_0_member_zip`).
+  const labelForKey = useCallback((key: string): string => {
+    if (key === '__members_ownership') return locale === 'it' ? 'Quote dei soci' : 'Member ownership'
+    const stepId = steps[currentStep].id
+    const stepFields = fields[stepId] || []
+    const pick = (f: FieldConfig) => (locale === 'it' && f.labelIt ? f.labelIt : f.label) || f.name
+    // member_{idx}_{name}
+    const m = key.match(/^member_\d+_(.+)$/)
+    if (m) {
+      const f = TAX_MEMBER_FIELDS.find(ff => ff.name === m[1])
+      if (f) return pick(f)
+    }
+    // {repeater}_{idx}_{sub}
+    for (const f of stepFields) {
+      if (f.type === 'repeater' && f.repeaterFields) {
+        const rm = key.match(new RegExp(`^${f.name}_\\d+_(.+)$`))
+        if (rm) {
+          const rf = f.repeaterFields.find(ff => ff.name === rm[1])
+          if (rf) return pick(rf)
+        }
+      }
+    }
+    const top = stepFields.find(f => f.name === key)
+    if (top) return pick(top)
+    return key
+  }, [currentStep, steps, fields, locale])
+
+  // Compute the step's errors and PUBLISH them (highlight + summary). Returns
+  // true when the step is BLOCKED (has errors). Used by forward navigation and
+  // submit so the client sees exactly what to fix instead of a dead grey button.
+  const raiseStepErrors = useCallback((): boolean => {
+    const errs = getStepErrors()
+    const keys = Object.keys(errs)
+    if (keys.length === 0) { setFieldErrors([]); return false }
+    setFieldErrors(keys.map(k => ({ field: k, message: errs[k] })))
+    if (typeof document !== 'undefined') {
+      const first = document.querySelector(`[data-field-key="${CSS.escape(keys[0])}"]`)
+      if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      else window.scrollTo({ top: 0, behavior: 'smooth' })
     }
     return true
-  }, [currentStep, steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC])
+  }, [getStepErrors])
+
+  const errorFor = useCallback(
+    (key: string) => fieldErrors.find(e => e.field === key)?.message,
+    [fieldErrors],
+  )
 
   // Save progress to wizard_progress table. `silent` = autosave mode: no
   // toasts (a failed autosave just stays dirty and retries on the next edit;
@@ -617,8 +677,10 @@ export function WizardClient({
 
   // Submit wizard
   const handleSubmit = useCallback(async () => {
-    if (!validateStep()) {
-      toast.error(locale === 'it' ? 'Compila tutti i campi obbligatori' : 'Please fill all required fields')
+    // Clarify fix: highlight the exact missing fields on the final step + explain,
+    // instead of a generic "fill all required fields" toast over a grey button.
+    if (raiseStepErrors()) {
+      toast.error(locale === 'it' ? 'Completa i campi evidenziati per inviare' : 'Complete the highlighted fields to submit')
       return
     }
 
@@ -756,10 +818,19 @@ export function WizardClient({
         ? "Invio non riuscito dopo alcuni tentativi. Aggiorna la pagina: se risulta già inviato, è andato a buon fine."
         : "Submit didn't go through after a few tries. Refresh the page — if it shows as already submitted, it worked."),
     )
-  }, [wizardType, entityType, formData, accountId, contactId, leadId, currentProgressId, validateStep, locale, isResubmitMode, itinCount, memberCount, isMMLLC])
+  }, [wizardType, entityType, formData, accountId, contactId, leadId, currentProgressId, raiseStepErrors, locale, isResubmitMode, itinCount, memberCount, isMMLLC])
 
   // Auto-save on step change
   const handleStepChange = useCallback((step: number) => {
+    // Clarify fix: a FORWARD move must pass the current step. If it doesn't,
+    // highlight the exact missing fields + explain, and stay put — never a
+    // silent dead button. Backward moves (and tab clicks to earlier steps) are
+    // always allowed and clear the errors.
+    if (step > currentStep) {
+      if (raiseStepErrors()) return
+    } else {
+      setFieldErrors([])
+    }
     setCurrentStep(step)
     // Auto-save in background (only if user has entered data)
     const hasData = Object.keys(formData).some(k => formData[k] !== undefined && formData[k] !== '')
@@ -782,7 +853,7 @@ export function WizardClient({
           console.warn('[wizard] Auto-save failed — data preserved in memory')
         })
     }
-  }, [wizardType, formData, accountId, contactId, leadId, currentProgressId])
+  }, [wizardType, formData, accountId, contactId, leadId, currentProgressId, currentStep, raiseStepErrors])
 
   // Locked screen — Antonio has reviewed the data, no more editing
   if (isLocked) {
@@ -922,18 +993,21 @@ export function WizardClient({
         </div>
       )}
 
-      {/* Server-side validation error banner — populated from /api/portal/wizard-submit 400 response */}
+      {/* Validation summary — client-side (missing required fields on this step,
+          Clarify fix) OR server-side (wizard-submit 400). Lists each blocking
+          field by its plain localized label + the reason, and each field is
+          also highlighted below. */}
       {fieldErrors.length > 0 && (
         <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl p-4 mb-4" data-testid="wizard-field-errors">
           <AlertCircle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
           <div className="text-sm w-full">
             <p className="font-semibold text-red-900 mb-1">
-              {locale === 'it' ? 'Correggi i seguenti campi:' : 'Please correct the following:'}
+              {locale === 'it' ? 'Per continuare, completa questi campi:' : 'To continue, complete these fields:'}
             </p>
             <ul className="list-disc list-inside text-red-700 space-y-0.5">
               {fieldErrors.map((fe, i) => (
                 <li key={`${fe.field}-${i}`}>
-                  <span className="font-medium">{fe.field}</span>: {fe.message}
+                  <span className="font-medium">{labelForKey(fe.field)}</span>: {fe.message}
                 </li>
               ))}
             </ul>
@@ -1007,13 +1081,14 @@ export function WizardClient({
                     return resolved === field.conditional.value
                   })
                   .map(field => (
-                    <div key={`${idx}_${field.name}`} className={field.type === 'select' || field.type === 'textarea' || field.type === 'file' ? 'md:col-span-2' : ''}>
+                    <div key={`${idx}_${field.name}`} data-field-key={`member_${idx}_${field.name}`} className={field.type === 'select' || field.type === 'textarea' || field.type === 'file' ? 'md:col-span-2' : ''}>
                       <WizardField
                         field={field}
                         value={formData[`member_${idx}_${field.name}`] ?? ''}
                         onChange={(name, value) => handleFieldChange(`member_${idx}_${name}`, value)}
                         onFileUpload={(name, file, onProgress) => handleFileUpload(`member_${idx}_${name}`, file, onProgress)}
                         locale={locale}
+                        error={errorFor(`member_${idx}_${field.name}`)}
                       />
                     </div>
                   ))}
@@ -1150,11 +1225,12 @@ export function WizardClient({
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           {field.repeaterFields?.map(rf => (
-                            <div key={rf.name} className={rf.type === 'textarea' || rf.type === 'file' ? 'md:col-span-2' : ''}>
+                            <div key={rf.name} data-field-key={`${field.name}_${idx}_${rf.name}`} className={rf.type === 'textarea' || rf.type === 'file' ? 'md:col-span-2' : ''}>
                               <WizardField
                                 field={rf}
                                 value={formData[`${field.name}_${idx}_${rf.name}`] ?? ''}
                                 onChange={(name, value) => handleFieldChange(`${field.name}_${idx}_${name}`, value)}
+                                error={errorFor(`${field.name}_${idx}_${rf.name}`)}
                                 // Without the upload callback a file sub-field
                                 // silently stores raw FILENAMES instead of
                                 // storage paths (wizard-field.tsx fallback) —
@@ -1209,7 +1285,7 @@ export function WizardClient({
               }
               // ── Regular field ────────────────────────────────────────
               return (
-                <div key={field.name} className={field.type === 'textarea' || field.type === 'checkbox' ? 'md:col-span-2' : ''}>
+                <div key={field.name} data-field-key={field.name} className={field.type === 'textarea' || field.type === 'checkbox' ? 'md:col-span-2' : ''}>
                   <WizardField
                     field={{ ...field, prefilled: !!prefillData[field.name] }}
                     value={formData[field.name] ?? ''}
@@ -1217,6 +1293,7 @@ export function WizardClient({
                     onFileUpload={handleFileUpload}
                     onAiAssist={wizardType === 'td_communication' ? handleAiAssist : undefined}
                     locale={locale}
+                    error={errorFor(field.name)}
                   />
                   {/* High-stakes confirmation: show an amber warning when the
                       field's value matches its configured warningOnValue (e.g.
