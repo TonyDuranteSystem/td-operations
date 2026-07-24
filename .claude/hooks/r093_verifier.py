@@ -31,6 +31,18 @@ v2 CHANGES (closing the two v1 gaps)
   recommendations, and reasoning. The assistant's own earlier words are NEVER
   evidence (only real tool results and user statements are ground truth).
 
+v3 CHANGES (investigation discipline — the ITIN/Luma case)
+----------------------------------------------------------
+v1/v2 audited only external-state CLAIMS, and were explicitly told never to flag
+questions or next-steps. That let a whole failure class through: the assistant
+ASKING the user a fact the system could answer ("did they buy one ITIN or two?"
+— the offer said two), SKIPPING a check the user explicitly listed, or drawing an
+absolute negative ("this person has no ITIN") from a lookup too narrow to support
+it (queried the company, concluded about the person). v3 adds PART B — three
+discipline flags (unmet_check, answerable_question, narrow_negative) — kept
+deliberately narrow: it never flags approval questions or genuine judgment calls
+(price/strategy), only facts the SYSTEM can answer or checks the USER named.
+
 MECHANICS (verified against the live platform, not assumed)
 -----------------------------------------------------------
 - Stop hook continuation: print {"decision":"block","reason":...}; the recursive
@@ -49,6 +61,7 @@ KILL SWITCH: R093_VERIFIER_OFF=1 disables.
 MODEL: R093_AUDITOR_MODEL (default "sonnet").
 """
 
+import datetime
 import json
 import os
 import re
@@ -61,8 +74,29 @@ USER_CAP = 4000          # chars of user-stated context
 MIN_ANSWER_LEN = 120     # skip trivial answers
 AUDITOR_TIMEOUT = 80     # seconds for the headless auditor call
 
+# Diagnostic log — records whether the verifier ran, whether the independent
+# auditor authenticated/returned, and the final decision. Lets us SEE what
+# happened on a Stop event instead of guessing. Off the repo tree so it is
+# never committed. Override path with R093_VERIFIER_LOG; disable by pointing it
+# at /dev/null.
+LOG_PATH = os.environ.get("R093_VERIFIER_LOG", "/tmp/r093-verifier-debug.log")
+
+
+def log(event, **fields):
+    try:
+        rec = {
+            "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+            "event": event,
+        }
+        rec.update(fields)
+        with open(LOG_PATH, "a") as f:
+            f.write(json.dumps(rec, default=str)[:4000] + "\n")
+    except Exception:
+        pass
+
 
 def fail_open(msg=None):
+    log("fail_open", reason=msg or "")
     if msg:
         sys.stderr.write(f"r093-verifier: {msg}\n")
     sys.exit(0)
@@ -76,17 +110,19 @@ def cap(text, n):
 
 def main():
     if os.environ.get("R093_AUDITOR"):
-        fail_open()  # never run inside the auditor's own sub-session
+        sys.exit(0)  # never run inside the auditor's own sub-session (no log noise)
     if os.environ.get("R093_VERIFIER_OFF"):
-        fail_open()
+        fail_open("kill switch R093_VERIFIER_OFF set")
 
     try:
         hook = json.load(sys.stdin)
     except Exception as e:
         fail_open(f"stdin parse: {e}")
 
+    log("invoked", stop_active=hook.get("stop_hook_active"))
+
     if hook.get("stop_hook_active") in (True, "true", "True"):
-        fail_open()  # break the continuation loop
+        fail_open("continuation loop (stop_hook_active)")  # break the loop
 
     transcript_path = hook.get("transcript_path") or ""
     if not transcript_path or not os.path.isfile(transcript_path):
@@ -195,9 +231,9 @@ def main():
     # Need SOME grounded evidence in the session to diff against, and a
     # substantive answer. Pure chit-chat with no lookups anywhere is skipped.
     if not this_turn_results and not prior_results:
-        fail_open()
+        fail_open("gate: no grounded evidence in session")
     if len(answer.strip()) < MIN_ANSWER_LEN:
-        fail_open()
+        fail_open("gate: answer too short")
 
     this_turn = (
         cap("\n\n----\n\n".join(this_turn_results), THIS_TURN_CAP)
@@ -217,13 +253,16 @@ def main():
 
     # ---- build the auditor call ------------------------------------------
     system = (
-        "You are a strict, independent fact-checker auditing another AI "
-        "assistant's reply against the grounded evidence it had access to this "
-        "session. You have exactly one job: catch claims about EXTERNAL STATE "
-        "that the evidence does not support. You do not care whether the reply "
-        "is helpful, well-written, or complete. EVIDENCE comes in tiers; only "
-        "real tool outputs and user statements are ground truth — the "
-        "assistant's own earlier words are NOT evidence and must never be "
+        "You are a strict, independent auditor of another AI assistant's reply "
+        "against the grounded evidence it had access to this session. You have "
+        "two jobs: (A) catch claims about EXTERNAL STATE that the evidence does "
+        "not support, and (B) catch investigation-discipline failures — the "
+        "assistant asking the user for a fact the system could look up, skipping "
+        "a check the user explicitly asked for, or drawing an absolute negative "
+        "conclusion from a lookup too narrow to support it. You do not care "
+        "whether the reply is helpful, well-written, or complete. EVIDENCE comes "
+        "in tiers; only real tool outputs and user statements are ground truth — "
+        "the assistant's own earlier words are NOT evidence and must never be "
         "treated as support. Output STRICT JSON only."
     )
     user = (
@@ -233,26 +272,49 @@ def main():
         "[WHAT THE USER HAS STATED]\n" + users + "\n\n"
         "ANSWER — the assistant's latest reply:\n<answer>\n" + cap(answer, 8000)
         + "\n</answer>\n\n"
-        "TASK: Audit ONLY concrete claims about EXTERNAL STATE — client/account/"
-        "contact/payment/document facts, database values, what a file/table/"
-        "column/function contains or does, system configuration, and specific "
-        "dates/amounts/IDs/statuses that should come from tool outputs.\n\n"
-        "Flag a claim when:\n"
-        "  (a) it CONTRADICTS the EVIDENCE, or\n"
-        "  (b) the EVIDENCE contains a different/conflicting value for the same "
-        "fact that the ANSWER did not explicitly flag, or\n"
-        "  (c) it is a specific external-state fact with NO support anywhere in "
-        "EVIDENCE (an ungrounded assertion).\n\n"
-        "NEVER flag (these are not violations): recommendations, plans, next "
+        "Audit the ANSWER on two fronts.\n\n"
+        "PART A — EXTERNAL-STATE CLAIMS. Audit ONLY concrete claims about "
+        "external state — client/account/contact/payment/document facts, "
+        "database values, what a file/table/column/function contains or does, "
+        "system configuration, and specific dates/amounts/IDs/statuses that "
+        "should come from tool outputs.\n"
+        "Flag such a claim when:\n"
+        "  (contradiction) it CONTRADICTS the EVIDENCE, or\n"
+        "  (conflict) the EVIDENCE contains a different/conflicting value for "
+        "the same fact that the ANSWER did not explicitly flag, or\n"
+        "  (ungrounded) it is a specific external-state fact with NO support "
+        "anywhere in EVIDENCE.\n\n"
+        "PART B — INVESTIGATION DISCIPLINE. Flag when:\n"
+        "  (unmet_check) the USER's message explicitly asked the assistant to "
+        "check/confirm/verify something specific (e.g. 'check the offer', "
+        "'check both members before saying anything'), and the ANSWER instead "
+        "ASKS THE USER about that thing, or asserts it with NO supporting tool "
+        "output in EVIDENCE. The assistant was told to find it out — not ask, "
+        "not guess.\n"
+        "  (answerable_question) the ANSWER asks the USER for a concrete record "
+        "or client fact that a tool in this system could retrieve — what they "
+        "bought, their language, an invoice/payment/document status, whether a "
+        "record exists. It should look it up, not ask.\n"
+        "  (narrow_negative) the ANSWER states an absolute negative about a "
+        "subject ('X has no Y', 'there is no Z for this person'), but EVIDENCE "
+        "only contains a lookup too narrow to support it — e.g. it queried the "
+        "COMPANY but concludes about a PERSON, or checked one table/scope and "
+        "generalized to all.\n\n"
+        "NEVER flag (these are NOT violations): recommendations, plans, next "
         "steps, opinions, reasoning, fair summaries or paraphrases of the "
         "evidence, restatements of what the user said, general world knowledge, "
-        "or META statements about this work session itself — what was built, "
-        "tested, committed, pushed, how the tooling behaves, or what happened "
-        "earlier in the conversation.\n\n"
+        "META statements about this work session itself (what was built, tested, "
+        "committed, pushed, how the tooling behaves, what happened earlier), an "
+        "APPROVAL/permission question ('want me to build/ship/send this?'), or a "
+        "genuine JUDGMENT question that is the user's to decide (a price, a "
+        "strategy, a business exception). PART B fires ONLY for facts the SYSTEM "
+        "can answer or checks the USER explicitly named — never for judgment "
+        "calls.\n\n"
         "Be precise and conservative; only flag what you can point to. Output "
         "STRICT JSON ONLY, no prose:\n"
-        '{"violations":[{"claim":"<claim as stated in ANSWER>",'
-        '"issue":"contradiction|conflict|ungrounded",'
+        '{"violations":[{"claim":"<claim or question as stated in ANSWER>",'
+        '"issue":"contradiction|conflict|ungrounded|unmet_check|'
+        'answerable_question|narrow_negative",'
         '"evidence":"<what EVIDENCE says, or the word absent>"}]}\n'
         'If there are no violations, output exactly {"violations":[]}.'
     )
@@ -269,12 +331,19 @@ def main():
     ]
     env = dict(os.environ)
     env["R093_AUDITOR"] = "1"
+    log("auditor_call", model=model, answer_len=len(answer))
     try:
         r = subprocess.run(
             cmd, capture_output=True, text=True, timeout=AUDITOR_TIMEOUT, env=env
         )
     except Exception as e:
         fail_open(f"auditor call: {e}")
+    log(
+        "auditor_result",
+        returncode=r.returncode,
+        stdout_len=len((r.stdout or "")),
+        stderr=(r.stderr or "")[:400],
+    )
     out = (r.stdout or "").strip()
     if not out:
         fail_open("auditor empty output")
@@ -292,7 +361,7 @@ def main():
 
     violations = parsed.get("violations") or []
     if not isinstance(violations, list) or not violations:
-        fail_open()  # clean — let the turn end
+        fail_open("clean: auditor found no violations")  # let the turn end
 
     # ---- block and force correction --------------------------------------
     bullets = []
@@ -308,18 +377,29 @@ def main():
     reason = (
         "🔴 R093 INDEPENDENT VERIFIER — an independent model audited your reply "
         "against the grounded evidence this session (this turn's tool outputs, "
-        "your earlier lookups, and what the user stated) and found external-state "
-        "claims the evidence does not support (or conflicts you did not flag):\n\n"
+        "your earlier lookups, and what the user stated) and found problems:\n\n"
         + "\n".join(bullets)
-        + "\n\nGo back to the ACTUAL evidence, reconcile each flagged claim against "
-        "what it literally says, and CORRECT your reply. Where two sources "
-        "disagree, present BOTH values and flag the conflict — never silently "
-        "pick one. For an 'ungrounded' flag, either cite the real source of the "
-        "fact or look it up before asserting it. Do not simply restate your "
-        "previous answer; fix the specific claims above and tell the user what "
-        "changed. Put source references (file paths, table.column, commits) in "
-        "a short 'Technical details' footer; keep the reply body in plain "
-        "English (R095)."
+        + "\n\nFix EACH item before you answer:\n"
+        "• contradiction / conflict / ungrounded → go back to what the evidence "
+        "literally says. Where two sources disagree, present BOTH values and "
+        "flag the conflict — never silently pick one. For 'ungrounded', cite the "
+        "real source or look it up before asserting it.\n"
+        "• unmet_check / answerable_question → DO THE LOOKUP NOW and report the "
+        "result. Do NOT ask the user and do NOT guess — the system already has "
+        "the answer (the offer, the record, the account, the file). Only a real "
+        "judgment call (a price, a strategy) may be put to the user.\n"
+        "• narrow_negative → widen the query to match your claim's scope (the "
+        "PERSON, not just the company; every relevant place) before concluding "
+        "anything is absent.\n"
+        "Do not simply restate your previous answer; fix the specific items "
+        "above and tell the user what changed. Put source references (file "
+        "paths, table.column, commits) in a short 'Technical details' footer; "
+        "keep the reply body in plain English (R095)."
+    )
+    log(
+        "decision_block",
+        count=len(violations),
+        issues=[str(v.get("issue", "")) for v in violations if isinstance(v, dict)],
     )
     print(json.dumps({"decision": "block", "reason": reason}))
     sys.exit(0)

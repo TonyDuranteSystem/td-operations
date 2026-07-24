@@ -20,6 +20,8 @@ contract = """OPERATING CONTRACT — read BEFORE responding. The rules you break
 
 4. NO ACTION WITHOUT A YES. Never build, edit, run, migrate, ship, or send until Antonio explicitly approves THIS turn. Present the plan in plain English, then wait. "Ship it / go / send it" approves that ONE item only.
 
+5. LOOK IT UP, DON'T ASK. Never ask Antonio for a fact the system can give you — what a client bought, their language, an invoice/payment/document status, whether a record exists, any record's state. Find it first (the offer, the database, the CRM, the account, the file). Only ask him for a genuine judgment call that is his to make — a price, a strategy, an exception. If his message lists checks to run ("check the offer", "check both members before saying anything"), do EVERY one and report each result before you conclude. Asking what you could have looked up wastes his time.
+
 Then, once a plan is approved and you are acting:
 - Sandbox first; production only on Antonio's explicit word.
 - After shipping: verify it actually works, then record it where it belongs (sysdoc + KB/Supabase) so anyone can find it.
