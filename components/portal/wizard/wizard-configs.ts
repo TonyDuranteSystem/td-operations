@@ -861,6 +861,35 @@ export const TD_COMM_FALLBACK_FIELDS: Record<string, FieldConfig[]> = {
 }
 
 /**
+ * True only for the wizards that actually render an OWNER + MEMBERS roster, and
+ * therefore legitimately ask "who is the SS-4 Responsible Party?" and enforce a
+ * members-ownership sum: formation, onboarding, and tax (incl. tax_return).
+ *
+ * Every other wizard — itin, banking, company_info, closure, td_communication —
+ * has NO owner/members step and no signer picker. Running the formation-only
+ * SS-4 Responsible-Party validation on those deadlocks Submit, because the
+ * chosen-signer count can never reach 1. That is exactly what stranded the
+ * personal ITIN wizard for multi-member-LLC clients (Adam Mihaly / LUMA Beauty,
+ * 2026-07-24): entityType='MMLLC' turned the check on even though the ITIN form
+ * has nothing to do with the company's member structure.
+ *
+ * This is an ALLOWLIST on purpose. The previous gate was a blocklist
+ * (`entityType==='MMLLC' && !isBankingWizard`) whose failure mode was
+ * deadlock-by-default: every newly added wizard type inherited the signer
+ * requirement until someone remembered to exclude it (banking was patched in
+ * July, ITIN/company_info/closure were still latent). The allowlist fails safe —
+ * a new wizard type simply doesn't get the check unless it opts in.
+ */
+export function wizardCollectsOwnerMembers(wizardType: string): boolean {
+  return (
+    wizardType === 'formation' ||
+    wizardType === 'onboarding' ||
+    wizardType === 'tax' ||
+    wizardType === 'tax_return'
+  )
+}
+
+/**
  * Get the correct steps and fields based on wizard type and entity type.
  */
 export function getWizardConfig(wizardType: string, entityType?: string, bankingProvider?: string) {

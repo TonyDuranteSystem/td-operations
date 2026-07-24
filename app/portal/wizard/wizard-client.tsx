@@ -4,7 +4,7 @@ import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
 import { WizardShell, type WizardStep } from '@/components/portal/wizard/wizard-shell'
 import { WizardField, type FieldConfig } from '@/components/portal/wizard/wizard-field'
-import { getWizardConfig, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD } from '@/components/portal/wizard/wizard-configs'
+import { getWizardConfig, wizardCollectsOwnerMembers, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD } from '@/components/portal/wizard/wizard-configs'
 import { createClient } from '@/lib/supabase/client'
 import { AlertCircle, CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
 
@@ -284,18 +284,16 @@ export function WizardClient({
 
   const isResubmitMode = initialSubmitStatus === 'submitted' && !isLocked
 
-  // MMLLC formation only: who is the SS-4 Responsible Party (the signer).
-  // Exactly one of {owner, each additional member} must be selected. This block
-  // is inert for SMLLC and for non-formation wizards (the members step + owner
-  // signer radio only render when isMMLLC).
-  //
-  // Bank applications (Relay/Payset) are NOT formation: they collect their own
-  // owner/partner ownership (equity_pct / partner_equity_pct) and must never
-  // inherit formation's SS-4 signer question or its members-ownership-sum rule.
-  // So isMMLLC is forced off for banking wizards — the bank form is judged only
-  // on its own fields. (Adam Mihaly / LUMA Beauty, 2026-07-09.)
-  const isBankingWizard = wizardType === 'banking_relay' || wizardType === 'banking_payset'
-  const isMMLLC = entityType === 'MMLLC' && !isBankingWizard
+  // Multi-member SS-4 Responsible Party (the signer) + members-ownership rules.
+  // These belong ONLY to the wizards that render an owner + members roster
+  // (formation, onboarding, tax) — see wizardCollectsOwnerMembers. Gating on a
+  // bare MMLLC blocklist leaked the formation-only signer requirement into every
+  // OTHER multi-member wizard that has no signer picker, deadlocking Submit: the
+  // personal ITIN wizard demanded "Select exactly one SS-4 Responsible Party"
+  // with no way to answer (Adam Mihaly / LUMA Beauty ITIN, 2026-07-24), and the
+  // same trap sat latent on company_info and closure. Inert for SMLLC, ITIN,
+  // banking, company_info, closure, and td_communication.
+  const isMMLLC = entityType === 'MMLLC' && wizardCollectsOwnerMembers(wizardType)
 
   const [currentStep, setCurrentStep] = useState(Math.min(savedStep, steps.length - 1))
   const [formData, setFormData] = useState<Record<string, string | string[] | boolean | number>>(initialData)
