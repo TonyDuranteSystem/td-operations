@@ -78,69 +78,65 @@ export default function LeasePageWithCode() {
   const pdfBlobRef = useRef<Blob | null>(null)
 
   // ─── LOAD LEASE ───
-  const loadLease = useCallback(async () => {
-    if (!token) return
+  // Everything now comes from the server route, which verifies the access code
+  // BEFORE returning anything, evaluates the email gate server-side, tracks the
+  // view with the service key, and returns a WHITELIST (never access_code or
+  // tenant_email). What this replaces: a browser-side select('*') with the anon
+  // key + a client-side `access_code !== code` check that ran AFTER the whole row
+  // — including the tax ID and the access code — had already been delivered.
+  // See lib/lease/public-view.ts. Returns the outcome so the email gate can react
+  // without a second request.
+  const loadLease = useCallback(async (emailOverride?: string): Promise<'ok' | 'requires-email' | 'error'> => {
+    if (!token) return 'error'
 
-    // Admin preview bypass
     const adminMode = searchParams.get('preview') === 'td'
     const portalMode = searchParams.get('portal') === 'true'
-    if (adminMode) {
-      setIsAdmin(true)
-      setVerified(true)
-    }
-    if (portalMode) {
-      setIsPortal(true)
-      setVerified(true) // Skip email gate when embedded in portal (already authenticated)
-    }
+    if (adminMode) setIsAdmin(true)
+    if (portalMode) setIsPortal(true)
 
-    const { data, error: err } = await supabasePublic
-      .from('lease_agreements')
-      .select('*')
-      .eq('token', token)
-      .single()
+    const cookieEmail = document.cookie
+      .split(';')
+      .find(c => c.trim().startsWith(`lease_email_${token}=`))
+      ?.split('=')[1]
+    const email = emailOverride ?? (cookieEmail ? decodeURIComponent(cookieEmail) : '')
 
-    if (err || !data) {
-      setError('Lease agreement not found.')
+    const qs = new URLSearchParams({ code })
+    if (adminMode) qs.set('preview', 'td')
+    if (portalMode) qs.set('portal', 'true')
+
+    let res: Response
+    try {
+      res = await fetch(`/api/lease/${token}/fetch?${qs.toString()}`, {
+        headers: email ? { 'x-lease-email': email } : {},
+      })
+    } catch {
+      setError('Could not load the lease. Please check your connection and try again.')
       setLoading(false)
-      return
+      return 'error'
     }
 
-    if (!adminMode && data.access_code !== code) {
-      setError('Invalid link.')
+    if (res.status === 404) { setError('Lease agreement not found.'); setLoading(false); return 'error' }
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}))
+      setError(d.error || 'This lease link is invalid or has expired.')
       setLoading(false)
-      return
+      return 'error'
     }
 
-    setLease(data)
-    setSigned(!!data.signed_at)
+    const data = await res.json()
+    if (data.requiresEmail) {
+      setLoading(false)
+      return 'requires-email'
+    }
+
+    setLease(data.lease)
+    setSigned(!!data.lease.signed_at)
+    setVerified(true)
     setLoading(false)
-
-    if (adminMode) return
-
-    // Check email gate cookie
-    if (!data.tenant_email) {
-      setVerified(true)
-    } else {
-      const cookie = document.cookie.split(';').find(c => c.trim().startsWith(`lease_verified_${token}=`))
-      if (cookie) setVerified(true)
-    }
+    return 'ok'
   }, [token, code, searchParams])
 
   useEffect(() => { loadLease() }, [loadLease])
-
-  // Track view
-  useEffect(() => {
-    if (!lease || !verified || signed) return
-    supabasePublic
-      .from('lease_agreements')
-      .update({
-        view_count: (lease.view_count || 0) + 1,
-        viewed_at: new Date().toISOString(),
-        status: ['draft', 'sent'].includes(lease.status) ? 'viewed' : lease.status,
-      })
-      .eq('id', lease.id)
-      .then(() => {})
-  }, [lease?.id, verified]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Init signature pad
   useEffect(() => {
@@ -159,16 +155,21 @@ export default function LeasePageWithCode() {
   }, [verified, lease, signed])
 
   // ─── EMAIL GATE ───
-  function handleEmailVerify(e: React.FormEvent) {
+  // Compared on the SERVER now. The tenant address is never sent to the browser,
+  // so there is nothing here to compare against — a successful check is what
+  // returns the lease. One fetch, not two.
+  async function handleEmailVerify(e: React.FormEvent) {
     e.preventDefault()
-    if (!lease?.tenant_email) return
-    if (emailInput.trim().toLowerCase() === lease.tenant_email.toLowerCase()) {
-      document.cookie = `lease_verified_${token}=1; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
-      setVerified(true)
-      setEmailError('')
-    } else {
+    const candidate = emailInput.trim()
+    if (!candidate) return
+    setEmailError('')
+    const outcome = await loadLease(candidate)
+    if (outcome === 'requires-email') {
       setEmailError('The email address does not match. Please try again.')
+      return
     }
+    if (outcome === 'error') return
+    document.cookie = `lease_email_${token}=${encodeURIComponent(candidate)}; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
   }
 
   // ─── SIGN ───

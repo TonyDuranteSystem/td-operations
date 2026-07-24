@@ -43,6 +43,11 @@ const PUBLIC_PREFIXES = [
   '/api/banking-form-completed',
   '/api/itin-form-completed',
   '/api/lease-signed',
+  // Public LEASE read route. Token-gated, NOT session-gated: it verifies the
+  // lease access code server-side and returns a whitelist (lib/lease/public-view),
+  // the way the OA fetch route below does. The lease signing pages call it instead
+  // of reading lease_agreements with the anon key.
+  '/api/lease/',
   '/api/oa-signed',
   // Public OA read route. Token-gated, NOT session-gated: it verifies the
   // agreement's access code itself (app/api/operating-agreement/.../fetch) and

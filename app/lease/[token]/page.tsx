@@ -88,64 +88,58 @@ export default function LeasePage() {
   const leaseBodyRef = useRef<HTMLDivElement>(null)
 
   // ─── LOAD LEASE ───
-  const loadLease = useCallback(async () => {
-    if (!token) return
+  // Same server-side read as the coded page (see there + lib/lease/public-view.ts).
+  // This legacy page mostly redirects ?c= links to the coded route; the load only
+  // runs for staff preview (?preview=td) and as a fallback — but it must still go
+  // through the server so the anon-read revoke does not break it.
+  const loadLease = useCallback(async (emailOverride?: string): Promise<'ok' | 'requires-email' | 'error'> => {
+    if (!token) return 'error'
 
-    // Admin preview bypass
     const adminMode = searchParams.get('preview') === 'td'
-    if (adminMode) {
-      setIsAdmin(true)
-      setVerified(true)
-    }
+    if (adminMode) setIsAdmin(true)
 
-    const { data, error: err } = await supabasePublic
-      .from('lease_agreements')
-      .select('*')
-      .eq('token', token)
-      .single()
+    const cookieEmail = document.cookie
+      .split(';')
+      .find(c => c.trim().startsWith(`lease_email_${token}=`))
+      ?.split('=')[1]
+    const email = emailOverride ?? (cookieEmail ? decodeURIComponent(cookieEmail) : '')
 
-    if (err || !data) {
-      setError('Lease agreement not found.')
+    const qs = new URLSearchParams({ code: accessCode })
+    if (adminMode) qs.set('preview', 'td')
+
+    let res: Response
+    try {
+      res = await fetch(`/api/lease/${token}/fetch?${qs.toString()}`, {
+        headers: email ? { 'x-lease-email': email } : {},
+      })
+    } catch {
+      setError('Could not load the lease. Please check your connection and try again.')
       setLoading(false)
-      return
+      return 'error'
     }
 
-    if (!adminMode && data.access_code !== accessCode) {
-      setError('Invalid link.')
+    if (res.status === 404) { setError('Lease agreement not found.'); setLoading(false); return 'error' }
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}))
+      setError(d.error || 'This lease link is invalid or has expired.')
       setLoading(false)
-      return
+      return 'error'
     }
 
-    setLease(data)
-    setSigned(!!data.signed_at)
+    const data = await res.json()
+    if (data.requiresEmail) { setLoading(false); return 'requires-email' }
+
+    setLease(data.lease)
+    setSigned(!!data.lease.signed_at)
+    setVerified(true)
     setLoading(false)
-
-    if (adminMode) return
-
-    // Check email gate cookie
-    if (!data.tenant_email) {
-      setVerified(true)
-    } else {
-      const cookie = document.cookie.split(';').find(c => c.trim().startsWith(`lease_verified_${token}=`))
-      if (cookie) setVerified(true)
-    }
+    return 'ok'
   }, [token, accessCode, searchParams])
 
   useEffect(() => { loadLease() }, [loadLease])
 
-  // Track view
-  useEffect(() => {
-    if (!lease || !verified || signed) return
-    supabasePublic
-      .from('lease_agreements')
-      .update({
-        view_count: (lease.view_count || 0) + 1,
-        viewed_at: new Date().toISOString(),
-        status: ['draft', 'sent'].includes(lease.status) ? 'viewed' : lease.status,
-      })
-      .eq('id', lease.id)
-      .then(() => {})
-  }, [lease?.id, verified]) // eslint-disable-line react-hooks/exhaustive-deps
+  // View tracking now happens server-side inside the fetch route (was an anon
+  // UPDATE from here). Removed.
 
   // Init signature pad
   useEffect(() => {
@@ -164,16 +158,19 @@ export default function LeasePage() {
   }, [verified, lease, signed])
 
   // ─── EMAIL GATE ───
-  function handleEmailVerify(e: React.FormEvent) {
+  // Compared on the server; the address never reaches the browser.
+  async function handleEmailVerify(e: React.FormEvent) {
     e.preventDefault()
-    if (!lease?.tenant_email) return
-    if (emailInput.trim().toLowerCase() === lease.tenant_email.toLowerCase()) {
-      document.cookie = `lease_verified_${token}=1; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
-      setVerified(true)
-      setEmailError('')
-    } else {
+    const candidate = emailInput.trim()
+    if (!candidate) return
+    setEmailError('')
+    const outcome = await loadLease(candidate)
+    if (outcome === 'requires-email') {
       setEmailError('The email address does not match. Please try again.')
+      return
     }
+    if (outcome === 'error') return
+    document.cookie = `lease_email_${token}=${encodeURIComponent(candidate)}; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
   }
 
   // ─── SIGN ───
