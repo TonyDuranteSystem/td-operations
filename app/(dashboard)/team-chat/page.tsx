@@ -54,6 +54,14 @@ function fileSize(b: number): string {
 
 export default function TeamWorkspacePage() {
   const [threads, setThreads] = useState<TeamThread[]>([])
+  // Mirror of `threads` for effects that must READ the list without re-running
+  // whenever it refreshes (the selection effect below decides the opening view;
+  // tracking `threads` there would reopen the panel on every poll).
+  const threadsRef = useRef<TeamThread[]>([])
+  useEffect(() => { threadsRef.current = threads }, [threads])
+  // Declared here (not next to its effect further down) because the selection
+  // effect reads it to avoid covering a deep-linked bug with the threads panel.
+  const deepRootDoneRef = useRef(false)
   const [members, setMembers] = useState<TeamMember[]>([])
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
@@ -271,8 +279,15 @@ export default function TeamWorkspacePage() {
       setThreadMeta(d.thread_meta ?? {})
       setThreadsList(d.threads ?? [])
       setArchivedRoots(d.archived_roots ?? [])
-      // Optimistically clear this thread's unread badge locally.
-      setThreads(prev => prev.map(t => t.id === threadId ? { ...t, unread_count: 0 } : t))
+      // Optimistically clear this thread's unread badge locally — but NOT for a
+      // channel. A channel's badge counts BUGS WITH SOMETHING NEW and is
+      // deliberately not cleared by opening the channel (that was the whole
+      // bug). Zeroing it here made it blink: this call zeroed it, the 20s
+      // thread-list poll restored the true number, the 8s message poll zeroed it
+      // again — which reads exactly like the defect being fixed.
+      setThreads(prev => prev.map(t => (
+        t.id === threadId && t.thread_type !== 'channel' ? { ...t, unread_count: 0 } : t
+      )))
     } catch {
       if (!opts?.silent) toast.error('Failed to load messages')
     } finally {
@@ -324,8 +339,44 @@ export default function TeamWorkspacePage() {
     }
   }, [deepLinkThread, threads])
 
-  // Load messages when a thread is selected (and close any open thread pane / panel).
-  useEffect(() => { if (selectedId) { setOpenRootId(null); setShowThreadsPanel(false); loadMessages(selectedId) } }, [selectedId, loadMessages])
+  // Load messages when a thread is selected (and close any open thread pane).
+  //
+  // A CHANNEL now opens on its LIST OF THREADS, not the flat stream. Antonio,
+  // 2026-07-24, on td-bug: "it is a mess because I can't control the single bug,
+  // I have to go back and forth to each one." The per-bug list already existed —
+  // titles, status, who is on it, what is new — but it was behind a button, so
+  // the thing you landed on was the one long scroll. The stream is one click
+  // away (the panel's Close), and any deep link straight to a bug still wins:
+  // openThread() closes the panel.
+  // DMs and client conversations are real conversations, not lists of work, so
+  // they still open on their messages.
+  useEffect(() => {
+    if (!selectedId) return
+    setOpenRootId(null)
+    const t = threadsRef.current.find(x => x.id === selectedId)
+    // ⚠️ 'channel' ONLY, never 'general'. General is a flat room — 48 top-level
+    // messages, zero threads — so opening it on the panel shows "No threads
+    // here" as a full-cover overlay. And general is what a cold load
+    // auto-selects, so that would be the FIRST thing seen on every visit.
+    const isChannel = t?.thread_type === 'channel'
+    // Don't cover a bug the user was deep-linked to (notification / copied
+    // link). Scoped to the deep-linked channel itself: a root that never
+    // resolves (older than the loaded window, or a stale link) must not leave
+    // every later channel opening on the stream for the rest of the session.
+    const deepLinkPending = !!searchParams.get('root')
+      && !deepRootDoneRef.current
+      && selectedId === searchParams.get('thread')
+    // Same for a bug opened from the BOARD: that flow sets selectedId first and
+    // opens the pane on the next render, so opening the panel here would flash a
+    // full-white overlay for one paint — the whole screen on the phone.
+    const boardOpenPending = pendingOpenRef.current?.threadId === selectedId
+    setShowThreadsPanel(isChannel && !deepLinkPending && !boardOpenPending)
+    loadMessages(selectedId)
+    // threadsRef/searchParams are read, not tracked: this must run on SELECTION,
+    // not every time the thread list refreshes underneath it (that would slam
+    // the panel back open while the user is reading the stream).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, loadMessages])
 
   // Realtime: messages + thread list
   useEffect(() => {
@@ -594,18 +645,61 @@ export default function TeamWorkspacePage() {
 
   // Open a Slack thread pane on a root message: mark it read (per-thread), clear
   // its local unread dot, and default the composer to reply to the root.
+  /**
+   * Advance MY read pointer on one thread. Throttled per root — engagement
+   * gestures arrive in bursts and each call is a POST.
+   *
+   * ⚠️ CALL THIS ONLY ON A REAL HUMAN GESTURE (opening the thread, a pointer /
+   * key inside its pane, sending into it). NEVER on a message arriving, a poll,
+   * or a programmatic scroll — that is the "a message marked itself read" defect
+   * this workspace has already shipped once (see the 2026-07-23 entry in
+   * docs/systems/team-workspace.md). A badge cleared for a message nobody saw is
+   * unrecoverable: the push has already gone.
+   */
+  const lastReadPostRef = useRef<Record<string, number>>({})
+  const markThreadRead = useCallback((rootId: string) => {
+    const tid = selectedIdRef.current
+    if (!tid || !rootId) return
+    const now = Date.now()
+    if (now - (lastReadPostRef.current[rootId] ?? 0) < 3000) return
+    lastReadPostRef.current[rootId] = now
+    fetch(`/api/team/threads/${tid}/thread-read`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ root_id: rootId }),
+    }).catch(() => {})
+  }, [])
+
+  /**
+   * A reply that lands WHILE the pane is open is read by a human who is sitting
+   * there — but only when they actually do something. Without this the reply
+   * stays counted in the channel badge until the user clicks that same bug a
+   * second time, which nobody thinks to do while already reading it.
+   */
+  const onPaneEngagement = useCallback(() => {
+    const rid = openRootIdRef.current
+    if (rid) {
+      markThreadRead(rid)
+      setThreadMeta(prev => prev[rid] ? { ...prev, [rid]: { ...prev[rid], unread: false } } : prev)
+      setThreadsList(prev => prev.map(t => t.root_id === rid ? { ...t, unread: false } : t))
+    }
+  }, [markThreadRead])
+
   const openThread = useCallback((rootId: string) => {
     setOpenRootId(rootId)
     setReplyTo(null)
+    // The threads panel is a full-cover overlay and a channel now opens on it,
+    // so opening a bug must always uncover it — from the panel, from the stream,
+    // and from a deep link arriving after the panel has been shown.
+    setShowThreadsPanel(false)
     setThreadMeta(prev => prev[rootId] ? { ...prev, [rootId]: { ...prev[rootId], unread: false } } : prev)
-    const tid = selectedIdRef.current
-    if (tid) {
-      fetch(`/api/team/threads/${tid}/thread-read`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ root_id: rootId }),
-      }).catch(() => {})
-    }
+    // The panel's own row also carries the dot — clear it there or a thread the
+    // user just opened stays bold behind the pane.
+    setThreadsList(prev => prev.map(t => t.root_id === rootId ? { ...t, unread: false } : t))
+    // Opening a thread IS the gesture — bypass the throttle window so a fresh
+    // open always records, even right after a pane gesture on the same root.
+    lastReadPostRef.current[rootId] = 0
+    markThreadRead(rootId)
     requestAnimationFrame(() => inputRef.current?.focus())
-  }, [])
+  }, [markThreadRead])
 
   const closeThread = useCallback(() => { setOpenRootId(null); setReplyTo(null) }, [])
 
@@ -872,7 +966,6 @@ export default function TeamWorkspacePage() {
   // Deep link to a specific thread pane: /team-chat?thread=<ch>&root=<rootId>.
   // One-shot (a ref guard) so it doesn't re-open on every poll refresh.
   const deepLinkRoot = searchParams.get('root')
-  const deepRootDoneRef = useRef(false)
   useEffect(() => {
     if (!deepLinkRoot || deepRootDoneRef.current) return
     if (selectedId === deepLinkThread && messages.some(m => m.id === deepLinkRoot)) {
@@ -1446,6 +1539,9 @@ export default function TeamWorkspacePage() {
                 <div
                   style={{ ['--thread-pane-w' as string]: `${paneWidth}px` }}
                   className="flex-1 md:flex-none md:w-[var(--thread-pane-w)] border-zinc-200 flex flex-col min-h-0 bg-white"
+                  onPointerDown={onPaneEngagement}
+                  onKeyDown={onPaneEngagement}
+                  onWheel={onPaneEngagement}
                 >
                   <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-zinc-200">
                     {/* The thread's NAME is the header — renaming it here is the

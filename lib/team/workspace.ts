@@ -218,18 +218,28 @@ export interface TeamThreadCountRow {
 /**
  * Team-chat notification count for the sidebar/menu signal.
  *
- * Signals for: a new **DM**, an **@mention**, or unread in a **client
- * conversation you are a participant of** (you've opened, posted, or been
- * shared into it) — Antonio 2026-07-10. Still NOT ordinary channel chatter or a
- * conversation you've never touched (that was the noisy "48"). A participant
- * discussion contributes its full unread_count (which already includes any
- * mentions); every other non-DM thread contributes only its mention_count.
+ * Signals for: a new **DM**, unread in a **client conversation you are a
+ * participant of**, an **@mention**, and — since 2026-07-24 — **a work channel
+ * with a bug that is new for you**.
+ *
+ * Channels used to contribute only their mention_count, so a bug could be
+ * opened and answered with the sidebar showing nothing (Antonio: "I have to
+ * know everything because I work on the bugs"). A CHANNEL's unread_count is now
+ * counted at THREAD grain by get_team_threads — it is "how many bugs have
+ * something new", not how many messages exist — which is why counting it here
+ * cannot bring back the noisy per-message number.
+ *
+ * ⚠️ 'general' is deliberately still mention-only. It is NOT counted at thread
+ * grain (48 top-level messages, no replies, no per-thread read rows), so its
+ * unread_count is a raw message count that nothing in the UI can clear —
+ * exactly the stuck "48" this signal was cleaned up to remove.
  */
 export function countTeamNotifications(threads: TeamThreadCountRow[] | null | undefined): number {
   let n = 0
   for (const t of threads ?? []) {
     if (t.thread_type === 'dm') n += Number(t.unread_count) || 0
     else if (t.thread_type === 'discussion' && t.is_participant) n += Number(t.unread_count) || 0
+    else if (t.thread_type === 'channel') n += Number(t.unread_count) || 0
     else n += Number(t.mention_count) || 0
   }
   return n
@@ -247,7 +257,7 @@ export interface TeamNotifThreadRow {
 
 export interface TeamNotifItem {
   id: string
-  kind: 'dm' | 'mention' | 'conversation' | 'thread'
+  kind: 'dm' | 'mention' | 'conversation' | 'thread' | 'channel'
   /** Display label: the other person (DM), or the channel/conversation. */
   label: string
   count: number
@@ -279,6 +289,14 @@ export function buildTeamNotifications(
       const unread = Number(t.unread_count) || 0
       if (unread <= 0) continue
       items.push({ id: t.id, kind: 'conversation', label: t.label || 'Conversation', count: unread, url: `/team-chat?thread=${t.id}` })
+    } else if (t.thread_type === 'channel') {
+      // A work channel: the count is BUGS with something new (thread grain), so
+      // the row reads "#td-bug · 3" and opens the channel on its bug list.
+      // Individual followed threads are appended separately by the notifications
+      // route and deep-link to the bug itself — more specific, same signal.
+      const unread = Number(t.unread_count) || 0
+      if (unread <= 0) continue
+      items.push({ id: t.id, kind: 'channel', label: `#${t.label || 'channel'}`, count: unread, url: `/team-chat?thread=${t.id}` })
     } else {
       const mentions = Number(t.mention_count) || 0
       if (mentions <= 0) continue
@@ -286,7 +304,7 @@ export function buildTeamNotifications(
     }
   }
   // DMs first, then conversations, then mentions; by count within each kind.
-  const rank = (k: TeamNotifItem['kind']) => (k === 'dm' ? 0 : k === 'conversation' ? 1 : 2)
+  const rank = (k: TeamNotifItem['kind']) => (k === 'dm' ? 0 : k === 'conversation' ? 1 : k === 'channel' ? 2 : 3)
   return items.sort((a, b) => (a.kind === b.kind ? b.count - a.count : rank(a.kind) - rank(b.kind)))
 }
 

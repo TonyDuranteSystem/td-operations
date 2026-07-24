@@ -20,6 +20,7 @@ import 'server-only'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getInternalBaseUrl } from '@/lib/mcp/tools/agent-messages'
 import { CLAUDE_SENDER_UUID, CLAUDE_SENDER_NAME, mentionsClaude } from '@/lib/team/workspace'
+import { channelNotifiesStaff } from '@/lib/team/channel-notify'
 import type { WorkerImageBlock, WorkerDocumentBlock } from '@/lib/ai-agent/worker-tools'
 import { fullReachEnabledFor } from '@/lib/ai-agent/full-reach'
 
@@ -171,7 +172,7 @@ export async function processClaudeReply(params: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: thread } = await (supabaseAdmin as any)
     .from('internal_threads')
-    .select('id, account_id, contact_id, channel_name, title')
+    .select('id, account_id, contact_id, thread_type, channel_slug, channel_name, title')
     .eq('id', threadId)
     .single()
 
@@ -461,16 +462,29 @@ export async function processClaudeReply(params: {
   }
 
   // Slack parity: Slack posts the answer as a NEW message so the phone gets a
-  // push. In Team Chat the answer replaces the placeholder (no insert → no push
-  // path), so push the asker explicitly. Best-effort.
+  // push. In Team Chat the answer REPLACES the placeholder — an UPDATE, not an
+  // insert — so no send route ever runs and nothing else can notify here.
+  //
+  // In a WORK CHANNEL that means every staff member, not just the asker: an
+  // @claude answer in td-bug is part of the bug, and Antonio must see it whoever
+  // asked (2026-07-24). Elsewhere (a DM, a client discussion) it stays with the
+  // person who asked. Best-effort.
   try {
     const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
-    await sendPushToAdminUsers([prompt.sender_id], {
+    const payload = {
       title: 'Claude replied',
       body: reply.slice(0, 120),
       url: `/team-chat?thread=${threadId}`,
       tag: `team-claude-${threadId}`,
-    })
+    }
+    const isWorkChannel = (thread?.thread_type === 'channel' || thread?.thread_type === 'general')
+      && channelNotifiesStaff(thread?.channel_slug ?? thread?.channel_name ?? null)
+    if (isWorkChannel) {
+      const { sendPushToStaffExcept } = await import('@/lib/team/notify')
+      await sendPushToStaffExcept(CLAUDE_SENDER_UUID, payload)
+    } else {
+      await sendPushToAdminUsers([prompt.sender_id], payload)
+    }
   } catch { /* non-critical */ }
 
   return { ok: true }

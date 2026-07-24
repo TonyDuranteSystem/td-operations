@@ -587,8 +587,8 @@ async function pushNotifyAdmin(accountId: string | null, contactId: string | nul
     displayName = contact?.full_name || 'Unknown'
   }
 
-  const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-  await sendPushToAdmin({
+  const { sendPushToStaff } = await import('@/lib/team/notify')
+  await sendPushToStaff({
     title: `Chat: ${displayName}`,
     body: messagePreview.slice(0, 200) || '[Attachment]',
     url: `/portal-chats${accountId ? `?account=${accountId}` : ''}`,

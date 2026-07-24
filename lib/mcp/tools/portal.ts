@@ -2139,20 +2139,16 @@ Supports both:
 
         // Send push notification to all admins
         try {
-          const { data: subs } = await supabaseAdmin
-            .from("admin_push_subscriptions")
-            .select("*")
-            .neq("user_id", senderId)
-
-          if (subs?.length) {
-            const { sendPushToAdmin } = await import("@/lib/portal/web-push")
-            await sendPushToAdmin({
-              title: `Team: ${contextName}`,
-              body: msgText.slice(0, 100),
-              url: "/portal-chats?view=internal",
-              tag: `internal-thread-${threadId}`,
-            })
-          }
+          // No pre-check on the subscription table: who receives is decided by
+          // the staff directory inside sendPushToStaffExcept, and a failed probe
+          // here used to swallow the notification with no log.
+          const { sendPushToStaffExcept } = await import("@/lib/team/notify")
+          await sendPushToStaffExcept(senderId, {
+            title: `Team: ${contextName}`,
+            body: msgText.slice(0, 100),
+            url: "/portal-chats?view=internal",
+            tag: `internal-thread-${threadId}`,
+          })
         } catch {
           // Push notification failure is non-critical
         }

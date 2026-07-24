@@ -5,6 +5,8 @@ import { validateTeamCard } from '@/lib/team/workspace'
 import { resolveMentions } from '@/lib/team/directory'
 import { triggerClaudeReply } from '@/lib/team/claude-trigger'
 import { sendPushToAdminUsers } from '@/lib/portal/web-push'
+import { sendPushToStaffExcept } from '@/lib/team/notify'
+import { channelNotifiesStaff } from '@/lib/team/channel-notify'
 import type { ChatAttachment } from '@/lib/types'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -61,7 +63,7 @@ export async function POST(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: thread } = await (supabaseAdmin as any)
     .from('internal_threads')
-    .select('id, thread_type, account_id, dm_key')
+    .select('id, thread_type, account_id, dm_key, channel_slug, channel_name, title')
     .eq('id', threadId)
     .single()
   if (!thread) return NextResponse.json({ error: 'Thread not found' }, { status: 404 })
@@ -157,11 +159,45 @@ export async function POST(
     // Deep-link: a reply opens the thread pane on its root; a top-level message
     // opens the channel.
     const threadUrl = `/team-chat?thread=${threadId}${rootId ? `&root=${rootId}` : ''}`
-    // Push ONLY for a DM (to the other participant), an @mention (to the
-    // mentioned teammates), a client-conversation you're in, or a THREAD REPLY
-    // (to that thread's participants) — Antonio 2026-07-09. Ordinary top-level
-    // channel chatter still buzzes no one (matches the DM/@mention dot).
-    if (mentions.userIds.length > 0) {
+    // ── WORK CHANNELS NOTIFY EVERY STAFF MEMBER ───────────────────────────
+    // Antonio 2026-07-24: "There is only Luca and me... I have to know
+    // everything because I work on the bugs." The old rule pushed a channel
+    // message only to @mentioned people or, for a reply, the thread's FOLLOWERS
+    // — so a bug could be raised and answered with nobody told, which is what
+    // actually happened in td-bug: Antonio follows 1 of its 13 bug threads.
+    // Follow/mention targeting is for a 50-person channel; with two people it is
+    // just a way to miss things. Silent channels (Claude's own bug reports) are
+    // decided by the ONE predicate the toast listener also reads, so what pushes
+    // and what pops up can never disagree.
+    const notifiesStaff = (thread.thread_type === 'channel' || thread.thread_type === 'general')
+      && channelNotifiesStaff(thread.channel_slug ?? thread.channel_name ?? null)
+    if (notifiesStaff) {
+      const channelLabel = thread.channel_slug ?? thread.channel_name ?? 'general'
+      // Tagged per THREAD, not per channel: two bugs must not replace each other
+      // on the lock screen.
+      const tag = rootId ? `team-thread-${rootId}` : `team-channel-${threadId}-${msg.id}`
+      const base = { body: preview, url: threadUrl, tag }
+      // Two pushes, not one: everyone is told, but only the people actually
+      // named are told they were named. One broadcast carrying the "mentioned
+      // you" title would tell every teammate they had been @named when they had
+      // not.
+      const mentioned = new Set(mentions.userIds)
+      // SETTLED INDEPENDENTLY, not sequenced: awaiting one then the other means a
+      // transport error on the mention push throws past the second, so an
+      // @mention in a work channel would notify NOBODY — including the people it
+      // was not addressed to. Each push stands on its own.
+      await Promise.allSettled([
+        mentioned.size > 0
+          ? sendPushToAdminUsers(Array.from(mentioned), {
+              ...base, title: `${displayName} mentioned you · #${channelLabel}`,
+            })
+          : Promise.resolve(),
+        sendPushToStaffExcept(user.id, {
+          ...base,
+          title: rootId ? `${displayName} replied · #${channelLabel}` : `${displayName} · #${channelLabel}`,
+        }, Array.from(mentioned)),
+      ])
+    } else if (mentions.userIds.length > 0) {
       await sendPushToAdminUsers(mentions.userIds, {
         title: `${displayName} mentioned you`,
         body: preview,

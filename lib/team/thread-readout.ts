@@ -48,11 +48,20 @@ export function formatThreadReadout(args: {
   status: TeamWorkStatus | string
   assigneeName: string | null
   messages: ThreadReadoutMessage[]
+  /** Ids needed to ANSWER inside this thread (team_chat_send channel + root_id). */
+  channelSlug?: string | null
+  rootId?: string | null
 }): string {
   const statusLabel = TEAM_WORK_STATUS_LABELS[args.status as TeamWorkStatus] ?? args.status
   const lines: string[] = []
   lines.push(`Team Chat thread in #${args.channelLabel}: "${args.title}"`)
   lines.push(`Status: ${statusLabel}${args.assigneeName ? ` · Assigned to ${args.assigneeName}` : ''}`)
+  // Reading a bug is almost always the step before answering it, and the answer
+  // belongs INSIDE the bug. Hand back the exact ids team_chat_send needs so the
+  // reply cannot end up as a detached message in the channel.
+  if (args.rootId) {
+    lines.push(`To answer inside this thread: team_chat_send with channel="${args.channelSlug ?? args.channelLabel}" and root_id="${args.rootId}" (after Antonio approves the draft).`)
+  }
   lines.push('')
   for (const m of args.messages) {
     const who = m.sender_name || 'Unknown'

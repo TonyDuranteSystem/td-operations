@@ -2862,8 +2862,8 @@ async function sendTeamMessageTool(p: any): Promise<string> {
 
   // Push notification to admins (best-effort).
   try {
-    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-    await sendPushToAdmin({
+    const { sendPushToStaffExcept } = await import('@/lib/team/notify')
+    await sendPushToStaffExcept(senderId, {
       title: `Team: ${contextName}`, body: message.slice(0, 100),
       url: '/portal-chats?view=internal', tag: `internal-thread-${threadId}`,
     })

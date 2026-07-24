@@ -10,6 +10,13 @@
  *  - Per-failure console.error fires with statusCode + endpoint context.
  *  - Summary log fires only when failed > 0.
  *  - sent/failed counters are correct.
+ *
+ * VEHICLE NOTE (2026-07-24): these cases used to drive the matrix through
+ * `sendPushToAdmin`, the broadcast-to-every-registered-device helper. That
+ * helper is DELETED — a push must now resolve real staff ids first (see
+ * lib/team/notify.ts). The matrix itself is unchanged and still lives in
+ * deliverPushBatch; it is exercised here through `sendPushToAdminUsers`, the
+ * surviving low-level sender that every notification path ends in.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -44,6 +51,7 @@ vi.mock('@/lib/supabase-admin', () => {
         const selectBuilder = {
           eq: vi.fn(() => Promise.resolve({ data: subs, error: null })),
           neq: vi.fn(() => Promise.resolve({ data: subs, error: null })),
+          in: vi.fn(() => Promise.resolve({ data: subs, error: null })),
           // Make the bare select awaitable: builder.then() resolves with subs.
           then: (resolve: (v: { data: typeof subs; error: null }) => void) =>
             resolve({ data: subs, error: null }),
@@ -95,8 +103,8 @@ describe('web-push cleanup matrix', () => {
     setSubs([{ id: 'sub-410', endpoint: 'https://fcm.example/410', p256dh: 'p', auth_key: 'a' }])
     mockSendNotification.mockRejectedValueOnce(makeStatusError(410))
 
-    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-    const result = await sendPushToAdmin({ title: 't', body: 'b' })
+    const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
+    const result = await sendPushToAdminUsers(['staff-1'], { title: 't', body: 'b' })
 
     expect(result).toEqual({ sent: 0, failed: 1 })
     expect(capturedDeletes).toEqual([{ table: 'admin_push_subscriptions', id: 'sub-410' }])
@@ -106,8 +114,8 @@ describe('web-push cleanup matrix', () => {
     setSubs([{ id: 'sub-404', endpoint: 'https://fcm.example/404', p256dh: 'p', auth_key: 'a' }])
     mockSendNotification.mockRejectedValueOnce(makeStatusError(404))
 
-    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-    await sendPushToAdmin({ title: 't', body: 'b' })
+    const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
+    await sendPushToAdminUsers(['staff-1'], { title: 't', body: 'b' })
 
     expect(capturedDeletes).toEqual([{ table: 'admin_push_subscriptions', id: 'sub-404' }])
   })
@@ -123,8 +131,8 @@ describe('web-push cleanup matrix', () => {
       .mockRejectedValueOnce(makeStatusError(403))
       .mockRejectedValueOnce(makeStatusError(400))
 
-    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-    const result = await sendPushToAdmin({ title: 't', body: 'b' })
+    const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
+    const result = await sendPushToAdminUsers(['staff-1'], { title: 't', body: 'b' })
 
     expect(result).toEqual({ sent: 0, failed: 3 })
     expect(capturedDeletes.map((d) => d.id).sort()).toEqual(['sub-400', 'sub-401', 'sub-403'])
@@ -139,8 +147,8 @@ describe('web-push cleanup matrix', () => {
       .mockRejectedValueOnce(makeStatusError(408))
       .mockRejectedValueOnce(makeStatusError(429))
 
-    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-    const result = await sendPushToAdmin({ title: 't', body: 'b' })
+    const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
+    const result = await sendPushToAdminUsers(['staff-1'], { title: 't', body: 'b' })
 
     expect(result).toEqual({ sent: 0, failed: 2 })
     expect(capturedDeletes).toEqual([])
@@ -155,8 +163,8 @@ describe('web-push cleanup matrix', () => {
       .mockRejectedValueOnce(makeStatusError(500))
       .mockRejectedValueOnce(makeStatusError(503))
 
-    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-    await sendPushToAdmin({ title: 't', body: 'b' })
+    const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
+    await sendPushToAdminUsers(['staff-1'], { title: 't', body: 'b' })
 
     expect(capturedDeletes).toEqual([])
   })
@@ -172,8 +180,8 @@ describe('web-push cleanup matrix', () => {
       .mockRejectedValueOnce(makeStatusError(410))
       .mockResolvedValueOnce({ statusCode: 201 })
 
-    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-    const result = await sendPushToAdmin({ title: 't', body: 'b' })
+    const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
+    const result = await sendPushToAdminUsers(['staff-1'], { title: 't', body: 'b' })
 
     expect(result).toEqual({ sent: 2, failed: 1 })
     expect(capturedDeletes).toEqual([{ table: 'admin_push_subscriptions', id: 'dead' }])
@@ -183,8 +191,8 @@ describe('web-push cleanup matrix', () => {
     setSubs([{ id: 'sub-x', endpoint: 'https://fcm.example/x', p256dh: 'p', auth_key: 'a' }])
     mockSendNotification.mockRejectedValueOnce(makeStatusError(410))
 
-    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-    await sendPushToAdmin({ title: 't', body: 'b' })
+    const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
+    await sendPushToAdminUsers(['staff-1'], { title: 't', body: 'b' })
 
     const failureCall = consoleErrorSpy.mock.calls.find(
       (c) => c[0] === '[web-push] send failed',
@@ -193,7 +201,9 @@ describe('web-push cleanup matrix', () => {
     const meta = failureCall?.[1] as { statusCode?: number; endpoint?: string; context?: string }
     expect(meta?.statusCode).toBe(410)
     expect(meta?.endpoint).toContain('fcm.example/x')
-    expect(meta?.context).toBe('admin')
+    // Context label follows the sender: the deleted broadcast logged 'admin',
+    // the surviving per-user sender logs 'admin-users:<n>'.
+    expect(meta?.context).toBe('admin-users:1')
   })
 
   it('logs a summary line only when failed > 0', async () => {
@@ -205,8 +215,8 @@ describe('web-push cleanup matrix', () => {
       .mockResolvedValueOnce({ statusCode: 201 })
       .mockResolvedValueOnce({ statusCode: 201 })
 
-    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-    await sendPushToAdmin({ title: 't', body: 'b' })
+    const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
+    await sendPushToAdminUsers(['staff-1'], { title: 't', body: 'b' })
 
     const summary = consoleErrorSpy.mock.calls.find(
       (c) => typeof c[0] === 'string' && c[0].includes('sent') && c[0].includes('failed'),
@@ -225,13 +235,13 @@ describe('web-push cleanup matrix', () => {
       .mockRejectedValueOnce(makeStatusError(410))
       .mockRejectedValueOnce(makeStatusError(500))
 
-    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-    await sendPushToAdmin({ title: 't', body: 'b' })
+    const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
+    await sendPushToAdminUsers(['staff-1'], { title: 't', body: 'b' })
 
     const summary = consoleErrorSpy.mock.calls.find(
       (c) =>
         typeof c[0] === 'string' &&
-        c[0].includes('admin:') &&
+        c[0].includes('admin-users:') &&
         c[0].includes('1 sent') &&
         c[0].includes('2 failed'),
     )
@@ -241,8 +251,8 @@ describe('web-push cleanup matrix', () => {
   it('returns {sent:0, failed:0} when there are no subscriptions', async () => {
     setSubs([])
 
-    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-    const result = await sendPushToAdmin({ title: 't', body: 'b' })
+    const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
+    const result = await sendPushToAdminUsers(['staff-1'], { title: 't', body: 'b' })
 
     expect(result).toEqual({ sent: 0, failed: 0 })
     expect(mockSendNotification).not.toHaveBeenCalled()
@@ -252,8 +262,8 @@ describe('web-push cleanup matrix', () => {
     delete process.env.VAPID_PUBLIC_KEY
     delete process.env.VAPID_PRIVATE_KEY
 
-    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-    const result = await sendPushToAdmin({ title: 't', body: 'b' })
+    const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
+    const result = await sendPushToAdminUsers(['staff-1'], { title: 't', body: 'b' })
 
     expect(result).toEqual({ sent: 0, failed: 0 })
     expect(mockSendNotification).not.toHaveBeenCalled()

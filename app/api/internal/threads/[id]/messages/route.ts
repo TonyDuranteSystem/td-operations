@@ -85,7 +85,7 @@ export async function POST(
 
   // Push notification to other admins (never to the sender)
   try {
-    const { sendPushToAdminExcluding } = await import('@/lib/portal/web-push')
+    const { sendPushToStaffExcept } = await import('@/lib/team/notify')
     const body = message.slice(0, 100) || (attachments?.length ? `📎 ${attachments[0].name}` : '📎 File')
 
     if (thread.account_id) {
@@ -95,7 +95,7 @@ export async function POST(
         .select('company_name')
         .eq('id', thread.account_id)
         .single()
-      await sendPushToAdminExcluding(user.id, {
+      await sendPushToStaffExcept(user.id, {
         title: `${displayName} — ${account?.company_name ?? 'Team'}`,
         body,
         url: `/portal-chats?view=internal`,
@@ -103,7 +103,7 @@ export async function POST(
       })
     } else {
       // Team general thread — "Antonio: message" or "Luca: message"
-      await sendPushToAdminExcluding(user.id, {
+      await sendPushToStaffExcept(user.id, {
         title: displayName,
         body,
         url: `/team-chat`,

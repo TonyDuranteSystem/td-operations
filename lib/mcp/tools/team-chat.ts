@@ -23,16 +23,19 @@ Target — provide EXACTLY ONE:
 - thread_id: an existing team thread UUID
 - dm_user_id: a staff user UUID to direct-message
 
+ANSWERING A SPECIFIC BUG — add root_id: the answer lands INSIDE that bug's own thread instead of as a new message in the channel, and the teammate's notification opens the bug. ALWAYS prefer this when replying about a bug someone already opened; a bare channel post detaches the answer from the bug it belongs to. Get the root id from team_chat_read_thread (the link Antonio pasted carries it). Cannot be combined with dm_user_id.
+
 ⚠️ MANDATORY — approval before sending (same rule as gmail_send): SHOW THE FULL DRAFT (target + exact message) in chat and WAIT for Antonio's explicit approval ("send it" / "go") before calling this tool. A general "tell Luca about X" is NOT approval — show the draft first. Never call this on the first turn that proposes the message.`,
     {
       channel: z.string().optional().describe('Channel slug or name (e.g. "td-dev", "general"). Provide exactly one target.'),
       thread_id: z.string().uuid().optional().describe("Existing team thread UUID. Provide exactly one target."),
       dm_user_id: z.string().uuid().optional().describe("Staff user UUID to DM as Claude. Provide exactly one target."),
+      root_id: z.string().uuid().optional().describe("Root message UUID of an existing thread — answer INSIDE that bug/topic rather than posting a new message into the channel. Must belong to the targeted channel."),
       message: z.string().describe('Message body. @mention staff (e.g. "@Luca") to push them.'),
     },
-    async ({ channel, thread_id, dm_user_id, message }) => {
+    async ({ channel, thread_id, dm_user_id, root_id, message }) => {
       try {
-        const result = await postTeamMessage({ channel, thread_id, dm_user_id, message })
+        const result = await postTeamMessage({ channel, thread_id, dm_user_id, root_id, message })
         const who = result.mentioned_user_ids.length
           ? ` (pushed ${result.mentioned_user_ids.length} mentioned teammate${result.mentioned_user_ids.length > 1 ? "s" : ""})`
           : ""
@@ -40,7 +43,7 @@ Target — provide EXACTLY ONE:
           content: [
             {
               type: "text" as const,
-              text: `✅ Posted to team chat (${result.thread_type} thread ${result.thread_id}), message ${result.message_id}${who}.`,
+              text: `✅ Posted to team chat (${result.thread_type} thread ${result.thread_id})${result.root_id ? ` inside thread ${result.root_id}` : ""}, message ${result.message_id}${who}.`,
             },
           ],
         }
@@ -123,6 +126,8 @@ Give it the ENTIRE pasted link (e.g. https://crm.tonydurante.us/team-chat?thread
           assigneeName,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           messages: [root, ...((replies ?? []) as any[])],
+          channelSlug: channel?.channel_slug ?? null,
+          rootId,
         })
 
         return { content: [{ type: "text" as const, text }] }

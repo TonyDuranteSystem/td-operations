@@ -136,52 +136,24 @@ export async function sendPushToContact(
 }
 
 /**
- * Send push notification to all admin subscriptions
+ * ⛔ THE TWO BROADCASTS THAT USED TO LIVE HERE ARE DELETED — DO NOT BRING THEM
+ * BACK. `sendPushToAdmin` (every registered device) and
+ * `sendPushToAdminExcluding` (every registered device but one) selected rows of
+ * the admin push table by NOTHING except the table they were in. They carried
+ * internal team chat, staff notes on client messages, and client chat previews.
+ *
+ * The table is not a staff list: until 2026-07-24 the endpoint that registers a
+ * device required only *a* logged-in user, so a partner's browser or a client's
+ * portal login could put itself there and start receiving all of it. Production
+ * was clean — exactly two devices, Antonio's and Luca's — so nothing ever
+ * leaked; the door was open, not the room.
+ *
+ * Replaced by `sendPushToStaffExcept` / `sendPushToStaff` in lib/team/notify.ts,
+ * which resolve real staff ids through the one directory that knows partners and
+ * clients are not staff, and then call `sendPushToAdminUsers` below.
+ * Antonio, 2026-07-24: "the client's browser never has to get anything about our
+ * business."
  */
-export async function sendPushToAdmin(payload: PushPayload) {
-  try {
-    initWebPush()
-  } catch {
-    return { sent: 0, failed: 0 }
-  }
-
-  const { data: subscriptions } = await supabaseAdmin
-    .from('admin_push_subscriptions')
-    .select('id, endpoint, p256dh, auth_key')
-
-  if (!subscriptions?.length) return { sent: 0, failed: 0 }
-
-  return deliverPushBatch('admin_push_subscriptions', subscriptions, payload, 'admin')
-}
-
-/**
- * Send push notification to all admin subscriptions except a specific user.
- * Used for team-to-team messages so the sender doesn't notify themselves.
- */
-export async function sendPushToAdminExcluding(
-  excludeUserId: string,
-  payload: PushPayload,
-) {
-  try {
-    initWebPush()
-  } catch {
-    return { sent: 0, failed: 0 }
-  }
-
-  const { data: subscriptions } = await supabaseAdmin
-    .from('admin_push_subscriptions')
-    .select('id, endpoint, p256dh, auth_key')
-    .neq('user_id', excludeUserId)
-
-  if (!subscriptions?.length) return { sent: 0, failed: 0 }
-
-  return deliverPushBatch(
-    'admin_push_subscriptions',
-    subscriptions,
-    payload,
-    `admin-excluding:${excludeUserId}`,
-  )
-}
 
 /**
  * Send push notification to specific dashboard users only (by auth user id).

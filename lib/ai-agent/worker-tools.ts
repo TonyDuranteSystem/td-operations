@@ -414,6 +414,7 @@ export const TEAM_CHAT_SEND_TOOL: ToolDef = {
     "Post a message into the INTERNAL Team Workspace ('team chat') AS Claude. Staff-only (Antonio, Luca) — NEVER visible to clients (this is NOT a client message or email).",
     "Use for team coordination: announce a fix/deploy, flag something to check, ask a teammate to test. @mention a teammate (e.g. '@Luca' or '@Antonio') to push them.",
     "Target — provide EXACTLY ONE: channel (slug/name like 'td-dev' or 'general'), thread_id (existing team thread UUID), or dm_user_id (staff UUID to DM).",
+    "ANSWERING A SPECIFIC BUG: add root_id to post INSIDE that bug's own thread instead of as a new message in the channel. Always prefer this when the message is about a bug someone already opened — it keeps the answer with the bug and the recipient's notification opens the bug itself. root_id cannot be combined with dm_user_id.",
     "Only call AFTER Antonio has explicitly approved the draft in THIS thread ('send it' / 'go'). Show the draft (target + exact text) first and wait — same rule as send_email / send_portal_message. Do NOT call speculatively.",
   ].join("\n"),
   parameters: {
@@ -422,6 +423,7 @@ export const TEAM_CHAT_SEND_TOOL: ToolDef = {
       channel: { type: "string", description: "Channel slug or name (e.g. 'td-dev', 'general'). Provide exactly one target." },
       thread_id: { type: "string", description: "Existing team thread UUID. Provide exactly one target." },
       dm_user_id: { type: "string", description: "Staff user UUID to DM as Claude. Provide exactly one target." },
+      root_id: { type: "string", description: "Root message UUID of an existing thread — answer INSIDE that bug/topic instead of posting a new message into the channel. Must belong to the targeted channel." },
       message: { type: "string", description: "Message body. @mention staff (e.g. '@Luca') to push them." },
     },
     required: ["message"],
@@ -2378,14 +2380,16 @@ export async function executeWorkerTool(
     }
     try {
       const { postTeamMessage } = await import("@/lib/team/post-message")
-      const p = params as { channel?: string; thread_id?: string; dm_user_id?: string; message?: string }
+      const p = params as { channel?: string; thread_id?: string; dm_user_id?: string; root_id?: string; message?: string }
       const result = await postTeamMessage({
         channel: p.channel,
         thread_id: p.thread_id,
         dm_user_id: p.dm_user_id,
+        root_id: p.root_id,
         message: p.message ?? "",
       })
-      return `✅ Posted to team chat (${result.thread_type} thread ${result.thread_id})${result.mentioned_user_ids.length ? `, pushed ${result.mentioned_user_ids.length} mentioned teammate(s)` : ""}.`
+      const where = result.root_id ? ` inside thread ${result.root_id}` : ""
+      return `✅ Posted to team chat (${result.thread_type} thread ${result.thread_id})${where}${result.mentioned_user_ids.length ? `, pushed ${result.mentioned_user_ids.length} mentioned teammate(s)` : ""}.`
     } catch (e) {
       return `❌ Could not post to team chat: ${e instanceof Error ? e.message : String(e)}`
     }

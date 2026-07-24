@@ -28,7 +28,9 @@ import {
 } from '@/lib/team/workspace'
 import { resolveMentions } from '@/lib/team/directory'
 import { findOrCreateDm } from '@/lib/team/dm'
-import { sendPushToAdminUsers, sendPushToAdminExcluding } from '@/lib/portal/web-push'
+import { sendPushToAdminUsers } from '@/lib/portal/web-push'
+import { sendPushToStaffExcept } from '@/lib/team/notify'
+import { channelNotifiesStaff } from '@/lib/team/channel-notify'
 import { validateTeamPostTarget, validateTeamPostMessage } from '@/lib/team/post-message-validate'
 
 export { validateTeamPostTarget, validateTeamPostMessage, TEAM_MESSAGE_MAX } from '@/lib/team/post-message-validate'
@@ -40,6 +42,12 @@ export interface PostTeamMessageInput {
   thread_id?: string | null
   /** Post a DM (as Claude) to this staff user id. */
   dm_user_id?: string | null
+  /**
+   * Answer INSIDE an existing thread (a bug) rather than posting a new
+   * top-level message. The root message id of that thread — validated to belong
+   * to the resolved target. Combine with `channel` or `thread_id`.
+   */
+  root_id?: string | null
   /** Message body. @mentions (e.g. "@Luca") drive targeted push. */
   message: string
   /** Optional rich card (validated via validateTeamCard). */
@@ -51,6 +59,8 @@ export interface PostTeamMessageResult {
   message_id: string
   thread_type: string
   mentioned_user_ids: string[]
+  /** The thread this answer landed inside, or null for a top-level post. */
+  root_id: string | null
 }
 
 /**
@@ -58,29 +68,39 @@ export interface PostTeamMessageResult {
  */
 async function resolveTargetThread(
   input: Pick<PostTeamMessageInput, 'channel' | 'thread_id' | 'dm_user_id'>,
-): Promise<{ thread_id: string; thread_type: string } | null> {
+): Promise<{ thread_id: string; thread_type: string; channel_slug: string | null; channel_name: string | null; dm_key: string | null } | null> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const admin = supabaseAdmin as any
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const shape = (d: any) => ({
+    thread_id: d.id as string,
+    thread_type: d.thread_type as string,
+    channel_slug: (d.channel_slug ?? null) as string | null,
+    channel_name: (d.channel_name ?? null) as string | null,
+    dm_key: (d.dm_key ?? null) as string | null,
+  })
+  const COLS = 'id, thread_type, channel_slug, channel_name, dm_key'
+
   if (input.thread_id) {
-    const { data } = await admin.from('internal_threads').select('id, thread_type').eq('id', input.thread_id).maybeSingle()
-    return data ? { thread_id: data.id, thread_type: data.thread_type } : null
+    const { data } = await admin.from('internal_threads').select(COLS).eq('id', input.thread_id).maybeSingle()
+    return data ? shape(data) : null
   }
 
   if (input.dm_user_id) {
     const { thread } = await findOrCreateDm(CLAUDE_SENDER_UUID, input.dm_user_id)
-    return { thread_id: thread.id, thread_type: 'dm' }
+    return { thread_id: thread.id, thread_type: 'dm', channel_slug: null, channel_name: null, dm_key: thread.dm_key ?? null }
   }
 
   // channel: slug first, then name, then the special "general" room.
   const channel = (input.channel ?? '').trim()
-  const bySlug = await admin.from('internal_threads').select('id, thread_type').eq('thread_type', 'channel').eq('channel_slug', channel).maybeSingle()
-  if (bySlug.data) return { thread_id: bySlug.data.id, thread_type: bySlug.data.thread_type }
-  const byName = await admin.from('internal_threads').select('id, thread_type').eq('thread_type', 'channel').ilike('channel_name', channel).maybeSingle()
-  if (byName.data) return { thread_id: byName.data.id, thread_type: byName.data.thread_type }
+  const bySlug = await admin.from('internal_threads').select(COLS).eq('thread_type', 'channel').eq('channel_slug', channel).maybeSingle()
+  if (bySlug.data) return shape(bySlug.data)
+  const byName = await admin.from('internal_threads').select(COLS).eq('thread_type', 'channel').ilike('channel_name', channel).maybeSingle()
+  if (byName.data) return shape(byName.data)
   if (channel.toLowerCase() === 'general') {
-    const gen = await admin.from('internal_threads').select('id, thread_type').eq('thread_type', 'general').limit(1).maybeSingle()
-    if (gen.data) return { thread_id: gen.data.id, thread_type: gen.data.thread_type }
+    const gen = await admin.from('internal_threads').select(COLS).eq('thread_type', 'general').limit(1).maybeSingle()
+    if (gen.data) return shape(gen.data)
   }
   return null
 }
@@ -99,12 +119,42 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
   const target = await resolveTargetThread(input)
   if (!target) throw new Error('Target thread not found (check the channel slug/name, thread id, or user id).')
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const admin = supabaseAdmin as any
+
+  // ── Answering INSIDE a specific thread (a bug), not into the channel ──────
+  // Antonio 2026-07-24: from a coding session he says "tell Luca X" about the
+  // bug he is working on. Without this the answer landed as a NEW top-level
+  // message in the stream, detached from the bug it belongs to — and Luca's
+  // notification opened the channel rather than the bug.
+  // The root is validated against the resolved thread, so a wrong id cannot
+  // graft an answer onto an unrelated bug (or another channel's).
+  let rootId: string | null = null
+  if (input.root_id) {
+    // Threads exist ONLY in channels/general. A thread_id pointing at a DM or a
+    // client discussion would otherwise accept a root_id and stamp a message
+    // that renders in the flat stream but is invisible to every thread list.
+    if (target.thread_type !== 'channel' && target.thread_type !== 'general') {
+      throw new Error('root_id is only valid in a channel — that target has no threads inside it.')
+    }
+    const { data: root } = await admin
+      .from('internal_messages')
+      .select('id, thread_id, root_id')
+      .eq('id', input.root_id)
+      .maybeSingle()
+    if (!root) throw new Error('root_id not found.')
+    if (root.thread_id !== target.thread_id) {
+      throw new Error('root_id belongs to a different channel than the target.')
+    }
+    // Replying to a reply flattens to its root — the same 2-level rule the
+    // human send route applies, so a thread can never grow a third level.
+    rootId = (root.root_id ?? root.id) as string
+  }
+
   const message = input.message.trim()
   const mentions = await resolveMentions(message, CLAUDE_SENDER_UUID)
   const now = new Date().toISOString()
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const admin = supabaseAdmin as any
   const { data: msg, error } = await admin
     .from('internal_messages')
     .insert({
@@ -112,6 +162,8 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
       sender_id: CLAUDE_SENDER_UUID,
       sender_name: CLAUDE_SENDER_NAME,
       message,
+      root_id: rootId,
+      reply_to_id: rootId,
       card: input.card ?? null,
       mentions: mentions.matchedHandles.length ? mentions.matchedHandles : [],
       mentioned_user_ids: mentions.userIds,
@@ -121,29 +173,66 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
     .single()
   if (error) throw new Error(error.message)
 
+  // An answer into an ARCHIVED thread brings it back — same rule as the human
+  // send route. Without it the message is accepted and pushed, yet the thread
+  // stays hidden from the channel, the panel and the board.
+  if (rootId) {
+    try {
+      await admin
+        .from('internal_thread_state')
+        .update({ archived_at: null, archived_by: null, updated_at: now })
+        .eq('root_message_id', rootId)
+        .not('archived_at', 'is', null)
+    } catch { /* an un-archive failure must not fail the post */ }
+  }
+
   // Bump activity so the sidebar re-sorts. (No human read pointer is advanced —
   // Claude is not a real user, and advancing a human's pointer would wrongly
   // clear their unread.)
   await admin.from('internal_threads').update({ last_activity_at: now }).eq('id', target.thread_id)
 
-  // Push (best-effort). Targeted to @mentioned staff; else broadcast to all
-  // staff (Claude is not a real user, so nobody is excluded).
+  // Push (best-effort) — to STAFF, resolved by name. Never the old "everyone
+  // with a registered device" broadcast (see lib/team/notify.ts). Claude is not
+  // a real user, so nobody is actually excluded.
   try {
     const preview = message.slice(0, 120) || (input.card ? '📇 Shared a card' : 'New message')
+    const url = `/team-chat?thread=${target.thread_id}${rootId ? `&root=${rootId}` : ''}`
+    // Per-thread tag so two bugs don't replace each other on the lock screen.
+    const tag = rootId ? `team-thread-${rootId}` : `team-thread-${target.thread_id}`
     if (mentions.userIds.length > 0) {
       await sendPushToAdminUsers(mentions.userIds, {
         title: `${CLAUDE_SENDER_NAME} mentioned you`,
         body: preview,
-        url: `/team-chat?thread=${target.thread_id}`,
+        url,
         tag: `team-mention-${target.thread_id}`,
       })
+    } else if (target.thread_type === 'dm') {
+      // A DM goes to the ONE other participant. It used to broadcast, so a note
+      // Claude sent privately to Luca previewed on every staff device.
+      const otherId = (target.dm_key ?? '').split(':').find(id => id && id !== CLAUDE_SENDER_UUID)
+      if (otherId) {
+        await sendPushToAdminUsers([otherId], { title: CLAUDE_SENDER_NAME, body: preview, url, tag })
+      }
+    } else if (target.thread_type === 'channel' || target.thread_type === 'general') {
+      // SAME silence rule as the human send route — Claude answering in the
+      // machine-written bug channel must not buzz phones. The MCP tool tells
+      // Claude to prefer root_id when answering a bug, and worker bug reports
+      // end with "@claude — investigate", so this path is genuinely reachable.
+      if (channelNotifiesStaff(target.channel_slug ?? target.channel_name ?? null)) {
+        await sendPushToStaffExcept(CLAUDE_SENDER_UUID, { title: CLAUDE_SENDER_NAME, body: preview, url, tag })
+      }
     } else {
-      await sendPushToAdminExcluding(CLAUDE_SENDER_UUID, {
-        title: CLAUDE_SENDER_NAME,
-        body: preview,
-        url: `/team-chat?thread=${target.thread_id}`,
-        tag: `team-thread-${target.thread_id}`,
-      })
+      // A client discussion: participants only, never every staff device.
+      const { data: participants } = await admin
+        .from('internal_thread_reads')
+        .select('user_id')
+        .eq('thread_id', target.thread_id)
+      const ids = ((participants ?? []) as { user_id: string }[])
+        .map(p => p.user_id)
+        .filter(uid => uid && uid !== CLAUDE_SENDER_UUID)
+      if (ids.length > 0) {
+        await sendPushToAdminUsers(ids, { title: CLAUDE_SENDER_NAME, body: preview, url, tag })
+      }
     }
   } catch {
     // non-critical
@@ -154,5 +243,6 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
     message_id: msg.id as string,
     thread_type: target.thread_type,
     mentioned_user_ids: mentions.userIds,
+    root_id: rootId,
   }
 }

@@ -80,23 +80,17 @@ export async function GET() {
 
     const portalChats = portalClientCount
 
-    // Team chat signal — ONLY unread DMs + @mentions (not channel chatter).
+    // Team chat signal — unread DMs, participant conversations, @mentions, AND
+    // work channels (counted as bugs-with-something-new since 2026-07-24).
     let teamChat = 0
     if (teamThreadsResult.status === 'fulfilled' && !teamThreadsResult.value.error) {
       teamChat = countTeamNotifications((teamThreadsResult.value.data ?? []) as TeamThreadCountRow[])
     }
-    // Slack-thread signal: threads this user FOLLOWS with unread replies. Its own
-    // count path (follow + unread live at the root-message grain, which
-    // get_team_threads doesn't carry). The sidebar renders teamChat > 0 as a DOT,
-    // so adding here lights it without reconciling counts across the two grains.
-    // Best-effort: never let this break the badges payload.
-    if (userId) {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data: followed } = await (getDb() as any).rpc('list_followed_unread_threads', { p_user_id: userId })
-        teamChat += (followed ?? []).length
-      } catch { /* non-critical */ }
-    }
+    // NOTE (2026-07-24): the followed-unread-threads count used to be ADDED here.
+    // It no longer is, and must not be re-added: a channel's unread_count is now
+    // itself the number of THREADS in it that are new for you, so every followed
+    // unread thread is already inside that number. Adding both counted the same
+    // bug twice.
 
     // Gmail unread
     const supportUnread = gmailSupportResult.status === 'fulfilled'

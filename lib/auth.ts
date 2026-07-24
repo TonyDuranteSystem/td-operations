@@ -1,4 +1,5 @@
 import type { User } from "@supabase/supabase-js"
+import { isStaffAuthRole } from "@/lib/team/workspace"
 
 const ADMIN_EMAILS = ["antonio.durante@tonydurante.us"]
 
@@ -41,6 +42,21 @@ export function getUserDisplayName(user: User): string {
 export function isDashboardUser(user: User | null): boolean {
   if (!user) return false
   return !isClient(user)
+}
+
+/**
+ * Is this user TD STAFF? Stricter than `isDashboardUser`, which only excludes
+ * clients and therefore lets a managed PARTNER through (Cris authenticates with
+ * role 'partner' and is confined to /collab by middleware).
+ *
+ * Use this — not isDashboardUser — for anything that carries internal business
+ * to a person: push registration, staff notification targeting, internal notes.
+ * The rule itself lives in ONE place (isStaffAuthRole) so the server and the UI
+ * can never disagree about who counts as staff.
+ */
+export function isStaffUser(user: User | null): boolean {
+  if (!user) return false
+  return isStaffAuthRole(user.app_metadata?.role)
 }
 
 /** Paths that require admin role. Team users are redirected to /. */

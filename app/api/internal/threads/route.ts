@@ -206,7 +206,7 @@ export async function POST(request: NextRequest) {
       .neq('user_id', user.id)
 
     if (subs?.length) {
-      const { sendPushToAdminExcluding } = await import('@/lib/portal/web-push')
+      const { sendPushToStaffExcept } = await import('@/lib/team/notify')
       // Get name for notification
       let notifName = title || 'Team'
       if (account_id) {
@@ -225,7 +225,7 @@ export async function POST(request: NextRequest) {
         notifName = contact?.full_name ?? 'Team'
       }
 
-      await sendPushToAdminExcluding(user.id, {
+      await sendPushToStaffExcept(user.id, {
         title: `Team: ${notifName}`,
         body: title || firstMessage.slice(0, 100),
         url: `/portal-chats?view=internal`,

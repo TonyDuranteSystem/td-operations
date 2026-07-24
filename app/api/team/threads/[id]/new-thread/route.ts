@@ -3,6 +3,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, getUserDisplayName } from '@/lib/auth'
 import { resolveMentions } from '@/lib/team/directory'
 import { sendPushToAdminUsers } from '@/lib/portal/web-push'
+import { sendPushToStaffExcept } from '@/lib/team/notify'
+import { channelNotifiesStaff } from '@/lib/team/channel-notify'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -43,7 +45,7 @@ export async function POST(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: thread } = await (supabaseAdmin as any)
     .from('internal_threads')
-    .select('id, thread_type')
+    .select('id, thread_type, channel_slug, channel_name')
     .eq('id', threadId)
     .single()
   if (!thread || (thread.thread_type !== 'channel' && thread.thread_type !== 'general')) {
@@ -96,9 +98,21 @@ export async function POST(
     .from('internal_thread_reads')
     .upsert({ thread_id: threadId, user_id: user.id, last_read_at: now, updated_at: now }, { onConflict: 'thread_id,user_id' })
 
-  // 5. @mentions still ping — deep-linked straight to the new thread's pane.
+  // 5. Tell the team. A NEW BUG is the single most important thing that happens
+  //    in this channel, and until 2026-07-24 opening one notified nobody unless
+  //    you also remembered to @name someone. Every staff member except the
+  //    author now gets it, deep-linked straight to the new thread's pane — the
+  //    same rule (and the same predicate) as a reply.
   try {
-    if (mentions.userIds.length > 0) {
+    const channelLabel = thread.channel_slug ?? thread.channel_name ?? 'general'
+    if (channelNotifiesStaff(thread.channel_slug ?? thread.channel_name ?? null)) {
+      await sendPushToStaffExcept(user.id, {
+        title: `${displayName} opened · #${channelLabel}`,
+        body: title.slice(0, 120),
+        url: `/team-chat?thread=${threadId}&root=${msg.id}`,
+        tag: `team-thread-${msg.id}`,
+      })
+    } else if (mentions.userIds.length > 0) {
       await sendPushToAdminUsers(mentions.userIds, {
         title: `${displayName} started a thread`,
         body: title.slice(0, 120),

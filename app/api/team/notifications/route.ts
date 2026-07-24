@@ -36,24 +36,55 @@ export async function GET() {
     (id) => nameById.get(id),
   )
 
-  // Slack threads the caller FOLLOWS that have unread replies — same signal that
-  // lights the dot, so clicking it always shows what caused it. Deep-links
-  // straight to that thread's pane. Best-effort: never break the list.
+  // Individual THREADS (bugs) that are new for the caller, across every channel —
+  // deep-linked straight to that bug's pane, which is the actionable row.
+  //
+  // ⚠️ THESE REPLACE the per-channel summary rows built above, they do not sit
+  // next to them: a channel's unread_count is now the COUNT OF THESE THREADS,
+  // so listing both showed the same bug twice (once named, once inside "#td-bug
+  // · 3"). Any channel represented here has its summary row removed below.
+  //
+  // Previously this listed only threads the caller FOLLOWS. With two people and
+  // every channel post notifying, "followed" no longer describes what is new:
+  // Luca opened 13 bug threads in td-bug and Antonio follows exactly one of
+  // them, so the followed-only list showed almost nothing.
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: followed } = await (supabaseAdmin as any)
-      .rpc('list_followed_unread_threads', { p_user_id: user.id })
+    const { data: allThreads } = await (supabaseAdmin as any)
+      .rpc('list_all_threads', { p_user_id: user.id, p_limit: 300, p_include_archived: false })
+    // Only threads that live in a CHANNEL. list_all_threads also returns the
+    // general room's roots, and general is deliberately mention-only in
+    // countTeamNotifications (its raw unread can never be cleared) — listing
+    // them here would show rows the dot never counted. A badge and the list it
+    // opens must describe the same set.
+    const channelThreadIds = new Set(
+      ((threads ?? []) as TeamNotifThreadRow[])
+        .filter(t => t.thread_type === 'channel')
+        .map(t => t.id),
+    )
+    const coveredChannels = new Set<string>()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for (const f of ((followed ?? []) as any[])) {
+    for (const t of ((allThreads ?? []) as any[])) {
+      if (!t?.unread) continue
+      if (!channelThreadIds.has(t.thread_id)) continue
+      coveredChannels.add(t.thread_id)
       items.push({
-        id: f.root_message_id,
+        id: t.root_message_id,
         kind: 'thread',
-        label: `#${f.thread_label} · ${String(f.title ?? '').slice(0, 60)}`,
-        count: Number(f.unread_count) || 1,
-        url: `/team-chat?thread=${f.thread_id}&root=${f.root_message_id}`,
+        label: `#${t.channel_label} · ${String(t.title ?? '').slice(0, 60)}`,
+        count: 1,
+        url: `/team-chat?thread=${t.thread_id}&root=${t.root_message_id}`,
       })
     }
-  } catch { /* non-critical */ }
+    if (coveredChannels.size > 0) {
+      for (let i = items.length - 1; i >= 0; i--) {
+        if (items[i].kind === 'channel' && coveredChannels.has(items[i].id)) items.splice(i, 1)
+      }
+    }
+  } catch {
+    // Best-effort: on failure the per-channel summary rows survive, so the list
+    // still says WHERE something is new — never nothing.
+  }
 
   return NextResponse.json({ items })
 }

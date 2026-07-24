@@ -199,8 +199,8 @@ async function notifyAdminOfReaction(accountId: string | null, contactId: string
     displayName = contact?.full_name || displayName
   }
 
-  const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-  await sendPushToAdmin({
+  const { sendPushToStaff } = await import('@/lib/team/notify')
+  await sendPushToStaff({
     title: `Reaction: ${displayName}`,
     body: `${emoji} on your message`,
     url: `/portal-chats${accountId ? `?account=${accountId}` : ''}`,

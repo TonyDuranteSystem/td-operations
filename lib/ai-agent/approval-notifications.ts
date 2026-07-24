@@ -98,8 +98,8 @@ async function pushToAdmins(title: string, body: string, tag: string): Promise<v
     const db = supabaseAdmin as AnyDb
     const { data: subs } = await db.from("admin_push_subscriptions").select("id").limit(1)
     if (!subs?.length) return
-    const { sendPushToAdmin } = await import("@/lib/portal/web-push")
-    await sendPushToAdmin({ title, body, url: "/portal-chats?view=internal", tag })
+    const { sendPushToStaff } = await import("@/lib/team/notify")
+    await sendPushToStaff({ title, body, url: "/portal-chats?view=internal", tag })
   } catch {
     /* push is non-critical */
   }

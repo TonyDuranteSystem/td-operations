@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import { MessageSquare, CreditCard, PenTool, FileText } from 'lucide-react'
+import { channelNotifiesStaff } from '@/lib/team/channel-notify'
 
 /**
  * Global realtime notification listener for the CRM dashboard.
@@ -35,25 +36,39 @@ export function RealtimeNotifications() {
     })
   }, [])
 
-  // Thread ids that should ping me: the DMs I'm in, AND the client conversations
-  // I'm a participant of (opened / posted / shared into). Never plain channel
-  // chatter or a conversation I've never touched (Antonio 2026-07-09/10).
-  // Refreshed every 60s so a brand-new DM or conversation starts pinging within
-  // a minute.
+  // Thread ids that should ping me: the DMs I'm in, the client conversations I'm
+  // a participant of (opened / posted / shared into), AND every WORK CHANNEL.
+  //
+  // Channels were deliberately excluded until 2026-07-24 ("never plain channel
+  // chatter"). Antonio: "There is only Luca and me... I have to know everything
+  // because I work on the bugs." So a channel post now pops up here too — the
+  // same rule the send route uses to decide the push, read from the SAME
+  // predicate (channelNotifiesStaff) so the phone and the screen cannot
+  // disagree about what is worth telling you.
+  //
+  // Refreshed every 60s so a brand-new DM, conversation or channel starts
+  // pinging within a minute.
   const myDmThreadIdsRef = useRef<Set<string>>(new Set())
   const myConversationThreadIdsRef = useRef<Set<string>>(new Set())
+  const myChannelThreadIdsRef = useRef<Map<string, string>>(new Map())
   useEffect(() => {
     let cancelled = false
     const load = () => {
       fetch('/api/team/threads')
         .then(r => r.json())
-        .then((d: { threads?: Array<{ id: string; thread_type?: string; is_participant?: boolean }> }) => {
+        .then((d: { threads?: Array<{ id: string; thread_type?: string; is_participant?: boolean; channel_slug?: string | null; channel_name?: string | null; label?: string | null }> }) => {
           if (cancelled || !Array.isArray(d.threads)) return
           myDmThreadIdsRef.current = new Set(
             d.threads.filter(t => t.thread_type === 'dm').map(t => t.id),
           )
           myConversationThreadIdsRef.current = new Set(
             d.threads.filter(t => t.thread_type === 'discussion' && t.is_participant).map(t => t.id),
+          )
+          myChannelThreadIdsRef.current = new Map(
+            d.threads
+              .filter(t => (t.thread_type === 'channel' || t.thread_type === 'general')
+                && channelNotifiesStaff(t.channel_slug ?? t.channel_name ?? null))
+              .map(t => [t.id, t.channel_slug ?? t.channel_name ?? t.label ?? 'team']),
           )
         })
         .catch(() => {})
@@ -176,6 +191,70 @@ export function RealtimeNotifications() {
       .subscribe()
 
     // ─── Listen for new internal team messages ────────────
+    //
+    // BOTH INSERT and UPDATE. An @claude answer in Team Chat is written by
+    // REPLACING the "…" placeholder message — an UPDATE — so an INSERT-only
+    // listener showed a toast saying literally "…" and never showed the answer
+    // that followed (found by the bug hunter, 2026-07-24). Placeholder bodies
+    // are skipped on insert; the update that replaces one is what pops up.
+    const PENDING_PLACEHOLDERS = ['…', '⋯']
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const notifyForInternalMessage = (row: any, isUpdate: boolean) => {
+      // Don't notify while you are LOOKING at team chat — you can see it.
+      // NOTE: /portal-chats used to be suppressed here too, which meant a team
+      // message arriving while Antonio worked in Portal Chats produced no signal
+      // at all (the floating chat also stays quiet there). He asked for the
+      // pop-up "wherever I am", so only the team-chat page is silent.
+      const p = pathnameRef.current
+      if (p === '/team-chat' || p.startsWith('/team-chat/')) return
+
+      // Don't notify for own messages.
+      if (row?.sender_id && row.sender_id === currentUserIdRef.current) return
+      // A soft-deleted / retracted message must never surface its body.
+      if (row?.deleted_at) return
+
+      const body = typeof row?.message === 'string' ? row.message : ''
+      // "Claude is thinking" is not news. The answer arrives as an UPDATE.
+      if (PENDING_PLACEHOLDERS.includes(body.trim())) return
+      // An UPDATE is only interesting when it turned a placeholder into an
+      // answer. Every other update (an edit, a reaction write) would otherwise
+      // re-toast a message the user has already seen.
+      if (isUpdate && !PENDING_PLACEHOLDERS.includes(String(row?.old_message ?? '').trim())) return
+
+      const mine = currentUserIdRef.current
+      const mentionsMe = !!mine && Array.isArray(row?.mentioned_user_ids)
+        && row.mentioned_user_ids.includes(mine)
+      const threadId = row?.thread_id
+      const isMyDm = !!threadId && myDmThreadIdsRef.current.has(threadId)
+      const isMyConversation = !!threadId && myConversationThreadIdsRef.current.has(threadId)
+      const channelLabel = threadId ? myChannelThreadIdsRef.current.get(threadId) : undefined
+      if (!mentionsMe && !isMyDm && !isMyConversation && !channelLabel) return
+
+      const senderName = row?.sender_name || 'Team member'
+      // Deep-link INTO the thread when the message belongs to one, so the click
+      // lands on the bug rather than the channel's stream.
+      const rootId = row?.root_id as string | null | undefined
+      const url = threadId
+        ? `/team-chat?thread=${threadId}${rootId ? `&root=${rootId}` : ''}`
+        : '/team-chat'
+
+      playSound()
+
+      toast(
+        mentionsMe ? `@mention · ${senderName}`
+          : isMyDm ? `DM · ${senderName}`
+          : channelLabel ? `#${channelLabel} · ${senderName}`
+          : `Conversation · ${senderName}`,
+        {
+          description: body.slice(0, 80) || 'New team message',
+          icon: <MessageSquare className="h-4 w-4 text-orange-500" />,
+          duration: 6000,
+          action: { label: 'Open', onClick: () => router.push(url) },
+        }
+      )
+    }
+
     const internalChannel = supabase
       .channel('global-internal-messages')
       .on(
@@ -185,48 +264,29 @@ export function RealtimeNotifications() {
           schema: 'public',
           table: 'internal_messages',
         },
+        (payload) => notifyForInternalMessage(payload.new, false),
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'internal_messages',
+        },
         (payload) => {
-          // Don't notify if already on the page that handles this thread
-          const p = pathnameRef.current
-          const isOnTeamChat = p === '/team-chat' || p.startsWith('/team-chat/')
-          const isOnPortalChats = p === '/portal-chats'
-          if (isOnTeamChat || isOnPortalChats) return
-
-          // Don't notify for own messages
-          if (payload.new?.sender_id && payload.new.sender_id === currentUserIdRef.current) return
-
-          // Ping for a DM to me, an @mention of me, or activity in a client
-          // conversation I'm a participant of — never plain channel chatter or a
-          // conversation I've never touched (Antonio 2026-07-09/10).
-          const mine = currentUserIdRef.current
-          const mentionsMe = !!mine && Array.isArray(payload.new?.mentioned_user_ids)
-            && payload.new.mentioned_user_ids.includes(mine)
-          const isMyDm = !!payload.new?.thread_id && myDmThreadIdsRef.current.has(payload.new.thread_id)
-          const isMyConversation = !!payload.new?.thread_id && myConversationThreadIdsRef.current.has(payload.new.thread_id)
-          if (!mentionsMe && !isMyDm && !isMyConversation) return
-
-          const senderName = payload.new?.sender_name || 'Team member'
-          const threadId = payload.new?.thread_id
-
-          playSound()
-
-          toast(
-            mentionsMe ? `@mention · ${senderName}` : isMyDm ? `DM · ${senderName}` : `Conversation · ${senderName}`,
-            {
-              description: typeof payload.new?.message === 'string'
-                ? payload.new.message.slice(0, 80)
-                : 'New team message',
-              icon: <MessageSquare className="h-4 w-4 text-orange-500" />,
-              duration: 6000,
-              action: {
-                label: 'Open',
-                onClick: () => router.push(threadId ? `/team-chat?thread=${threadId}` : '/team-chat'),
-              },
-            }
-          )
-        }
+          // Supabase only sends the previous row when the table is REPLICA
+          // IDENTITY FULL. When it does, use it to tell "placeholder became an
+          // answer" from an ordinary edit; when it doesn't, `payload.old` is
+          // just the primary key and we stay SILENT rather than re-toasting
+          // every edit.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const old = payload.old as any
+          if (typeof old?.message !== 'string') return
+          notifyForInternalMessage({ ...payload.new, old_message: old.message }, true)
+        },
       )
       .subscribe()
+
 
     // ─── Listen for business events in action_log ─────────
     // No server-side filter — client-side filtering for business events only.

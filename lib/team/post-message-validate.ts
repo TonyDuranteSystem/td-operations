@@ -15,12 +15,20 @@ export function validateTeamPostTarget(input: {
   channel?: string | null
   thread_id?: string | null
   dm_user_id?: string | null
+  root_id?: string | null
 }): string | null {
   const set = [input.channel, input.thread_id, input.dm_user_id].filter(
     (v) => typeof v === 'string' && v.trim().length > 0,
   )
   if (set.length === 0) return 'A target is required: one of channel, thread_id, or dm_user_id.'
   if (set.length > 1) return 'Provide exactly ONE target: channel, thread_id, or dm_user_id (not several).'
+  // A DM is a flat conversation with no threads inside it, so "answer inside
+  // thread X" has no meaning there. Refuse loudly rather than silently dropping
+  // the root and posting into the DM as a new message.
+  const root = typeof input.root_id === 'string' ? input.root_id.trim() : ''
+  if (root && typeof input.dm_user_id === 'string' && input.dm_user_id.trim()) {
+    return 'root_id cannot be combined with dm_user_id — a direct message has no threads inside it.'
+  }
   return null
 }
 
