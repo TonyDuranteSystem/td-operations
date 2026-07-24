@@ -29,6 +29,9 @@ import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateOnboardingData, normalizeEIN } from "../validation"
 import { runOCRCrossCheck } from "../ocr-crosscheck"
 import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
+import { resolveMemberContactId } from "@/lib/members/resolve-member-contact"
+import { upsertMemberRow } from "@/lib/members/write-member-row"
+import { normalizePersonName, normalizeEmail } from "@/lib/members/member-identity"
 import { createSD } from "@/lib/operations/service-delivery"
 import type { Json } from "@/lib/database.types"
 
@@ -489,7 +492,41 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       .eq('account_id', account_id)
       .eq('contact_id', contact_id)
 
+    // Detect genuine same-(name+email) duplicates across the OWNER and the
+    // individual members. Two members may legitimately share one email (family
+    // LLC) as long as their names differ; but two individuals with the SAME name
+    // AND email are indistinguishable and would corrupt the members/ownership
+    // tables. This is a background job with no interactive prompt, so we FLAG and
+    // SKIP the colliding member (never silently overwrite) and exclude it from
+    // the owner's ownership calculation.
+    const { data: ownerContact } = await supabaseAdmin
+      .from('contacts').select('full_name, email').eq('id', contact_id).maybeSingle()
+    const ownerName = ownerContact?.full_name
+      || [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).map(String).join(' ')
+      || null
+    const ownerEmail = ownerContact?.email || null
+    const skippedMemberIdx = new Set<number>()
+    {
+      const seen = new Set<string>()
+      if (ownerName && ownerEmail) seen.add(`${normalizePersonName(ownerName)} ${normalizeEmail(ownerEmail)}`)
+      for (let i = 0; i < additionalMembers.length; i++) {
+        const mm = additionalMembers[i]
+        if (mm.member_type !== 'individual') continue
+        const nm = [mm.member_first_name, mm.member_last_name].filter(Boolean).join(' ')
+        const em = mm.member_email
+        if (!nm || !em) continue
+        const key = `${normalizePersonName(nm)} ${normalizeEmail(em)}`
+        if (seen.has(key)) {
+          skippedMemberIdx.add(i)
+          result.steps.push(step(`member_${i + 1}`, 'error', `Duplicate member "${nm}" (${em}) — same name and email as the owner or another member. Skipped to protect the ownership table; please correct the wizard data and re-run.`))
+        } else {
+          seen.add(key)
+        }
+      }
+    }
+
     for (let i = 0; i < additionalMembers.length; i++) {
+      if (skippedMemberIdx.has(i)) continue
       const m = additionalMembers[i]
       const isPrimary = primaryMemberIndex === i + 1
       const ownershipPct = m.member_ownership_pct
@@ -501,47 +538,34 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           const repName = m.member_rep_name
           const companyName = m.member_company_name ?? `Company Member ${i + 1}`
 
-          await supabaseAdmin.from('members').upsert(
-            {
-              account_id,
-              member_type: 'company',
-              company_name: companyName,
-              ein: m.member_company_ein,
-              address_street: m.member_company_street,
-              address_city: m.member_company_city,
-              address_state: m.member_company_state,
-              address_zip: m.member_company_zip,
-              address_country: m.member_company_country,
-              ownership_pct: ownershipPct,
-              is_primary: false,
-              is_signer: false,
-              representative_name: repName,
-              representative_email: repEmail,
-              representative_address_street: m.member_rep_address_street,
-              representative_address_city: m.member_rep_address_city,
-              representative_address_state: m.member_rep_address_state,
-              representative_address_zip: m.member_rep_address_zip,
-              representative_address_country: m.member_rep_address_country,
-              updated_at: now2,
-            },
-            { onConflict: 'account_id,company_name' }
-          )
+          const { error: companyRowErr } = await upsertMemberRow({
+            account_id,
+            member_type: 'company',
+            company_name: companyName,
+            ein: m.member_company_ein,
+            address_street: m.member_company_street,
+            address_city: m.member_company_city,
+            address_state: m.member_company_state,
+            address_zip: m.member_company_zip,
+            address_country: m.member_company_country,
+            ownership_pct: ownershipPct,
+            is_primary: false,
+            is_signer: false,
+            representative_name: repName,
+            representative_email: repEmail,
+            representative_address_street: m.member_rep_address_street,
+            representative_address_city: m.member_rep_address_city,
+            representative_address_state: m.member_rep_address_state,
+            representative_address_zip: m.member_rep_address_zip,
+            representative_address_country: m.member_rep_address_country,
+            updated_at: now2,
+          })
+          if (companyRowErr) result.steps.push(step(`member_${i + 1}_row`, 'error', companyRowErr))
 
           if (repEmail) {
-            let repContactId: string | null = null
-            const { data: existingRep } = await supabaseAdmin
-              .from('contacts').select('id').eq('email', repEmail).limit(1)
-            if (existingRep?.length) {
-              repContactId = existingRep[0].id
-            } else {
-              // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- deferred migration, dev_task 7ebb1e0c
-              const { data: newRep } = await supabaseAdmin.from('contacts').insert({
-                email: repEmail,
-                full_name: repName ?? repEmail,
-                created_at: now2, updated_at: now2,
-              } as any).select('id').single()
-              repContactId = newRep?.id ?? null
-            }
+            // Resolve the representative's contact by email + name (shared resolver)
+            // so two company reps on one email stay distinct people.
+            const repContactId = await resolveMemberContactId({ email: repEmail, name: repName, now: now2 })
             if (repContactId) {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any -- is_primary not in types
               await supabaseAdmin.from('account_contacts').upsert(
@@ -560,39 +584,27 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           const memberEmail = m.member_email
           const memberName = [m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ') || memberEmail || `Member ${i + 1}`
 
-          let membContactId: string | null = null
-          if (memberEmail) {
-            const { data: existingC } = await supabaseAdmin
-              .from('contacts').select('id').eq('email', memberEmail).limit(1)
-            if (existingC?.length) {
-              membContactId = existingC[0].id
-            } else {
-              // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- deferred migration, dev_task 7ebb1e0c
-              const { data: newC } = await supabaseAdmin.from('contacts').insert({
-                email: memberEmail,
-                full_name: memberName,
-                first_name: m.member_first_name ?? undefined,
-                last_name: m.member_last_name ?? undefined,
-                created_at: now2, updated_at: now2,
-              } as any).select('id').single()
-              membContactId = newC?.id ?? null
-            }
-          }
+          // Resolve this member's own contact by email + name (shared resolver),
+          // refreshing the fields the wizard provided. Two members can share one
+          // email and stay distinct people.
+          const membContactId = await resolveMemberContactId({
+            email: memberEmail,
+            name: memberName,
+            first_name: m.member_first_name,
+            last_name: m.member_last_name,
+            refresh: {
+              date_of_birth: m.member_dob,
+              citizenship: m.member_nationality,
+              address_line1: m.member_street,
+              address_city: m.member_city,
+              address_state: m.member_state_province,
+              address_zip: m.member_zip,
+              address_country: m.member_country,
+            },
+            now: now2,
+          })
 
           if (membContactId) {
-            const upd: Record<string, unknown> = { updated_at: now2 }
-            if (m.member_first_name) upd.first_name = m.member_first_name
-            if (m.member_last_name) upd.last_name = m.member_last_name
-            if (m.member_dob) upd.date_of_birth = m.member_dob
-            if (m.member_nationality) upd.citizenship = m.member_nationality
-            if (m.member_street) upd.address_line1 = m.member_street
-            if (m.member_city) upd.address_city = m.member_city
-            if (m.member_state_province) upd.address_state = m.member_state_province
-            if (m.member_zip) upd.address_zip = m.member_zip
-            if (m.member_country) upd.address_country = m.member_country
-            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-            await supabaseAdmin.from('contacts').update(upd).eq('id', membContactId)
-
             // eslint-disable-next-line @typescript-eslint/no-explicit-any -- is_primary added via script 28c, not yet in generated types
             const { error: acErr } = await supabaseAdmin.from('account_contacts').upsert(
               { account_id, contact_id: membContactId, role: 'Member', is_primary: isPrimary, ...(ownershipPct !== null && { ownership_pct: ownershipPct }) } as any,
@@ -604,26 +616,26 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
               result.steps.push(step(`member_${i + 1}_link`, 'ok', `${memberName}${isPrimary ? ' [PRIMARY]' : ''}`))
             }
 
-            // Write individual row to members table
-            await supabaseAdmin.from('members').upsert(
-              {
-                account_id,
-                member_type: 'individual',
-                full_name: memberName,
-                email: memberEmail,
-                address_street: m.member_street,
-                address_city: m.member_city,
-                address_state: m.member_state_province,
-                address_zip: m.member_zip,
-                address_country: m.member_country,
-                ownership_pct: ownershipPct,
-                is_primary: isPrimary,
-                is_signer: false,
-                contact_id: membContactId,
-                updated_at: now2,
-              },
-              { onConflict: 'account_id,contact_id' }
-            )
+            // Write the individual row to the members table via the reliable,
+            // idempotent writer (the old onConflict upsert silently 42P10'd, so
+            // members rows were never written by this job).
+            const { error: memberRowErr } = await upsertMemberRow({
+              account_id,
+              member_type: 'individual',
+              full_name: memberName,
+              email: memberEmail,
+              address_street: m.member_street,
+              address_city: m.member_city,
+              address_state: m.member_state_province,
+              address_zip: m.member_zip,
+              address_country: m.member_country,
+              ownership_pct: ownershipPct,
+              is_primary: isPrimary,
+              is_signer: false,
+              contact_id: membContactId,
+              updated_at: now2,
+            })
+            if (memberRowErr) result.steps.push(step(`member_${i + 1}_row`, 'error', memberRowErr))
 
             // Passport: find in upload_paths by key pattern passport_member_${i}
             const memberPassportPath = (p.upload_paths ?? []).find(up => up.includes(`passport_member_${i}`))
@@ -674,9 +686,12 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       }
     }
 
-    // Set owner's ownership_pct = 100 - sum(additional members' pcts)
+    // Set owner's ownership_pct = 100 - sum(additional members' pcts).
+    // Skipped duplicates are excluded from the sum so the written rows stay
+    // internally consistent (sum to 100); the duplicate itself was flagged above.
     if (contact_id && account_id) {
-      const additionalPctSum = additionalMembers.reduce((sum, m) => {
+      const additionalPctSum = additionalMembers.reduce((sum, m, idx) => {
+        if (skippedMemberIdx.has(idx)) return sum
         const pct = m.member_ownership_pct ?? 0
         return sum + (isNaN(pct) ? 0 : pct)
       }, 0)
@@ -687,12 +702,13 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         .eq('contact_id', contact_id)
       result.steps.push(step('owner_pct', 'ok', `Owner ownership_pct = ${ownerPct}%`))
 
-      // Write owner row to members table
+      // Write owner row to members table via the reliable writer, wrapped so a
+      // failure here can never abort the downstream lease/OA/tax/portal steps.
       const ownerFirst = submitted.owner_first_name ? String(submitted.owner_first_name) : null
       const ownerLast = submitted.owner_last_name ? String(submitted.owner_last_name) : null
       const ownerFullName = [ownerFirst, ownerLast].filter(Boolean).join(' ') || null
-      await supabaseAdmin.from('members').upsert(
-        {
+      try {
+        const { error: ownerRowErr } = await upsertMemberRow({
           account_id,
           member_type: 'individual',
           full_name: ownerFullName,
@@ -706,10 +722,13 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           is_signer: false,
           contact_id,
           updated_at: now2,
-        },
-        { onConflict: 'account_id,contact_id' }
-      )
-      result.steps.push(step('owner_members_row', 'ok', `Owner written to members table (${ownerPct}%)`))
+        })
+        result.steps.push(ownerRowErr
+          ? step('owner_members_row', 'error', ownerRowErr)
+          : step('owner_members_row', 'ok', `Owner written to members table (${ownerPct}%)`))
+      } catch (ownerErr) {
+        result.steps.push(step('owner_members_row', 'error', ownerErr instanceof Error ? ownerErr.message : String(ownerErr)))
+      }
     }
 
     // Portal invite reminder for all members

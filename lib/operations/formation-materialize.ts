@@ -39,6 +39,8 @@ import { reanchorLeadConversations } from "@/lib/team/reanchor-conversations"
 import { logAction } from "@/lib/mcp/action-log"
 import { ensureCompanyFolder, migrateContactToCompany } from "@/lib/drive-folder-utils"
 import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
+import { resolveMemberContactId } from "@/lib/members/resolve-member-contact"
+import { normalizePersonName, normalizeEmail } from "@/lib/members/member-identity"
 import { syncTier } from "./sync-tier"
 import { uploadBinaryToDrive } from "@/lib/google-drive"
 
@@ -370,7 +372,34 @@ export async function materializeFormationCompany(
       // Uses the resolver-supplied uploadPaths (from formation_submissions when
       // present; extracted from wizard_progress.data when in fallback mode).
       primaryMemberIndex = typeof submitted.primary_member_index === "number" ? submitted.primary_member_index as number : 0
-      additionalPctSum = additionalMembers.reduce((sum, m) => sum + (m.member_ownership_pct ?? 0), 0)
+
+      // Flag genuine same-(name+email) duplicates across the owner and the
+      // individual members. Members may share one email (family LLC) if their
+      // names differ; identical name AND email is indistinguishable and would
+      // corrupt the members/ownership tables, so we SKIP and flag it (never
+      // silently drop via a unique-violation) and exclude it from the sums.
+      const ownerDupName = [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).map(String).join(" ") || null
+      const ownerDupEmail = submitted.owner_email ? String(submitted.owner_email) : null
+      const skippedMemberIdx = new Set<number>()
+      {
+        const seen = new Set<string>()
+        if (ownerDupName && ownerDupEmail) seen.add(`${normalizePersonName(ownerDupName)} ${normalizeEmail(ownerDupEmail)}`)
+        for (let i = 0; i < additionalMembers.length; i++) {
+          const mm = additionalMembers[i]
+          if (mm.member_type !== "individual") continue
+          const nm = [mm.member_first_name, mm.member_last_name].filter(Boolean).join(" ")
+          const em = mm.member_email
+          if (!nm || !em) continue
+          const key = `${normalizePersonName(nm)} ${normalizeEmail(em)}`
+          if (seen.has(key)) {
+            skippedMemberIdx.add(i)
+            steps.push({ step: `member_${i + 1}`, status: "error", detail: `Duplicate member "${nm}" (${em}) — same name and email as the owner or another member. Skipped to protect the ownership table; please correct and re-materialize.` })
+          } else {
+            seen.add(key)
+          }
+        }
+      }
+      additionalPctSum = additionalMembers.reduce((sum, m, idx) => skippedMemberIdx.has(idx) ? sum : sum + (m.member_ownership_pct ?? 0), 0)
 
       // Update owner is_primary on account_contacts based on picker.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- is_primary not in generated types yet
@@ -381,6 +410,7 @@ export async function materializeFormationCompany(
 
       const now = new Date().toISOString()
       for (let i = 0; i < additionalMembers.length; i++) {
+        if (skippedMemberIdx.has(i)) continue
         const m = additionalMembers[i]
         const isPrimary = primaryMemberIndex === i + 1
         const ownershipPct = m.member_ownership_pct
@@ -420,21 +450,8 @@ export async function materializeFormationCompany(
 
             // Find-or-create the representative contact for portal access.
             if (repEmail) {
-              let repContactId: string | null = null
-              const { data: existingRep } = await supabaseAdmin
-                .from("contacts").select("id").eq("email", repEmail).limit(1).maybeSingle()
-              if (existingRep) {
-                repContactId = existingRep.id
-              } else {
-                // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- deferred migration; central materialization path
-                const { data: newRep } = await supabaseAdmin.from("contacts").insert({
-                  email: repEmail,
-                  full_name: repName ?? repEmail,
-                  created_at: now,
-                  updated_at: now,
-                } as any).select("id").single()
-                repContactId = newRep?.id ?? null
-              }
+              // Resolve the representative's contact by email + name (shared resolver).
+              const repContactId = await resolveMemberContactId({ email: repEmail, name: repName, now })
               if (repContactId) {
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- is_primary not in types
                 await supabaseAdmin.from("account_contacts").upsert(
@@ -459,39 +476,27 @@ export async function materializeFormationCompany(
             const memberEmail = m.member_email ? String(m.member_email).toLowerCase().trim() : null
             const memberName = [m.member_first_name, m.member_last_name].filter(Boolean).join(" ") || memberEmail || `Member ${i + 1}`
 
-            let membContactId: string | null = null
-            if (memberEmail) {
-              const { data: existingC } = await supabaseAdmin
-                .from("contacts").select("id").eq("email", memberEmail).limit(1).maybeSingle()
-              if (existingC) {
-                membContactId = existingC.id
-              } else {
-                // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- deferred migration; central materialization path
-                const { data: newC } = await supabaseAdmin.from("contacts").insert({
-                  email: memberEmail,
-                  full_name: memberName,
-                  first_name: m.member_first_name ?? undefined,
-                  last_name: m.member_last_name ?? undefined,
-                  created_at: now,
-                  updated_at: now,
-                } as any).select("id").single()
-                membContactId = newC?.id ?? null
-              }
-            }
+            // Resolve this member's own contact by email + name (shared resolver),
+            // refreshing the fields the wizard provided. Distinct people who share
+            // one email each keep their own contact.
+            const membContactId = await resolveMemberContactId({
+              email: memberEmail,
+              name: memberName,
+              first_name: m.member_first_name,
+              last_name: m.member_last_name,
+              refresh: {
+                date_of_birth: m.member_dob,
+                citizenship: m.member_nationality,
+                address_line1: m.member_street,
+                address_city: m.member_city,
+                address_state: m.member_state_province,
+                address_zip: m.member_zip,
+                address_country: m.member_country,
+              },
+              now,
+            })
 
             if (membContactId) {
-              const upd: Record<string, unknown> = { updated_at: now }
-              if (m.member_first_name) upd.first_name = m.member_first_name
-              if (m.member_last_name) upd.last_name = m.member_last_name
-              if (m.member_dob) upd.date_of_birth = m.member_dob
-              if (m.member_nationality) upd.citizenship = m.member_nationality
-              if (m.member_street) upd.address_line1 = m.member_street
-              if (m.member_city) upd.address_city = m.member_city
-              if (m.member_state_province) upd.address_state = m.member_state_province
-              if (m.member_zip) upd.address_zip = m.member_zip
-              if (m.member_country) upd.address_country = m.member_country
-              // eslint-disable-next-line no-restricted-syntax -- deferred migration; central materialization path
-              await supabaseAdmin.from("contacts").update(upd).eq("id", membContactId)
 
               // eslint-disable-next-line @typescript-eslint/no-explicit-any -- is_primary not in types
               await supabaseAdmin.from("account_contacts").upsert(
