@@ -18,7 +18,7 @@ import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { lease_id, token } = body as { lease_id?: string; token?: string }
+    const { lease_id, token, code } = body as { lease_id?: string; token?: string; code?: string }
 
     if (!lease_id || !token) {
       return NextResponse.json({ error: "lease_id and token required" }, { status: 400 })
@@ -27,13 +27,22 @@ export async function POST(req: NextRequest) {
     // Fetch lease record
     const { data: lease, error: leaseErr } = await supabaseAdmin
       .from("lease_agreements")
-      .select("id, token, tenant_company, account_id, contact_id, suite_number, status, pdf_storage_path")
+      .select("id, token, tenant_company, account_id, contact_id, suite_number, status, pdf_storage_path, access_code")
       .eq("id", lease_id)
       .eq("token", token)
       .single()
 
     if (leaseErr || !lease) {
       return NextResponse.json({ error: "Lease not found" }, { status: 404 })
+    }
+
+    // This endpoint has no session (the signer is not logged in) and it fires real
+    // side-effects — support email, SD advance, a task, and a Drive/portal filing.
+    // A guessable token alone must NOT be enough to trigger those, so require the
+    // per-lease access code the genuine signer holds. (Once the anon-read hole is
+    // closed the code is no longer harvestable, so this becomes a real gate.)
+    if (!code || code !== lease.access_code) {
+      return NextResponse.json({ error: "Invalid access code." }, { status: 403 })
     }
 
     if (lease.status !== "signed") {

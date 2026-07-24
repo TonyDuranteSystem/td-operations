@@ -179,6 +179,12 @@ export default function LeasePage() {
   // ─── SIGN ───
   async function handleSign() {
     if (!lease || !sigPadRef.current) return
+    // Admin preview must never execute a real lease (see the coded page for the
+    // full note). ?preview=td is view-only.
+    if (isAdmin) {
+      alert('Admin preview cannot sign a lease. Open it as the client to do that.')
+      return
+    }
     if (sigPadRef.current.isEmpty()) {
       alert('Please sign above before submitting.')
       return
@@ -247,7 +253,7 @@ export default function LeasePage() {
         await fetch('/api/lease-signed', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lease_id: lease.id, token: lease.token }),
+          body: JSON.stringify({ lease_id: lease.id, token: lease.token, code: accessCode }),
         })
       } catch {
         // Non-blocking — signing is already saved
