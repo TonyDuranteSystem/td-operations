@@ -11,6 +11,7 @@ import { isAdmin, isDashboardUser } from '@/lib/auth'
 import { countTeamNotifications, type TeamThreadCountRow } from '@/lib/team/workspace'
 import { SwRegister } from '@/components/dashboard/sw-register'
 import { RealtimeNotifications } from '@/components/dashboard/realtime-notifications'
+import { ClearAllToasts } from '@/components/dashboard/clear-all-toasts'
 import { UiEventListener } from '@/components/dashboard/ui-event-listener'
 import { DashboardPullToRefresh } from '@/components/dashboard/pull-to-refresh'
 import StickyNotesLayer from '@/components/dashboard/sticky-notes-layer'
@@ -149,6 +150,7 @@ export default async function DashboardLayout({
       <SandboxBanner />
       <SwRegister />
       <RealtimeNotifications />
+      <ClearAllToasts />
       <UiEventListener />
       <DashboardPullToRefresh />
       <div data-sandbox={isSandbox ? 'true' : undefined} className={isSandbox ? 'flex h-[calc(100vh-2.5rem)] mt-10' : 'flex h-screen'}>

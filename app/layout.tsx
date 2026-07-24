@@ -41,7 +41,17 @@ export default function RootLayout({
       <body className={inter.className}>
         <SandboxBanner />
         {children}
-        <Toaster position="bottom-right" richColors closeButton />
+        {/* Bottom offset reserves a thin band at the corner for the dashboard's
+            "Clear all" pill (components/dashboard/clear-all-toasts.tsx). Toasts
+            stack upward from just above the band so the pill never overlaps
+            them, on desktop or the mobile PWA. */}
+        <Toaster
+          position="bottom-right"
+          richColors
+          closeButton
+          offset={{ bottom: '64px' }}
+          mobileOffset={{ bottom: '56px' }}
+        />
       </body>
     </html>
   )
