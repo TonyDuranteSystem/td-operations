@@ -29,6 +29,18 @@ describe("review-status: canTransition (spec §3 graph)", () => {
   it("approved can bounce back to revision_requested", () => {
     expect(canTransition("approved", "revision_requested")).toBe(true)
   })
+  it("staff can request changes from any non-confirmed state (Carasso edit-button fix)", () => {
+    // Legacy external-form submissions carry review_status = null; the flow
+    // "Request Changes" button must reach revision_requested from there and from
+    // every other pre-confirmation state.
+    expect(canTransition(null, "revision_requested")).toBe(true)
+    expect(canTransition("submitted", "revision_requested")).toBe(true)
+    expect(canTransition("resubmitted", "revision_requested")).toBe(true)
+    expect(canTransition("reopened", "revision_requested")).toBe(true)
+  })
+  it("a confirmed (finalized) return still cannot jump straight to revision_requested", () => {
+    expect(canTransition("confirmed", "revision_requested")).toBe(false)
+  })
   it("reopen: confirmed → reopened → submitted", () => {
     expect(canTransition("confirmed", "reopened")).toBe(true)
     expect(canTransition("reopened", "submitted")).toBe(true)

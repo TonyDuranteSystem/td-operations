@@ -124,6 +124,7 @@ export function ActionButtons({ serviceDeliveryId, actions }: ActionButtonsProps
   const router = useRouter()
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [warning, setWarning] = useState<string | null>(null)
 
   const resolved = (actions ?? [])
     .map(resolveAction)
@@ -134,6 +135,7 @@ export function ActionButtons({ serviceDeliveryId, actions }: ActionButtonsProps
     if (busyKey) return
     setBusyKey(action.uid)
     setError(null)
+    setWarning(null)
     try {
       const res = await fetch(`/api/flows/${serviceDeliveryId}/advance`, {
         method: 'POST',
@@ -144,6 +146,9 @@ export function ActionButtons({ serviceDeliveryId, actions }: ActionButtonsProps
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Could not perform this action. Please try again.')
       }
+      // The action succeeded, but a follow-on step (e.g. unlocking the client's
+      // tax form) may need staff attention — show it without blocking.
+      if (typeof data.warning === 'string' && data.warning) setWarning(data.warning)
       router.refresh()
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not perform this action.')
@@ -182,6 +187,11 @@ export function ActionButtons({ serviceDeliveryId, actions }: ActionButtonsProps
         })}
       </div>
       {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      {warning && (
+        <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          {warning}
+        </p>
+      )}
     </div>
   )
 }

@@ -29,7 +29,7 @@ import { buildSubmissionRecord } from '@/lib/portal/submission-record'
 import { buildSubmissionToken } from '@/lib/portal/submission-token'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
 import { validateWizardData } from '@/lib/jobs/validation'
-import { collectUploadPaths } from '@/lib/portal/wizard-uploads'
+import { collectUploadPaths, isWizardUploadPath } from '@/lib/portal/wizard-uploads'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
 import { formationLeadOwned } from '@/lib/portal/formation-lead-access'
@@ -244,7 +244,7 @@ export async function POST(req: NextRequest) {
         const nowIso = new Date().toISOString()
         const { data: curSub, error: curErr } = await supabaseAdmin
           .from('tax_return_submissions')
-          .select('id, token, review_status, review_history')
+          .select('id, token, review_status, review_history, upload_paths')
           .eq('id', taxEligibility.submissionId)
           .single()
         if (curErr || !curSub) {
@@ -255,9 +255,27 @@ export async function POST(req: NextRequest) {
           )
         }
 
+        // Preserve documents the client already attached (Carasso edit-button
+        // fix, 2026-07-23). The form only re-surfaces uploads whose storage path
+        // carries a wizard prefix; a document uploaded through the EXTERNAL tax
+        // form uses a different path scheme, so a bare overwrite would drop its
+        // reference on the first resubmit even though the file still exists in
+        // storage. Carry forward ONLY the prior paths the wizard cannot represent
+        // (non-wizard-prefixed external docs the client can neither see nor
+        // remove). Wizard-prefixed docs come SOLELY from the new form data, so a
+        // document the client REPLACED or REMOVED this edit is honored — the old
+        // one is not resurrected. `uploadPaths` already holds the wizard-prefixed
+        // set the client currently has.
+        const priorExternalPaths = Array.isArray(curSub.upload_paths)
+          ? (curSub.upload_paths as unknown[]).filter(
+              (p): p is string => typeof p === 'string' && !isWizardUploadPath(p),
+            )
+          : []
+        const mergedUploadPaths = Array.from(new Set([...priorExternalPaths, ...uploadPaths]))
+
         const { error: updErr } = await supabaseAdmin
           .from('tax_return_submissions')
-          .update({ submitted_data: data, upload_paths: uploadPaths, updated_at: nowIso })
+          .update({ submitted_data: data, upload_paths: mergedUploadPaths, updated_at: nowIso })
           .eq('id', curSub.id)
         if (updErr) {
           console.error('[wizard-submit] Review-mode submission update failed:', updErr.message)

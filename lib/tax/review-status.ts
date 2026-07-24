@@ -43,18 +43,26 @@ export function isReviewStatus(v: unknown): v is ReviewStatus {
  * review_status yet). `reopened` immediately re-enters the loop at `submitted`.
  */
 export const REVIEW_TRANSITIONS: Record<ReviewStatus | "null", ReviewStatus[]> = {
-  null: ["submitted"],
-  submitted: ["under_review"],
+  // `null → revision_requested` + `submitted/resubmitted/reopened → revision_requested`
+  // added 2026-07-23 (Carasso edit-button fix): staff pressing "Request Changes"
+  // in the flow workspace is a genuine review action that must open the client's
+  // edit, and it has to work on submissions that never entered the review loop.
+  // The ~64 legacy external-form submissions carry review_status = null (they set
+  // the old `status='reviewed'`, never a review_status), so the ONLY lawful entry
+  // used to be `null → submitted`, which no button drove. "Request changes" is
+  // legal from every non-confirmed state; confirmed still routes through reopened.
+  null: ["submitted", "revision_requested"],
+  submitted: ["under_review", "revision_requested"],
   under_review: ["approved", "revision_requested"],
   revision_requested: ["resubmitted"],
-  resubmitted: ["under_review"],
+  resubmitted: ["under_review", "revision_requested"],
   // approved → submitted: a client EDIT invalidates the approval (added
   // 2026-07-16, PTBT fix — closes the approve-then-swap window where edited
   // data could be confirmed unreviewed). The submit route performs this
   // transition synchronously.
   approved: ["confirmed", "revision_requested", "submitted"],
   confirmed: ["reopened"],
-  reopened: ["submitted"],
+  reopened: ["submitted", "revision_requested"],
 }
 
 /** Who legitimately drives each transition (used for the history entry + route auth). */

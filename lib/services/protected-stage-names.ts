@@ -59,6 +59,7 @@ export const PROTECTED_STAGE_NAMES: ProtectedStageName[] = [
     because: "the tax review flow matches it when a submission is confirmed",
   },
   { name: "Data Submitted", because: "the tax board groups deliveries by it" },
+  { name: "Revision Requested", because: "a client resubmit moves the delivery off it by name back into review" },
   { name: "Articles Received", because: "the formation flow advances through it by name" },
   { name: "Sent for Signature", because: "the signature flow matches it by name" },
   { name: "Sent to be filed", because: "the tax filing flow matches it by name" },

@@ -456,6 +456,32 @@ export default async function WizardPage({
     }
   }
 
+  // Edit-mode pre-fill for tax clients who submitted through the EXTERNAL form
+  // (Carasso edit-button fix, 2026-07-23). Those clients have NO wizard_progress
+  // row — their answers and uploaded documents live only on the submission. When
+  // staff reopen for changes and the client edits, his data must ALREADY be on
+  // the form (so a wrong figure or a wrong document is right there to correct),
+  // not a blank form. Only fires for tax, only when there's no draft to prefer,
+  // and only while the review state is client-editable — never overrides an
+  // in-progress draft, never surfaces a locked/under-review submission.
+  if (wizardType === 'tax' && accountId && !progressId) {
+    const { data: editSub } = await supabaseAdmin
+      .from('tax_return_submissions')
+      .select('submitted_data, review_status')
+      .eq('account_id', accountId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const rs = (editSub?.review_status ?? null) as ReviewStatus | null
+    if (editSub?.submitted_data && rs !== null && isClientEditable(rs)) {
+      savedData = editSub.submitted_data as Record<string, unknown>
+      // Start at step 1 so he walks every step — any NEW required question the
+      // form has gained since his submission is shown blank, not skipped.
+      savedStep = 0
+      wizardSubmitStatus = 'submitted'
+    }
+  }
+
   // For submitted tax wizards: lock based on the REVIEW state (Slice 2), not the
   // old sent_to_accountant flag. Editable while submitted / revision_requested /
   // approved / reopened; LOCKED while staff are actively reviewing (under_review)

@@ -282,7 +282,13 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
         // 2nd-installment billing gate skipped) or even BACKWARD from
         // Preparation on a stale-tab resubmit. A resubmit already at
         // "Data Submitted" is a clean no-op (no history churn).
-        const SD_ADVANCE_FROM_STAGES = new Set(["Wizard Available", "Payment Received"])
+        // "Revision Requested" is included (Carasso edit-button fix, 2026-07-23):
+        // when staff requested changes the SD sits at that stage showing a
+        // "waiting for the client" notice; the client's resubmit must move it
+        // BACK to "Data Submitted" so staff see the response and can re-review —
+        // otherwise the flow board and client tracker stay stuck on "Revision
+        // Requested" for the rest of the loop.
+        const SD_ADVANCE_FROM_STAGES = new Set(["Wizard Available", "Payment Received", "Revision Requested"])
         if (sdRecord.stage === "Data Submitted") {
           result.steps.push(step("sd_advance", "skipped", `SD ${sdRecord.id} already at Data Submitted (resubmit)`))
         } else if (!sdRecord.stage || !SD_ADVANCE_FROM_STAGES.has(sdRecord.stage)) {
@@ -295,7 +301,9 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
           from_stage: sdRecord.stage,
           to_stage: "Data Submitted",
           advanced_at: now,
-          notes: "Client submitted tax form via portal — entering review (review_status=submitted)",
+          notes: sdRecord.stage === "Revision Requested"
+            ? "Client resubmitted after a revision request — back into review (review_status=resubmitted)"
+            : "Client submitted tax form via portal — entering review (review_status=submitted)",
         })
 
         // eslint-disable-next-line no-restricted-syntax

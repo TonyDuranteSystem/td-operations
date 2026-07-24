@@ -28,6 +28,17 @@ export const WIZARD_UPLOAD_PREFIXES = [
   'wizard/',
 ] as const
 
+/** True when a storage path is a wizard-form upload (matches a wizard prefix).
+ *  A path that is NOT wizard-prefixed came from another source — e.g. the legacy
+ *  external tax form's own bucket scheme — which the wizard's file fields cannot
+ *  represent, so the client can neither see nor remove it in the wizard UI. */
+export function isWizardUploadPath(
+  p: string,
+  prefixes: readonly string[] = WIZARD_UPLOAD_PREFIXES,
+): boolean {
+  return prefixes.some(pre => p.startsWith(pre))
+}
+
 /** Coerce a wizard field value (string | string[] | anything) to an array of
  *  string paths. Non-strings and non-string array members are dropped. */
 export function normalizeUploadValue(val: unknown): string[] {

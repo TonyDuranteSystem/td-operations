@@ -3,7 +3,35 @@ import {
   normalizeUploadValue,
   firstUploadPath,
   collectUploadPaths,
+  isWizardUploadPath,
 } from '@/lib/portal/wizard-uploads'
+
+describe('isWizardUploadPath — external-vs-wizard discriminator (Carasso doc-preservation)', () => {
+  it('recognises wizard-prefixed paths', () => {
+    expect(isWizardUploadPath('tax/acct/prior_year_return_ab12_r.pdf')).toBe(true)
+    expect(isWizardUploadPath('formation/x/passport_cd34_p.jpg')).toBe(true)
+    expect(isWizardUploadPath('banking_relay/x/id_ef56_i.png')).toBe(true)
+  })
+  it('treats a legacy external-form path as NON-wizard (form cannot represent it)', () => {
+    expect(isWizardUploadPath('carasso-consulting-llc-2025/ein_letter.pdf')).toBe(false)
+  })
+  it('the resubmit union rule: keep external prior docs, let the client control wizard docs', () => {
+    // Exactly the merge the wizard-submit review branch performs.
+    const prior = ['carasso-consulting-llc-2025/ein_letter.pdf', 'tax/acct/bank_A.pdf']
+    const nowCollected = ['tax/acct/bank_B.pdf'] // client REPLACED bank_A with bank_B
+    const priorExternal = prior.filter(p => !isWizardUploadPath(p))
+    const merged = Array.from(new Set([...priorExternal, ...nowCollected]))
+    expect(merged).toContain('carasso-consulting-llc-2025/ein_letter.pdf') // external kept
+    expect(merged).toContain('tax/acct/bank_B.pdf') // new kept
+    expect(merged).not.toContain('tax/acct/bank_A.pdf') // replaced one NOT resurrected
+  })
+  it('the resubmit union rule: a REMOVED wizard doc stays removed, external survives', () => {
+    const prior = ['ext-bucket/ein.pdf', 'tax/acct/bank_A.pdf']
+    const nowCollected: string[] = [] // client removed everything the wizard shows
+    const merged = Array.from(new Set([...prior.filter(p => !isWizardUploadPath(p)), ...nowCollected]))
+    expect(merged).toEqual(['ext-bucket/ein.pdf'])
+  })
+})
 
 describe('normalizeUploadValue', () => {
   it('wraps a single string in an array', () => {
