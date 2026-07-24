@@ -171,6 +171,13 @@ export function toPublicAgreement(row: Row) {
     pdf_storage_path: row.pdf_storage_path ?? null,
     total_signers: row.total_signers ?? 1,
     signed_count: row.signed_count ?? 0,
+    // Load-bearing, and easy to miss: adding a column to the SELECT above does
+    // nothing unless it is copied here — this projection is what the browser
+    // actually receives. Without it the signing page cannot tell a paper-signed
+    // agreement from an electronic one, so it showed returning clients the
+    // electronic "All Members Have Signed" panel and a Download button that
+    // always failed (paper agreements deliberately have no generated PDF).
+    signature_method: row.signature_method ?? null,
   }
 }
 

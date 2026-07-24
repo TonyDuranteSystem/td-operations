@@ -62,6 +62,7 @@ const agreementRow = {
   pdf_storage_path: null,
   total_signers: 2,
   signed_count: 0,
+  signature_method: 'by_hand',
 }
 
 const signatureRows = [
@@ -113,6 +114,11 @@ describe("toPublicAgreement", () => {
     expect(out.registered_agent_name).toBe("RA Inc")
     expect(out.effective_date).toBe("2026-01-10")
     expect(out.total_signers).toBe(2)
+    // Adding a column to the SELECT does nothing unless the projection copies it.
+    // It was in the SELECT but not here, so the signing page could not tell a
+    // paper-signed agreement from an electronic one and showed returning clients
+    // a Download button that always failed.
+    expect(out.signature_method).toBe('by_hand')
     expect(out.entity_type).toBe("MMLLC")
   })
 
