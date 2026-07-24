@@ -6,6 +6,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash .claude/hooks/worktree-write-guard.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "bash .claude/hooks/bash-production-guard.sh",
             "timeout": 5
           },
@@ -19,6 +24,11 @@
       {
         "matcher": "Edit|Write",
         "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/worktree-write-guard.sh",
+            "timeout": 5
+          },
           {
             "type": "command",
             "command": "bash .claude/hooks/verify-before-edit.sh",
