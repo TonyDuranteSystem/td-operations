@@ -43,6 +43,8 @@ interface OAAgreement {
   pdf_storage_path: string | null
   total_signers: number
   signed_count: number
+  /** 'electronic' | 'by_hand' | null (older rows predate the distinction). */
+  signature_method: string | null
 }
 
 interface OASignature {
@@ -334,7 +336,7 @@ function OperatingAgreementCodeContent() {
         // genuinely complete.
         window.parent.postMessage(
           { type: 'oa-signed', token, member_index: currentSignerIndex ?? undefined, allSigned: true },
-          'https://portal.tonydurante.us',
+          portalTargetOrigin(),
         )
       }
     } catch (err) {
@@ -342,6 +344,22 @@ function OperatingAgreementCodeContent() {
     } finally {
       setHandSubmitting(false)
     }
+  }
+
+  /** Where to post the "signed" message so the portal shell can refresh.
+   *
+   *  Hardcoding the production portal meant the message was silently dropped
+   *  anywhere else — so on sandbox or locally the banner and checklist never
+   *  updated and the feature looked broken during QA. Derive it from the page
+   *  that actually embedded us, and only trust our own domains. */
+  function portalTargetOrigin(): string {
+    try {
+      const ref = document.referrer ? new URL(document.referrer).origin : ''
+      if (ref && (ref.endsWith('.tonydurante.us') || ref.endsWith('.vercel.app') || ref.startsWith('http://localhost'))) {
+        return ref
+      }
+    } catch { /* fall through to the production portal */ }
+    return 'https://portal.tonydurante.us'
   }
 
   /** Render a typed name in a signature script onto a canvas and return a PNG. */
@@ -460,7 +478,7 @@ function OperatingAgreementCodeContent() {
         // portal announced "signed and saved" to a partial signer.
         window.parent.postMessage(
           { type: 'oa-signed', token, member_index: currentSignerIndex ?? undefined, allSigned: !!data.allSigned },
-          'https://portal.tonydurante.us',
+          portalTargetOrigin(),
         )
       }
     } catch (err) {
@@ -607,7 +625,12 @@ function OperatingAgreementCodeContent() {
   // drafted, indistinguishable in the record from the member's own. Deriving the
   // restriction from the query flag is safe because it only ever REMOVES the
   // ability to sign; faking the flag costs you the button.
-  const canSign = !isAdmin && (isMultiSigner
+  // `!handDone` is load-bearing: after the client declares they signed on paper
+  // we deliberately no longer set `signed`/`allSigned` (those drive the
+  // electronic confirmation panel), so without this the "Sign Operating
+  // Agreement" button and the signature pad stayed live UNDER the "Thank you —
+  // recorded" panel, and clicking them returned "already complete".
+  const canSign = !isAdmin && !handDone && (isMultiSigner
     ? (currentSignerIndex !== null && !currentSignerAlreadySigned && !signed)
     : (!signed && !allSigned))
 
@@ -778,8 +801,26 @@ function OperatingAgreementCodeContent() {
           </>
         )}
 
-        {/* Signed confirmation */}
-        {(allSigned || (!isMultiSigner && signed)) && (
+        {/* Signed on PAPER — no system-generated PDF exists, so this must NOT
+            offer a download. Shown on every later visit too, not just the one
+            where they confirmed: the agreement is stored as signed, so without
+            this branch a returning client got the electronic panel and a
+            Download that always failed. */}
+        {oa.signature_method === 'by_hand' && (allSigned || signed || oa.status === 'signed') && (
+          <div style={{ background: '#f0f7f0', border: '1px solid #b8d4b8', borderRadius: 6, padding: 20, textAlign: 'center', marginTop: 24 }}>
+            <p style={{ color: '#2d6a2d', fontWeight: 700, fontSize: 16, margin: 0 }}>
+              {oa.language === 'it' ? 'Operating Agreement firmato a mano' : 'Operating Agreement — signed on paper'}
+            </p>
+            <p style={{ color: '#4a8a4a', fontSize: 14, marginTop: 8 }}>
+              {oa.language === 'it'
+                ? 'Hai confermato di averlo firmato a mano. Se vuoi conservarne una copia, puoi caricare il documento firmato nella sezione Documenti del tuo portale.'
+                : 'You confirmed you signed this on paper. If you would like a copy kept for you, you can upload the signed document in the Documents section of your portal.'}
+            </p>
+          </div>
+        )}
+
+        {/* Signed confirmation (electronic only) */}
+        {oa.signature_method !== 'by_hand' && (allSigned || (!isMultiSigner && signed)) && (
           <div style={{ background: '#f0f7f0', border: '1px solid #b8d4b8', borderRadius: 6, padding: 20, textAlign: 'center', marginTop: 24 }}>
             <p style={{ color: '#2d6a2d', fontWeight: 700, fontSize: 16, margin: 0 }}>
               {allSigned ? 'Operating Agreement — All Members Have Signed' : 'Operating Agreement Signed Successfully'}

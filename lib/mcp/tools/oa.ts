@@ -445,11 +445,19 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           // telling us they signed on paper (we hold nothing unless they uploaded
           // a scan). Printing "✅ Signed" for both was the exact question
           // signature_method was added to answer, and no staff surface answered it.
+          // THREE states, not two. NULL means the row predates the distinction
+          // (~73 signed agreements on production do) — those were signed with the
+          // old browser screenshot and carry NO certificate, IP or device trail.
+          // Reporting them as "signed electronically … certificate on file" would
+          // assert evidence TD does not hold.
           data.signed_at
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- signature_method is newer than the generated DB types
-            ? (data as any).signature_method === "by_hand"
-              ? `✍️ Signed ON PAPER (client-declared): ${data.signed_at} — TD holds no electronic signature; the signed copy exists only if the client uploaded a scan (check the account's documents).`
-              : `✅ Signed electronically: ${data.signed_at} — signature, device/IP trail and certificate on file.`
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- newer than the generated DB types
+            ? ((data as any).signature_method === "by_hand"
+                ? `✍️ Signed ON PAPER (client-declared): ${data.signed_at} — TD holds no electronic signature; the signed copy exists only if the client uploaded a scan (check the account's documents).`
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- newer than the generated DB types
+                : (data as any).signature_method === "electronic"
+                  ? `✅ Signed electronically: ${data.signed_at} — signature, device/IP trail and certificate on file.`
+                  : `✅ Signed: ${data.signed_at} — legacy record (predates signature tracking): a signed PDF exists, but NO certificate, IP or device trail.`)
             : "⏳ Not signed yet",
           data.pdf_storage_path ? `PDF: ${data.pdf_storage_path}` : null,
           ...signerLines,

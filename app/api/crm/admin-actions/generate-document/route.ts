@@ -127,6 +127,29 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
   // route and the MCP tool but NOT here, leaving a two-click path in the CRM
   // that destroys an executed legal document and the only proof the client ever
   // signed it. Same predicate as both other doors — one rule, three doors.
+  // Defence in depth, matching the portal door: the parent row's status/count can
+  // lag a signature that IS already written (the signing route writes the member's
+  // row and only then increments the counter). Ask the signatures themselves too,
+  // and FAIL CLOSED if that count cannot be read — refusing a re-create is
+  // recoverable, deleting an executed signature is not.
+  if (existing?.length && params.force_recreate) {
+    const { count: signedChildren, error: countErr } = await supabaseAdmin
+      .from("oa_signatures")
+      .select("id", { count: "exact", head: true })
+      .eq("oa_id", existing[0].id)
+      .eq("status", "signed")
+    if (countErr) {
+      return { error: `Could not verify whether this Operating Agreement has been signed, so it was not touched. Please try again.` }
+    }
+    if ((signedChildren ?? 0) > 0) {
+      return {
+        error:
+          `Refusing to recreate: ${signedChildren} member signature(s) are already recorded on this ` +
+          `Operating Agreement. Recreating deletes them with no undo. VOID it instead, then create a new one.`,
+      }
+    }
+  }
+
   if (existing?.length && params.force_recreate && hasCollectedSignatures(existing[0])) {
     const collected = (existing[0].signed_count ?? 0) > 0 ? ` (${existing[0].signed_count} signature(s) collected)` : ""
     return {
@@ -512,6 +535,13 @@ async function sendOA(token: string) {
   // live and actionable again in the client's portal.
   if (oa.status === "voided") {
     return { error: `This Operating Agreement is voided (cancelled). Create a new one instead of re-sending it.` }
+  }
+  // A partly-signed multi-owner agreement must not be knocked back to 'sent':
+  // the signatures already collected stay in the counter, but every status
+  // reader (portal banner, CRM) would then disagree with it and show the client
+  // as if nobody had signed.
+  if (oa.status === "partially_signed") {
+    return { error: `This Operating Agreement is partly signed — some owners have already signed it. Re-sending would reset its status. Send each remaining owner their personal signing link instead.` }
   }
 
   // ⚠️ THIS DOES NOT SEND AN EMAIL. It marks the agreement ready and returns the

@@ -26,7 +26,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { hasCollectedSignatures } from '@/lib/portal/oa-regenerate-guard'
-import { OA_SUPPORTED_STATES } from '@/lib/types/oa-templates'
+import { OA_SUPPORTED_STATES, normalizeOAState } from '@/lib/types/oa-templates'
 import { APP_BASE_URL } from '@/lib/config'
 import { notifyClientActionRequired } from '@/lib/portal/action-required'
 import { reportSystemError } from '@/lib/system-errors'
@@ -71,7 +71,10 @@ export async function POST(request: NextRequest) {
   // annual-report duty, governing law) for the supported states — outside them a
   // client would silently self-generate a materially weaker agreement that staff
   // would have been blocked from producing.
-  const oaState = (account.state_of_formation ?? '').toUpperCase()
+  // MUST normalise first: accounts store the full name ("Wyoming", "New
+  // Mexico"), not the code. Comparing the stored value straight against the code
+  // list refused 289 of 291 production accounts.
+  const oaState = normalizeOAState(account.state_of_formation)
   if (!OA_SUPPORTED_STATES.includes(oaState as (typeof OA_SUPPORTED_STATES)[number])) {
     return NextResponse.json(
       {

@@ -425,6 +425,20 @@ export function generateOASections(data: OAData): OASection[] {
 
 // ─── Supported states ────────────────────────────────────────
 
+/**
+ * Normalise a stored state of formation to its two-letter code.
+ *
+ * Accounts store the FULL NAME ("Wyoming", "New Mexico") — that is the dominant
+ * shape in production (201 Wyoming, 38 Florida, 29 New Mexico, 21 Delaware vs a
+ * single "NM"). Every caller that compares against OA_SUPPORTED_STATES must run
+ * the raw value through this first: comparing the stored name directly against
+ * the code list rejects essentially every real account.
+ */
+export function normalizeOAState(raw: string | null | undefined): string {
+  const upper = (raw ?? "").trim().toUpperCase()
+  return STATE_NAME_TO_CODE[upper] || upper
+}
+
 export const OA_SUPPORTED_STATES = ["NM", "WY", "FL", "DE"] as const
 export type OASupportedState = (typeof OA_SUPPORTED_STATES)[number]
 export type OAEntityType = "SMLLC" | "MMLLC"

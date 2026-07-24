@@ -66,6 +66,12 @@ export const OA_AGREEMENT_SELECT = [
   "pdf_storage_path",
   "total_signers",
   "signed_count",
+  // 'electronic' | 'by_hand' | null. Not sensitive, and the signing page needs
+  // it: a paper-signed agreement deliberately has NO generated PDF, so without
+  // this the page showed returning clients the electronic "All Members Have
+  // Signed" panel and a Download button that always failed with "PDF not
+  // available yet".
+  "signature_method",
 ].join(", ")
 
 export const OA_SIGNATURE_SELECT = [

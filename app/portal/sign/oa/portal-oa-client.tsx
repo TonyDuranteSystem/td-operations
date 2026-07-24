@@ -35,8 +35,16 @@ export function PortalOAClient({ oaUrl, status, companyName, language }: PortalO
   // Listen for postMessage from embedded OA page when signing completes.
   const handleMessage = useCallback((event: MessageEvent) => {
     // Only trust our own signing page. Without this any embedded/opener frame
-    // could flip the client's agreement banner to "Signed".
-    if (event.origin !== window.location.origin && !event.origin.endsWith('.tonydurante.us')) return
+    // could flip the client's agreement banner to "Signed". Note `.tonydurante.us`
+    // with the leading dot is deliberate — a lookalike like "evil-tonydurante.us"
+    // does not match. Sandbox/local origins are accepted too, or this cannot be
+    // QA'd anywhere but production.
+    const trusted =
+      event.origin === window.location.origin ||
+      event.origin.endsWith('.tonydurante.us') ||
+      event.origin.endsWith('.vercel.app') ||
+      event.origin.startsWith('http://localhost')
+    if (!trusted) return
     if (event.data?.type === 'oa-signed') {
       // A multi-owner agreement is NOT signed when one owner signs — announcing
       // "signed and saved" to a partial signer was wrong (it self-corrected on
