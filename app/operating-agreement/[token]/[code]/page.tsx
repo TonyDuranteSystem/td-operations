@@ -7,8 +7,6 @@ import { generateOASections, type OAData, type OAMember } from '@/lib/types/oa-t
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { resolveSignedPdfPath } from '@/lib/oa/signed-pdf-path'
 
-const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
 // --- Types -----------------------------------------------
 interface OAAgreement {
@@ -106,6 +104,16 @@ function OperatingAgreementCodeContent() {
   const [signing, setSigning] = useState(false)
   const [signed, setSigned] = useState(false)
   const [allSigned, setAllSigned] = useState(false)
+
+  // How the signer makes their mark. All three modes produce one PNG data URL the
+  // server places on the agreement — draw with a mouse/finger, type a name (printed
+  // in a signature script), or upload a photo of a real wet signature. Upload is
+  // the closest match to a handwritten signature; type is the convenient default.
+  const [signMode, setSignMode] = useState<'draw' | 'type' | 'upload'>('draw')
+  const [typedName, setTypedName] = useState('')
+  const [uploadedSig, setUploadedSig] = useState<string | null>(null)
+  // ESIGN/UETA consent — the server refuses to sign without it.
+  const [consent, setConsent] = useState(false)
 
   // "I signed by hand" — the client printed the draft, signed on paper, and is
   // telling us so. `handMode` reveals the confirm panel; the file is optional.
@@ -239,16 +247,18 @@ function OperatingAgreementCodeContent() {
 
   useEffect(() => { loadOA() }, [loadOA])
 
-  // Init signature pad
+  // Init signature pad. Only in Draw mode — the canvas is display:none in the other
+  // modes, so re-running when signMode returns to 'draw' re-measures and re-binds it.
   useEffect(() => {
     if (!verified || !oa || signed || currentSignerAlreadySigned) return
+    if (signMode !== 'draw') return
     // For MMLLC without signer param, don't show signature pad
     if (isMultiSigner && currentSignerIndex === null) return
 
     const initSig = async () => {
       const SignaturePad = (await import('signature_pad')).default
       const canvas = sigCanvasRef.current
-      if (!canvas) return
+      if (!canvas || canvas.offsetWidth === 0) return
       canvas.width = canvas.offsetWidth * 2
       canvas.height = canvas.offsetHeight * 2
       const ctx = canvas.getContext('2d')
@@ -256,7 +266,7 @@ function OperatingAgreementCodeContent() {
       sigPadRef.current = new SignaturePad(canvas, { backgroundColor: 'rgb(255,255,255)' })
     }
     setTimeout(initSig, 300)
-  }, [verified, oa, signed, currentSignerAlreadySigned, isMultiSigner, currentSignerIndex])
+  }, [verified, oa, signed, currentSignerAlreadySigned, isMultiSigner, currentSignerIndex, signMode])
 
   // --- EMAIL GATE ---
   // Compared on the server. The address is no longer sent to the browser, so
@@ -320,234 +330,196 @@ function OperatingAgreementCodeContent() {
     }
   }
 
+  /** Render a typed name in a signature script onto a canvas and return a PNG. */
+  function renderTypedSignature(name: string): string | null {
+    const canvas = document.createElement('canvas')
+    canvas.width = 600
+    canvas.height = 200
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    ctx.fillStyle = '#0a1a3a'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    // Shrink to fit long names within the canvas width.
+    let size = 72
+    ctx.font = `italic ${size}px "Segoe Script", "Brush Script MT", "Snell Roundhand", cursive`
+    while (size > 28 && ctx.measureText(name).width > canvas.width - 40) {
+      size -= 4
+      ctx.font = `italic ${size}px "Segoe Script", "Brush Script MT", "Snell Roundhand", cursive`
+    }
+    ctx.fillText(name, canvas.width / 2, canvas.height / 2)
+    return canvas.toDataURL('image/png')
+  }
+
+  /** Read an uploaded image file, draw it onto a canvas, and return a PNG data URL.
+   *  This normalises any format (JPEG/HEIC/PNG) to the PNG the server expects, and
+   *  keeps a transparent background so a scan drops onto the line cleanly. */
+  async function handleUploadSignature(file: File): Promise<void> {
+    // Drop any earlier upload first — otherwise a failed decode below leaves the
+    // previous image in place and the signer submits the wrong one.
+    setUploadedSig(null)
+    if (file.size > 8 * 1024 * 1024) {
+      alert('That image is too large. Please use a photo under 8 MB.')
+      return
+    }
+    try {
+      const bitmap = await createImageBitmap(file)
+      const maxW = 600
+      const scale = Math.min(1, maxW / bitmap.width)
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(bitmap.width * scale)
+      canvas.height = Math.round(bitmap.height * scale)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('no canvas')
+      ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+      setUploadedSig(canvas.toDataURL('image/png'))
+    } catch {
+      alert('That image could not be read. Please try a JPG or PNG photo of your signature.')
+    }
+  }
+
+  /** The signature PNG for the active mode, or null if nothing has been provided. */
+  function getSignaturePng(): string | null {
+    if (signMode === 'draw') {
+      if (!sigPadRef.current || sigPadRef.current.isEmpty()) return null
+      return sigPadRef.current.toDataURL('image/png')
+    }
+    if (signMode === 'type') {
+      const name = typedName.trim()
+      return name ? renderTypedSignature(name) : null
+    }
+    return uploadedSig
+  }
+
+  // Signing is now entirely server-side: the browser sends the signature image and
+  // the server verifies the code, records IP/device/consent, writes with the service
+  // key, and (on the last signer) renders the executed agreement + legal certificate
+  // and files it. The old browser-side html2pdf screenshot + anon-key writes are gone.
   async function handleSign() {
-    if (!oa || !sigPadRef.current) return
-    if (sigPadRef.current.isEmpty()) {
-      alert('Please sign above before submitting.')
+    if (!oa) return
+    if (!consent) {
+      alert('Please confirm you agree to sign electronically before signing.')
+      return
+    }
+    const sigPng = getSignaturePng()
+    if (!sigPng) {
+      alert('Please provide your signature above before submitting.')
       return
     }
 
     setSigning(true)
     try {
-      const sigDataUrl = sigPadRef.current.toDataURL('image/png')
+      const signerCode = searchParams.get('signer')
+      const res = await fetch(`/api/operating-agreement/${token}/sign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: accessCode,
+          signer: signerCode,
+          consent: true,
+          signature_png: sigPng,
+          signature_method: signMode === 'draw' ? 'drawn' : signMode === 'type' ? 'typed' : 'uploaded',
+          signed_by_name: signMode === 'type' ? typedName.trim() : undefined,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      // 202 = recorded, still finalizing (last-signer render is being retried) — not
+      // an error to the signer, their signature is in.
+      if (!res.ok && res.status !== 202) {
+        throw new Error(data.error || 'Something went wrong while signing. Please try again.')
+      }
 
-      if (isMultiSigner && currentSignerIndex !== null && currentSig) {
-        // ─── MMLLC: Save signature PNG to storage ───
-        const sigPngPath = `${token}/sig-${currentSignerIndex}.png`
-        const sigBlob = await (await fetch(sigDataUrl)).blob()
+      setSigned(true)
+      if (data.allSigned) setAllSigned(true)
 
-        await fetch(`${SB_URL}/storage/v1/object/signed-oa/${sigPngPath}`, {
-          method: 'POST',
-          headers: {
-            'apikey': SB_ANON,
-            'Authorization': `Bearer ${SB_ANON}`,
-            'Content-Type': 'image/png',
-          },
-          body: sigBlob,
-        })
-
-        // Update oa_signatures row
-        await supabasePublic
-          .from('oa_signatures')
-          .update({
-            status: 'signed',
-            signed_at: new Date().toISOString(),
-            signature_image_path: sigPngPath,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', currentSig.id)
-
-        // Atomic increment signed_count
-        const { data: updatedOa } = await supabasePublic.rpc('increment_oa_signed_count', { oa_uuid: oa.id })
-
-        // Check if we're the last signer
-        const newSignedCount = updatedOa ?? ((oa.signed_count || 0) + 1)
-        const isLastSigner = newSignedCount >= totalSigners
-
-        if (isLastSigner) {
-          // ─── Last signer: generate combined PDF ───
-          // Replace canvas with image
-          const canvas = sigCanvasRef.current
-          if (canvas) {
-            const img = document.createElement('img')
-            img.src = sigDataUrl
-            img.style.width = canvas.style.width || `${canvas.offsetWidth}px`
-            img.style.height = canvas.style.height || `${canvas.offsetHeight}px`
-            canvas.parentNode?.replaceChild(img, canvas)
-          }
-
-          // Hide action bar
-          const actionBar = document.getElementById('oa-action-bar')
-          if (actionBar) actionBar.style.display = 'none'
-
-          // Hide the signing controls (label + Clear link) that live inside the
-          // captured area, so they do not print inside the executed agreement.
-          const element = oaBodyRef.current
-          element?.querySelectorAll<HTMLElement>('[data-hide-in-pdf]').forEach(el => { el.style.display = 'none' })
-
-          // Generate PDF with ALL signatures
-          const html2pdf = (await import('html2pdf.js')).default
-          if (element) {
-            const pdfBlob: Blob = await html2pdf()
-              .set({
-                margin: [0.5, 0.6, 0.7, 0.6],
-                filename: `Operating_Agreement_${oa.company_name.replace(/\s+/g, '_')}.pdf`,
-                image: { type: 'jpeg', quality: 0.95 },
-                html2canvas: { scale: 2, useCORS: true },
-                jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
-              })
-              .from(element)
-              .outputPdf('blob')
-
-            pdfBlobRef.current = pdfBlob
-
-            // Upload combined PDF
-            const pdfPath = `${token}/oa-signed-${Date.now()}.pdf`
-            await fetch(`${SB_URL}/storage/v1/object/signed-oa/${pdfPath}`, {
-              method: 'POST',
-              headers: {
-                'apikey': SB_ANON,
-                'Authorization': `Bearer ${SB_ANON}`,
-                'Content-Type': 'application/pdf',
-              },
-              body: pdfBlob,
-            })
-
-            // Update OA record to fully signed
-            await supabasePublic
-              .from('oa_agreements')
-              .update({
-                status: 'signed',
-                signed_at: new Date().toISOString(),
-                pdf_storage_path: pdfPath,
-                signature_data: {
-                  members: members.map(m => m.name),
-                  signed_date: today(),
-                  multi_signer: true,
-                },
-              })
-              .eq('id', oa.id)
-          }
-
-          setAllSigned(true)
-        } else {
-          // Not last signer — update OA to partially_signed
-          await supabasePublic
-            .from('oa_agreements')
-            .update({
-              status: 'partially_signed',
-            })
-            .eq('id', oa.id)
-        }
-
-        // Notify backend
-        try {
-          await fetch('/api/oa-signed', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ oa_id: oa.id, token, member_index: currentSignerIndex }),
-          })
-        } catch {
-          // Non-blocking
-        }
-
-        setSigned(true)
-
-        if (isPortal && window.parent !== window) {
-          window.parent.postMessage({ type: 'oa-signed', token, member_index: currentSignerIndex }, '*')
-        }
-      } else {
-        // ─── SMLLC: existing flow ───
-        const canvas = sigCanvasRef.current
-        if (canvas) {
-          const img = document.createElement('img')
-          img.src = sigDataUrl
-          img.style.width = canvas.style.width || `${canvas.offsetWidth}px`
-          img.style.height = canvas.style.height || `${canvas.offsetHeight}px`
-          canvas.parentNode?.replaceChild(img, canvas)
-        }
-
-        const actionBar = document.getElementById('oa-action-bar')
-        if (actionBar) actionBar.style.display = 'none'
-
-        const element = oaBodyRef.current
-        if (!element) throw new Error('OA body not found')
-
-        // Hide the signing controls (label + Clear link) that live inside the
-        // captured area, so they do not print inside the executed agreement.
-        element.querySelectorAll<HTMLElement>('[data-hide-in-pdf]').forEach(el => { el.style.display = 'none' })
-
-        const html2pdf = (await import('html2pdf.js')).default
-
-        const pdfBlob: Blob = await html2pdf()
-          .set({
-            margin: [0.5, 0.6, 0.7, 0.6],
-            filename: `Operating_Agreement_${oa.company_name.replace(/\s+/g, '_')}.pdf`,
-            image: { type: 'jpeg', quality: 0.95 },
-            html2canvas: { scale: 2, useCORS: true },
-            jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
-          })
-          .from(element)
-          .outputPdf('blob')
-
-        pdfBlobRef.current = pdfBlob
-
-        const pdfPath = `${token}/oa-signed-${Date.now()}.pdf`
-        const uploadRes = await fetch(`${SB_URL}/storage/v1/object/signed-oa/${pdfPath}`, {
-          method: 'POST',
-          headers: {
-            'apikey': SB_ANON,
-            'Authorization': `Bearer ${SB_ANON}`,
-            'Content-Type': 'application/pdf',
-          },
-          body: pdfBlob,
-        })
-        if (!uploadRes.ok) throw new Error('PDF upload failed')
-
-        const sigData: Record<string, unknown> = {
-          manager_name: managerName,
-          signed_date: today(),
-        }
-        if (isMMLLC) {
-          sigData.members = members.map(m => m.name)
-        } else {
-          sigData.member_name = oa.member_name
-        }
-
-        await supabasePublic
-          .from('oa_agreements')
-          .update({
-            status: 'signed',
-            signed_at: new Date().toISOString(),
-            signature_data: sigData,
-            pdf_storage_path: pdfPath,
-            signed_count: 1,
-          })
-          .eq('id', oa.id)
-
-        try {
-          await fetch('/api/oa-signed', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ oa_id: oa.id, token }),
-          })
-        } catch {
-          // Non-blocking
-        }
-
-        setSigned(true)
-
-        if (isPortal && window.parent !== window) {
-          window.parent.postMessage({ type: 'oa-signed', token }, '*')
-        }
+      if (isPortal && window.parent !== window) {
+        window.parent.postMessage(
+          { type: 'oa-signed', token, member_index: currentSignerIndex ?? undefined },
+          'https://portal.tonydurante.us',
+        )
       }
     } catch (err) {
       console.error('Signing failed:', err)
-      alert('An error occurred while signing. Please try again.')
+      alert(err instanceof Error && err.message ? err.message : 'An error occurred while signing. Please try again.')
     } finally {
       setSigning(false)
     }
   }
+
+  // The signature capture control — Draw / Type / Upload. Rendered inside whichever
+  // signature block is active (MMLLC current signer or SMLLC). The draw canvas stays
+  // mounted (toggled with display) so the signature pad keeps its binding.
+  const signatureCapture = (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+        {(['draw', 'type', 'upload'] as const).map(mode => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => setSignMode(mode)}
+            style={{
+              padding: '6px 14px', fontSize: 13, borderRadius: 6, cursor: 'pointer',
+              border: signMode === mode ? '2px solid #0A3161' : '1px solid #ccc',
+              background: signMode === mode ? '#eef2fb' : '#fff',
+              color: '#0A3161', fontWeight: signMode === mode ? 600 : 400,
+            }}
+          >
+            {mode === 'draw' ? 'Draw' : mode === 'type' ? 'Type' : 'Upload'}
+          </button>
+        ))}
+      </div>
+
+      {/* Draw — canvas stays mounted so the pad binding survives mode switches. */}
+      <div style={{ display: signMode === 'draw' ? 'block' : 'none' }}>
+        <canvas
+          ref={sigCanvasRef}
+          style={{ width: '100%', maxWidth: 400, height: 100, border: '1px solid #0A3161', borderRadius: 4, background: '#fff', cursor: 'crosshair' }}
+        />
+        <button
+          type="button"
+          onClick={() => sigPadRef.current?.clear()}
+          style={{ display: 'block', marginTop: 4, fontSize: 12, color: '#888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+        >
+          Clear signature
+        </button>
+      </div>
+
+      {/* Type — printed in a signature script, with a live preview. */}
+      {signMode === 'type' && (
+        <div>
+          <input
+            value={typedName}
+            onChange={e => setTypedName(e.target.value)}
+            placeholder="Type your full name"
+            style={{ width: '100%', maxWidth: 400, padding: '10px 12px', fontSize: 14, border: '1px solid #0A3161', borderRadius: 4, boxSizing: 'border-box' }}
+          />
+          {typedName.trim() && (
+            <div style={{ marginTop: 8, height: 70, display: 'flex', alignItems: 'center', maxWidth: 400, border: '1px dashed #ccc', borderRadius: 4, background: '#fff' }}>
+              <span style={{ fontFamily: '"Segoe Script","Brush Script MT","Snell Roundhand",cursive', fontStyle: 'italic', fontSize: 36, color: '#0a1a3a', paddingLeft: 16 }}>
+                {typedName.trim()}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Upload — a photo of a real signature, normalised to PNG on selection. */}
+      {signMode === 'upload' && (
+        <div>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={e => { const f = e.target.files?.[0]; if (f) void handleUploadSignature(f) }}
+            style={{ fontSize: 13 }}
+          />
+          {uploadedSig && (
+            // eslint-disable-next-line @next/next/no-img-element -- local data URL, not optimizable
+            <img src={uploadedSig} alt="Your signature" style={{ display: 'block', marginTop: 8, maxWidth: 400, maxHeight: 100, objectFit: 'contain', border: '1px solid #eee', borderRadius: 4 }} />
+          )}
+        </div>
+      )}
+    </div>
+  )
 
   // --- RENDER ---
 
@@ -743,26 +715,11 @@ function OperatingAgreementCodeContent() {
                     <p style={{ fontSize: 12, color: '#22c55e', marginTop: 8, fontStyle: 'italic' }}>Signed{sig?.signed_at ? ` on ${new Date(sig.signed_at).toLocaleDateString()}` : ''}</p>
                   )}
 
-                  {/* Current signer — active signature pad */}
+                  {/* Current signer — active signature capture (draw/type/upload) */}
                   {isCurrent && !isSigned && !signed && (
                     <div style={{ marginTop: 12 }}>
-                      {/* data-hide-in-pdf: the label and the Clear link are signing
-                          controls, not part of the agreement. They sit inside the
-                          captured area, so they are hidden the instant before the
-                          PDF is taken (see handleSign) — the signature image itself
-                          stays. Without this they printed inside the executed OA. */}
-                      <p data-hide-in-pdf="true" style={{ fontSize: 12, color: '#0A3161', fontWeight: 600, marginBottom: 6 }}>Your Signature:</p>
-                      <canvas
-                        ref={sigCanvasRef}
-                        style={{ width: '100%', height: 100, border: '2px solid #0A3161', borderRadius: 4, background: '#fff', cursor: 'crosshair' }}
-                      />
-                      <button
-                        data-hide-in-pdf="true"
-                        onClick={() => sigPadRef.current?.clear()}
-                        style={{ marginTop: 4, fontSize: 12, color: '#888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
-                      >
-                        Clear signature
-                      </button>
+                      <p style={{ fontSize: 12, color: '#0A3161', fontWeight: 600, marginBottom: 6 }}>Your Signature:</p>
+                      {signatureCapture}
                     </div>
                   )}
 
@@ -786,19 +743,8 @@ function OperatingAgreementCodeContent() {
           <>
             {!signed && (
               <div style={{ marginTop: 16 }}>
-                {/* data-hide-in-pdf: see the note on the multi-member block above. */}
-                <p data-hide-in-pdf="true" style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Member / Manager Signature:</p>
-                <canvas
-                  ref={sigCanvasRef}
-                  style={{ width: '100%', maxWidth: 400, height: 100, border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'crosshair' }}
-                />
-                <button
-                  data-hide-in-pdf="true"
-                  onClick={() => sigPadRef.current?.clear()}
-                  style={{ marginTop: 4, fontSize: 12, color: '#888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
-                >
-                  Clear signature
-                </button>
+                <p style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Member / Manager Signature:</p>
+                {signatureCapture}
               </div>
             )}
             <div style={{ marginTop: 8 }}>
@@ -867,26 +813,36 @@ function OperatingAgreementCodeContent() {
       {/* Action bar — outside the PDF capture area */}
       {canSign && (
         <div id="oa-action-bar" style={{ maxWidth: 800, margin: '24px auto', textAlign: 'center' }}>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, maxWidth: 520, margin: '0 auto 14px', textAlign: 'left', fontSize: 13, color: '#444', cursor: 'pointer', lineHeight: 1.5 }}>
+            <input
+              type="checkbox"
+              checked={consent}
+              onChange={e => setConsent(e.target.checked)}
+              style={{ marginTop: 3, flexShrink: 0 }}
+            />
+            <span>
+              {oa.language === 'it'
+                ? 'Accetto di firmare questo Operating Agreement elettronicamente e che la mia firma elettronica ha lo stesso valore legale della firma autografa.'
+                : 'I agree to sign this Operating Agreement electronically, and that my electronic signature is the legal equivalent of my handwritten signature.'}
+            </span>
+          </label>
           <button
             onClick={handleSign}
-            disabled={signing}
+            disabled={signing || !consent}
             style={{
               padding: '14px 48px',
               fontSize: 16,
               fontWeight: 700,
-              background: signing ? '#999' : '#0A3161',
+              background: signing || !consent ? '#999' : '#0A3161',
               color: '#fff',
               border: 'none',
               borderRadius: 6,
-              cursor: signing ? 'default' : 'pointer',
+              cursor: signing || !consent ? 'default' : 'pointer',
               fontFamily: 'Georgia, serif',
             }}
           >
-            {signing ? 'Generating...' : 'Sign Operating Agreement'}
+            {signing ? 'Signing…' : 'Sign Operating Agreement'}
           </button>
-          <p style={{ fontSize: 13, color: '#888', marginTop: 8 }}>
-            By clicking, you confirm that you have read and agree to the terms above.
-          </p>
         </div>
       )}
 
