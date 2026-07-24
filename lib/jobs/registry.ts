@@ -18,6 +18,7 @@ import { handleRecategorizeAi } from "./handlers/recategorize-ai"
 import { handleRecategorizeWorkspaceAi } from "./handlers/recategorize-workspace-ai"
 import { handleCountryPolicySweep } from "./handlers/country-policy-sweep"
 import { handleEsignSendEmail } from "./handlers/esign-send-email"
+import { handleArchiveTaxSubmission } from "./handlers/archive-tax-submission"
 
 /** Runner-supplied execution context (Phase 3R): the hard wall-clock deadline
  *  anchored to the RUNNER's invocation start — a chunked handler must stop
@@ -60,6 +61,11 @@ const handlers: Record<string, JobHandler> = {
   country_policy_sweep: handleCountryPolicySweep,
   // Added 2026-06-27 — e-sign signer-invite emails (durable, retried).
   esign_send_email: handleEsignSendEmail,
+  // Added 2026-07-24 — durable Google-Drive archival of a tax submission,
+  // split out of tax_form_setup so a slow/failed copy self-heals via retry
+  // without re-sending the client emails. The backstop sweep re-enqueues any
+  // submission left un-archived and raises the loud staff alert.
+  archive_tax_submission: handleArchiveTaxSubmission,
 }
 
 export function getJobHandler(jobType: string): JobHandler | null {

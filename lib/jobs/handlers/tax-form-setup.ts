@@ -420,6 +420,22 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
     } catch (e) {
       result.steps.push(step("drive_save", "error", e instanceof Error ? e.message : String(e)))
     }
+
+    // Backstop: enqueue the DURABLE archive job (Carasso Drive-reliability,
+    // 2026-07-24). The inline drive_save above is best-effort with no retry and
+    // no marker — this durable job self-heals, sets drive_archived_at on full
+    // success, and is idempotent (skips if one is already queued or archived).
+    // Kept ALONGSIDE the inline copy on purpose: the MMLLC statement-scrape
+    // block below still reads statements from Drive synchronously.
+    if (p.submission_id) {
+      try {
+        const { enqueueTaxArchiveJob } = await import("@/lib/tax/archive-enqueue")
+        const r = await enqueueTaxArchiveJob({ submissionId: p.submission_id, accountId: p.account_id, createdBy: "tax_form_setup" })
+        result.steps.push(step("archive_enqueue", "ok", `durable archive job: ${r.status}`))
+      } catch (e) {
+        result.steps.push(step("archive_enqueue", "error", e instanceof Error ? e.message : String(e)))
+      }
+    }
   }
 
   await updateJobProgress(job.id, result)

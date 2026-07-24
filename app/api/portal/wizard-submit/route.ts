@@ -424,6 +424,22 @@ export async function POST(req: NextRequest) {
           console.error('[wizard-submit] Statement ingest enqueue failed:', e)
         }
       }
+
+      // Google-Drive archival → durable job, enqueued SYNCHRONOUSLY here for the
+      // same reason as the ingest jobs above: the fire-and-forget tax_form_setup
+      // handler can be killed before its own (best-effort) copy runs, and its
+      // inline copy has no retry. This durable job self-heals and owns the
+      // drive_archived_at marker; the backstop sweep catches anything still
+      // un-archived. Idempotent — a non-failed archive job for this submission
+      // is skipped. (Carasso Drive-reliability, 2026-07-24.)
+      if ((wizard_type === 'tax' || wizard_type === 'tax_return') && submissionId && account_id) {
+        try {
+          const { enqueueTaxArchiveJob } = await import('@/lib/tax/archive-enqueue')
+          await enqueueTaxArchiveJob({ submissionId, accountId: account_id, createdBy: 'portal_wizard' })
+        } catch (e) {
+          console.error('[wizard-submit] Drive archive enqueue failed:', e)
+        }
+      }
     }
 
     // ─── 4b. BANKING WIZARD — fire-and-forget background work, return immediately ───

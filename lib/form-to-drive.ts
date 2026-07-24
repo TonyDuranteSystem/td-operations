@@ -770,7 +770,16 @@ export async function copyUploadsToDrive(
   bucket: string,
   targetFolderId: string,
   fileMapping?: Record<string, string>, // optional: map category prefixes to Drive subfolders
-  opts?: { existingNames?: Map<string, string> | null } // optional pre-fetched folderFileNameMap for targetFolderId
+  opts?: {
+    existingNames?: Map<string, string> | null // optional pre-fetched folderFileNameMap for targetFolderId
+    // Per-file bucket resolver (2026-07-24, Drive-reliability). A single tax
+    // submission can now carry files from TWO buckets: portal-wizard uploads in
+    // "onboarding-uploads" and legacy EXTERNAL-form uploads (e.g. Carasso's EIN
+    // letter, path "carasso-consulting-llc-2025/…") in "tax-form-uploads". With
+    // one fixed bucket the external file downloads from the wrong bucket → 0
+    // files copied. When provided, this picks the bucket per path; else `bucket`.
+    resolveBucket?: (path: string) => string
+  }
 ): Promise<{ copied: string[]; failed: string[]; skipped: string[] }> {
   const { uploadBinaryToDrive, folderFileNameMap } = await import("@/lib/google-drive")
   const copied: string[] = []
@@ -814,6 +823,8 @@ export async function copyUploadsToDrive(
       continue
     }
 
+    const fileBucket = opts?.resolveBucket ? opts.resolveBucket(path) : bucket
+
     let downloaded = false
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -823,11 +834,11 @@ export async function copyUploadsToDrive(
         }
 
         const { data: fileData, error: dlError } = await supabaseAdmin.storage
-          .from(bucket)
+          .from(fileBucket)
           .download(path)
 
         if (dlError) {
-          console.warn(`[copyUploadsToDrive] Attempt ${attempt + 1}/${MAX_RETRIES} failed for ${bucket}/${path}: ${dlError.message}`)
+          console.warn(`[copyUploadsToDrive] Attempt ${attempt + 1}/${MAX_RETRIES} failed for ${fileBucket}/${path}: ${dlError.message}`)
           if (attempt === MAX_RETRIES - 1) {
             failed.push(`${fileName} (download error after ${MAX_RETRIES} attempts: ${dlError.message})`)
           }
@@ -1004,7 +1015,7 @@ export async function saveFormToDrive(
    * turn left step 7's bank-statement parse with nothing to read and produced
    * no P&L/Balance Sheet. Pass the bucket the files were actually uploaded to.
    */
-  opts?: { bucket?: string },
+  opts?: { bucket?: string; resolveBucket?: (path: string) => string },
 ): Promise<{ summaryFileId: string | null; copied: string[]; failed: string[]; skipped: string[]; errors: string[] }> {
   // Tax wizard payloads arrive with flattened repeater keys and alias
   // duplicates — normalize them for the accountant PDF (fold member/RPT
@@ -1021,7 +1032,13 @@ export async function saveFormToDrive(
   const { listFolder, createFolder, uploadBinaryToDriveUpsert, folderFileNameMap } = await import("@/lib/google-drive")
   const errors: string[] = []
 
-  // Find or create subfolder
+  // Find or create subfolder.
+  // ABORT-ON-UNRESOLVED (2026-07-24, Drive-reliability): if the target
+  // subfolder / year folder cannot be resolved, we MUST NOT continue — the old
+  // code fell through with targetFolderId still = the account ROOT and dumped
+  // the PDF + every file there while still returning a truthy summaryFileId,
+  // reporting "ok" while 3.Tax/{year} stayed empty (a silent misfile). Return
+  // with errors and NO uploads so the durable archive job retries instead.
   let targetFolderId = driveFolderId
   try {
     const contents = await listFolder(driveFolderId)
@@ -1052,12 +1069,31 @@ export async function saveFormToDrive(
       }
     }
   } catch (e) {
-    errors.push(`Subfolder error: ${e instanceof Error ? e.message : String(e)}`)
+    // Do NOT fall through to the account root — abort the whole archival.
+    return {
+      summaryFileId: null,
+      copied: [],
+      failed: [],
+      skipped: [],
+      errors: [`Subfolder unresolved (aborted to avoid misfiling to account root): ${e instanceof Error ? e.message : String(e)}`],
+    }
   }
 
   // One listing of the target folder feeds both the summary-PDF upsert and
-  // the upload skip-guard below (LT Program duplicate incident, 2026-07-07).
+  // the upload skip-guard below (LT Program duplicate incident, 2026-07-07). If
+  // the listing itself fails, ABORT — a null map turns the stable-name UPSERT
+  // into a blind CREATE (duplicate PDFs/files on a retry). Better to fail and
+  // let the durable job retry with a good listing.
   const existingNames = await folderFileNameMap(targetFolderId)
+  if (!existingNames) {
+    return {
+      summaryFileId: null,
+      copied: [],
+      failed: [],
+      skipped: [],
+      errors: ["Target folder listing failed (aborted to avoid duplicate uploads on retry)"],
+    }
+  }
 
   // Generate summary PDF. The file name is stable across runs, so this is an
   // UPSERT: a re-run or resubmission refreshes the one existing PDF in place
@@ -1088,7 +1124,7 @@ export async function saveFormToDrive(
     bucket,
     targetFolderId,
     undefined,
-    { existingNames }
+    { existingNames, resolveBucket: opts?.resolveBucket }
   )
 
   return { summaryFileId, copied, failed, skipped, errors }

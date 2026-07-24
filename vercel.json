@@ -163,6 +163,10 @@
     {
       "path": "/api/cron/tax-completion-sweep",
       "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/tax-archive-sweep",
+      "schedule": "*/15 * * * *"
     }
   ],
   "rewrites": [
