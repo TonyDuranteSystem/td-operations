@@ -591,6 +591,11 @@ async function sendLease(token: string) {
     return { already_sent: true, status: lease.status }
   }
 
+  // What this actually does: marks the lease ready, which is what makes it
+  // appear in the client's PORTAL to sign. Leases reach clients through the
+  // portal — not by email. This button never emailed anyone, so it must not
+  // claim it did: staff were shown "Sent to <client>" while nothing had been
+  // sent to the client at all. Mirrors the send_oa fix.
   const { error: updateErr } = await supabaseAdmin
     .from("lease_agreements")
     .update({ status: "sent" })
@@ -604,13 +609,15 @@ async function sendLease(token: string) {
     table_name: "lease_agreements",
     record_id: lease.id,
     account_id: lease.account_id,
-    summary: `Sent lease to ${lease.tenant_email} for ${lease.tenant_company}`,
-    details: { token: lease.token, email: lease.tenant_email, source: "crm-button" },
+    summary: `Made lease available in the client portal for ${lease.tenant_company}`,
+    details: { token: lease.token, tenant_email: lease.tenant_email, source: "crm-button", emailed: false, channel: "portal" },
   })
 
   return {
     success: true,
-    sent_to: lease.tenant_email,
+    emailed: false,
+    recipient: lease.tenant_email,
+    notice: `Ready — the Lease Agreement now appears in the client's portal to sign. No email is sent.`,
     client_url: `${LEASE_BASE_URL}/${lease.token}/${lease.access_code}`,
   }
 }
