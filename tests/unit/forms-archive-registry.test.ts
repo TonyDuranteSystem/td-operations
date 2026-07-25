@@ -83,3 +83,30 @@ describe("banking recipe registration", () => {
     expect(getArchiveRecipe("nonsense")).toBeNull()
   })
 })
+
+describe("itin recipe registration", () => {
+  const recipe = getArchiveRecipe("itin")
+
+  it("is registered on the itin submissions table", () => {
+    expect(recipe).not.toBeNull()
+    expect(ARCHIVE_RECIPES.itin).toBeDefined()
+    expect(recipe?.table).toBe("itin_submissions")
+  })
+
+  it("selects the person-keying columns + marker columns (folder resolves per person)", () => {
+    expect(recipe?.selectColumns).toContain("lead_id")
+    expect(recipe?.selectColumns).toContain("contact_id")
+    expect(recipe?.selectColumns).toContain("account_id")
+    expect(recipe?.selectColumns).toContain("created_at")
+    expect(recipe?.selectColumns).toContain("drive_archived_at")
+    expect(recipe?.selectColumns).toContain("drive_archive_meta")
+  })
+
+  it("treats completed as real, everything else as not real", () => {
+    expect(recipe?.isReal({ status: "completed" })).toBe(true)
+    expect(recipe?.isReal({ status: "pending" })).toBe(false)
+    expect(recipe?.isReal({ status: "reviewed" })).toBe(false)
+    expect(recipe?.isReal({ status: null })).toBe(false)
+    expect(recipe?.isReal({})).toBe(false)
+  })
+})

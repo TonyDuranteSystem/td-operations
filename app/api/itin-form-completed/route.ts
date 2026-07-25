@@ -60,15 +60,11 @@ export async function POST(req: NextRequest) {
 
     const results: { step: string; status: string; detail?: string }[] = []
 
-    // Get client name
-    let clientName = token
-    if (sub.lead_id) {
-      const { data: lead } = await supabaseAdmin.from("leads").select("full_name").eq("id", sub.lead_id).single()
-      if (lead) { clientName = lead.full_name }
-    } else if (sub.contact_id) {
-      const { data: contact } = await supabaseAdmin.from("contacts").select("full_name").eq("id", sub.contact_id).single()
-      if (contact) { clientName = contact.full_name }
-    }
+    // Get client name — the SHARED resolver (lead's name, else contact's, else
+    // token) so the inline save below and the durable archive recipe always
+    // resolve the SAME person folder.
+    const { resolveItinClientName } = await import("@/lib/forms/itin-contact-folder")
+    const clientName = await resolveItinClientName({ leadId: sub.lead_id, contactId: sub.contact_id, token })
 
     // Get company name if linked.
     //
@@ -171,42 +167,23 @@ export async function POST(req: NextRequest) {
     // --- STEP 2: Create Drive folder + save data PDF ---
     let driveFolderId = ""
     try {
-      const { listFolder, createFolder } = await import("@/lib/google-drive")
       const { saveFormToDrive } = await import("@/lib/form-to-drive")
+      const { resolveItinContactFolder } = await import("@/lib/forms/itin-contact-folder")
 
-      // Use the client's company Drive folder when they have one. `driveAccountId`
-      // is the submission's account when present, else the contact's linked
-      // account — an ITIN submission is person-keyed and carries no account_id,
-      // so reading sub.account_id alone would send every ITIN package of a
-      // company-owning client into a Leads folder.
-      if (driveAccountId) {
-        const { data: acc } = await supabaseAdmin.from("accounts").select("drive_folder_id").eq("id", driveAccountId).single()
-        if (acc?.drive_folder_id) driveFolderId = acc.drive_folder_id
-      }
-
-      if (!driveFolderId) {
-        // Standalone: create Leads/{name}/ folder
-        const TD_CLIENTS_FOLDER = "1mbz_bUDwC4K259RcC-tDKihjlvdAVXno"
-        const clientsContents = await listFolder(TD_CLIENTS_FOLDER) as { files?: { id: string; name: string; mimeType: string }[] }
-        let leadsParent = clientsContents?.files?.find(
-          (f: { name: string; mimeType: string }) => f.name === "Leads" && f.mimeType === "application/vnd.google-apps.folder"
-        )
-        if (!leadsParent) {
-          const nf = await createFolder(TD_CLIENTS_FOLDER, "Leads")
-          leadsParent = { id: nf.id, name: "Leads", mimeType: "application/vnd.google-apps.folder" }
-        }
-
-        const folderName = clientName || token
-        const leadsContents = await listFolder(leadsParent.id) as { files?: { id: string; name: string; mimeType: string }[] }
-        let clientFolder = leadsContents?.files?.find(
-          (f: { name: string; mimeType: string }) => f.name === folderName && f.mimeType === "application/vnd.google-apps.folder"
-        )
-        if (!clientFolder) {
-          const nf = await createFolder(leadsParent.id, folderName)
-          clientFolder = { id: nf.id, name: folderName, mimeType: "application/vnd.google-apps.folder" }
-        }
-        driveFolderId = clientFolder.id
-      }
+      // ITIN files under the PERSON's CONTACT folder, never the company's main
+      // area (Antonio, 2026-07-25): a company-owner's ITIN → the company's
+      // "2. Contacts" subfolder; an individual's → a per-person folder under
+      // "Individual Clients". Same resolver the durable archive recipe uses, so
+      // the inline save + the reliable job land in the SAME place. This whole
+      // folder (data summary here + the W-7/1040-NR generated in step 5, which
+      // reuse driveFolderId) now lives under the contact.
+      driveFolderId = await resolveItinContactFolder({
+        accountId: driveAccountId,
+        contactId: sub.contact_id,
+        leadId: sub.lead_id,
+        token,
+        clientName: clientName || token,
+      })
 
       if (driveFolderId) {
         const driveResult = await saveFormToDrive(
@@ -214,6 +191,32 @@ export async function POST(req: NextRequest) {
           { token, submittedAt: fullSub?.completed_at || new Date().toISOString(), companyName: displayName }
         )
         results.push({ step: "drive_save", status: "ok", detail: `Summary: ${driveResult.summaryFileId ? "saved" : "failed"}. Files: ${driveResult.copied.length} copied.` })
+
+        // Durable backstop (2026-07-25): the inline save above is best-effort.
+        // Enqueue the reliable archive job with the plan PINNED (folder + bucket
+        // + config + paths) so a slow/failed copy self-heals via retry, and the
+        // sweep can alert if it never lands.
+        try {
+          const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
+          const { deriveUploadPaths } = await import("@/lib/forms/archive-registry")
+          await enqueueFormArchiveJob({
+            formType: "itin",
+            submissionId: submission_id,
+            pin: {
+              folderId: driveFolderId,
+              bucket: "onboarding-uploads",
+              configKey: "itin",
+              // Union the column with paths inside submitted_data (matches the
+              // recipe fallback) — the portal wizard keeps upload paths in the
+              // data, so pinning the column alone could archive an empty package.
+              uploadPaths: deriveUploadPaths(uploadPaths, sd),
+              companyName: displayName,
+            },
+            createdBy: "itin_form_completed",
+          })
+        } catch (e) {
+          results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        }
       }
     } catch (e) {
       results.push({ step: "drive_save", status: "error", detail: e instanceof Error ? e.message : String(e) })

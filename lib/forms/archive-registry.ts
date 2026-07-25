@@ -17,6 +17,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { collectUploadPaths } from "@/lib/portal/wizard-uploads"
+import { resolveItinContactFolder, resolveItinClientName } from "@/lib/forms/itin-contact-folder"
 
 /** Everything the archival engine needs to write ONE submission's package. Either
  *  derived fresh by a recipe's resolvePlan(), or read back from the values PINNED
@@ -139,10 +140,48 @@ const bankingRecipe: ArchiveRecipe = {
   },
 }
 
+/**
+ * ITIN recipe. Person-keyed — files under the CONTACT, never the company's main
+ * area: a company-owner's ITIN goes in the company's "2. Contacts" subfolder; an
+ * individual's goes under "Individual Clients" (see resolveItinContactFolder).
+ * Single submission table, single storage bucket (onboarding-uploads). The fire
+ * path pins the resolved folder; this fallback re-resolves it identically.
+ */
+const itinRecipe: ArchiveRecipe = {
+  formType: "itin",
+  table: "itin_submissions",
+  selectColumns:
+    "id, token, lead_id, account_id, contact_id, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",
+  isReal(row) {
+    return (row.status as string | null) === "completed"
+  },
+  async resolvePlan(row) {
+    const leadId = (row.lead_id as string | null) ?? null
+    const contactId = (row.contact_id as string | null) ?? null
+    const token = (row.token as string | null) ?? null
+    const clientName = await resolveItinClientName({ leadId, contactId, token })
+    const folderId = await resolveItinContactFolder({
+      accountId: (row.account_id as string | null) ?? null,
+      contactId,
+      leadId,
+      token,
+      clientName,
+    })
+    return {
+      folderId,
+      bucket: "onboarding-uploads",
+      configKey: "itin",
+      uploadPaths: deriveUploadPaths(row.upload_paths, row.submitted_data as Record<string, unknown> | null),
+      companyName: clientName || undefined,
+    }
+  },
+}
+
 /** All registered form recipes, keyed by formType. Add a form here (+ its marker
  *  columns migration + enqueue wiring) when it adopts the durable archival. */
 export const ARCHIVE_RECIPES: Record<string, ArchiveRecipe> = {
   banking: bankingRecipe,
+  itin: itinRecipe,
 }
 
 export function getArchiveRecipe(formType: string): ArchiveRecipe | null {
