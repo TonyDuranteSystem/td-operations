@@ -13,28 +13,40 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { lease_id, signed_date, start_date, end_date } = await req.json() as {
-      lease_id: string
-      signed_date: string
-      start_date: string
-      end_date: string
+    const { lease_id } = await req.json() as { lease_id: string }
+
+    if (!lease_id) {
+      return NextResponse.json({ error: 'lease_id required' }, { status: 400 })
     }
 
-    if (!lease_id || !signed_date || !start_date || !end_date) {
-      return NextResponse.json({ error: 'lease_id, signed_date, start_date, end_date required' }, { status: 400 })
-    }
-
-    // Fetch lease record
+    // Fetch lease record — including the ACTUAL signed date + term dates. This
+    // tool produces a clean filed copy of an EXECUTED lease; it must reproduce
+    // what the client signed, not whatever dates a caller types. Previously it
+    // took signed_date / start_date / end_date from the request and stamped a
+    // "/s/ Name" signature regardless — so it could file a "signed" document for
+    // a lease nobody signed, or with dates that differ from the executed terms.
     const { data: lease } = await supabaseAdmin
       .from('lease_agreements')
-      .select('id, token, tenant_company, tenant_ein, tenant_state, tenant_contact_name, landlord_name, landlord_address, landlord_signer, landlord_title, suite_number, square_feet, monthly_rent, yearly_rent, security_deposit, late_fee, late_fee_per_day, account_id')
+      .select('id, token, tenant_company, tenant_ein, tenant_state, tenant_contact_name, landlord_name, landlord_address, landlord_signer, landlord_title, suite_number, square_feet, monthly_rent, yearly_rent, security_deposit, late_fee, late_fee_per_day, account_id, status, signed_at, effective_date, term_start_date, term_end_date')
       .eq('id', lease_id)
       .single()
 
     if (!lease) return NextResponse.json({ error: 'Lease not found' }, { status: 404 })
     if (!lease.account_id) return NextResponse.json({ error: 'Lease has no account_id' }, { status: 400 })
 
-    // Generate PDF with new dates
+    // Only a genuinely SIGNED lease can have a "signed copy" regenerated. This is
+    // what stops a fabricated signature being filed for an unsigned lease.
+    if (lease.status !== 'signed' || !lease.signed_at) {
+      return NextResponse.json(
+        { error: 'This lease is not signed yet — a signed copy can only be regenerated for an executed lease.' },
+        { status: 400 },
+      )
+    }
+
+    const signedDate = (lease.signed_at as string).split('T')[0]
+
+    // Regenerate from the lease's OWN recorded data — the real signed date and the
+    // agreed term dates. No caller-supplied dates.
     const pdfBytes = await generateLeasePDF({
       landlordName: lease.landlord_name ?? undefined,
       landlordAddress: lease.landlord_address ?? undefined,
@@ -46,15 +58,15 @@ export async function POST(req: NextRequest) {
       tenantContactName: lease.tenant_contact_name,
       suiteNumber: lease.suite_number,
       squareFeet: lease.square_feet ?? undefined,
-      effectiveDate: signed_date,
-      termStartDate: start_date,
-      termEndDate: end_date,
+      effectiveDate: (lease.effective_date as string) ?? signedDate,
+      termStartDate: lease.term_start_date as string,
+      termEndDate: lease.term_end_date as string,
       monthlyRent: lease.monthly_rent ?? undefined,
       yearlyRent: lease.yearly_rent ?? undefined,
       securityDeposit: lease.security_deposit ?? undefined,
       lateFee: lease.late_fee ?? undefined,
       lateFeePerDay: lease.late_fee_per_day ?? undefined,
-      signedDate: signed_date,
+      signedDate,
     })
 
     // Upload to Supabase Storage

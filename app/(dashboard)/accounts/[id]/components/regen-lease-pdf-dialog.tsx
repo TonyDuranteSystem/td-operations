@@ -31,28 +31,22 @@ export function RegenLeasePdfDialog({
   const [isPending, startTransition] = useTransition()
   const [done, setDone] = useState(false)
 
-  const [signedDate, setSignedDate] = useState(toInputDate(signedAt) || toInputDate(new Date().toISOString()))
-  const [startDate, setStartDate] = useState(toInputDate(termStartDate))
-  const [endDate, setEndDate] = useState(toInputDate(termEndDate))
+  // Read-only: the copy is regenerated from the lease's OWN recorded dates, not
+  // typed in. Typing dates here used to let a filed "signed" copy differ from what
+  // the client actually executed.
+  const signedDateStr = toInputDate(signedAt)
+  const startDateStr = toInputDate(termStartDate)
+  const endDateStr = toInputDate(termEndDate)
 
   if (!open) return null
 
   const handleRegen = () => {
-    if (!signedDate || !startDate || !endDate) {
-      toast.error('All three dates are required')
-      return
-    }
     startTransition(async () => {
       try {
         const res = await fetch('/api/crm/admin-actions/regen-lease-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            lease_id: leaseId,
-            signed_date: signedDate,
-            start_date: startDate,
-            end_date: endDate,
-          }),
+          body: JSON.stringify({ lease_id: leaseId }),
         })
         const data = await res.json()
         if (!res.ok) {
@@ -95,47 +89,15 @@ export function RegenLeasePdfDialog({
           ) : (
             <>
               <p className="text-sm text-muted-foreground">
-                Generates a clean signed copy using the dates below and replaces the existing PDF in Drive and the client portal.
+                Regenerates a clean signed copy of this executed lease — using the lease&apos;s own
+                recorded dates — and replaces the existing PDF in Drive and the client portal.
+                Only works on a signed lease.
               </p>
 
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                    Effective / Signed Date
-                  </label>
-                  <input
-                    type="date"
-                    value={signedDate}
-                    onChange={e => setSignedDate(e.target.value)}
-                    className="mt-1 w-full text-sm px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">Used for both parties&apos; signature dates.</p>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                      Term Start Date
-                    </label>
-                    <input
-                      type="date"
-                      value={startDate}
-                      onChange={e => setStartDate(e.target.value)}
-                      className="mt-1 w-full text-sm px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                      Term End Date
-                    </label>
-                    <input
-                      type="date"
-                      value={endDate}
-                      onChange={e => setEndDate(e.target.value)}
-                      className="mt-1 w-full text-sm px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                </div>
+              <div className="space-y-2 rounded-lg bg-zinc-50 border p-3 text-sm">
+                <div className="flex justify-between"><span className="text-muted-foreground">Signed date</span><span className="font-medium">{signedDateStr || '— not signed —'}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Term start</span><span className="font-medium">{startDateStr || '—'}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Term end</span><span className="font-medium">{endDateStr || '—'}</span></div>
               </div>
             </>
           )}
