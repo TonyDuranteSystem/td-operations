@@ -181,8 +181,25 @@ export async function createLease(
       }
     }
 
-    // 4. Suite number
-    const suiteNumber = params.suite_number ?? (await nextSuiteNumber())
+    // 4. Suite number. A suite is the client's REGISTERED ADDRESS — the address
+    // they give their bank — so it must stay STABLE across the years. Previously
+    // every lease took the next number from a single global counter, so a renewal
+    // (a new contract_year) silently reassigned a DIFFERENT suite and then step 7
+    // overwrote accounts.physical_address to the new address. Fix: reuse the suite
+    // this account already holds (its earliest prior lease); only a genuinely NEW
+    // account with no prior lease gets a fresh number. An explicit suite always
+    // wins (staff override).
+    let suiteNumber = params.suite_number
+    if (!suiteNumber) {
+      const { data: priorLeases } = await supabaseAdmin
+        .from("lease_agreements")
+        .select("suite_number")
+        .eq("account_id", params.account_id)
+        .not("suite_number", "is", null)
+        .order("created_at", { ascending: true })
+        .limit(1)
+      suiteNumber = priorLeases?.[0]?.suite_number ?? (await nextSuiteNumber())
+    }
 
     // 5. Token + dates + rent defaults
     const today = new Date().toISOString().slice(0, 10)
