@@ -17,6 +17,10 @@ let accountContactLinks: Array<{ contact_id: string }> = []
 let contactRow: { id: string; full_name: string; email: string | null; language: string | null } | null = null
 let duplicateLeases: Array<{ id: string; token: string; status: string }> = []
 let lastSuiteLeases: Array<{ suite_number: string }> = []
+// The account's OWN prior lease(s) — the reuse-the-suite lookup (ordered by
+// created_at). Empty = brand-new account, so createLease falls through to the
+// global nextSuiteNumber().
+let priorAccountLeases: Array<{ suite_number: string }> = []
 let insertReturnsRow: { id: string; token: string; access_code: string; suite_number: string; contract_year: number; contact_id: string } | null = null
 let insertError: { message: string } | null = null
 
@@ -55,6 +59,7 @@ vi.mock("@/lib/supabase-admin", () => ({
           filters[col] = value
           return chain
         }),
+        not: vi.fn(() => chain),
         order: vi.fn((col: string, opts?: { ascending?: boolean }) => {
           orderCol = col
           orderAsc = opts?.ascending ?? true
@@ -93,9 +98,15 @@ vi.mock("@/lib/supabase-admin", () => ({
           return { data: contactRow, error: null }
         }
         if (table === "lease_agreements") {
+          // nextSuiteNumber(): global max suite, ordered suite_number DESC.
           if (orderCol === "suite_number" && !orderAsc) {
             return { data: lastSuiteLeases, error: null }
           }
+          // The reuse-the-suite lookup: this account's own prior lease, created_at ASC.
+          if (orderCol === "created_at") {
+            return { data: priorAccountLeases, error: null }
+          }
+          // The duplicate check (account_id + contract_year).
           return { data: duplicateLeases, error: null }
         }
         return { data: null, error: null }
@@ -131,6 +142,7 @@ beforeEach(() => {
     language: "en",
   }
   duplicateLeases = []
+  priorAccountLeases = [] // default: brand-new account, no prior lease
   lastSuiteLeases = [{ suite_number: "3D-150" }]
   insertReturnsRow = {
     id: "lease-1",
@@ -271,6 +283,29 @@ describe("createLease — happy path", () => {
     await createLease({ account_id: "acct-1" })
     const insert = insertCalls[0].payload as Record<string, unknown>
     expect(insert.suite_number).toBe("3D-208")
+  })
+
+  it("REUSES the account's existing suite on renewal — no address drift", async () => {
+    // The account already holds Suite 3D-140. A renewal must keep it, NOT take the
+    // next global number (3D-151 here) — the suite is the client's registered
+    // address. This is the fix for the year-over-year address drift.
+    priorAccountLeases = [{ suite_number: "3D-140" }]
+    lastSuiteLeases = [{ suite_number: "3D-150" }] // global counter would give 3D-151
+    const { createLease } = await import("@/lib/operations/lease")
+    await createLease({ account_id: "acct-1", contract_year: 2027 })
+    const insert = insertCalls[0].payload as Record<string, unknown>
+    expect(insert.suite_number).toBe("3D-140")
+    // and the account address is re-synced to the SAME suite, so it does not drift
+    const acctUpdate = updateCalls.find(u => u.table === "accounts")
+    expect((acctUpdate?.payload as Record<string, unknown>)?.physical_address).toContain("Suite 3D-140")
+  })
+
+  it("an explicit suite_number still wins over the account's prior suite", async () => {
+    priorAccountLeases = [{ suite_number: "3D-140" }]
+    const { createLease } = await import("@/lib/operations/lease")
+    await createLease({ account_id: "acct-1", suite_number: "3D-999" })
+    const insert = insertCalls[0].payload as Record<string, unknown>
+    expect(insert.suite_number).toBe("3D-999")
   })
 
   it("uses explicit suite_number when provided", async () => {
