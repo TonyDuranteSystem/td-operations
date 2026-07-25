@@ -427,6 +427,26 @@ export function registerBankingFormTools(server: McpServer) {
               if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)
               if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy: ${driveResult.failed.join(", ")}`)
               if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
+
+              // Durable backstop (2026-07-24): enqueue the reliable archive job
+              // with the plan pinned so a slow/failed inline copy self-heals.
+              try {
+                const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
+                await enqueueFormArchiveJob({
+                  formType: "banking",
+                  submissionId: sub.id,
+                  pin: {
+                    folderId: driveFolderId,
+                    bucket: "banking-uploads",
+                    configKey: "banking",
+                    uploadPaths: (sub.upload_paths as string[]) || [],
+                    companyName: accountName || token,
+                  },
+                  createdBy: "banking_form_review",
+                })
+              } catch (e) {
+                lines.push(`⚠️ Archive enqueue failed: ${e instanceof Error ? e.message : String(e)}`)
+              }
             } else {
               lines.push("⚠️ No Drive folder found — data not saved to Drive")
             }

@@ -593,7 +593,7 @@ export async function POST(req: NextRequest) {
         if (capturedAccountId) {
           try {
             const providerSlug = capturedWizardType === 'banking_relay' ? 'relay' : 'payset'
-            await supabaseAdmin
+            const { data: updatedRow } = await supabaseAdmin
               .from('banking_submissions')
               .update({
                 submitted_data: capturedData,
@@ -602,6 +602,40 @@ export async function POST(req: NextRequest) {
               })
               .eq('account_id', capturedAccountId)
               .eq('provider', providerSlug)
+              .select('id')
+              .maybeSingle()
+
+            // Durable backstop (2026-07-24): the inline Drive save above is
+            // best-effort. Enqueue the reliable archive job with the plan PINNED
+            // — the wizard uploads to "onboarding-uploads" and this update does
+            // NOT persist upload_paths on the row, so we pin the paths (from the
+            // submitted data) + folder + config here so the durable job never
+            // re-guesses. config = the wizard type (banking_payset|banking_relay).
+            if (updatedRow?.id && driveFolderId) {
+              try {
+                const { enqueueFormArchiveJob } = await import('@/lib/forms/archive-enqueue')
+                await enqueueFormArchiveJob({
+                  formType: 'banking',
+                  submissionId: updatedRow.id,
+                  pin: {
+                    folderId: driveFolderId,
+                    bucket: 'onboarding-uploads',
+                    configKey: capturedWizardType,
+                    uploadPaths: extractUploadPaths(capturedData),
+                    companyName: compName || undefined,
+                  },
+                  createdBy: 'banking_wizard_submit',
+                })
+              } catch (e) {
+                console.error('[wizard-submit] banking archive enqueue error:', e)
+              }
+            } else if (!updatedRow?.id) {
+              // No banking_submissions row for this account+provider — the durable
+              // archival layer has nothing to attach to (only the inline best-
+              // effort save above covers it). Rare (the row is normally seeded at
+              // onboarding), but log it loudly rather than drop silently.
+              console.error(`[wizard-submit] no banking_submissions row for account ${capturedAccountId} provider ${providerSlug} — durable archival NOT enqueued (inline save only)`)
+            }
           } catch (e) {
             console.error('[wizard-submit] banking_submissions update error:', e)
           }

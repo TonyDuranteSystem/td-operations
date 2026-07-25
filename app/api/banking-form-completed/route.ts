@@ -279,6 +279,29 @@ export async function POST(req: NextRequest) {
               status: driveResult.errors.length ? "partial" : "ok",
               detail: `PDF: ${driveResult.summaryFileId || "none"}, copied: ${driveResult.copied.length}, failed: ${driveResult.failed.length}`,
             })
+
+            // Durable backstop (2026-07-24): the inline save above is best-effort.
+            // Enqueue the reliable archive job with the plan PINNED (folder +
+            // bucket + config + paths) so a slow/failed inline copy self-heals via
+            // retry, and the sweep can alert if it never lands. External banking
+            // form → bucket "banking-uploads", config "banking".
+            try {
+              const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
+              await enqueueFormArchiveJob({
+                formType: "banking",
+                submissionId: submission_id,
+                pin: {
+                  folderId: acct.drive_folder_id,
+                  bucket: "banking-uploads",
+                  configKey: "banking",
+                  uploadPaths: (fullSub.upload_paths as string[]) || [],
+                  companyName: companyName || undefined,
+                },
+                createdBy: "banking_form_completed",
+              })
+            } catch (e) {
+              results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
+            }
           } else {
             results.push({ step: "save_to_drive", status: "skipped", detail: "No submitted_data" })
           }

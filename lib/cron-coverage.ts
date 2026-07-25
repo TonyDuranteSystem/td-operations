@@ -54,6 +54,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/tax-reactivation": "30 10 * * *",
   "/api/cron/tax-completion-sweep": "*/30 * * * *",
   "/api/cron/tax-archive-sweep": "*/15 * * * *",
+  "/api/cron/forms-archive-sweep": "*/15 * * * *",
   "/api/cron/airwallex-sync": "*/15 * * * *",
   "/api/cron/stripe-sync": "0 */6 * * *",
   "/api/cron/itin-processing-check": "0 9 * * 1",

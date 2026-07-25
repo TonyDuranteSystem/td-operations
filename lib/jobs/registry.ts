@@ -19,6 +19,7 @@ import { handleRecategorizeWorkspaceAi } from "./handlers/recategorize-workspace
 import { handleCountryPolicySweep } from "./handlers/country-policy-sweep"
 import { handleEsignSendEmail } from "./handlers/esign-send-email"
 import { handleArchiveTaxSubmission } from "./handlers/archive-tax-submission"
+import { handleArchiveSubmission } from "./handlers/archive-submission"
 
 /** Runner-supplied execution context (Phase 3R): the hard wall-clock deadline
  *  anchored to the RUNNER's invocation start — a chunked handler must stop
@@ -66,6 +67,12 @@ const handlers: Record<string, JobHandler> = {
   // without re-sending the client emails. The backstop sweep re-enqueues any
   // submission left un-archived and raises the loud staff alert.
   archive_tax_submission: handleArchiveTaxSubmission,
+  // Added 2026-07-24 — GENERIC durable Drive archival for the non-tax forms
+  // (banking first, then formation/onboarding/itin/closure). Same reliability
+  // contract as archive_tax_submission, driven by per-form recipes in
+  // lib/forms/archive-registry.ts. Payload carries { form_type, table,
+  // submission_id }. Tax keeps its own handler (left untouched).
+  archive_submission: handleArchiveSubmission,
 }
 
 export function getJobHandler(jobType: string): JobHandler | null {
