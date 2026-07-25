@@ -191,10 +191,17 @@ export async function createLease(
     // wins (staff override).
     let suiteNumber = params.suite_number
     if (!suiteNumber) {
+      // Scope to the SAME TENANT, not just the account. An account can carry more
+      // than one lease with different suites — e.g. Imperium Commerce LLC has a
+      // company lease (3D-111) and a separate PERSONAL lease for its owner
+      // (3D-112) created the same day. createLease always writes
+      // tenant_company = account.company_name, so match on it: a company renewal
+      // reuses the company's own suite and can never inherit the personal one.
       const { data: priorLeases } = await supabaseAdmin
         .from("lease_agreements")
         .select("suite_number")
         .eq("account_id", params.account_id)
+        .eq("tenant_company", account.company_name)
         .not("suite_number", "is", null)
         .order("created_at", { ascending: true })
         .limit(1)
