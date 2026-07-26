@@ -22,10 +22,6 @@ import { uploadTeamAttachment, prepareChatFiles, CHAT_ATTACHMENT_MAX_COUNT } fro
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { TurnBadge } from '@/components/team-chat/turn-badge'
 import { sortPanelThreads, filterStreamRoots } from '@/lib/team/thread-meta'
-import {
-  clampThreadPaneWidth, readStoredThreadPaneWidth,
-  THREAD_PANE_DEFAULT_WIDTH, THREAD_PANE_WIDTH_KEY,
-} from '@/lib/team/pane-width'
 import { TEAM_COLORS, CLAUDE_SENDER_UUID, channelSlug, TEAM_WORK_STATUSES, TEAM_WORK_STATUS_LABELS, TEAM_STATUS_COLORS, type TeamWorkStatus } from '@/lib/team/workspace'
 import type { ChatAttachment } from '@/lib/types'
 import type { TeamMsg, TeamThread, TeamMember, Reaction, SlackChannel, SlackMsg, ThreadMeta, ThreadListItem, BoardThread, LaterThread } from './types'
@@ -120,15 +116,8 @@ export default function TeamWorkspacePage() {
   const [archivedRoots, setArchivedRoots] = useState<string[]>([])
   // Personal "bring forward" list — threads flagged from any channel.
   const [laterRoots, setLaterRoots] = useState<LaterThread[]>([])
-  // Thread pane width (desktop only — the pane is full-width on mobile).
-  // Starts at the default so server and first client render agree; the stored
-  // value is applied in an effect after mount.
-  const [paneWidth, setPaneWidth] = useState(THREAD_PANE_DEFAULT_WIDTH)
 
   const bottomRef = useRef<HTMLDivElement>(null)
-  // The messages+pane row — its width is the ceiling for a drag (the channel
-  // stream beside the pane must keep a readable minimum).
-  const paneRowRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   // Mirror of pendingFiles for the file-intake cap math (avoids a stale closure
@@ -173,57 +162,6 @@ export default function TeamWorkspacePage() {
   }, [isThreadedChannel, messages, archivedRoots, showArchived])
   const paneRoot = useMemo(() => (openRootId ? messages.find(m => m.id === openRootId) ?? null : null), [openRootId, messages])
   const paneReplies = useMemo(() => (openRootId ? messages.filter(m => m.root_id === openRootId) : []), [openRootId, messages])
-
-  // Restore the user's chosen pane width after mount (localStorage is not
-  // available during SSR, and reading it in useState would desync hydration).
-  useEffect(() => {
-    try {
-      setPaneWidth(readStoredThreadPaneWidth(window.localStorage.getItem(THREAD_PANE_WIDTH_KEY)))
-    } catch { /* private mode / storage disabled — keep the default */ }
-  }, [])
-
-  /**
-   * Drag the divider to resize the thread pane. Pointer events (not mouse) so
-   * it works with a trackpad, a mouse, and a stylus; pointer capture keeps the
-   * drag alive when the cursor outruns the 6px handle.
-   */
-  const startPaneResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    const handle = e.currentTarget
-    const startX = e.clientX
-    const startWidth = paneWidth
-    const rowWidth = paneRowRef.current?.getBoundingClientRect().width ?? 0
-    handle.setPointerCapture(e.pointerId)
-    // Dragging over text would otherwise select it across the whole page.
-    const prevSelect = document.body.style.userSelect
-    document.body.style.userSelect = 'none'
-
-    const onMove = (ev: PointerEvent) => {
-      // The pane is on the RIGHT: dragging left (negative delta) widens it.
-      setPaneWidth(clampThreadPaneWidth(startWidth - (ev.clientX - startX), rowWidth))
-    }
-    const onUp = () => {
-      handle.removeEventListener('pointermove', onMove)
-      handle.removeEventListener('pointerup', onUp)
-      handle.removeEventListener('pointercancel', onUp)
-      document.body.style.userSelect = prevSelect
-      try { handle.releasePointerCapture(e.pointerId) } catch { /* already released */ }
-      // Persist whatever width the drag settled on.
-      setPaneWidth(w => {
-        try { window.localStorage.setItem(THREAD_PANE_WIDTH_KEY, String(w)) } catch { /* storage disabled */ }
-        return w
-      })
-    }
-    handle.addEventListener('pointermove', onMove)
-    handle.addEventListener('pointerup', onUp)
-    handle.addEventListener('pointercancel', onUp)
-  }, [paneWidth])
-
-  /** Double-click the divider to go back to the default width. */
-  const resetPaneWidth = useCallback(() => {
-    setPaneWidth(THREAD_PANE_DEFAULT_WIDTH)
-    try { window.localStorage.setItem(THREAD_PANE_WIDTH_KEY, String(THREAD_PANE_DEFAULT_WIDTH)) } catch { /* storage disabled */ }
-  }, [])
 
   const loadThreads = useCallback(async (selectFirst = false) => {
     try {
@@ -703,6 +641,15 @@ export default function TeamWorkspacePage() {
   }, [markThreadRead])
 
   const closeThread = useCallback(() => { setOpenRootId(null); setReplyTo(null) }, [])
+
+  // Back out of the full-width thread view to the channel's list of threads
+  // (the drill-in "back" gesture). For a channel that means re-opening the
+  // Threads panel; other threaded surfaces just reveal their stream.
+  const backFromThread = useCallback(() => {
+    setOpenRootId(null); setReplyTo(null)
+    const t = threadsRef.current.find(x => x.id === selectedIdRef.current)
+    if (t?.thread_type === 'channel') setShowThreadsPanel(true)
+  }, [])
 
   // Select a sidebar thread. Clicking the channel you're ALREADY in returns you
   // to its thread list and closes any open thread — otherwise setSelectedId with
@@ -1499,10 +1446,10 @@ export default function TeamWorkspacePage() {
 
             <WorkerDropZone onFiles={addPendingFiles} disabled={sending || uploading || !!editing} label="Drop to attach" className="flex-1 flex flex-col min-h-0">
             {/* Messages + optional Slack-style thread pane */}
-            <div ref={paneRowRef} className="flex-1 flex min-h-0">
+            <div className="flex-1 flex min-h-0">
               {/* Channel stream (roots only in threaded channels) — hidden on
                   mobile while a thread pane is open */}
-              <div className={cn('flex-1 overflow-y-auto px-4 py-4 space-y-1', isThreadedChannel && openRootId && 'hidden md:block')}>
+              <div className={cn('flex-1 overflow-y-auto px-4 py-4 space-y-1', isThreadedChannel && openRootId && 'hidden')}>
                 {loadingMsgs ? (
                   <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-zinc-400" /></div>
                 ) : streamMessages.length === 0 ? (
@@ -1539,31 +1486,26 @@ export default function TeamWorkspacePage() {
                 <div ref={bottomRef} />
               </div>
 
-              {/* Thread pane: right column on desktop, full-width on mobile. Lives
-                  entirely inside Team Workspace (no navigation). */}
+              {/* Thread view: takes over the whole main area as a full-width
+                  drill-in (the channel stream steps aside) — the back arrow
+                  returns to the thread list. Lives entirely inside Team Workspace
+                  (no browser navigation). Mobile already did this; desktop now
+                  matches instead of the old cramped resizable split pane. */}
               {isThreadedChannel && openRootId && (
                 <div
-                  role="separator"
-                  aria-orientation="vertical"
-                  aria-label="Resize thread pane — drag, or double-click to reset"
-                  title="Drag to resize · double-click to reset"
-                  onPointerDown={startPaneResize}
-                  onDoubleClick={resetPaneWidth}
-                  className="hidden md:block shrink-0 w-1.5 cursor-col-resize touch-none bg-zinc-200 hover:bg-blue-400 active:bg-blue-500 transition-colors"
-                />
-              )}
-              {isThreadedChannel && openRootId && (
-                <div
-                  style={{ ['--thread-pane-w' as string]: `${paneWidth}px` }}
-                  className="flex-1 md:flex-none md:w-[var(--thread-pane-w)] border-zinc-200 flex flex-col min-h-0 bg-white"
+                  className="flex-1 border-zinc-200 flex flex-col min-h-0 bg-white"
                   onPointerDown={onPaneEngagement}
                   onKeyDown={onPaneEngagement}
                   onWheel={onPaneEngagement}
                 >
                   <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-zinc-200">
                     {/* The thread's NAME is the header — renaming it here is the
-                        obvious place to look for it. */}
+                        obvious place to look for it. The back arrow returns to
+                        the channel's list of threads. */}
                     <span className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5 min-w-0">
+                      <button onClick={backFromThread} className="p-1 -ml-1 rounded-full text-zinc-500 hover:bg-zinc-100 shrink-0" title="Back to threads" aria-label="Back to threads">
+                        <ChevronLeft className="h-4 w-4" />
+                      </button>
                       <MessageSquare className="h-4 w-4 shrink-0" />
                       <span className="truncate">{threadsList.find(t => t.root_id === openRootId)?.title ?? 'Thread'}</span>
                     </span>
@@ -1606,10 +1548,13 @@ export default function TeamWorkspacePage() {
                             onMarkUnread={rid => markThreadUnread(rid)} />
                         ) : null
                       })()}
-                      <button onClick={closeThread} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Close thread"><X className="h-4 w-4" /></button>
+                      <button onClick={backFromThread} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Close thread"><X className="h-4 w-4" /></button>
                     </div>
                   </div>
-                  <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
+                  {/* Comfortable centered reading column so a full-width thread
+                      doesn't stretch edge-to-edge on a wide monitor. */}
+                  <div className="flex-1 overflow-y-auto px-4 py-4">
+                    <div className="mx-auto w-full max-w-3xl space-y-1">
                     {paneRoot ? (
                       <MessageRow m={paneRoot} isMe={paneRoot.sender_id === currentUserId} isClaude={paneRoot.sender_id === CLAUDE_SENDER_UUID}
                         canDelete={paneRoot.sender_id === currentUserId || isAdmin} currentUserId={currentUserId}
@@ -1637,6 +1582,7 @@ export default function TeamWorkspacePage() {
                         touchMenu={touchMenuFor === m.id} setTouchMenu={open => setTouchMenuFor(open ? m.id : null)}
                         onMarkUnreadFromHere={openRootId ? () => markThreadUnread(openRootId, m.id) : undefined} />
                     ))}
+                    </div>
                   </div>
                 </div>
               )}
