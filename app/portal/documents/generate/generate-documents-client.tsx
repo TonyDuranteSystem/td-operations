@@ -140,6 +140,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   )
   const [isGenerating, setIsGenerating] = useState(false)
   const [signatureImage, setSignatureImage] = useState<string | null>(null)
+  const [portalSaveWarning, setPortalSaveWarning] = useState(false)
   const [history, setHistory] = useState<HistoryItem[]>(initialHistory)
   const [oaCreateStatus, setOaCreateStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
   const [oaNotified, setOaNotified] = useState(true)
@@ -263,6 +264,24 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
     setStage('signing')
   }
 
+  // Save the signed file into the client's portal Documents folder. Surfaces it
+  // as "new" for co-owners; never alerts the person who just signed it (server
+  // pre-marks the maker as having seen it). Throws on failure so the caller can
+  // log it — the user already has their download, so it's best-effort.
+  const uploadSignedToPortal = async (blob: Blob, filename: string) => {
+    const fd = new FormData()
+    fd.append('file', blob, filename)
+    fd.append('account_id', account.id)
+    fd.append('document_type', selectedType ? docTypeLabel(selectedType, 'en') : 'Generated Document')
+    fd.append('document_type_key', selectedType ?? '')
+    fd.append('file_name', filename)
+    const res = await fetch('/api/portal/generated-documents/save-signed', { method: 'POST', body: fd })
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}))
+      throw new Error(d.error || 'Portal save failed')
+    }
+  }
+
   const handleConfirmSign = async () => {
     if (!sigPadRef.current || sigPadRef.current.isEmpty()) return
     const sigDataUrl = sigPadRef.current.toDataURL('image/png')
@@ -273,18 +292,30 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
       setIsGenerating(true)
       try {
         const html2pdf = (await import('html2pdf.js')).default
-        await html2pdf()
-          .set({
-            margin: [0.5, 0.6, 0.7, 0.6],
-            filename: getPdfFilename(true),
-            image: { type: 'jpeg', quality: 0.95 },
-            html2canvas: { scale: 2, useCORS: true },
-            jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
-          })
-          .from(documentRef.current)
-          .save()
+        const pdfOpts = {
+          margin: [0.5, 0.6, 0.7, 0.6] as [number, number, number, number],
+          filename: getPdfFilename(true),
+          image: { type: 'jpeg' as const, quality: 0.95 },
+          html2canvas: { scale: 2, useCORS: true },
+          jsPDF: { unit: 'in' as const, format: 'letter' as const, orientation: 'portrait' as const },
+        }
+        await html2pdf().set(pdfOpts).from(documentRef.current).save()
 
         await saveToHistory('signed')
+
+        // Also save the signed file into the client's portal Documents folder so
+        // it's findable/downloadable later. Self-signed docs only — the OA has
+        // its own multi-signer flow. Best-effort: the user already has their
+        // download, so a portal-save hiccup must not block completion.
+        if (!isOA) {
+          try {
+            const pdfBlob: Blob = await html2pdf().set(pdfOpts).from(documentRef.current).outputPdf('blob')
+            await uploadSignedToPortal(pdfBlob, getPdfFilename(true))
+          } catch (saveErr) {
+            console.error('Portal Documents save failed (download still succeeded):', saveErr)
+            setPortalSaveWarning(true)
+          }
+        }
         setStage('done')
       } catch (err) {
         console.error('Signed PDF generation failed:', err)
@@ -867,6 +898,13 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 : (lang === 'it'
                   ? 'Il tuo Atto Costitutivo è pronto. Firmalo adesso per completare il processo.'
                   : 'Your Operating Agreement is ready. Sign it now to complete the process.')}
+            </p>
+          )}
+          {portalSaveWarning && (
+            <p className="text-sm text-amber-700 bg-amber-50 rounded-lg px-4 py-2 max-w-sm">
+              {lang === 'it'
+                ? 'Documento scaricato. Non siamo riusciti a salvarlo anche nella tua cartella Documenti — l’assistenza è stata avvisata.'
+                : 'Downloaded. We couldn’t also save it to your Documents folder — support has been notified.'}
             </p>
           )}
           {/* THE fix for the incident this flow caused: a client who had just
