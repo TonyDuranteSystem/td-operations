@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { validateNarrative, renderCallForOffer, normalizeEntityType, NARRATIVE_KEYS, type NarrativeResponse } from '@/lib/offer-narrative'
+import { validateNarrative, validateNarrativeChanges, renderCallForOffer, normalizeEntityType, NARRATIVE_KEYS, type NarrativeResponse } from '@/lib/offer-narrative'
 import {
+  buildRefineSystemPrompt,
   renderServiceLines,
   FALLBACK_BUSINESS_RULES,
   resolveBusinessRules,
@@ -120,6 +121,60 @@ describe('offerIncludesManagement', () => {
     expect(offerIncludesManagement('')).toBe(false)
     expect(offerIncludesManagement(null)).toBe(false)
     expect(offerIncludesManagement(undefined)).toBe(false)
+  })
+})
+
+describe('validateNarrativeChanges (refine — only changed sections)', () => {
+  it('accepts a partial change with a note and drops unknown keys', () => {
+    const r = validateNarrativeChanges({ note: 'Shortened intro.', changes: { intro_en: 'Short.', bogus: 1 } }, 'en')
+    expect(r.valid).toBe(true)
+    if (r.valid) {
+      expect(r.note).toBe('Shortened intro.')
+      expect(r.changes).toEqual({ intro_en: 'Short.' })
+    }
+  })
+
+  it('accepts an empty changes object (a no-op refine)', () => {
+    const r = validateNarrativeChanges({ note: 'Nothing to change.', changes: {} }, 'en')
+    expect(r.valid).toBe(true)
+    if (r.valid) expect(r.changes).toEqual({})
+  })
+
+  it('validates section shapes', () => {
+    const good = validateNarrativeChanges({ changes: { strategy: [{ step_number: 1, title: 'T', description: 'D' }] } }, 'en')
+    expect(good.valid).toBe(true)
+    const bad = validateNarrativeChanges({ changes: { strategy: [{ title: 'no step number' }] } }, 'en')
+    expect(bad.valid).toBe(false)
+    const badActions = validateNarrativeChanges({ changes: { immediate_actions: [{ title: 'x' }] } }, 'en')
+    expect(badActions.valid).toBe(false)
+  })
+
+  it('enforces the single-language intro rule', () => {
+    expect(validateNarrativeChanges({ changes: { intro_it: 'Ciao' } }, 'en').valid).toBe(false)
+    expect(validateNarrativeChanges({ changes: { intro_en: 'Hi' } }, 'it').valid).toBe(false)
+    expect(validateNarrativeChanges({ changes: { intro_it: 'Ciao' } }, 'it').valid).toBe(true)
+  })
+
+  it('rejects non-object input', () => {
+    expect(validateNarrativeChanges(null, 'en').valid).toBe(false)
+    expect(validateNarrativeChanges('nope', 'en').valid).toBe(false)
+  })
+})
+
+describe('buildRefineSystemPrompt (faithful writing assistant)', () => {
+  it('trusts the author and keeps the changed-only output contract', () => {
+    const p = buildRefineSystemPrompt('en', 'RULES BLOCK CONTENT', '- Banking: open a US business bank account')
+    expect(p).toContain('ONLY the sections you actually changed')
+    expect(p.toLowerCase()).toContain('do not refuse')
+    // business rules + service menu are injected as REFERENCE, not restrictions
+    expect(p).toContain('RULES BLOCK CONTENT')
+    expect(p).toContain('- Banking: open a US business bank account')
+  })
+  it('does not gate on management or lecture about scope', () => {
+    const p = buildRefineSystemPrompt('it', 'RULES')
+    expect(p).not.toContain('does NOT include ongoing management')
+    expect(p.toLowerCase()).not.toContain('never add bookkeeping')
+    expect(p).toContain('Italian')
   })
 })
 

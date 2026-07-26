@@ -180,3 +180,68 @@ export function validateNarrative(
 
   return { valid: true, result: obj as unknown as NarrativeResponse }
 }
+
+/** A refine round returns only the sections it changed. */
+export type NarrativeChanges = Partial<NarrativeResponse>
+
+function isStepArray(v: unknown): boolean {
+  if (!Array.isArray(v)) return false
+  return v.every((s) => {
+    if (typeof s !== 'object' || !s) return false
+    const i = s as Record<string, unknown>
+    return typeof i.step_number === 'number' && typeof i.title === 'string' && typeof i.description === 'string'
+  })
+}
+
+/**
+ * Validate a REFINE response: `{ note, changes }` where `changes` holds ONLY the
+ * sections that changed (any subset of the narrative keys). Each present key is
+ * shape-checked exactly like {@link validateNarrative}; unknown keys are dropped;
+ * an empty `changes` (a no-op refine) is valid. The single-language rule is
+ * enforced: only the intro matching `language` may appear.
+ */
+export function validateNarrativeChanges(
+  data: unknown,
+  language: 'en' | 'it',
+): { valid: true; note: string; changes: NarrativeChanges } | { valid: false; error: string } {
+  if (!data || typeof data !== 'object') return { valid: false, error: 'Response is not an object' }
+  const obj = data as Record<string, unknown>
+  const note = typeof obj.note === 'string' ? obj.note : ''
+  const src = (obj.changes && typeof obj.changes === 'object') ? obj.changes as Record<string, unknown> : {}
+  const changes: NarrativeChanges = {}
+
+  const wrongIntro = language === 'en' ? 'intro_it' : 'intro_en'
+  if (src[wrongIntro] != null && String(src[wrongIntro]).trim() !== '') {
+    return { valid: false, error: `${wrongIntro} must not be set when language is ${language}` }
+  }
+
+  const rightIntro = language === 'en' ? 'intro_en' : 'intro_it'
+  if (rightIntro in src) {
+    if (typeof src[rightIntro] !== 'string') return { valid: false, error: `${rightIntro} must be a string` }
+    changes[rightIntro] = src[rightIntro] as string
+  }
+  if ('strategy' in src) {
+    if (!isStepArray(src.strategy)) return { valid: false, error: 'strategy must be an array of {step_number,title,description}' }
+    changes.strategy = src.strategy as NarrativeResponse['strategy']
+  }
+  if ('next_steps' in src) {
+    if (!isStepArray(src.next_steps)) return { valid: false, error: 'next_steps must be an array of {step_number,title,description}' }
+    changes.next_steps = src.next_steps as NarrativeResponse['next_steps']
+  }
+  if ('future_developments' in src) {
+    const v = src.future_developments
+    if (!Array.isArray(v) || !v.every((f) => typeof f === 'object' && f && typeof (f as Record<string, unknown>).text === 'string')) {
+      return { valid: false, error: 'future_developments must be an array of {text}' }
+    }
+    changes.future_developments = v as NarrativeResponse['future_developments']
+  }
+  if ('immediate_actions' in src) {
+    const v = src.immediate_actions
+    if (!Array.isArray(v) || !v.every((a) => typeof a === 'object' && a && typeof (a as Record<string, unknown>).title === 'string' && typeof (a as Record<string, unknown>).description === 'string')) {
+      return { valid: false, error: 'immediate_actions must be an array of {title,description}' }
+    }
+    changes.immediate_actions = v as NarrativeResponse['immediate_actions']
+  }
+
+  return { valid: true, note, changes }
+}

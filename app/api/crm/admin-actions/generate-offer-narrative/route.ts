@@ -3,15 +3,13 @@ import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
 import { validateNarrative, renderCallForOffer, normalizeEntityType } from '@/lib/offer-narrative'
 import {
-  OFFER_NARRATIVE_RULES_TAG,
-  FALLBACK_BUSINESS_RULES,
   renderServiceLines,
-  resolveBusinessRules,
   buildSystemPrompt,
   buildUserPrompt,
   offerIncludesManagement,
   type NarrativeServiceInput,
 } from '@/lib/offers/narrative-business-rules'
+import { loadOfferBusinessRules } from '@/lib/offers/load-business-rules'
 import { callAI } from '@/lib/portal/ai-provider'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { reportSystemError } from '@/lib/system-errors'
@@ -45,50 +43,6 @@ async function fetchCallContext(leadId?: string | null, accountId?: string | nul
   } catch (err) {
     console.error('[generate-offer-narrative] call-context fetch failed (non-fatal):', err instanceof Error ? err.message : err)
     return ''
-  }
-}
-
-/**
- * Load the editable offer-narrative BUSINESS RULES from the knowledge base (the
- * canonical business-rules store — Antonio edits them there, no code change). We
- * take the most-recently-updated article carrying the rules tag; `created_at` is
- * a deterministic tiebreaker (updated_at can be null). FAIL-SAFE: any miss/error
- * degrades to the built-in floor so the writer still never invents bookkeeping.
- *
- * LOUD ON MISS: a genuinely-absent/mistagged article is a CONFIG error (Antonio's
- * live edits would be silently ignored), so it is reported — distinctly from a
- * transient DB error. Never fail-open.
- */
-async function loadBusinessRules(userEmail?: string | null): Promise<string> {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('knowledge_articles')
-      .select('content')
-      .contains('tags', [OFFER_NARRATIVE_RULES_TAG])
-      .order('updated_at', { ascending: false, nullsFirst: false })
-      .order('created_at', { ascending: false, nullsFirst: false })
-      .limit(1)
-      .maybeSingle()
-    if (error) throw error
-    const { rules, source } = resolveBusinessRules(data)
-    if (source === 'fallback_missing') {
-      // Config error, not a blip: the editable rules article is missing/mistagged
-      // so every offer silently uses the code floor and admin edits do nothing.
-      console.error(`[generate-offer-narrative] no knowledge article tagged "${OFFER_NARRATIVE_RULES_TAG}" — using built-in fallback floor. Create/tag the article so edits take effect.`)
-      await reportSystemError({
-        source: 'server',
-        route: '/api/crm/admin-actions/generate-offer-narrative',
-        method: 'POST',
-        http_status: 200,
-        user_email: userEmail ?? null,
-        message: `Offer-narrative rules article (tag "${OFFER_NARRATIVE_RULES_TAG}") not found — generator fell back to the built-in floor; admin KB edits have no effect until the article is created and tagged.`,
-      }).catch(() => {})
-    }
-    return rules
-  } catch (err) {
-    // Transient DB error — quiet fallback, still safe (never fail-open).
-    console.error('[generate-offer-narrative] business-rules load failed, using fallback floor:', err instanceof Error ? err.message : err)
-    return FALLBACK_BUSINESS_RULES
   }
 }
 
@@ -140,7 +94,10 @@ export async function POST(req: NextRequest) {
 
     // Business rules (what TD does/doesn't do, tax filing by company type, portal)
     // come from the editable knowledge base, not hardcoded prose. Fail-safe.
-    const businessRules = await loadBusinessRules(user?.email)
+    const businessRules = await loadOfferBusinessRules({
+      route: '/api/crm/admin-actions/generate-offer-narrative',
+      userEmail: user?.email,
+    })
     const systemPrompt = buildSystemPrompt(lang, businessRules, includesManagement)
 
     // Enrich the context with the client's actual call (notes + full transcript)

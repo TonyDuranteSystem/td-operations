@@ -281,6 +281,11 @@ export function CreateOfferDialog({
 
   // Narrative content (client-facing, AI-generated or manual)
   const [narrativeOpen, setNarrativeOpen] = useState(false)
+  // Conversational refine: discuss the narrative with the AI. It returns ONLY the
+  // sections it changed, applied over the current (possibly hand-edited) content.
+  const [refineInput, setRefineInput] = useState('')
+  const [refineLoading, setRefineLoading] = useState(false)
+  const [refineMessages, setRefineMessages] = useState<{ role: 'you' | 'ai'; text: string }[]>([])
   const [narrativeLoading, setNarrativeLoading] = useState(false)
   const [introEn, setIntroEn] = useState('')
   const [introIt, setIntroIt] = useState('')
@@ -451,6 +456,69 @@ export function CreateOfferDialog({
       toast.error(msg)
     } finally {
       setNarrativeLoading(false)
+    }
+  }
+
+  // Conversational refine — discuss the narrative; apply only what changed.
+  async function refineNarrative() {
+    const instruction = refineInput.trim()
+    if (refineLoading || !instruction) return
+    if (selected.length === 0) { toast.error('Generate or add a narrative first'); return }
+    setRefineLoading(true)
+    setRefineMessages(m => [...m, { role: 'you', text: instruction }])
+    setRefineInput('')
+    try {
+      const serviceDetails = selected.map(s => {
+        const cat = catalog.find(c => c.id === s.id)
+        return { name: cat?.name || s.id, description: cat?.description || null }
+      })
+      const includesManagement = selected.some(s => {
+        const svc = catalog.find(c => c.id === s.id)
+        const ct = svc?.contract_type
+        return ct === 'formation' || ct === 'onboarding' || ct === 'renewal' || !!svc?.has_annual || svc?.category === 'primary'
+      })
+      const res = await fetch('/api/crm/admin-actions/refine-offer-narrative', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_name: clientNameValue,
+          language,
+          services: serviceDetails,
+          contract_type: derivedContractType,
+          entity_type: entityType || null,
+          includes_management: includesManagement,
+          current: {
+            intro_en: introEn, intro_it: introIt,
+            strategy: strategyJson, next_steps: nextStepsJson,
+            future_developments: futureDevJson, immediate_actions: immediateActionsJson,
+          },
+          instruction,
+        }),
+      })
+      if (!res.ok) {
+        const { parsed, raw } = await readErrorBody(res)
+        if (isSessionExpired(res.status, parsed)) throw new Error(SESSION_EXPIRED_MSG)
+        reportDialogError({ route: '/api/crm/admin-actions/refine-offer-narrative', method: 'POST', http_status: res.status, message: parsed.error || `Non-JSON error (HTTP ${res.status})`, body_snippet: parsed.error ? null : raw.slice(0, 500) })
+        throw new Error(parsed.error || `Refine failed (HTTP ${res.status})`)
+      }
+      const data = await res.json()
+      const changes = data.changes || {}
+      const applied: string[] = []
+      if ('intro_en' in changes) { setIntroEn(changes.intro_en || ''); applied.push('intro (EN)') }
+      if ('intro_it' in changes) { setIntroIt(changes.intro_it || ''); applied.push('intro (IT)') }
+      if ('strategy' in changes) { setStrategyJson(JSON.stringify(changes.strategy, null, 2)); applied.push('strategy') }
+      if ('next_steps' in changes) { setNextStepsJson(JSON.stringify(changes.next_steps, null, 2)); applied.push('next steps') }
+      if ('future_developments' in changes) { setFutureDevJson(JSON.stringify(changes.future_developments, null, 2)); applied.push('future developments') }
+      if ('immediate_actions' in changes) { setImmediateActionsJson(JSON.stringify(changes.immediate_actions, null, 2)); applied.push('immediate actions') }
+      const note = typeof data.note === 'string' && data.note ? data.note : (applied.length ? `Updated ${applied.join(', ')}.` : 'No change made.')
+      setRefineMessages(m => [...m, { role: 'ai', text: applied.length ? `${note} (updated: ${applied.join(', ')})` : note }])
+      if (applied.length) toast.success(`Updated: ${applied.join(', ')}`)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Refine failed'
+      setRefineMessages(m => [...m, { role: 'ai', text: `⚠️ ${msg}` }])
+      toast.error(msg)
+    } finally {
+      setRefineLoading(false)
     }
   }
 
@@ -1359,8 +1427,44 @@ export function CreateOfferDialog({
                   <label className="text-xs font-medium text-zinc-700">Future Developments <span className="font-normal text-zinc-400">(JSON array)</span></label>
                   <textarea value={futureDevJson} onChange={e => setFutureDevJson(e.target.value)} rows={2} placeholder='[{"text": "..."}]' className="w-full mt-1 px-3 py-2 text-xs font-mono border rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
                 </div>
+                {(introEn || introIt || strategyJson || nextStepsJson) && (
+                  <div className="border border-violet-200 rounded-lg bg-violet-50/50 p-3 space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-violet-900">
+                      <Sparkles className="h-3.5 w-3.5 text-violet-500" />
+                      Discuss with AI
+                      <span className="font-normal text-violet-500">— ask for a change (e.g. &ldquo;shorten the intro&rdquo;, &ldquo;drop step 3&rdquo;)</span>
+                    </div>
+                    {refineMessages.length > 0 && (
+                      <div className="max-h-40 overflow-y-auto space-y-1.5 text-xs">
+                        {refineMessages.map((m, i) => (
+                          <div key={i} className={m.role === 'you' ? 'text-right' : 'text-left'}>
+                            <span className={`inline-block px-2 py-1 rounded-md ${m.role === 'you' ? 'bg-violet-600 text-white' : 'bg-white border text-zinc-700'}`}>
+                              {m.text}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex items-end gap-2">
+                      <textarea
+                        value={refineInput}
+                        onChange={e => setRefineInput(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); refineNarrative() } }}
+                        disabled={refineLoading}
+                        rows={3}
+                        placeholder="Tell the AI what to change, or give it context about the client… (⌘/Ctrl+Enter to send)"
+                        className="flex-1 px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50 resize-y min-h-[64px] max-h-56"
+                      />
+                      <button type="button" onClick={refineNarrative} disabled={refineLoading || !refineInput.trim()} className="inline-flex items-center gap-1 px-3 py-2 text-xs font-medium rounded-md bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 shrink-0">
+                        {refineLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                        {refineLoading ? 'Working...' : 'Send'}
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-violet-400">Give it context about the client or ask for a change. It only edits what you ask, keeps your other edits, and won&rsquo;t promise services that aren&rsquo;t in the offer.</p>
+                  </div>
+                )}
                 {(introEn || strategyJson) && (
-                  <button type="button" onClick={() => { setIntroEn(''); setIntroIt(''); setStrategyJson(''); setNextStepsJson(''); setFutureDevJson(''); setImmediateActionsJson('') }} className="text-xs text-red-500 hover:text-red-700">
+                  <button type="button" onClick={() => { setIntroEn(''); setIntroIt(''); setStrategyJson(''); setNextStepsJson(''); setFutureDevJson(''); setImmediateActionsJson(''); setRefineMessages([]) }} className="text-xs text-red-500 hover:text-red-700">
                     Clear all narrative content
                   </button>
                 )}

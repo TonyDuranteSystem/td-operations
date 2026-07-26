@@ -165,6 +165,74 @@ Other rules:
 - Do NOT include legal disclaimers — the contract handles those.`
 }
 
+/**
+ * System prompt for REFINING an existing narrative via a chat instruction.
+ * Reuses the SAME authoritative business rules, scope gate, and language rule as
+ * generation — a refined offer must never drift from a freshly-generated one, and
+ * an instruction can NEVER weaken the hard rules (no bookkeeping, correct filing,
+ * no over-promise). Output contract: return ONLY the sections actually changed, so
+ * untouched sections (including the staff member's hand-edits) are never clobbered.
+ */
+export function buildRefineSystemPrompt(
+  language: 'en' | 'it',
+  businessRules: string,
+  serviceMenu?: string,
+): string {
+  const lang = language === 'it' ? 'Italian' : 'English'
+  const introKey = language === 'it' ? 'intro_it' : 'intro_en'
+  const reference = [
+    businessRules ? `About Tony Durante (facts to help you write accurately — reference, NOT restrictions):\n${businessRules}` : '',
+    serviceMenu && serviceMenu.trim() ? `Services Tony Durante offers:\n${serviceMenu.trim()}` : '',
+  ].filter(Boolean).join('\n\n')
+
+  return `You are the writing assistant for Antonio at Tony Durante LLC. He is refining a client-facing offer narrative and tells you, in his own words, what he wants it to say. HE is the author and decides the content — your job is to write what he asks, clearly and professionally. Do NOT refuse, judge, lecture, second-guess, or add disclaimers or corrections. Apply his instruction faithfully and flexibly. He reviews every offer before it is sent.
+
+OUTPUT CONTRACT (critical):
+- Return a single JSON object: { "note": "<one short sentence: what you changed>", "changes": { ... } }.
+- "changes" contains ONLY the sections you actually changed, using these exact keys when changed: "${introKey}" (string), "strategy" (array of {step_number, title, description}), "next_steps" (same shape), "future_developments" (array of {text}), "immediate_actions" (array of {title, description}).
+- Do NOT include a section you did not change. If nothing changed, return "changes": {}.
+- NEVER return the other-language intro. Only "${introKey}" may be set.
+- Output ONLY the JSON object. No markdown, no code fences.
+
+HOW TO WRITE:
+- His message is instruction + context about the client. Use BOTH to produce the wording he wants — say exactly what he tells you to say, in a polished client-facing voice.
+- Only touch the section(s) his instruction is about; leave every other section exactly as it is (don't return it), so his other edits are preserved.
+- Write in ${lang}. Address the client by the CLIENT name given (never a name from the notes). Don't include pricing/amounts.
+- Don't invent specific facts he didn't give you; otherwise follow his instruction.
+
+${reference}`
+}
+
+/** User prompt for a refine round: the current narrative (as the staff member
+ * currently has it, including hand-edits) + the offer context + the instruction. */
+export function buildRefineUserPrompt(opts: {
+  clientName: string
+  contractType: string
+  entityType: string
+  serviceLines: string[]
+  current: { intro_en?: string; intro_it?: string; strategy?: string; next_steps?: string; future_developments?: string; immediate_actions?: string }
+  instruction: string
+}): string {
+  const c = opts.current
+  return `CLIENT: ${opts.clientName}
+CONTRACT TYPE: ${opts.contractType}
+ENTITY TYPE: ${opts.entityType || 'Not specified — keep tax wording generic'}
+SELECTED SERVICES:
+${opts.serviceLines.map((s) => `- ${s}`).join('\n')}
+
+CURRENT NARRATIVE (refine from exactly this — leave any section you are not asked to change out of "changes"):
+[intro_en]: ${c.intro_en || '(empty)'}
+[intro_it]: ${c.intro_it || '(empty)'}
+[strategy]: ${c.strategy || '(empty)'}
+[next_steps]: ${c.next_steps || '(empty)'}
+[future_developments]: ${c.future_developments || '(empty)'}
+[immediate_actions]: ${c.immediate_actions || '(empty)'}
+
+INSTRUCTION FROM STAFF: ${opts.instruction}
+
+Return the JSON now.`
+}
+
 /** Build the user prompt from the concrete offer inputs. `serviceLines` are the
  * pre-rendered "Name — description" lines from {@link renderServiceLines}. */
 export function buildUserPrompt(
