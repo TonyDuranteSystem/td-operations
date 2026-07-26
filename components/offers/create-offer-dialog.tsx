@@ -11,6 +11,7 @@ interface CatalogService {
   id: string
   slug: string
   name: string
+  description: string | null
   pipeline: string | null
   contract_type: string | null
   has_annual: boolean
@@ -207,6 +208,7 @@ export function CreateOfferDialog({
             id: (s.slug as string) || (s.id as string),
             slug: (s.slug as string) || '',
             name: s.name as string,
+            description: (s.description as string | null) ?? null,
             pipeline: (s.pipeline as string | null) ?? null,
             contract_type: (s.contract_type as string | null) ?? null,
             has_annual: (s.has_annual as boolean) ?? false,
@@ -369,9 +371,26 @@ export function CreateOfferDialog({
       }
       if (adminNotes.trim()) noteParts.push(`Admin Notes: ${adminNotes.trim()}`)
 
-      const serviceNames = selected.map(s => {
+      // Send each selected service's real name + catalog description so the
+      // writer describes the ACTUAL service (from the editable catalog), not
+      // prose invented in code.
+      const serviceDetails = selected.map(s => {
         const cat = catalog.find(c => c.id === s.id)
-        return cat?.name || s.id
+        return { name: cat?.name || s.id, description: cat?.description || null }
+      })
+
+      // Whether this offer carries ongoing management — true if a selected
+      // service is a management contract (formation / onboarding / renewal), OR
+      // carries a recurring annual fee, OR is a primary service. Using all three
+      // signals (not contract_type alone) means a management service whose
+      // catalog row is missing contract_type still counts. A standalone offer
+      // (ITIN-only, notary-only, banking-only) stays false, so the writer won't
+      // promise registered agent / annual filing / the portal the client didn't buy.
+      const includesManagement = selected.some(s => {
+        const svc = catalog.find(c => c.id === s.id)
+        const ct = svc?.contract_type
+        return ct === 'formation' || ct === 'onboarding' || ct === 'renewal'
+          || !!svc?.has_annual || svc?.category === 'primary'
       })
 
       const res = await fetch('/api/crm/admin-actions/generate-offer-narrative', {
@@ -380,9 +399,19 @@ export function CreateOfferDialog({
         body: JSON.stringify({
           client_name: clientNameValue,
           language,
-          services: serviceNames,
+          services: serviceDetails,
           notes_context: noteParts.join('\n\n'),
-          contract_type: catalog.find(c => selected.some(s => s.id === c.id))?.contract_type || 'formation',
+          // Same contract-type the offer RECORD uses (derivedContractType skips
+          // null-contract_type services), so the narrative can't describe forming
+          // a new company for an onboarding client on a bundled offer.
+          contract_type: derivedContractType,
+          // Entity type drives the tax wording (SMLLC = 5472/1120 information
+          // return, MMLLC = 1065 partnership with P&L + balance sheet). Without
+          // it the writer can't describe the correct filing for this client.
+          entity_type: entityType || null,
+          // Gates the management/portal language so standalone offers don't
+          // over-promise ongoing services.
+          includes_management: includesManagement,
           // Let the server pull the client's full call transcript (notes + every
           // turn) from call_summaries for a richer, personalized narrative.
           lead_id: leadId || null,

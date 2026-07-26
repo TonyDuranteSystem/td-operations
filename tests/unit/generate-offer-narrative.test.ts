@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { validateNarrative, renderCallForOffer, NARRATIVE_KEYS, type NarrativeResponse } from '@/lib/offer-narrative'
+import { validateNarrative, renderCallForOffer, normalizeEntityType, NARRATIVE_KEYS, type NarrativeResponse } from '@/lib/offer-narrative'
+import {
+  renderServiceLines,
+  FALLBACK_BUSINESS_RULES,
+  resolveBusinessRules,
+  offerIncludesManagement,
+} from '@/lib/offers/narrative-business-rules'
 
 function validNarrative(): NarrativeResponse {
   return {
@@ -24,6 +30,98 @@ function validNarrative(): NarrativeResponse {
     ],
   }
 }
+
+describe('normalizeEntityType', () => {
+  it('maps the dialog short codes to human labels', () => {
+    expect(normalizeEntityType('SMLLC')).toBe('Single-Member LLC')
+    expect(normalizeEntityType('MMLLC')).toBe('Multi-Member LLC')
+    expect(normalizeEntityType('Corp')).toBe('Corporation')
+  })
+
+  it('maps the full labels stored on the offer record', () => {
+    expect(normalizeEntityType('Single Member LLC')).toBe('Single-Member LLC')
+    expect(normalizeEntityType('Multi Member LLC')).toBe('Multi-Member LLC')
+    expect(normalizeEntityType('Corporation')).toBe('Corporation')
+  })
+
+  it('is case- and whitespace-insensitive', () => {
+    expect(normalizeEntityType('  smllc ')).toBe('Single-Member LLC')
+    expect(normalizeEntityType('multi member llc')).toBe('Multi-Member LLC')
+  })
+
+  it('returns empty string for missing/unknown so the prompt stays generic', () => {
+    expect(normalizeEntityType('')).toBe('')
+    expect(normalizeEntityType(null)).toBe('')
+    expect(normalizeEntityType(undefined)).toBe('')
+    expect(normalizeEntityType('LLP')).toBe('')
+  })
+})
+
+describe('renderServiceLines', () => {
+  it('renders name + catalog description as one line', () => {
+    expect(renderServiceLines([{ name: 'Onboarding', description: 'TD takes over management of an existing LLC.' }]))
+      .toEqual(['Onboarding — TD takes over management of an existing LLC.'])
+  })
+
+  it('renders just the name when there is no description', () => {
+    expect(renderServiceLines([{ name: 'Onboarding', description: null }])).toEqual(['Onboarding'])
+    expect(renderServiceLines([{ name: 'Onboarding' }])).toEqual(['Onboarding'])
+  })
+
+  it('accepts bare-string services for backward compatibility', () => {
+    expect(renderServiceLines(['Onboarding', 'EIN Application'])).toEqual(['Onboarding', 'EIN Application'])
+  })
+
+  it('drops blank / nameless entries', () => {
+    expect(renderServiceLines(['', { name: '' }, { description: 'orphan' } as { name?: string; description?: string }, 'Real']))
+      .toEqual(['Real'])
+  })
+})
+
+describe('FALLBACK_BUSINESS_RULES (minimal fail-safe floor)', () => {
+  it('forbids bookkeeping and keeps tax wording generic', () => {
+    expect(FALLBACK_BUSINESS_RULES.toLowerCase()).toContain('does not offer')
+    expect(FALLBACK_BUSINESS_RULES.toLowerCase()).toContain('bookkeeping')
+    expect(FALLBACK_BUSINESS_RULES.toLowerCase()).toMatch(/stay general|generic/i)
+  })
+
+  it('is a floor, NOT a mirror — it does not duplicate the rich KB content', () => {
+    // The rich per-entity filing + portal detail lives ONLY in the editable KB
+    // article, so the fallback can never drift from it. Guard that here.
+    expect(FALLBACK_BUSINESS_RULES).not.toContain('5472')
+    expect(FALLBACK_BUSINESS_RULES).not.toContain('1065')
+    expect(FALLBACK_BUSINESS_RULES.toLowerCase()).not.toContain('portal chat')
+  })
+})
+
+describe('resolveBusinessRules', () => {
+  it('uses the KB article content when present', () => {
+    const r = resolveBusinessRules({ content: 'REAL RULES FROM KB' })
+    expect(r).toEqual({ rules: 'REAL RULES FROM KB', source: 'kb' })
+  })
+
+  it('falls back to the floor and flags a missing article', () => {
+    expect(resolveBusinessRules(null)).toEqual({ rules: FALLBACK_BUSINESS_RULES, source: 'fallback_missing' })
+    expect(resolveBusinessRules({ content: '' }).source).toBe('fallback_missing')
+    expect(resolveBusinessRules({ content: '   ' }).source).toBe('fallback_missing')
+    expect(resolveBusinessRules({ content: null }).source).toBe('fallback_missing')
+  })
+})
+
+describe('offerIncludesManagement', () => {
+  it('is true only for management contract types', () => {
+    expect(offerIncludesManagement('formation')).toBe(true)
+    expect(offerIncludesManagement('onboarding')).toBe(true)
+    expect(offerIncludesManagement('renewal')).toBe(true)
+  })
+  it('is false for standalone / unknown contract types', () => {
+    expect(offerIncludesManagement('itin')).toBe(false)
+    expect(offerIncludesManagement('tax_return')).toBe(false)
+    expect(offerIncludesManagement('')).toBe(false)
+    expect(offerIncludesManagement(null)).toBe(false)
+    expect(offerIncludesManagement(undefined)).toBe(false)
+  })
+})
 
 describe('validateNarrative', () => {
   it('accepts a valid narrative response', () => {

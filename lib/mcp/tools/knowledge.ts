@@ -143,7 +143,10 @@ export function registerKnowledgeTools(server: McpServer) {
         if (source === "article") {
           const { data, error } = await supabaseAdmin
             .from("knowledge_articles")
-            .insert({ title, category, content })
+            // tags were silently dropped for articles (persisted only for
+            // responses), so any tag-based lookup (e.g. the offer-narrative
+            // rules article) could never find a tool-created article.
+            .insert({ title, category, content, tags: tags && tags.length ? tags : null })
             .select("id, title, category")
             .single()
           if (error) throw error

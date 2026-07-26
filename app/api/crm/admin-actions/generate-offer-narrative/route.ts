@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
-import { validateNarrative, renderCallForOffer } from '@/lib/offer-narrative'
+import { validateNarrative, renderCallForOffer, normalizeEntityType } from '@/lib/offer-narrative'
+import {
+  OFFER_NARRATIVE_RULES_TAG,
+  FALLBACK_BUSINESS_RULES,
+  renderServiceLines,
+  resolveBusinessRules,
+  buildSystemPrompt,
+  buildUserPrompt,
+  offerIncludesManagement,
+  type NarrativeServiceInput,
+} from '@/lib/offers/narrative-business-rules'
 import { callAI } from '@/lib/portal/ai-provider'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { reportSystemError } from '@/lib/system-errors'
@@ -38,76 +48,48 @@ async function fetchCallContext(leadId?: string | null, accountId?: string | nul
   }
 }
 
-// ── System prompt ──
-
-function buildSystemPrompt(language: 'en' | 'it'): string {
-  // Single-language intro — match the client's preferred language only.
-  // 2026-05-07: previously generated BOTH intros; the access-code offer page
-  // renders both fields side-by-side, which produced unwanted bilingual
-  // welcome blocks for monolingual clients (Mojo / Sanjin case). Generator
-  // now produces only the matching intro and leaves the other empty.
-  const introSpec = language === 'it'
-    ? `- "intro_it": A rich, 4-6 sentence personalized introduction in NATURAL Italian (not machine-translated). Open by referencing what the client actually shared on their call — their business, their goal, a specific concern or opportunity they raised. Then explain what this offer is designed to do for them and why this approach fits their situation. Make it personal and specific to THIS client, never generic.
-- "intro_en": MUST be an empty string "". Do not produce English intro content.`
-    : `- "intro_en": A rich, 4-6 sentence personalized introduction in English. Open by referencing what the client actually shared on their call — their business, their goal, a specific concern or opportunity they raised. Then explain what this offer is designed to do for them and why this approach fits their situation. Make it personal and specific to THIS client, never generic.
-- "intro_it": MUST be an empty string "". Do not produce Italian intro content.`
-
-  const otherSectionsLang = language === 'it' ? 'Italian' : 'English'
-
-  return `You are a senior business consultant at Tony Durante LLC, a professional consulting firm based in Florida that helps international entrepreneurs set up and manage U.S. LLCs.
-
-Your job is to write a rich, professional, client-facing offer narrative — NOT a terse summary. The client reads this before signing, so it should feel like a tailored strategy memo from a consultant who listened carefully to their call and understands their situation deeply.
-
-Your writing style is:
-- Professional but warm and approachable — a trusted advisor, not a salesperson
-- Specific: pull real details from the call/notes (business model, country, goals, concerns raised). Every sentence should be about THIS client, not a template
-- Confident and authoritative about the services
-- No filler, no jargon
-
-You must produce ALL output as a single JSON object with exactly these keys:
-${introSpec}
-- "strategy": An array of 4-5 strategic steps. Each: { "step_number": N, "title": "Short Title", "description": "2-3 sentence explanation of WHY this step matters for this client specifically, grounded in their situation — not just what it is" }. These describe the overall approach/plan for the client.
-- "next_steps": An array of 4-5 next steps after signing. Each: { "step_number": N, "title": "Short Title", "description": "2-3 sentences: what happens, who does what, and what the client can expect" }. These describe what happens operationally after the client signs.
-- "future_developments": An array of 3-4 items. Each: { "text": "A concrete future opportunity specific to their business model or goals, 1-2 sentences" }. These are growth opportunities for later.
-- "immediate_actions": An array of 2-3 items. Each: { "title": "Action Name", "description": "2-3 sentences: what needs to happen right away and why it matters for this client" }. These are things to address right away.
-
-LANGUAGE RULES (CRITICAL):
-- The client's preferred language is ${otherSectionsLang}. Generate ALL content in ${otherSectionsLang} only.
-- The intro field for the OTHER language MUST be an empty string ""; do NOT translate or duplicate the intro into the other language.
-- "strategy", "next_steps", "future_developments", and "immediate_actions" MUST be written in ${otherSectionsLang}.
-
-CONTRACT TYPE RULES (CRITICAL — shapes the entire content):
-- "formation": client is forming a BRAND NEW LLC. Cover formation steps, EIN application, registered agent setup, state filing.
-- "onboarding": client ALREADY HAS an existing LLC and is joining Tony Durante's ongoing management. Do NOT mention entity formation, LLC registration, or gathering formation documents — the company exists. Focus on: integrating into ongoing compliance management, collecting existing company documents, setting up accounting systems, understanding their current compliance state, registered agent and annual filing management going forward.
-- "renewal": client is renewing an existing annual management agreement. Focus on continuity, service upgrades, and the upcoming year's compliance calendar.
-
-Other rules:
-- Output ONLY the JSON object. No markdown, no code fences, no explanation.
-- All content must be relevant to the specific client and services selected.
-- The intro must reference the client's actual situation, not be generic.
-- Strategy and next_steps should reflect the specific services in the offer.
-- Do NOT include pricing or amounts — those are handled separately.
-- Do NOT include legal disclaimers — the contract handles those.`
-}
-
-function buildUserPrompt(
-  clientName: string,
-  language: string,
-  services: string[],
-  notesContext: string,
-  contractType: string,
-): string {
-  return `Generate offer narrative content for this client:
-
-CLIENT: ${clientName}
-PREFERRED LANGUAGE: ${language === 'it' ? 'Italian' : 'English'}
-CONTRACT TYPE: ${contractType}
-SELECTED SERVICES: ${services.join(', ')}
-
-NOTES & CONTEXT (internal — do not reproduce verbatim, use to personalize):
-${notesContext || 'No additional notes provided.'}
-
-Generate the JSON now.`
+/**
+ * Load the editable offer-narrative BUSINESS RULES from the knowledge base (the
+ * canonical business-rules store — Antonio edits them there, no code change). We
+ * take the most-recently-updated article carrying the rules tag; `created_at` is
+ * a deterministic tiebreaker (updated_at can be null). FAIL-SAFE: any miss/error
+ * degrades to the built-in floor so the writer still never invents bookkeeping.
+ *
+ * LOUD ON MISS: a genuinely-absent/mistagged article is a CONFIG error (Antonio's
+ * live edits would be silently ignored), so it is reported — distinctly from a
+ * transient DB error. Never fail-open.
+ */
+async function loadBusinessRules(userEmail?: string | null): Promise<string> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('knowledge_articles')
+      .select('content')
+      .contains('tags', [OFFER_NARRATIVE_RULES_TAG])
+      .order('updated_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle()
+    if (error) throw error
+    const { rules, source } = resolveBusinessRules(data)
+    if (source === 'fallback_missing') {
+      // Config error, not a blip: the editable rules article is missing/mistagged
+      // so every offer silently uses the code floor and admin edits do nothing.
+      console.error(`[generate-offer-narrative] no knowledge article tagged "${OFFER_NARRATIVE_RULES_TAG}" — using built-in fallback floor. Create/tag the article so edits take effect.`)
+      await reportSystemError({
+        source: 'server',
+        route: '/api/crm/admin-actions/generate-offer-narrative',
+        method: 'POST',
+        http_status: 200,
+        user_email: userEmail ?? null,
+        message: `Offer-narrative rules article (tag "${OFFER_NARRATIVE_RULES_TAG}") not found — generator fell back to the built-in floor; admin KB edits have no effect until the article is created and tagged.`,
+      }).catch(() => {})
+    }
+    return rules
+  } catch (err) {
+    // Transient DB error — quiet fallback, still safe (never fail-open).
+    console.error('[generate-offer-narrative] business-rules load failed, using fallback floor:', err instanceof Error ? err.message : err)
+    return FALLBACK_BUSINESS_RULES
+  }
 }
 
 // ── Route handler ──
@@ -121,7 +103,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json()
-    const { client_name, language, services, notes_context, contract_type, lead_id, account_id } = body
+    const { client_name, language, services, notes_context, contract_type, entity_type, includes_management, lead_id, account_id } = body
 
     if (!client_name || !services || !Array.isArray(services) || services.length === 0) {
       return NextResponse.json(
@@ -130,8 +112,36 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // Services arrive from the dialog as { name, description } read straight from
+    // the editable services catalog (older/other callers may send bare names).
+    // Render "Name — description" lines so the writer describes the REAL service,
+    // not prose invented in code.
+    const serviceLines = renderServiceLines(services as NarrativeServiceInput[])
+    if (serviceLines.length === 0) {
+      return NextResponse.json(
+        { error: 'services must contain at least one named service' },
+        { status: 400 },
+      )
+    }
+
     const lang: 'en' | 'it' = language === 'it' ? 'it' : 'en'
-    const systemPrompt = buildSystemPrompt(lang)
+    // Whether this offer carries ongoing management — gates the management/portal
+    // language so a narrow standalone offer (ITIN-only, notary-only) doesn't
+    // promise registered agent / annual filing / the portal the client didn't buy.
+    // The dialog sends an explicit flag computed from the real selected services;
+    // fall back to deriving it from the contract type for other callers.
+    const contractType = contract_type || 'formation'
+    // Prefer the dialog's explicit flag (computed from the real selected
+    // services). Fall back to the RAW contract type — not the 'formation'
+    // default — so an absent/unknown type never silently defaults to management ON.
+    const includesManagement = typeof includes_management === 'boolean'
+      ? includes_management
+      : offerIncludesManagement(contract_type)
+
+    // Business rules (what TD does/doesn't do, tax filing by company type, portal)
+    // come from the editable knowledge base, not hardcoded prose. Fail-safe.
+    const businessRules = await loadBusinessRules(user?.email)
+    const systemPrompt = buildSystemPrompt(lang, businessRules, includesManagement)
 
     // Enrich the context with the client's actual call (notes + full transcript)
     // so the narrative is grounded in what they really said, not just the capped
@@ -144,9 +154,10 @@ export async function POST(req: NextRequest) {
     const userPrompt = buildUserPrompt(
       client_name,
       lang,
-      services as string[],
+      serviceLines,
       combinedContext,
-      contract_type || 'formation',
+      contractType,
+      normalizeEntityType(entity_type),
     )
 
     // AI generation via the shared provider (lib/portal/ai-provider.ts):

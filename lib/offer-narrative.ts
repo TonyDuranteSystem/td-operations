@@ -51,6 +51,23 @@ export function renderCallForOffer(call: OfferCallContext | null | undefined, ch
   return out
 }
 
+/**
+ * Normalize an entity type into a human label the offer-narrative model reasons
+ * about. The Create Offer dialog sends short codes (SMLLC/MMLLC/Corp); legacy or
+ * other callers may send the full label. Unknown/empty returns '' so the prompt's
+ * "not specified" branch keeps the tax wording generic instead of guessing a form
+ * (or, worse, inventing bookkeeping). Pure + exported so it's unit-tested without
+ * a route/AI call.
+ */
+export function normalizeEntityType(raw?: string | null): string {
+  const v = (raw || '').trim().toLowerCase()
+  if (!v) return ''
+  if (v === 'smllc' || v.includes('single')) return 'Single-Member LLC'
+  if (v === 'mmllc' || v.includes('multi')) return 'Multi-Member LLC'
+  if (v === 'corp' || v.includes('corp')) return 'Corporation'
+  return ''
+}
+
 export interface NarrativeResponse {
   intro_en: string
   intro_it: string
