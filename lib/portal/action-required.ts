@@ -426,3 +426,61 @@ export async function notifySs4ReadyToSign(opts: {
     return { dispatched: false, chat: msg, notification: msg, email: msg }
   }
 }
+
+/**
+ * Notify the tenant that their office lease is ready to sign in the portal.
+ *
+ * Mirrors notifySs4ReadyToSign: posts a portal chat message, raises the bell +
+ * web push, and sends an immediate email (when the contact has an email on
+ * file) — bilingual, deep-linking to the Sign page. Fired from sendLeaseToPortal
+ * after a draft→sent flip, so both the CRM Send button and the first-installment
+ * renewal auto-send notify the client. Only the lease's own contact (the single
+ * tenant signer) is messaged. Returns the per-channel result so callers can
+ * report truthfully whether the email actually went out.
+ *
+ * Guard: only dispatches while the lease is actually awaiting signature
+ * (status sent/viewed); a signed/draft lease is skipped. Dedup scope is the
+ * per-account Sign link, so a client with two companies gets one alert each.
+ */
+export async function notifyLeaseReadyToSign(opts: {
+  leaseId?: string
+  token?: string
+  serviceDeliveryId?: string | null
+}): Promise<ActionRequiredResult> {
+  try {
+    if (!opts.leaseId && !opts.token) {
+      const msg = 'skipped: no lease identifier (leaseId or token required)'
+      return { dispatched: false, chat: msg, notification: msg, email: msg }
+    }
+    let query = supabaseAdmin
+      .from('lease_agreements')
+      .select('id, token, account_id, contact_id, tenant_company, status')
+    query = opts.leaseId ? query.eq('id', opts.leaseId) : query.eq('token', opts.token as string)
+    const { data: lease } = await query.maybeSingle()
+
+    if (!lease || (lease.status !== 'sent' && lease.status !== 'viewed')) {
+      const msg = 'skipped: lease not awaiting signature'
+      return { dispatched: false, chat: msg, notification: msg, email: msg }
+    }
+
+    const company = lease.tenant_company || 'your company'
+    return await notifyClientActionRequired({
+      contact_id: lease.contact_id ?? null,
+      account_id: lease.account_id ?? null,
+      service_delivery_id: opts.serviceDeliveryId ?? null,
+      topic: null,
+      title: {
+        en: `Sign your office lease — ${company}`,
+        it: `Firma il contratto di locazione — ${company}`,
+      },
+      message: {
+        en: `Your office lease for ${company} is ready for your signature. Please open your portal and sign it — it only takes a minute.`,
+        it: `Il contratto di locazione per ${company} è pronto per la firma. Accedi al portale e firmalo — bastano pochi secondi.`,
+      },
+      link: `/portal/sign?account=${lease.account_id}`,
+    })
+  } catch (err) {
+    const msg = `failed: ${err instanceof Error ? err.message : String(err)}`
+    return { dispatched: false, chat: msg, notification: msg, email: msg }
+  }
+}

@@ -13,6 +13,7 @@ import { PortalSidebar } from '@/components/portal/portal-sidebar'
 import { OfficeClock } from '@/components/portal/office-clock'
 import { countryToTimeZone } from '@/lib/portal/client-timezone'
 import { getUnopenedDocsCount } from '@/lib/portal/document-alerts'
+import { getToSignCount } from '@/lib/portal/signable-documents'
 import { LocaleProvider } from '@/components/portal/locale-provider'
 import { Providers } from '@/components/providers'
 import { NotificationBell } from '@/components/portal/notification-bell'
@@ -218,10 +219,15 @@ export default async function PortalLayout({
         contactId ? getUnreadChatCount(contactId) : Promise.resolve(0),
       ])
 
-  // Unopened client-visible documents — drives the Documents tab pulse + count.
-  const unreadDocsCount = contactId
-    ? await getUnopenedDocsCount(contactId, accounts.map(a => a.id))
-    : 0
+  // Tab counts, in parallel to avoid adding a serial round-trip to every page:
+  //  - unreadDocsCount → Documents tab pulse + count (unopened client docs)
+  //  - toSignCount     → Sign Documents tab "new" blink (lease, OA, SS-4, e-sign…)
+  const [unreadDocsCount, toSignCount] = await Promise.all([
+    contactId ? getUnopenedDocsCount(contactId, accounts.map(a => a.id)) : Promise.resolve(0),
+    contactId && selectedAccountId
+      ? getToSignCount({ selectedAccountId, contactId, userEmail: user.email })
+      : Promise.resolve(0),
+  ])
 
   // "Complete Setup" sidebar visibility — see lib/portal/wizard-visibility.ts
   // for the three branches (SD-by-account, SD-by-contact, tier-based
@@ -256,6 +262,7 @@ export default async function PortalLayout({
             portalTier={portalTier}
             unreadChatCount={unreadChatCount}
             unreadDocsCount={unreadDocsCount}
+            toSignCount={toSignCount}
             accountType={accounts.find(a => a.id === selectedAccountId)?.account_type ?? null}
             contactId={contactId || undefined}
             portalRole={effectivePortalRole}

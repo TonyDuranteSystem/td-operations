@@ -48,6 +48,8 @@ interface PortalSidebarProps {
   portalTier?: string
   unreadChatCount?: number
   unreadDocsCount?: number
+  /** Documents awaiting this client's signature — drives the Sign tab "new" blink. */
+  toSignCount?: number
   hasWizardPending?: boolean
   accountType?: string | null
   contactId?: string
@@ -185,7 +187,7 @@ const SECTION_LABELS: Record<string, Record<string, string>> = {
 }
 
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, accountType, contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, toSignCount = 0, accountType, contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -432,12 +434,16 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
   const renderNavItem = (item: NavItem) => {
     const isDocsItem = item.href === '/portal/documents'
-    // Documents tab pulses while there are unopened client-visible docs, and
-    // stops once the client is actually on the Documents page.
+    const isSignItem = item.href === '/portal/sign'
+    // Documents tab pulses while there are unopened client-visible docs; the
+    // Sign Documents tab pulses while there is anything awaiting signature
+    // (lease, OA, SS-4, e-sign, …). Both stop once the client is on that page.
     const docsPulse = isDocsItem && unreadDocsCount > 0 && !isActive(item.href)
+    const signPulse = isSignItem && toSignCount > 0 && !isActive(item.href)
     const badge = item.href === '/portal/chat' && liveUnreadCount > 0
       ? liveUnreadCount
-      : (isDocsItem && unreadDocsCount > 0 ? unreadDocsCount : 0)
+      : (isDocsItem && unreadDocsCount > 0 ? unreadDocsCount
+        : (isSignItem && toSignCount > 0 ? toSignCount : 0))
 
     // Context-aware label for the wizard nav item.
     // The tab serves two purposes depending on the client's stage:
@@ -475,7 +481,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           isActive(item.href)
             ? 'bg-blue-50 text-blue-700'
             : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900',
-          docsPulse && 'animate-pulse'
+          (docsPulse || signPulse) && 'animate-pulse'
         )}
       >
         <item.icon className="h-4 w-4 shrink-0" />

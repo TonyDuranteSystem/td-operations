@@ -164,6 +164,15 @@ export async function createLease(
     // 3. Duplicate check (unless opted out)
     const year = params.contract_year ?? new Date().getFullYear()
     if (!params.skip_duplicate_check) {
+      // Keyed on account+year ONLY (not tenant_company). This is the SAFETY net
+      // against silent suite/registered-address drift: if the account's legal
+      // name was corrected and staff re-generate the same-year lease, the new
+      // tenant_company would otherwise miss the prior lease, create a second one
+      // with a fresh suite, and overwrite accounts.physical_address. A visible
+      // "duplicate" refusal is far safer than a silent address change. The rare
+      // legitimate second lease (a separate personal lease on an account that
+      // already has a company lease) is created via skip_duplicate_check, and
+      // the unique index (keyed on account+year+tenant_company) still permits it.
       const { data: existing } = await supabaseAdmin
         .from("lease_agreements")
         .select("id, token, status")
@@ -251,6 +260,29 @@ export async function createLease(
       .single()
 
     if (insertErr || !lease) {
+      // Race loser: another writer inserted the (account_id, contract_year)
+      // lease between our duplicate check and this insert. The unique index
+      // uq_lease_account_contract_year rejects it with 23505 — treat it as a
+      // duplicate (not an error) so callers behave exactly as the SELECT-caught
+      // duplicate path, and no second lease row is ever created.
+      if (insertErr?.code === "23505") {
+        const { data: winner } = await supabaseAdmin
+          .from("lease_agreements")
+          .select("id, token, status")
+          .eq("account_id", params.account_id)
+          .eq("contract_year", year)
+          .eq("tenant_company", account.company_name)
+          .limit(1)
+        if (winner?.length) {
+          const w = winner[0]
+          return {
+            success: false,
+            outcome: "duplicate",
+            existing: { id: w.id, token: w.token, status: w.status },
+            error: `Lease already exists for ${account.company_name} year ${year}`,
+          }
+        }
+      }
       return {
         success: false,
         outcome: "error",
@@ -315,6 +347,10 @@ export interface SendLeaseToPortalResult {
   recipient?: string | null
   tenant_company?: string
   access_code?: string
+  /** True only when the ready-to-sign EMAIL actually went out (not push-only,
+   * not skipped for a missing contact email, not failed). Lets callers report
+   * truthfully instead of claiming an email that never sent. */
+  emailSent?: boolean
   error?: string
 }
 
@@ -393,8 +429,22 @@ export async function sendLeaseToPortal(token: string): Promise<SendLeaseToPorta
     record_id: lease.id,
     account_id: lease.account_id,
     summary: `Made lease available in the client portal for ${lease.tenant_company}`,
-    details: { token, tenant_email: lease.tenant_email, emailed: false, channel: "portal" },
+    details: { token, channel: "portal" },
   })
 
-  return { success: true, status: "sent", ...base }
+  // Tell the tenant their lease is ready to sign (portal chat + bell/push + an
+  // immediate email when the contact has one on file). Best-effort: a notify
+  // failure must never fail the send itself. emailSent reflects whether the
+  // email channel actually went out, so callers don't claim an email that never
+  // sent.
+  let emailSent = false
+  try {
+    const { notifyLeaseReadyToSign } = await import("@/lib/portal/action-required")
+    const notified = await notifyLeaseReadyToSign({ token })
+    emailSent = typeof notified.email === "string" && notified.email.startsWith("ok")
+  } catch (err) {
+    console.error(`[sendLeaseToPortal] notify failed for ${token}:`, err instanceof Error ? err.message : err)
+  }
+
+  return { success: true, status: "sent", emailSent, ...base }
 }

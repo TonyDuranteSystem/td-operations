@@ -603,9 +603,11 @@ async function sendLease(token: string) {
 
   return {
     success: true,
-    emailed: false,
+    emailed: result.emailSent === true,
     recipient: result.recipient,
-    notice: `Ready — the Lease Agreement now appears in the client's portal to sign. No email is sent.`,
+    notice: result.emailSent
+      ? `Ready — the Lease Agreement is now in the client's portal to sign, and they've been notified (in-portal alert + email).`
+      : `Ready — the Lease Agreement is now in the client's portal to sign, and they've been alerted in the portal (no confirmation email went out — check the client has an email on file).`,
     client_url: `${LEASE_BASE_URL}/${token}/${result.access_code}`,
   }
 }

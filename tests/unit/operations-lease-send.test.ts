@@ -147,7 +147,7 @@ describe("sendLeaseToPortal", () => {
     expect(updateCalls.length).toBe(1)
     expect(updateCalls[0]).toEqual({ status: "sent" })
     expect(actionLogCalls.length).toBe(1)
-    expect(actionLogCalls[0].details).toMatchObject({ emailed: false, channel: "portal" })
+    expect(actionLogCalls[0].details).toMatchObject({ channel: "portal" })
   })
 
   it("treats a lost race that landed on 'sent' as a no-op success (no double log)", async () => {
