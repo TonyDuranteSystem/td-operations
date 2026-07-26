@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   FileText, Send, Plus, CheckCircle2, Clock, AlertCircle,
-  Loader2, ExternalLink, RefreshCw,
+  Loader2, ExternalLink, RefreshCw, Trash2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -33,6 +33,12 @@ interface DocumentStatuses {
 interface DocumentsPanelProps {
   accountId: string
   isAdmin: boolean
+  /** Client-facing base URL (app.tonydurante.us in prod, the sandbox URL in
+   *  sandbox) — computed on the server and passed down, because this is a client
+   *  component and the env override that distinguishes the two is server-only.
+   *  Preview links MUST use it so a sandbox View opens the sandbox lease, not the
+   *  production one (which carries a different access code → "Invalid access code"). */
+  appBaseUrl: string
   onGenerateOA: () => void
   onGenerateLease: () => void
   onGenerateSS4: () => void
@@ -60,11 +66,12 @@ function formatDate(d: string | null | undefined): string {
   }
 }
 
-export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLease, onGenerateSS4, onGenerateIntercompany, onRegenLease }: DocumentsPanelProps) {
+export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, onGenerateLease, onGenerateSS4, onGenerateIntercompany, onRegenLease }: DocumentsPanelProps) {
   const router = useRouter()
   const [statuses, setStatuses] = useState<DocumentStatuses | null>(null)
   const [loading, setLoading] = useState(true)
   const [sendingDoc, setSendingDoc] = useState<string | null>(null)
+  const [cancellingDoc, setCancellingDoc] = useState<string | null>(null)
 
   const fetchStatuses = useCallback(async () => {
     try {
@@ -117,6 +124,48 @@ export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLea
       toast.error(err instanceof Error ? err.message : 'Error sending document')
     } finally {
       setSendingDoc(null)
+    }
+  }
+
+  // Which host serves the client-facing lease/OA/ss4 pages for THIS environment.
+  // There is no env var that's correct in both: the server app-URL override is
+  // empty in sandbox (falls back to production), and the public app-URL points at
+  // the internal CRM host in production. But on sandbox / preview / localhost the
+  // CRM and the client pages are ONE deployment on ONE domain, so the current
+  // address is the right base there; only in production is the client app on a
+  // separate domain (app.tonydurante.us), where we use the server-provided value.
+  // Staff-only preview, so using the current origin never exposes an internal
+  // domain to a client (R005). Falls back to appBaseUrl during SSR.
+  const previewBase = (() => {
+    if (typeof window === 'undefined') return appBaseUrl
+    const host = window.location.hostname
+    if (host.includes('sandbox') || host === 'localhost' || host.startsWith('127.')) {
+      return window.location.origin
+    }
+    return appBaseUrl
+  })()
+
+  const handleCancelDraft = async (token: string) => {
+    if (!window.confirm('Cancel this draft lease? It will be permanently deleted — this cannot be undone. (Only drafts can be cancelled; a sent or signed lease is never touched.)')) return
+    setCancellingDoc('lease')
+    try {
+      const res = await fetch('/api/crm/admin-actions/generate-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'cancel_lease_draft', token }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        toast.error(data.error || 'Could not cancel the draft')
+        return
+      }
+      toast.success(data.message || 'Draft lease cancelled')
+      fetchStatuses()
+      router.refresh()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error cancelling draft')
+    } finally {
+      setCancellingDoc(null)
     }
   }
 
@@ -251,6 +300,21 @@ export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLea
                       </button>
                     )}
 
+                    {/* Cancel draft — lease drafts only. A draft was never sent
+                        to the client, so deleting it is safe and frees the
+                        "one lease per year" block. Never shown once sent/signed. */}
+                    {doc.key === 'lease' && status === 'draft' && (
+                      <button
+                        onClick={() => handleCancelDraft(doc.data!.token)}
+                        disabled={cancellingDoc === doc.key}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-red-50 text-red-700 hover:bg-red-100 transition-colors disabled:opacity-50"
+                        title="Permanently delete this draft lease"
+                      >
+                        {cancellingDoc === doc.key ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                        Cancel draft
+                      </button>
+                    )}
+
                     {/* Recreate button for OA */}
                     {doc.key === 'oa' && doc.onGenerate && (
                       <button
@@ -309,19 +373,32 @@ export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLea
                           // host and is absent on the client-facing domain).
                           // Fall back to the codeless URL for any legacy row that
                           // has no code, rather than interpolating "undefined".
+                          // Base URL is the CURRENT environment's client domain (prod vs
+                          // sandbox), passed from the server — never hardcoded, or a sandbox
+                          // View opens the production document (different access code →
+                          // "Invalid access code"). R012.
                           doc.key === 'oa' ? (doc.data.access_code
-                            ? `https://app.tonydurante.us/operating-agreement/${doc.data.token}/${doc.data.access_code}?preview=td`
-                            : `https://app.tonydurante.us/operating-agreement/${doc.data.token}?preview=td`) :
-                          doc.key === 'lease' ? `https://app.tonydurante.us/lease/${doc.data.token}?preview=td` :
-                          doc.key === 'ss4' ? `https://app.tonydurante.us/ss4/${doc.data.token}/${doc.data.access_code}?preview=td` :
+                            ? `${previewBase}/operating-agreement/${doc.data.token}/${doc.data.access_code}?preview=td`
+                            : `${previewBase}/operating-agreement/${doc.data.token}?preview=td`) :
+                          // Lease preview MUST carry the access code. On the client-facing
+                          // domain the staff session cookie is absent, so ?preview=td alone
+                          // does not authenticate — the page falls back to requiring the code
+                          // and, without it, errors with "Invalid access code". The coded URL
+                          // satisfies that check. Fall back to codeless only for a legacy row
+                          // that has no code, rather than interpolating "undefined".
+                          doc.key === 'lease' ? (doc.data.access_code
+                            ? `${previewBase}/lease/${doc.data.token}/${doc.data.access_code}?preview=td`
+                            : `${previewBase}/lease/${doc.data.token}?preview=td`) :
+                          doc.key === 'ss4' ? `${previewBase}/ss4/${doc.data.token}/${doc.data.access_code}?preview=td` :
                           '#'
                         }
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="p-1 rounded hover:bg-zinc-100 text-muted-foreground"
-                        title="Preview"
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded text-muted-foreground hover:bg-zinc-100 transition-colors"
+                        title="Open the document as the client sees it (no email is sent, nothing is marked as opened)"
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
+                        View
                       </a>
                     )}
                   </>

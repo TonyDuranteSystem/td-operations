@@ -704,6 +704,14 @@ export async function POST(request: Request) {
         return NextResponse.json(result)
       }
 
+      case "cancel_lease_draft": {
+        if (!params.token) return NextResponse.json({ error: "Missing token" }, { status: 400 })
+        const { cancelLeaseDraft } = await import("@/lib/operations/lease")
+        const result = await cancelLeaseDraft(params.token)
+        if (!result.success) return NextResponse.json({ error: result.error }, { status: 400 })
+        return NextResponse.json({ success: true, message: result.message })
+      }
+
       case "fetch_statuses": {
         if (!account_id) return NextResponse.json({ error: "Missing account_id" }, { status: 400 })
         const statuses = await fetchDocumentStatuses(account_id)

@@ -149,6 +149,8 @@ interface OfferData {
 
 interface AccountDetailProps {
   account: Account
+  /** Client-facing base URL for the current environment (server-computed). */
+  appBaseUrl?: string
   contacts: Contact[]
   services: Service[]
   payments: Payment[]
@@ -581,7 +583,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [] }: AccountDetailProps) {
+export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [] }: AccountDetailProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   // Deep-link support: a `?tab=<key>` param (e.g. from the What's New "Open"
@@ -763,6 +765,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
       <DocumentsPanel
         accountId={account.id}
         isAdmin={true}
+        appBaseUrl={appBaseUrl}
         onGenerateOA={() => setShowOADialog(true)}
         onGenerateLease={() => setShowLeaseDialog(true)}
         onGenerateSS4={() => setShowSS4Dialog(true)}

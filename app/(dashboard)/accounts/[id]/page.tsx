@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { notFound } from 'next/navigation'
 import { AccountDetail } from '@/components/accounts/account-detail'
+import { APP_BASE_URL } from '@/lib/config'
 import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
@@ -474,6 +475,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
       )}
       <AccountDetail
         flows={flows}
+        appBaseUrl={APP_BASE_URL}
         account={account as Account}
         contacts={contacts}
         services={services}

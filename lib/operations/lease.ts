@@ -464,3 +464,103 @@ export async function sendLeaseToPortal(token: string): Promise<SendLeaseToPorta
 
   return { success: true, status: "sent", emailSent, ...base }
 }
+
+export interface CancelLeaseDraftResult {
+  success: boolean
+  error?: string
+  message?: string
+}
+
+/**
+ * Permanently deletes a lease that is STILL a draft. A draft has never been
+ * released to the client (only sent/viewed/signed leases appear in the portal),
+ * so there is nothing client-facing to preserve — and removing it frees the
+ * "one lease per company per year" block so staff can generate a corrected one.
+ * Refuses anything past draft: a sent/viewed/signed lease is the client's
+ * document and must never be silently destroyed (mirrors the OA recreate guard).
+ * Lives here (not in the route) so the protected accounts write stays in the
+ * operations layer, exactly like createLease/sendLeaseToPortal.
+ */
+export async function cancelLeaseDraft(token: string): Promise<CancelLeaseDraftResult> {
+  const { data: lease, error } = await supabaseAdmin
+    .from("lease_agreements")
+    .select("id, status, tenant_company, account_id, contract_year, suite_number")
+    .eq("token", token)
+    .maybeSingle()
+
+  if (error) return { success: false, error: `Could not read the lease: ${error.message}` }
+  if (!lease) return { success: false, error: `Lease not found: ${token}` }
+  if (lease.status !== "draft") {
+    return {
+      success: false,
+      error:
+        `Only a draft lease can be cancelled. This lease is "${lease.status}" — it has already ` +
+        `been sent to or signed by the client, so it cannot be deleted here.`,
+    }
+  }
+
+  // Conditional delete = TOCTOU guard. If the client (or another staff action)
+  // flipped it out of "draft" between our read and here, this deletes NOTHING
+  // and we report it honestly rather than destroying a live/signed lease.
+  const { data: deleted, error: delErr } = await supabaseAdmin
+    .from("lease_agreements")
+    .delete()
+    .eq("id", lease.id)
+    .eq("status", "draft")
+    .select("id")
+
+  if (delErr) return { success: false, error: `Failed to cancel the draft: ${delErr.message}` }
+  if (!deleted?.length) {
+    return {
+      success: false,
+      error: `This lease is no longer a draft — it may have just been sent or signed. Nothing was deleted.`,
+    }
+  }
+
+  // Undo the side effect createLease left on the account. When this draft was
+  // generated, createLease wrote the account's physical_address to this suite
+  // (that address is what a legacy account's client sees as their registered
+  // mailing address). If we delete the draft and leave it, the account keeps
+  // pointing at a suite no longer backed by any lease — and because suite numbers
+  // are handed out as global-max+1, the freed number is recycled to the next new
+  // account, so two clients could display the same suite. Recompute the address
+  // from the account's REMAINING leases (reuse the earliest same-tenant suite, or
+  // clear it if none remain) — but only when the stored address still reflects the
+  // cancelled suite, so a manually-set address is never clobbered.
+  if (lease.suite_number) {
+    const { data: acct } = await supabaseAdmin
+      .from("accounts")
+      .select("physical_address")
+      .eq("id", lease.account_id)
+      .maybeSingle()
+    if (acct?.physical_address?.includes(`Suite ${lease.suite_number}`)) {
+      const { data: remaining } = await supabaseAdmin
+        .from("lease_agreements")
+        .select("suite_number")
+        .eq("account_id", lease.account_id)
+        .eq("tenant_company", lease.tenant_company)
+        .not("suite_number", "is", null)
+        .order("created_at", { ascending: true })
+        .limit(1)
+      const restored = remaining?.[0]?.suite_number
+        ? `10225 Ulmerton Rd, Suite ${remaining[0].suite_number}, Largo, FL 33771`
+        : null
+      await supabaseAdmin
+        .from("accounts")
+        .update({ physical_address: restored })
+        .eq("id", lease.account_id)
+    }
+  }
+
+  logAction({
+    actor: "crm-admin",
+    action_type: "delete",
+    table_name: "lease_agreements",
+    record_id: lease.id,
+    account_id: lease.account_id,
+    summary: `Cancelled draft lease for ${lease.tenant_company} (${lease.contract_year})`,
+    details: { token, status_before: "draft", source: "crm-button" },
+  })
+
+  return { success: true, message: "Draft lease cancelled." }
+}
