@@ -102,7 +102,11 @@ export async function archiveFormSubmission(formType: string, submissionId: stri
         submittedAt: r.completed_at ?? nowIso,
         companyName: plan.companyName,
       },
-      { bucket: plan.bucket },
+      // A form with MORE THAN ONE upload origin (e.g. closure: external form →
+      // closure-uploads, portal wizard → onboarding-uploads) supplies a per-path
+      // bucket resolver so BOTH origins download from the right bucket. plan.bucket
+      // is the default for forms with a single origin.
+      { bucket: plan.bucket, resolveBucket: recipe.resolveBucket },
     )
   } catch (e) {
     await recordAttempt(recipe.table, submissionId, priorMeta, priorAttempts + 1, `save threw: ${e instanceof Error ? e.message : String(e)}`, null)

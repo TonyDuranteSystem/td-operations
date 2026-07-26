@@ -110,3 +110,30 @@ describe("itin recipe registration", () => {
     expect(recipe?.isReal({})).toBe(false)
   })
 })
+
+describe("closure recipe registration", () => {
+  const recipe = getArchiveRecipe("closure")
+
+  it("is registered on the closure submissions table", () => {
+    expect(recipe).not.toBeNull()
+    expect(ARCHIVE_RECIPES.closure).toBeDefined()
+    expect(recipe?.table).toBe("closure_submissions")
+  })
+
+  it("selects account + contact/lead (company or closure-folder resolution) + marker columns", () => {
+    expect(recipe?.selectColumns).toContain("account_id")
+    expect(recipe?.selectColumns).toContain("contact_id")
+    expect(recipe?.selectColumns).toContain("lead_id")
+    expect(recipe?.selectColumns).toContain("created_at")
+    expect(recipe?.selectColumns).toContain("drive_archived_at")
+    expect(recipe?.selectColumns).toContain("drive_archive_meta")
+  })
+
+  it("treats completed / reviewed as real, everything else as not real", () => {
+    expect(recipe?.isReal({ status: "completed" })).toBe(true)
+    expect(recipe?.isReal({ status: "reviewed" })).toBe(true)
+    expect(recipe?.isReal({ status: "pending" })).toBe(false)
+    expect(recipe?.isReal({ status: null })).toBe(false)
+    expect(recipe?.isReal({})).toBe(false)
+  })
+})

@@ -16,8 +16,9 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { collectUploadPaths } from "@/lib/portal/wizard-uploads"
+import { collectUploadPaths, isWizardUploadPath } from "@/lib/portal/wizard-uploads"
 import { resolveItinContactFolder, resolveItinClientName } from "@/lib/forms/itin-contact-folder"
+import { resolveClosureFolder, resolveClosureClientName } from "@/lib/forms/closure-folder"
 
 /** Everything the archival engine needs to write ONE submission's package. Either
  *  derived fresh by a recipe's resolvePlan(), or read back from the values PINNED
@@ -53,6 +54,14 @@ export interface ArchiveRecipe {
    * plan at submission and the engine skips this.
    */
   resolvePlan(row: Record<string, unknown>): Promise<ArchivePlan>
+  /**
+   * OPTIONAL per-file bucket resolver, for a form whose files can live in MORE
+   * THAN ONE storage bucket (e.g. closure: external form → closure-uploads, portal
+   * wizard → onboarding-uploads). Applied per upload path so both origins download
+   * from the right bucket. Omit for single-origin forms (they use plan.bucket).
+   * A pure function (not part of the pinned plan) so it survives the JSON pin.
+   */
+  resolveBucket?: (path: string) => string
 }
 
 /** Read an account's stable Drive folder id. Throws retryable on a read error,
@@ -177,11 +186,61 @@ const itinRecipe: ArchiveRecipe = {
   },
 }
 
+/**
+ * CLOSURE recipe. Files where the completion route files today, made reliable:
+ * the company folder when an account is explicitly linked (never inferred from a
+ * contact link — a person may own several companies), else a deterministic
+ * "{client} - {llc} (Closure)" folder under Leads. The external closure form
+ * uploads to the "closure-uploads" bucket. This durable path BACKSTOPS the
+ * best-effort completion save (retry + marker); the separate review/MCP re-saves
+ * to the company folder are unchanged.
+ */
+const closureRecipe: ArchiveRecipe = {
+  formType: "closure",
+  table: "closure_submissions",
+  selectColumns:
+    "id, token, account_id, contact_id, lead_id, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",
+  isReal(row) {
+    const status = row.status as string | null
+    return status === "completed" || status === "reviewed"
+  },
+  // Closure has TWO upload origins: the external form (closure-uploads) and the
+  // portal wizard (onboarding-uploads, "closure/"-prefixed paths). Resolve the
+  // bucket PER PATH so both archive correctly — a single default would silently
+  // lose the other origin's files.
+  resolveBucket(path) {
+    return isWizardUploadPath(path) ? "onboarding-uploads" : "closure-uploads"
+  },
+  async resolvePlan(row) {
+    const submittedData = (row.submitted_data ?? {}) as Record<string, unknown>
+    const clientName = await resolveClosureClientName({
+      submittedData,
+      leadId: (row.lead_id as string | null) ?? null,
+      contactId: (row.contact_id as string | null) ?? null,
+      token: (row.token as string | null) ?? null,
+    })
+    const llcName = String(submittedData.llc_name || "Unknown LLC")
+    const folderId = await resolveClosureFolder({
+      accountId: (row.account_id as string | null) ?? null,
+      clientName,
+      llcName,
+    })
+    return {
+      folderId,
+      bucket: "closure-uploads",
+      configKey: "closure",
+      uploadPaths: deriveUploadPaths(row.upload_paths, submittedData),
+      companyName: llcName,
+    }
+  },
+}
+
 /** All registered form recipes, keyed by formType. Add a form here (+ its marker
  *  columns migration + enqueue wiring) when it adopts the durable archival. */
 export const ARCHIVE_RECIPES: Record<string, ArchiveRecipe> = {
   banking: bankingRecipe,
   itin: itinRecipe,
+  closure: closureRecipe,
 }
 
 export function getArchiveRecipe(formType: string): ArchiveRecipe | null {

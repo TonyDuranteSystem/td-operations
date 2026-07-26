@@ -318,7 +318,11 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
   },
 
   closure: {
-    bucket: "onboarding-uploads",
+    // The external closure form uploads to "closure-uploads" (see
+    // app/closure-form/[token]/[code]/page.tsx). This was "onboarding-uploads",
+    // which meant EVERY closure attachment downloaded from the wrong bucket and
+    // 0 files ever reached Drive (silent, pre-existing — fixed 2026-07-26).
+    bucket: "closure-uploads",
     driveSubfolder: "1. Company",
     pdfTitle: "LLC Closure Data Collection",
     filePrefix: "Closure_Data",
@@ -846,7 +850,7 @@ export async function copyUploadsToDrive(
         }
 
         if (!fileData || fileData.size === 0) {
-          console.warn(`[copyUploadsToDrive] Attempt ${attempt + 1}/${MAX_RETRIES} empty for ${bucket}/${path} (size: ${fileData?.size ?? 'null'})`)
+          console.warn(`[copyUploadsToDrive] Attempt ${attempt + 1}/${MAX_RETRIES} empty for ${fileBucket}/${path} (size: ${fileData?.size ?? 'null'})`)
           if (attempt === MAX_RETRIES - 1) {
             failed.push(`${fileName} (empty after ${MAX_RETRIES} attempts)`)
           }

@@ -128,6 +128,29 @@ export async function POST(req: NextRequest) {
         status: "ok",
         detail: `Summary: ${driveResult.summaryFileId ? "saved" : "failed"}. Files: ${driveResult.copied.length} copied.`,
       })
+
+      // Durable backstop (2026-07-26): the inline save above is best-effort (as
+      // are the review + MCP re-saves). Enqueue the reliable archive job with the
+      // plan PINNED (the SAME folder we just resolved) so a slow/failed copy
+      // self-heals via retry, and the sweep alerts if it never lands.
+      try {
+        const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
+        const { deriveUploadPaths } = await import("@/lib/forms/archive-registry")
+        await enqueueFormArchiveJob({
+          formType: "closure",
+          submissionId: sub.id,
+          pin: {
+            folderId: targetFolderId,
+            bucket: "closure-uploads",
+            configKey: "closure",
+            uploadPaths: deriveUploadPaths(uploadPaths, submittedData),
+            companyName: llcName,
+          },
+          createdBy: "closure_form_completed",
+        })
+      } catch (e) {
+        results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
     } catch (e) {
       results.push({ step: "drive_save", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
@@ -219,6 +242,7 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
     // ---- STEP 5: Create task for Luca ----
     try {
       await dbWriteSafe(
+        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
         supabaseAdmin
           .from("tasks")
           .insert({
@@ -253,6 +277,7 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
 
         if (sd) {
           await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw service_deliveries.update; extract to lib/operations/ per dev_task fda76fd3
             supabaseAdmin
               .from("service_deliveries")
               .update({
