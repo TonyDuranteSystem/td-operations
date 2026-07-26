@@ -210,7 +210,13 @@ describe("createLease — duplicate check", () => {
     expect(result.existing).toEqual({ id: "lease-0", token: "example-llc-2026", status: "sent" })
   })
 
-  it("bypasses duplicate check when skip_duplicate_check=true", async () => {
+  it("bypasses the code-side duplicate check when skip_duplicate_check=true", async () => {
+    // This asserts skip bypasses the SELECT pre-check only. In real prod/sandbox
+    // the unique index uq_lease_account_year_tenant still enforces one lease per
+    // (account, year, tenant) — so if the prior row still exists the INSERT
+    // raises 23505 and createLease returns outcome "duplicate" instead. The mock
+    // has no index, so it reaches "created" here. Remove the prior row first to
+    // actually re-generate a same-year lease.
     duplicateLeases = [{ id: "lease-0", token: "example-llc-2026", status: "sent" }]
     const { createLease } = await import("@/lib/operations/lease")
     const result = await createLease({ account_id: "acct-1", skip_duplicate_check: true })

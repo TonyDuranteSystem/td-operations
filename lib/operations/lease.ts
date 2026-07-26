@@ -59,10 +59,17 @@ export interface CreateLeaseParams {
   /** Tenant signature title. Default: 'Manager'. */
   tenant_title?: string
   /**
-   * When true, the (account_id + contract_year) duplicate check is
-   * skipped. Default false. Used by flows that re-generate a lease
-   * for the same year after a cancellation, or by CRM admin paths
-   * that want the caller to decide on conflict.
+   * When true, the code-side (account_id + contract_year) SELECT duplicate
+   * check is skipped. Default false. Used by CRM admin paths that want the
+   * caller to decide on conflict.
+   *
+   * ⚠️ This only skips the CODE check — it does NOT override the DB. The unique
+   * index uq_lease_account_year_tenant (account_id, contract_year,
+   * tenant_company) still enforces one lease per year per tenant, and
+   * createLease always writes tenant_company = account.company_name. So to
+   * re-generate a same-year lease after a cancellation you must first remove
+   * (or void) the prior row; otherwise the INSERT raises a unique violation,
+   * which createLease surfaces as outcome "duplicate" (never a second row).
    */
   skip_duplicate_check?: boolean
   actor?: string
@@ -169,10 +176,14 @@ export async function createLease(
       // name was corrected and staff re-generate the same-year lease, the new
       // tenant_company would otherwise miss the prior lease, create a second one
       // with a fresh suite, and overwrite accounts.physical_address. A visible
-      // "duplicate" refusal is far safer than a silent address change. The rare
-      // legitimate second lease (a separate personal lease on an account that
-      // already has a company lease) is created via skip_duplicate_check, and
-      // the unique index (keyed on account+year+tenant_company) still permits it.
+      // "duplicate" refusal is far safer than a silent address change.
+      //
+      // A genuinely separate PERSONAL lease (a different tenant_company on the
+      // same account, same year — the documented Imperium company+owner case) is
+      // NOT created here: createLease always writes tenant_company =
+      // account.company_name, so it only ever makes the company lease. Such a
+      // personal lease is authored by a different path that sets its own tenant;
+      // the unique index keeps both because their tenant_company differs.
       const { data: existing } = await supabaseAdmin
         .from("lease_agreements")
         .select("id, token, status")
@@ -441,7 +452,12 @@ export async function sendLeaseToPortal(token: string): Promise<SendLeaseToPorta
   try {
     const { notifyLeaseReadyToSign } = await import("@/lib/portal/action-required")
     const notified = await notifyLeaseReadyToSign({ token })
-    emailSent = typeof notified.email === "string" && notified.email.startsWith("ok")
+    // "ok (N sent)" = emailed now. A "duplicate within dedup window" skip means
+    // the client was already emailed for this within the last few minutes — so
+    // report it as notified either way, rather than falsely telling staff no
+    // email went out.
+    const em = typeof notified.email === "string" ? notified.email : ""
+    emailSent = em.startsWith("ok") || em.includes("duplicate within dedup window")
   } catch (err) {
     console.error(`[sendLeaseToPortal] notify failed for ${token}:`, err instanceof Error ? err.message : err)
   }
