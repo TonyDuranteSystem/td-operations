@@ -59,6 +59,10 @@ export interface ThreadMeta {
   /** Management status (defaults 'todo' = untriaged/Open). */
   status?: 'todo' | 'in_progress' | 'waiting' | 'handled'
   assignee_id?: string | null
+  /** Read-receipt / "whose turn" state for the viewer (lib/team/thread-turn). */
+  read_state?: 'waiting_you' | 'waiting_them' | 'seen' | 'none'
+  /** Whom we're waiting on for 'waiting_them' (first names). */
+  waiting_name?: string | null
 }
 
 /** A row in the per-channel Threads management panel (from GET `threads`). */
@@ -81,6 +85,9 @@ export interface ThreadListItem {
   root_sender_id: string | null
   /** Personal "bring forward" flag — only the caller sees it. */
   later: boolean
+  /** Read-receipt / "whose turn" state for the viewer (lib/team/thread-turn). */
+  read_state?: 'waiting_you' | 'waiting_them' | 'seen' | 'none'
+  waiting_name?: string | null
 }
 
 /** A row in the personal "bring forward" list (GET /api/team/later-threads). */
@@ -92,6 +99,9 @@ export interface LaterThread {
   status: 'todo' | 'in_progress' | 'waiting' | 'handled'
   unread: boolean
   flagged_at: string
+  /** Read-receipt / "whose turn" state for the viewer (lib/team/thread-turn). */
+  read_state?: 'waiting_you' | 'waiting_them' | 'seen' | 'none'
+  waiting_name?: string | null
 }
 
 /** A thread card on the cross-channel Board (from GET /api/team/all-threads). */
@@ -110,6 +120,9 @@ export interface BoardThread {
   archived?: boolean
   /** Personal "bring forward" flag. */
   later?: boolean
+  /** Read-receipt / "whose turn" state for the viewer (lib/team/thread-turn). */
+  read_state?: 'waiting_you' | 'waiting_them' | 'seen' | 'none'
+  waiting_name?: string | null
 }
 
 export type ThreadType = 'general' | 'channel' | 'discussion' | 'dm'

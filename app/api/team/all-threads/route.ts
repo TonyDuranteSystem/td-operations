@@ -26,5 +26,14 @@ export async function GET(request: NextRequest) {
   const { data, error } = await (supabaseAdmin as any)
     .rpc('list_all_threads', { p_user_id: user.id, p_limit: 300, p_include_archived: includeArchived })
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ threads: data ?? [] })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows = (data ?? []) as any[]
+  // Read-receipt / "whose turn" state — the shared calculation used everywhere.
+  const { enrichThreadTurn } = await import('@/lib/team/thread-turn-server')
+  const turnMap = await enrichThreadTurn(rows.map(r => r.root_message_id), user.id)
+  const threads = rows.map(r => {
+    const turn = turnMap[r.root_message_id]
+    return { ...r, read_state: turn?.read_state ?? 'none', waiting_name: turn?.waiting_name ?? null }
+  })
+  return NextResponse.json({ threads })
 }

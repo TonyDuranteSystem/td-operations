@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { Hash, MessageSquare, Archive, ArchiveRestore } from 'lucide-react'
 import { format } from 'date-fns'
 import { TEAM_WORK_STATUSES, TEAM_WORK_STATUS_LABELS, type TeamWorkStatus } from '@/lib/team/workspace'
+import { TurnBadge } from '@/components/team-chat/turn-badge'
 import type { BoardThread } from './types'
 
 const COLUMN_STYLE: Record<TeamWorkStatus, { top: string; badge: string }> = {
@@ -129,6 +130,9 @@ export function TeamBoard({ threads, onStatusChange, onOpenThread, showArchived,
                                 <span className="flex items-center gap-1"><MessageSquare className="h-3 w-3" />{t.reply_count}</span>
                                 {t.last_activity_at && <span>{format(new Date(t.last_activity_at), 'MMM d')}</span>}
                               </div>
+                              {t.read_state && t.read_state !== 'none' && (
+                                <div className="mt-1"><TurnBadge state={t.read_state} name={t.waiting_name} /></div>
+                              )}
                             </div>
                           )}
                         </Draggable>

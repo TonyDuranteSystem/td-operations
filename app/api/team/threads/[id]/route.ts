@@ -257,6 +257,27 @@ export async function GET(
       )
   }
 
+  // Read-receipt / "whose turn" state for every listed thread — the same shared
+  // calculation used by the board and the Later list, so the four surfaces can
+  // never disagree. Attached to the panel rows AND folded into thread_meta so the
+  // in-stream "replies" affordance can show it too.
+  const { enrichThreadTurn } = await import('@/lib/team/thread-turn-server')
+  const turnMap = await enrichThreadTurn(panelRootIds, user.id)
+  for (const t of threads) {
+    const turn = turnMap[t.root_id]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(t as any).read_state = turn?.read_state ?? 'none'
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(t as any).waiting_name = turn?.waiting_name ?? null
+  }
+  for (const rid of Object.keys(threadMeta)) {
+    const turn = turnMap[rid]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(threadMeta as any)[rid].read_state = turn?.read_state ?? 'none'
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(threadMeta as any)[rid].waiting_name = turn?.waiting_name ?? null
+  }
+
   return NextResponse.json({
     thread,
     messages: enriched,

@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { uploadTeamAttachment, prepareChatFiles, CHAT_ATTACHMENT_MAX_COUNT } from '@/lib/team/attachment'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
+import { TurnBadge } from '@/components/team-chat/turn-badge'
 import { sortPanelThreads, filterStreamRoots } from '@/lib/team/thread-meta'
 import {
   clampThreadPaneWidth, readStoredThreadPaneWidth,
@@ -703,6 +704,18 @@ export default function TeamWorkspacePage() {
 
   const closeThread = useCallback(() => { setOpenRootId(null); setReplyTo(null) }, [])
 
+  // Select a sidebar thread. Clicking the channel you're ALREADY in returns you
+  // to its thread list and closes any open thread — otherwise setSelectedId with
+  // the same value is a React no-op, the selection effect never re-runs, and the
+  // click appears to do nothing while a thread is open (Antonio, 2026-07-26: "I
+  // click td-bug and it doesn't go back in the list").
+  const onSelectThread = useCallback((id: string) => {
+    if (selectedIdRef.current !== id) { setSelectedId(id); return }
+    setOpenRootId(null)
+    const t = threadsRef.current.find(x => x.id === id)
+    if (t?.thread_type === 'channel') setShowThreadsPanel(true)
+  }, [])
+
   // Set a thread's management status and/or assignee (Threads panel + pane).
   const setThreadState = useCallback(async (rootId: string, patch: { status?: TeamWorkStatus; assignee_id?: string | null; title?: string | null }, channelId?: string) => {
     // Optimistic local update. A cleared title falls back to the opening
@@ -1247,6 +1260,9 @@ export default function TeamWorkspacePage() {
                           {l.unread && <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />}{l.title}
                         </span>
                         <span className="block text-[11px] text-zinc-400 truncate">#{l.channel_label} · {TEAM_WORK_STATUS_LABELS[l.status]}</span>
+                        {l.read_state && l.read_state !== 'none' && (
+                          <TurnBadge state={l.read_state} name={l.waiting_name} className="mt-0.5" />
+                        )}
                       </span>
                       <span onClick={e => { e.stopPropagation(); setThreadLater(l.root_message_id, false, l.thread_id) }}
                         title="Remove from Later"
@@ -1258,7 +1274,7 @@ export default function TeamWorkspacePage() {
                 </>
               )}
 
-              {generalThread && <ThreadRow t={generalThread} selected={selectedId === generalThread.id} onClick={() => setSelectedId(generalThread.id)} icon={<Hash className="h-3.5 w-3.5" />} label="general" />}
+              {generalThread && <ThreadRow t={generalThread} selected={selectedId === generalThread.id} onClick={() => onSelectThread(generalThread.id)} icon={<Hash className="h-3.5 w-3.5" />} label="general" />}
 
               <SectionHeader label="Channels" onAdd={() => setShowNewChannel(true)} />
               {channels.length === 0 && <p className="px-2 text-[11px] text-zinc-400 mb-2">No channels yet.</p>}
@@ -1272,7 +1288,7 @@ export default function TeamWorkspacePage() {
                         {filed.length > 0 ? (expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />) : <span className="w-3.5 inline-block" />}
                       </button>
                       <div className="flex-1 min-w-0">
-                        <ThreadRow t={ch} selected={selectedId === ch.id} onClick={() => setSelectedId(ch.id)} icon={<Hash className="h-3.5 w-3.5" style={ch.color ? { color: ch.color } : undefined} />} label={ch.channel_slug ?? ch.label} />
+                        <ThreadRow t={ch} selected={selectedId === ch.id} onClick={() => onSelectThread(ch.id)} icon={<Hash className="h-3.5 w-3.5" style={ch.color ? { color: ch.color } : undefined} />} label={ch.channel_slug ?? ch.label} />
                       </div>
                     </div>
                     {expanded && filed.map(t => (
@@ -1289,7 +1305,7 @@ export default function TeamWorkspacePage() {
 
               <SectionHeader label="Direct Messages" dot={dms.some(d => d.unread_count > 0)} onAdd={() => setShowNewDm(true)} />
               {dms.length === 0 && <p className="px-2 text-[11px] text-zinc-400 mb-2">No DMs yet.</p>}
-              {dms.map(t => <ThreadRow key={t.id} t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)} icon={<span className={cn('w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white', senderColor(t.id))}>{initials(dmLabel(t))}</span>} label={dmLabel(t)} />)}
+              {dms.map(t => <ThreadRow key={t.id} t={t} selected={selectedId === t.id} onClick={() => onSelectThread(t.id)} icon={<span className={cn('w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white', senderColor(t.id))}>{initials(dmLabel(t))}</span>} label={dmLabel(t)} />)}
 
               <SectionHeader label="Conversations" onAdd={() => setShowNewConversation(true)} />
 
@@ -1513,6 +1529,7 @@ export default function TeamWorkspacePage() {
                             <MessageSquare className="h-3.5 w-3.5" />
                             {meta.reply_count} {meta.reply_count === 1 ? 'reply' : 'replies'}
                             <span className="text-zinc-400 font-normal">· last reply {format(new Date(meta.last_reply_at), 'MMM d, HH:mm')}</span>
+                            <TurnBadge state={meta.read_state} name={meta.waiting_name} />
                           </button>
                         )}
                       </div>
@@ -1900,7 +1917,10 @@ function ThreadsPanel({ channelId, channelName, threads, members, currentUserId,
                 <p className={cn('text-sm truncate flex items-center gap-1.5', t.unread ? 'font-semibold text-zinc-900' : 'text-zinc-800')}>
                   {t.unread && <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />}{t.title}
                 </p>
-                <p className="text-[11px] text-zinc-400 truncate">{t.sender_name ? `${t.sender_name} · ` : ''}{t.reply_count} {t.reply_count === 1 ? 'reply' : 'replies'}{t.last_reply_at ? ` · ${format(new Date(t.last_reply_at), 'MMM d, HH:mm')}` : ''}</p>
+                <p className="text-[11px] text-zinc-400 truncate flex items-center gap-1.5">
+                  <span className="truncate">{t.sender_name ? `${t.sender_name} · ` : ''}{t.reply_count} {t.reply_count === 1 ? 'reply' : 'replies'}{t.last_reply_at ? ` · ${format(new Date(t.last_reply_at), 'MMM d, HH:mm')}` : ''}</span>
+                  <TurnBadge state={t.read_state} name={t.waiting_name} className="shrink-0" />
+                </p>
                 {t.archived && (
                   <p className="text-[11px] text-amber-600 truncate flex items-center gap-1">
                     <Archive className="h-3 w-3 shrink-0" />
