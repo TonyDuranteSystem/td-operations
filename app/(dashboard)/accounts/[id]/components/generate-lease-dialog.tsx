@@ -10,9 +10,19 @@ interface GenerateLeaseDialogProps {
   onClose: () => void
   accountId: string
   companyName: string
+  /** Pre-fills the start date. When absent, defaults to today. */
+  formationDate?: string | null
 }
 
-export function GenerateLeaseDialog({ open, onClose, accountId, companyName }: GenerateLeaseDialogProps) {
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function isISODate(v: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(v)
+}
+
+export function GenerateLeaseDialog({ open, onClose, accountId, companyName, formationDate }: GenerateLeaseDialogProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [result, setResult] = useState<{
@@ -26,9 +36,41 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName }: G
   const [monthlyRent, setMonthlyRent] = useState('100')
   const [securityDeposit, setSecurityDeposit] = useState('150')
 
+  // Pre-fill the start with the company's formation date ONLY when the company
+  // was formed THIS year (the mid-year-formation case). A years-old formation
+  // date would silently create a back-dated, past-year lease, so fall back to
+  // today. Either way it stays editable.
+  const fmtStart = formationDate ? String(formationDate).slice(0, 10) : ''
+  const initialStart = isISODate(fmtStart) && Number(fmtStart.slice(0, 4)) === new Date().getFullYear()
+    ? fmtStart
+    : todayISO()
+  const [startDate, setStartDate] = useState(initialStart)
+  const [endDate, setEndDate] = useState(`${initialStart.slice(0, 4)}-12-31`)
+  const [endEdited, setEndEdited] = useState(false)
+
+  const handleStartChange = (v: string) => {
+    setStartDate(v)
+    // Keep the end on Dec 31 of the chosen start year — but only while staff
+    // haven't hand-edited the end themselves (don't clobber a custom term).
+    if (isISODate(v) && !endEdited) setEndDate(`${v.slice(0, 4)}-12-31`)
+  }
+
+  const handleEndChange = (v: string) => {
+    setEndDate(v)
+    setEndEdited(true)
+  }
+
   if (!open) return null
 
   const handleGenerate = () => {
+    if (!startDate || !endDate) {
+      toast.error('Please set both a start and end date.')
+      return
+    }
+    if (endDate < startDate) {
+      toast.error('End date cannot be before the start date.')
+      return
+    }
     startTransition(async () => {
       try {
         const res = await fetch('/api/crm/admin-actions/generate-document', {
@@ -38,8 +80,12 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName }: G
             action: 'generate_lease',
             account_id: accountId,
             // suite_number omitted — auto-assigned by backend
-            monthly_rent: parseInt(monthlyRent) || 100,
-            security_deposit: parseInt(securityDeposit) || 150,
+            // Number.isFinite preserves an intentional 0 (|| would rewrite it).
+            monthly_rent: Number.isFinite(parseInt(monthlyRent)) ? parseInt(monthlyRent) : 100,
+            security_deposit: Number.isFinite(parseInt(securityDeposit)) ? parseInt(securityDeposit) : 150,
+            term_start_date: startDate,
+            term_end_date: endDate,
+            effective_date: startDate,
           }),
         })
         const data = await res.json()
@@ -95,6 +141,27 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName }: G
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Start Date</label>
+                    <input
+                      type="date"
+                      value={startDate}
+                      onChange={e => handleStartChange(e.target.value)}
+                      className="mt-1 w-full text-sm px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">End Date</label>
+                    <input
+                      type="date"
+                      value={endDate}
+                      onChange={e => handleEndChange(e.target.value)}
+                      className="mt-1 w-full text-sm px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
                     <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Monthly Rent ($)</label>
                     <input
                       type="number"
@@ -117,7 +184,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName }: G
 
               <div className="text-xs text-muted-foreground bg-zinc-50 rounded-lg p-3 space-y-1">
                 <p>Premises: 10225 Ulmerton Rd, Largo, FL 33771</p>
-                <p>Term: 12 months (Jan 1 - Dec 31, {new Date().getFullYear()})</p>
+                <p>Term: {startDate || '—'} → {endDate || '—'}</p>
                 <p>Yearly rent: ${(parseInt(monthlyRent) || 100) * 12}</p>
               </div>
             </>

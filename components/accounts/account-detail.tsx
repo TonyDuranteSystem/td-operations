@@ -797,6 +797,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         onClose={() => setShowLeaseDialog(false)}
         accountId={account.id}
         companyName={account.company_name}
+        formationDate={account.formation_date}
       />
       <GenerateIntercompanyDialog
         open={showIntercompanyDialog}

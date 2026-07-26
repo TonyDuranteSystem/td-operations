@@ -316,11 +316,22 @@ async function generateLease(accountId: string, params: Record<string, unknown>)
   const { account } = accResult
 
   const { createLease } = await import("@/lib/operations/lease")
+  const termStartDate = params.term_start_date as string | undefined
+  const termEndDate = params.term_end_date as string | undefined
+  // When staff pick a start date in the dialog, the lease's contract year is
+  // the year of that start date (not "today"). Falls back to any explicit
+  // contract_year, else createLease defaults to the current year.
+  const contractYear =
+    (termStartDate && /^\d{4}-\d{2}-\d{2}$/.test(termStartDate)
+      ? Number(termStartDate.slice(0, 4))
+      : undefined) ?? (params.contract_year as number | undefined)
   const result = await createLease({
     account_id: accountId,
     suite_number: params.suite_number as string | undefined,
-    contract_year: params.contract_year as number | undefined,
+    contract_year: contractYear,
     effective_date: params.effective_date as string | undefined,
+    term_start_date: termStartDate,
+    term_end_date: termEndDate,
     monthly_rent: params.monthly_rent as number | undefined,
     yearly_rent: params.yearly_rent as number | undefined,
     security_deposit: params.security_deposit as number | undefined,
@@ -579,46 +590,23 @@ async function sendOA(token: string) {
 // ─── Send Lease ───
 
 async function sendLease(token: string) {
-  const { data: lease, error } = await supabaseAdmin
-    .from("lease_agreements")
-    .select("id, token, status, tenant_email, tenant_company, access_code, account_id")
-    .eq("token", token)
-    .single()
+  // Delegates the status flip to the shared operation so the CRM Send button
+  // and the first-installment renewal auto-send stay on ONE code path (draft
+  // guard, "viewed" protection, honest status classification). This button
+  // never emailed anyone — it makes the lease appear in the client's PORTAL to
+  // sign — so it must not claim it did. Mirrors the send_oa fix.
+  const { sendLeaseToPortal } = await import("@/lib/operations/lease")
+  const result = await sendLeaseToPortal(token)
 
-  if (error || !lease) return { error: `Lease not found: ${token}` }
-  if (!lease.tenant_email) return { error: "No tenant email on lease record" }
-  if (lease.status === "sent" || lease.status === "signed" || lease.status === "active") {
-    return { already_sent: true, status: lease.status }
-  }
-
-  // What this actually does: marks the lease ready, which is what makes it
-  // appear in the client's PORTAL to sign. Leases reach clients through the
-  // portal — not by email. This button never emailed anyone, so it must not
-  // claim it did: staff were shown "Sent to <client>" while nothing had been
-  // sent to the client at all. Mirrors the send_oa fix.
-  const { error: updateErr } = await supabaseAdmin
-    .from("lease_agreements")
-    .update({ status: "sent" })
-    .eq("id", lease.id)
-
-  if (updateErr) return { error: `Failed to update lease status: ${updateErr.message}` }
-
-  logAction({
-    actor: "crm-admin",
-    action_type: "send",
-    table_name: "lease_agreements",
-    record_id: lease.id,
-    account_id: lease.account_id,
-    summary: `Made lease available in the client portal for ${lease.tenant_company}`,
-    details: { token: lease.token, tenant_email: lease.tenant_email, source: "crm-button", emailed: false, channel: "portal" },
-  })
+  if (!result.success) return { error: result.error }
+  if (result.already) return { already_sent: true, status: result.status }
 
   return {
     success: true,
     emailed: false,
-    recipient: lease.tenant_email,
+    recipient: result.recipient,
     notice: `Ready — the Lease Agreement now appears in the client's portal to sign. No email is sent.`,
-    client_url: `${LEASE_BASE_URL}/${lease.token}/${lease.access_code}`,
+    client_url: `${LEASE_BASE_URL}/${token}/${result.access_code}`,
   }
 }
 

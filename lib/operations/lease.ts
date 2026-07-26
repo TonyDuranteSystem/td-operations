@@ -301,3 +301,100 @@ export async function createLease(
     }
   }
 }
+
+// ─── Send lease to the client portal ────────────────────────
+
+export interface SendLeaseToPortalResult {
+  success: boolean
+  /** Lease status after the call ("sent" on success, or the existing status). */
+  status?: string
+  /** True when the lease was already in the portal (sent/viewed/signed) — a no-op success. */
+  already?: boolean
+  lease_id?: string
+  token?: string
+  recipient?: string | null
+  tenant_company?: string
+  access_code?: string
+  error?: string
+}
+
+/**
+ * The lease statuses that mean it is already in the client's portal, so a
+ * (re-)send is a no-op success. Lease status is constrained to
+ * draft/sent/viewed/signed (chk_lease_status); "viewed" means the client has
+ * already opened it — never knock that back to "sent".
+ */
+const LEASE_ALREADY_IN_PORTAL = ["sent", "viewed", "signed"]
+
+/**
+ * Make a draft lease appear in the client's PORTAL to sign.
+ *
+ * Leases reach clients through the portal, NOT by email — this flips the
+ * status to "sent" and does not email anyone (mirrors send_oa). Shared so the
+ * CRM Send Lease button AND the first-installment renewal auto-send use one
+ * code path.
+ *
+ * Only a "draft" is sendable. A lease already in the portal (sent/viewed/
+ * signed) is a no-op success. Any other status is refused with an explicit
+ * error rather than falsely reported as sent. The UPDATE carries a
+ * `status = 'draft'` guard against a TOCTOU double-flip; if it loses the race
+ * the real status is re-read and classified honestly.
+ */
+export async function sendLeaseToPortal(token: string): Promise<SendLeaseToPortalResult> {
+  const { data: lease, error } = await supabaseAdmin
+    .from("lease_agreements")
+    .select("id, status, tenant_email, tenant_company, account_id, access_code")
+    .eq("token", token)
+    .single()
+
+  if (error || !lease) return { success: false, error: `Lease not found: ${token}` }
+
+  const base = {
+    lease_id: lease.id as string,
+    token,
+    recipient: lease.tenant_email as string | null,
+    tenant_company: lease.tenant_company as string,
+    access_code: lease.access_code as string,
+  }
+
+  if (LEASE_ALREADY_IN_PORTAL.includes(lease.status)) {
+    return { success: true, status: lease.status, already: true, ...base }
+  }
+  if (lease.status !== "draft") {
+    return { success: false, error: `Cannot send a lease in status "${lease.status}"`, ...base }
+  }
+  if (!lease.tenant_email) return { success: false, error: "No tenant email on lease record", ...base }
+
+  const { data: updated, error: updateErr } = await supabaseAdmin
+    .from("lease_agreements")
+    .update({ status: "sent" })
+    .eq("id", lease.id)
+    .eq("status", "draft")
+    .select("id")
+
+  if (updateErr) return { success: false, error: `Failed to update lease status: ${updateErr.message}`, ...base }
+
+  if (!updated?.length) {
+    // Lost the draft→sent race — re-read to report the real state honestly.
+    const { data: fresh } = await supabaseAdmin
+      .from("lease_agreements")
+      .select("status")
+      .eq("id", lease.id)
+      .single()
+    const now = fresh?.status ?? "unknown"
+    if (LEASE_ALREADY_IN_PORTAL.includes(now)) return { success: true, status: now, already: true, ...base }
+    return { success: false, error: `Cannot send a lease in status "${now}"`, ...base }
+  }
+
+  logAction({
+    actor: "system:lease",
+    action_type: "send",
+    table_name: "lease_agreements",
+    record_id: lease.id,
+    account_id: lease.account_id,
+    summary: `Made lease available in the client portal for ${lease.tenant_company}`,
+    details: { token, tenant_email: lease.tenant_email, emailed: false, channel: "portal" },
+  })
+
+  return { success: true, status: "sent", ...base }
+}

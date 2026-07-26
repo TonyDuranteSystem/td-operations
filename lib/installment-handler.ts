@@ -170,7 +170,7 @@ export async function onFirstInstallmentPaid(
     .maybeSingle()
   const contactId = contactLink?.contact_id || null
 
-  // ─── 1. Create CMRA Mailing Address SD + new lease ───
+  // ─── 1. Create CMRA Mailing Address SD ───
   try {
     const { data: existingCmra } = await supabaseAdmin
       .from("service_deliveries")
@@ -348,7 +348,7 @@ export async function onFirstInstallmentPaid(
       `<h2>[PAID] 1st Installment ${year} -- ${account.company_name}</h2>` +
       `<p>Payment confirmed. Recurring services activated for ${year}.</p>` +
       `<pre style="background:#f3f4f6;padding:12px;border-radius:6px">${sdSummary}</pre>` +
-      `<p>Next: create and send lease agreement for ${year}.</p>` +
+      `<p>The ${year} lease is created automatically and placed in the client portal to sign.</p>` +
       `</div>`
     ).toString("base64url")
     await gmailPost("/messages/send", { raw })
@@ -357,43 +357,56 @@ export async function onFirstInstallmentPaid(
     steps.push({ step: "email", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
-  // ─── 6. Create task for lease ───
-  // Idempotent: the title is year-scoped, so an existing task with the same
-  // title means this handler already ran for this account+year (e.g. the
-  // bank-feed matcher fired it, then a manual mark-paid or the cron fired it
-  // again). Skip rather than insert a duplicate.
+  // ─── 6. Auto-create the renewal lease and put it in the client portal to sign ───
+  // The office lease is an annual Jan 1 → Dec 31 agreement. On renewal, create
+  // this year's lease and send it straight to the portal to sign — no manual
+  // step, no email. Formerly this section only dropped a reminder onto the
+  // (now-defunct) staff task list, so renewal leases were routinely forgotten.
+  // Idempotent: createLease guards on (account, contract_year); on a duplicate
+  // we still (re-)send the existing lease so a partial prior run completes.
   try {
-    const leaseTitle = `Create lease ${year} -- ${account.company_name}`
-    const { data: existingLeaseTask } = await supabaseAdmin
-      .from("tasks")
-      .select("id")
-      .eq("account_id", accountId)
-      .eq("task_title", leaseTitle)
-      .limit(1)
-      .maybeSingle()
-
-    if (existingLeaseTask) {
-      steps.push({ step: "lease_task", status: "skipped", detail: "Lease task already exists for this account/year" })
+    if (!contactId) {
+      steps.push({ step: "lease", status: "skipped", detail: "No linked contact — cannot create lease" })
     } else {
-      await dbWriteSafe(
-        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-        supabaseAdmin.from("tasks").insert({
-          task_title: leaseTitle,
-          description: `1st installment paid. Create and send new lease agreement for ${year}.\n\nUse: lease_create(account_id="${accountId}", suite_number="...")\nThen: lease_send(token)`,
-          assigned_to: "Luca",
-          priority: "High",
-          category: "Document",
-          status: "To Do",
-          due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          account_id: accountId,
-          created_by: "System",
-        }),
-        "tasks.insert"
-      )
-      steps.push({ step: "lease_task", status: "ok" })
+      const { createLease, sendLeaseToPortal } = await import("@/lib/operations/lease")
+      const leaseResult = await createLease({
+        account_id: accountId,
+        contact_id: contactId,
+        contract_year: year,
+        effective_date: `${year}-01-01`,
+        term_start_date: `${year}-01-01`,
+        term_end_date: `${year}-12-31`,
+        actor: "system:first-installment",
+        summary: `Renewal lease ${year} auto-created on 1st installment for ${account.company_name}`,
+        details: { source: "first-installment", year },
+      })
+
+      if (leaseResult.success && leaseResult.lease) {
+        // Only auto-send a lease THIS run created. Never blind-send a
+        // pre-existing same-year lease — it may be a staff work-in-progress
+        // draft (custom rent/dates) that a human has not finished reviewing.
+        const sent = await sendLeaseToPortal(leaseResult.lease.token)
+        if (sent.success) {
+          steps.push({
+            step: "lease",
+            status: "created+sent",
+            detail: `${leaseResult.lease.token} (${sent.already ? "already in portal" : "now in portal to sign"})`,
+          })
+        } else {
+          steps.push({ step: "lease", status: "error", detail: `Lease ${leaseResult.lease.token} created but send failed: ${sent.error}` })
+        }
+      } else if (leaseResult.outcome === "duplicate" && leaseResult.existing) {
+        steps.push({
+          step: "lease",
+          status: "exists",
+          detail: `A ${year} lease already exists (${leaseResult.existing.status}) — left as-is, not auto-sent. Review/send manually if needed.`,
+        })
+      } else {
+        steps.push({ step: "lease", status: "error", detail: leaseResult.error || "Lease not created" })
+      }
     }
   } catch (e) {
-    steps.push({ step: "lease_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    steps.push({ step: "lease", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
   // ─── Partner renewal payout — installment 1 share (recurring, USD) ───
