@@ -21,7 +21,13 @@
  *    Antonio categorizes; the books are never silently invented.
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { classifyFeedType, type FeedSignalSource } from "@/lib/finance/feed-signals"
+import {
+  extractFeedEmails,
+  extractInvoiceReference,
+  extractStripePaymentIntent,
+  type FeedSignalSource,
+} from "@/lib/finance/feed-signals"
+import { isMatchableInvoice } from "@/lib/finance/invoice-matchability"
 import { updateFeeds } from "@/lib/finance/feed-write"
 
 /** The owner's books. Every projected row carries THIS and only this. */
@@ -35,6 +41,7 @@ export interface ProjectableFeed extends FeedSignalSource {
   currency?: string | null
   status?: string | null
   external_id?: string | null
+  matched_payment_id?: string | null
 }
 
 /** A row as My Finances stores it. */
@@ -66,19 +73,76 @@ const BANK_LABELS: Record<string, string> = {
   manual: "Other",
 }
 
+/** An open invoice, reduced to what the "could this be paying an invoice?" test needs. */
+export interface OpenInvoiceRef {
+  amount: number
+  currency?: string | null
+}
+
 /**
- * Does this feed belong in the owner's books rather than the client-invoice feed?
+ * Is this deposit POSITIVELY a client paying an invoice?
  *
- * YES for: money TD spent (`outgoing`), Stripe payouts, and bank rewards.
- * NO for: anything that is (or might still be) a client paying an invoice — those stay in
- * Finance. Uncertainty always resolves to "leave it in Finance": failing to project is a
- * visible gap in the owner's books, while wrongly projecting hides a client payment from
- * reconciliation and the client's service never activates.
+ * This is the whole decision, and it is deliberately the only positive test in the system
+ * (Antonio, 2026-07-27): *"a system that will recognize the payments that are NOT from
+ * clients for invoices… if something is wrong or the system doesn't know, put it in My
+ * Finances, with a button 'this is for client' to put it back in Finance."*
+ *
+ * So Finance keeps a deposit only when something concrete says "a client is paying an
+ * invoice". Everything else — including anything unrecognised — goes to My Finances, where
+ * Antonio sees it in his own section and can send it back with one click. That is what makes
+ * the default safe: the fallback is not a hidden bucket, it is HIS screen, and it is reversible.
+ *
+ * Note this inverts the previous design, which tried to prove a row WAS a payout (by its
+ * wording) and left everything else in Finance. Proving the positive — "this is a client
+ * payment" — is the reliable direction, because a client payment carries evidence (an invoice
+ * number, a card payment reference, a payer email, or an amount matching something owed)
+ * while "not a client payment" is an absence, and absence can never be proven from wording.
  */
-export function isOwnerLedgerFeed(feed: ProjectableFeed): boolean {
-  if (feed.status === "outgoing") return true
-  const { type } = classifyFeedType(feed)
-  return type === "stripe_payout" || type === "bank_reward"
+export function isClientInvoicePayment(feed: ProjectableFeed, openInvoices: OpenInvoiceRef[] = []): boolean {
+  // Money LEAVING the account is never a client paying an invoice.
+  if (feed.status === "outgoing") return false
+
+  // Already reconciled against an invoice — never second-guess the matcher. Both the status
+  // and the link are checked: either alone is enough to mean "this money is already a client's
+  // settled payment", and a row that lost one of the two must still be protected.
+  if (feed.status === "matched" || feed.matched_payment_id) return true
+
+  // A Stripe card charge carries its own payment reference — the certain link.
+  if (extractStripePaymentIntent(feed)) return true
+
+  // An invoice number on the payment (the reference clients are told to quote).
+  if (extractInvoiceReference(feed)) return true
+  const text = `${feed.sender_name ?? ""} ${feed.memo ?? ""} ${feed.sender_reference ?? ""}`
+  if (/\bINV-?\d{4,}\b/i.test(text)) return true
+
+  // A payer email — resolves to a contact, and only client payments carry one.
+  if (extractFeedEmails(feed).length > 0) return true
+
+  // The amount matches something a client currently owes. Deliberately the WIDEST tolerance
+  // in the system (20% or $50, whichever is larger): this is a VETO protecting a client's
+  // money, and being over-cautious costs only a row Antonio moves himself, while being
+  // under-cautious costs a client's payment. Currency must agree — a €1,000 deposit is not
+  // evidence for a $1,000 invoice.
+  const amount = Math.abs(typeof feed.amount === "string" ? Number(feed.amount) : feed.amount)
+  if (Number.isFinite(amount)) {
+    const feedCurrency = (feed.currency || "USD").toUpperCase()
+    for (const inv of openInvoices) {
+      if ((inv.currency || "USD").toUpperCase() !== feedCurrency) continue
+      const invAmount = Math.abs(Number(inv.amount))
+      if (!Number.isFinite(invAmount) || invAmount === 0) continue
+      if (Math.abs(amount - invAmount) <= Math.max(invAmount * 0.2, 50)) return true
+    }
+  }
+
+  return false
+}
+
+/**
+ * Does this feed belong in the owner's books? Everything that is not positively a client
+ * invoice payment — including anything the system does not recognise.
+ */
+export function isOwnerLedgerFeed(feed: ProjectableFeed, openInvoices: OpenInvoiceRef[] = []): boolean {
+  return !isClientInvoicePayment(feed, openInvoices)
 }
 
 /**
@@ -114,25 +178,85 @@ export function buildOwnerLedgerRow(feed: ProjectableFeed): OwnerLedgerRow | nul
 }
 
 /**
- * The scheduled sweep: find bank activity that is TD's own money, copy it into My Finances,
- * and take it out of the Bank Feed. Runs BEFORE the invoice matcher each cycle, so a Stripe
- * payout is never scored against a client invoice in the first place.
+ * "This is for a client" — send a transaction back from My Finances to the Bank Feed.
  *
- * Scope: everything except `matched` (its status carries the invoice link — those feeds are
- * still COPIED to the owner's books but never re-labelled) and rows already `owner_ledger`.
- * The copy is an upsert on a deterministic ref, so re-running is harmless.
+ * The escape hatch that makes the default safe (Antonio, 2026-07-27): anything the system
+ * cannot positively identify lands in My Finances, and one click returns it to Finance for
+ * invoice matching. Without this the default would be a trap; with it, a wrong guess costs
+ * one click.
+ *
+ * REMOVES the copy from the owner's books before restoring the feed. Leaving it would count
+ * the money TWICE — once in Antonio's books and again against the client's invoice — so
+ * "fixing" a misroute would create a bookkeeping error. Delete first: if the delete fails we
+ * stop and the row stays put, rather than existing in both places.
+ */
+export async function sendOwnerLedgerRowToFinance(
+  feedId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const { error: delErr } = await supabaseAdmin
+    .from("bank_transactions")
+    .delete()
+    .eq("account_id", OWNER_ACCOUNT_ID) // never touch a client's rows
+    .eq("transaction_ref", `feed:${feedId}`)
+
+  if (delErr) return { ok: false, error: `Could not remove it from My Finances: ${delErr.message}` }
+
+  // Back to the review queue, where the matcher and staff can work it.
+  const res = await updateFeeds([feedId], { status: "unmatched" }, "owner-ledger-send-to-finance")
+  if (!res.ok) return { ok: false, error: res.error ?? "Could not return it to the Bank Feed." }
+  return { ok: true }
+}
+
+/**
+ * Every invoice a client could still be paying — the veto list for `isClientInvoicePayment`.
+ * Uses the ONE shared matchability predicate rather than a hand-written status list, because
+ * this codebase has already been burned by four divergent definitions of "open invoice".
+ * A Partial invoice is compared on what is still owed, exactly as the matcher does.
+ */
+async function fetchOpenInvoices(): Promise<OpenInvoiceRef[]> {
+  const { data, error } = await supabaseAdmin
+    .from("payments")
+    .select("amount, total, amount_due, amount_paid, amount_currency, status, invoice_status, is_test")
+  if (error || !data) return []
+
+  const out: OpenInvoiceRef[] = []
+  for (const inv of data) {
+    if (inv.is_test === true) continue
+    if (!isMatchableInvoice(inv as { status?: string | null; invoice_status?: string | null })) continue
+    const total = Number(inv.total ?? inv.amount ?? 0)
+    const paid = Number(inv.amount_paid ?? 0)
+    const outstanding = Number.isFinite(total) && total > 0 ? total - (Number.isFinite(paid) ? paid : 0) : total
+    // Both the full figure and the remaining balance count as "something a client owes".
+    if (Number.isFinite(total) && total > 0) out.push({ amount: total, currency: inv.amount_currency })
+    if (Number.isFinite(outstanding) && outstanding > 0 && outstanding !== total) {
+      out.push({ amount: outstanding, currency: inv.amount_currency })
+    }
+  }
+  return out
+}
+
+/**
+ * The scheduled sweep: anything that is not positively a client invoice payment is copied to
+ * My Finances and taken out of the Bank Feed. Runs each cycle before the invoice matcher.
+ *
+ * `matched` feeds are still COPIED (their money is TD's) but never re-labelled — that status
+ * carries the invoice link. The copy is an upsert on a deterministic ref, so re-running is
+ * harmless. Ordered and status-scoped so nothing can silently fall outside the window.
  */
 export async function sweepFeedsToOwnerLedger(): Promise<ProjectionResult> {
+  const openInvoices = await fetchOpenInvoices()
+
   const { data, error } = await supabaseAdmin
     .from("td_bank_feeds")
-    .select("id, transaction_date, amount, currency, source, sender_name, memo, sender_reference, raw_data, status, external_id")
+    .select("id, transaction_date, amount, currency, source, sender_name, memo, sender_reference, raw_data, status, external_id, matched_payment_id")
     .not("status", "in", '("owner_ledger")')
+    .order("transaction_date", { ascending: false })
     .limit(2000)
 
   if (error) {
     return { ok: false, considered: 0, projected: 0, skipped: 0, error: error.message }
   }
-  return projectFeedsToOwnerLedger((data ?? []) as ProjectableFeed[], { markFeeds: true })
+  return projectFeedsToOwnerLedger((data ?? []) as ProjectableFeed[], { markFeeds: true, openInvoices })
 }
 
 export interface ProjectionResult {
@@ -151,12 +275,12 @@ export interface ProjectionResult {
  */
 export async function projectFeedsToOwnerLedger(
   feeds: ProjectableFeed[],
-  opts: { markFeeds?: boolean } = {},
+  opts: { markFeeds?: boolean; openInvoices?: OpenInvoiceRef[] } = {},
 ): Promise<ProjectionResult> {
   const rows: OwnerLedgerRow[] = []
   const markable: string[] = []
   for (const feed of feeds) {
-    if (!isOwnerLedgerFeed(feed)) continue
+    if (!isOwnerLedgerFeed(feed, opts.openInvoices ?? [])) continue
     const row = buildOwnerLedgerRow(feed)
     if (!row) continue
     rows.push(row)

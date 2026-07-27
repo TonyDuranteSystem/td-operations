@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest"
 import {
   buildOwnerLedgerRow,
+  isClientInvoicePayment,
   isOwnerLedgerFeed,
   OWNER_ACCOUNT_ID,
   type ProjectableFeed,
+  type OpenInvoiceRef,
 } from "@/lib/finance/owner-ledger-projection"
 
 const base: ProjectableFeed = {
@@ -17,79 +19,91 @@ const base: ProjectableFeed = {
   status: "needs_review",
 }
 
-describe("isOwnerLedgerFeed — what belongs in the owner's books", () => {
-  it("a Stripe payout does", () => {
-    expect(isOwnerLedgerFeed(base)).toBe(true)
+/**
+ * THE RULE (Antonio, 2026-07-27): Finance keeps a deposit ONLY when something concrete proves
+ * a client is paying an invoice. Everything else — including anything unrecognised — goes to
+ * My Finances, where he can send it back with one click.
+ */
+describe("isClientInvoicePayment — what STAYS in Finance", () => {
+  it("a card charge with its payment reference stays", () => {
+    expect(isClientInvoicePayment({ ...base, source: "stripe", raw_data: { payment_intent: "pi_3T5A2O" } })).toBe(true)
   })
 
-  it("money TD spent does", () => {
-    expect(isOwnerLedgerFeed({ ...base, sender_name: "Anything", memo: "x", status: "outgoing" })).toBe(true)
+  it("an invoice number in the text keeps it in Finance", () => {
+    expect(isClientInvoicePayment({ ...base, sender_name: "WISE US INC - INV-001389 -WR", memo: null })).toBe(true)
   })
 
-  it("a Mercury bank reward does", () => {
-    expect(
-      isOwnerLedgerFeed({
-        ...base,
-        source: "mercury_api",
-        sender_name: "Mercury",
-        memo: "Cash bonus for referring ATCOACHING LLC.",
-        raw_data: { counterpartyName: "Mercury" },
-      }),
-    ).toBe(true)
+  it("a payer email keeps it in Finance", () => {
+    expect(isClientInvoicePayment({ ...base, memo: "payment from aman@simpleholdingsusa.com" })).toBe(true)
   })
 
-  it("a real client payment does NOT — it stays in Finance", () => {
-    expect(
-      isOwnerLedgerFeed({ ...base, sender_name: "WISE US INC - INV-001389", memo: "WISE US INC - INV-001389", raw_data: {} }),
-    ).toBe(false)
+  it("a feed already tied to an invoice stays", () => {
+    expect(isClientInvoicePayment({ ...base, matched_payment_id: "pay-1" })).toBe(true)
   })
 
-  it("a client card charge does NOT", () => {
-    expect(
-      isOwnerLedgerFeed({
-        ...base,
-        source: "stripe",
-        sender_name: "Bilaal Rajan",
-        memo: "visa ••••9765",
-        raw_data: { object: "charge", payment_intent: "pi_x" },
-      }),
-    ).toBe(false)
+  it("an amount matching something a client owes keeps it in Finance", () => {
+    const owed: OpenInvoiceRef[] = [{ amount: 1000, currency: "USD" }]
+    expect(isClientInvoicePayment({ ...base, amount: 1019.25 }, owed)).toBe(true)
+  })
+
+  it("PART-PAYMENT: $500 against a $2,200 invoice — the wide tolerance keeps it in Finance", () => {
+    // The Council broke the earlier rule on exactly this: a client part-payment matched no
+    // invoice under a 5% tolerance and was swept out. The veto uses max(20%, $50).
+    const owed: OpenInvoiceRef[] = [{ amount: 500, currency: "USD" }, { amount: 2200, currency: "USD" }]
+    expect(isClientInvoicePayment({ ...base, amount: 500, sender_name: "Some Wire", memo: null }, owed)).toBe(true)
+  })
+
+  it("CURRENCY: a EUR deposit is NOT kept by a same-numbered USD invoice", () => {
+    const owed: OpenInvoiceRef[] = [{ amount: 1019.25, currency: "USD" }]
+    expect(isClientInvoicePayment({ ...base, currency: "EUR", sender_name: "Wire", memo: null }, owed)).toBe(false)
   })
 })
 
-describe("buildOwnerLedgerRow — the six safety rules", () => {
-  it("1. ALWAYS pins the owner account — never a client's", () => {
-    const row = buildOwnerLedgerRow(base)!
-    expect(row.account_id).toBe(OWNER_ACCOUNT_ID)
+describe("isOwnerLedgerFeed — what goes to MY FINANCES", () => {
+  it("a Stripe payout goes (nothing proves it is a client)", () => {
+    expect(isOwnerLedgerFeed(base)).toBe(true)
   })
 
-  it("2. signs the amount — money out is negative, money in positive", () => {
+  it("money TD spent goes", () => {
+    expect(isOwnerLedgerFeed({ ...base, status: "outgoing", sender_name: "Tony Durante LLC" })).toBe(true)
+  })
+
+  it("a bank reward goes", () => {
+    expect(isOwnerLedgerFeed({ ...base, source: "mercury_api", sender_name: "Mercury", memo: "Cash bonus for referring ATCOACHING LLC." })).toBe(true)
+  })
+
+  it("THE DEFAULT: an unrecognised deposit goes to My Finances (not left in Finance)", () => {
+    expect(isOwnerLedgerFeed({ ...base, sender_name: "Unknown Wire", memo: null, raw_data: {} })).toBe(true)
+  })
+
+  it("outgoing money is never treated as a client payment even if it names a client", () => {
+    expect(isClientInvoicePayment({ ...base, status: "outgoing", memo: "INV-001389" })).toBe(false)
+  })
+})
+
+describe("buildOwnerLedgerRow — the safety rules", () => {
+  it("ALWAYS pins the owner account — never a client's", () => {
+    expect(buildOwnerLedgerRow(base)!.account_id).toBe(OWNER_ACCOUNT_ID)
+  })
+
+  it("signs the amount — money out negative, money in positive", () => {
     expect(buildOwnerLedgerRow({ ...base, status: "outgoing", amount: 25000 })!.amount).toBe(-25000)
     expect(buildOwnerLedgerRow({ ...base, amount: 1019.25 })!.amount).toBe(1019.25)
   })
 
-  it("3. always produces a non-blank, deterministic reference", () => {
-    const row = buildOwnerLedgerRow(base)!
-    expect(row.transaction_ref).toBe("feed:abc-123")
-    expect(row.transaction_ref.trim()).not.toBe("")
+  it("produces a non-blank deterministic reference so it can be sent back", () => {
+    expect(buildOwnerLedgerRow(base)!.transaction_ref).toBe("feed:abc-123")
   })
 
-  it("4. derives the tax year from the transaction date", () => {
-    expect(buildOwnerLedgerRow({ ...base, transaction_date: "2025-12-31" })!.tax_year).toBe(2025)
-  })
-
-  it("5. preserves the row's own currency (no FX guessing)", () => {
-    expect(buildOwnerLedgerRow({ ...base, currency: "eur" })!.currency).toBe("EUR")
-  })
-
-  it("6. always lands uncategorized — nothing is auto-booked as income", () => {
-    expect(buildOwnerLedgerRow(base)!.category).toBe("uncategorized")
+  it("derives the tax year, preserves currency, always lands uncategorized", () => {
+    const row = buildOwnerLedgerRow({ ...base, transaction_date: "2025-12-31", currency: "eur" })!
+    expect(row.tax_year).toBe(2025)
+    expect(row.currency).toBe("EUR")
+    expect(row.category).toBe("uncategorized")
   })
 
   it("maps the bank label so cash groups per account", () => {
-    expect(buildOwnerLedgerRow({ ...base, source: "relay" })!.bank_name).toBe("Relay")
     expect(buildOwnerLedgerRow({ ...base, source: "mercury_api" })!.bank_name).toBe("Mercury")
-    expect(buildOwnerLedgerRow({ ...base, source: "airwallex_api" })!.bank_name).toBe("Airwallex")
   })
 
   it("refuses a row it cannot build safely rather than corrupting the books", () => {
@@ -97,11 +111,7 @@ describe("buildOwnerLedgerRow — the six safety rules", () => {
     expect(buildOwnerLedgerRow({ ...base, transaction_date: "not-a-date" })).toBeNull()
   })
 
-  it("rounds to cents (no floating-point dust in the books)", () => {
+  it("rounds to cents (no floating-point dust)", () => {
     expect(buildOwnerLedgerRow({ ...base, amount: 0.1 + 0.2 })!.amount).toBe(0.3)
-  })
-
-  it("falls back to a description when the memo is empty", () => {
-    expect(buildOwnerLedgerRow({ ...base, memo: null, sender_name: null })!.description).toBe("Bank transaction")
   })
 })

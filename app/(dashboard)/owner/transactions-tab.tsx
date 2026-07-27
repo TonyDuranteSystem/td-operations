@@ -108,6 +108,8 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
   const [offset, setOffset] = useState(0)
   const [modal, setModal] = useState<ModalState | null>(null)
   const [saving, setSaving] = useState(false)
+  /** The row currently being sent back to Finance (disables just that button). */
+  const [sendingRef, setSendingRef] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [bulkCategory, setBulkCategory] = useState<OwnerCategory>('expense')
   const [bulkSubcategory, setBulkSubcategory] = useState('')
@@ -153,6 +155,30 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
       toast.error(e instanceof Error ? e.message : 'Save failed')
     } finally {
       setSaving(false)
+    }
+  }
+
+  /**
+   * "This is for a client" — the system put this here because it could not prove the money
+   * was a client paying an invoice. Antonio knows better; this returns it to the Bank Feed
+   * for matching (and removes it from his books so it can never be counted twice).
+   */
+  async function sendToFinance(tx: OwnerTransaction) {
+    if (!tx.transaction_ref) return
+    setSendingRef(tx.transaction_ref)
+    try {
+      const res = await fetch('/api/owner/transactions/to-finance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transaction_ref: tx.transaction_ref }),
+      })
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Could not move it to Finance.') }
+      toast.success('Moved to Finance — it will be matched to an invoice')
+      load(offset)
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'Could not move it to Finance.')
+    } finally {
+      setSendingRef(null)
     }
   }
 
@@ -355,16 +381,31 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                 <td className="px-3 py-2.5 text-xs text-zinc-500">{tx.subcategory?.replace(/_/g, ' ') ?? '—'}</td>
                 <td className="px-3 py-2.5 text-xs text-zinc-400 max-w-[120px] truncate">{tx.notes ?? ''}</td>
                 <td className="px-3 py-2.5">
-                  <button
-                    onClick={() => openModal(tx)}
-                    className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
-                      tx.category === 'uncategorized'
-                        ? 'bg-orange-50 text-orange-700 hover:bg-orange-100 border border-orange-200'
-                        : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-100'
-                    }`}
-                  >
-                    {tx.category === 'uncategorized' ? 'Categorize ↗' : 'Edit'}
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => openModal(tx)}
+                      className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                        tx.category === 'uncategorized'
+                          ? 'bg-orange-50 text-orange-700 hover:bg-orange-100 border border-orange-200'
+                          : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-100'
+                      }`}
+                    >
+                      {tx.category === 'uncategorized' ? 'Categorize ↗' : 'Edit'}
+                    </button>
+                    {/* Only a row that CAME from the bank feed can go back to it. This is the
+                        escape hatch: anything the system could not identify as a client
+                        payment lands here, and one click returns it to the Bank Feed. */}
+                    {tx.transaction_ref?.startsWith('feed:') && (
+                      <button
+                        onClick={() => sendToFinance(tx)}
+                        disabled={sendingRef === tx.transaction_ref}
+                        title="Move this back to Finance — it is a client paying an invoice"
+                        className="rounded border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50"
+                      >
+                        {sendingRef === tx.transaction_ref ? 'Moving…' : 'This is for a client →'}
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
