@@ -34,6 +34,7 @@ import { syncAirwallexDeposits } from "@/lib/airwallex-sync"
 import { logCron } from "@/lib/cron-log"
 import { processBankFeedMatches } from "@/lib/operations/process-bank-feed-matches"
 import { sweepFeedsToOwnerLedger } from "@/lib/finance/owner-ledger-projection"
+import { syncStripePayouts } from "@/lib/finance/stripe-payouts"
 import { runContractMonitor } from "@/lib/db-contract-monitor"
 
 export async function GET(req: NextRequest) {
@@ -127,6 +128,22 @@ export async function GET(req: NextRequest) {
       console.error("[check-wire] Stripe outgoing mark failed:", stripeOutgoingErr)
     }
 
+    // ─── Step 4a: Refresh the real Stripe payout list ───────────────
+    // Stripe itself knows every payout's exact amount and arrival date. Keeping that list
+    // current is what lets a "Stripe transfer" deposit be confirmed against a REAL payout
+    // instead of trusting the wording a particular bank happens to print — the wording is
+    // per-bank and would break the day payouts move to a different account. Runs before the
+    // sweep so the list is fresh when it is consulted. Fire-and-forget.
+    let payoutSync: Awaited<ReturnType<typeof syncStripePayouts>> | { error: string } | null = null
+    try {
+      payoutSync = await syncStripePayouts()
+      if (!payoutSync.ok) console.error("[check-wire] Stripe payout sync failed:", payoutSync.error)
+    } catch (payoutErr) {
+      const msg = payoutErr instanceof Error ? payoutErr.message : String(payoutErr)
+      console.error("[check-wire] Stripe payout sync threw:", msg)
+      payoutSync = { error: msg }
+    }
+
     // ─── Step 4b: Route TD's OWN money to My Finances ───────────────
     // Finance holds ONLY client invoice payments (Antonio, 2026-07-27). Everything else —
     // Stripe payouts, bank rewards, money TD spent — is copied into My Finances and taken
@@ -197,6 +214,7 @@ export async function GET(req: NextRequest) {
         open_invoices: openInvoices?.length ?? 0,
         airwallex_feeds: airwallexFeedCount,
         stripe_payouts_marked_outgoing: stripePayoutsMarked,
+        stripe_payout_sync: payoutSync,
         owner_ledger: ownerLedger,
         match: matchResult,
         db_contract: contractResult,
@@ -208,6 +226,7 @@ export async function GET(req: NextRequest) {
       pending_activations: pendingList?.length ?? 0,
       new_airwallex_feeds: airwallexFeedCount,
       stripe_payouts_marked_outgoing: stripePayoutsMarked,
+      stripe_payout_sync: payoutSync,
       owner_ledger: ownerLedger,
       match: matchResult,
       db_contract: contractResult,
