@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { validateApplyUrl, bankTileHref } from '@/lib/bank-referrals'
+import { validateApplyUrl, bankTileHref, summarizeBankActivity } from '@/lib/bank-referrals'
 
 // The Bank Applications page became catalog-driven on 2026-07-27. These two
 // pure helpers decide (a) whether a link Antonio types in the CRM is usable at
@@ -59,6 +59,35 @@ describe('validateApplyUrl — managed ("we submit for you") banks', () => {
   it('tolerates surrounding whitespace', () => {
     expect(validateApplyUrl('  /portal/wizard?type=banking_relay  ', true)).toBeNull()
     expect(validateApplyUrl('  https://mercury.com/  ', false)).toBeNull()
+  })
+})
+
+describe('summarizeBankActivity — drives the staff panel staying quiet', () => {
+  it('reports no activity when the client has clicked nothing', () => {
+    // The Nexo Agency case: 7 banks in the catalog, zero clicks. Panel must
+    // collapse rather than render seven grey "Not Clicked" rows.
+    const entries = ['relay', 'payset', 'mercury', 'sokin', 'revolut', 'airwallex', 'verto'].map(() => ({
+      clicked_at: null,
+    }))
+    expect(summarizeBankActivity(entries)).toEqual({ total: 7, clickedCount: 0, hasActivity: false })
+  })
+
+  it('flags activity as soon as one bank is clicked', () => {
+    const entries = [{ clicked_at: null }, { clicked_at: '2026-07-25T19:32:09Z' }, { clicked_at: null }]
+    expect(summarizeBankActivity(entries)).toEqual({ total: 3, clickedCount: 1, hasActivity: true })
+  })
+
+  it('counts every clicked bank, not just the first', () => {
+    const entries = [
+      { clicked_at: '2026-07-01T00:00:00Z' },
+      { clicked_at: '2026-07-02T00:00:00Z' },
+      { clicked_at: null },
+    ]
+    expect(summarizeBankActivity(entries)).toMatchObject({ clickedCount: 2, hasActivity: true })
+  })
+
+  it('handles an empty catalog without claiming activity', () => {
+    expect(summarizeBankActivity([])).toEqual({ total: 0, clickedCount: 0, hasActivity: false })
   })
 })
 

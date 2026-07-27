@@ -170,6 +170,22 @@ export function bankTileHref(bank: Pick<BankPageOption, 'slug' | 'apply_url' | '
   return bank.managed ? bank.apply_url : `/portal/apply/bank/${bank.slug}`
 }
 
+/**
+ * Summary the staff account panel needs to decide whether it should shout.
+ *
+ * Since the bank catalog grew from one row to seven (2026-07-27), a panel that
+ * always renders every bank is mostly a wall of "Not Clicked" — noise on an
+ * account page that has plenty to look at. Antonio's rule: only tell me when
+ * the client actually did something. So the panel collapses itself when
+ * `clickedCount` is 0 and raises an alert when it isn't.
+ */
+export function summarizeBankActivity(
+  entries: Pick<BankReferralStatus, 'clicked_at'>[],
+): { total: number; clickedCount: number; hasActivity: boolean } {
+  const clickedCount = entries.filter(e => !!e.clicked_at).length
+  return { total: entries.length, clickedCount, hasActivity: clickedCount > 0 }
+}
+
 export async function getBankReferralsForAccount(accountId: string): Promise<BankReferralStatus[]> {
   try {
     const [referrals, clicks] = await Promise.all([
