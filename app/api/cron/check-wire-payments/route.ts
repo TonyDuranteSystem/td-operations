@@ -12,7 +12,9 @@
  * 2. Syncs Airwallex EUR deposits to td_bank_feeds (inline — keeps its own
  *    retry/error handling)
  * 3. Runs content-dedup safety net
- * 4. Marks Mercury Stripe payouts as outgoing
+ * 4. Routes TD's own money (payouts, rewards, spending) to My Finances — anything
+ *    that is not provably a client paying an invoice. Wording-based marking was
+ *    REMOVED 2026-07-27; the decision is evidence-based now.
  * 5. Delegates to processBankFeedMatches() — the canonical match + activation
  *    chain. Same lib used by the Mercury / Airwallex crons and the admin
  *    "Sync All Banks Now" button. NO hand-rolled match loop here.
@@ -29,7 +31,6 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
-import { markMercuryStripePayoutsOutgoing } from "@/lib/bank-feed-matcher"
 import { syncAirwallexDeposits } from "@/lib/airwallex-sync"
 import { logCron } from "@/lib/cron-log"
 import { processBankFeedMatches } from "@/lib/operations/process-bank-feed-matches"
@@ -114,19 +115,14 @@ export async function GET(req: NextRequest) {
     // two different external_ids, dedup it on the provider's transaction id — never
     // on amount + name + day.
 
-    // ─── Step 4: Mark Mercury Stripe payouts as outgoing ────────────
-    // These rows are already tracked by the Stripe sync; marking them outgoing
-    // prevents the matcher from wasting cycles trying to reconcile them.
-    let stripePayoutsMarked = 0
-    try {
-      const stripeResult = await markMercuryStripePayoutsOutgoing()
-      stripePayoutsMarked = stripeResult.marked
-      if (stripePayoutsMarked > 0) {
-        console.warn(`[check-wire] Marked ${stripePayoutsMarked} Mercury Stripe payout(s) as outgoing`)
-      }
-    } catch (stripeOutgoingErr) {
-      console.error("[check-wire] Stripe outgoing mark failed:", stripeOutgoingErr)
-    }
+    // ─── Step 4: REMOVED 2026-07-27 — wording-based payout marking ──
+    // This step read the bank's memo text for the literal "STRIPE; TRANSFER" and flipped the
+    // row to `outgoing`. Antonio rejected deciding what money is from how a bank happens to
+    // word it: the wording differs per bank, breaks the day payouts move accounts, and this
+    // check had already missed every Relay payout (they read "STRIPE - TRANSFER", dash, in a
+    // different field). Step 4b below now decides by EVIDENCE — a deposit stays in Finance
+    // only if something proves a client is paying an invoice — so this step is not just
+    // redundant, it contradicted the rule.
 
     // ─── Step 4a: Refresh the real Stripe payout list ───────────────
     // Stripe itself knows every payout's exact amount and arrival date. Keeping that list
@@ -213,7 +209,6 @@ export async function GET(req: NextRequest) {
         pending_activations: pendingList?.length ?? 0,
         open_invoices: openInvoices?.length ?? 0,
         airwallex_feeds: airwallexFeedCount,
-        stripe_payouts_marked_outgoing: stripePayoutsMarked,
         stripe_payout_sync: payoutSync,
         owner_ledger: ownerLedger,
         match: matchResult,
@@ -225,7 +220,6 @@ export async function GET(req: NextRequest) {
       ok: true,
       pending_activations: pendingList?.length ?? 0,
       new_airwallex_feeds: airwallexFeedCount,
-      stripe_payouts_marked_outgoing: stripePayoutsMarked,
       stripe_payout_sync: payoutSync,
       owner_ledger: ownerLedger,
       match: matchResult,

@@ -102,112 +102,12 @@ export function extractInvoiceReference(feed: FeedSignalSource): string | null {
   return null
 }
 
-/**
- * Feed TYPE classification — "what kind of money is this?", from STRUCTURED provider
- * data, not the description wording (Antonio, 2026-07-26; Council pass #2).
+/*
+ * REMOVED 2026-07-27 — `classifyFeedType` and its Stripe wording signature.
  *
- * Two ideas keep this safe (both are Council blockers folded in):
- *  1. POSITIVE-EVIDENCE-ONLY. The default is `client_payment` — a row is only pulled
- *     toward a non-client type on real evidence. Nothing is classified "not a client
- *     payment" by elimination. Uncertainty stays a client payment and flows to the
- *     matcher/review, never hidden.
- *  2. TYPE is separate from BASIS (how we know). The routing layer auto-routes ONLY
- *     high-confidence bases (`structured_id`, `counterparty_exact`); `name` / `plaid_pfc`
- *     are advisory and must stay in review. Plaid's `personal_finance_category` is
- *     demonstrably wrong in BOTH directions (a client wire came back TRANSFER_IN, a
- *     Stripe payout came back INCOME), so it may only corroborate, never decide.
- *
- * This function is per-row and pure. It CANNOT confirm an internal transfer on its own
- * (that needs the two legs paired across our own accounts) nor a Stripe payout by its
- * true identity (that needs the Stripe payout-id cross-match) — those live in the
- * cross-row pass. Here it surfaces the best single-row signal with an honest basis.
+ * It labelled a row's type by reading the bank's description text. Antonio rejected that:
+ * wording differs per bank and breaks the day payouts move accounts. The decision now lives
+ * in `lib/finance/owner-ledger-projection.ts::isClientInvoicePayment`, which proves the
+ * POSITIVE — a deposit stays in Finance only when something concrete says a client is paying
+ * an invoice — and sends everything else to My Finances, visible and reversible.
  */
-export type FeedType =
-  | "client_payment"
-  | "stripe_payout"
-  | "internal_transfer"
-  | "bank_reward"
-  | "unknown"
-
-/** How the type was decided, from strongest to weakest. Routing keys on this. */
-export type FeedTypeBasis =
-  | "structured_id" // a provider id proves it (e.g. Stripe payout id) — auto-routable
-  | "counterparty_exact" // the structured counterparty IS the bank/processor — auto-routable
-  | "name" // description signature only — advisory, keep in review
-  | "plaid_pfc" // Plaid category corroboration only — advisory, keep in review
-  | "none"
-
-export interface FeedTypeResult {
-  type: FeedType
-  basis: FeedTypeBasis
-  detail?: string
-}
-
-/** Bank feeds where a Stripe payout could LAND. `source='stripe'` rows are client
- * card charges (they self-identify via payment_intent) — never payouts. */
-const BANK_FEED_SOURCES = new Set([
-  "relay",
-  "mercury",
-  "mercury_api",
-  "airwallex_api",
-  "airwallex_email",
-  "banking_circle",
-  "chase",
-  "qb_deposit",
-])
-
-/** "stripe" immediately followed by "transfer", separated only by space/dash/semicolon/
- * colon — a CONTIGUOUS signature. Deliberately NOT two independent contains() (which a
- * client named "…stripe…" plus a bank "wire transfer" memo would trip). The \b before
- * "stripe" also rejects "pinstripe". */
-const STRIPE_PAYOUT_SIGNATURE = /\bstripe\b[\s;:–—-]+transfer\b/i
-
-function rawObject(feed: FeedSignalSource): Record<string, unknown> {
-  return feed.raw_data && typeof feed.raw_data === "object"
-    ? (feed.raw_data as Record<string, unknown>)
-    : {}
-}
-
-export function classifyFeedType(feed: FeedSignalSource): FeedTypeResult {
-  const data = rawObject(feed)
-  const source = feed.source ?? ""
-  const text = `${feed.sender_name ?? ""} ${feed.memo ?? ""} ${feed.sender_reference ?? ""}`
-
-  const counterparty =
-    typeof data.counterpartyName === "string" ? data.counterpartyName.trim() : ""
-
-  // 1. BANK REWARD — the counterparty IS the bank itself (Mercury's native feed carries a
-  //    structured counterparty). EXACT match only: "Mercury Ventures LLC" (a client) must
-  //    not trip it, and an empty counterparty must never match.
-  if (
-    (source === "mercury" || source === "mercury_api") &&
-    counterparty.toLowerCase() === "mercury"
-  ) {
-    return { type: "bank_reward", basis: "counterparty_exact", detail: "mercury" }
-  }
-
-  // 2. STRIPE PAYOUT — only on a BANK feed (never on a client card charge, source='stripe').
-  //    Robust identity (payout-id cross-match) is added with the payouts sync; until then a
-  //    name signature is `basis: 'name'` so routing keeps it visible in review, not hidden.
-  if (BANK_FEED_SOURCES.has(source)) {
-    if (counterparty.toLowerCase() === "stripe") {
-      return { type: "stripe_payout", basis: "counterparty_exact", detail: "stripe" }
-    }
-    if (STRIPE_PAYOUT_SIGNATURE.test(text)) {
-      return { type: "stripe_payout", basis: "name" }
-    }
-  }
-
-  // INTERNAL TRANSFER is deliberately NOT detected here. Plaid's ACCOUNT_TRANSFER category
-  // was measured against the real feed (2026-07-26) and is WRONG most of the time: of 19
-  // rows it tagged ACCOUNT_TRANSFER, only 2 were genuine own-account moves (both money going
-  // OUT, already excluded by their outgoing direction); the other ~17 were real CLIENT
-  // payments (WISE / Avorgate / Next To Prime / …), several already matched to invoices. And
-  // every genuine internal transfer in the data goes OUT to an account we don't sync, so no
-  // incoming leg exists to pair. A future internal_transfer classification must come from a
-  // CONFIRMED pair-match across our OWN synced accounts (both legs present, own-account id on
-  // each) — never from this per-row category, which fails toward hiding client money.
-
-  // Default — a client payment. Stays in the matcher/review. (Positive-evidence-only.)
-  return { type: "client_payment", basis: "none" }
-}

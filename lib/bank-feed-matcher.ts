@@ -26,7 +26,7 @@ import {
   extractInvoiceReference,
 } from "@/lib/finance/feed-signals"
 import { isChargeRefundedNow } from "@/lib/stripe-sync"
-import { updateFeed, updateFeeds } from "@/lib/finance/feed-write"
+import { updateFeed } from "@/lib/finance/feed-write"
 import { auditLinkMetadata } from "@/lib/finance/feed-vocabulary"
 
 // Re-exported: the money math moved to lib/finance/invoice-money.ts so the single
@@ -876,43 +876,20 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
   }
 }
 
-/**
- * Returns true if a td_bank_feeds row is a Stripe payout deposit on Mercury.
- * These rows are already tracked via the Stripe sync (source='stripe'); the Mercury
- * entry is a redundant deposit notification — not a client payment to reconcile.
+/*
+ * REMOVED 2026-07-27 — `isStripePayoutFeed` / `markMercuryStripePayoutsOutgoing`.
  *
- * Exported for unit tests.
+ * They decided what money was by READING THE BANK'S WORDING: a Mercury row whose memo
+ * contained the literal "STRIPE; TRANSFER" was flipped to `outgoing` so the matcher would
+ * skip it. Antonio rejected that approach outright — wording differs per bank and breaks the
+ * day payouts move to a different account, and it had already missed every Relay payout
+ * because those say "STRIPE - TRANSFER" with a dash, in a different field.
+ *
+ * Replaced by the invoice-first rule in `lib/finance/owner-ledger-projection.ts`: a deposit
+ * stays in Finance only when something PROVES a client is paying an invoice, and everything
+ * else — payouts included, whatever the bank calls them — goes to My Finances, where it is
+ * visible and reversible with one click. No text matching anywhere in the decision.
  */
-export function isStripePayoutFeed(memo: string | null, senderReference: string | null): boolean {
-  const memoUp = (memo || "").toUpperCase()
-  const refUp = (senderReference || "").toUpperCase()
-  return memoUp.includes("STRIPE; TRANSFER") || refUp.includes("STRIPE; TRANSFER")
-}
-
-/**
- * Marks unmatched Mercury/mercury_api rows that are Stripe payouts as 'outgoing'
- * so the matcher loop skips them. Called as a pre-processing step in check-wire-payments.
- */
-export async function markMercuryStripePayoutsOutgoing(): Promise<{ marked: number }> {
-  const { data: feeds, error } = await supabaseAdmin
-    .from("td_bank_feeds")
-    .select("id, memo, sender_reference")
-    .in("source", ["mercury", "mercury_api"])
-    .eq("status", "unmatched")
-
-  if (error || !feeds || feeds.length === 0) return { marked: 0 }
-
-  const ids = feeds
-    .filter(f => isStripePayoutFeed(f.memo, f.sender_reference))
-    .map(f => f.id)
-
-  if (ids.length === 0) return { marked: 0 }
-
-  const result = await updateFeeds(ids, { status: "outgoing" }, "matcher:mark-stripe-payouts-outgoing")
-  if (!result.ok) return { marked: 0 }
-
-  return { marked: ids.length }
-}
 
 /** Outcome of settling one invoice from one bank transaction. */
 type SettleResult = {
