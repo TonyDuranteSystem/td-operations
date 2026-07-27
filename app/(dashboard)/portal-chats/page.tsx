@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, AlertTriangle, StickyNote } from 'lucide-react'
@@ -261,6 +262,43 @@ export default function PortalChatsPage() {
   // Internal team chat
   const [sidebarView, setSidebarView] = useState<'chats' | 'internal' | 'actions'>('chats')
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
+  // Make picking a chat a real Back step. Without this, switching chats changes
+  // nothing the browser knows about, so the header Back arrow skips the whole
+  // page and lands on the dashboard (Antonio, 2026-07-26). Restoring only sets
+  // the identifiers — the existing effects reload that thread's messages from
+  // them, exactly as a deep link does.
+  useSelectionHistory(
+    { account: selectedAccountId, contact: selectedContactId, thread: selectedThreadId, view: sidebarView },
+    (v) => {
+      setSelectedAccountId(v.account)
+      setSelectedContactId(v.contact)
+      setSelectedThreadId(v.thread)
+      setSidebarView(v.view === 'internal' || v.view === 'actions' ? v.view : 'chats')
+      // Rebuild the companion state the click handler derives (header name, send
+      // target, members/companies). Skipping this leaves the PREVIOUS chat's name
+      // in the header — selectedName wins over the currentThread fallback — and a
+      // send target pointing at the chat you just left.
+      const t = threads?.find(x => (v.account ? x.account_id === v.account : v.contact ? x.contact_id === v.contact : false))
+      if (!t) {
+        setSelectedName(null); setSelectedThreadContactId(null)
+        setSelectedThreadMembers([]); setSelectedThreadCompanies([]); setSelectedCompanyId(null)
+        return
+      }
+      const members = t.members ?? []
+      const companies = t.companies ?? []
+      const isAccountThread = !!v.account && members.length > 0
+      setSelectedName({
+        company: t.contact_name || t.company_name,
+        contact: isAccountThread ? members.map(m => m.name).join(' · ') : (companies.map(c => c.name).join(' · ') || undefined),
+      })
+      setSelectedThreadContactId(t.contact_id)
+      setSelectedThreadMembers(isAccountThread ? members : [])
+      setSelectedThreadCompanies(isAccountThread ? [] : companies)
+      // Same closed-account guard as the click path: never default the send
+      // target to a closed company the client can no longer see.
+      setSelectedCompanyId(isAccountThread ? null : (companies.find(c => !c.closed)?.id ?? null))
+    },
+  )
   const [internalReplyText, setInternalReplyText] = useState('')
   const [internalPendingFile, setInternalPendingFile] = useState<PendingAdminFile | null>(null)
   const [internalUploading, setInternalUploading] = useState(false)
