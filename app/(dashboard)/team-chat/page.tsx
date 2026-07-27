@@ -21,6 +21,7 @@ import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { uploadTeamAttachment, prepareChatFiles, CHAT_ATTACHMENT_MAX_COUNT } from '@/lib/team/attachment'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { TurnBadge } from '@/components/team-chat/turn-badge'
+import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import { sortPanelThreads, filterStreamRoots } from '@/lib/team/thread-meta'
 import { TEAM_COLORS, CLAUDE_SENDER_UUID, channelSlug, TEAM_WORK_STATUSES, TEAM_WORK_STATUS_LABELS, TEAM_STATUS_COLORS, type TeamWorkStatus } from '@/lib/team/workspace'
 import type { ChatAttachment } from '@/lib/types'
@@ -942,6 +943,53 @@ export default function TeamWorkspacePage() {
       openThread(deepLinkRoot)
     }
   }, [deepLinkRoot, deepLinkThread, selectedId, messages, openThread])
+
+  // ── Make every Team Workspace selection a real Back step ──────────────────
+  // Picking a channel / DM / conversation, opening a thread, switching to the
+  // Board, or opening a Slack channel are all pure state — the URL never moved,
+  // so the global Back arrow skipped the whole page and landed on the dashboard
+  // (Antonio, 2026-07-26, on Portal Chats; identical here). Recording them in
+  // the query string makes Back walk: thread → channel → previous channel → the
+  // page before. Reuses the SAME `?thread=`/`?root=` keys the existing deep
+  // links use, so a copied URL and a Back step mean exactly the same thing.
+  useSelectionHistory(
+    {
+      thread: selectedId,
+      root: openRootId,
+      slack: selectedSlackId,
+      view: view === 'board' ? 'board' : null,
+    },
+    (v) => {
+      setView(v.view === 'board' ? 'board' : 'list')
+      if (v.slack) { selectSlack(v.slack); return }
+      if (!v.thread) {
+        pendingOpenRef.current = null
+        setSelectedId(null); setOpenRootId(null); setReplyTo(null)
+        return
+      }
+      if (v.root) {
+        // Go through the Board's proven path: it parks the request and replays
+        // it once that channel's messages have loaded — and fetches the thread
+        // on demand when it's older than the loaded window. Setting openRootId
+        // directly would be WIPED by the selection effect, which resets the open
+        // thread whenever the channel changes.
+        openThreadInChannel(v.thread, v.root)
+        return
+      }
+      // Channel with no thread open.
+      pendingOpenRef.current = null
+      if (selectedIdRef.current === v.thread) {
+        // Same channel — this is "close the thread". setSelectedId would be a
+        // no-op here, so the selection effect never runs and the thread would
+        // stay open; mirror what the in-thread back arrow does.
+        setOpenRootId(null); setReplyTo(null)
+        const t = threadsRef.current.find(x => x.id === v.thread)
+        if (t?.thread_type === 'channel') setShowThreadsPanel(true)
+      } else {
+        setSelectedId(v.thread)
+      }
+    },
+  )
 
   const toggleReaction = async (msgId: string, emoji: string) => {
     setReactFor(null)
