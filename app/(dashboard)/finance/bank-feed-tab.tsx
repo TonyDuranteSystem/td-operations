@@ -11,7 +11,7 @@ import {
   Loader2, ArrowRight, CheckCircle2, AlertCircle, AlertTriangle,
   Search, Building2, User, Trash2, Check, RotateCw, Copy, Undo2,
 } from 'lucide-react'
-import { matchBankFeedToInvoices, ignoreBankFeed, deleteDuplicateBankFeed, restoreBankFeed } from './actions'
+import { matchBankFeedToInvoices, ignoreBankFeed, deleteDuplicateBankFeed, restoreBankFeed, claimBankFeedForOwner } from './actions'
 import { invoicePartyName } from '@/lib/finance/invoice-party'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { VALID_SERVICE_TYPES } from '@/lib/operations/service-types'
@@ -445,8 +445,45 @@ interface CandidateInfo {
   confidence: string | null
 }
 
+/**
+ * "Mine →" — Antonio claims a deposit for My Finances, by hand.
+ *
+ * The mirror of the "This is for a client →" button over there. The cautious rule keeps
+ * anything that COULD be a client payment in Finance; when he looks at a row and knows it is
+ * his own money (a bank reward with a wrong auto-match pinned on it, say), this is the
+ * one-click override. Rendered only for admins — and the server action re-checks the role,
+ * because button visibility is not a security boundary.
+ */
+function ClaimForOwnerButton({ feedId }: { feedId: string }) {
+  const router = useRouter()
+  const [busy, setBusy] = useState(false)
+  const handleClaim = async () => {
+    setBusy(true)
+    try {
+      const result = await claimBankFeedForOwner(feedId)
+      if (!result.success) throw new Error(result.error || 'Could not move it to My Finances.')
+      toast.success('Moved to My Finances')
+      router.refresh()
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not move it to My Finances.')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <button
+      onClick={handleClaim}
+      disabled={busy}
+      className="rounded border border-purple-200 bg-purple-50 px-2 py-0.5 text-[11px] font-medium text-purple-700 hover:bg-purple-100 disabled:opacity-50 shrink-0"
+      title="This is TD's own money, not a client payment — move it to My Finances"
+    >
+      {busy ? 'Moving…' : 'Mine →'}
+    </button>
+  )
+}
+
 function UnmatchedRow({
-  feed, openInvoices, isMatching, onStartMatch, onCancelMatch, candidateInfo,
+  feed, openInvoices, isMatching, onStartMatch, onCancelMatch, candidateInfo, isAdmin = false,
 }: {
   feed: BankFeedRecord
   openInvoices: OpenInvoice[]
@@ -454,6 +491,7 @@ function UnmatchedRow({
   onStartMatch: () => void
   onCancelMatch: () => void
   candidateInfo?: CandidateInfo | null
+  isAdmin?: boolean
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -756,6 +794,7 @@ function UnmatchedRow({
         <div className="flex items-center gap-1 shrink-0">
           {!isMatching ? (
             <>
+              {isAdmin && <ClaimForOwnerButton feedId={feed.id} />}
               <button onClick={onStartMatch} className="p-1 rounded hover:bg-blue-50 text-blue-500" title="Match to invoice" disabled={isPending}>
                 <Link2 className="h-4 w-4" />
               </button>
@@ -1424,7 +1463,7 @@ function DuplicateRow({ feed }: { feed: BankFeedRecord }) {
   )
 }
 
-function IgnoredRow({ feed }: { feed: BankFeedRecord }) {
+function IgnoredRow({ feed, isAdmin = false }: { feed: BankFeedRecord; isAdmin?: boolean }) {
   return (
     <div className="flex items-center gap-3 px-4 py-3 text-sm border-b last:border-b-0 opacity-60">
       <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
@@ -1437,6 +1476,9 @@ function IgnoredRow({ feed }: { feed: BankFeedRecord }) {
       <span className={cn('text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0', STATUS_COLORS.ignored)}>
         ignored
       </span>
+      {/* An ignored row is often TD's own money dismissed by hand before My Finances existed
+          — the claim button gives it a real home instead of limbo. */}
+      {isAdmin && <ClaimForOwnerButton feedId={feed.id} />}
     </div>
   )
 }
@@ -1697,6 +1739,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
                 onStartMatch={() => setMatchingFeed(feed.id)}
                 onCancelMatch={() => setMatchingFeed(null)}
                 candidateInfo={candidateInfo}
+                isAdmin={isAdmin}
               />
             ) : feed.status === 'activation_crashed' ? (
               <CrashedRow feed={feed} />
@@ -1705,7 +1748,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
             ) : feed.status === 'duplicate' ? (
               <DuplicateRow feed={feed} />
             ) : (
-              <IgnoredRow feed={feed} />
+              <IgnoredRow feed={feed} isAdmin={isAdmin} />
             )
             return (
               <div

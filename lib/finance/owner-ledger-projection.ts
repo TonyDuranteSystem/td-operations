@@ -178,6 +178,52 @@ export function buildOwnerLedgerRow(feed: ProjectableFeed): OwnerLedgerRow | nul
 }
 
 /**
+ * "This is mine" — Antonio sends a Bank Feed row to My Finances by hand.
+ *
+ * The mirror of `sendOwnerLedgerRowToFinance`. The automatic rule keeps anything that COULD
+ * be a client payment in Finance (a stale pinned candidate, or an amount near an open
+ * invoice); when Antonio looks at it and says "no, that's my money", his judgment overrides
+ * the rule's caution — a human decision, not a wording guess. First real case: the June 2026
+ * Relay "Partner Payout Program" deposit held hostage by a wrong Legerra candidate.
+ *
+ * Copies FIRST, marks after (the same discipline as the sweep), and clears any stale
+ * candidate pin so the row doesn't carry a dead invoice reference into the owner's books.
+ * Refuses a `matched` feed outright: that money settled a client invoice — moving it would
+ * contradict a completed reconciliation, and undoing a settlement is a deliberate separate
+ * act, not a routing click.
+ */
+export async function sendFeedToOwnerLedger(
+  feedId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const { data: feed, error: readErr } = await supabaseAdmin
+    .from("td_bank_feeds")
+    .select("id, transaction_date, amount, currency, source, sender_name, memo, sender_reference, raw_data, status, external_id, matched_payment_id")
+    .eq("id", feedId)
+    .maybeSingle()
+
+  if (readErr) return { ok: false, error: `Could not read the transaction: ${readErr.message}` }
+  if (!feed) return { ok: false, error: "Transaction not found." }
+  if (feed.status === "matched") {
+    return { ok: false, error: "This transaction already settled a client invoice — unlink it there first." }
+  }
+  if (feed.status === "owner_ledger") return { ok: true } // already home
+
+  const row = buildOwnerLedgerRow(feed as ProjectableFeed)
+  if (!row) return { ok: false, error: "This transaction cannot be moved safely (bad date or amount)." }
+
+  // COPY FIRST — the row must exist in My Finances before it leaves the Bank Feed.
+  const { error: insErr } = await supabaseAdmin
+    .from("bank_transactions")
+    .upsert([row], { onConflict: "account_id,transaction_ref,transaction_date,amount" })
+  if (insErr) return { ok: false, error: `Could not copy it into My Finances: ${insErr.message}` }
+
+  // MARK AFTER — and drop any stale candidate pin with it.
+  const res = await updateFeeds([feedId], { status: "owner_ledger", matched_payment_id: null, match_confidence: null }, "owner-ledger-manual-claim")
+  if (!res.ok) return { ok: false, error: res.error ?? "Copied, but could not update the Bank Feed row." }
+  return { ok: true }
+}
+
+/**
  * "This is for a client" — send a transaction back from My Finances to the Bank Feed.
  *
  * The escape hatch that makes the default safe (Antonio, 2026-07-27): anything the system

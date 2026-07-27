@@ -922,6 +922,42 @@ export async function matchBankFeedToInvoices(
   })
 }
 
+/**
+ * "This is mine" — Antonio claims a Bank Feed row for My Finances.
+ *
+ * The mirror of the "This is for a client" button in My Finances. The automatic rule keeps
+ * anything that COULD be a client payment in Finance (a pinned candidate, an amount near an
+ * open invoice); this is his one-click override when he looks at a row and knows it is his
+ * own money. First real case: a Relay "Partner Payout Program" deposit held in the review
+ * queue by a wrong auto-matched candidate.
+ *
+ * Admin gate is INSIDE the action — button visibility is not a security boundary. Staff must
+ * not be able to move money out of the invoice queue into the owner's books.
+ */
+export async function claimBankFeedForOwner(feedId: string): Promise<ActionResult> {
+  const { createClient } = await import('@/lib/supabase/server')
+  const { isAdmin } = await import('@/lib/auth')
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isAdmin(user)) {
+    return { success: false, error: 'Admin access required' }
+  }
+
+  return safeAction(async () => {
+    const { sendFeedToOwnerLedger } = await import('@/lib/finance/owner-ledger-projection')
+    const result = await sendFeedToOwnerLedger(feedId)
+    if (!result.ok) throw new Error(result.error ?? 'Could not move it to My Finances.')
+    revalidatePath('/finance')
+    revalidatePath('/reconciliation')
+    revalidatePath('/owner')
+  }, {
+    action_type: 'update',
+    table_name: 'td_bank_feeds',
+    record_id: feedId,
+    summary: 'Bank feed claimed for My Finances (owner money, not a client payment)',
+  })
+}
+
 export async function ignoreBankFeed(feedId: string): Promise<ActionResult> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
