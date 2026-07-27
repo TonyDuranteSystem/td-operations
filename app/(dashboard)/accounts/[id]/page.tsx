@@ -6,6 +6,8 @@ import { AccountDetail } from '@/components/accounts/account-detail'
 import { APP_BASE_URL } from '@/lib/config'
 import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
+import { isOwnerRole, pickViewAsContactId } from '@/lib/portal/pick-view-as-contact'
+import { getClientLoginContactIds } from '@/lib/portal/client-login-index'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import { resolveFlows } from '@/lib/flows/resolve-flows'
 import { FormationWorkspaceBanner } from '@/components/flows/formation-workspace-banner'
@@ -59,7 +61,10 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     supabase
       .from('account_contacts')
       .select('role, contact:contacts(*)')
-      .eq('account_id', params.id),
+      .eq('account_id', params.id)
+      // Deterministic order: without it, Postgres row order decided who the
+      // fallback "primary contact" was, and it could change between loads.
+      .order('contact_id'),
     // Services (from service_deliveries — source of truth)
     supabase
       .from('service_deliveries')
@@ -449,11 +454,31 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     (sd) => sd.service_type === 'Company Formation' && sd.status === 'active',
   )
 
-  // "View as client" (admin + staff): resolve the account's primary contact (Owner,
-  // else first linked contact). Read-only portal view.
+  // Primary contact for the e-sign prefill: the owner-role link if one exists
+  // (case-insensitive — production holds BOTH 'owner' and 'Owner'), else the
+  // first contact in the now-deterministic query order.
   const canViewAs = admin
   const primaryContact =
-    contacts.find((c) => (c as Contact & { role?: string }).role === 'Owner') ?? contacts[0]
+    contacts.find((c) => isOwnerRole((c as Contact & { role?: string }).role)) ?? contacts[0]
+
+  // "View as client" target: ONLY a contact that actually has a client portal
+  // login — the button opens that person's portal, so a login is the
+  // precondition, not an after-click discovery (Nexo Agency incident,
+  // 2026-07-27: the owner-role link had no login and the button always errored).
+  // Owner preferred among login-holders; button hidden when nobody qualifies.
+  let viewAsContactId: string | null = null
+  if (canViewAs && contacts.length > 0) {
+    try {
+      const loginHolders = await getClientLoginContactIds()
+      viewAsContactId = pickViewAsContactId(
+        contacts.map((c) => ({ id: c.id, role: (c as Contact & { role?: string }).role })),
+        loginHolders,
+      )
+    } catch (e) {
+      // Auth listing failure must not break the account page — just hide the button.
+      console.error('[accounts/[id]] view-as target resolution failed:', e)
+    }
+  }
 
   return (
     <div className="p-6 lg:p-8">
@@ -464,7 +489,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         >
           ✍️ Create e-sign document
         </Link>
-        {canViewAs && primaryContact && <ViewAsClientButton contactId={primaryContact.id} />}
+        {canViewAs && viewAsContactId && <ViewAsClientButton contactId={viewAsContactId} />}
       </div>
       {formationSd && (
         <FormationWorkspaceBanner
