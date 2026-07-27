@@ -33,6 +33,7 @@ import { markMercuryStripePayoutsOutgoing } from "@/lib/bank-feed-matcher"
 import { syncAirwallexDeposits } from "@/lib/airwallex-sync"
 import { logCron } from "@/lib/cron-log"
 import { processBankFeedMatches } from "@/lib/operations/process-bank-feed-matches"
+import { sweepFeedsToOwnerLedger } from "@/lib/finance/owner-ledger-projection"
 import { runContractMonitor } from "@/lib/db-contract-monitor"
 
 export async function GET(req: NextRequest) {
@@ -126,6 +127,26 @@ export async function GET(req: NextRequest) {
       console.error("[check-wire] Stripe outgoing mark failed:", stripeOutgoingErr)
     }
 
+    // ─── Step 4b: Route TD's OWN money to My Finances ───────────────
+    // Finance holds ONLY client invoice payments (Antonio, 2026-07-27). Everything else —
+    // Stripe payouts, bank rewards, money TD spent — is copied into My Finances and taken
+    // out of the Bank Feed. This runs BEFORE the matcher on purpose: a payout that never
+    // reaches Step 5 can never be scored against a client invoice, which is the double-count
+    // this exists to prevent. Fire-and-forget: a failure here must not stop reconciliation.
+    let ownerLedger: Awaited<ReturnType<typeof sweepFeedsToOwnerLedger>> | { error: string } | null = null
+    try {
+      ownerLedger = await sweepFeedsToOwnerLedger()
+      if (ownerLedger.ok && (ownerLedger.marked ?? 0) > 0) {
+        console.warn(`[check-wire] Routed ${ownerLedger.marked} transaction(s) to My Finances`)
+      } else if (!ownerLedger.ok) {
+        console.error("[check-wire] owner-ledger sweep failed:", ownerLedger.error)
+      }
+    } catch (sweepErr) {
+      const msg = sweepErr instanceof Error ? sweepErr.message : String(sweepErr)
+      console.error("[check-wire] owner-ledger sweep threw:", msg)
+      ownerLedger = { error: msg }
+    }
+
     // ─── Step 5: Auto-match + auto-activate via shared orchestrator ─
     // Replaces the prior hand-rolled match loop. processBankFeedMatches:
     //   - calls matchAndReconcile on every unmatched feed (limit 200)
@@ -176,6 +197,7 @@ export async function GET(req: NextRequest) {
         open_invoices: openInvoices?.length ?? 0,
         airwallex_feeds: airwallexFeedCount,
         stripe_payouts_marked_outgoing: stripePayoutsMarked,
+        owner_ledger: ownerLedger,
         match: matchResult,
         db_contract: contractResult,
       },
@@ -186,6 +208,7 @@ export async function GET(req: NextRequest) {
       pending_activations: pendingList?.length ?? 0,
       new_airwallex_feeds: airwallexFeedCount,
       stripe_payouts_marked_outgoing: stripePayoutsMarked,
+      owner_ledger: ownerLedger,
       match: matchResult,
       db_contract: contractResult,
     })

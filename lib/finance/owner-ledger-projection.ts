@@ -113,6 +113,28 @@ export function buildOwnerLedgerRow(feed: ProjectableFeed): OwnerLedgerRow | nul
   }
 }
 
+/**
+ * The scheduled sweep: find bank activity that is TD's own money, copy it into My Finances,
+ * and take it out of the Bank Feed. Runs BEFORE the invoice matcher each cycle, so a Stripe
+ * payout is never scored against a client invoice in the first place.
+ *
+ * Scope: everything except `matched` (its status carries the invoice link — those feeds are
+ * still COPIED to the owner's books but never re-labelled) and rows already `owner_ledger`.
+ * The copy is an upsert on a deterministic ref, so re-running is harmless.
+ */
+export async function sweepFeedsToOwnerLedger(): Promise<ProjectionResult> {
+  const { data, error } = await supabaseAdmin
+    .from("td_bank_feeds")
+    .select("id, transaction_date, amount, currency, source, sender_name, memo, sender_reference, raw_data, status, external_id")
+    .not("status", "in", '("owner_ledger")')
+    .limit(2000)
+
+  if (error) {
+    return { ok: false, considered: 0, projected: 0, skipped: 0, error: error.message }
+  }
+  return projectFeedsToOwnerLedger((data ?? []) as ProjectableFeed[], { markFeeds: true })
+}
+
 export interface ProjectionResult {
   ok: boolean
   considered: number
