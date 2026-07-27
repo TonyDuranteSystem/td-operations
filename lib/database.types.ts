@@ -11773,6 +11773,42 @@ export type Database = {
         }
         Relationships: []
       }
+      stripe_payouts: {
+        Row: {
+          amount: number
+          arrival_date: string
+          created_at: string
+          currency: string
+          id: string
+          livemode: boolean
+          raw_data: Json | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          amount: number
+          arrival_date: string
+          created_at?: string
+          currency?: string
+          id: string
+          livemode?: boolean
+          raw_data?: Json | null
+          status: string
+          updated_at?: string
+        }
+        Update: {
+          amount?: number
+          arrival_date?: string
+          created_at?: string
+          currency?: string
+          id?: string
+          livemode?: boolean
+          raw_data?: Json | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       system_docs: {
         Row: {
           agent_readable: boolean
