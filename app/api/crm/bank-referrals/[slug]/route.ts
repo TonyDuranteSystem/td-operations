@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
+import { BANK_COLUMNS, validateApplyUrl } from '@/lib/bank-referrals'
 
 // Untyped view of supabaseAdmin — the generated DB types don't include
 // bank_referrals yet; remove once regenerated.
@@ -24,28 +25,52 @@ export async function PATCH(
   const auth = await requireAdmin()
   if (auth) return auth
 
-  const body = await req.json().catch(() => null) as { label?: string; apply_url?: string; enabled?: boolean; rep_email?: string | null } | null
+  const body = await req.json().catch(() => null) as {
+    label?: string
+    apply_url?: string
+    enabled?: boolean
+    rep_email?: string | null
+    tag?: string | null
+    description_en?: string | null
+    description_it?: string | null
+    managed?: boolean
+    sort_order?: number
+  } | null
   if (!body) return NextResponse.json({ error: 'invalid body' }, { status: 400 })
+
+  // The link rule depends on whether the bank is managed, and BOTH can change
+  // in the same edit — so validate against the resulting state, not the old
+  // one. Read the current row first (also gives us a clean 404).
+  const { data: existing } = await sb
+    .from('bank_referrals')
+    .select('apply_url, managed')
+    .eq('slug', params.slug)
+    .maybeSingle()
+  if (!existing) return NextResponse.json({ error: 'not found' }, { status: 404 })
 
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
   if (typeof body.label === 'string' && body.label.trim()) patch.label = body.label.trim()
-  if (typeof body.apply_url === 'string' && body.apply_url.trim()) {
-    try {
-      const u = new URL(body.apply_url)
-      if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('scheme')
-    } catch {
-      return NextResponse.json({ error: 'apply_url must be a valid http(s) URL' }, { status: 400 })
-    }
-    patch.apply_url = body.apply_url.trim()
-  }
   if (typeof body.enabled === 'boolean') patch.enabled = body.enabled
+  if (typeof body.managed === 'boolean') patch.managed = body.managed
+  if (Number.isFinite(body.sort_order)) patch.sort_order = body.sort_order
   if ('rep_email' in body) patch.rep_email = body.rep_email?.trim() || null
+  if ('tag' in body) patch.tag = body.tag?.trim() || null
+  if ('description_en' in body) patch.description_en = body.description_en?.trim() || null
+  if ('description_it' in body) patch.description_it = body.description_it?.trim() || null
+
+  const nextManaged = typeof body.managed === 'boolean' ? body.managed : existing.managed === true
+  const nextUrl = typeof body.apply_url === 'string' && body.apply_url.trim()
+    ? body.apply_url.trim()
+    : (existing.apply_url as string)
+  const urlError = validateApplyUrl(nextUrl, nextManaged)
+  if (urlError) return NextResponse.json({ error: urlError }, { status: 400 })
+  if (typeof body.apply_url === 'string' && body.apply_url.trim()) patch.apply_url = nextUrl
 
   const { data, error } = await sb
     .from('bank_referrals')
     .update(patch)
     .eq('slug', params.slug)
-    .select()
+    .select(BANK_COLUMNS)
     .single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if (!data) return NextResponse.json({ error: 'not found' }, { status: 404 })
