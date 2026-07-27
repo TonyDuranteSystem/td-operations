@@ -227,7 +227,13 @@ export default async function FinancePage({
       .from('td_bank_feeds')
       .select('*, payments:matched_payment_id(invoice_number, description, account_id, accounts:account_id(company_name))')
       .order('transaction_date', { ascending: false })
-      .limit(200),
+      // 1000, not 200: with ~500 rows in the table, the old 200-row window silently hid every
+      // older transaction from EVERY tab — a row returned to the queue from My Finances (two
+      // March deposits, 296 newer rows ahead of them) was invisible with no error and no hint.
+      // The tab renders 50 per page, so the larger fetch changes payload size, not the UI.
+      // 1000 is PostgREST's per-request ceiling; when the table approaches it, this needs real
+      // pagination, and the count below (shown in the header) is the tell.
+      .limit(1000),
     supabaseAdmin
       .from('td_bank_feeds')
       .select('id', { count: 'exact', head: true }),
