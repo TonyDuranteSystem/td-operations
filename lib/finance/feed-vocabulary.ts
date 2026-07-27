@@ -38,6 +38,14 @@ export const FEED_STATUSES = [
   /** The invoice was paid but the client's activation failed; parked with a Retry button.
    *  Also absent from the production CHECK until 2026-07-14. */
   "activation_crashed",
+  /** NOT a client invoice payment — TD's own money (a Stripe payout, a bank reward, money
+   *  TD spent). It has been copied into My Finances, where the company's accounting is done.
+   *  Finance keeps ONLY client invoice payments, so staff working invoices never see the
+   *  owner's business activity. The money is not hidden: it is visible in My Finances, which
+   *  is its home — that is what makes removing it from the Bank Feed safe rather than a
+   *  repeat of the invisible-`duplicate` incident. Added 2026-07-27
+   *  (migration 20260727-1200-bank-feed-owner-ledger-status.sql). */
+  "owner_ledger",
 ] as const
 
 export type FeedStatus = (typeof FEED_STATUSES)[number]
