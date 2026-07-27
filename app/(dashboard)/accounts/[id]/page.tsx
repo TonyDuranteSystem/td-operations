@@ -7,7 +7,7 @@ import { APP_BASE_URL } from '@/lib/config'
 import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import { isOwnerRole, pickViewAsContactId } from '@/lib/portal/pick-view-as-contact'
-import { listAllAuthUsers } from '@/lib/auth-admin-helpers'
+import { getClientLoginContactIds } from '@/lib/portal/client-login-index'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import { resolveFlows } from '@/lib/flows/resolve-flows'
 import { FormationWorkspaceBanner } from '@/components/flows/formation-workspace-banner'
@@ -469,16 +469,10 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   let viewAsContactId: string | null = null
   if (canViewAs && contacts.length > 0) {
     try {
-      const authUsers = await listAllAuthUsers()
-      const clientLoginContactIds = new Set(
-        authUsers
-          .filter((u) => (u.app_metadata as { role?: string } | undefined)?.role === 'client')
-          .map((u) => (u.app_metadata as { contact_id?: string } | undefined)?.contact_id)
-          .filter((id): id is string => typeof id === 'string' && id.length > 0),
-      )
+      const loginHolders = await getClientLoginContactIds()
       viewAsContactId = pickViewAsContactId(
         contacts.map((c) => ({ id: c.id, role: (c as Contact & { role?: string }).role })),
-        clientLoginContactIds,
+        loginHolders,
       )
     } catch (e) {
       // Auth listing failure must not break the account page — just hide the button.

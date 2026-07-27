@@ -40,6 +40,26 @@ describe('pickViewAsContactId', () => {
     expect(pickViewAsContactId(contacts, logins('peter-info'))).toBe('peter-info')
   })
 
+  // MUTATION GUARD. The earlier owner test had the owner sorting FIRST, so
+  // replacing the owner lookup with `viewable[0]` kept every test green — the
+  // rule the feature exists for was unprotected. Here the owner sorts LAST, so
+  // this fails the moment owner-preference is removed.
+  it('prefers the owner even when the owner sorts AFTER a member', () => {
+    const contacts = [
+      { id: 'aaa-member', role: 'Member' },
+      { id: 'zzz-owner', role: 'owner' },
+    ]
+    expect(pickViewAsContactId(contacts, logins('aaa-member', 'zzz-owner'))).toBe('zzz-owner')
+  })
+
+  it('prefers a capital-O Owner that sorts after a member too', () => {
+    const contacts = [
+      { id: 'aaa-member', role: 'Member' },
+      { id: 'zzz-owner', role: 'Owner' },
+    ]
+    expect(pickViewAsContactId(contacts, logins('aaa-member', 'zzz-owner'))).toBe('zzz-owner')
+  })
+
   it('is deterministic regardless of input order', () => {
     const a = [
       { id: 'ccc', role: 'Member' },
