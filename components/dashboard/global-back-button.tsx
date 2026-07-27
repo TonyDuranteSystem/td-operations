@@ -4,30 +4,23 @@ import { useRouter, usePathname } from 'next/navigation'
 import { useEffect, useRef } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { markInAppNavigation, canGoBackInApp } from '@/lib/nav/in-app-history'
 
 /**
  * Global in-app Back — rendered on every dashboard page, in BOTH the desktop
  * header and the mobile app bar. It matters most in the installed phone app (a
  * PWA has no browser back button), which is why Antonio asked for it everywhere.
  *
- * Goes to the previous page you were on (Next.js App Router restores scroll on
- * back). GUARDED so a fresh open / deep link doesn't call back() into nothing and
- * leave the app: we only call router.back() once the user has actually navigated
- * within the app this session; otherwise we go home ('/').
+ * Steps back to wherever you were: the previous page, OR the previous in-page
+ * selection (the previous chat in Portal Chats), because those selections are
+ * recorded as real history entries by `useSelectionHistory`. On a fresh load /
+ * deep link there is nothing in-app to return to, so it goes home rather than
+ * calling back() into nothing and leaving the app.
  *
- * ⚠️ We do NOT read window.history.state.idx — the Next.js App Router does NOT
- * populate it (verified 2026-07-26: history.state is
- * {__NA, __PRIVATE_NEXTJS_INTERNALS_TREE}, no idx), so the old idx guard was
- * always falsy and every Back went home. We track navigation via pathname
- * changes instead, in a module-scoped flag so it survives remounts and is shared
- * by the desktop + mobile instances.
- *
- * NOTE: this steps back a PAGE. Surfaces that drill in WITHOUT changing the URL
- * (a thread inside team chat, a conversation inside portal chats) carry their own
- * in-surface back controls; the two together always let you step back.
+ * The "is there anywhere to go back to" question is answered by the shared
+ * counter in lib/nav/in-app-history — see the warning there for the two guards
+ * that were tried and failed (history.state.idx, and pathname-only).
  */
-let hasNavigatedInApp = false
-
 export function GlobalBackButton({ className }: { className?: string }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -35,12 +28,13 @@ export function GlobalBackButton({ className }: { className?: string }) {
 
   useEffect(() => {
     // Skip the initial mount; any later pathname change is a real in-app move.
-    if (mounted.current) hasNavigatedInApp = true
+    // (Query-only moves are reported by useSelectionHistory instead.)
+    if (mounted.current) markInAppNavigation()
     else mounted.current = true
   }, [pathname])
 
   const onBack = () => {
-    if (hasNavigatedInApp) router.back()
+    if (canGoBackInApp()) router.back()
     else router.push('/')
   }
 

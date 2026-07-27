@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
+import { markInAppNavigation } from '@/lib/nav/in-app-history'
 
 /**
  * Make an IN-PAGE selection (which chat / which thread you're looking at) a real
@@ -91,6 +92,10 @@ export function useSelectionHistory(
       const next = applySelectionToUrl(window.location.href, valuesRef.current)
       if (next === window.location.href) return
       window.history.pushState(null, '', next)
+      // Tell the global Back arrow this counts as a move. It cannot infer it:
+      // the pathname is unchanged, only the query moved. Without this, Back
+      // sees "no in-app history" and goes home — the exact bug this fixes.
+      markInAppNavigation()
     } catch {
       /* History API unavailable — selection still works, just no Back step. */
     }
