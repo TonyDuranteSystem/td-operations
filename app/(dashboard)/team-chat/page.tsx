@@ -462,9 +462,18 @@ export default function TeamWorkspacePage() {
     const upto = text.slice(0, caret)
     const rest = text.slice(caret)
     const replaced = upto.replace(/@([a-zA-Z0-9._-]*)$/, `@${handle} `)
+    // Put the caret right AFTER the inserted "@handle " (past the trailing
+    // space), not where it used to be — otherwise a controlled textarea restores
+    // the old offset, which now sits behind the name we just inserted.
+    const newCaret = replaced.length
     setText(replaced + rest)
     setMentionQuery(null)
-    requestAnimationFrame(() => el?.focus())
+    requestAnimationFrame(() => {
+      const e = inputRef.current
+      if (!e) return
+      e.focus()
+      try { e.setSelectionRange(newCaret, newCaret) } catch { /* setSelectionRange unsupported — focus alone */ }
+    })
   }
 
   // Keep the ref in sync so file-intake reads the live staged list.
@@ -1952,6 +1961,7 @@ function SidebarThread({ t, selected, onClick, icon, label, resolved, channels, 
       <button onClick={onClick} className="flex-1 min-w-0 flex items-center gap-2 px-2 py-1.5 text-left">
         <span className="shrink-0 text-zinc-500">{icon}</span>
         <span className={cn('flex-1 truncate text-sm', t.unread_count > 0 ? 'font-semibold text-zinc-900' : 'text-zinc-600', resolved && 'line-through opacity-60')}>{label}</span>
+        <TurnBadge state={t.read_state} name={t.waiting_name} compact />
         <StatusDot status={t.work_status} />
         {t.later && <Clock className="h-3 w-3 text-amber-400 shrink-0" />}
         {t.unread_count > 0 && <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">{t.unread_count}</span>}
@@ -1989,6 +1999,7 @@ function ThreadRow({ t, selected, onClick, icon, label, resolved }: { t: TeamThr
     <button onClick={onClick} className={cn('w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left', selected ? 'bg-zinc-200' : 'hover:bg-zinc-100')}>
       <span className="shrink-0 text-zinc-500">{icon}</span>
       <span className={cn('flex-1 truncate text-sm', t.unread_count > 0 ? 'font-semibold text-zinc-900' : 'text-zinc-600', resolved && 'line-through opacity-60')}>{label}</span>
+      <TurnBadge state={t.read_state} name={t.waiting_name} compact />
       <StatusDot status={t.work_status} />
       {t.unread_count > 0 && <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">{t.unread_count}</span>}
     </button>

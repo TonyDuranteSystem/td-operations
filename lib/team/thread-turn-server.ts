@@ -56,14 +56,20 @@ export async function enrichThreadTurn(
     // failure is observable in Vercel, then drop every badge for this batch.
     if (rrErr) { console.error('enrichThreadTurn: roots query failed', rrErr.message); return {} }
     if (rr) rootRows.push(...rr)
-    // Every reply under those roots, ascending so the last write per root wins.
+    // Every reply under those roots, DESCENDING (newest first). Deliberately not
+    // ascending: PostgREST caps result sets (default ~1000 rows), and an
+    // ascending fetch under that cap returns the OLDEST rows and silently drops
+    // the newest — so "last message" would be stale and the receipt wrong. Newest
+    // first + first-wins-per-root keeps the correct last message even when
+    // capped; the worst case becomes a MISSING badge for a very hot thread
+    // (honest "unknown"), never a wrong one (senior-engineer review 2026-07-26).
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: rp, error: rpErr } = await (supabaseAdmin as any)
       .from('internal_messages')
       .select('root_id, sender_id, sender_name, created_at')
       .in('root_id', part)
       .is('deleted_at', null)
-      .order('created_at', { ascending: true })
+      .order('created_at', { ascending: false })
     if (rpErr) { console.error('enrichThreadTurn: replies query failed', rpErr.message); return {} }
     if (rp) replyRows.push(...rp)
   }
@@ -84,10 +90,16 @@ export async function enrichThreadTurn(
     lastByRoot.set(r.id, { sender_id: r.sender_id, created_at: r.created_at })
     noteParticipant(r.id, r.sender_id, r.sender_name)
   }
+  // Replies are DESCENDING → the FIRST one seen per root is the newest. A reply
+  // (always newer than the root) overwrites the root seed once; older replies are
+  // ignored. Participants/names still note every reply we did see.
+  const replyLastSeen = new Set<string>()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const r of (replyRows ?? []) as any[]) {
-    // Ascending order → the last assignment per root is the newest message.
-    lastByRoot.set(r.root_id, { sender_id: r.sender_id, created_at: r.created_at })
+    if (!replyLastSeen.has(r.root_id)) {
+      replyLastSeen.add(r.root_id)
+      lastByRoot.set(r.root_id, { sender_id: r.sender_id, created_at: r.created_at })
+    }
     noteParticipant(r.root_id, r.sender_id, r.sender_name)
   }
 
@@ -128,4 +140,110 @@ export async function enrichThreadTurn(
     participantsByRoot,
     nameById,
   })
+}
+
+/**
+ * Conversation-grain read receipt for whole threads (DMs + client discussions),
+ * where the "thread" IS the conversation and messages are flat (no roots). Same
+ * pure computeThreadTurn, keyed by thread id instead of root id. Read pointers
+ * come from internal_thread_reads (conversation grain) rather than
+ * internal_root_reads. Fails silent-but-logged, never wrong — same rule as
+ * enrichThreadTurn.
+ *
+ * @param threadIds  DM / discussion thread ids being listed in the sidebar.
+ * @param viewerId   the caller.
+ */
+export async function enrichConversationTurn(
+  threadIds: string[],
+  viewerId: string,
+): Promise<Record<string, ThreadTurn>> {
+  const ids = Array.from(new Set(threadIds)).filter(Boolean)
+  if (ids.length === 0) return {}
+
+  const chunk = <T,>(arr: T[], size: number): T[][] => {
+    const out: T[][] = []
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+    return out
+  }
+  const idChunks = chunk(ids, 100)
+
+  const lastByRoot = new Map<string, LastMessage>()
+  const participantsByRoot = new Map<string, Set<string>>()
+  const nameById = new Map<string, string>()
+  const readsByRoot = new Map<string, Map<string, string>>()
+
+  const noteParticipant = (threadId: string, senderId: string, senderName: string | null) => {
+    let set = participantsByRoot.get(threadId)
+    if (!set) { set = new Set(); participantsByRoot.set(threadId, set) }
+    set.add(senderId)
+    if (senderName && !nameById.has(senderId)) nameById.set(senderId, senderName)
+  }
+
+  const lastSeenThread = new Set<string>()
+  for (const part of idChunks) {
+    // Every non-deleted message in these conversations, DESCENDING (newest
+    // first). Not ascending: PostgREST caps result sets (~1000 rows) and an
+    // ascending fetch under the cap returns the OLDEST rows, dropping the newest
+    // — a stale "last message" and a wrong receipt. Newest-first + first-wins-
+    // per-thread stays correct even when capped (worst case: a missing badge on
+    // a very high-volume conversation, never a wrong one). NOTE: this still
+    // transfers all rows; a DISTINCT ON (thread_id) RPC is the bounded upgrade
+    // once volume grows (follow-up) — negligible at the current ~hundreds.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: msgs, error: msgErr } = await (supabaseAdmin as any)
+      .from('internal_messages')
+      .select('thread_id, sender_id, sender_name, created_at')
+      .in('thread_id', part)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+    if (msgErr) { console.error('enrichConversationTurn: messages query failed', msgErr.message); return {} }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const m of (msgs ?? []) as any[]) {
+      if (!lastSeenThread.has(m.thread_id)) {
+        lastSeenThread.add(m.thread_id)
+        lastByRoot.set(m.thread_id, { sender_id: m.sender_id, created_at: m.created_at })
+      }
+      noteParticipant(m.thread_id, m.sender_id, m.sender_name)
+    }
+
+    // Every participant's conversation-grain read pointer.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: rd, error: rdErr } = await (supabaseAdmin as any)
+      .from('internal_thread_reads')
+      .select('thread_id, user_id, last_read_at')
+      .in('thread_id', part)
+    if (rdErr) { console.error('enrichConversationTurn: reads query failed', rdErr.message); return {} }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const r of (rd ?? []) as any[]) {
+      let m = readsByRoot.get(r.thread_id)
+      if (!m) { m = new Map(); readsByRoot.set(r.thread_id, m) }
+      m.set(r.user_id, r.last_read_at)
+      let set = participantsByRoot.get(r.thread_id)
+      if (!set) { set = new Set(); participantsByRoot.set(r.thread_id, set) }
+      set.add(r.user_id)
+    }
+  }
+
+  const turn = computeThreadTurn({
+    lastByRoot,
+    viewerId,
+    aiSenderId: CLAUDE_SENDER_UUID,
+    readsByRoot,
+    participantsByRoot,
+    nameById,
+  })
+
+  // Suppress the badge on a conversation whose ONLY other party is the AI (an
+  // Antonio↔AI DM): there is no human on the other side, so "waiting for them" /
+  // "seen" is meaningless and would otherwise stick forever. Safe to decide here
+  // at conversation grain (participants ARE the full membership); the shared
+  // helper can't assume this for channel threads, where the teammate may simply
+  // not have joined a given thread yet.
+  for (const threadId of Object.keys(turn)) {
+    const parts = participantsByRoot.get(threadId)
+    const humanOther = parts && Array.from(parts).some(uid => uid !== viewerId && uid !== CLAUDE_SENDER_UUID)
+    if (!humanOther) turn[threadId] = { read_state: 'none', waiting_name: null }
+  }
+
+  return turn
 }

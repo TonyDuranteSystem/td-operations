@@ -165,6 +165,9 @@ export interface TeamThread {
   client_bucket: 'active_client' | 'lead' | 'partner' | 'individual' | 'suspended' | 'cancelled' | 'offboarded' | 'internal' | null
   /** Lead pipeline stage for lead-anchored conversations (e.g. "Offer Sent"), else null. */
   lead_status: string | null
+  /** Conversation-grain read receipt (DMs + discussions only; lib/team/thread-turn). */
+  read_state?: 'waiting_you' | 'waiting_them' | 'seen' | 'none'
+  waiting_name?: string | null
 }
 
 export interface TeamMember {

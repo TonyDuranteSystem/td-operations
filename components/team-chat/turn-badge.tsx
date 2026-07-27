@@ -1,6 +1,6 @@
 'use client'
 
-import { Check, Eye } from 'lucide-react'
+import { Check, CheckCheck, Eye } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ThreadReadState } from '@/lib/team/thread-turn'
 
@@ -14,12 +14,26 @@ export function TurnBadge({
   state,
   name,
   className,
+  compact,
 }: {
   state?: ThreadReadState | null
   name?: string | null
   className?: string
+  /** Icon-only variant for tight rows (sidebar DM/conversation list). */
+  compact?: boolean
 }) {
   if (!state || state === 'none') return null
+
+  // Compact: WhatsApp-style read marks for tight sidebar rows.
+  if (compact) {
+    if (state === 'waiting_you') {
+      return <span title="Waiting for you to read" className={cn('shrink-0 inline-flex', className)}><Eye className="h-3.5 w-3.5 text-amber-500" /></span>
+    }
+    if (state === 'waiting_them') {
+      return <span title={`Sent · waiting for ${name || 'them'}`} className={cn('shrink-0 inline-flex', className)}><Check className="h-3.5 w-3.5 text-zinc-400" /></span>
+    }
+    return <span title="Seen" className={cn('shrink-0 inline-flex', className)}><CheckCheck className="h-3.5 w-3.5 text-emerald-500" /></span>
+  }
 
   const shell = 'inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full border whitespace-nowrap'
 
