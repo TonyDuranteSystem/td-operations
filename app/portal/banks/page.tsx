@@ -6,81 +6,23 @@
  * Organization. This page lists the recommended providers + the key rules
  * (what you need, never share the SS-4, describe your business clearly).
  *
- * Static curated list — edit RECOMMENDED_BANKS to change providers/links.
+ * The provider list is CATALOG-DRIVEN (2026-07-27): it comes from
+ * `bank_referrals`, which Antonio edits in the CRM at Trackers -> Banking
+ * Fintech. It used to be a hardcoded array here while the CRM screen fed a
+ * separate "Partner Banks" box on the portal home — two lists that drifted
+ * (the hardcoded Sokin tile had lost its ?pid referral tag, so those clicks
+ * were never attributed). That box is retired; this page is the only place
+ * clients see banks. Do NOT reintroduce a hardcoded list — add banks in the
+ * CRM.
  */
 
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getLocale } from '@/lib/portal/i18n'
+import { getBankPageOptions, bankTileHref } from '@/lib/bank-referrals'
 import { Landmark, FileText, ShieldAlert, PencilLine, ExternalLink, ArrowRight } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
-
-interface BankOption {
-  name: string
-  /**
-   * Where the tile links. For self-service banks this is the provider's
-   * official site (opens in a new tab). For MANAGED banks (Relay, Payset)
-   * this is the internal wizard form URL — same-tab navigation, no new tab.
-   */
-  url: string
-  /** Currency / positioning tag. */
-  tag: string
-  descEn: string
-  descIt: string
-  /**
-   * Managed = TD prepares and submits the application on the client's behalf.
-   * The tile opens the internal intake form (`/portal/wizard?type=...`)
-   * instead of the bank's own site. Relay + Payset only — this is the flow
-   * the team still runs (Antonio confirmed 2026-07-08). Self-service banks
-   * omit this flag and link out to the provider.
-   */
-  managed?: boolean
-}
-
-// Recommended fintech providers. Managed banks (Relay, Payset) open the
-// internal "we submit for you" intake form; the rest link to each provider's
-// official site — verify external URLs before changing. Antonio can edit this
-// list freely.
-const RECOMMENDED_BANKS: BankOption[] = [
-  {
-    name: 'Relay',
-    url: '/portal/wizard?type=banking_relay',
-    tag: 'USD',
-    managed: true,
-    descEn: 'US business account (USD) — fill in your details and we prepare and submit the application for you.',
-    descIt: 'Conto business USA (USD) — inserisci i tuoi dati e prepariamo e inviamo la richiesta per te.',
-  },
-  {
-    name: 'Payset',
-    url: '/portal/wizard?type=banking_payset',
-    tag: 'EUR / Multi-currency',
-    managed: true,
-    descEn: 'EUR/IBAN multi-currency account — fill in your details and we submit the application for you.',
-    descIt: 'Conto multivaluta EUR/IBAN — inserisci i tuoi dati e inviamo la richiesta per te.',
-  },
-  {
-    name: 'Mercury',
-    url: 'https://mercury.com/',
-    tag: 'USD',
-    descEn: 'US banking popular with startups and e-commerce — fast online application.',
-    descIt: 'Banca USA molto usata da startup ed e-commerce — domanda online veloce.',
-  },
-  {
-    name: 'Sokin',
-    url: 'https://www.sokin.com/',
-    tag: 'Multi-currency',
-    descEn: 'Multi-currency account for international payments and transfers.',
-    descIt: 'Conto multivaluta per pagamenti e bonifici internazionali.',
-  },
-  {
-    name: 'Wise',
-    url: 'https://wise.com/business/',
-    tag: 'Multi-currency',
-    descEn: 'Multi-currency business account with low-cost international transfers.',
-    descIt: 'Conto business multivaluta con bonifici internazionali a basso costo.',
-  },
-]
 
 const COPY = {
   en: {
@@ -130,6 +72,7 @@ export default async function PortalBanksPage() {
 
   const locale = getLocale(user)
   const c = COPY[locale] ?? COPY.en
+  const banks = await getBankPageOptions()
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto space-y-6">
@@ -183,13 +126,14 @@ export default async function PortalBanksPage() {
       <div className="space-y-3">
         <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{c.recommendedTitle}</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {RECOMMENDED_BANKS.map((bank) => (
+          {banks.map((bank) => (
             <a
-              key={bank.name}
-              href={bank.url}
+              key={bank.slug}
               // Managed tiles (Relay, Payset) navigate to the internal intake
-              // form in the same tab. Self-service tiles open the provider's
-              // site in a new tab.
+              // form in the same tab. Self-service tiles go through the tracked
+              // redirect — which records the click and forwards to the
+              // provider's referral-tagged URL — and open in a new tab.
+              href={bankTileHref(bank)}
               {...(bank.managed ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
               className={`group flex flex-col gap-1.5 rounded-xl border p-4 transition-colors ${
                 bank.managed
@@ -198,17 +142,23 @@ export default async function PortalBanksPage() {
               }`}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-semibold text-zinc-900">{bank.name}</span>
-                <span className="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-600">
-                  {bank.tag}
-                </span>
+                <span className="text-sm font-semibold text-zinc-900">{bank.label}</span>
+                {bank.tag && (
+                  <span className="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-600">
+                    {bank.tag}
+                  </span>
+                )}
               </div>
               {bank.managed && (
                 <span className="inline-flex w-fit items-center rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
                   {c.managedBadge}
                 </span>
               )}
-              <p className="text-xs text-zinc-500">{locale === 'it' ? bank.descIt : bank.descEn}</p>
+              {(locale === 'it' ? bank.description_it : bank.description_en) && (
+                <p className="text-xs text-zinc-500">
+                  {locale === 'it' ? bank.description_it : bank.description_en}
+                </p>
+              )}
               <span className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-blue-600 group-hover:text-blue-700">
                 {bank.managed ? c.applyManaged : c.apply}
                 {bank.managed ? <ArrowRight className="h-3 w-3" /> : <ExternalLink className="h-3 w-3" />}
