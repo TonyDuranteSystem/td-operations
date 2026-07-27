@@ -1500,6 +1500,14 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
   const filtered = useMemo(() => {
     let items = bankFeeds
 
+    // The Bank Feed is for CLIENT INVOICE PAYMENTS ONLY (Antonio, 2026-07-27). A feed marked
+    // `owner_ledger` is TD's own money — a Stripe payout, a bank reward, money TD spent — and
+    // it already lives in My Finances, where the company's accounting is done. It is removed
+    // here for EVERYONE: staff reconciling invoices should not wade through it, and it is not
+    // their business. This is not the invisible-`duplicate` failure — the money has a visible
+    // home (My Finances); it is only absent from the screen it never belonged on.
+    items = items.filter(f => f.status !== 'owner_ledger')
+
     // Hide outgoing transactions for non-admin users
     if (!isAdmin) {
       items = items.filter(f => f.status !== 'outgoing')

@@ -16,7 +16,11 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const notesTable = () => (supabaseAdmin as any).from("staff_notes")
 
-export type NoteVisibility = "private" | "shared" | "team"
+/** Every value `staff_notes.visibility` may hold — registered with the code↔database
+ *  contract gate 2026-07-27 so a value the database rejects can never be written silently. */
+export const STAFF_NOTE_VISIBILITIES = ["private", "shared", "team"] as const
+
+export type NoteVisibility = (typeof STAFF_NOTE_VISIBILITIES)[number]
 
 export interface StaffNoteInput {
   body: string

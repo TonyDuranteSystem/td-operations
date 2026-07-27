@@ -34,6 +34,8 @@ import { FEED_STATUSES, MATCH_CONFIDENCES, FEED_SOURCES } from "@/lib/finance/fe
 import { PAYMENT_CATEGORIES } from "@/lib/billing/payment-classification"
 import { PAYMENT_ITEM_TYPES } from "@/lib/finance/payment-item-vocabulary"
 import { TEAM_WORK_STATUSES } from "@/lib/team/workspace"
+import { OA_AGREEMENT_SIGNATURE_METHODS, OA_SIGNATURE_METHODS } from "@/lib/oa/signature-vocabulary"
+import { STAFF_NOTE_VISIBILITIES } from "@/lib/notes/staff-notes"
 
 /** name → `pg_get_constraintdef()` text, exactly as Postgres prints it. */
 export type ConstraintDefs = Record<string, string>
@@ -83,6 +85,12 @@ export const CONSTRAINT_CONTRACTS = [
   // A MONEY column: `fee` lines are excluded from an invoice's base amount, so
   // a value the database rejects here silently breaks a total.
   { table: "payment_items", column: "item_type", constraint: "payment_items_item_type_check", values: PAYMENT_ITEM_TYPES },
+  // Registered 2026-07-27. All three reached production unregistered — surfaced the moment the
+  // committed snapshot was refreshed, having been invisible while it sat stale since 07-21.
+  // A rejected write on a signature column is a signature that silently does not record.
+  { table: "oa_agreements", column: "signature_method", constraint: "oa_agreements_signature_method_check", values: OA_AGREEMENT_SIGNATURE_METHODS },
+  { table: "oa_signatures", column: "signature_method", constraint: "oa_signatures_signature_method_check", values: OA_SIGNATURE_METHODS },
+  { table: "staff_notes", column: "visibility", constraint: "staff_notes_visibility", values: STAFF_NOTE_VISIBILITIES },
 ] as const
 
 /**

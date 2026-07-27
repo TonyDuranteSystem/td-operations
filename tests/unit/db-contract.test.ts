@@ -64,7 +64,9 @@ describe("checkDbContract", () => {
     const v = violations.find(x => x.constraint === "td_bank_feeds_status_check")
 
     expect(v?.kind).toBe("code_writes_rejected_values")
-    expect(v?.rejectedValues).toEqual(["needs_review", "activation_crashed"])
+    // Every status the code can write that the old constraint lacked. `owner_ledger` joined
+    // the vocabulary on 2026-07-27 and is absent from that historical CHECK too.
+    expect(v?.rejectedValues).toEqual(["needs_review", "activation_crashed", "owner_ledger"])
   })
 
   it("treats a MISSING constraint as a failure, not as permission", () => {
@@ -146,12 +148,13 @@ describe("checksumDefs", () => {
     // The snapshot was not hand-verified by eye; the database fingerprinted its own rules and
     // we recomputed the same fingerprint over the file. This test pins that agreement, so a
     // future edit of the file cannot quietly diverge from the database it claims to describe.
-    // Re-pinned 2026-07-21 after regenerating the snapshot from PRODUCTION via
+    // Re-pinned 2026-07-27 after regenerating the snapshot from PRODUCTION via
     // `npm run snapshot:constraints` (which refuses to run against any other
     // database). The value below is the digest PRODUCTION computed over its own
     // constraints, not one recomputed to make a red test pass — the previous
-    // pin was 665364ba9d4e7746d9f3fd558dc6ff55 over 190 constraints.
-    expect(checksumDefs(prodConstraints())).toBe("4d0d3a3813a7e69f8570474ac398ee1e")
+    // pin was 4d0d3a3813a7e69f8570474ac398ee1e over 194 constraints, and before
+    // that 665364ba9d4e7746d9f3fd558dc6ff55 over 190.
+    expect(checksumDefs(prodConstraints())).toBe("9c43924c747b933a5336c5bcd57e780a")
   })
 })
 
@@ -161,10 +164,12 @@ describe("the committed production snapshot", () => {
   })
 
   it("holds production's full constraint set", () => {
-    // 190 -> 194: production gained four CHECK constraints since the last
-    // snapshot. Re-pinned in the same change that regenerated the file.
-    expect(prodSnapshotMeta().count).toBe(194)
-    expect(Object.keys(prodConstraints())).toHaveLength(194)
+    // 190 -> 194 -> 200: production keeps gaining CHECK constraints between snapshots
+    // (prod DDL is applied by hand), and a stale file hides them — the 07-27 refresh
+    // surfaced three unregistered constrained columns that had been invisible since 07-21.
+    // Re-pinned in the same change that regenerated the file.
+    expect(prodSnapshotMeta().count).toBe(200)
+    expect(Object.keys(prodConstraints())).toHaveLength(200)
   })
 
   it("PRODUCTION accepts every value the code can write", () => {
