@@ -18,12 +18,17 @@ export default async function FinancePage({
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user || !isDashboardUser(user)) redirect('/login')
-  const userIsAdmin = isDashboardUser(user)
 
-  // Card-fee master switch — visible ONLY to true admins (isAdmin, not just any
-  // dashboard user). The server action re-checks the role independently; this
-  // gate only controls whether the card renders. Council-approved Phase A.
-  const userIsTrueAdmin = isAdmin(user)
+  // TRUE admin — not "any staff member". This was `isDashboardUser` (i.e. every staff
+  // account) while being named `isAdmin` and passed to the dashboard as the admin flag, so
+  // the admin-only Expenses tab and the owner's outgoing money were visible to all staff.
+  // Antonio's requirement (2026-07-27) is the opposite: staff work invoices in Finance and
+  // must not see TD's own business activity. Fixed 2026-07-27.
+  const userIsAdmin = isAdmin(user)
+
+  // Card-fee master switch — visible ONLY to true admins. The server action re-checks the
+  // role independently; this gate only controls whether the card renders.
+  const userIsTrueAdmin = userIsAdmin
   const cardFee = userIsTrueAdmin
     ? {
         enabled: await isCardFeeEnabled(),
@@ -232,8 +237,21 @@ export default async function FinancePage({
       .order('created_at', { ascending: false }),
   ])
 
-  const bankFeeds = bankFeedsRes.data ?? []
-  const bankFeedTotalCount = bankFeedCountRes.count ?? bankFeeds.length
+  // PRIVACY, ENFORCED ON THE SERVER — not by hiding rows in the browser.
+  // TD's own money (money out, and anything routed to My Finances) is Antonio's business, not
+  // the staff's. Filtering it client-side still SENDS it to every staff browser, where it is
+  // one dev-tools tab away; the only real gate is never putting it in the response. Admins get
+  // everything, so nothing is lost to the person who owns the books.
+  const allBankFeeds = bankFeedsRes.data ?? []
+  const PRIVATE_TO_OWNER = new Set(['outgoing', 'owner_ledger'])
+  const bankFeeds = userIsAdmin
+    ? allBankFeeds
+    : allBankFeeds.filter(f => !PRIVATE_TO_OWNER.has(String((f as { status?: unknown }).status ?? '')))
+  // The count must match what the viewer can actually see, or the header claims rows they
+  // will never find.
+  const bankFeedTotalCount = userIsAdmin
+    ? (bankFeedCountRes.count ?? allBankFeeds.length)
+    : bankFeeds.length
   // Cast: the contacts:payments_contact_id_fkey(full_name) embed is correct at
   // runtime but the generated Supabase types can't resolve the named FK
   // (payments has two FKs to contacts), so the field types as SelectQueryError.
@@ -318,10 +336,15 @@ export default async function FinancePage({
     .order('created_at', { ascending: false })
     .limit(500)
 
-  const tdExpenses = (tdExpensesRaw ?? []).map(e => ({
-    ...e,
-    accounts: e.accounts as unknown as { company_name: string } | null,
-  }))
+  // The Expenses tab is admin-only, and until now that was enforced only by hiding the tab —
+  // the vendor bills themselves were still sent to every staff browser. Non-admins now get an
+  // empty list, so what TD spends is not in the page they receive at all.
+  const tdExpenses = userIsAdmin
+    ? (tdExpensesRaw ?? []).map(e => ({
+        ...e,
+        accounts: e.accounts as unknown as { company_name: string } | null,
+      }))
+    : []
 
   // ── Overview stats ──
   const allInvoices = invoiceSummary ?? []
