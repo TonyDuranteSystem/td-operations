@@ -202,6 +202,9 @@ async function runSidebarWorker(args: {
   // fresh one → fresh memory); otherwise a stable per-user thread.
   const scope = `dashboard-${userId}${conversationId ? `-${conversationId}` : ''}`
   const threadId = deterministicThreadUuid(scope)
+  // Marks the start of THIS turn, so a confirm card is only offered for a draft
+  // this turn actually created — never a stale pending one from an earlier ask.
+  const turnStartedAt = Date.now()
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
@@ -378,6 +381,28 @@ async function runSidebarWorker(args: {
       // Client-facing sends, aimed by the server (see buildSidebarSendRails).
       ...rails.portal,
       ...rails.email,
+      // PREPARE-THEN-CONFIRM on this surface too. Without this the executor could
+      // only REFUSE an address that isn't the pinned client — which is why staff on
+      // a client page could not email anyone else and were told to press a Confirm
+      // button that does not exist here. With it, a refused address becomes a frozen
+      // draft the staff member reads and confirms; the assistant still never sends
+      // on its own.
+      //
+      // mailbox is FIXED to support@ — the sidebar has no mailbox authorisation
+      // check, so honouring a model-chosen `from: antonio` here would let any team
+      // member send as Antonio. The Inbox gates that separately; this surface does
+      // not, so it does not get the choice.
+      //
+      // `sendable` is EMPTY on purpose: an off-thread send carrying files stays
+      // refused (see the executor), so there is nothing to attach and nothing that
+      // could imply an attachment the recipient will not receive.
+      emailSendPrep: {
+        threadUuid: threadId,
+        gmailThreadId: null,
+        mailbox: 'support@tonydurante.us',
+        defaultReplyToMessageId: null,
+        sendable: [],
+      },
       // WHO asked. Without it a send from here is logged as the generic worker and
       // "who told it to do that" has no answer.
       sendActor: `crm-sidebar:${userEmail ?? userId}`,
@@ -390,10 +415,37 @@ async function runSidebarWorker(args: {
       ...(clientKey ? { clientKey } : {}),
     })
     if (rowId) await db.from('agent_messages').update({ reply, status: 'done' }).eq('id', rowId)
+
+    // A draft frozen for confirmation this turn, if the assistant proposed an
+    // address the pin refused. Only a row created by THIS turn is surfaced — a
+    // stale pending draft from earlier must never reappear as today's Confirm,
+    // or the staff member approves a message they have forgotten the context of.
+    let preparedSend: {
+      id: string
+      to: string
+      subject: string
+      body: string
+    } | null = null
+    try {
+      const { data: prep } = await db
+        .from('worker_prepared_sends')
+        .select('id, to_address, subject, body, created_at')
+        .eq('thread_uuid', threadId)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (prep && (!turnStartedAt || new Date(prep.created_at).getTime() >= turnStartedAt)) {
+        preparedSend = { id: prep.id, to: prep.to_address, subject: prep.subject, body: prep.body ?? '' }
+      }
+    } catch (err) {
+      // A missing confirm card must never fail the answer itself.
+      console.warn('[ai-agent] prepared-send lookup failed:', err)
+    }
     // Files the worker produced go back as structured data, NOT left to the reply to
     // mention. The first live run generated the PDF and then dropped the link from its
     // own answer — the panel renders the download regardless of what it says.
-    return NextResponse.json({ content: reply, provider: 'worker', tools_used: [], artifacts: artifacts ?? [] })
+    return NextResponse.json({ content: reply, provider: 'worker', tools_used: [], artifacts: artifacts ?? [], preparedSend, ...(rowId ? { messageId: rowId } : {}) })
   } catch (err) {
     if (rowId) {
       await db

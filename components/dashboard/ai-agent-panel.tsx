@@ -67,6 +67,10 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [history, setHistory] = useState<Array<{ id: string; title: string; lastAt: string; turns: number }>>([])
   const [restoring, setRestoring] = useState(false)
+  /** A draft frozen server-side, waiting for this staff member to confirm it.
+   *  Confirm sends EXACTLY these bytes — it does not re-ask the assistant. */
+  const [preparedSend, setPreparedSend] = useState<{ id: string; to: string; subject: string; body: string } | null>(null)
+  const [confirming, setConfirming] = useState(false)
   // Live route → per-page client scope for the worker's brain. Read at SEND time
   // (below), never cached, so navigating between clients can't mis-scope.
   const pathname = usePathname()
@@ -315,6 +319,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
       const toolInfo = data.tools_used?.length ? `\n\n_🔧 Used: ${Array.from(new Set(data.tools_used) as Set<string>).join(', ')}_` : ''
       // Tag BOTH sides of the exchange with the stored turn id, so the message can
       // be edited or rewound immediately — not only after a reload.
+      setPreparedSend(data.preparedSend ?? null)
       const turnId = typeof data.messageId === 'string' ? data.messageId : undefined
       setMessages(prev => {
         const next = [...prev]
@@ -370,6 +375,36 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     // one-frame collapse to a single line before the effect corrected it.
     await sendMessage(newMessages, filesToSend)
   })
+
+  /** Confirm or discard a frozen draft. The endpoint dispatches the stored bytes;
+   *  the outcome comes from the HTTP result, never from the assistant's prose —
+   *  a model that says "sent" is not evidence that anything was sent. */
+  const resolvePreparedSend = useCallback(async (action: 'confirm' | 'cancel') => {
+    if (!preparedSend) return
+    setConfirming(true)
+    try {
+      const res = await fetch('/api/inbox/worker-chat/confirm-send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prepared_id: preparedSend.id, action }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        // R099 — say what the server said, never a generic failure.
+        toast.error(data.error || 'Could not complete that — please try again.')
+        return
+      }
+      setMessages((prev) => [...prev, {
+        role: 'assistant',
+        content: action === 'confirm' ? `✅ Sent to ${preparedSend.to}.` : 'Cancelled — nothing was sent.',
+      }])
+      setPreparedSend(null)
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not complete that.')
+    } finally {
+      setConfirming(false)
+    }
+  }, [preparedSend])
 
   const readyFiles = att.files.filter((f) => f.path && !f.error)
   const stillUploading = att.files.some((f) => !f.path && !f.error)
@@ -682,6 +717,43 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
 
         {restoring && (
           <p className="px-4 py-2 text-[11px] text-zinc-500 border-b">Loading your conversation…</p>
+        )}
+
+        {/* A draft frozen for confirmation. The address is monospaced and never
+            shortened, and the message itself is shown — confirming a recipient
+            without reading the body is how someone approves one draft while a
+            different one goes out. */}
+        {preparedSend && (
+          <div className="border-t border-amber-200 bg-amber-50 px-4 py-3 shrink-0">
+            <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide mb-1">Check the address, then confirm</p>
+            <p className="text-sm text-zinc-800">
+              Email <span className="font-mono font-medium break-all">{preparedSend.to}</span>
+            </p>
+            {preparedSend.subject ? (
+              <p className="text-xs text-zinc-600 mt-0.5">Subject: {preparedSend.subject}</p>
+            ) : null}
+            {preparedSend.body ? (
+              <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-amber-200 bg-white px-2.5 py-2">
+                <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
+              </div>
+            ) : null}
+            <div className="mt-2.5 flex items-center gap-2">
+              <button
+                onClick={() => void resolvePreparedSend('confirm')}
+                disabled={confirming}
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {confirming ? 'Sending…' : 'Confirm & send'}
+              </button>
+              <button
+                onClick={() => void resolvePreparedSend('cancel')}
+                disabled={confirming}
+                className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         )}
 
         {/* Attached files — one row each, with its own upload state. A file that
