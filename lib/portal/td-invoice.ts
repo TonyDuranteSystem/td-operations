@@ -436,23 +436,38 @@ async function findByIdempotencyKey(key: string): Promise<TDInvoiceResult | null
  * Sync status from payments → client_expenses.
  * One-way: payments is the source of truth for TD invoices.
  */
+/**
+ * Map an invoice status to a value client_expenses.status accepts (its CHECK allows ONLY
+ * Pending / Paid / Overdue / Cancelled). Open-but-not-yet-due ('Sent', 'Draft', 'Partial',
+ * 'Pending') reads as 'Pending' to the client. Pure and exported so tests pin it — an
+ * unmapped value falling through is a database-rejected write, historically silent.
+ */
+export function toExpenseStatus(newStatus: string): string {
+  const statusMap: Record<string, string> = {
+    'Pending': 'Pending',
+    'Paid': 'Paid',
+    'Partial': 'Pending',
+    'Sent': 'Pending',
+    'Draft': 'Pending',
+    'Overdue': 'Overdue',
+    'Cancelled': 'Cancelled',
+    'Split': 'Cancelled',
+  }
+  return statusMap[newStatus] || newStatus
+}
+
 export async function syncTDInvoiceStatus(
   paymentId: string,
   newStatus: string,
   paidDate?: string,
   amountPaid?: number
 ): Promise<void> {
-  // Map payment status → expense status
-  const statusMap: Record<string, string> = {
-    'Pending': 'Pending',
-    'Paid': 'Paid',
-    'Partial': 'Pending',
-    'Overdue': 'Overdue',
-    'Cancelled': 'Cancelled',
-    'Split': 'Cancelled',
-  }
-
-  const expenseStatus = statusMap[newStatus] || newStatus
+  // Map payment status → expense status. client_expenses.status has a CHECK allowing ONLY
+  // Pending / Paid / Overdue / Cancelled — an unmapped value falling through `|| newStatus`
+  // is rejected by the database, and rejected writes here have historically been silent.
+  // 'Sent' and 'Draft' were exactly that hole (found 2026-07-28 when un-marking an Overdue
+  // invoice whose due date was renegotiated): open-but-not-yet-due is 'Pending' to a client.
+  const expenseStatus = toExpenseStatus(newStatus)
 
   const updates: Record<string, unknown> = {
     status: expenseStatus,
