@@ -51,6 +51,14 @@ export interface AdvanceStageParams {
    * in the CRM (the old default-to-today bug). Ignored for other transitions.
    */
   formation_date?: string
+  /**
+   * Staff-supplied LLC type for the Company Formation advance into "Articles
+   * Received" — the materializer's highest-priority entity-type source. Sent
+   * by the workspace Articles-upload modal when the automatic resolution
+   * (signed contract → formation form → wizard data) cannot determine the
+   * type (the Covelli/DoctorGut case). Ignored for other transitions.
+   */
+  entity_type?: "SMLLC" | "MMLLC"
 }
 
 export interface AdvanceStageResult {
@@ -66,6 +74,20 @@ export interface AdvanceStageResult {
   auto_triggers: string[] // human-readable log of what auto-workflows ran
   requires_approval?: boolean
   sla_days?: number | null
+  /**
+   * Company-Formation materialization outcome, set ONLY on an advance into
+   * "Articles Received" for a not-yet-materialized formation. Deterministic
+   * failures (no data / no name / no entity type) never reach here — they
+   * REFUSE the advance up-front (success:false). This field reports the
+   * RUNTIME outcome so callers can surface a structured warning instead of
+   * grepping the free-text auto_triggers (the Covelli silent-failure fix).
+   */
+  materialization?: {
+    attempted: boolean
+    outcome: string
+    account_id?: string
+    error?: string
+  }
 }
 
 // ─── Main function ────────────────────────────────────────
@@ -141,6 +163,65 @@ export async function advanceServiceDelivery(
           requires_approval: true,
         }
       }
+    }
+  }
+
+  // 4b. Company Formation — REFUSE the advance into "Articles Received" when
+  // the company cannot be materialized for a DETERMINISTIC data reason (no
+  // formation data / no confirmed filed name / unresolvable entity type).
+  // Before this gate the stage move committed first and the materialization
+  // failure was only appended to auto_triggers — which no workspace surface
+  // rendered — so staff saw success while no account existed and the SS-4
+  // panel then dead-ended (Covelli/DoctorGut, 2026-07-28). Deterministic
+  // gates are checkable up-front; transient runtime errors (Drive/network)
+  // in section 11b below still fail soft with a structured warning. The admin
+  // Upload Articles route already blocks on failure — this makes the flow
+  // paths consistent with it.
+  if (
+    delivery.service_type === "Company Formation" &&
+    targetStage.stage_name === "Articles Received" &&
+    !delivery.account_id &&
+    delivery.contact_id
+  ) {
+    try {
+      const { preflightFormationMaterialization } = await import("@/lib/operations/formation-materialize")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- name_checks not in generated types
+      const { data: preNcRow } = await (supabaseAdmin as any)
+        .from("service_deliveries")
+        .select("name_checks")
+        .eq("id", delivery_id)
+        .maybeSingle()
+      const preConfirmedName = filedName((preNcRow?.name_checks as NameCheck[] | null) ?? null)
+      const pre = await preflightFormationMaterialization({
+        contact_id: delivery.contact_id,
+        chosen_name: preConfirmedName,
+        entity_type: params.entity_type ?? null,
+      })
+      if (!pre.ok) {
+        const hint =
+          pre.failure === "missing_entity_type"
+            ? " Choose the LLC type (single- or multi-member) in the Articles upload dialog, or record it on the signed contract, then retry."
+            : pre.failure === "missing_chosen_name"
+              ? " Mark the state-approved name as filed in Name Checks first, then retry."
+              : ""
+        return {
+          success: false,
+          error: `Cannot create the company record: ${pre.error ?? "unknown reason"}${hint}`,
+          from_stage: delivery.stage || "New",
+          to_stage: targetStage.stage_name,
+          to_order: targetStage.stage_order,
+          total_stages: stages.length,
+          is_completed: false,
+          created_tasks: [],
+          failed_tasks: [],
+          auto_triggers: [],
+        }
+      }
+    } catch (preErr) {
+      // The preflight is a guard, not a new failure mode: if the CHECK itself
+      // errors (transient read), fall through — section 11b keeps its
+      // resilient fail-soft behavior and reports via `materialization`.
+      console.warn("[advanceServiceDelivery] formation materialize preflight failed (non-blocking):", preErr)
     }
   }
 
@@ -586,6 +667,7 @@ export async function advanceServiceDelivery(
   // Resilient: a failure is logged to auto_triggers but never fails the advance
   // (the stage move already committed above). On success we reflect the new
   // account on the in-memory record so sections 12 & 13 below fire this run.
+  let materialization: AdvanceStageResult["materialization"]
   if (
     delivery.service_type === "Company Formation" &&
     targetStage.stage_name === "Articles Received" &&
@@ -599,11 +681,14 @@ export async function advanceServiceDelivery(
         .select("name_checks")
         .eq("id", delivery_id)
         .maybeSingle()
+      // Name lockstep (bug-hunter 2026-07-28): pass the filed name when we have
+      // one, otherwise let the materializer's OWN fallback chain run
+      // (wizard_progress.chosen_name_final → chosen_name) — the same chain the
+      // §4b preflight uses. The old hard-skip on a missing name_checks entry
+      // let the gate pass on the wizard name and then silently skipped
+      // materialization here.
       const confirmedName = filedName((ncRow?.name_checks as NameCheck[] | null) ?? null)
-
-      if (!confirmedName) {
-        autoTriggers.push("Account not materialized: no filed company name in name_checks yet")
-      } else {
+      {
         // Resolve the formation state CODE (wizard data → default NM). The
         // formation wizard rarely captures the formation state, so NM (the
         // primary filing state) is the documented default.
@@ -625,24 +710,39 @@ export async function advanceServiceDelivery(
         const { materializeFormationCompany } = await import("@/lib/operations/formation-materialize")
         const mat = await materializeFormationCompany({
           contact_id: delivery.contact_id,
-          chosen_name: confirmedName,
+          chosen_name: confirmedName ?? undefined,
           formation_state: stateCode,
           // Staff-confirmed filing date (OCR-prefilled in the workspace). When
           // omitted the materializer still falls back to today — but the
           // workspace requires it before this transition, so that's a safety net
           // for non-UI callers (cron/MCP), not the normal path.
           formation_date: params.formation_date,
+          // Staff-supplied LLC-type override from the upload dialog — wins
+          // over contract/form/wizard resolution (see AdvanceStageParams).
+          entity_type: params.entity_type,
           actor: `flow-advance:${actor}`,
         })
         if (mat.success && mat.account_id) {
           delivery.account_id = mat.account_id
-          autoTriggers.push(`Account materialized: ${confirmedName} (${stateCode}) → ${mat.account_id} [${mat.outcome}]`)
+          autoTriggers.push(`Account materialized: ${confirmedName ?? "(name from wizard data)"} (${stateCode}) → ${mat.account_id} [${mat.outcome}]`)
+          materialization = { attempted: true, outcome: mat.outcome, account_id: mat.account_id }
         } else {
           autoTriggers.push(`Account materialization failed (${mat.outcome}): ${mat.error ?? "unknown"}`)
+          materialization = {
+            attempted: true,
+            outcome: mat.outcome,
+            error: `${mat.error ?? "unknown"} — the company record was NOT created.`,
+          }
         }
       }
     } catch (matErr) {
-      autoTriggers.push(`Account materialization error: ${matErr instanceof Error ? matErr.message : String(matErr)}`)
+      const msg = matErr instanceof Error ? matErr.message : String(matErr)
+      autoTriggers.push(`Account materialization error: ${msg}`)
+      materialization = {
+        attempted: true,
+        outcome: "error",
+        error: `${msg} — the company record was NOT created.`,
+      }
     }
   }
 
@@ -864,5 +964,6 @@ export async function advanceServiceDelivery(
     auto_triggers: autoTriggers,
     requires_approval: targetStage.requires_approval ?? false,
     sla_days: targetStage.sla_days ?? null,
+    materialization,
   }
 }

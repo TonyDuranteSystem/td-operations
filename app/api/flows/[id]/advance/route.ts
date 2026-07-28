@@ -33,6 +33,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       typeof body.formation_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.formation_date)
         ? body.formation_date
         : undefined
+    // Staff-supplied LLC type (workspace Articles-upload modal) — the
+    // materializer's highest-priority entity-type source. Only SMLLC/MMLLC.
+    const entityType: 'SMLLC' | 'MMLLC' | undefined =
+      body.entity_type === 'SMLLC' || body.entity_type === 'MMLLC' ? body.entity_type : undefined
 
     if (!targetStage) {
       return NextResponse.json(
@@ -45,6 +49,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       delivery_id: serviceDeliveryId,
       target_stage: targetStage,
       formation_date: formationDate,
+      entity_type: entityType,
       actor: 'flow-action',
       notes: `Advanced to "${targetStage}" via flow Workspace action`,
     })
@@ -93,11 +98,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           : "Heads up: the client's tax form was not unlocked for editing. Press Request Changes again, or check the submission."
     }
 
+    // Company-Formation materialization: deterministic failures already refuse
+    // the advance up-front, so a failure here is a transient runtime error —
+    // the stage moved but NO account exists. Surface it loudly (the old
+    // free-text-only auto_triggers path is what made the Covelli failure
+    // silent).
+    const mat = result.materialization
+    if (mat && mat.error) {
+      warning = `The stage moved, but the company record was NOT created: ${mat.error} Fix the cause, go back one stage, and advance again — or use Upload Articles on the contact page.`
+    }
+
     return NextResponse.json({
       success: true,
       to_stage: result.to_stage,
       is_completed: result.is_completed,
       auto_triggers: result.auto_triggers,
+      materialization: result.materialization ?? null,
       revision_sync: revisionSync,
       warning,
     })

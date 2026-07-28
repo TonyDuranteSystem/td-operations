@@ -67,6 +67,11 @@ export function LlcNameSelectionCard({
   const [formationDate, setFormationDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [filingId, setFilingId] = useState('')
   const [formationState, setFormationState] = useState<'' | 'NM' | 'WY' | 'FL' | 'DE'>('')
+  // Optional LLC-type override. Blank = resolve automatically (signed contract
+  // → formation form → wizard). Needed when none of those carry the type —
+  // older contracts often lack it (Covelli/DoctorGut, 2026-07-28); without an
+  // override the materializer refuses rather than guessing.
+  const [entityType, setEntityType] = useState<'' | 'SMLLC' | 'MMLLC'>('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Find formation wizard that's been submitted
@@ -134,6 +139,7 @@ export function LlcNameSelectionCard({
       fd.append('formation_date', formationDate)
       fd.append('formation_state', formationState)
       if (filingId.trim()) fd.append('filing_id', filingId.trim())
+      if (entityType) fd.append('entity_type', entityType)
       const res = await fetch('/api/crm/admin-actions/upload-articles', {
         method: 'POST',
         body: fd,
@@ -480,6 +486,22 @@ export function LlcNameSelectionCard({
                   placeholder="e.g. 7234567"
                   className="w-full text-sm border border-zinc-200 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-700 mb-1">LLC type (optional override)</label>
+                <select
+                  value={entityType}
+                  onChange={e => setEntityType(e.target.value as '' | 'SMLLC' | 'MMLLC')}
+                  className="w-full text-sm border border-zinc-200 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="">Automatic (from contract / forms)</option>
+                  <option value="SMLLC">Single-Member LLC</option>
+                  <option value="MMLLC">Multi-Member LLC</option>
+                </select>
+                <p className="mt-1 text-[11px] text-zinc-500">
+                  Set this when the signed contract and the client&apos;s forms don&apos;t carry the
+                  type (older contracts) — the company can&apos;t be created without it.
+                </p>
               </div>
             </div>
 

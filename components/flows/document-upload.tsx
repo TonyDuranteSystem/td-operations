@@ -72,11 +72,25 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
   const [prefilling, setPrefilling] = useState(false)
   const stagedPathRef = useRef<string | null>(null)
 
+  // Post-upload staff warning (file saved but the flow/company step failed) —
+  // rendered amber, never as a green success (Covelli silent-failure fix).
+  const [warn, setWarn] = useState<string | null>(null)
+  // LLC-type override: the materialize preflight tells us whether the type
+  // resolves from contract/form/wizard. When it does NOT, the confirm modal
+  // requires an explicit staff choice — otherwise the company cannot be
+  // created and the advance would be refused after the upload.
+  const [entityTypeNeeded, setEntityTypeNeeded] = useState(false)
+  const [entityType, setEntityType] = useState<'SMLLC' | 'MMLLC' | ''>('')
+  // Deterministic blocker the staff cannot resolve from this modal (no filed
+  // name / no formation data) — shown up front, confirm disabled.
+  const [preflightBlocked, setPreflightBlocked] = useState<string | null>(null)
+
   function handlePick(e: React.ChangeEvent<HTMLInputElement>) {
     const picked = e.target.files?.[0] ?? null
     setFile(picked)
     setError(null)
     setDone(null)
+    setWarn(null)
   }
 
   function clearPick() {
@@ -114,7 +128,13 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
 
   // Register the staged file against the flow (Drive + documents row +
   // auto-advance). Passes the staff-confirmed formation date when present.
-  async function commitUpload(storagePath: string, fileName: string, fileType: string, confirmedDate?: string) {
+  async function commitUpload(
+    storagePath: string,
+    fileName: string,
+    fileType: string,
+    confirmedDate?: string,
+    confirmedEntityType?: 'SMLLC' | 'MMLLC' | '',
+  ) {
     const apiRes = await fetch(`/api/flows/${serviceDeliveryId}/upload-document`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -127,15 +147,29 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
         ...(folder ? { folder } : {}),
         ...(rename ? { rename } : {}),
         ...(confirmedDate ? { formation_date: confirmedDate } : {}),
+        ...(confirmedEntityType ? { entity_type: confirmedEntityType } : {}),
       }),
     })
     const data = await apiRes.json().catch(() => ({}))
     if (!apiRes.ok || !data.success) {
       throw new Error(data.detail || data.error || 'Upload failed — please try again.')
     }
+    // Never show a failed company creation / refused advance as a green
+    // success: the server reports both via `advance` (structured) and folds
+    // them into `detail` with a ⚠️ marker.
+    const matError: string | undefined = data.advance?.materialization?.error
+    const advanceRefused =
+      needsFormationDate && data.advance && data.advance.success === false && data.advance.error
+    if (matError) {
+      setWarn(`${fileName} uploaded, but the company record was NOT created: ${matError}`)
+    } else if (advanceRefused) {
+      setWarn(`${fileName} uploaded, but the flow did not advance: ${data.advance.error}`)
+    }
     // Prefer the server's summary — for ITIN approval letters it reports the
     // OCR/finalize outcome (ITIN saved + client notified, or a warning).
-    setDone(typeof data.detail === 'string' && data.detail ? data.detail : `${fileName} uploaded`)
+    if (!matError && !advanceRefused) {
+      setDone(typeof data.detail === 'string' && data.detail ? data.detail : `${fileName} uploaded`)
+    }
     clearPick()
     stagedPathRef.current = null
     window.dispatchEvent(
@@ -149,6 +183,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
     setUploading(true)
     setError(null)
     setDone(null)
+    setWarn(null)
     try {
       const storagePath = await stageFile(file)
 
@@ -158,16 +193,34 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
       if (needsFormationDate) {
         stagedPathRef.current = storagePath
         setFormationDate('')
+        setEntityTypeNeeded(false)
+        setEntityType('')
+        setPreflightBlocked(null)
         setConfirming(true)
         setPrefilling(true)
         try {
-          const res = await fetch(
-            `/api/flows/${serviceDeliveryId}/articles-formation-date?storage_path=${encodeURIComponent(storagePath)}`,
-          )
-          const data = await res.json().catch(() => ({}))
-          if (data?.formation_date) setFormationDate(data.formation_date)
+          // Date prefill + materialize preflight in parallel: the preflight
+          // decides whether staff must pick the LLC type up front (it is
+          // required when contract/form/wizard cannot resolve it — otherwise
+          // the company cannot be created and the advance is refused).
+          const [dateRes, preRes] = await Promise.all([
+            fetch(
+              `/api/flows/${serviceDeliveryId}/articles-formation-date?storage_path=${encodeURIComponent(storagePath)}`,
+            ).then((r) => r.json()).catch(() => ({})),
+            fetch(`/api/flows/${serviceDeliveryId}/materialize-preflight`)
+              .then((r) => r.json()).catch(() => ({})),
+          ])
+          if (dateRes?.formation_date) setFormationDate(dateRes.formation_date)
+          if (preRes?.applicable && preRes.ok === false) {
+            if (preRes.failure === 'missing_entity_type') {
+              setEntityTypeNeeded(true)
+            } else if (preRes.error) {
+              setPreflightBlocked(preRes.error)
+            }
+          }
         } catch {
-          // ignore — staff enter the date manually
+          // ignore — staff enter the date manually; the server-side gate
+          // still refuses with an actionable message if something is missing
         } finally {
           setPrefilling(false)
           setUploading(false)
@@ -178,6 +231,10 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
       await commitUpload(storagePath, file.name, file.type)
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Upload failed — please try again.')
+      // Always release the button on failure — the formation path skips the
+      // finally reset (it normally hands off to the confirm modal), which left
+      // a failed staging stuck on "Uploading…" forever (bug-hunter 2026-07-28).
+      setUploading(false)
     } finally {
       if (!needsFormationDate) setUploading(false)
     }
@@ -189,10 +246,15 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
       setError('Please enter the formation date before continuing.')
       return
     }
+    if (entityTypeNeeded && !entityType) {
+      setError('Choose the LLC type (single- or multi-member) before continuing.')
+      return
+    }
     setUploading(true)
     setError(null)
+    setWarn(null)
     try {
-      await commitUpload(stagedPathRef.current, file.name, file.type, formationDate)
+      await commitUpload(stagedPathRef.current, file.name, file.type, formationDate, entityType)
       setConfirming(false)
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Upload failed — please try again.')
@@ -269,6 +331,11 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
           {done}
         </p>
       )}
+      {warn && !confirming && (
+        <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          ⚠️ {warn}
+        </p>
+      )}
       {error && !confirming && <p className="mt-3 text-sm text-red-600">{error}</p>}
 
       {confirming && (
@@ -294,6 +361,30 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
             {!prefilling && formationDate && (
               <p className="mt-2 text-xs text-emerald-700">Pre-filled from the uploaded Articles — confirm it&apos;s correct.</p>
             )}
+            {entityTypeNeeded && (
+              <label className="mt-4 block text-sm font-medium text-zinc-700">
+                LLC type
+                <select
+                  value={entityType}
+                  onChange={(e) => setEntityType(e.target.value as 'SMLLC' | 'MMLLC' | '')}
+                  disabled={uploading}
+                  className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm"
+                >
+                  <option value="">Choose…</option>
+                  <option value="SMLLC">Single-Member LLC</option>
+                  <option value="MMLLC">Multi-Member LLC</option>
+                </select>
+                <span className="mt-1 block text-xs font-normal text-amber-700">
+                  The LLC type could not be determined from the signed contract or the client&apos;s
+                  forms — it is required to create the company, so please pick it from the offer.
+                </span>
+              </label>
+            )}
+            {preflightBlocked && (
+              <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                The company cannot be created yet: {preflightBlocked}
+              </p>
+            )}
             {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
             <div className="mt-5 flex justify-end gap-2">
               <button
@@ -307,7 +398,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
               <button
                 type="button"
                 onClick={confirmFormationDate}
-                disabled={uploading || prefilling}
+                disabled={uploading || prefilling || !!preflightBlocked}
                 className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-zinc-300 disabled:text-zinc-400"
               >
                 {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
