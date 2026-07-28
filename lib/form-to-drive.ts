@@ -131,12 +131,16 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
           { key: "comp_debt_changes", label: "Debt Canceled/Forgiven/Modified" },
           { key: "comp_asset_purchases", label: "Bought/Sold Major Assets" },
           { key: "comp_anything_else", label: "Anything Else (client note)" },
+          // LIVE question (moved out of the legacy block 2026-07-28): the
+          // foreign-partner answer drives Form 1065 Schedule B line 14,
+          // Schedule B-1, and Schedules K-2/K-3, so the accountant must see it
+          // as a current answer — not filed under "pre-redesign".
+          { key: "mmllc_foreign_partners", label: "Non-US Member (Foreign Partner)" },
           // Legacy (pre-redesign submissions)
           { key: "prior_year_returns_filed", label: "Prior Year Returns Filed" },
           { key: "financial_statements_sent", label: "Financial Statements Sent" },
           { key: "mmllc_has_payroll", label: "Has Payroll" },
           { key: "mmllc_ownership_change", label: "Ownership Change During Year" },
-          { key: "mmllc_foreign_partners", label: "Foreign Partners" },
           { key: "mmllc_assets_over_50k", label: "Total Assets Over $50K" },
           { key: "mmllc_received_1099", label: "Received 1099" },
           { key: "mmllc_issued_1099", label: "Issued 1099" },

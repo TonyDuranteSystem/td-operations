@@ -4,7 +4,7 @@ import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
 import { WizardShell, type WizardStep } from '@/components/portal/wizard/wizard-shell'
 import { WizardField, type FieldConfig } from '@/components/portal/wizard/wizard-field'
-import { getWizardConfig, wizardCollectsOwnerMembers, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
+import { getWizardConfig, wizardCollectsOwnerMembers, wizardRequiresSs4Signer, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
 import { createClient } from '@/lib/supabase/client'
 import { AlertCircle, CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
 
@@ -294,6 +294,10 @@ export function WizardClient({
   // same trap sat latent on company_info and closure. Inert for SMLLC, ITIN,
   // banking, company_info, closure, and td_communication.
   const isMMLLC = entityType === 'MMLLC' && wizardCollectsOwnerMembers(wizardType)
+  // Narrower than isMMLLC: the SS-4 signer picker + its "exactly one" rule
+  // belong only to the EIN-application wizards, not to tax. See
+  // wizardRequiresSs4Signer for why tax was carrying it.
+  const requiresSs4Signer = isMMLLC && wizardRequiresSs4Signer(wizardType)
 
   const [currentStep, setCurrentStep] = useState(Math.min(savedStep, steps.length - 1))
   const [formData, setFormData] = useState<Record<string, string | string[] | boolean | number>>(initialData)
@@ -706,17 +710,24 @@ export function WizardClient({
     // remainder, 100 − sum, at materialization). Gated to MMLLC so SMLLC and
     // every other wizard are untouched.
     if (isMMLLC) {
-      let signerCount = isTruthyFlag(formData.owner_is_signer) ? 1 : 0
-      for (let i = 0; i < memberCount; i++) {
-        if (isTruthyFlag(formData[`member_${i}_is_signer`])) signerCount++
-      }
-      if (signerCount !== 1) {
-        toast.error(
-          locale === 'it'
-            ? 'Seleziona esattamente una persona come Responsible Party del modulo SS-4.'
-            : 'Select exactly one person as the SS-4 Responsible Party.',
-        )
-        return
+      // SS-4 Responsible Party — ONLY for the wizards that feed an EIN
+      // application. Excluded from tax (2026-07-28): nothing in the tax
+      // pipeline reads the signer, and by tax season the EIN already exists,
+      // so this refused the whole questionnaire over a discarded answer. The
+      // ownership-sum check below still runs for tax and is required there.
+      if (requiresSs4Signer) {
+        let signerCount = isTruthyFlag(formData.owner_is_signer) ? 1 : 0
+        for (let i = 0; i < memberCount; i++) {
+          if (isTruthyFlag(formData[`member_${i}_is_signer`])) signerCount++
+        }
+        if (signerCount !== 1) {
+          toast.error(
+            locale === 'it'
+              ? 'Seleziona esattamente una persona come Responsible Party del modulo SS-4.'
+              : 'Select exactly one person as the SS-4 Responsible Party.',
+          )
+          return
+        }
       }
 
       let pctSum = 0
@@ -818,7 +829,7 @@ export function WizardClient({
         ? "Invio non riuscito dopo alcuni tentativi. Aggiorna la pagina: se risulta già inviato, è andato a buon fine."
         : "Submit didn't go through after a few tries. Refresh the page — if it shows as already submitted, it worked."),
     )
-  }, [wizardType, entityType, formData, accountId, contactId, leadId, currentProgressId, raiseStepErrors, locale, isResubmitMode, itinCount, memberCount, isMMLLC])
+  }, [wizardType, entityType, formData, accountId, contactId, leadId, currentProgressId, raiseStepErrors, locale, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer])
 
   // Auto-save on step change
   const handleStepChange = useCallback((step: number) => {
@@ -1093,14 +1104,19 @@ export function WizardClient({
                     </div>
                   ))}
               </div>
-              {/* MMLLC: this member can be the SS-4 Responsible Party. */}
-              <SignerRadio
-                checked={signerIndex === idx}
-                onSelect={() => setSigner(idx)}
-                label={locale === 'it'
-                  ? `${idx === 0 ? `Membro ${idx + 1}` : `Membro ${idx + 1}`} è il Responsible Party del modulo SS-4.`
-                  : `Member ${idx + 1} is the SS-4 Responsible Party.`}
-              />
+              {/* MMLLC: this member can be the SS-4 Responsible Party. Hidden
+                  on tax — the EIN already exists by then and nothing in the tax
+                  pipeline reads the answer, so leaving the control would be a
+                  dead tick box (2026-07-28). */}
+              {requiresSs4Signer && (
+                <SignerRadio
+                  checked={signerIndex === idx}
+                  onSelect={() => setSigner(idx)}
+                  label={locale === 'it'
+                    ? `${idx === 0 ? `Membro ${idx + 1}` : `Membro ${idx + 1}`} è il Responsible Party del modulo SS-4.`
+                    : `Member ${idx + 1} is the SS-4 Responsible Party.`}
+                />
+              )}
             </div>
           ))}
           <button
@@ -1140,7 +1156,7 @@ export function WizardClient({
       ) : (
         <>
         {/* MMLLC: owner can elect to be the SS-4 Responsible Party. */}
-        {isMMLLC && stepId === 'owner' && (
+        {requiresSs4Signer && stepId === 'owner' && (
           <div className="mb-4">
             <p className="text-sm font-semibold text-zinc-700 mb-1.5">
               {locale === 'it' ? 'Responsible Party (SS-4)' : 'SS-4 Responsible Party'}

@@ -436,12 +436,36 @@ export const TAX_MEMBER_FIELDS: FieldConfig[] = [
   { name: 'member_last_name', label: 'Last name (as in the passport)', labelIt: 'Cognome (come sul passaporto)', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
   { name: 'member_citizenship', label: 'Country of citizenship', labelIt: 'Paese di cittadinanza', type: 'country', required: true, conditional: { field: 'member_type', value: 'individual' }, hint: 'The country of the passport. This tells the IRS the member is a foreign (non-US) partner.', hintIt: 'Il paese del passaporto. Indica all\'IRS che il socio è straniero (non USA).' },
   { name: 'member_residence_country', label: 'Country where this member lives', labelIt: 'Paese dove vive questo socio', type: 'country', required: true, conditional: { field: 'member_type', value: 'individual' }, hint: 'Where the member physically lives today — not necessarily the citizenship. Example: Italian citizen living in Dubai → Dubai (UAE).', hintIt: 'Dove vive fisicamente oggi — non necessariamente la cittadinanza. Esempio: cittadino italiano che vive a Dubai → Emirati Arabi.' },
+  // Added 2026-07-28. The ONLY fact that citizenship + country-of-residence
+  // cannot give us. A lawful permanent resident is a US person under IRC
+  // §7701(b)(1)(A) — so a green-card holder with a foreign passport is NOT a
+  // foreign partner, and treating them as one would wrongly force K-2/K-3.
+  // Asked PER MEMBER so the answer is attached to a named person: the return
+  // reports each member individually, so "someone has a green card" is not
+  // usable — we must know WHO.
+  // Options inlined, NOT the shared YN constant: TAX_MEMBER_FIELDS is evaluated
+  // before YN is initialised further down the module, so referencing it here
+  // throws at import time.
+  { name: 'member_green_card', label: 'Does this member hold a US green card?', labelIt: 'Questo socio ha la green card USA?', type: 'select', required: true, conditional: { field: 'member_type', value: 'individual' }, options: [
+    { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
+    { value: 'No', label: 'No' },
+  ], hint: 'A green card (US permanent residence) makes someone American for tax purposes, whatever passport they hold. Answer No if they have never had one. Most of our clients answer No.', hintIt: 'La green card (residenza permanente USA) rende una persona americana ai fini fiscali, qualunque passaporto abbia. Rispondi No se non l\'ha mai avuta. La maggior parte dei nostri clienti risponde No.' },
   { name: 'member_street', label: 'Home address (street)', labelIt: 'Indirizzo di casa (via)', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' }, hint: 'The member\'s personal home address. This address goes on the member\'s IRS statement (Schedule K-1) — it must be real and current.', hintIt: 'L\'indirizzo di casa personale del socio. Va sul documento IRS del socio (Schedule K-1) — deve essere reale e attuale.' },
   { name: 'member_city', label: 'City', labelIt: 'Città', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
   { name: 'member_zip', label: 'ZIP / Postal code', labelIt: 'CAP', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
   // ── Company ──
   { name: 'member_company_name', label: 'Company legal name', labelIt: 'Ragione sociale', type: 'text', required: true, conditional: { field: 'member_type', value: 'company' } },
   { name: 'member_company_ein', label: 'Company EIN or foreign tax number (if any)', labelIt: 'EIN o codice fiscale estero della società (se esiste)', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  // Added 2026-07-28 (CPA-IRS council). The tax form collected a company
+  // member's name, tax number and beneficial owner but never WHERE IT WAS
+  // FORMED — so the entity half of the foreign-partner question was
+  // unanswerable, and Form 1065 Schedule B-1 Part I column (iv) "Country of
+  // Organization" had no source. The formation/onboarding members form has
+  // always asked this; the tax form did not.
+  // NOTE the counterintuitive rule in the hint: a US-formed entity is a US
+  // person under IRC §7701(a)(30) even when foreigners own it — so it is NOT a
+  // foreign partner. Place of formation decides, not who owns it.
+  { name: 'member_company_country', label: 'Country where this company was formed', labelIt: 'Paese in cui è stata costituita questa società', type: 'country', required: true, conditional: { field: 'member_type', value: 'company' }, hint: 'The country whose law the company was registered under — not where it trades, and not where its owners live. This is what decides whether the IRS treats it as a foreign partner: a company formed in the US counts as American even if foreigners own it.', hintIt: 'Il paese sotto la cui legge la società è registrata — non dove opera, né dove vivono i suoi soci. È questo che decide se l\'IRS la considera socio estero: una società costituita negli USA conta come americana anche se è posseduta da stranieri.' },
   { name: 'member_company_owner', label: 'Who owns this company? (name of the real person behind it)', labelIt: 'Chi possiede questa società? (nome della persona reale dietro di essa)', type: 'text', required: true, conditional: { field: 'member_type', value: 'company' }, hint: 'When a member is a company, the IRS wants to know the real person at the top. Write their full name.', hintIt: 'Quando un socio è una società, l\'IRS vuole sapere chi è la persona reale al vertice. Scrivi il nome completo.' },
   // ── ITIN (both types — for a company member it's the beneficial owner's) ──
   { name: 'member_itin_status', label: 'Does this member have a US tax number (ITIN)?', labelIt: 'Questo socio ha un numero fiscale USA (ITIN)?', type: 'select', required: true, options: [
@@ -520,7 +544,38 @@ export const TAX_MMLLC_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'comp_foreign_trusts', label: 'Did the company send money to, or receive money from, a foreign trust?', labelIt: 'La società ha inviato o ricevuto denaro da un trust estero?', type: 'select', required: true, options: YN, hint: 'If you don\'t know what a trust is, your answer is No.', hintIt: 'Se non sai cos\'è un trust, la risposta è No.' },
     // Restored 2026-06-25 (Antonio): these two Schedule-B / 1065 questions were
     // dropped in the §14 MMLLC redesign (commit 9916eeb9) and asked back for.
-    { name: 'mmllc_foreign_partners', label: 'Any foreign partners?', labelIt: 'Soci stranieri?', type: 'select', required: false, options: YN },
+    //
+    // REWORDED + made REQUIRED 2026-07-28 after a CPA-IRS council review.
+    // The old copy was the bare label "Any foreign partners?" with no hint and
+    // required:false. Result on production: of 15 submitted MMLLC tax forms only
+    // 2 answered Yes, 6 answered No while every listed member was non-US, and 7
+    // were left blank because the field was optional.
+    //
+    // Why "partner" means "member": IRC §761(b) defines a partner as a member of
+    // the partnership, and a US multi-member LLC is a partnership by default
+    // (Treas. Reg. §301.7701-3(b)(1)(i)) — which is why it files Form 1065 at
+    // all. "Foreign partner" = any partner who is not a US person under IRC
+    // §7701(a)(30) (Treas. Reg. §1.1446-1(c)(1)). Form 1065 Schedule B-1 Part II
+    // ("Individuals or Estates Owning 50% or More") asks Country of Citizenship,
+    // so it plainly reaches non-US INDIVIDUAL members, not only foreign entities.
+    // The source questionnaire TD rebuilt from (James Baker CPA) says it
+    // explicitly: "Check the box if the Company has any foreign (Non US)
+    // partners" — the "(Non US)" is the clarifier our rebuild dropped.
+    //
+    // What it drives: Schedule B line 14, Schedule B-1 disclosure, and above all
+    // Schedules K-2/K-3 — a single non-US member breaks the domestic filing
+    // exception. It does NOT by itself create US tax (§1446 withholding needs
+    // effectively connected income, which these clients generally lack), hence
+    // the reassurance in the hint: a Yes is normal and costs them nothing.
+    // REMOVED 2026-07-28 — this was 'Any foreign partners?' and, briefly, a
+    // reworded version of the same yes/no. It is now DERIVED from the member
+    // cards (citizenship + country of residence + green card for a person;
+    // country of formation for a company) — see lib/tax/foreign-partners.ts.
+    // Reason: on production only 2 of 15 submitted MMLLC forms answered it
+    // usably (6 wrong, 7 blank). The clients had already typed every fact it
+    // asks about one step earlier; asking them to restate it in tax vocabulary
+    // ("partner" = "member") is what produced the wrong answers. The derived
+    // result is shown back for confirmation, so it remains their statement.
     { name: 'mmllc_assets_over_50k', label: 'Total assets over $50,000?', labelIt: 'Attivi totali superiori a $50.000?', type: 'select', required: false, options: YN },
     { name: 'comp_digital_assets', label: 'Did the company RECEIVE crypto as a payment, or SELL / convert / spend any crypto during the year?', labelIt: 'La società ha RICEVUTO crypto come pagamento, o VENDUTO / convertito / speso crypto durante l\'anno?', type: 'select', required: true, options: YN, hint: 'Only BUYING and HOLDING does not count — if the company just bought crypto and kept it, answer No. Answer Yes if crypto came IN as payment for something, or went OUT: sold, converted to dollars/euros, or used to pay for something. Simple signal: if your exchange (Kraken, Coinbase…) sent you a tax form (1099 / 1099-DA), the answer is almost certainly Yes.', hintIt: 'Solo COMPRARE e TENERE non conta — se la società ha solo comprato crypto e le ha tenute, rispondi No. Rispondi Sì se sono ENTRATE crypto come pagamento, o se sono USCITE: vendute, convertite in dollari/euro, o usate per pagare qualcosa. Segnale semplice: se il tuo exchange (Kraken, Coinbase…) ti ha inviato un modulo fiscale (1099 / 1099-DA), la risposta è quasi certamente Sì.' },
     { name: 'comp_digital_assets_scenario', label: 'What happened with the crypto?', labelIt: 'Cosa è successo con le crypto?', type: 'select', required: true, conditional: { field: 'comp_digital_assets', value: 'Yes' }, options: [
@@ -887,6 +942,38 @@ export function wizardCollectsOwnerMembers(wizardType: string): boolean {
     wizardType === 'tax' ||
     wizardType === 'tax_return'
   )
+}
+
+/**
+ * Which of those wizards must ALSO name an SS-4 Responsible Party?
+ *
+ * Only the ones that feed an EIN application. The SS-4 IS the EIN application:
+ * naming one responsible person is required to file it, which happens at
+ * formation (and at onboarding for a company we did not form).
+ *
+ * The TAX wizard is deliberately excluded (2026-07-28). Three reasons:
+ *  1. NOTHING CONSUMES IT. Verified across the tax pipeline — the submit route,
+ *     the confirm route, apply-confirmed-submission, the tax MCP tools and the
+ *     financials orchestration contain ZERO references to a signer. The client
+ *     was blocked on an answer that is then discarded.
+ *  2. IT IS ASKED TOO LATE. By tax season the company already has its EIN on
+ *     file, so there is no SS-4 to sign.
+ *  3. IT WAS NEVER A TAX REQUIREMENT. It arrived by inheritance: the old gate
+ *     was a blocklist that switched the formation-only check on for every MMLLC
+ *     wizard. When that stranded the personal ITIN wizard (Adam Mihaly / LUMA
+ *     Beauty, 2026-07-24) it was converted to the allowlist above — and tax was
+ *     carried across with formation and onboarding rather than re-examined.
+ *
+ * The symptom: a multi-member client fills the entire tax questionnaire and is
+ * refused at the final step by a toast naming a tick box several steps back,
+ * with no way to reach it. Reproduced on the QA fixture 2026-07-28.
+ *
+ * NOTE this is separate from the members-ownership check, which the tax wizard
+ * KEEPS and needs — every member is on a Schedule K-1, so their shares must
+ * total 100%.
+ */
+export function wizardRequiresSs4Signer(wizardType: string): boolean {
+  return wizardType === 'formation' || wizardType === 'onboarding'
 }
 
 /**
