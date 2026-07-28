@@ -945,6 +945,38 @@ export function wizardCollectsOwnerMembers(wizardType: string): boolean {
 }
 
 /**
+ * Which of those wizards must ALSO name an SS-4 Responsible Party?
+ *
+ * Only the ones that feed an EIN application. The SS-4 IS the EIN application:
+ * naming one responsible person is required to file it, which happens at
+ * formation (and at onboarding for a company we did not form).
+ *
+ * The TAX wizard is deliberately excluded (2026-07-28). Three reasons:
+ *  1. NOTHING CONSUMES IT. Verified across the tax pipeline — the submit route,
+ *     the confirm route, apply-confirmed-submission, the tax MCP tools and the
+ *     financials orchestration contain ZERO references to a signer. The client
+ *     was blocked on an answer that is then discarded.
+ *  2. IT IS ASKED TOO LATE. By tax season the company already has its EIN on
+ *     file, so there is no SS-4 to sign.
+ *  3. IT WAS NEVER A TAX REQUIREMENT. It arrived by inheritance: the old gate
+ *     was a blocklist that switched the formation-only check on for every MMLLC
+ *     wizard. When that stranded the personal ITIN wizard (Adam Mihaly / LUMA
+ *     Beauty, 2026-07-24) it was converted to the allowlist above — and tax was
+ *     carried across with formation and onboarding rather than re-examined.
+ *
+ * The symptom: a multi-member client fills the entire tax questionnaire and is
+ * refused at the final step by a toast naming a tick box several steps back,
+ * with no way to reach it. Reproduced on the QA fixture 2026-07-28.
+ *
+ * NOTE this is separate from the members-ownership check, which the tax wizard
+ * KEEPS and needs — every member is on a Schedule K-1, so their shares must
+ * total 100%.
+ */
+export function wizardRequiresSs4Signer(wizardType: string): boolean {
+  return wizardType === 'formation' || wizardType === 'onboarding'
+}
+
+/**
  * Get the correct steps and fields based on wizard type and entity type.
  */
 export function getWizardConfig(wizardType: string, entityType?: string, bankingProvider?: string) {
