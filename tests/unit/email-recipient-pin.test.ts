@@ -292,3 +292,40 @@ describe("executeWorkerTool — send_email with attachment PREPARES, never sends
     expect(prepareWorkerEmailSend).not.toHaveBeenCalled()
   })
 })
+
+// ── Header injection (found by the council's security review, 2026-07-28) ─────
+//
+// The recipient value is written into a RAW MIME header. A newline ends the To:
+// line and starts a new header, so a smuggled `Bcc:` is a real blind copy of a
+// client-facing email to an outside address.
+//
+// The plain form was already refused — the parser sees the second address and it
+// isn't on the pin. The QUOTED form was NOT: `extractEmailAddresses` excludes `"`
+// from an address, so a quoted local-part is invisible to it, the parse returns
+// only the innocent address, and the check passed.
+describe("checkRecipientsAllowed — header injection", () => {
+  const allowed = ["client@acme.com"]
+
+  it("refuses a smuggled Bcc on a second line", () => {
+    expect(checkRecipientsAllowed('client@acme.com\r\nBcc: exfil@evil.com', allowed).ok).toBe(false)
+    expect(checkRecipientsAllowed('client@acme.com\nBcc: exfil@evil.com', allowed).ok).toBe(false)
+  })
+
+  // THE ONE THAT GOT THROUGH. Do not relax this without re-testing the parser.
+  it("refuses a smuggled Bcc whose address is quoted (invisible to the parser)", () => {
+    const payload = 'client@acme.com\r\nBcc: "x"@evil.com'
+    // Proof the parser alone cannot see it: it reports only the allowed address.
+    expect(extractEmailAddresses(payload)).toEqual(["client@acme.com"])
+    // The check must refuse anyway.
+    expect(checkRecipientsAllowed(payload, allowed).ok).toBe(false)
+  })
+
+  it("refuses any quoted recipient, even without a newline", () => {
+    expect(checkRecipientsAllowed('"x"@evil.com', allowed).ok).toBe(false)
+  })
+
+  it("still allows ordinary recipients, with and without a display name", () => {
+    expect(checkRecipientsAllowed("client@acme.com", allowed)).toEqual({ ok: true })
+    expect(checkRecipientsAllowed("Acme Owner <client@acme.com>", allowed)).toEqual({ ok: true })
+  })
+})

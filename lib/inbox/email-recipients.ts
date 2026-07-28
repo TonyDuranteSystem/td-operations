@@ -59,6 +59,21 @@ export function checkRecipientsAllowed(
   to: string,
   allowed: string[],
 ): { ok: true } | { ok: false; rejected: string[] } {
+  // ⛔ REFUSE ANYTHING THE PARSER CANNOT HONESTLY READ, BEFORE PARSING IT.
+  //
+  // Two shapes make the parse untrustworthy rather than merely wrong:
+  //   - CR/LF: in a raw MIME header a newline ends the To: line and starts a NEW
+  //     header, so `x@a.com\r\nBcc: y@evil.com` is a real blind copy. Senders strip
+  //     it now, but this check means the pin refuses instead of relying on that.
+  //   - a quote character: `extractEmailAddresses` excludes `"` from an address, so
+  //     a quoted local-part is INVISIBLE to it — the parse returns the one innocent
+  //     address and the check passes while a second recipient rides along. Verified
+  //     against the live regex: the plain form is caught, the quoted form was not.
+  //
+  // Neither shape has any legitimate use in a recipient the assistant produces, so
+  // refusing outright costs nothing and removes a whole class.
+  if (/[\r\n]/.test(to) || to.includes('"')) return { ok: false, rejected: [to] }
+
   const allowSet = new Set(allowed.map((a) => a.toLowerCase()))
   const requested = extractEmailAddresses(to)
   if (!requested.length) return { ok: false, rejected: [to] }
