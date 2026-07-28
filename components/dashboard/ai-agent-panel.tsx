@@ -150,7 +150,11 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     const next = Math.max(min, Math.min(el.scrollHeight, max))
     el.style.height = next + 'px'
     el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden'
-  }, [input])
+    // `open` is a dependency because the panel returns null while closed: the
+    // textarea is attached without this component remounting, so on re-open the
+    // effect would not run and the height would depend on the `rows` attribute
+    // happening to match `min`. Sizing it explicitly keeps the two from drifting.
+  }, [input, open])
 
   const sendMessage = async (msgs: Message[], attachments?: UploadedAttachment[]) => {
     setLoading(true)
