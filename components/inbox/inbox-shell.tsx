@@ -1223,10 +1223,15 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         )}
 
         {/* ─── Conversation List ─────────────── */}
+        {/* Gmail-style full-width reading (Antonio 2026-07-28): when an email
+            is open the list HIDES at every width, not just mobile. CSS-hide
+            only — the list must STAY MOUNTED because it owns the reconcile /
+            override machinery (delete/undo/restore); unmounting it here would
+            drop pending hides. The back arrow in the thread header returns. */}
         <div
           className={cn(
-            'w-full lg:w-[350px] lg:shrink-0 flex flex-col border-r',
-            selected ? 'hidden lg:flex' : 'flex'
+            'w-full lg:w-[350px] lg:shrink-0 flex-col border-r',
+            selected ? 'hidden' : 'flex'
           )}
         >
           <ConversationList
@@ -1265,7 +1270,11 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                   on narrow windows/mobile the button cluster wraps to its own
                   row instead of crushing the subject to one word per line. */}
               <div className="flex items-center gap-x-3 gap-y-1.5 px-4 py-2.5 border-b bg-white shrink-0 flex-wrap">
-                <button onClick={handleBack} className="lg:hidden p-1 rounded hover:bg-zinc-100">
+                <button
+                  onClick={handleBack}
+                  title="Back to the email list"
+                  className="p-1 rounded hover:bg-zinc-100"
+                >
                   <ArrowLeft className="h-5 w-5" />
                 </button>
 
@@ -1537,7 +1546,12 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
               ) : (
                 <div className="flex flex-1 min-h-0">
                   <div className="flex-1 flex flex-col min-w-0">
+                    {/* Keyed by conversation: a remount per thread resets the
+                        scroll position and the per-message collapse state by
+                        construction — no cross-thread state leaks (council
+                        2026-07-28). */}
                     <MessageThread
+                      key={selected.id}
                       conversation={selected}
                       mailbox={activeMailbox}
                       registerPrint={(fn) => { printRef.current = fn }}

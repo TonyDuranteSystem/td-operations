@@ -75,7 +75,9 @@ export function ThreadEmailPanel({ accountId, contactId }: ThreadEmailPanelProps
             {selected.subject || selected.name}
           </p>
         </div>
-        <MessageThread conversation={selected} mailbox="support" />
+        {/* Keyed: remount per conversation resets scroll + collapse state
+            (same rule as the Inbox mount — council 2026-07-28). */}
+        <MessageThread key={selected.id} conversation={selected} mailbox="support" />
         <ComposeReply conversation={selected} mailbox="support" />
       </div>
     )

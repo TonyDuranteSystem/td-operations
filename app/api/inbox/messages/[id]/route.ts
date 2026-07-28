@@ -8,7 +8,7 @@ import {
   extractInlineImages,
   type GmailAPIMessage,
 } from "@/lib/gmail"
-import { rewriteCidSources } from "@/lib/inbox/email-html"
+import { rewriteCidSources, safeEmailDate } from "@/lib/inbox/email-html"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import type { InboxMessage } from "@/lib/types"
 
@@ -107,9 +107,9 @@ export async function GET(
           isHtml: extracted.isHtml,
           type: "email",
           status: msg.labelIds?.includes("UNREAD") ? "new" : "read",
-          createdAt: date
-            ? new Date(date).toISOString()
-            : new Date(parseInt(msg.internalDate)).toISOString(),
+          // A spam sender's malformed Date header must not 500 the whole
+          // thread — safeEmailDate never throws.
+          createdAt: safeEmailDate(date, msg.internalDate),
           ...(attachments.length > 0 ? { attachments } : {}),
         }
       })

@@ -1,11 +1,12 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { InboxMessage, InboxConversation } from '@/lib/types'
 import { sanitizeEmailHtml } from '@/lib/html-escape'
+import { emailSnippet } from '@/lib/inbox/email-html'
 import { splitQuotedText } from '@/lib/inbox/email-quote'
 import { printEmailThread } from '@/lib/inbox/print-email'
 import { resolveAttachmentType, shouldOpenInTab } from '@/lib/inbox/attachment-open'
@@ -200,13 +201,24 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
   const queryClient = useQueryClient()
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  const { data, isLoading } = useQuery<ThreadResponse>({
+  const { data, isLoading, error } = useQuery<ThreadResponse>({
     queryKey: ['inbox-messages', conversation.id, mailbox],
-    queryFn: () => {
+    queryFn: async () => {
       const params = mailbox ? `?mailbox=${mailbox}` : ''
-      return fetch(`/api/inbox/messages/${encodeURIComponent(conversation.id)}${params}`).then(
-        (r) => r.json()
+      const res = await fetch(
+        `/api/inbox/messages/${encodeURIComponent(conversation.id)}${params}`
       )
+      if (!res.ok) {
+        // R099 + the scroll bug's hidden twin: swallowing a failed poll into
+        // `data` used to render the "No messages" branch, unmounting the
+        // scroll container — the next good poll remounted it at the top.
+        // Throwing keeps react-query's last-good data (and scroll) in place.
+        const d = await res.json().catch(() => ({}))
+        throw new Error(
+          (d as { error?: string }).error || 'Could not load this conversation.'
+        )
+      }
+      return res.json()
     },
     refetchInterval: 15_000,
   })
@@ -245,15 +257,97 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
   }, [conversation.id])
 
   // Chat channels: auto-scroll to bottom (newest last, WhatsApp-style).
-  // EMAIL threads render NEWEST FIRST (Luca 2026-07-08: no scrolling to the
-  // bottom of long threads — and the growing email iframes made bottom-scroll
-  // land mid-thread anyway), so they stay at the top.
+  // EMAIL threads render NEWEST FIRST and deliberately have NO scroll-on-data
+  // effect: scrolling on payload change was the jump-to-top bug — the 15s
+  // poll's mark-read "new"→"read" status flip landed a changed payload a few
+  // seconds after opening any unread thread and yanked the reader to the top
+  // (Luca 2026-07-28, council-reviewed). Both mount sites key this component
+  // by conversation id, so a remount lands at the top on its own; the
+  // conversation.id effect below is a belt-and-braces for any unkeyed mount.
   const isEmailThread = data?.channel === 'gmail'
   useEffect(() => {
-    if (!scrollRef.current) return
-    scrollRef.current.scrollTop = isEmailThread ? 0 : scrollRef.current.scrollHeight
+    if (!scrollRef.current || isEmailThread) return
+    scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.messages])
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
+  }, [conversation.id])
+
+  // ─── Gmail-style collapse (email threads only) ───────────────────────────
+  // Seeded ONCE per mount from the first payload: newest expanded, the rest
+  // collapsed. Refetches NEVER re-seed — the mark-read payload delta arrives
+  // ~15s after open and must not collapse what the user expanded. Later
+  // arrivals render collapsed with a "New" badge; nothing ever auto-collapses
+  // or auto-expands under the reader (council decision 2026-07-28).
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [newIds, setNewIds] = useState<Set<string>>(new Set())
+  const seededRef = useRef(false)
+  const knownIdsRef = useRef<Set<string>>(new Set())
+  // Scroll anchor for toggles: keep the clicked header at the same viewport
+  // offset when content above/around it changes height (Safari has no native
+  // scroll anchoring — Antonio reads on the iPhone PWA).
+  const anchorRef = useRef<{ id: string; top: number } | null>(null)
+
+  useEffect(() => {
+    if (data?.channel !== 'gmail' || !data.messages?.length) return
+    const newestFirst = [...data.messages].reverse()
+    if (!seededRef.current) {
+      seededRef.current = true
+      knownIdsRef.current = new Set(newestFirst.map((m) => m.id))
+      setExpanded(new Set([newestFirst[0].id]))
+      return
+    }
+    const fresh = newestFirst.filter((m) => !knownIdsRef.current.has(m.id))
+    if (fresh.length > 0) {
+      fresh.forEach((m) => knownIdsRef.current.add(m.id))
+      setNewIds((prev) => {
+        const next = new Set(prev)
+        fresh.forEach((m) => next.add(m.id))
+        return next
+      })
+    }
+  }, [data])
+
+  // One-line previews for collapsed cards, computed once per payload (a
+  // multi-MB newsletter must not be re-stripped on every render).
+  const snippets = useMemo(() => {
+    const map = new Map<string, string>()
+    if (data?.channel === 'gmail') {
+      for (const m of data.messages || []) {
+        map.set(m.id, emailSnippet(m.content || '', m.isHtml))
+      }
+    }
+    return map
+  }, [data])
+
+  const toggleMessage = (id: string) => {
+    const el = scrollRef.current?.querySelector(`[data-mid="${CSS.escape(id)}"]`)
+    if (el) anchorRef.current = { id, top: el.getBoundingClientRect().top }
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+    setNewIds((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }
+
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current
+    if (!anchor || !scrollRef.current) return
+    anchorRef.current = null
+    const el = scrollRef.current.querySelector(`[data-mid="${CSS.escape(anchor.id)}"]`)
+    if (!el) return
+    const delta = el.getBoundingClientRect().top - anchor.top
+    if (delta !== 0) scrollRef.current.scrollTop += delta
+  }, [expanded])
 
   // Expose a Print/Save-as-PDF handler for the loaded email thread to a parent
   // toolbar. Prints messages chronologically (oldest first), Gmail-print style.
@@ -288,6 +382,18 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
     )
   }
 
+  // A failed FIRST load surfaces the server's reason (R099). A failed POLL
+  // never lands here — react-query keeps the last good payload.
+  if (error && !data) {
+    return (
+      <div className="flex-1 flex items-center justify-center px-6 text-center text-sm text-red-600">
+        {error instanceof Error && error.message
+          ? error.message
+          : 'Could not load this conversation.'}
+      </div>
+    )
+  }
+
   const messages = isEmailThread
     ? [...(data?.messages || [])].reverse() // newest email on top
     : data?.messages || []
@@ -315,6 +421,19 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
           contactId={conversation.contactId}
           prefill={data?.subject || conversation.subject || conversation.name}
         />
+        {isEmailThread && messages.length > 1 && (
+          <button
+            type="button"
+            onClick={() => {
+              const allOpen = messages.every((m) => expanded.has(m.id))
+              setExpanded(allOpen ? new Set() : new Set(messages.map((m) => m.id)))
+              if (!allOpen) setNewIds(new Set())
+            }}
+            className="shrink-0 text-xs text-zinc-400 hover:text-zinc-600 bg-zinc-100 px-2 py-1 rounded-xl"
+          >
+            {messages.every((m) => expanded.has(m.id)) ? 'Collapse all' : 'Expand all'}
+          </button>
+        )}
       </div>
 
       {messages.map((msg) => {
@@ -325,56 +444,82 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
         // a sandboxed iframe (email CSS preserved, scripts impossible). Chat
         // channels keep the bubble layout.
         if (isEmail) {
+          const isOpen = expanded.has(msg.id)
+          const isNew = newIds.has(msg.id)
           return (
             <div
               key={msg.id}
+              data-mid={msg.id}
               className={cn(
                 'rounded-lg border bg-white overflow-hidden',
                 isOutbound ? 'border-blue-200' : 'border-zinc-200'
               )}
             >
-              <div
+              {/* The whole header is the expand/collapse toggle (Gmail-style).
+                  Collapsed cards show a one-line snippet and mount NO iframe —
+                  a 40-message thread renders one viewer, not forty. */}
+              <button
+                type="button"
+                onClick={() => toggleMessage(msg.id)}
+                title={isOpen ? 'Collapse this email' : 'Expand this email'}
                 className={cn(
-                  'flex items-center justify-between gap-2 px-4 py-2 border-b text-xs',
-                  isOutbound ? 'bg-blue-50/60 border-blue-100' : 'bg-zinc-50 border-zinc-100'
+                  'w-full flex items-center justify-between gap-2 px-4 py-2 text-xs text-left cursor-pointer',
+                  isOpen && 'border-b',
+                  isOutbound
+                    ? 'bg-blue-50/60 border-blue-100 hover:bg-blue-50'
+                    : 'bg-zinc-50 border-zinc-100 hover:bg-zinc-100'
                 )}
               >
-                <span className="font-semibold text-zinc-700 truncate">
+                <span className="font-semibold text-zinc-700 truncate shrink-0 max-w-[45%]">
                   {isOutbound ? `To: ${msg.sender}` : msg.sender}
                 </span>
-                <span className="text-zinc-400 shrink-0">
+                {!isOpen && (
+                  <span className="flex-1 min-w-0 truncate text-zinc-400 font-normal">
+                    {snippets.get(msg.id) || ''}
+                  </span>
+                )}
+                <span className="flex items-center gap-2 shrink-0 text-zinc-400">
+                  {isNew && (
+                    <span className="rounded-full bg-emerald-100 text-emerald-700 px-2 py-0.5 text-[10px] font-semibold">
+                      New
+                    </span>
+                  )}
                   {formatMessageTime(msg.createdAt)}
                 </span>
-              </div>
+              </button>
 
-              <div className="px-2 py-1">
-                {/* Branch on the REAL MIME type from the server — guessing
-                    from the content misdetects plain replies quoting an
-                    address like `<a@b.com>` as HTML and eats line breaks.
-                    Heuristic kept only as fallback for cached payloads. */}
-                {(msg.isHtml ?? (msg.content?.includes('<') && msg.content?.includes('>'))) ? (
-                  // Inbound email HTML is attacker-controlled (anyone can email
-                  // support@). Defense in depth: sanitized AND rendered in a
-                  // sandboxed iframe with scripts disabled (security audit
-                  // 2026-06-13, H8/H9).
-                  <EmailHtmlFrame html={sanitizeEmailHtml(msg.content)} />
-                ) : (
-                  <PlainEmailBody content={msg.content || ''} />
-                )}
-              </div>
+              {isOpen && (
+                <>
+                  <div className="px-2 py-1">
+                    {/* Branch on the REAL MIME type from the server — guessing
+                        from the content misdetects plain replies quoting an
+                        address like `<a@b.com>` as HTML and eats line breaks.
+                        Heuristic kept only as fallback for cached payloads. */}
+                    {(msg.isHtml ?? (msg.content?.includes('<') && msg.content?.includes('>'))) ? (
+                      // Inbound email HTML is attacker-controlled (anyone can email
+                      // support@). Defense in depth: sanitized AND rendered in a
+                      // sandboxed iframe with scripts disabled (security audit
+                      // 2026-06-13, H8/H9).
+                      <EmailHtmlFrame html={sanitizeEmailHtml(msg.content)} />
+                    ) : (
+                      <PlainEmailBody content={msg.content || ''} />
+                    )}
+                  </div>
 
-              {msg.attachments && msg.attachments.length > 0 && (
-                <div className="px-4 pb-3 pt-1 flex flex-wrap gap-1.5">
-                  {msg.attachments.map((att, i) => (
-                    <AttachmentChip
-                      key={i}
-                      att={att}
-                      messageId={msg.id}
-                      mailbox={mailbox}
-                      className="flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-700 transition-colors"
-                    />
-                  ))}
-                </div>
+                  {msg.attachments && msg.attachments.length > 0 && (
+                    <div className="px-4 pb-3 pt-1 flex flex-wrap gap-1.5">
+                      {msg.attachments.map((att, i) => (
+                        <AttachmentChip
+                          key={i}
+                          att={att}
+                          messageId={msg.id}
+                          mailbox={mailbox}
+                          className="flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-700 transition-colors"
+                        />
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { rewriteCidSources, decodeHtmlEntities, displayNameFromHeader } from '@/lib/inbox/email-html'
+import {
+  rewriteCidSources,
+  decodeHtmlEntities,
+  displayNameFromHeader,
+  htmlToPlainText,
+  emailSnippet,
+  safeEmailDate,
+} from '@/lib/inbox/email-html'
 import { extractInlineImages, type GmailAPIMessage } from '@/lib/gmail'
 
 describe('decodeHtmlEntities', () => {
@@ -134,5 +141,74 @@ describe('extractInlineImages', () => {
     expect(
       extractInlineImages({ headers: [], mimeType: 'text/html', body: { data: 'x' } })
     ).toEqual([])
+  })
+})
+
+describe('htmlToPlainText', () => {
+  it('drops style/script/head CONTENT, not just the tags (styled newsletter)', () => {
+    const newsletter =
+      '<head><title>x</title></head><style>body{margin:0}.wrapper{color:red}</style>' +
+      '<script>alert(1)</script><div><p>Hello <b>Antonio</b>,</p><p>your invoice is ready.</p></div>'
+    expect(htmlToPlainText(newsletter)).toBe('Hello Antonio, your invoice is ready.')
+  })
+
+  it('decodes entities once and collapses whitespace', () => {
+    expect(htmlToPlainText('<p>Q&amp;A&nbsp;&nbsp;time</p>\n\n<p>ok</p>')).toBe('Q&A time ok')
+    // double-encoded marketing mail must not double-decode
+    expect(htmlToPlainText('<p>&amp;nbsp;</p>')).toBe('&nbsp;')
+  })
+
+  it('caps multi-MB hostile input instead of regexing all of it', () => {
+    const huge = '<p>lead</p>' + 'x'.repeat(5_000_000)
+    const out = htmlToPlainText(huge)
+    expect(out.startsWith('lead')).toBe(true)
+    expect(out.length).toBeLessThanOrEqual(20_000)
+  })
+
+  it('handles empty and tag-free input', () => {
+    expect(htmlToPlainText('')).toBe('')
+    expect(htmlToPlainText('just text')).toBe('just text')
+  })
+})
+
+describe('emailSnippet', () => {
+  it('one line with ellipsis past the cap, honoring the real isHtml flag', () => {
+    const s = emailSnippet('line one\nline two\nline three', false, 15)
+    expect(s.endsWith('…')).toBe(true)
+    expect(s.length).toBeLessThanOrEqual(15)
+    expect(s).not.toContain('\n')
+  })
+
+  it('plain replies quoting an address are NOT treated as HTML when flag says plain', () => {
+    // content sniff would call this HTML; the explicit flag must win
+    expect(emailSnippet('reply to <a@b.com> ok', false)).toBe('reply to <a@b.com> ok')
+  })
+
+  it('sniffs only when the flag is absent (cached payloads)', () => {
+    expect(emailSnippet('<p>hi</p>', undefined)).toBe('hi')
+  })
+
+  it('empty content → empty snippet', () => {
+    expect(emailSnippet('', true)).toBe('')
+  })
+})
+
+describe('safeEmailDate', () => {
+  it('parses a valid Date header', () => {
+    expect(safeEmailDate('Tue, 28 Jul 2026 10:00:00 +0000', '123')).toBe(
+      '2026-07-28T10:00:00.000Z'
+    )
+  })
+
+  it('falls back to internalDate on a hostile header instead of throwing', () => {
+    expect(safeEmailDate('Never', '1753700000000')).toBe(
+      new Date(1753700000000).toISOString()
+    )
+  })
+
+  it('missing header uses internalDate; both bad → epoch 0, never a throw', () => {
+    expect(safeEmailDate('', '1753700000000')).toBe(new Date(1753700000000).toISOString())
+    expect(safeEmailDate('Never', 'garbage')).toBe(new Date(0).toISOString())
+    expect(safeEmailDate(null, null)).toBe(new Date(0).toISOString())
   })
 })
