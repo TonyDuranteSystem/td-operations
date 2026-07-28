@@ -860,6 +860,31 @@ export async function updateInvoice(
       }
     }
 
+    // Moving the due date into the future on an Overdue invoice un-marks it IMMEDIATELY —
+    // back to Partial if money was applied, else Sent. Overdue-marking was one-way for its
+    // whole life: the daily pass flips past-due invoices Overdue but nothing ever flipped
+    // one back, so a renegotiated payment date (Shoppyverse → September, Luca 2026-07-28)
+    // left the label stuck forever. The daily pass now heals this too (step 1b), but the
+    // person editing the date deserves to SEE the status change, not wait a day for a cron.
+    // Reminder count resets — a renegotiated date starts a fresh reminder cycle.
+    if (updates.due_date) {
+      const today = new Date().toISOString().split('T')[0]
+      if (updates.due_date >= today) {
+        const { data: inv } = await supabaseAdmin
+          .from('payments')
+          .select('invoice_status, amount_paid')
+          .eq('id', paymentId)
+          .single()
+        if (inv?.invoice_status === 'Overdue') {
+          const { syncInvoiceStatus } = await import('@/lib/portal/unified-invoice')
+          const backTo = Number(inv.amount_paid ?? 0) > 0 ? 'Partial' : 'Sent'
+          await syncInvoiceStatus('payment', paymentId, backTo)
+          // eslint-disable-next-line no-restricted-syntax -- reminder pacing reset alongside the status flip
+          await supabaseAdmin.from('payments').update({ reminder_count: 0 }).eq('id', paymentId)
+        }
+      }
+    }
+
     // Also update client_expenses mirror. Deliberately NOT `notes`: invoice
     // notes are INTERNAL staff remarks (the edit dialog promises "not visible
     // to client") — client_expenses belongs to the client's own bookkeeping,
