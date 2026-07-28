@@ -16,6 +16,9 @@ import {
   looksLikeFailedLookup,
   assertsCannotDo,
   looksLikeIncompleteRead,
+  finalizeReplyForStopReason,
+  TRUNCATED_REPLY_NOTE,
+  TRUNCATED_EMPTY_REPLY,
 } from "@/lib/ai-agent/answer-guards"
 import { buildCoverage, coverageNote } from "@/lib/docai-windows"
 
@@ -293,5 +296,38 @@ describe("looksLikeIncompleteRead — partial reads are not proof of search", ()
     const counts = !looksLikeFailedLookup(full) && !looksLikeIncompleteRead(full)
     expect(counts).toBe(true)
     expect(hasSearchedForAbsence(["read_scanned_document"])).toBe(true)
+  })
+})
+
+// ── Truncated answers (added with the Claude-5 models) ───────────────────────
+// These exist because the newer models reason before answering and that reasoning
+// is charged against the SAME output ceiling, so they hit it far sooner. Before
+// this, a cut-off answer shipped looking complete and an empty one became the
+// meaningless "(no response generated)".
+describe("finalizeReplyForStopReason", () => {
+  it("leaves a normally-finished answer completely untouched", () => {
+    const reply = "Lepren LLC has two open invoices."
+    expect(finalizeReplyForStopReason(reply, "end_turn")).toBe(reply)
+    expect(finalizeReplyForStopReason(reply, "tool_use")).toBe(reply)
+    expect(finalizeReplyForStopReason(reply, undefined)).toBe(reply)
+  })
+
+  it("marks an answer that was cut off, keeping the text that was written", () => {
+    const out = finalizeReplyForStopReason("The total for March is 4,21", "max_tokens")
+    expect(out).toContain("The total for March is 4,21")
+    expect(out).toContain(TRUNCATED_REPLY_NOTE)
+  })
+
+  it("replaces an EMPTY truncated answer rather than returning a blank reply", () => {
+    expect(finalizeReplyForStopReason("", "max_tokens")).toBe(TRUNCATED_EMPTY_REPLY)
+    expect(finalizeReplyForStopReason("   \n ", "max_tokens")).toBe(TRUNCATED_EMPTY_REPLY)
+  })
+
+  it("never silently drops the fact that an answer was incomplete", () => {
+    // The whole point: a truncated reply must never be indistinguishable from a
+    // finished one. Whatever the text, the marker has to be present.
+    for (const text of ["short", "a".repeat(5000), "ends mid-sent"]) {
+      expect(finalizeReplyForStopReason(text, "max_tokens")).not.toBe(text)
+    }
   })
 })

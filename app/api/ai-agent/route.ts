@@ -71,9 +71,12 @@ export async function POST(request: NextRequest) {
   }
 
   const ALLOWED_ATTACHMENT_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf', 'text/csv', 'text/plain']
+  /** Mirrors MAX_FILES in components/chat/use-worker-attachments.ts — the reader
+   *  drops anything past it, so accepting more here would only look like it worked. */
+  const MAX_SIDEBAR_ATTACHMENTS = 5
 
   try {
-    const { messages, provider: requestedProvider, attachment, conversationId, clientKey } = await request.json()
+    const { messages, provider: requestedProvider, attachment, attachments, conversationId, clientKey } = await request.json()
 
     if (!messages?.length || !Array.isArray(messages)) {
       return NextResponse.json({ error: 'messages array required' }, { status: 400 })
@@ -111,6 +114,32 @@ export async function POST(request: NextRequest) {
       validAttachment = { name: String(attachment.name), type: attachment.type, base64: attachment.base64 }
     }
 
+    // Files the staff member pasted/dropped into the sidebar THIS turn. Same
+    // contract the Inbox and Portal-Chats panels already use: the browser uploads
+    // straight to the PRIVATE worker-attachments bucket via a signed URL and sends
+    // us only the object PATH, so a multi-megabyte file never rides in the request
+    // body (base64 in the body 413s at the platform edge — the reason the legacy
+    // single-file field above is capped at 10MB and cannot simply be widened).
+    // The path is re-validated server-side by isValidWorkerUploadPath inside the
+    // fetcher; a caller-supplied path never reaches the service-key client
+    // unchecked. Type policy lives in the upload-URL route (validateChatAttachment),
+    // which is why there is no ALLOWED_ATTACHMENT_TYPES check here — that list is
+    // the LEGACY field's narrower policy and is what blocked Excel on this panel.
+    const validAttachments = Array.isArray(attachments)
+      ? attachments
+          .filter(
+            (a: { path?: unknown }): a is { path: string; name?: string; mime_type?: string; size?: number } =>
+              typeof a?.path === 'string' && a.path.length > 0,
+          )
+          .slice(0, MAX_SIDEBAR_ATTACHMENTS)
+          .map((a) => ({
+            path: a.path,
+            name: typeof a.name === 'string' ? a.name : 'file',
+            mime_type: typeof a.mime_type === 'string' ? a.mime_type : undefined,
+            size: typeof a.size === 'number' ? a.size : undefined,
+          }))
+      : []
+
     // WORKER PATH — now the default, and now including attachment turns. Previously a
     // turn WITH a file fell through to the old engine, which is exactly the turn most
     // likely to end in "file this for me" on a panel that could act unasked.
@@ -128,6 +157,7 @@ export async function POST(request: NextRequest) {
         conversationId: typeof conversationId === 'string' ? conversationId : null,
         clientKey: parseSidebarClientKey(clientKey),
         attachment: validAttachment,
+        attachments: validAttachments,
       })
     }
 
@@ -164,8 +194,9 @@ async function runSidebarWorker(args: {
   conversationId: string | null
   clientKey: string | null
   attachment?: { name: string; type: string; base64: string }
+  attachments?: Array<{ path: string; name: string; mime_type?: string; size?: number }>
 }): Promise<NextResponse> {
-  const { userId, userEmail, conversationId, clientKey, attachment } = args
+  const { userId, userEmail, conversationId, clientKey, attachment, attachments } = args
   let { userBody } = args
   // Per-conversation thread when the panel supplies an id (a "new chat" mints a
   // fresh one → fresh memory); otherwise a stable per-user thread.
@@ -179,11 +210,12 @@ async function runSidebarWorker(args: {
   // become native document blocks, everything else is extracted to text and appended to
   // the body — the same treatment the Inbox and Team Chat give a dropped file.
   const media: { images: WorkerImageBlock[]; documents: WorkerDocumentBlock[] } = { images: [], documents: [] }
+
+  // LEGACY single-file field (base64 in the request body). Kept so an older tab
+  // that hasn't reloaded still works; the panel now sends `attachments` instead.
   if (attachment) {
     try {
-      const { readAttachmentBuffer, capMediaBudget, fenceUntrustedContent } = await import(
-        '@/lib/ai-agent/attachment-reader'
-      )
+      const { readAttachmentBuffer, fenceUntrustedContent } = await import('@/lib/ai-agent/attachment-reader')
       const buffer = Buffer.from(attachment.base64, 'base64')
       const read = await readAttachmentBuffer(buffer, { id: 'sidebar-upload', name: attachment.name, mimetype: attachment.type })
       if (read.kind === 'image') media.images.push(read.imageBlock)
@@ -195,13 +227,52 @@ async function runSidebarWorker(args: {
       } else {
         userBody = `${userBody}\n\n${read.note}`
       }
+    } catch (err) {
+      console.warn('[ai-agent] sidebar attachment unreadable:', err)
+      userBody = `${userBody}\n\n[The attached file "${attachment.name}" could not be read. Say so plainly rather than guessing at its contents.]`
+    }
+  }
+
+  // Files uploaded to the private bucket by the panel this turn. Identical
+  // treatment to the Inbox / Portal-Chats panels, via the same shared reader —
+  // several files per turn, and any type the reader understands (spreadsheets and
+  // Word documents included), not the six MIME types the legacy field allowed.
+  if (attachments?.length) {
+    try {
+      const { readAttachments, fetchWorkerUploadBytes, fenceUntrustedContent } = await import(
+        '@/lib/ai-agent/attachment-reader'
+      )
+      const refs = attachments.map((a) => ({ id: a.path, name: a.name, mimetype: a.mime_type, size: a.size }))
+      const read = await readAttachments(refs, fetchWorkerUploadBytes)
+      media.images.push(...read.imageBlocks)
+      media.documents.push(...read.documentBlocks)
+      if (read.textBlocks.length) {
+        // Extracted text joins the PERSISTED body so it survives into later turns;
+        // an image can't, which is why only its "was shown" note is kept.
+        userBody = `${userBody}\n\n${fenceUntrustedContent('files the staff member attached', read.textBlocks.join('\n\n'))}`
+      }
+    } catch (err) {
+      // Answer anyway, but never silently: a missing file must not look like a file
+      // the worker read and found nothing in.
+      console.warn('[ai-agent] sidebar uploads unreadable:', err)
+      const names = attachments.map((a) => a.name).join(', ')
+      userBody = `${userBody}\n\n[The attached file(s) "${names}" could not be read. Say so plainly rather than guessing at their contents.]`
+    }
+  }
+
+  // ONE budget across BOTH sources: the caps multiply out past the request limit,
+  // and the whole payload is re-sent on every iteration of the tool loop. Capping
+  // per-source would let a legacy file and an uploaded one each pass alone and
+  // blow the ceiling together.
+  if (media.images.length || media.documents.length) {
+    try {
+      const { capMediaBudget } = await import('@/lib/ai-agent/attachment-reader')
       const capped = capMediaBudget(media.images, media.documents)
       media.images = capped.images
       media.documents = capped.documents
       if (capped.dropped.length) userBody = `${userBody}\n\n[Not attached: ${capped.dropped.join('; ')}.]`
     } catch (err) {
-      console.warn('[ai-agent] sidebar attachment unreadable:', err)
-      userBody = `${userBody}\n\n[The attached file "${attachment.name}" could not be read. Say so plainly rather than guessing at its contents.]`
+      console.warn('[ai-agent] media budget check failed:', err)
     }
   }
 

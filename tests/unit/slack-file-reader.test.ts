@@ -5,6 +5,7 @@ import {
   extractTextFromBuffer,
   SLACK_FILE_TEXT_CHAR_CAP,
 } from "@/lib/ai-agent/slack-file-reader"
+import { looksLikeIncompleteRead } from "@/lib/ai-agent/answer-guards"
 
 describe("classifySlackFile", () => {
   it("routes images to the vision path (handled elsewhere)", () => {
@@ -60,9 +61,23 @@ describe("capText", () => {
   it("truncates and notes when over the cap", () => {
     const long = "x".repeat(50)
     const out = capText(long, 10)
-    expect(out.startsWith("xxxxxxxxxx")).toBe(true)
+    expect(out).toContain("xxxxxxxxxx")
     expect(out).toMatch(/truncated/)
     expect(out).toMatch(/50 chars/)
+  })
+
+  // A truncated read must be DETECTABLE as partial, not just annotated. The
+  // detector scans the head only, so the marker has to be there — a tail note is
+  // invisible to it, which is how a 4,000-row bank statement used to count as a
+  // complete read and license "there is no wire to X in this file".
+  it("marks a truncated read as incomplete, in the head, in the guard's own format", () => {
+    const out = capText("x".repeat(50_000), 20_000)
+    expect(looksLikeIncompleteRead(out)).toBe(true)
+    expect(out.slice(0, 600)).toMatch(/"complete"\s*:\s*false/i)
+  })
+
+  it("does NOT mark an untruncated read as incomplete", () => {
+    expect(looksLikeIncompleteRead(capText("a short file", 20_000))).toBe(false)
   })
 
   it("defaults to SLACK_FILE_TEXT_CHAR_CAP", () => {

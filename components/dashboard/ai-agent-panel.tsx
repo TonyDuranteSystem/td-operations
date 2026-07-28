@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { Bot, X, Send, Loader2, Trash2, Mic, Square, Sparkles, Paperclip, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useHoldToSend } from '@/components/chat/use-hold-to-send'
+import { useWorkerAttachments, type UploadedAttachment } from '@/components/chat/use-worker-attachments'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { clientKeyFromPath } from '@/lib/ai-agent/sidebar-scope'
 import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
@@ -25,18 +26,6 @@ interface Message {
   artifacts?: { kind: string; url: string; label: string }[]
 }
 
-interface AttachedFile {
-  name: string
-  size: number
-  type: string
-  base64: string
-  preview?: string  // data URL for images
-}
-
-
-const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf', 'text/csv', 'text/plain']
-const MAX_FILE_SIZE = 10 * 1024 * 1024  // 10MB
-
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
@@ -48,8 +37,18 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [attachedFile, setAttachedFile] = useState<AttachedFile | null>(null)
   const [isDragging, setIsDragging] = useState(false)
+  /**
+   * Attachments, on the SAME machinery as the Inbox and Portal-Chats panels.
+   *
+   * This panel used to hold ONE file and base64 it into the request body, with a
+   * six-MIME-type picker — which is why Luca could not attach a spreadsheet and why
+   * a second file replaced the first. The shared hook uploads straight to the
+   * private bucket through a signed URL (bytes never ride in the body, so a large
+   * scan no longer 413s), keeps up to five files, and applies the one type policy
+   * every other chat upload uses.
+   */
+  const att = useWorkerAttachments()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -74,31 +73,6 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     isSupported: micSupported,
   } = useVoiceInput({ language: 'en-US', onTranscript: handleTranscript })
 
-  // File selection + validation
-  const handleFileSelect = useCallback((file: File) => {
-    if (!ALLOWED_TYPES.includes(file.type)) {
-      toast.error('Unsupported file type. Allowed: PNG, JPG, WEBP, PDF, CSV, TXT')
-      return
-    }
-    if (file.size > MAX_FILE_SIZE) {
-      toast.error('File too large (max 10MB)')
-      return
-    }
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      const dataUrl = e.target?.result as string
-      const base64 = dataUrl.split(',')[1]
-      setAttachedFile({
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        base64,
-        preview: file.type.startsWith('image/') ? dataUrl : undefined,
-      })
-    }
-    reader.readAsDataURL(file)
-  }, [])
-
   // Drag & drop handlers
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -114,9 +88,11 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
-    const file = e.dataTransfer.files[0]
-    if (file) handleFileSelect(file)
-  }, [handleFileSelect])
+    // EVERY dropped file, not just the first — dropping three and silently reading
+    // one is the same failure as the second upload replacing the first.
+    const dropped = Array.from(e.dataTransfer.files)
+    if (dropped.length) void att.add(dropped)
+  }, [att])
 
   // Listen for open event from sidebar (with optional email context)
   useEffect(() => {
@@ -152,15 +128,41 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     }
   }, [messages, loading])
 
-  // Auto-grow textarea
+  /**
+   * Auto-grow the composer.
+   *
+   * It used to open as a SINGLE 44px line capped at 120px, so the placeholder
+   * alone wrapped and the box showed a scrollbar before a word was typed — you
+   * could not see what you were writing (Antonio, 2026-07-28: "it's small and
+   * scrollable"). Now it opens at a readable three lines and grows with the text.
+   *
+   * The ceiling is a share of the WINDOW, not a fixed pixel count, because the
+   * whole CRM is used as a phone app at ~380px where a tall box would swallow the
+   * conversation. Scrolling turns on only once that ceiling is reached, so the
+   * scrollbar means "there is more above", never "this box is too small".
+   */
   useEffect(() => {
     const el = inputRef.current
     if (!el) return
+    const min = 84 // ≈ 3 lines — enough to see a full sentence while typing
+    // A viewport share, but never TRUSTED BLINDLY: window.innerHeight can be 0 in
+    // a hidden/background tab and during some embedded runs (measured 0 in QA). A
+    // bare Math.min against that collapses the ceiling onto the minimum and the
+    // box can never grow — the very bug this effect exists to fix. So fall back to
+    // a normal desktop height, and keep a floor well above `min`.
+    const vh = Number.isFinite(window.innerHeight) && window.innerHeight > 0 ? window.innerHeight : 800
+    const max = Math.max(min + 60, Math.min(260, Math.round(vh * 0.35)))
     el.style.height = '0px'
-    el.style.height = Math.max(44, Math.min(el.scrollHeight, 120)) + 'px'
-  }, [input])
+    const next = Math.max(min, Math.min(el.scrollHeight, max))
+    el.style.height = next + 'px'
+    el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden'
+    // `open` is a dependency because the panel returns null while closed: the
+    // textarea is attached without this component remounting, so on re-open the
+    // effect would not run and the height would depend on the `rows` attribute
+    // happening to match `min`. Sizing it explicitly keeps the two from drifting.
+  }, [input, open])
 
-  const sendMessage = async (msgs: Message[], attachment?: AttachedFile | null) => {
+  const sendMessage = async (msgs: Message[], attachments?: UploadedAttachment[]) => {
     setLoading(true)
     try {
       const res = await fetch('/api/ai-agent', {
@@ -168,9 +170,8 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: msgs.map(m => ({ role: m.role, content: m.content })),
-          attachment: attachment
-            ? { name: attachment.name, type: attachment.type, base64: attachment.base64 }
-            : undefined,
+          // Storage paths only — the bytes went straight to the private bucket.
+          attachments: attachments?.length ? attachments : undefined,
           // Worker path (when enabled): a stable per-conversation thread + the live
           // per-page client scope.
           conversationId: (conversationIdRef.current ??= crypto.randomUUID()),
@@ -205,31 +206,63 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
 
   // Runs only once the hold expires (or Enter is pressed a second time). Nothing is
   // cleared until here — cancelling has to leave the box exactly as it was.
-  const { armed, secondsLeft, arm, cancel } = useHoldToSend<null>(async () => {
-    const text = input.trim()
-    if (!text && !attachedFile) return
+  //
+  // The turn is SNAPSHOT when send is pressed and carried through the hold, never
+  // re-read when the timer fires. Re-reading loses both ways during those seconds:
+  // a file dropped mid-countdown is still uploading at fire time, so it is excluded
+  // AND then wiped by the clear — silently, because the failed-file confirm already
+  // ran; and a file attached after the send decision would otherwise join a turn the
+  // staff member never agreed to send. Same contract as the Inbox/Portal composer.
+  const { armed, secondsLeft, arm, cancel } = useHoldToSend<{
+    text: string
+    files: UploadedAttachment[]
+  }>(async ({ text, files: filesToSend }) => {
+    if (!text && !filesToSend.length) return
 
     // Build display content (what shows in chat history)
     const displayContent = [
       text,
-      attachedFile ? `📎 ${attachedFile.name}` : '',
+      filesToSend.length ? filesToSend.map((f) => `📎 ${f.name}`).join('\n') : '',
     ].filter(Boolean).join('\n\n')
 
     const userMessage: Message = { role: 'user', content: displayContent }
     const newMessages = [...messages, userMessage]
     setMessages(newMessages)
     setInput('')
-    const fileToSend = attachedFile
-    setAttachedFile(null)
-    if (inputRef.current) inputRef.current.style.height = 'auto'
-    await sendMessage(newMessages, fileToSend)
+    att.clear()
+    // Height is NOT reset here — clearing the text re-runs the auto-grow effect,
+    // which returns the box to its minimum. Setting 'auto' as well produced a
+    // one-frame collapse to a single line before the effect corrected it.
+    await sendMessage(newMessages, filesToSend)
   })
 
+  const readyFiles = att.files.filter((f) => f.path && !f.error)
+  const stillUploading = att.files.some((f) => !f.path && !f.error)
+
   const handleSend = () => {
-    if ((!input.trim() && !attachedFile) || loading) return
+    if ((!input.trim() && !readyFiles.length) || loading) return
+    // Sending mid-upload would drop the file silently — the exact "the worker
+    // ignored my attachment" outcome.
+    if (att.uploading || stillUploading) {
+      toast.error('Still uploading — one moment.')
+      return
+    }
+    // Never let a failed file vanish on send: an answer built without the document
+    // the staff member believes it read is worse than no answer.
+    const lost = att.failed()
+    if (lost.length) {
+      const names = lost.map((f) => f.name).join(', ')
+      if (!window.confirm(`${names} could not be uploaded and will NOT be sent.\n\nSend anyway?`)) return
+    }
     if (isRecording) stopRecording()
+    // A bare file gets an implicit ask, so the worker has something to act on
+    // rather than replying "what would you like me to do with this?".
+    const text = input.trim()
+    const files = att.uploaded()
+    const message = text || (files.length ? 'Look at the attached file(s).' : '')
+    if (!message) return
     // While held, a second press means "I'm sure" — the hook fires immediately.
-    arm(null)
+    arm({ text: message, files })
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -247,7 +280,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
 
   const clearChat = () => {
     setMessages([])
-    setAttachedFile(null)
+    att.clear()
     // Start a fresh worker-memory thread for the next conversation.
     conversationIdRef.current = null
   }
@@ -288,8 +321,11 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
           <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg border-2 border-dashed border-violet-400 bg-violet-50/90 pointer-events-none">
             <div className="text-center">
               <Paperclip className="h-10 w-10 text-violet-400 mx-auto mb-2" />
-              <p className="text-sm font-medium text-violet-600">Drop file here</p>
-              <p className="text-xs text-violet-400 mt-1">PNG, JPG, WEBP, PDF, CSV, TXT — max 10MB</p>
+              <p className="text-sm font-medium text-violet-600">Drop files here</p>
+              {/* Must match what the upload route actually accepts. The old copy
+                  named six formats and 10MB, which told a staff member holding a
+                  spreadsheet that it was unsupported — the reported bug, in the UI. */}
+              <p className="text-xs text-violet-400 mt-1">Up to 5 files — documents, spreadsheets, images — max 20MB each</p>
             </div>
           </div>
         )}
@@ -443,32 +479,42 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
           </div>
         )}
 
-        {/* File preview strip */}
-        {attachedFile && (
-          <div className="px-3 py-2 border-t bg-violet-50 flex items-center gap-2">
-            {attachedFile.preview ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={attachedFile.preview}
-                alt={attachedFile.name}
-                className="h-10 w-10 rounded object-cover border border-violet-200 shrink-0"
-              />
-            ) : (
-              <div className="h-10 w-10 rounded bg-violet-100 border border-violet-200 flex items-center justify-center shrink-0">
-                <FileText className="h-5 w-5 text-violet-500" />
+        {/* Attached files — one row each, with its own upload state. A file that
+            failed says so here instead of disappearing. */}
+        {att.files.length > 0 && (
+          <div className="px-3 py-2 border-t bg-violet-50 flex flex-col gap-1.5">
+            {att.files.map((f) => (
+              <div key={f.localId} className="flex items-center gap-2">
+                <div
+                  className={cn(
+                    'h-8 w-8 rounded border flex items-center justify-center shrink-0',
+                    f.error ? 'bg-red-100 border-red-200' : 'bg-violet-100 border-violet-200',
+                  )}
+                >
+                  {f.error ? (
+                    <X className="h-4 w-4 text-red-500" />
+                  ) : f.path ? (
+                    <FileText className="h-4 w-4 text-violet-500" />
+                  ) : (
+                    <Loader2 className="h-4 w-4 animate-spin text-violet-400" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-zinc-800 truncate">{f.name}</p>
+                  <p className={cn('text-[10px]', f.error ? 'text-red-600' : 'text-zinc-400')}>
+                    {f.error ? f.error : f.path ? formatFileSize(f.size) : 'Uploading…'}
+                  </p>
+                </div>
+                <button
+                  onClick={() => att.remove(f.localId)}
+                  className="p-1 rounded-full text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors shrink-0"
+                  title="Remove attachment"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
               </div>
-            )}
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-zinc-800 truncate">{attachedFile.name}</p>
-              <p className="text-[10px] text-zinc-400">{formatFileSize(attachedFile.size)}</p>
-            </div>
-            <button
-              onClick={() => setAttachedFile(null)}
-              className="p-1 rounded-full text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors shrink-0"
-              title="Remove attachment"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
+            ))}
+            {att.limitNotice && <p className="text-[11px] text-amber-700">{att.limitNotice}</p>}
           </div>
         )}
 
@@ -480,19 +526,28 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              rows={1}
+              onPaste={att.onPaste}
+              rows={3}
               placeholder={isRecording ? 'Recording...' : 'Ask anything about your CRM...'}
+              // overflow is set by the auto-grow effect (hidden until the ceiling),
+              // so it is deliberately NOT in this class list.
               className={cn(
-                'flex-1 min-w-0 px-4 py-3 text-sm border rounded-xl bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:bg-white resize-none overflow-y-auto transition-colors',
+                'flex-1 min-w-0 px-4 py-3 text-sm leading-relaxed border rounded-xl bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:bg-white resize-none transition-colors',
                 isRecording && 'ring-2 ring-red-300 bg-red-50/50'
               )}
             />
-            {/* Hidden file input */}
+            {/* Hidden file input. NO accept filter: the one type policy lives in the
+                upload route (executables blocked, everything the reader understands
+                allowed). A narrower list here is what made spreadsheets unpickable. */}
             <input
               ref={fileInputRef}
               type="file"
-              accept=".png,.jpg,.jpeg,.webp,.pdf,.csv,.txt"
-              onChange={e => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+              multiple
+              onChange={e => {
+                const picked = Array.from(e.target.files ?? [])
+                if (picked.length) void att.add(picked)
+                e.target.value = ''
+              }}
               className="hidden"
             />
             {/* Attach */}
@@ -501,11 +556,11 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
               disabled={loading}
               className={cn(
                 'p-3 rounded-xl transition-colors shrink-0',
-                attachedFile
+                att.files.length
                   ? 'bg-violet-100 text-violet-600'
                   : 'bg-zinc-100 text-zinc-600 hover:bg-violet-100 hover:text-violet-600'
               )}
-              title="Attach file (PNG, JPG, WEBP, PDF, CSV, TXT)"
+              title="Attach files (up to 5 — documents, spreadsheets, images)"
             >
               <Paperclip className="h-5 w-5" />
             </button>
@@ -536,7 +591,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
                 glance and the same button doubles as "send it now". */}
             <button
               onClick={handleSend}
-              disabled={(!input.trim() && !attachedFile) || loading}
+              disabled={(!input.trim() && !readyFiles.length) || loading}
               className={cn(
                 'p-3 rounded-xl text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0',
                 armed ? 'bg-amber-500 hover:bg-amber-600' : 'bg-violet-600 hover:bg-violet-700',
