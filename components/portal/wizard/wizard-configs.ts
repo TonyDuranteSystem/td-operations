@@ -436,6 +436,20 @@ export const TAX_MEMBER_FIELDS: FieldConfig[] = [
   { name: 'member_last_name', label: 'Last name (as in the passport)', labelIt: 'Cognome (come sul passaporto)', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
   { name: 'member_citizenship', label: 'Country of citizenship', labelIt: 'Paese di cittadinanza', type: 'country', required: true, conditional: { field: 'member_type', value: 'individual' }, hint: 'The country of the passport. This tells the IRS the member is a foreign (non-US) partner.', hintIt: 'Il paese del passaporto. Indica all\'IRS che il socio è straniero (non USA).' },
   { name: 'member_residence_country', label: 'Country where this member lives', labelIt: 'Paese dove vive questo socio', type: 'country', required: true, conditional: { field: 'member_type', value: 'individual' }, hint: 'Where the member physically lives today — not necessarily the citizenship. Example: Italian citizen living in Dubai → Dubai (UAE).', hintIt: 'Dove vive fisicamente oggi — non necessariamente la cittadinanza. Esempio: cittadino italiano che vive a Dubai → Emirati Arabi.' },
+  // Added 2026-07-28. The ONLY fact that citizenship + country-of-residence
+  // cannot give us. A lawful permanent resident is a US person under IRC
+  // §7701(b)(1)(A) — so a green-card holder with a foreign passport is NOT a
+  // foreign partner, and treating them as one would wrongly force K-2/K-3.
+  // Asked PER MEMBER so the answer is attached to a named person: the return
+  // reports each member individually, so "someone has a green card" is not
+  // usable — we must know WHO.
+  // Options inlined, NOT the shared YN constant: TAX_MEMBER_FIELDS is evaluated
+  // before YN is initialised further down the module, so referencing it here
+  // throws at import time.
+  { name: 'member_green_card', label: 'Does this member hold a US green card?', labelIt: 'Questo socio ha la green card USA?', type: 'select', required: true, conditional: { field: 'member_type', value: 'individual' }, options: [
+    { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
+    { value: 'No', label: 'No' },
+  ], hint: 'A green card (US permanent residence) makes someone American for tax purposes, whatever passport they hold. Answer No if they have never had one. Most of our clients answer No.', hintIt: 'La green card (residenza permanente USA) rende una persona americana ai fini fiscali, qualunque passaporto abbia. Rispondi No se non l\'ha mai avuta. La maggior parte dei nostri clienti risponde No.' },
   { name: 'member_street', label: 'Home address (street)', labelIt: 'Indirizzo di casa (via)', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' }, hint: 'The member\'s personal home address. This address goes on the member\'s IRS statement (Schedule K-1) — it must be real and current.', hintIt: 'L\'indirizzo di casa personale del socio. Va sul documento IRS del socio (Schedule K-1) — deve essere reale e attuale.' },
   { name: 'member_city', label: 'City', labelIt: 'Città', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
   { name: 'member_zip', label: 'ZIP / Postal code', labelIt: 'CAP', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
@@ -553,19 +567,15 @@ export const TAX_MMLLC_FIELDS: Record<string, FieldConfig[]> = {
     // exception. It does NOT by itself create US tax (§1446 withholding needs
     // effectively connected income, which these clients generally lack), hence
     // the reassurance in the hint: a Yes is normal and costs them nothing.
-    { name: 'mmllc_foreign_partners', label: 'Is any member of the LLC a non-US person?', labelIt: 'Qualche socio della LLC è un soggetto non statunitense?', type: 'select', required: true, options: YN,
-      hint: 'The IRS calls the LLC\'s members its "partners". A member is a foreign partner if they are not a US citizen and not a US tax resident (no green card, and not living in the US for most of the year) — or, if the member is a company, if that company was not formed in the United States. This is about the people and companies that OWN this LLC, not your customers or suppliers. Almost all our clients answer Yes: being a foreign partner is completely normal and does not by itself create any US tax — it only changes which schedules go with the return.',
-      hintIt: 'L\'IRS chiama "partner" i soci della LLC. Un socio è un socio estero se non è cittadino USA e non è residente fiscale USA (nessuna green card, e non vive negli USA per la maggior parte dell\'anno) — oppure, se il socio è una società, se quella società non è stata costituita negli Stati Uniti. Riguarda le persone e le società che POSSIEDONO questa LLC, non i tuoi clienti o fornitori. Quasi tutti i nostri clienti rispondono Sì: essere socio estero è del tutto normale e non comporta di per sé alcuna tassa USA — cambia solo quali allegati accompagnano la dichiarazione.' },
-    // Safety net for a "No": if none of these is true the client cannot honestly
-    // answer No, and if one IS true we have a written basis for it on a signed
-    // return. Shown only when they answered No.
-    { name: 'mmllc_foreign_partners_no_basis', label: 'You answered that no member is a non-US person. Which of these is true?', labelIt: 'Hai risposto che nessun socio è un soggetto non statunitense. Quale di queste è vera?', type: 'select', required: true, conditional: { field: 'mmllc_foreign_partners', value: 'No' }, options: [
-      { value: 'us_citizen', label: 'A member is a US citizen', labelIt: 'Un socio è cittadino USA' },
-      { value: 'green_card', label: 'A member has a US green card', labelIt: 'Un socio ha la green card USA' },
-      { value: 'lives_in_us', label: 'A member lives in the US most of the year', labelIt: 'Un socio vive negli USA per la maggior parte dell\'anno' },
-      { value: 'us_company', label: 'A member is a company formed in the United States', labelIt: 'Un socio è una società costituita negli Stati Uniti' },
-      { value: 'none', label: 'None of these — I need to check', labelIt: 'Nessuna di queste — devo verificare' },
-    ], hint: 'If none of these applies, the answer above is probably Yes. Pick "None of these" and we will check it with you.', hintIt: 'Se nessuna si applica, la risposta sopra è probabilmente Sì. Scegli "Nessuna di queste" e lo verifichiamo insieme.' },
+    // REMOVED 2026-07-28 — this was 'Any foreign partners?' and, briefly, a
+    // reworded version of the same yes/no. It is now DERIVED from the member
+    // cards (citizenship + country of residence + green card for a person;
+    // country of formation for a company) — see lib/tax/foreign-partners.ts.
+    // Reason: on production only 2 of 15 submitted MMLLC forms answered it
+    // usably (6 wrong, 7 blank). The clients had already typed every fact it
+    // asks about one step earlier; asking them to restate it in tax vocabulary
+    // ("partner" = "member") is what produced the wrong answers. The derived
+    // result is shown back for confirmation, so it remains their statement.
     { name: 'mmllc_assets_over_50k', label: 'Total assets over $50,000?', labelIt: 'Attivi totali superiori a $50.000?', type: 'select', required: false, options: YN },
     { name: 'comp_digital_assets', label: 'Did the company RECEIVE crypto as a payment, or SELL / convert / spend any crypto during the year?', labelIt: 'La società ha RICEVUTO crypto come pagamento, o VENDUTO / convertito / speso crypto durante l\'anno?', type: 'select', required: true, options: YN, hint: 'Only BUYING and HOLDING does not count — if the company just bought crypto and kept it, answer No. Answer Yes if crypto came IN as payment for something, or went OUT: sold, converted to dollars/euros, or used to pay for something. Simple signal: if your exchange (Kraken, Coinbase…) sent you a tax form (1099 / 1099-DA), the answer is almost certainly Yes.', hintIt: 'Solo COMPRARE e TENERE non conta — se la società ha solo comprato crypto e le ha tenute, rispondi No. Rispondi Sì se sono ENTRATE crypto come pagamento, o se sono USCITE: vendute, convertite in dollari/euro, o usate per pagare qualcosa. Segnale semplice: se il tuo exchange (Kraken, Coinbase…) ti ha inviato un modulo fiscale (1099 / 1099-DA), la risposta è quasi certamente Sì.' },
     { name: 'comp_digital_assets_scenario', label: 'What happened with the crypto?', labelIt: 'Cosa è successo con le crypto?', type: 'select', required: true, conditional: { field: 'comp_digital_assets', value: 'Yes' }, options: [

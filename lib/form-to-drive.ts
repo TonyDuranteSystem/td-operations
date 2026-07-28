@@ -136,7 +136,6 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
           // Schedule B-1, and Schedules K-2/K-3, so the accountant must see it
           // as a current answer — not filed under "pre-redesign".
           { key: "mmllc_foreign_partners", label: "Non-US Member (Foreign Partner)" },
-          { key: "mmllc_foreign_partners_no_basis", label: "Basis for 'No' on Non-US Member" },
           // Legacy (pre-redesign submissions)
           { key: "prior_year_returns_filed", label: "Prior Year Returns Filed" },
           { key: "financial_statements_sent", label: "Financial Statements Sent" },

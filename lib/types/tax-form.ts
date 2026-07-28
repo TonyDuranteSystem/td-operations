@@ -183,12 +183,10 @@ export const FORM_FIELDS: FieldConfig[] = [
   { key: 'financial_statements_sent', type: 'boolean', required: true, step: 3, entityTypes: ['MMLLC'] },
   { key: 'mmllc_has_payroll', type: 'boolean', required: true, step: 3, entityTypes: ['MMLLC'] },
   { key: 'mmllc_ownership_change', type: 'boolean', required: false, step: 3, entityTypes: ['MMLLC'] },
-  // required:true since 2026-07-28 — as an optional field it came back blank on
-  // 7 of 15 submitted MMLLC forms (CPA-IRS council).
-  { key: 'mmllc_foreign_partners', type: 'boolean', required: true, step: 3, entityTypes: ['MMLLC'] },
-  // Shown only when the client answers No — captures WHY, so a No on a signed
-  // return has a written basis.
-  { key: 'mmllc_foreign_partners_no_basis', type: 'select', required: false, step: 3, entityTypes: ['MMLLC'] },
+  // Kept as an OPTIONAL key so historic submissions still read/print, but it is
+  // no longer asked: the answer is derived from the member cards
+  // (lib/tax/foreign-partners.ts) as of 2026-07-28.
+  { key: 'mmllc_foreign_partners', type: 'boolean', required: false, step: 3, entityTypes: ['MMLLC'] },
   { key: 'mmllc_assets_over_50k', type: 'boolean', required: false, step: 3, entityTypes: ['MMLLC'] },
   { key: 'mmllc_received_1099', type: 'boolean', required: false, step: 3, entityTypes: ['MMLLC'] },
   { key: 'mmllc_issued_1099', type: 'boolean', required: false, step: 3, entityTypes: ['MMLLC'] },
@@ -328,8 +326,7 @@ export const LABELS = {
     financial_statements_sent: 'Have financial statements been sent?',
     mmllc_has_payroll: 'Does the LLC have payroll?',
     mmllc_ownership_change: 'Any ownership changes during the year?',
-    mmllc_foreign_partners: 'Is any member of the LLC a non-US person?',
-    mmllc_foreign_partners_no_basis: 'Basis for answering No to non-US members',
+    mmllc_foreign_partners: 'Any foreign partners? (now derived from the member list)',
     mmllc_assets_over_50k: 'Total assets over $50,000?',
     mmllc_received_1099: 'Did the LLC receive any 1099 forms?',
     mmllc_issued_1099: 'Did the LLC issue any 1099 forms?',
@@ -484,8 +481,7 @@ export const LABELS = {
     financial_statements_sent: 'I bilanci sono stati inviati?',
     mmllc_has_payroll: 'La LLC ha buste paga?',
     mmllc_ownership_change: 'Cambiamenti nella proprietà durante l\'anno?',
-    mmllc_foreign_partners: 'Qualche socio della LLC è un soggetto non statunitense?',
-    mmllc_foreign_partners_no_basis: 'Motivo della risposta No sui soci non statunitensi',
+    mmllc_foreign_partners: 'Soci esteri? (ora derivato dalla lista soci)',
     mmllc_assets_over_50k: 'Attività totali superiori a $50.000?',
     mmllc_received_1099: 'La LLC ha ricevuto moduli 1099?',
     mmllc_issued_1099: 'La LLC ha emesso moduli 1099?',
