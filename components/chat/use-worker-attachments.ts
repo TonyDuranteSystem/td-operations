@@ -13,7 +13,7 @@
  * PATH and the server reads it back with the service key.
  */
 
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
 
 /** A file staged in the composer, before/after its upload completes. */
@@ -67,43 +67,60 @@ export function useWorkerAttachments() {
   const [uploading, setUploading] = useState(false)
   const [limitNotice, setLimitNotice] = useState<string | null>(null)
 
-  const remove = useCallback((localId: string) => {
-    setFiles((prev) => prev.filter((f) => f.localId !== localId))
-    setLimitNotice(null)
+  /**
+   * The authoritative list, updated SYNCHRONOUSLY.
+   *
+   * ⛔ WHY A REF AND NOT JUST STATE — this was a live bug, reproduced in a browser
+   * on sandbox 2026-07-27. The accept/reject decision used to be computed INSIDE
+   * the `setFiles` updater, and the upload loop then read the array that updater
+   * had filled. React only evaluates an updater eagerly while the hook's update
+   * queue is EMPTY; once anything else is queued (a remove, a clear, a second
+   * attach in the same breath) it is deferred to the render pass. The code after
+   * `setFiles` then saw an EMPTY accepted list, returned early, and never started
+   * the upload — while the row still rendered, because the updater did eventually
+   * run. Observable result: a file staged and stuck on "Uploading…" for ever, no
+   * network request, no error, and it is silently dropped from the turn.
+   *
+   * The ref makes acceptance deterministic while KEEPING the property the updater
+   * was there for: it is written before this call returns, so two fast pastes see
+   * each other's count and cannot each stage a full five.
+   */
+  const filesRef = useRef<StagedAttachment[]>([])
+
+  /** Single write path — ref first (synchronous truth), then state (render). */
+  const writeFiles = useCallback((next: (prev: StagedAttachment[]) => StagedAttachment[]) => {
+    filesRef.current = next(filesRef.current)
+    setFiles(filesRef.current)
   }, [])
 
-  const clear = useCallback(() => {
-    setFiles([])
+  const remove = useCallback((localId: string) => {
+    writeFiles((prev) => prev.filter((f) => f.localId !== localId))
     setLimitNotice(null)
-  }, [])
+  }, [writeFiles])
+
+  const clear = useCallback(() => {
+    writeFiles(() => [])
+    setLimitNotice(null)
+  }, [writeFiles])
 
   const add = useCallback(async (incoming: File[]) => {
     if (!incoming.length) return
 
-    // The cap must be computed against the CURRENT list, inside the updater.
-    // Reading `files.length` from the closure lets two fast pastes each see the
-    // pre-render count and stage 5 apiece — the server then reads only the first
-    // 5 and drops the rest, which is exactly the "the worker ignored my file"
-    // outcome this cap exists to prevent.
-    const accepted: Array<{ entry: StagedAttachment; file: File }> = []
-    let overflow = 0
-    setFiles((prev) => {
-      const room = Math.max(0, MAX_FILES - prev.length)
-      const take = incoming.slice(0, room)
-      overflow = incoming.length - take.length
-      for (const file of take) {
-        accepted.push({
-          entry: {
-            localId: nextLocalId(),
-            name: file.name,
-            size: file.size,
-            mimeType: file.type || 'application/octet-stream',
-          },
-          file,
-        })
-      }
-      return [...prev, ...accepted.map((a) => a.entry)]
-    })
+    // Room is computed against the ref, so it reflects files staged microseconds
+    // ago by a still-unrendered call.
+    const room = Math.max(0, MAX_FILES - filesRef.current.length)
+    const take = incoming.slice(0, room)
+    const overflow = incoming.length - take.length
+    const accepted: Array<{ entry: StagedAttachment; file: File }> = take.map((file) => ({
+      entry: {
+        localId: nextLocalId(),
+        name: file.name,
+        size: file.size,
+        mimeType: file.type || 'application/octet-stream',
+      },
+      file,
+    }))
+    writeFiles((prev) => [...prev, ...accepted.map((a) => a.entry)])
 
     // Never swallow a file the user tried to attach.
     if (overflow > 0) {
@@ -121,7 +138,7 @@ export function useWorkerAttachments() {
       staged.map(async (entry, i) => {
         const file = files_[i]
         const fail = (error: string) =>
-          setFiles((prev) => prev.map((f) => (f.localId === entry.localId ? { ...f, error } : f)))
+          writeFiles((prev) => prev.map((f) => (f.localId === entry.localId ? { ...f, error } : f)))
 
         // Same type policy as every other chat upload (executables blocked).
         const validationError = validateChatAttachment(file.name, file.size, file.type)
@@ -167,24 +184,28 @@ export function useWorkerAttachments() {
                 : 'Upload failed. Please check your connection and try again.',
             )
           }
-          setFiles((prev) => prev.map((f) => (f.localId === entry.localId ? { ...f, path } : f)))
+          writeFiles((prev) => prev.map((f) => (f.localId === entry.localId ? { ...f, path } : f)))
         } catch (err) {
           fail(err instanceof Error && err.message ? err.message : 'Upload failed. Please try again.')
         }
       }),
     )
     setUploading(false)
-  }, [])
+  }, [writeFiles])
 
+  // These two are read at SEND time, not during render, so they consult the ref
+  // rather than rendered state: an upload that completed moments before the click
+  // must count, and a file that just failed must not be silently sent past its
+  // warning. `files` remains the render source.
   /** Files that actually made it to storage — the only ones worth sending. */
   const uploaded = useCallback((): UploadedAttachment[] => {
-    return files
+    return filesRef.current
       .filter((f): f is StagedAttachment & { path: string } => Boolean(f.path) && !f.error)
       .map((f) => ({ path: f.path, name: f.name, mime_type: f.mimeType, size: f.size }))
-  }, [files])
+  }, [])
 
   /** Files that failed. Sending must not silently drop them. */
-  const failed = useCallback(() => files.filter((f) => f.error), [files])
+  const failed = useCallback(() => filesRef.current.filter((f) => f.error), [])
 
   /** Paste handler: pull image blobs (a screenshot) out of the clipboard. */
   const onPaste = useCallback(
