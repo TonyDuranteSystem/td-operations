@@ -5,7 +5,7 @@ import { useMemo, useRef, useEffect, useState } from 'react'
 import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, ArchiveRestore, Palette, FolderInput, Ban } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { markByKey, COLOR_MARKS } from '@/lib/inbox/color-marks'
+import { markByKey, COLOR_MARKS, MARK_LABEL_PREFIX } from '@/lib/inbox/color-marks'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 import {
   advanceReleases,
@@ -583,7 +583,11 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                       <>
                         <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setRowMenu(null) }} />
                         <div className="absolute right-0 top-full mt-1 z-50 bg-white border rounded-md shadow-xl min-w-[180px] max-h-64 overflow-y-auto py-1">
-                          {userLabels!.map(label => (
+                          {/* Marked/* are the color-mark system's own labels — filing
+                              into one by hand would break its one-color-per-thread
+                              invariant (set_color swaps marks; move_to_label only
+                              adds). The palette next door is the way to color. */}
+                          {userLabels!.filter(l => !l.name.startsWith(MARK_LABEL_PREFIX)).map(label => (
                             <button
                               key={label.id}
                               onClick={(e) => {
