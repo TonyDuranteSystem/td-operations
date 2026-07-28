@@ -37,6 +37,9 @@ interface PreparedSend {
   id: string
   to: string
   subject: string
+  /** The exact text that will be sent — rendered so Confirm approves a MESSAGE,
+   *  not just an address. */
+  body: string
   attachments: Array<{ name: string; size?: number }>
 }
 
@@ -76,7 +79,9 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
         {
           role: 'worker',
           text: action === 'confirm'
-            ? `✅ Sent to ${preparedSend.to} with ${preparedSend.attachments.map(a => a.name).join(', ')} attached.`
+            ? (preparedSend.attachments.length
+                ? `✅ Sent to ${preparedSend.to} with ${preparedSend.attachments.map(a => a.name).join(', ')} attached.`
+                : `✅ Sent to ${preparedSend.to}.`)
             : 'Cancelled — nothing was sent.',
         },
       ])
@@ -267,9 +272,20 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
         <div className="border-t border-amber-200 bg-amber-50 px-4 py-3 shrink-0">
           <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide mb-1">Confirm before sending</p>
           <p className="text-sm text-zinc-800">
-            Email <span className="font-medium">{preparedSend.to}</span>
-            {preparedSend.subject ? <> — “{preparedSend.subject}”</> : null}
+            Email <span className="font-mono font-medium break-all">{preparedSend.to}</span>
           </p>
+          {preparedSend.subject ? (
+            <p className="text-xs text-zinc-600 mt-0.5">Subject: {preparedSend.subject}</p>
+          ) : null}
+          {/* THE MESSAGE ITSELF. Confirming an address without seeing the body is
+              how someone approves one draft while a different one goes out — the
+              exact failure the frozen-payload path exists to remove. Scrollable
+              rather than truncated: a cut-off body hides the part worth checking. */}
+          {preparedSend.body ? (
+            <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-amber-200 bg-white px-2.5 py-2">
+              <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
+            </div>
+          ) : null}
           <div className="mt-1.5 space-y-1">
             {preparedSend.attachments.map((a, i) => (
               <div key={i} className="flex items-center gap-1.5 text-xs text-zinc-600">

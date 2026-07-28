@@ -2277,6 +2277,55 @@ export async function executeWorkerTool(
         // sentence is now DERIVED from whether the confirm path is actually wired
         // for this call (`capturedOffThreadAttempts` is the array the route reads to
         // build the confirm control — no array, no button, no promise).
+        // ⛔ FREEZE THE DRAFT SO CONFIRM MEANS "SEND EXACTLY THIS, ONCE".
+        //
+        // The old flow refused, captured the address, and the panel's Confirm
+        // RE-RAN the model with the address added to the pin — so the email that
+        // left was a fresh draft, not the one the staff member read. Now the exact
+        // subject/body/recipient are frozen into a prepared-send row and Confirm
+        // dispatches those bytes: single-use (atomic pending→sent claim), TTL'd,
+        // and unchanged between the screen and the wire.
+        //
+        // The address is still NOT chosen by the model in any meaningful sense —
+        // it is refused first, then shown to a human who has to look at it and act.
+        // That is Antonio's model (2026-07-28): the system stays flexible and the
+        // human confirmation is the gate, rather than a hard-coded address list.
+        // TEXT-ONLY. An off-thread send that also carries FILES keeps the old hard
+        // refusal: this path passes no attachment refs, so preparing one would show
+        // the staff member an email they believe has documents on it and send it
+        // without them. Sending a client's file to an address that is not on the
+        // thread is also the worst version of a wrong-recipient mistake, so it stays
+        // behind the existing refusal until it is designed on purpose.
+        const wantsAttachments = Array.isArray(params.attach) && params.attach.length > 0
+        if (sendContext.emailSendPrep && verdict.rejected.length === 1 && !wantsAttachments) {
+          const prep = sendContext.emailSendPrep
+          const { prepareWorkerEmailSend } = await import("@/lib/inbox/worker-email-send")
+          const proposed = await prepareWorkerEmailSend({
+            threadUuid: prep.threadUuid,
+            // Deliberately NOT the open thread: this person is not on it, so the
+            // email is a NEW one. It also keeps confirm-time thread re-validation
+            // (which would reject an off-thread address) correctly out of the way.
+            gmailThreadId: null,
+            mailbox: prep.mailbox,
+            replyToMessageId: null,
+            to: verdict.rejected[0],
+            subject: typeof params.subject === "string" ? params.subject : "",
+            body: typeof params.body === "string" ? params.body : "",
+            attachRefs: [],
+            sendable: prep.sendable,
+            allowedRecipients: sendContext.pinnedEmailRecipients ?? [],
+            proposedRecipient: true,
+            actor: sendContext.actor ?? "unknown",
+          })
+          if (proposed.ok) {
+            return [
+              `📋 Not on this thread — prepared for the staff member to confirm.`,
+              proposed.message,
+              `Show them the exact address (${verdict.rejected[0]}) and the message. Do NOT claim it has been sent.`,
+            ].join(" ")
+          }
+        }
+
         const confirmAvailable = Array.isArray(sendContext.capturedOffThreadAttempts)
         return [
           `❌ Refused: ${verdict.rejected.join(", ")} is not on this email thread, so I can't send there from here.`,

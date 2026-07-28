@@ -642,12 +642,17 @@ export async function POST(req: NextRequest) {
       id: string
       to: string
       subject: string
+      body: string
       attachments: Array<{ name: string; size?: number }>
     } | null = null
-    if (surface === "inbox" && sendableUploads.length) {
+    // NOT gated on `sendableUploads.length` any more. That gate meant only a send
+    // WITH an attachment could ever produce a confirm card — which is why a plain
+    // email to someone off the thread fell back to the re-run path and the staff
+    // member confirmed an address rather than a message.
+    if (surface === "inbox") {
       const { data: prep } = await db
         .from("worker_prepared_sends")
-        .select("id, to_address, subject, attachments")
+        .select("id, to_address, subject, body, attachments")
         .eq("thread_uuid", threadId)
         .eq("status", "pending")
         .order("created_at", { ascending: false })
@@ -659,6 +664,10 @@ export async function POST(req: NextRequest) {
           id: prep.id,
           to: prep.to_address,
           subject: prep.subject,
+          // The BODY is returned so the panel can show what will actually be sent.
+          // Confirming a recipient without seeing the message is how someone
+          // approves one draft and a different one goes out.
+          body: prep.body ?? "",
           attachments: (prep.attachments ?? []).map((a: { name: string; size?: number }) => ({ name: a.name, size: a.size })),
         }
       }

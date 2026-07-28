@@ -63,6 +63,18 @@ export interface PrepareInput {
   /** Addresses on the open thread; recipient must be one of these. */
   allowedRecipients: string[]
   actor: string
+  /**
+   * The recipient is being PROPOSED to a human, not asserted as already allowed.
+   *
+   * Set only when the executor has just refused this address against the pin and
+   * is handing it to the staff member to confirm. It skips the allow-list check
+   * here — the human's Confirm click is the gate — and NOTHING else: the payload
+   * is still frozen, still single-use, still TTL'd, and the recipient in the row
+   * is the one the human will see. The point is that what is confirmed is what is
+   * sent; the previous flow re-ran the model after the click, so the message that
+   * left was never the message that was approved.
+   */
+  proposedRecipient?: boolean
 }
 
 export type PrepareResult =
@@ -84,7 +96,9 @@ function mb(bytes: number): string {
  */
 export async function prepareWorkerEmailSend(input: PrepareInput): Promise<PrepareResult> {
   // Recipient must be on the thread (defence in depth — the executor also checks).
-  const verdict = checkRecipientsAllowed(input.to, input.allowedRecipients)
+  const verdict = input.proposedRecipient
+    ? ({ ok: true } as const)
+    : checkRecipientsAllowed(input.to, input.allowedRecipients)
   if (verdict.ok === false) {
     return {
       ok: false,
@@ -94,9 +108,9 @@ export async function prepareWorkerEmailSend(input: PrepareInput): Promise<Prepa
 
   // Resolve each ref against the staff's uploads. A ref not in the set — or no
   // refs at all — is a hard refusal: the model can never attach anything else.
-  if (!input.attachRefs.length) {
-    return { ok: false, message: "❌ No file to attach was found on this message. Drop the file into the panel on the same message you say to send it." }
-  }
+  // No attachments is FINE — a plain email is the ordinary case. It used to be a
+  // hard refusal here, which is exactly why only attachment sends ever produced a
+  // frozen, confirmable payload and text emails fell back to the re-run path.
   const resolved: SendableUpload[] = []
   for (const ref of input.attachRefs) {
     const hit = input.sendable.find((s) => s.ref === ref)
@@ -146,7 +160,9 @@ export async function prepareWorkerEmailSend(input: PrepareInput): Promise<Prepa
   return {
     ok: true,
     preparedId: data.id,
-    message: `Ready to send to ${input.to} with ${fileList} attached. Ask the staff member to press Confirm to send — I won't send it on my own.`,
+    message: resolved.length
+      ? `Ready to send to ${input.to} with ${fileList} attached. Ask the staff member to press Confirm to send — I won't send it on my own.`
+      : `Ready to send to ${input.to}. Ask the staff member to check the address and press Confirm — I won't send it on my own, and Confirm sends exactly this message.`,
   }
 }
 

@@ -65,8 +65,47 @@ describe("prepareWorkerEmailSend", () => {
     expect(insertSpy).not.toHaveBeenCalled()
   })
 
-  it("REFUSES when there are no attach refs (nothing to attach)", async () => {
+  // CONTRACT CHANGED 2026-07-28. This used to assert that a prepare with no
+  // attachments is refused — which is precisely why only attachment sends ever got
+  // a frozen, confirmable payload, and a plain email fell back to the path where
+  // Confirm re-ran the model and sent a draft nobody had read. A text-only prepare
+  // is now the ordinary case. What still must NOT be possible is asking for a file
+  // that isn't yours — covered by the next two tests, which are unchanged.
+  it("ALLOWS a text-only prepare (no attachments) and freezes the payload", async () => {
     const r = await prepareWorkerEmailSend({ ...base, attachRefs: [], sendable })
+    expect(r.ok).toBe(true)
+    expect(insertSpy).toHaveBeenCalled()
+    // The frozen row must carry the message itself, not just the recipient.
+    const row = insertSpy.mock.calls[0][0]
+    expect(row.to_address).toBe(base.to)
+    expect(row.body).toBe(base.body)
+    expect(row.status).toBe("pending")
+    expect(row.attachments).toEqual([])
+  })
+
+  // The human confirmation is the gate for an address the pin refused, so the
+  // frozen row must hold the address the human will be shown — unchanged.
+  it("freezes a PROPOSED recipient without consulting the allow-list", async () => {
+    const r = await prepareWorkerEmailSend({
+      ...base,
+      to: "someone-not-on-the-thread@elsewhere.com",
+      attachRefs: [],
+      sendable,
+      allowedRecipients: ["only@thread.com"],
+      proposedRecipient: true,
+    })
+    expect(r.ok).toBe(true)
+    expect(insertSpy.mock.calls[0][0].to_address).toBe("someone-not-on-the-thread@elsewhere.com")
+  })
+
+  it("still REFUSES an off-allow-list recipient when it is NOT flagged as proposed", async () => {
+    const r = await prepareWorkerEmailSend({
+      ...base,
+      to: "someone-not-on-the-thread@elsewhere.com",
+      attachRefs: [],
+      sendable,
+      allowedRecipients: ["only@thread.com"],
+    })
     expect(r.ok).toBe(false)
     expect(insertSpy).not.toHaveBeenCalled()
   })
