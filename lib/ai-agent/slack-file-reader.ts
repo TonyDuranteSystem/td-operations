@@ -92,10 +92,32 @@ export function classifySlackFile(mimetype: string | undefined, name: string | u
   return "unsupported"
 }
 
-/** Truncate text to the cap, appending a clear note when content was dropped. */
+/**
+ * Truncate text to the cap, marking the result as a PARTIAL read.
+ *
+ * The marker is emitted at the HEAD, not only as the tail note, and carries the
+ * machine-readable `"complete": false` contract that `looksLikeIncompleteRead`
+ * (lib/ai-agent/answer-guards.ts) keys on — that check scans only the first 600
+ * characters, by design, so a tail-only note is invisible to it.
+ *
+ * WHY THIS MATTERS, and it is the spreadsheet case exactly: a year of bank
+ * transactions flattened to rows runs far past this cap, so the assistant used to
+ * receive the first few hundred rows as an ordinary SUCCESSFUL read. It could then
+ * total the payouts, or state that a wire is absent, while the absence guard
+ * affirmatively confirmed it had looked. Same failure the windowed-OCR contract
+ * closed for long scanned PDFs; this closes it for extracted text.
+ */
 export function capText(text: string, cap: number = SLACK_FILE_TEXT_CHAR_CAP): string {
   if (text.length <= cap) return text
-  return `${text.slice(0, cap)}\n\n…[truncated — file is ${text.length} chars, showing first ${cap}]`
+  return [
+    `INCOMPLETE READ — "complete": false`,
+    `Showing the first ${cap} of ${text.length} characters. The rest was NOT read.`,
+    `Do not total, count, or state that something is absent from this file on the strength of this excerpt.`,
+    '',
+    text.slice(0, cap),
+    '',
+    `…[truncated — file is ${text.length} chars, showing first ${cap}]`,
+  ].join('\n')
 }
 
 /** Flatten an exceljs workbook buffer to tab-separated rows, sheet by sheet. */
