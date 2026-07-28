@@ -47,17 +47,34 @@ export async function getOrCreateLabelId(
     return existing.id
   }
 
-  const created = (await gmailPost(
-    '/labels',
-    {
-      name,
-      labelListVisibility: 'labelShow',
-      messageListVisibility: 'show',
-    },
-    asUser,
-  )) as GmailLabelRow
-  labelIdCache.set(cacheKey, created.id)
-  return created.id
+  try {
+    const created = (await gmailPost(
+      '/labels',
+      {
+        name,
+        labelListVisibility: 'labelShow',
+        messageListVisibility: 'show',
+      },
+      asUser,
+    )) as GmailLabelRow
+    labelIdCache.set(cacheKey, created.id)
+    return created.id
+  } catch (err) {
+    // Create can lose a race: another serverless instance created the label
+    // between our list and create (Gmail rejects duplicate names). Re-list and
+    // adopt the winner instead of failing this send's labeling.
+    const relisted = (await gmailGet('/labels', undefined, asUser)) as {
+      labels?: GmailLabelRow[]
+    }
+    const winner = (relisted.labels ?? []).find(
+      (l) => l.name.toLowerCase() === name.toLowerCase(),
+    )
+    if (winner) {
+      labelIdCache.set(cacheKey, winner.id)
+      return winner.id
+    }
+    throw err
+  }
 }
 
 /** Add a label to one message (messages.modify). */

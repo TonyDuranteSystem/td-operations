@@ -63,6 +63,21 @@ describe('getOrCreateLabelId', () => {
   })
 })
 
+describe('getOrCreateLabelId — create race', () => {
+  it('adopts the concurrently-created label when create loses the race', async () => {
+    // First list: empty. Create: rejected (another instance won). Re-list:
+    // the winner exists — adopt its id instead of failing.
+    vi.mocked(gmailGet)
+      .mockResolvedValueOnce({ labels: [] })
+      .mockResolvedValueOnce({
+        labels: [{ id: 'Label_won', name: 'Race Label', type: 'user' }],
+      })
+    vi.mocked(gmailPost).mockRejectedValueOnce(new Error('Label name exists'))
+    const id = await getOrCreateLabelId('Race Label')
+    expect(id).toBe('Label_won')
+  })
+})
+
 describe('addLabelToMessage', () => {
   it('calls messages.modify with the label id', async () => {
     vi.mocked(gmailPost).mockResolvedValue({})

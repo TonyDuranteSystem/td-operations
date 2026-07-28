@@ -80,14 +80,31 @@ function makeChain(data: unknown, count?: number) {
   return chain
 }
 
+// A push_subscriptions chain that answers differently for the contact-level
+// (.eq('contact_id',…)) and account-level (.eq('account_id',…)) count checks.
+function makePushChain(counts: { contact?: number; account?: number }) {
+  let col: string | null = null
+  const chain: Record<string, unknown> = {
+    select: vi.fn(() => chain),
+    eq: vi.fn((c: string) => { col = c; return chain }),
+    then: (resolve: (v: { data: null; error: null; count: number }) => unknown) =>
+      resolve({ data: null, error: null, count: col === 'contact_id' ? (counts.contact ?? 0) : (counts.account ?? 0) }),
+  }
+  return chain
+}
+
 // Dispatch the mocked supabaseAdmin.from(table) to per-table data.
 // pushSubs simulates the push_subscriptions count check (0 = no push → email sent).
-function mockDb(opts: { contact?: unknown; accountContacts?: unknown[]; teammates?: unknown[]; pushSubs?: number }) {
+// pushSubsByCol distinguishes contact-level vs account-level subscription counts.
+function mockDb(opts: { contact?: unknown; accountContacts?: unknown[]; teammates?: unknown[]; pushSubs?: number; pushSubsByCol?: { contact?: number; account?: number } }) {
   vi.mocked(supabaseAdmin.from).mockImplementation(((table: string) => {
     if (table === 'contacts') return makeChain(opts.contact ?? null)
     if (table === 'account_contacts') return makeChain(opts.accountContacts ?? [])
     if (table === 'portal_team_members') return makeChain(opts.teammates ?? [])
-    if (table === 'push_subscriptions') return makeChain(null, opts.pushSubs ?? 0)
+    if (table === 'push_subscriptions') {
+      if (opts.pushSubsByCol) return makePushChain(opts.pushSubsByCol)
+      return makeChain(null, opts.pushSubs ?? 0)
+    }
     return makeChain(null)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   }) as any)
@@ -396,6 +413,38 @@ describe('notifyClientOfAdminMessage', () => {
     })
 
     await notifyClientOfAdminMessage({ account_id: 'account-pwa', messagePreview: 'New message' })
+
+    expect(gmailPost).not.toHaveBeenCalled()
+  })
+
+  it('multi-member: one member\'s account-level subscription does NOT silence the other member\'s email', async () => {
+    // Council bug-hunter regression (2026-07-28): on an MMLLC, member A
+    // subscribing must not cut member B off from both push AND email. The
+    // account-level subscription is unattributable, so with >1 recipient each
+    // person needs their OWN contact-level subscription to skip the email.
+    mockDb({
+      accountContacts: [
+        { contacts: { id: 'c-a', email: 'member-a@example.com', full_name: 'Member A', language: 'en' } },
+        { contacts: { id: 'c-b', email: 'member-b@example.com', full_name: 'Member B', language: 'en' } },
+      ],
+      pushSubsByCol: { contact: 0, account: 1 },
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-mmllc-blackout', messagePreview: 'New message' })
+
+    const tos = vi.mocked(gmailPost).mock.calls.map(c => extractMimeTo((c[1] as { raw: string }).raw))
+    expect(tos.sort()).toEqual(['member-a@example.com', 'member-b@example.com'])
+  })
+
+  it('solo owner: a legacy account-level subscription still skips the email', async () => {
+    mockDb({
+      accountContacts: [
+        { contacts: { id: 'c-solo', email: 'solo@example.com', full_name: 'Solo Owner', language: 'en' } },
+      ],
+      pushSubsByCol: { contact: 0, account: 1 },
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-solo-legacy', messagePreview: 'New message' })
 
     expect(gmailPost).not.toHaveBeenCalled()
   })

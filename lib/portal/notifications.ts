@@ -311,6 +311,9 @@ export async function notifyClientOfAdminMessage({
   if (recipients.length === 0) return
 
   const { gmailPost } = await import('@/lib/gmail')
+  // Imported outside the per-recipient try: an import failure must not be
+  // logged as "Email failed" for an email that was actually sent.
+  const { labelPortalChatNotification } = await import('@/lib/gmail-labels')
   const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const preview = escHtml(messagePreview.slice(0, 200) || '…')
   const portalChatUrl = `${PORTAL_BASE_URL}/portal/chat`
@@ -327,7 +330,12 @@ export async function notifyClientOfAdminMessage({
         .eq('contact_id', recipient.contactId)
       if (count && count > 0) hasPush = true
     }
-    if (!hasPush && account_id) {
+    // Account-level subscriptions can't be attributed to a person (legacy rows
+    // predate contact stamping), so trust them only when this notification has
+    // a SINGLE recipient. On a multi-member account or with teammates, skipping
+    // everyone because ONE member subscribed would cut the others off from both
+    // push AND email (council bug-hunter finding, 2026-07-28).
+    if (!hasPush && account_id && recipients.length === 1) {
       const { count } = await supabaseAdmin
         .from('push_subscriptions')
         .select('id', { count: 'exact', head: true })
@@ -389,7 +397,9 @@ export async function notifyClientOfAdminMessage({
       })) as { id?: string }
       // File the sent copy under the "Portal chat notifications" label so
       // these routine emails stay out of the way in Gmail. Never throws.
-      const { labelPortalChatNotification } = await import('@/lib/gmail-labels')
+      // Best-effort by design: most callers fire this function without await,
+      // so a frozen serverless instance can cut the label round-trip after the
+      // send — the email still goes out, it just stays unlabeled.
       await labelPortalChatNotification(sent?.id)
     } catch (err) {
       console.error(`[notifyClientOfAdminMessage] Email failed for ${recipient.email}:`, err)
