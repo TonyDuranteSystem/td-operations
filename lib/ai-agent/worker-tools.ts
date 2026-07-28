@@ -56,6 +56,8 @@ import {
   looksLikeFailedLookup,
   assertsCannotDo,
   looksLikeIncompleteRead,
+  finalizeReplyForStopReason,
+  TRUNCATED_EMPTY_REPLY,
 } from "./answer-guards"
 import {
   readCodebaseFile,
@@ -3454,13 +3456,39 @@ export async function runWorkerLoop(
         }
       }
 
+      // ⛔ THE ANSWER RAN OUT OF ROOM. `stop_reason: "max_tokens"` means the model
+      // was still writing when it hit the output ceiling — the reply is CUT OFF
+      // mid-thought, or (if the ceiling was spent before any prose) empty.
+      //
+      // This was never handled: the branch above treats "no tool calls" as "done",
+      // so a truncated answer shipped looking complete, and an empty one became the
+      // meaningless "(no response generated)". It matters more now than it used to,
+      // because the newer models reason before they answer and that reasoning is
+      // charged against this same ceiling — so they reach it far sooner. Adding
+      // those models without this check is what turns "smarter" into "cut off".
+      //
+      // Deliberately NOT auto-continued: resuming a half-written answer needs the
+      // turn re-sent and re-billed, and can loop. Saying plainly that it was cut
+      // short is honest and lets the staff member ask for the rest.
+      const ranOutOfRoom = data.stop_reason === "max_tokens"
       if (reply) {
         // A flat "I can't do this" is a capability gap — no correction can teach it.
         if (assertsCannotDo(reply) && !wallsHit.includes("cannot_do")) wallsHit.push("cannot_do")
-        return { reply, toolsUsed, reachedMaxLoops: false, wallsHit, succeededTools, artifacts }
+        return {
+          reply: finalizeReplyForStopReason(reply, data.stop_reason),
+          toolsUsed,
+          reachedMaxLoops: false,
+          wallsHit,
+          succeededTools,
+          artifacts,
+        }
       }
       if (toolUseBlocks.length === 0) {
-        return { reply: "(no response generated)", toolsUsed, reachedMaxLoops: false }
+        return {
+          reply: ranOutOfRoom ? TRUNCATED_EMPTY_REPLY : "(no response generated)",
+          toolsUsed,
+          reachedMaxLoops: false,
+        }
       }
     }
 
@@ -3556,7 +3584,16 @@ export async function runWorkerLoop(
         const data = await res.json()
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const reply = data.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim()
-        if (reply) return { reply, toolsUsed, reachedMaxLoops: true }
+        // Same ceiling, same honesty rule as the main exit above: a synthesis that
+        // ran out of room is cut off mid-sentence, and shipping it unmarked reads
+        // as a finished answer.
+        if (reply) {
+          return {
+            reply: finalizeReplyForStopReason(reply, data.stop_reason),
+            toolsUsed,
+            reachedMaxLoops: true,
+          }
+        }
       }
     } catch (err) {
       console.warn("[worker-loop] final-answer synthesis call failed:", err)

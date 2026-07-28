@@ -29,21 +29,42 @@ export interface WorkerModelOption {
  * Antonio has to make. When a newer model ships, add it here and the gear picks it
  * up everywhere; nothing else changes.
  */
+/**
+ * ⛔ NO LABEL MAY CLAIM WHICH MODEL IS "CURRENT". That drifts silently and lies.
+ *
+ * The old list had "Current (what it runs today)" on Sonnet 4.6 and "Newer than
+ * what the worker runs today" on Sonnet 5 — but the stored setting had been moved
+ * to Sonnet 5, so the menu told Antonio the opposite of the truth while the tick
+ * sat on the "newer" one. Which model is running is STATE, not a label: the gear
+ * shows the tick, and that is the single place it is expressed.
+ *
+ * Each entry describes only what is permanently true of that model.
+ */
 export const WORKER_MODEL_OPTIONS: WorkerModelOption[] = [
   {
-    id: "claude-opus-4-8",
+    id: "claude-fable-5",
     label: "Smartest",
-    hint: "Best reasoning and least likely to guess. Costs more per question and is a little slower.",
+    hint: "The strongest reasoning available, and the least likely to guess. Thinks before answering, so it is slower and costs the most per question.",
+  },
+  {
+    id: "claude-opus-5",
+    label: "Very strong",
+    hint: "Close to the smartest for most work, at roughly half the cost per question. Also thinks before answering.",
   },
   {
     id: "claude-sonnet-5",
     label: "Balanced — recommended",
-    hint: "Newer than what the worker runs today. Strong reasoning at a sensible cost.",
+    hint: "Strong reasoning at a sensible cost. The right default for everyday CRM questions and client drafts.",
+  },
+  {
+    id: "claude-opus-4-8",
+    label: "Previous top tier",
+    hint: "The strongest of the older generation. Keep only if a newer one misbehaves on real conversations.",
   },
   {
     id: "claude-sonnet-4-6",
-    label: "Current (what it runs today)",
-    hint: "The model in use now. Keep this until a newer one is tested against real conversations.",
+    label: "Previous balanced",
+    hint: "The older everyday model. Slightly cheaper than Sonnet 5 but weaker; no reason to pick it unless rolling back.",
   },
   {
     id: "claude-haiku-4-5-20251001",

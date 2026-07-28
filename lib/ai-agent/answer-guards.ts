@@ -369,3 +369,45 @@ export function buildCorrectionNudge(): string {
     "If you cannot verify, say so plainly and accept the correction.",
   ].join("\n")
 }
+
+// ── Truncated answers ────────────────────────────────────────────────────────
+
+/**
+ * The visible marker appended to an answer that hit the output ceiling.
+ *
+ * Kept here (not inline in the loop) so it is one string with one test, and so
+ * both places that finish a turn — the normal exit and the exhaustion-synthesis
+ * fallback — cannot drift apart in what they tell the staff member.
+ */
+export const TRUNCATED_REPLY_NOTE =
+  "_[Cut off — I reached my answer-length limit. Ask me to continue, or for a shorter version.]_"
+
+/** What to say when the ceiling was spent before any prose was written at all. */
+export const TRUNCATED_EMPTY_REPLY =
+  "I ran out of answer length before writing anything — the thinking for this one was too long. Ask me again more narrowly, or in smaller parts."
+
+/**
+ * Finish a reply honestly for the API's `stop_reason`.
+ *
+ * `max_tokens` means the model was STILL WRITING when it hit the output ceiling:
+ * the text is cut off mid-thought, or empty if the ceiling went entirely on
+ * reasoning. Before this existed the loop treated "no tool calls" as "finished",
+ * so a truncated answer shipped looking complete and an empty one became the
+ * meaningless "(no response generated)".
+ *
+ * This matters more with the newer models than it used to: they reason before
+ * answering and that reasoning is charged against this same ceiling, so they
+ * reach it far sooner. Adding them without this is what turns "smarter" into
+ * "cut off mid-sentence".
+ *
+ * Deliberately does NOT auto-continue — resuming a half-written answer re-sends
+ * and re-bills the turn and can loop. Saying plainly that it was cut short lets
+ * the staff member ask for the rest.
+ *
+ * Pure. Any stop reason other than `max_tokens` returns the reply untouched.
+ */
+export function finalizeReplyForStopReason(reply: string, stopReason: unknown): string {
+  const trimmed = (reply ?? "").trim()
+  if (stopReason !== "max_tokens") return reply
+  return trimmed ? `${reply}\n\n${TRUNCATED_REPLY_NOTE}` : TRUNCATED_EMPTY_REPLY
+}
