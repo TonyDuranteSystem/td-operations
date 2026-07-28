@@ -128,12 +128,28 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     }
   }, [messages, loading])
 
-  // Auto-grow textarea
+  /**
+   * Auto-grow the composer.
+   *
+   * It used to open as a SINGLE 44px line capped at 120px, so the placeholder
+   * alone wrapped and the box showed a scrollbar before a word was typed — you
+   * could not see what you were writing (Antonio, 2026-07-28: "it's small and
+   * scrollable"). Now it opens at a readable three lines and grows with the text.
+   *
+   * The ceiling is a share of the WINDOW, not a fixed pixel count, because the
+   * whole CRM is used as a phone app at ~380px where a tall box would swallow the
+   * conversation. Scrolling turns on only once that ceiling is reached, so the
+   * scrollbar means "there is more above", never "this box is too small".
+   */
   useEffect(() => {
     const el = inputRef.current
     if (!el) return
+    const min = 84 // ≈ 3 lines — enough to see a full sentence while typing
+    const max = Math.max(min, Math.min(260, Math.round(window.innerHeight * 0.35)))
     el.style.height = '0px'
-    el.style.height = Math.max(44, Math.min(el.scrollHeight, 120)) + 'px'
+    const next = Math.max(min, Math.min(el.scrollHeight, max))
+    el.style.height = next + 'px'
+    el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden'
   }, [input])
 
   const sendMessage = async (msgs: Message[], attachments?: UploadedAttachment[]) => {
@@ -204,7 +220,9 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     setMessages(newMessages)
     setInput('')
     att.clear()
-    if (inputRef.current) inputRef.current.style.height = 'auto'
+    // Height is NOT reset here — clearing the text re-runs the auto-grow effect,
+    // which returns the box to its minimum. Setting 'auto' as well produced a
+    // one-frame collapse to a single line before the effect corrected it.
     await sendMessage(newMessages, filesToSend)
   })
 
@@ -499,10 +517,12 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={att.onPaste}
-              rows={1}
+              rows={3}
               placeholder={isRecording ? 'Recording...' : 'Ask anything about your CRM...'}
+              // overflow is set by the auto-grow effect (hidden until the ceiling),
+              // so it is deliberately NOT in this class list.
               className={cn(
-                'flex-1 min-w-0 px-4 py-3 text-sm border rounded-xl bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:bg-white resize-none overflow-y-auto transition-colors',
+                'flex-1 min-w-0 px-4 py-3 text-sm leading-relaxed border rounded-xl bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:bg-white resize-none transition-colors',
                 isRecording && 'ring-2 ring-red-300 bg-red-50/50'
               )}
             />
