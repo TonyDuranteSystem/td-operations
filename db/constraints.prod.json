@@ -27,9 +27,9 @@
     "it on every push, so a hand-edit of this file cannot pass unnoticed."
   ],
   "generated_from": "production (Supabase ref ydzipybqeebtpcvsbtvs)",
-  "generated_at": "2026-07-27",
+  "generated_at": "2026-07-28",
   "constraint_count": 200,
-  "checksum_md5": "9c43924c747b933a5336c5bcd57e780a",
+  "checksum_md5": "3f58eb3fcf707e5cc3751583ee212ac6",
   "constraints": {
     "account_bank_balances_source_check": "CHECK ((source = ANY (ARRAY['client'::text, 'staff'::text])))",
     "account_location_policies_choice_check": "CHECK ((choice = ANY (ARRAY['business'::text, 'personal'::text])))",
@@ -209,7 +209,7 @@
     "tax_quote_submissions_status_check": "CHECK ((status = ANY (ARRAY['pending'::text, 'sent'::text, 'opened'::text, 'completed'::text, 'processed'::text])))",
     "tax_return_submissions_status_check": "CHECK ((status = ANY (ARRAY['pending'::text, 'sent'::text, 'opened'::text, 'completed'::text, 'reviewed'::text])))",
     "td_bank_feeds_match_confidence_check": "CHECK ((match_confidence = ANY (ARRAY['exact'::text, 'high'::text, 'medium'::text, 'low'::text, 'manual'::text, 'partial'::text, 'retroactive'::text])))",
-    "td_bank_feeds_source_check": "CHECK ((source = ANY (ARRAY['relay'::text, 'mercury'::text, 'mercury_api'::text, 'banking_circle'::text, 'qb_deposit'::text, 'airwallex_email'::text, 'airwallex_api'::text, 'manual'::text, 'stripe'::text, 'chase'::text])))",
+    "td_bank_feeds_source_check": "CHECK ((source = ANY (ARRAY['relay'::text, 'mercury'::text, 'mercury_api'::text, 'banking_circle'::text, 'qb_deposit'::text, 'airwallex_email'::text, 'airwallex_api'::text, 'manual'::text, 'stripe'::text, 'chase'::text, 'revolut'::text])))",
     "td_bank_feeds_status_check": "CHECK ((status = ANY (ARRAY['unmatched'::text, 'matched'::text, 'ignored'::text, 'duplicate'::text, 'outgoing'::text, 'needs_review'::text, 'activation_crashed'::text, 'owner_ledger'::text])))",
     "td_comm_deliverables_type_check": "CHECK ((type = ANY (ARRAY['logo_draft'::text, 'logo_final'::text, 'landing_page'::text, 'brand_guide'::text, 'business_card'::text, 'other'::text, 'mockup'::text, 'asset_kit'::text, 'social_kit'::text, 'geometry'::text])))",
     "td_comm_disclaimers_method_check": "CHECK ((method = ANY (ARRAY['click'::text, 'docusign'::text])))",

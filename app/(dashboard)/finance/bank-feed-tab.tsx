@@ -94,6 +94,7 @@ const SOURCE_LABELS: Record<string, string> = {
   airwallex_api: 'Airwallex',
   manual: 'Manual',
   stripe: 'Stripe',
+  revolut: 'Revolut',
 }
 
 const SOURCE_COLORS: Record<string, string> = {
@@ -105,6 +106,7 @@ const SOURCE_COLORS: Record<string, string> = {
   airwallex_api: 'bg-orange-100 text-orange-700',
   manual: 'bg-zinc-100 text-zinc-700',
   stripe: 'bg-violet-100 text-violet-700',
+  revolut: 'bg-sky-100 text-sky-700',
 }
 
 // Map bank institution names to source filter values
@@ -316,10 +318,12 @@ function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activ
     }
   }
 
-  // Relay is hidden from the Connected Banks UI per request — it still syncs
-  // transactions in the background; we just don't surface its card or balance.
+  // Relay and Revolut are hidden from the Connected Banks UI per Antonio's request —
+  // both still sync transactions in the background; we just don't surface their account
+  // summary cards or balances on this screen.
+  const HIDDEN_BANKS = ['relay', 'revolut']
   const visibleConnections = connections.filter(
-    conn => !((conn.institution_name ?? conn.bank_name ?? '').toLowerCase().includes('relay'))
+    conn => !HIDDEN_BANKS.some(b => (conn.institution_name ?? conn.bank_name ?? '').toLowerCase().includes(b))
   )
   const totalBalance = visibleConnections.reduce((sum, conn) =>
     sum + (conn.accounts ?? []).reduce((s, a) => s + (a.balances.current ?? 0), 0), 0

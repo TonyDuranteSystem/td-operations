@@ -152,9 +152,10 @@ describe("checksumDefs", () => {
     // `npm run snapshot:constraints` (which refuses to run against any other
     // database). The value below is the digest PRODUCTION computed over its own
     // constraints, not one recomputed to make a red test pass — the previous
-    // pin was 4d0d3a3813a7e69f8570474ac398ee1e over 194 constraints, and before
+    // pin was 9c43924c747b933a5336c5bcd57e780a over 200 (re-pinned again 2026-07-28
+    // after adding 'revolut' to the source CHECK), before that 4d0d3a38… over 194, and before
     // that 665364ba9d4e7746d9f3fd558dc6ff55 over 190.
-    expect(checksumDefs(prodConstraints())).toBe("9c43924c747b933a5336c5bcd57e780a")
+    expect(checksumDefs(prodConstraints())).toBe("3f58eb3fcf707e5cc3751583ee212ac6")
   })
 })
 
