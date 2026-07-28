@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { usePathname } from 'next/navigation'
-import { Bot, X, Send, Loader2, Trash2, Mic, Square, Sparkles, Paperclip, FileText } from 'lucide-react'
+import { Bot, X, Send, Loader2, Mic, Square, Sparkles, Paperclip, FileText, History, SquarePen, Pencil, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useHoldToSend } from '@/components/chat/use-hold-to-send'
 import { useWorkerAttachments, type UploadedAttachment } from '@/components/chat/use-worker-attachments'
@@ -24,7 +24,16 @@ interface Message {
    * reproduced by the feature meant to fix it.
    */
   artifacts?: { kind: string; url: string; label: string }[]
+  /** Id of the stored turn this came from — present only for restored/sent turns.
+   *  Without it a message cannot be edited or deleted, because there is no row to
+   *  rewind to. */
+  turnId?: string
 }
+
+/** Which conversation this browser was last in. Survives a refresh; the server
+ *  still scopes every read to the logged-in user, so a stale or foreign id simply
+ *  returns nothing rather than exposing someone else's history. */
+const CONVERSATION_KEY = 'td-ai-agent-conversation'
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -55,9 +64,119 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
   // Stable id for THIS conversation (worker-path memory thread). Minted lazily on
   // first send; a new chat mints a fresh one → fresh worker memory.
   const conversationIdRef = useRef<string | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [history, setHistory] = useState<Array<{ id: string; title: string; lastAt: string; turns: number }>>([])
+  const [restoring, setRestoring] = useState(false)
   // Live route → per-page client scope for the worker's brain. Read at SEND time
   // (below), never cached, so navigating between clients can't mis-scope.
   const pathname = usePathname()
+
+
+  /** One place that writes the conversation id — ref (read at send time), state
+   *  (rendering) and localStorage (survives the refresh) can never disagree. */
+  const setConversationId = useCallback((id: string | null) => {
+    conversationIdRef.current = id
+    try {
+      if (id) window.localStorage.setItem(CONVERSATION_KEY, id)
+      else window.localStorage.removeItem(CONVERSATION_KEY)
+    } catch {
+      // Private mode / storage disabled — the conversation still works for this
+      // session, it just won't survive a refresh. Not worth failing the panel over.
+    }
+  }, [])
+
+  /** Rebuild the on-screen thread from stored turns. Returns false when there is
+   *  nothing to restore, so the caller can fall back to a blank chat. */
+  const loadConversation = useCallback(async (id: string): Promise<boolean> => {
+    setRestoring(true)
+    try {
+      const res = await fetch(`/api/ai-agent?conversationId=${encodeURIComponent(id)}`)
+      if (!res.ok) return false
+      const data = await res.json().catch(() => ({}))
+      const turns: Array<{ id: string; user: string; assistant: string }> = Array.isArray(data.turns) ? data.turns : []
+      if (!turns.length) return false
+      const restored: Message[] = []
+      for (const t of turns) {
+        if (t.user) restored.push({ role: 'user', content: t.user, turnId: t.id })
+        // A turn with no reply is one that never finished — show the question so the
+        // history isn't silently missing it, but don't invent an answer.
+        if (t.assistant) restored.push({ role: 'assistant', content: t.assistant, turnId: t.id })
+      }
+      setMessages(restored)
+      setConversationId(id)
+      return true
+    } catch {
+      return false
+    } finally {
+      setRestoring(false)
+    }
+  }, [setConversationId])
+
+  const loadHistory = useCallback(async () => {
+    try {
+      const res = await fetch('/api/ai-agent?list=1')
+      if (!res.ok) return
+      const data = await res.json().catch(() => ({}))
+      if (Array.isArray(data.conversations)) setHistory(data.conversations)
+    } catch {
+      // A failed history fetch must never break the chat itself.
+    }
+  }, [])
+
+  // Restore on open. Only when the panel is empty — reopening mid-conversation must
+  // not wipe what is on screen.
+  useEffect(() => {
+    if (!open || messages.length > 0) return
+    let stored: string | null = null
+    try {
+      stored = window.localStorage.getItem(CONVERSATION_KEY)
+    } catch {
+      stored = null
+    }
+    if (stored) void loadConversation(stored)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  /** Delete a turn and everything after it. The rewind behind both Edit and Delete. */
+  const truncateFrom = useCallback(async (turnId: string): Promise<boolean> => {
+    const id = conversationIdRef.current
+    if (!id) return false
+    try {
+      const res = await fetch(
+        `/api/ai-agent?conversationId=${encodeURIComponent(id)}&fromTurnId=${encodeURIComponent(turnId)}`,
+        { method: 'DELETE' },
+      )
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        toast.error(d.error || 'Could not update that conversation.')
+        return false
+      }
+      return true
+    } catch {
+      toast.error('Could not update that conversation.')
+      return false
+    }
+  }, [])
+
+  /** Edit = rewind to this message and put it back in the box. Re-sending goes
+   *  through the ordinary send path, so the assistant's own memory (which it
+   *  rebuilds from the same stored thread) matches what you see. */
+  const editMessage = useCallback(async (index: number) => {
+    const msg = messages[index]
+    if (!msg?.turnId || loading) return
+    if (!(await truncateFrom(msg.turnId))) return
+    setMessages(messages.slice(0, index))
+    setInput(msg.content)
+    inputRef.current?.focus()
+  }, [messages, loading, truncateFrom])
+
+  const deleteFromMessage = useCallback(async (index: number) => {
+    const msg = messages[index]
+    if (!msg?.turnId || loading) return
+    if (!window.confirm('Delete this message and everything after it?')) return
+    if (!(await truncateFrom(msg.turnId))) return
+    setMessages(messages.slice(0, index))
+  }, [messages, loading, truncateFrom])
 
   // Voice input
   const handleTranscript = useCallback((text: string) => {
@@ -174,7 +293,10 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
           attachments: attachments?.length ? attachments : undefined,
           // Worker path (when enabled): a stable per-conversation thread + the live
           // per-page client scope.
-          conversationId: (conversationIdRef.current ??= crypto.randomUUID()),
+          conversationId: (() => {
+            if (!conversationIdRef.current) setConversationId(crypto.randomUUID())
+            return conversationIdRef.current
+          })(),
           clientKey: clientKeyFromPath(pathname),
         }),
       })
@@ -191,11 +313,24 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
         ? ' _(fallback engine — lookups only, no sending)_'
         : ''
       const toolInfo = data.tools_used?.length ? `\n\n_🔧 Used: ${Array.from(new Set(data.tools_used) as Set<string>).join(', ')}_` : ''
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: (data.content || 'No response.') + engineNote + toolInfo,
-        artifacts: Array.isArray(data.artifacts) ? data.artifacts : undefined,
-      }])
+      // Tag BOTH sides of the exchange with the stored turn id, so the message can
+      // be edited or rewound immediately — not only after a reload.
+      const turnId = typeof data.messageId === 'string' ? data.messageId : undefined
+      setMessages(prev => {
+        const next = [...prev]
+        if (turnId) {
+          for (let i = next.length - 1; i >= 0; i--) {
+            if (next[i].role === 'user') { next[i] = { ...next[i], turnId }; break }
+          }
+        }
+        next.push({
+          role: 'assistant',
+          content: (data.content || 'No response.') + engineNote + toolInfo,
+          artifacts: Array.isArray(data.artifacts) ? data.artifacts : undefined,
+          turnId,
+        })
+        return next
+      })
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Unknown error'
       setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${errMsg}` }])
@@ -281,8 +416,9 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
   const clearChat = () => {
     setMessages([])
     att.clear()
-    // Start a fresh worker-memory thread for the next conversation.
-    conversationIdRef.current = null
+    // Start a fresh worker-memory thread for the next conversation, and stop
+    // restoring the old one on the next open.
+    setConversationId(null)
   }
 
   if (!open) return null
@@ -349,13 +485,29 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
                 a decision and wasn't. Same class of thing as an assistant offering an
                 action it cannot perform. */}
             <WorkerSettingsGear />
+            {/* Past conversations. Opening the list fetches it — there is no reason to
+                pay for that on every page load when the panel is usually closed. */}
+            <button
+              onClick={() => {
+                const next = !historyOpen
+                setHistoryOpen(next)
+                if (next) void loadHistory()
+              }}
+              className={cn(
+                'p-2 rounded-lg transition-colors',
+                historyOpen ? 'bg-violet-100 text-violet-600' : 'text-zinc-400 hover:text-violet-600 hover:bg-violet-50',
+              )}
+              title="Past conversations"
+            >
+              <History className="h-4 w-4" />
+            </button>
             {messages.length > 0 && (
               <button
                 onClick={clearChat}
-                className="p-2 rounded-lg text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                title="Clear chat"
+                className="p-2 rounded-lg text-zinc-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
+                title="New chat (this one is saved)"
               >
-                <Trash2 className="h-4 w-4" />
+                <SquarePen className="h-4 w-4" />
               </button>
             )}
             <button
@@ -405,10 +557,32 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
             <div
               key={i}
               className={cn(
-                'flex',
+                'flex items-end gap-1',
                 msg.role === 'user' ? 'justify-end' : 'justify-start'
               )}
             >
+              {/* Edit / rewind, on your OWN messages only, and only once the turn has
+                  been stored (a turn with no id has no row to rewind to). Always
+                  visible rather than hover-only: the whole CRM is used as a phone app,
+                  where there is no hover. */}
+              {msg.role === 'user' && msg.turnId && !loading && (
+                <div className="flex flex-col gap-0.5 shrink-0">
+                  <button
+                    onClick={() => void editMessage(i)}
+                    className="p-1 rounded text-zinc-300 hover:text-violet-600 hover:bg-violet-50 transition-colors"
+                    title="Edit this message and continue from here"
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </button>
+                  <button
+                    onClick={() => void deleteFromMessage(i)}
+                    className="p-1 rounded text-zinc-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                    title="Delete this message and everything after it"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              )}
               <div
                 className={cn(
                   'max-w-[85%] rounded-2xl px-4 py-2.5 text-sm',
@@ -477,6 +651,37 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
               </>
             )}
           </div>
+        )}
+
+        {historyOpen && (
+          <div className="border-b bg-zinc-50 max-h-64 overflow-y-auto">
+            {history.length === 0 ? (
+              <p className="px-4 py-3 text-xs text-zinc-500">No earlier conversations yet.</p>
+            ) : (
+              history.map((h) => (
+                <button
+                  key={h.id || 'legacy'}
+                  onClick={() => {
+                    setHistoryOpen(false)
+                    void loadConversation(h.id)
+                  }}
+                  className={cn(
+                    'w-full text-left px-4 py-2.5 border-b border-zinc-100 hover:bg-violet-50 transition-colors',
+                    h.id === conversationIdRef.current && 'bg-violet-50',
+                  )}
+                >
+                  <p className="text-xs font-medium text-zinc-800 truncate">{h.title || 'Conversation'}</p>
+                  <p className="text-[10px] text-zinc-400">
+                    {new Date(h.lastAt).toLocaleString()} · {h.turns} {h.turns === 1 ? 'message' : 'messages'}
+                  </p>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+
+        {restoring && (
+          <p className="px-4 py-2 text-[11px] text-zinc-500 border-b">Loading your conversation…</p>
         )}
 
         {/* Attached files — one row each, with its own upload state. A file that

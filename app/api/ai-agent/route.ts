@@ -411,3 +411,191 @@ async function runSidebarWorker(args: {
 // 300s timeout: the worker path runs a multi-step tool loop (same as the Inbox
 // worker). The old provider path was well under 60s, but they share this route.
 export const maxDuration = 300
+
+// ─── Conversation history ────────────────────────────────────────────────────
+//
+// Antonio, 2026-07-28: "if we are doing something and then maybe refresh the page,
+// we lose everything." The turns were ALREADY being persisted (see the insert in
+// runSidebarWorker) — what was missing is any way to read them back. The panel held
+// the conversation id in a React ref, so a refresh minted a new one and orphaned the
+// previous conversation in the database rather than losing it.
+//
+// The scope key is stored readably in `context_json.crm_scope_key` as
+// `dashboard-<userId>[-<conversationId>]`, which is what makes listing a user's own
+// conversations possible at all — `thread_id` is a one-way hash and cannot be
+// reversed. Every query below is prefix-scoped to the CALLER's own id, so one staff
+// member can never read or truncate another's conversations.
+
+/** Rows are read with the service key, so the caller's own scope is the ONLY gate. */
+function sidebarScopePrefix(userId: string): string {
+  return `dashboard-${userId}`
+}
+
+interface StoredTurn {
+  id: string
+  body: string | null
+  reply: string | null
+  status: string | null
+  created_at: string
+  context_json: { crm_scope_key?: string; user_message?: string } | null
+}
+
+/** `dashboard-<userId>-<conversationId>` → conversationId ('' for the legacy
+ *  per-user thread that predates conversation ids). */
+function conversationIdFromScope(scope: string, userId: string): string {
+  const prefix = `${sidebarScopePrefix(userId)}-`
+  return scope.startsWith(prefix) ? scope.slice(prefix.length) : ''
+}
+
+/**
+ * GET /api/ai-agent
+ *   ?list=1                    → the caller's recent conversations (newest first)
+ *   ?conversationId=<id>       → the turns of ONE conversation, oldest first
+ *
+ * Mirrors the shape the Inbox / Portal-Chats panels already use, rather than
+ * inventing a second contract.
+ */
+export async function GET(request: NextRequest) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || isClient(user)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  const prefix = sidebarScopePrefix(user.id)
+  const wantList = request.nextUrl.searchParams.get('list') === '1'
+  const conversationId = request.nextUrl.searchParams.get('conversationId')?.trim() || null
+
+  if (wantList) {
+    // Newest 300 turns for this user, folded down to one entry per conversation.
+    // Capped because a busy user accumulates turns quickly and the list only ever
+    // shows a handful — reading everything to render ten rows is waste.
+    const { data, error } = await db
+      .from('agent_messages')
+      .select('id, body, created_at, context_json')
+      .eq('recipient', 'worker')
+      .like('context_json->>crm_scope_key', `${prefix}%`)
+      .order('created_at', { ascending: false })
+      .limit(300)
+    if (error) {
+      console.error('[ai-agent] conversation list failed:', error)
+      return NextResponse.json({ error: 'Could not load your conversations.' }, { status: 500 })
+    }
+
+    const byConversation = new Map<string, { id: string; title: string; lastAt: string; turns: number }>()
+    for (const row of (data ?? []) as StoredTurn[]) {
+      const scope = row.context_json?.crm_scope_key ?? ''
+      const id = conversationIdFromScope(scope, user.id)
+      const existing = byConversation.get(id)
+      if (existing) {
+        existing.turns += 1
+        // Rows arrive newest-first, so the LAST one seen is the oldest — i.e. the
+        // opening question, which is the only thing resembling a title we have.
+        // Nothing generates real titles today; that was left out deliberately
+        // rather than spend a model call per conversation.
+        existing.title = (row.context_json?.user_message || row.body || existing.title).slice(0, 80)
+      } else {
+        byConversation.set(id, {
+          id,
+          title: (row.context_json?.user_message || row.body || 'Conversation').slice(0, 80),
+          lastAt: row.created_at,
+          turns: 1,
+        })
+      }
+    }
+    return NextResponse.json({ conversations: Array.from(byConversation.values()).slice(0, 20) })
+  }
+
+  if (!conversationId) {
+    return NextResponse.json({ error: 'conversationId or list=1 required' }, { status: 400 })
+  }
+
+  const scope = `${prefix}-${conversationId}`
+  const { data, error } = await db
+    .from('agent_messages')
+    .select('id, body, reply, status, created_at, context_json')
+    .eq('thread_id', deterministicThreadUuid(scope))
+    .eq('recipient', 'worker')
+    .order('created_at', { ascending: true })
+    .limit(60)
+  if (error) {
+    console.error('[ai-agent] conversation fetch failed:', error)
+    return NextResponse.json({ error: 'Could not load that conversation.' }, { status: 500 })
+  }
+
+  // Re-scoped defensively: the thread id is a hash of the scope, so a caller cannot
+  // forge another user's thread — but a stored row is checked anyway, because the
+  // hash is only as good as the scope that built it.
+  const turns = ((data ?? []) as StoredTurn[])
+    .filter((t) => (t.context_json?.crm_scope_key ?? '') === scope)
+    .map((t) => ({
+      id: t.id,
+      user: t.context_json?.user_message ?? t.body ?? '',
+      assistant: t.reply ?? '',
+      status: t.status ?? 'done',
+      at: t.created_at,
+    }))
+
+  return NextResponse.json({ conversationId, turns })
+}
+
+/**
+ * DELETE /api/ai-agent?conversationId=<id>[&fromTurnId=<id>]
+ *
+ * With `fromTurnId`: removes that turn and EVERYTHING AFTER it — the rewind that
+ * makes a conversation editable. Editing is deliberately built as truncate-then-resend
+ * rather than as a new "rewrite an answer" path: the panel re-submits the corrected
+ * text through the ORDINARY send route, so there is one way to produce an answer, and
+ * the worker's own memory (which it rebuilds from this same thread) matches what the
+ * staff member sees. A separate edit path would let the two drift, which is how an
+ * assistant ends up confidently answering from a message you already deleted.
+ *
+ * Without `fromTurnId`: deletes the whole conversation.
+ */
+export async function DELETE(request: NextRequest) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || isClient(user)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
+  }
+
+  const conversationId = request.nextUrl.searchParams.get('conversationId')?.trim()
+  const fromTurnId = request.nextUrl.searchParams.get('fromTurnId')?.trim() || null
+  if (!conversationId) {
+    return NextResponse.json({ error: 'conversationId required' }, { status: 400 })
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  const scope = `${sidebarScopePrefix(user.id)}-${conversationId}`
+  const threadId = deterministicThreadUuid(scope)
+
+  let cutoff: string | null = null
+  if (fromTurnId) {
+    const { data: turn, error: turnErr } = await db
+      .from('agent_messages')
+      .select('id, created_at, context_json')
+      .eq('id', fromTurnId)
+      .single()
+    if (turnErr || !turn) {
+      return NextResponse.json({ error: 'That message no longer exists.' }, { status: 404 })
+    }
+    // The turn must belong to THIS caller's conversation. Without this check a
+    // guessed row id would truncate someone else's history.
+    if ((turn.context_json?.crm_scope_key ?? '') !== scope) {
+      return NextResponse.json({ error: 'Not your conversation.' }, { status: 403 })
+    }
+    cutoff = turn.created_at
+  }
+
+  let query = db.from('agent_messages').delete().eq('thread_id', threadId).eq('recipient', 'worker')
+  if (cutoff) query = query.gte('created_at', cutoff)
+  const { error } = await query
+  if (error) {
+    console.error('[ai-agent] conversation truncate failed:', error)
+    return NextResponse.json({ error: 'Could not update that conversation.' }, { status: 500 })
+  }
+  return NextResponse.json({ ok: true, conversationId, truncatedFrom: fromTurnId })
+}
