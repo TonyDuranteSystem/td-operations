@@ -33,6 +33,8 @@ export const DUNNING_AUTOSEND_KEY = "dunning_autosend"
 
 export interface DunningSummary {
   marked_overdue: number
+  /** Overdue invoices whose due date moved to the future — flipped back to Sent/Partial. */
+  unmarked_future_dated: number
   /** Reminder jobs enqueued this pass (the worker delivers them gradually). */
   reminders_queued: number
   /** Eligible invoices skipped because a reminder job is already queued. */
@@ -171,6 +173,49 @@ async function markOverdueInvoices(errors: string[]): Promise<number> {
   return marked
 }
 
+/**
+ * Step 1b — the REVERSE of step 1, which never existed: un-mark Overdue invoices whose due
+ * date has been moved into the future (a renegotiated payment date — Luca's Shoppyverse case,
+ * 2026-07-28: due date pushed to September, label stuck on Overdue forever).
+ *
+ * Back to Partial when money has already been applied, else back to Sent — via the same
+ * status-only writer step 1 uses, so both status columns and the client-expense mirror stay
+ * in sync. `reminder_count` resets: a renegotiated due date starts a NEW reminder cycle, so
+ * if the new date also passes unpaid, the client is reminded again rather than silently
+ * skipped because the old cycle already used its two reminders.
+ *
+ * `>=` today (not `>`): an invoice due TODAY is not yet overdue — step 1 uses strictly-before
+ * for marking, and the two must partition cleanly or a due-today invoice would flap.
+ */
+async function unmarkFutureDatedInvoices(errors: string[]): Promise<number> {
+  const today = new Date().toISOString().split("T")[0]
+
+  const { data: candidates, error } = await supabaseAdmin
+    .from("payments")
+    .select("id, invoice_number, amount_paid")
+    .eq("invoice_status", "Overdue")
+    .gte("due_date", today)
+
+  if (error) {
+    errors.push(`Query future-dated overdue: ${error.message}`)
+    return 0
+  }
+
+  let unmarked = 0
+  for (const inv of candidates ?? []) {
+    try {
+      const backTo = Number(inv.amount_paid ?? 0) > 0 ? "Partial" : "Sent"
+      await syncInvoiceStatus("payment", inv.id, backTo)
+      // eslint-disable-next-line no-restricted-syntax -- reminder pacing reset, same table the dunning pass owns
+      await supabaseAdmin.from("payments").update({ reminder_count: 0 }).eq("id", inv.id)
+      unmarked++
+    } catch (err) {
+      errors.push(`Un-mark ${inv.invoice_number}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  return unmarked
+}
+
 /** Step 2 — enqueue reminder jobs for due invoices, bounded to `cap` per pass
  *  (oldest-first). The background worker sends them. Dedups against
  *  already-queued reminders in a single query, then bulk-enqueues. */
@@ -261,11 +306,14 @@ export async function runDunning(opts: { cap?: number; autoSend: boolean }): Pro
   const cap = opts.cap ?? (await getDunningCap())
   const errors: string[] = []
   const marked_overdue = await markOverdueInvoices(errors)
+  // The reverse pass runs BEFORE reminders are enqueued, so an invoice whose due date was
+  // renegotiated this morning cannot be considered for a reminder in the same run.
+  const unmarked_future_dated = await unmarkFutureDatedInvoices(errors)
 
   if (!opts.autoSend) {
-    return { marked_overdue, reminders_queued: 0, skipped: 0, capped: false, considered: 0, auto_send: false, errors }
+    return { marked_overdue, unmarked_future_dated, reminders_queued: 0, skipped: 0, capped: false, considered: 0, auto_send: false, errors }
   }
 
   const { queued, skipped, considered, capped } = await enqueueDueReminders(cap, errors)
-  return { marked_overdue, reminders_queued: queued, skipped, capped, considered, auto_send: true, errors }
+  return { marked_overdue, unmarked_future_dated, reminders_queued: queued, skipped, capped, considered, auto_send: true, errors }
 }
