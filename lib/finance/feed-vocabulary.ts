@@ -90,6 +90,11 @@ export const FEED_SOURCES = [
   "manual",
   "stripe",
   "chase",
+  /** Revolut Business, connected via Plaid 2026-07-27. Without this entry `toFeedSource`
+   *  falls back to "manual" and every Revolut transaction is permanently mislabeled
+   *  (the sync upserts with ignoreDuplicates, so a later fix does not relabel old rows).
+   *  Migration 20260728-0100 adds it to the database CHECK — prod DDL BEFORE this deploys. */
+  "revolut",
 ] as const
 
 export type FeedSource = (typeof FEED_SOURCES)[number]

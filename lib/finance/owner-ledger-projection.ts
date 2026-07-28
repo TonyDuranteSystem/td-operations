@@ -69,6 +69,7 @@ const BANK_LABELS: Record<string, string> = {
   banking_circle: "Banking Circle",
   chase: "Chase",
   stripe: "Stripe",
+  revolut: "Revolut",
   qb_deposit: "Other",
   manual: "Other",
 }
