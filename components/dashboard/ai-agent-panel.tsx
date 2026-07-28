@@ -180,11 +180,17 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
 
   // Runs only once the hold expires (or Enter is pressed a second time). Nothing is
   // cleared until here — cancelling has to leave the box exactly as it was.
-  const { armed, secondsLeft, arm, cancel } = useHoldToSend<null>(async () => {
-    const text = input.trim()
-    // Only files that actually reached storage count — one still uploading or
-    // errored must not make the turn look like it carried it.
-    const filesToSend = att.uploaded()
+  //
+  // The turn is SNAPSHOT when send is pressed and carried through the hold, never
+  // re-read when the timer fires. Re-reading loses both ways during those seconds:
+  // a file dropped mid-countdown is still uploading at fire time, so it is excluded
+  // AND then wiped by the clear — silently, because the failed-file confirm already
+  // ran; and a file attached after the send decision would otherwise join a turn the
+  // staff member never agreed to send. Same contract as the Inbox/Portal composer.
+  const { armed, secondsLeft, arm, cancel } = useHoldToSend<{
+    text: string
+    files: UploadedAttachment[]
+  }>(async ({ text, files: filesToSend }) => {
     if (!text && !filesToSend.length) return
 
     // Build display content (what shows in chat history)
@@ -221,8 +227,14 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
       if (!window.confirm(`${names} could not be uploaded and will NOT be sent.\n\nSend anyway?`)) return
     }
     if (isRecording) stopRecording()
+    // A bare file gets an implicit ask, so the worker has something to act on
+    // rather than replying "what would you like me to do with this?".
+    const text = input.trim()
+    const files = att.uploaded()
+    const message = text || (files.length ? 'Look at the attached file(s).' : '')
+    if (!message) return
     // While held, a second press means "I'm sure" — the hook fires immediately.
-    arm(null)
+    arm({ text: message, files })
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -281,8 +293,11 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
           <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg border-2 border-dashed border-violet-400 bg-violet-50/90 pointer-events-none">
             <div className="text-center">
               <Paperclip className="h-10 w-10 text-violet-400 mx-auto mb-2" />
-              <p className="text-sm font-medium text-violet-600">Drop file here</p>
-              <p className="text-xs text-violet-400 mt-1">PNG, JPG, WEBP, PDF, CSV, TXT — max 10MB</p>
+              <p className="text-sm font-medium text-violet-600">Drop files here</p>
+              {/* Must match what the upload route actually accepts. The old copy
+                  named six formats and 10MB, which told a staff member holding a
+                  spreadsheet that it was unsupported — the reported bug, in the UI. */}
+              <p className="text-xs text-violet-400 mt-1">Up to 5 files — documents, spreadsheets, images — max 20MB each</p>
             </div>
           </div>
         )}

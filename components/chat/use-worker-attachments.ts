@@ -48,6 +48,19 @@ export const MAX_FILES = 5
  */
 export const MAX_WORKER_FILE_MB = 20
 export const MAX_WORKER_FILE_BYTES = MAX_WORKER_FILE_MB * 1024 * 1024
+/**
+ * Mirrors MAX_IMAGE_BYTES in lib/ai-agent/attachment-reader.ts. An IMAGE has a
+ * tighter ceiling than a document: over this the reader cannot build a vision
+ * block at all and returns a "too large to look at" note instead.
+ *
+ * Checked here for the same reason the 20MB limit is — otherwise a phone photo of
+ * a passport or an EIN letter (routinely 6-12MB) uploads green, sends, and the
+ * assistant then says it cannot see it. Success followed by refusal is the failure
+ * this file's size check exists to prevent; it was only preventing it for the
+ * document limit.
+ */
+export const MAX_WORKER_IMAGE_MB = 5
+export const MAX_WORKER_IMAGE_BYTES = MAX_WORKER_IMAGE_MB * 1024 * 1024
 
 export function useWorkerAttachments() {
   const [files, setFiles] = useState<StagedAttachment[]>([])
@@ -118,6 +131,14 @@ export function useWorkerAttachments() {
         // worker then says it can't read the file — success followed by refusal.
         if (file.size > MAX_WORKER_FILE_BYTES) {
           return fail(`Too large for the worker to read: ${(file.size / 1024 / 1024).toFixed(1)} MB (max ${MAX_WORKER_FILE_MB} MB).`)
+        }
+        // Images have their own, lower ceiling — see MAX_WORKER_IMAGE_BYTES.
+        // Keyed on the declared type: the server sniffs the real bytes, so a
+        // mislabelled file is still caught there; this is the early, honest warning.
+        if (file.type.startsWith('image/') && file.size > MAX_WORKER_IMAGE_BYTES) {
+          return fail(
+            `Image too large for the worker to look at: ${(file.size / 1024 / 1024).toFixed(1)} MB (max ${MAX_WORKER_IMAGE_MB} MB). Screenshot it or export it smaller.`,
+          )
         }
 
         try {
