@@ -384,7 +384,13 @@ export async function notifyClientOfAdminMessage({
         Buffer.from(html).toString('base64'),
         `--${boundary}--`,
       ].join('\r\n')
-      await gmailPost('/messages/send', { raw: Buffer.from(raw).toString('base64url') })
+      const sent = (await gmailPost('/messages/send', {
+        raw: Buffer.from(raw).toString('base64url'),
+      })) as { id?: string }
+      // File the sent copy under the "Portal chat notifications" label so
+      // these routine emails stay out of the way in Gmail. Never throws.
+      const { labelPortalChatNotification } = await import('@/lib/gmail-labels')
+      await labelPortalChatNotification(sent?.id)
     } catch (err) {
       console.error(`[notifyClientOfAdminMessage] Email failed for ${recipient.email}:`, err)
     }

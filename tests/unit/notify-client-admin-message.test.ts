@@ -19,9 +19,14 @@ vi.mock('@/lib/portal/web-push', () => ({
   sendPushToContact: vi.fn(),
 }))
 
+vi.mock('@/lib/gmail-labels', () => ({
+  labelPortalChatNotification: vi.fn(),
+}))
+
 import { notifyClientOfAdminMessage, dedupeRecipientsByEmail } from '@/lib/portal/notifications'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { gmailPost } from '@/lib/gmail'
+import { labelPortalChatNotification } from '@/lib/gmail-labels'
 
 function extractMimeSubject(raw: string): string {
   const mime = Buffer.from(raw, 'base64url').toString('utf-8')
@@ -116,6 +121,15 @@ describe('notifyClientOfAdminMessage', () => {
     expect(gmailPost).toHaveBeenCalledOnce()
     const { raw } = vi.mocked(gmailPost).mock.calls[0][1] as { raw: string }
     expect(extractMimeTo(raw)).toBe('test@example.com')
+  })
+
+  it('files the sent copy under the portal chat label', async () => {
+    mockDb({ contact: { email: 'label@example.com', full_name: 'Label Test', language: 'en' } })
+    vi.mocked(gmailPost).mockResolvedValue({ id: 'sent-msg-1' })
+
+    await notifyClientOfAdminMessage({ contact_id: 'contact-label-1', messagePreview: 'Label me.' })
+
+    expect(labelPortalChatNotification).toHaveBeenCalledWith('sent-msg-1')
   })
 
   it('sends Italian subject when contact language is it', async () => {

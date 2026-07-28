@@ -25,6 +25,7 @@ import { PortalSwRegister } from '@/components/portal/portal-sw-register'
 import { PortalWakeRefresh } from '@/components/portal/portal-wake-refresh'
 import { PwaInstallPrompt } from '@/components/portal/pwa-install-prompt'
 import { DashboardInstallBanner } from '@/components/portal/dashboard-install-banner'
+import { EnablePushCard } from '@/components/portal/enable-push-card'
 import { PasswordGate } from '@/components/portal/password-gate'
 import { SuspendedGuard } from '@/components/portal/suspended-guard'
 import { ViewAsBanner } from '@/components/portal/view-as-banner'
@@ -296,6 +297,10 @@ export default async function PortalLayout({
           ) : (
             <>
               <DashboardInstallBanner />
+              {/* Installed-app-only: one-tap push opt-in (mobile; desktop has
+                  the header PushToggle). Never shows together with the install
+                  banner — that one hides in standalone mode. */}
+              <EnablePushCard accountId={selectedAccountId || ''} />
               {children}
             </>
           )}
