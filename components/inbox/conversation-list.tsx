@@ -1,11 +1,11 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { useMemo, useRef, useEffect } from 'react'
-import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, ArchiveRestore } from 'lucide-react'
+import { useMemo, useRef, useEffect, useState } from 'react'
+import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, ArchiveRestore, Palette, FolderInput, Ban } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { markByKey } from '@/lib/inbox/color-marks'
+import { markByKey, COLOR_MARKS } from '@/lib/inbox/color-marks'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 import {
   advanceReleases,
@@ -57,6 +57,12 @@ interface ConversationListProps {
   // Gmail filters
   labelFilter?: string | null
   searchQuery?: string
+  /** Row-level quick actions (Antonio 2026-07-28): color-mark and file-to-folder
+   *  straight from the list, without opening the email. Wired to the parent's
+   *  single-email action mutation; absent → the buttons don't render. */
+  userLabels?: Array<{ id: string; name: string }>
+  onSetColor?: (conv: InboxConversation, color: string | null) => void
+  onMoveToLabel?: (conv: InboxConversation, labelId: string, labelName: string) => void
 }
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
@@ -86,8 +92,12 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, onRestored, onRestoredTo, onRestoreFailed, overrides, unread, onUnreadOverride, onReconciled, onPayloadOrigin, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
+export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, onRestored, onRestoredTo, onRestoreFailed, overrides, unread, onUnreadOverride, onReconciled, onPayloadOrigin, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter, userLabels, onSetColor, onMoveToLabel }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
   const queryClient = useQueryClient()
+
+  // Which row's quick-action popover (color palette / folder list) is open.
+  // One at a time; closed by the fixed overlay or by acting.
+  const [rowMenu, setRowMenu] = useState<{ id: string; kind: 'color' | 'label' } | null>(null)
 
   // Toggle a row read/unread from the list (next to the row Delete). Uses the
   // parent's optimistic unread override for instant badge/bold feedback and
@@ -502,6 +512,95 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                 the row actions would be unreachable — Antonio's phone PWA). */}
             {conv.channel === 'gmail' && (
               <div className="shrink-0 self-center flex items-center gap-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                {onSetColor && (
+                  <div className="relative">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setRowMenu(rowMenu?.id === conv.id && rowMenu.kind === 'color' ? null : { id: conv.id, kind: 'color' })
+                      }}
+                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600 transition-colors"
+                      title="Mark with a color"
+                    >
+                      {conv.colorMark ? (
+                        <span
+                          className="block h-4 w-4 rounded-full border border-white shadow-sm"
+                          style={{ backgroundColor: markByKey(conv.colorMark)?.hex }}
+                        />
+                      ) : (
+                        <Palette className="h-4 w-4" />
+                      )}
+                    </button>
+                    {rowMenu?.id === conv.id && rowMenu.kind === 'color' && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setRowMenu(null) }} />
+                        <div className="absolute right-0 top-full mt-1 z-50 bg-white rounded-lg shadow-xl border border-zinc-200 p-2 flex items-center gap-1.5">
+                          {COLOR_MARKS.map(m => (
+                            <button
+                              key={m.key}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setRowMenu(null)
+                                onSetColor(conv, m.key)
+                              }}
+                              className={cn(
+                                'h-5 w-5 rounded-full hover:scale-110 transition-transform',
+                                conv.colorMark === m.key && 'ring-2 ring-offset-1 ring-zinc-400'
+                              )}
+                              style={{ backgroundColor: m.hex }}
+                              title={m.label}
+                            />
+                          ))}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setRowMenu(null)
+                              onSetColor(conv, null)
+                            }}
+                            className="h-5 w-5 rounded-full border border-zinc-300 flex items-center justify-center text-zinc-400 hover:text-zinc-600 hover:scale-110 transition-transform"
+                            title="Remove mark"
+                          >
+                            <Ban className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+                {onMoveToLabel && (userLabels?.length ?? 0) > 0 && (
+                  <div className="relative">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setRowMenu(rowMenu?.id === conv.id && rowMenu.kind === 'label' ? null : { id: conv.id, kind: 'label' })
+                      }}
+                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600 transition-colors"
+                      title="File to folder"
+                    >
+                      <FolderInput className="h-4 w-4" />
+                    </button>
+                    {rowMenu?.id === conv.id && rowMenu.kind === 'label' && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setRowMenu(null) }} />
+                        <div className="absolute right-0 top-full mt-1 z-50 bg-white border rounded-md shadow-xl min-w-[180px] max-h-64 overflow-y-auto py-1">
+                          {userLabels!.map(label => (
+                            <button
+                              key={label.id}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setRowMenu(null)
+                                onMoveToLabel(conv, label.id, label.name)
+                              }}
+                              className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-50 transition-colors"
+                            >
+                              {label.name}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 <button
                   onClick={(e) => {
                     e.stopPropagation()

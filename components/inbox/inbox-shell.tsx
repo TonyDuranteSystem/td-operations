@@ -583,13 +583,13 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     // `mutationFn` on resume. Reading it live meant: open A → Delete → (drop
     // signal / click row B) → the resumed request trashes **B**, a live client
     // email, with no Undo, while A survives (council, 2026-07-16).
-    mutationFn: async ({ action, forwardTo, color, conv }: { action: string; forwardTo?: string; color?: string | null; originView?: string; conv?: InboxConversation | null }) => {
+    mutationFn: async ({ action, forwardTo, color, labelId, conv }: { action: string; forwardTo?: string; color?: string | null; labelId?: string; labelName?: string; originView?: string; conv?: InboxConversation | null }) => {
       if (!conv) return
       const threadId = conv.id.replace('gmail:', '')
       const res = await fetch('/api/inbox/email-actions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ threadId, action, forwardTo, color, mailbox: activeMailbox }),
+        body: JSON.stringify({ threadId, action, forwardTo, color, labelId, mailbox: activeMailbox }),
       })
       if (!res.ok) throw new Error('Action failed')
       return res.json()
@@ -612,6 +612,12 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
           setSelected(prev => prev && prev.id === acted.id ? { ...prev, colorMark } : prev)
         }
         toast.success(colorMark ? `Marked ${markByKey(colorMark)?.label ?? colorMark}` : 'Mark removed')
+        return
+      }
+      if (variables.action === 'move_to_label') {
+        // Gmail semantics: filing ADDS the folder label, the thread stays where
+        // it is — nothing to hide or refetch in the current view.
+        toast.success(variables.labelName ? `Filed to ${variables.labelName}` : 'Filed to folder')
         return
       }
       if (variables.action === 'archive' || variables.action === 'trash') {
@@ -1254,6 +1260,9 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             searchQuery={searchActive ? searchQuery : undefined}
             mailbox={activeMailbox}
             unreadFilter={unreadFilter}
+            userLabels={userLabels}
+            onSetColor={(conv, color) => emailActionMutation.mutate({ action: 'set_color', color, conv })}
+            onMoveToLabel={(conv, labelId, labelName) => emailActionMutation.mutate({ action: 'move_to_label', labelId, labelName, conv })}
           />
         </div>
 
