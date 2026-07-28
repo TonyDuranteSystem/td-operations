@@ -14,8 +14,30 @@
  * Needs GOOGLE_SA_KEY in the environment (same credential the app uses).
  */
 
-import { gmailGet, gmailPost } from '../lib/gmail'
+import { gmailGet, getGmailToken } from '../lib/gmail'
 import { getOrCreateLabelId, PORTAL_CHAT_LABEL } from '../lib/gmail-labels'
+
+/**
+ * batchModify returns 204 No Content on success — gmailPost() would crash
+ * trying to JSON-parse the empty body, so call the endpoint directly.
+ */
+async function batchAddLabel(ids: string[], labelId: string): Promise<void> {
+  const { token, userEmail } = await getGmailToken()
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/${userEmail}/messages/batchModify`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ids, addLabelIds: [labelId] }),
+    },
+  )
+  if (!res.ok) {
+    throw new Error(`Gmail batchModify ${res.status}: ${await res.text()}`)
+  }
+}
 
 // Exact subjects produced by notifyClientOfAdminMessage (EN + IT).
 const QUERY = [
@@ -57,10 +79,7 @@ async function main() {
 
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     const batch = ids.slice(i, i + BATCH_SIZE)
-    await gmailPost('/messages/batchModify', {
-      ids: batch,
-      addLabelIds: [labelId],
-    })
+    await batchAddLabel(batch, labelId)
     console.warn(`Labeled ${Math.min(i + BATCH_SIZE, ids.length)}/${ids.length}`)
   }
   console.warn('Done.')
