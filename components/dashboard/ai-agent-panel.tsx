@@ -145,7 +145,13 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     const el = inputRef.current
     if (!el) return
     const min = 84 // ≈ 3 lines — enough to see a full sentence while typing
-    const max = Math.max(min, Math.min(260, Math.round(window.innerHeight * 0.35)))
+    // A viewport share, but never TRUSTED BLINDLY: window.innerHeight can be 0 in
+    // a hidden/background tab and during some embedded runs (measured 0 in QA). A
+    // bare Math.min against that collapses the ceiling onto the minimum and the
+    // box can never grow — the very bug this effect exists to fix. So fall back to
+    // a normal desktop height, and keep a floor well above `min`.
+    const vh = Number.isFinite(window.innerHeight) && window.innerHeight > 0 ? window.innerHeight : 800
+    const max = Math.max(min + 60, Math.min(260, Math.round(vh * 0.35)))
     el.style.height = '0px'
     const next = Math.max(min, Math.min(el.scrollHeight, max))
     el.style.height = next + 'px'
