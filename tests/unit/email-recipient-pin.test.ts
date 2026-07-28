@@ -234,12 +234,26 @@ describe("executeWorkerTool — confirm-off-thread capture (the staff 'Confirm &
     expect(captured).toEqual(["valerio@gmail.com"])
   })
 
-  it("the bypass claim is gone and the confirm-button instruction is present in the refusal", async () => {
+  // CONTRACT CHANGED 2026-07-28. The refusal used to end by telling the staff member
+  // to press "Confirm & send" — on EVERY surface with a pin, while only one rendered
+  // that control (reported by Luca 2026-07-20 and again 2026-07-28). It now never
+  // names a button: reaching this refusal means a confirm card could NOT be produced
+  // for this call, because when one can be the executor freezes the draft and returns
+  // before here. A promise made from this point could only ever be false.
+  it("refuses without naming a Confirm button that does not exist on this screen", async () => {
     const r = await executeWorkerTool("send_email", { ...good, to: "valerio@gmail.com" }, available, null, null, {
       pinnedEmailRecipients: ["client@acme.com"], capturedOffThreadAttempts: [],
     })
     expect(r).toMatch(/CANNOT be bypassed/i)
-    expect(r).toMatch(/Confirm & send/i)
+    // The old positive instruction — "ask them to press the 'Confirm & send' button
+    // in this panel" — must be gone. Asserted on the INSTRUCTION, not on the word
+    // "Confirm": the replacement text deliberately says "do NOT tell the staff member
+    // to press a Confirm button", so a bare keyword match would fail on the fix itself.
+    expect(r).not.toMatch(/ask them to press/i)
+    expect(r).not.toMatch(/button in this panel/i)
+    expect(r).toMatch(/Do NOT tell the staff member to press/i)
+    // It must still hand the staff member what they need to act themselves.
+    expect(r).toMatch(/show them the exact address/i)
   })
 })
 

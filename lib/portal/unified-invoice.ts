@@ -236,6 +236,19 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
  * Only operates on client_invoices — no payments sync.
  * For TD invoice sync, use syncTDInvoiceStatus from td-invoice.ts.
  */
+/**
+ * Map an invoice-lifecycle status to a value the `payment_status` ENUM accepts.
+ * The enum has no 'Sent' / 'Partial' / 'Draft' labels — its open-invoice value is
+ * 'Pending'. Everything else ('Paid', 'Overdue', 'Cancelled', …) exists in both
+ * vocabularies and passes through. Pure and exported so the mapping is pinned by
+ * tests: an unmapped value here is a silently-rejected database write.
+ */
+export function toPaymentEnumStatus(newStatus: string): string {
+  return newStatus === 'Sent' || newStatus === 'Partial' || newStatus === 'Draft'
+    ? 'Pending'
+    : newStatus
+}
+
 export async function syncInvoiceStatus(
   source: 'invoice' | 'payment',
   id: string,
@@ -267,9 +280,18 @@ export async function syncInvoiceStatus(
       )
     }
 
+    // The two status columns speak DIFFERENT vocabularies. `invoice_status` is the invoice
+    // lifecycle (Draft/Sent/Partial/Overdue/Paid/…). `status` is the ENUM `payment_status`,
+    // which has NO 'Sent', 'Partial' or 'Draft' labels — its open-invoice value is 'Pending'.
+    // Passing the lifecycle value straight through made Postgres reject the ENTIRE update
+    // with an enum error, silently (nothing checked the result): that is how un-marking a
+    // renegotiated Overdue invoice reported success while changing nothing (Shoppyverse,
+    // 2026-07-28). Map to a legal enum label; pass through the labels that exist in both.
+    const paymentEnumStatus = toPaymentEnumStatus(newStatus)
+
     // Update the payment record
     const payUpdates: Record<string, unknown> = {
-      status: newStatus === 'Paid' ? 'Paid' : newStatus === 'Overdue' ? 'Overdue' : newStatus,
+      status: paymentEnumStatus,
       invoice_status: newStatus,
       updated_at: new Date().toISOString(),
     }
@@ -278,7 +300,13 @@ export async function syncInvoiceStatus(
       payUpdates.amount_paid = amountPaid
     }
     // eslint-disable-next-line no-restricted-syntax -- legacy syncInvoiceStatus payment update; tracked by dev_task 7ebb1e0c
-    await supabaseAdmin.from('payments').update(payUpdates).eq('id', id)
+    const { error: payStatusErr } = await supabaseAdmin.from('payments').update(payUpdates).eq('id', id)
+    // A write you did not verify is not a write (the feed-write lesson, relearned here):
+    // supabase-js RETURNS errors, and this exact update was being rejected for months of
+    // one-way Overdue marking history without anyone knowing a failure was even possible.
+    if (payStatusErr) {
+      throw new Error(`Invoice status update rejected by the database: ${payStatusErr.message}`)
+    }
 
     // Also sync to client_expenses (TD invoice → expense mirror)
     const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')

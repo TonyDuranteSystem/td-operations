@@ -276,3 +276,96 @@ export async function recallThreadHistory(
   if (error) throw new Error(`recallThreadHistory failed: ${error.message ?? "unknown error"}`)
   return formatRecalledTurns(threadId, (data ?? []) as ThreadMessageRow[], query, maxTurns)
 }
+
+// ── Real conversation replay ─────────────────────────────────────────────────
+
+/** One prior exchange, ready to be sent as real API messages. */
+export interface ReplayTurn {
+  user: string
+  assistant: string
+}
+
+/** How many prior exchanges are replayed verbatim. Everything older falls back to
+ *  the extractive summary, which is what `formatThreadContext` is for. Small on
+ *  purpose: the complaint is almost always about the immediately preceding reply,
+ *  and every replayed character is re-sent on EVERY iteration of the tool loop. */
+export const REPLAY_TURNS = 4
+/** Ceiling on replayed characters, newest-first. A turn count alone under-protects
+ *  a surface whose stored bodies are large; a byte budget alone can leave one giant
+ *  turn and no conversation. Both dials, together. */
+export const REPLAY_CHAR_BUDGET = 40_000
+
+/** Strip per-turn server assertions from a stored body before replaying it.
+ *
+ *  These are statements about the CURRENT turn — which addresses may be emailed,
+ *  which uploads are attachable, what media was dropped, and "an image is shown
+ *  above". Replayed on a later turn they are simply false: the allow-list has moved
+ *  on, the refs point at a different upload, and the image is not attached any more.
+ *  The client card is already never persisted for exactly this reason; these blocks
+ *  were the ones that slipped through. */
+export function stripPerTurnAssertions(text: string): string {
+  return (text ?? "")
+    .replace(/\[EMAIL RULE[^\]]*\]/g, "")
+    .replace(/\[FILES YOU CAN ATTACH[^\]]*\]/g, "")
+    .replace(/\[Not attached:[^\]]*\]/g, "")
+    // Past-tense rewrite rather than deletion: the model should know a file was
+    // discussed, but must never believe it is in front of it now.
+    .replace(/\[Attached image "([^"]*)"[^\]]*\]/g, '[An image "$1" was shown on that earlier turn — it is NOT attached now.]')
+    .replace(/\[Attached file "([^"]*)"[^\]]*\]/g, '[A file "$1" was read on that earlier turn — its contents are not repeated here.]')
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
+/**
+ * Build the real prior exchanges for a thread.
+ *
+ * ⛔ ONLY COMPLETE, SUCCESSFUL PAIRS. A row with a body and no reply is a turn that
+ * was killed mid-flight; a failed row holds an exception string in `reply`. Replaying
+ * either produces two consecutive user turns — a shape the API rejects and that this
+ * loop elsewhere goes out of its way to avoid — which would break that conversation
+ * for every later message, permanently. The panel already hides these from the human;
+ * the model must not see them either, or the two transcripts disagree.
+ */
+export async function buildReplayTurns(
+  threadId: string,
+  opts: { excludeMessageId?: string; turns?: number; charBudget?: number } = {},
+): Promise<ReplayTurn[]> {
+  if (!threadId || typeof threadId !== "string") return []
+  const limit = opts.turns ?? REPLAY_TURNS
+  const budget = opts.charBudget ?? REPLAY_CHAR_BUDGET
+
+  // Newest-first with a row limit — the old query read the ENTIRE thread every turn.
+  const { data, error } = await db()
+    .from("agent_messages")
+    .select("id, sender, recipient, body, reply, status, context_json, created_at")
+    .eq("thread_id", threadId)
+    .eq("recipient", "worker")
+    .eq("status", "done")
+    .order("created_at", { ascending: false })
+    .limit(limit + 5) // a little slack, since some rows still fail the pair filter
+  if (error || !data) return []
+
+  const out: ReplayTurn[] = []
+  let used = 0
+  for (const row of data as Array<{
+    id: string
+    body: string | null
+    reply: string | null
+    context_json: { user_message?: string } | null
+  }>) {
+    if (opts.excludeMessageId && row.id === opts.excludeMessageId) continue
+    // The human's own words where the surface stored them; the body is a fallback
+    // for older rows written before that was the case.
+    const rawUser = stripPerTurnAssertions(row.context_json?.user_message ?? row.body ?? "")
+    const assistant = (row.reply ?? "").trim()
+    // Both halves or neither — this is the rule that keeps the roles alternating.
+    if (!rawUser || !assistant) continue
+    const cost = rawUser.length + assistant.length
+    if (used + cost > budget) break
+    used += cost
+    out.push({ user: rawUser, assistant })
+    if (out.length >= limit) break
+  }
+  // Fetched newest-first; conversations read oldest-first.
+  return out.reverse()
+}

@@ -558,6 +558,10 @@ export async function POST(req: NextRequest) {
       // text, so it has its own kill switch (see full-reach.ts).
       enableFullToolReach: fullReachEnabledFor(surface === "portal-chats" ? "portal_chat" : "inbox"),
       maxIterations: 20,
+      // Real conversation on this surface: the thread is per-email (or per-client for
+      // Portal Chats), never shared between people, so replay cannot show one staff
+      // member another's exchange.
+      enableConversationReplay: true,
       ...sendRails,
       // Canonical per-client memory namespace: the wire/thread scope stays
       // 'acct-<id>'/'contact-<id>' (changing it would orphan every existing
