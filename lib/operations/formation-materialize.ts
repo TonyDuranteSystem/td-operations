@@ -106,6 +106,203 @@ export interface MaterializeFormationResult {
 
 const VALID_STATE_CODES = new Set(["NM", "WY", "FL", "DE"])
 
+// ─── Shared formation-source resolver (materializer + preflight) ─────────────
+
+/** The two rows the source decision is made from. */
+export interface FormationSourceRows {
+  sub: {
+    id: string
+    submitted_data: unknown
+    upload_paths: unknown
+    state: string | null
+    entity_type: string | null
+    created_at: string | null
+  } | null
+  wp: { id: string; data: unknown; lead_id: string | null; created_at: string | null } | null
+}
+
+export interface FormationSourceData {
+  submissionId: string | null
+  resolverSource: "formation_submissions" | "wizard_progress"
+  submittedData: Record<string, unknown>
+  uploadPaths: string[]
+  submissionState: string | null
+  submissionEntityType: string | null
+  wizardData: Record<string, unknown>
+  wp: FormationSourceRows["wp"]
+  /** Human note when a submission row was deliberately bypassed (recency pin). */
+  note: string | null
+}
+
+/**
+ * PURE decision: which data source feeds materialization.
+ *
+ * Recency pin (council 2026-07-28): when the newest submission predates the
+ * CURRENT wizard run, it belongs to an EARLIER formation — using it would
+ * bleed the old company's entity type / members / passports into the new one
+ * (returning-client hazard). In that case the wizard fallback wins.
+ */
+export function selectFormationSource(rows: FormationSourceRows): FormationSourceData {
+  const { sub, wp } = rows
+  const wizardData = (wp?.data || {}) as Record<string, unknown>
+
+  const subIsStale = !!(
+    sub && wp?.created_at && sub.created_at && sub.created_at < wp.created_at
+  )
+
+  if (sub && !subIsStale) {
+    return {
+      submissionId: sub.id,
+      resolverSource: "formation_submissions",
+      submittedData: (sub.submitted_data || {}) as Record<string, unknown>,
+      uploadPaths: Array.isArray(sub.upload_paths) ? (sub.upload_paths as string[]) : [],
+      submissionState: sub.state ?? null,
+      submissionEntityType: sub.entity_type ?? null,
+      wizardData,
+      wp,
+      note: null,
+    }
+  }
+
+  // Wizard fallback — extract upload paths using the same convention
+  // wizard-submit uses (any string value starting with "formation/").
+  const uploadPaths: string[] = []
+  for (const val of Object.values(wizardData)) {
+    if (typeof val === "string" && val.startsWith("formation/")) uploadPaths.push(val)
+  }
+  return {
+    submissionId: null,
+    resolverSource: "wizard_progress",
+    submittedData: wizardData,
+    uploadPaths,
+    submissionState: null,
+    submissionEntityType: (wizardData.entity_type as string | undefined) ?? null,
+    wizardData,
+    wp,
+    note: sub && subIsStale
+      ? `Newest submission ${sub.id} (${sub.created_at}) predates the current wizard run (${wp?.created_at}) — treated as a previous formation's data; using the wizard data instead.`
+      : null,
+  }
+}
+
+/**
+ * Fetch + select the formation data source for a contact.
+ *
+ * The submission read accepts status 'completed' OR 'reviewed', newest first:
+ * the formation-setup job auto-flips every submission to 'reviewed' seconds
+ * after submit, so a completed-only read matched NOTHING for any normally
+ * processed client and silently starved the entity-type resolver (the
+ * Covelli/DoctorGut incident, 2026-07-28). One query, newest first — never
+ * 'completed' before a newer 'reviewed' row (a stale completed row from an
+ * older formation must not win).
+ */
+export async function fetchFormationSourceData(contactId: string): Promise<FormationSourceData> {
+  const { data: sub } = await supabaseAdmin
+    .from("formation_submissions")
+    .select("id, submitted_data, upload_paths, state, entity_type, created_at")
+    .eq("contact_id", contactId)
+    .in("status", ["completed", "reviewed"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const { data: wp } = await supabaseAdmin
+    .from("wizard_progress")
+    .select("id, data, lead_id, created_at")
+    .eq("contact_id", contactId)
+    .eq("wizard_type", "formation")
+    .eq("status", "submitted")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  return selectFormationSource({ sub: sub ?? null, wp: wp ?? null })
+}
+
+// ─── Deterministic preflight (dry-run of the materialization gates) ──────────
+
+export type FormationPreflightFailure =
+  | "missing_submission"
+  | "missing_chosen_name"
+  | "missing_entity_type"
+
+export interface FormationMaterializePreflightResult {
+  ok: boolean
+  failure?: FormationPreflightFailure
+  error?: string
+  chosen_name?: string | null
+  entity_code?: "SMLLC" | "MMLLC"
+  entity_source?: string
+  entity_detail?: string
+}
+
+/**
+ * Read-only dry-run of the DETERMINISTIC gates materializeFormationCompany
+ * applies: formation data present, a chosen company name, and a resolvable
+ * entity type. Used (a) by advanceServiceDelivery to REFUSE the advance into
+ * "Articles Received" BEFORE the stage move commits — a deterministic
+ * materialization failure must never be a silent success (Covelli/DoctorGut,
+ * council 2026-07-28) — and (b) by the workspace Articles-upload modal to
+ * decide whether to require the staff LLC-type field. Mutates nothing. Must
+ * stay in lockstep with the materializer's own resolution (same source
+ * selection via fetchFormationSourceData, same resolver inputs).
+ */
+export async function preflightFormationMaterialization(input: {
+  contact_id: string
+  /** The confirmed/filed company name when the caller has one (name_checks). */
+  chosen_name?: string | null
+  /** Staff-supplied LLC-type override (wins over every other source). */
+  entity_type?: "SMLLC" | "MMLLC" | null
+}): Promise<FormationMaterializePreflightResult> {
+  const src = await fetchFormationSourceData(input.contact_id)
+
+  if (src.resolverSource === "wizard_progress" && !src.wp) {
+    return {
+      ok: false,
+      failure: "missing_submission",
+      error:
+        "No completed formation submission and no submitted formation wizard found for this contact. Ask the client to (re)submit the formation wizard from the portal.",
+    }
+  }
+
+  const chosenName = String(
+    input.chosen_name || src.wizardData.chosen_name_final || src.wizardData.chosen_name || "",
+  ).trim()
+  if (!chosenName) {
+    return {
+      ok: false,
+      failure: "missing_chosen_name",
+      error:
+        "No confirmed company name yet. Mark the filed LLC name first (Name checks → the name the state approved).",
+    }
+  }
+
+  const { resolveEntityTypeForFormation } = await import("@/lib/portal/entity-type-from-contract")
+  const resolution = await resolveEntityTypeForFormation({
+    contactId: input.contact_id,
+    leadId: src.wp?.lead_id ?? null,
+    adminOverride: input.entity_type ?? null,
+    submissionEntityType: src.submissionEntityType,
+    wizardEntityType: (src.wizardData.entity_type as string | undefined) ?? null,
+  })
+  if (resolution.source === "corporation_manual" || !resolution.wizardCode || !resolution.accountLabel) {
+    return {
+      ok: false,
+      failure: "missing_entity_type",
+      error: resolution.detail,
+      chosen_name: chosenName,
+    }
+  }
+
+  return {
+    ok: true,
+    chosen_name: chosenName,
+    entity_code: resolution.wizardCode,
+    entity_source: resolution.source,
+    entity_detail: resolution.detail,
+  }
+}
+
 export async function materializeFormationCompany(
   params: MaterializeFormationParams,
 ): Promise<MaterializeFormationResult> {
@@ -127,53 +324,25 @@ export async function materializeFormationCompany(
     index: number
   }[] = []
 
-  // Flexible formation-data resolver: prefer formation_submissions; fall back
-  // to wizard_progress.data when the row is missing. Admin-supplied state
+  // Flexible formation-data resolver — shared with the deterministic preflight
+  // (fetchFormationSourceData / selectFormationSource above): newest submission
+  // in status completed OR reviewed, wizard fallback when it is missing or
+  // belongs to an earlier formation (recency pin). Admin-supplied state
   // (params.formation_state) overrides any state on the submission row, since
   // wizard_progress never captures the formation state and admin is the only
   // source of truth at upload time.
-  let resolverSource: "formation_submissions" | "wizard_progress" = "formation_submissions"
-  let submittedData: Record<string, unknown> = {}
-  let uploadPaths: string[] = []
-  let submissionState: string | null = null
-  let submissionEntityType: string | null = null
-  let submissionId: string | null = null
-
   try {
-    // 1a. Try formation_submissions first.
-    const { data: sub } = await supabaseAdmin
-      .from("formation_submissions")
-      .select("id, submitted_data, upload_paths, state, entity_type")
-      .eq("contact_id", params.contact_id)
-      .eq("status", "completed")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    const src = await fetchFormationSourceData(params.contact_id)
+    const { resolverSource, submittedData, uploadPaths, submissionState, submissionEntityType, submissionId } = src
+    const wp = src.wp
+    const wizardData = src.wizardData
 
-    // 2. Wizard progress (always read — needed for chosen_name and for fallback data).
-    const { data: wp } = await supabaseAdmin
-      .from("wizard_progress")
-      .select("id, data, lead_id")
-      .eq("contact_id", params.contact_id)
-      .eq("wizard_type", "formation")
-      .eq("status", "submitted")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    const wizardData = (wp?.data || {}) as Record<string, unknown>
-
-    if (sub) {
-      submissionId = sub.id
-      submittedData = (sub.submitted_data || {}) as Record<string, unknown>
-      uploadPaths = Array.isArray(sub.upload_paths) ? (sub.upload_paths as string[]) : []
-      submissionState = sub.state ?? null
-      submissionEntityType = sub.entity_type ?? null
-      steps.push({ step: "fetch_submission", status: "ok", detail: `formation_submissions ${sub.id}` })
+    if (resolverSource === "formation_submissions") {
+      steps.push({ step: "fetch_submission", status: "ok", detail: `formation_submissions ${submissionId}` })
     } else {
-      // 1b. Fallback to wizard_progress.data. Surgical recovery path for the
-      // pre-fix wizard-submit window where formation_submissions could be
-      // missing while wizard_progress was correctly written.
+      // Wizard fallback. Surgical recovery path for the pre-fix wizard-submit
+      // window where formation_submissions could be missing while
+      // wizard_progress was correctly written — and for the recency pin.
       if (!wp) {
         return {
           success: false,
@@ -183,19 +352,12 @@ export async function materializeFormationCompany(
             "No completed formation submission found for this contact, and no submitted formation wizard either. Ask the client to (re)submit the formation wizard from the portal.",
         }
       }
-      resolverSource = "wizard_progress"
-      submittedData = wizardData
-      // Extract upload paths from the wizard data using the same convention
-      // wizard-submit uses (any string value starting with "formation/").
-      for (const val of Object.values(wizardData)) {
-        if (typeof val === "string" && val.startsWith("formation/")) uploadPaths.push(val)
-      }
-      submissionState = null
-      submissionEntityType = (wizardData.entity_type as string | undefined) ?? null
       steps.push({
         step: "fetch_submission",
         status: "skipped",
-        detail: `No formation_submissions row — falling back to wizard_progress ${wp.id} (self-heal will write the missing row on success)`,
+        detail:
+          src.note ??
+          `No formation_submissions row — falling back to wizard_progress ${wp.id} (self-heal will write the missing row on success)`,
       })
     }
 

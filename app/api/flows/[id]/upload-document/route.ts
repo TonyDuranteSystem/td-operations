@@ -54,6 +54,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       typeof body.formation_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.formation_date)
         ? body.formation_date
         : undefined
+    // Staff-supplied LLC type from the Articles-upload modal — required by the
+    // materializer when contract/form/wizard cannot resolve it (Covelli case).
+    const entityType: 'SMLLC' | 'MMLLC' | undefined =
+      body.entity_type === 'SMLLC' || body.entity_type === 'MMLLC' ? body.entity_type : undefined
     // Default true: every existing upload stage auto-advances. A caller can opt
     // out (auto_advance:false) when a separate action owns the advance — e.g. the
     // Tax Return "Tax Return Prepared" stage, where "Send for Signature" advances.
@@ -338,7 +342,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // transition into the final stage). We do NOT bump the date here — that
     // would double it. Best-effort: a failed/at-final advance must NOT fail the
     // upload that already succeeded.
-    let advance: { success: boolean; to_stage?: string; is_completed?: boolean; error?: string } = {
+    let advance: {
+      success: boolean
+      to_stage?: string
+      is_completed?: boolean
+      error?: string
+      materialization?: { attempted: boolean; outcome: string; account_id?: string; error?: string }
+    } = {
       success: false,
     }
     // isItinApprovalUpload: "ITIN Approved" is terminal — the finalize step
@@ -348,6 +358,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         const result = await advanceServiceDelivery({
           delivery_id: serviceDeliveryId,
           formation_date: formationDate,
+          entity_type: entityType,
           actor: 'flow-upload',
           notes: `Document uploaded: ${fileName}`,
         })
@@ -356,6 +367,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           to_stage: result.to_stage,
           is_completed: result.is_completed,
           error: result.error,
+          // Structured Company-Formation materialization outcome — previously
+          // discarded here, which made a failed company creation look like a
+          // clean upload (Covelli/DoctorGut silent failure).
+          materialization: result.materialization,
         }
       } catch (advErr) {
         // "Already at final stage" / intake-stage guard / approval-required all land
@@ -375,6 +390,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     let detail = `${effectiveName} uploaded`
     if (docRegisterWarning) {
       detail += ` — ⚠️ ${docRegisterWarning}`
+    }
+    // Company-Formation materialization: never let a failed company creation
+    // read as a clean upload. A refusal (deterministic preflight) or a
+    // transient materialization error both show up here AND in `advance`.
+    if (advance.materialization?.error) {
+      detail += ` — ⚠️ ${advance.materialization.error}`
+    } else if (autoAdvance && !isItinApprovalUpload && !advance.success && advance.error && flowStage === 'Filed with State') {
+      detail += ` — ⚠️ The file is saved, but the flow did NOT advance: ${advance.error}`
     }
     if (itinFinalize) {
       if (itinFinalize.finalized) {
