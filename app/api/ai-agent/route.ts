@@ -198,6 +198,9 @@ async function runSidebarWorker(args: {
 }): Promise<NextResponse> {
   const { userId, userEmail, conversationId, clientKey, attachment, attachments } = args
   let { userBody } = args
+  // Captured BEFORE any enrichment: what the staff member actually typed. Used as
+  // the stored user_message (and therefore as what is replayed and displayed).
+  const rawUserMessage = args.userBody
   // Per-conversation thread when the panel supplies an id (a "new chat" mints a
   // fresh one → fresh memory); otherwise a stable per-user thread.
   const scope = `dashboard-${userId}${conversationId ? `-${conversationId}` : ''}`
@@ -282,6 +285,25 @@ async function runSidebarWorker(args: {
   // Persist the turn (memory). Degrade to a memoryless turn if the insert fails.
   let rowId: string | null = null
   try {
+    // ⛔ RECOVER A CRASHED TURN FIRST. A turn killed mid-flight (function timeout,
+    // OOM) leaves its row stuck at 'processing'. A partial unique index allows only
+    // ONE in-flight row per conversation, so every later message collided with the
+    // corpse, fell through to a memoryless turn, and the conversation stopped
+    // remembering anything — silently and permanently. The Inbox has swept these
+    // since it shipped; the sidebar never got the same treatment. Five minutes is
+    // comfortably past the 300s request ceiling, so a live turn is never swept.
+    try {
+      await db
+        .from('agent_messages')
+        .update({ status: 'failed', reply: '(this turn was interrupted and did not finish)' })
+        .eq('thread_id', threadId)
+        .eq('recipient', 'worker')
+        .eq('status', 'processing')
+        .lt('created_at', new Date(Date.now() - 5 * 60 * 1000).toISOString())
+    } catch (err) {
+      console.warn('[ai-agent] stale-turn sweep failed (continuing):', err)
+    }
+
     const { data: inserted, error: insertError } = await db
       .from('agent_messages')
       .insert({
@@ -295,7 +317,11 @@ async function runSidebarWorker(args: {
           source: 'crm-worker',
           surface: 'dashboard',
           crm_scope_key: scope,
-          user_message: userBody,
+          // The RAW words, not the enriched body. `userBody` has by now had file
+          // text, fences and drop-notes appended; storing that as "what the user
+          // said" is why the conversation list shows machine text, and replaying it
+          // would re-inject a whole attachment on every later turn.
+          user_message: rawUserMessage,
           ...(clientKey ? { client_key: clientKey } : {}),
           user_email: userEmail,
         },
@@ -406,10 +432,25 @@ async function runSidebarWorker(args: {
       // WHO asked. Without it a send from here is logged as the generic worker and
       // "who told it to do that" has no answer.
       sendActor: `crm-sidebar:${userEmail ?? userId}`,
-      // Server-enforced client boundary: on a client page the assistant may not look
-      // up a DIFFERENT client. Note this is the control that was dead until this job —
-      // it only works because the context builder now forwards it.
-      ...(rails.clientScope ? { clientScope: rails.clientScope } : {}),
+      // ⛔ NO CLIENT BOUNDARY ON THIS SURFACE — deliberate, Antonio 2026-07-28:
+      // "the AI agent tab in the CRM is the main AI in the CRM that can understand
+      // everything, can read everything... instead of using claude.com, we use the AI
+      // agent in the CRM."
+      //
+      // The boundary was built for Portal Chats, where a CLIENT's own words sit in
+      // context next to a live send rail — there, refusing a lookup about a different
+      // client is real protection. The sidebar is staff-only and the staff member can
+      // open any client's page anyway, so the boundary bought nothing and cost exactly
+      // the complaint: an assistant that forgets a client the moment you navigate.
+      // WHAT STILL HOLDS is the thing that matters — sending. The recipient pin is
+      // untouched, and an address off it now becomes a frozen draft the human reads
+      // and confirms. Knowledge is open; ACTION still needs a person.
+      //
+      // Conversation replay is enabled here and on the Inbox only — the surfaces the
+      // complaint came from. Slack shares one thread between people for 30 minutes and
+      // team chat already injects its own recap of the room; replaying on either would
+      // show one person another's conversation, or duplicate what is already there.
+      enableConversationReplay: true,
       // Per-page client scope → the brain recalls this client's own lessons and
       // any save is scoped to them. Derived from the live route each turn.
       ...(clientKey ? { clientKey } : {}),
