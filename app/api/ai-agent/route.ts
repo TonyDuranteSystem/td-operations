@@ -205,12 +205,25 @@ async function runSidebarWorker(args: {
   // fresh one → fresh memory); otherwise a stable per-user thread.
   const scope = `dashboard-${userId}${conversationId ? `-${conversationId}` : ''}`
   const threadId = deterministicThreadUuid(scope)
-  // Marks the start of THIS turn, so a confirm card is only offered for a draft
-  // this turn actually created — never a stale pending one from an earlier ask.
-  const turnStartedAt = Date.now()
+  // Ids of prepared sends that ALREADY existed when this turn began, so a confirm
+  // card is only offered for a draft this turn actually created. ID-BASED, not a
+  // clock comparison: comparing the database's now() against this process's clock
+  // can drop THIS turn's card on skew, and the worker would then tell the staff
+  // member to press a button that isn't on screen (the false-capability class).
+  // Populated just below, once the db client exists.
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
+
+  const priorPreparedIds = new Set<string>()
+  {
+    const { data: existing } = await db
+      .from('worker_prepared_sends')
+      .select('id')
+      .eq('thread_uuid', threadId)
+      .eq('status', 'pending')
+    for (const r of (existing ?? []) as Array<{ id: string }>) priorPreparedIds.add(r.id)
+  }
 
   // Read the staff member's upload, if any. Images become vision blocks, scanned PDFs
   // become native document blocks, everything else is extracted to text and appended to
@@ -476,7 +489,8 @@ async function runSidebarWorker(args: {
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle()
-      if (prep && (!turnStartedAt || new Date(prep.created_at).getTime() >= turnStartedAt)) {
+      // Only a row THIS turn created — id snapshot, so no clock skew.
+      if (prep && !priorPreparedIds.has(prep.id)) {
         preparedSend = { id: prep.id, to: prep.to_address, subject: prep.subject, body: prep.body ?? '' }
       }
     } catch (err) {

@@ -48,6 +48,23 @@ describe("buildWorkerSendContext — the controls survive the handoff", () => {
     expect(ctx!.emailConfirmExempt).toEqual(["someone@example.com"])
   })
 
+  it("forwards forceMailbox — the antonio@-impersonation control", () => {
+    // MANDATED by buildWorkerSendContext's own docblock: every new control field must
+    // be asserted here. Without this, dropping forceMailbox from the builder would
+    // leave every executor-level test green (they pass the field directly) while a
+    // team member could send as Antonio from a surface that cannot authorise it.
+    const ctx = buildWorkerSendContext({ forceMailbox: "support" })
+    expect(ctx).toBeDefined()
+    expect(ctx!.forceMailbox).toBe("support")
+  })
+
+  it("forwards emailSendPrep — without it a new recipient cannot be frozen for confirmation", () => {
+    const prep = { threadUuid: "t1", mailbox: "support@tonydurante.us", sendable: [] }
+    const ctx = buildWorkerSendContext({ emailSendPrep: prep })
+    expect(ctx).toBeDefined()
+    expect(ctx!.emailSendPrep).toEqual(prep)
+  })
+
   it("forwards onBehalfOf (team-chat self-notification silencer) and builds a context for it alone", () => {
     // A dropped field here would silently revive Antonio's self-notifications —
     // the exact class of wiring bug this file exists for.

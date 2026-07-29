@@ -198,7 +198,12 @@ describe("executeWorkerTool — confirm-off-thread capture (the staff 'Confirm &
     executeTool.mockResolvedValue('{"success":true}')
   })
 
-  it("captures the refused off-thread address SERVER-SIDE for the confirm button", async () => {
+  it("REMOVED 2026-07-29: the legacy address capture no longer populates", async () => {
+    // The captured address drove a second button ("Confirm & send to this address")
+    // that RE-RAN the model, so the email that left was a fresh draft rather than the
+    // one the staff member read — and because the frozen row stayed pending, the
+    // proper card could then send a SECOND copy. The frozen payload is the only
+    // confirm path now, so nothing must be captured for a button that is gone.
     const captured: string[] = []
     const r = await executeWorkerTool(
       "send_email",
@@ -210,8 +215,7 @@ describe("executeWorkerTool — confirm-off-thread capture (the staff 'Confirm &
     )
     expect(r).toMatch(/can't send/i)
     expect(executeTool).not.toHaveBeenCalled()
-    // The parsed bare address (not the display-name form) is captured.
-    expect(captured).toEqual(["valerio@gmail.com"])
+    expect(captured).toEqual([])
   })
 
   it("captures nothing when the send was allowed", async () => {
@@ -222,8 +226,7 @@ describe("executeWorkerTool — confirm-off-thread capture (the staff 'Confirm &
     expect(captured).toEqual([])
   })
 
-  it("once the confirmed address is ON the widened allow-list, the SAME address sends", async () => {
-    // Simulates the route appending body.confirmedRecipient to the pin.
+  it("an address on the exempt list sends directly (no confirm friction)", async () => {
     const captured: string[] = []
     const r = await executeWorkerTool(
       "send_email",
@@ -238,12 +241,34 @@ describe("executeWorkerTool — confirm-off-thread capture (the staff 'Confirm &
     expect(captured).toEqual([]) // allowed → nothing to confirm
   })
 
-  it("does not double-capture the same address across retries in one turn", async () => {
+  it("stays empty across retries too — no surface builds a button from it any more", async () => {
     const captured: string[] = []
     const ctx = { emailConfirmExempt: ["client@acme.com"], capturedOffThreadAttempts: captured }
     await executeWorkerTool("send_email", { ...good, to: "valerio@gmail.com" }, available, null, null, ctx)
     await executeWorkerTool("send_email", { ...good, to: "valerio@gmail.com" }, available, null, null, ctx)
-    expect(captured).toEqual(["valerio@gmail.com"])
+    expect(captured).toEqual([])
+  })
+
+  it("a `to` with SEVERAL addresses is never frozen — one would be silently dropped", async () => {
+    // "email the client and their accountant" produced to: "client@…, giulia@…".
+    // Only the NEW address came back rejected, so freezing it alone sent to the
+    // accountant ONLY while the card named just her — staff would believe the client
+    // was included. And an unparseable multi-address string would have been frozen
+    // verbatim and delivered to both, since the freeze path skips prepare's parser.
+    const r = await executeWorkerTool(
+      "send_email",
+      { ...good, to: "client@acme.com, giulia@studio.it" },
+      available,
+      null,
+      null,
+      {
+        emailConfirmExempt: ["client@acme.com"],
+        emailSendPrep: { threadUuid: "t1", mailbox: "support@tonydurante.us", sendable: [] },
+      },
+    )
+    expect(prepareWorkerEmailSend).not.toHaveBeenCalled()
+    expect(executeTool).not.toHaveBeenCalled()
+    expect(r).toMatch(/ONE address per email/i)
   })
 
   // CONTRACT CHANGED 2026-07-28. The refusal used to end by telling the staff member

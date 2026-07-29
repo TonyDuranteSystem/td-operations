@@ -603,7 +603,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { reply, pendingOffThreadRecipient } = await callWorkerWithAttachments(userBody, {
+    const { reply } = await callWorkerWithAttachments(userBody, {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
       // Capability statement GENERATED from the rails actually assigned above, so what
@@ -717,14 +717,11 @@ export async function POST(req: NextRequest) {
     // Only when the worker actually attempted it AND it isn't the one the staff
     // just confirmed. Address comes from the executor's real refused attempt,
     // never from `reply`.
-    const confirmedNow = body.confirmedRecipient
-      ? (await import("@/lib/inbox/email-recipients")).extractEmailAddresses(body.confirmedRecipient)[0]
-      : null
-    const pendingSend =
-      surface === "inbox" && pendingOffThreadRecipient && pendingOffThreadRecipient !== confirmedNow
-        ? { to: pendingOffThreadRecipient }
-        : null
-
+    // The legacy "confirm this ADDRESS, then re-run the model" flow is GONE
+    // (2026-07-29). It rendered a second button beside the frozen card and pressing
+    // it re-drafted the email, so what left was not what the human read — and the
+    // frozen row stayed pending, so the card could then send a SECOND copy. The
+    // frozen payload is the only confirm path now.
     // (2) Attachment Confirm (this feature): if this turn PREPARED an email-with-
     // attachment, hand the panel the exact server-frozen payload (recipient +
     // filenames from the DB row, never the worker's text). Only a row created THIS
@@ -766,7 +763,7 @@ export async function POST(req: NextRequest) {
     }
     // messageId lets the panel offer 🧠 on the reply it just received (same id the
     // GET history returns), without a refetch.
-    return NextResponse.json({ reply, threadId, pendingSend, preparedSend, messageId: rowId })
+    return NextResponse.json({ reply, threadId, preparedSend, messageId: rowId })
   } catch (error) {
     if (rowId) {
       await db

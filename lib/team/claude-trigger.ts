@@ -18,7 +18,6 @@
  */
 import 'server-only'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { TD_MAILBOXES } from '@/lib/inbox/email-recipients'
 import { getInternalBaseUrl } from '@/lib/mcp/tools/agent-messages'
 import { CLAUDE_SENDER_UUID, CLAUDE_SENDER_NAME, mentionsClaude } from '@/lib/team/workspace'
 import { channelNotifiesStaff } from '@/lib/team/channel-notify'
@@ -227,41 +226,22 @@ export async function processClaudeReply(params: {
     forceMailbox?: 'support' | 'antonio'
   } = {}
   if (thread?.account_id || thread?.contact_id) {
-    // The linked client's own addresses are CONFIRM-EXEMPT; any other address the
-    // staff member names is still reachable but freezes for a one-click confirm
-    // (Antonio, 2026-07-29 — "see the recipient and press Confirm once"). A lookup
-    // failure leaves the list empty, so every recipient is confirmed: it degrades
-    // toward the human, never toward a silent send. Contacts link to accounts via
-    // account_contacts — `contacts` has NO account_id column.
-    let rows: Array<{ email: string | null }> = []
-    try {
-      if (thread.account_id) {
-        const { data: links } = await supabaseAdmin
-          .from('account_contacts')
-          .select('contact_id')
-          .eq('account_id', thread.account_id)
-        const ids = ((links ?? []) as Array<{ contact_id: string }>).map(l => l.contact_id).filter(Boolean)
-        if (ids.length) {
-          const { data } = await supabaseAdmin.from('contacts').select('email').in('id', ids)
-          rows = (data ?? []) as Array<{ email: string | null }>
-        }
-      } else {
-        const { data } = await supabaseAdmin
-          .from('contacts')
-          .select('email')
-          .eq('id', thread.contact_id as string)
-        rows = (data ?? []) as Array<{ email: string | null }>
-      }
-    } catch (err) {
-      console.warn('[claude-trigger] client address lookup failed (every recipient will be confirmed):', err)
-    }
-    const addresses = rows.map(r => r.email).filter((e): e is string => Boolean(e && e.includes('@')))
-    emailSendRail = {
-      enableEmailSend: true,
-      emailConfirmExempt: Array.from(new Set([...addresses, ...TD_MAILBOXES])),
-      // No mailbox-authorisation check on this surface — never send as antonio@.
-      forceMailbox: 'support',
-    }
+    // NO CONFIRM STEP HERE, DELIBERATELY — and this is the case the whole change was
+    // reported for (MFCompany: "email our accountant Smit about this client").
+    //
+    // Team Chat is STAFF-AUTHORED text: a teammate typing "@claude email X" is the
+    // decision itself, which is exactly why Antonio's rule ("the worker sends what
+    // we decide") applies cleanly here. The confirm-a-new-recipient step exists for
+    // the two surfaces that put ATTACKER-authored text in front of the model (an
+    // inbound email, a client's own chat message) — and, critically, those are the
+    // only surfaces with a Confirm card to render. Setting an exempt list here
+    // WITHOUT a card would freeze nothing and simply refuse every third-party
+    // address: the original bug, re-created by its own fix. Verified: this surface
+    // has no prepared-send UI.
+    //
+    // forceMailbox still applies — there is no mailbox-authorisation check here, so
+    // `from: 'antonio'` must never be honoured.
+    emailSendRail = { enableEmailSend: true, forceMailbox: 'support' }
   }
 
   // Recent conversation (exclude the placeholder itself) for context.

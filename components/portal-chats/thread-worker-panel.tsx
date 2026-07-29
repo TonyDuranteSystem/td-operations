@@ -209,8 +209,11 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
       }
       sentContextRef.current = true
       setMessages(prev => [...prev, { role: 'worker', text: data.reply || '(empty reply)', id: data.messageId }])
-      // A frozen email waiting on a human — render the Confirm card.
-      if (data.preparedSend) setPreparedSend(data.preparedSend)
+      // A frozen email waiting on a human — render the Confirm card. `?? null` is
+      // load-bearing: a turn that prepares nothing must CLEAR a previous card, or a
+      // stale frozen email stays on screen under a new conversation and one click
+      // sends it.
+      setPreparedSend(data.preparedSend ?? null)
     } catch (err) {
       setMessages(prev => [
         ...prev,
