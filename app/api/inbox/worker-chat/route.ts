@@ -126,14 +126,6 @@ export async function POST(req: NextRequest) {
      * the object path, never the bytes (a base64 body would 413 at the edge).
      */
     attachments?: Array<{ path?: string; name?: string; mime_type?: string; size?: number }>
-    /**
-     * The ONE off-thread address the staff member confirmed by pressing "Confirm
-     * & send" in the panel. Trusted because only the authenticated browser POSTs
-     * this — the model runs inside the handler and can never set it. Widens the
-     * recipient pin by exactly this address, for this send only. Validated to a
-     * single parseable address; never persisted into the allow-list.
-     */
-    confirmedRecipient?: string
   }
   try {
     body = await req.json()
@@ -483,19 +475,9 @@ export async function POST(req: NextRequest) {
   // (R108). Sending still requires the staff member's explicit "send it" (prompt).
   const actorEmail = user.email ?? "unknown"
 
-  // Staff-confirmed off-thread recipient (from the panel's "Confirm & send"
-  // button). Kept so an existing pending Confirm box still names the address in
-  // the prompt block, but it no longer widens an allow-list: with the recipient
-  // restriction removed (Antonio, 2026-07-29, dev job f55ea3bb) any address the
-  // staff member names is already allowed, so no confirm step is needed to reach
-  // one. Read only from this POST body, never from the model.
-  if (surface === "inbox" && body.confirmedRecipient) {
-    const { extractEmailAddresses } = await import("@/lib/inbox/email-recipients")
-    const parsed = extractEmailAddresses(body.confirmedRecipient)
-    if (parsed.length === 1) {
-      allowedEmailRecipients = Array.from(new Set([...(allowedEmailRecipients ?? []), parsed[0]]))
-    }
-  }
+  // The `confirmedRecipient` widening lever is GONE (2026-07-29). It made an
+  // address exempt for the turn, skipping the very Confirm card this design relies
+  // on — and it was the server half of the deleted re-run-the-model button.
 
   const sendRails =
     surface === "inbox"

@@ -268,7 +268,7 @@ describe("executeWorkerTool — confirm-off-thread capture (the staff 'Confirm &
     )
     expect(prepareWorkerEmailSend).not.toHaveBeenCalled()
     expect(executeTool).not.toHaveBeenCalled()
-    expect(r).toMatch(/ONE address per email/i)
+    expect(r).toMatch(/one address at a time/i)
   })
 
   // CONTRACT CHANGED 2026-07-28. The refusal used to end by telling the staff member
@@ -393,6 +393,61 @@ describe("executeWorkerTool — send_email with attachment PREPARES, never sends
     expect(executeTool).toHaveBeenCalledOnce()
     expect(prepareWorkerEmailSend).not.toHaveBeenCalled()
     expect(r).toContain("success")
+  })
+
+  it("only ONE email is frozen per turn — a second names no phantom pending send", async () => {
+    // The split-the-send instruction used to induce two freezes, and only the NEWEST
+    // row gets a card: the first became invisible while the reply claimed both were
+    // pending, so staff confirmed one and believed both had gone.
+    const ctx: Record<string, unknown> = {
+      emailConfirmExempt: ["client@acme.com"],
+      emailSendPrep: { threadUuid: "t1", mailbox: "support@tonydurante.us", sendable: [] },
+    }
+    const first = await executeWorkerTool(
+      "send_email",
+      { to: "one@new.com", subject: "s", body: "b" },
+      available, null, null, ctx,
+    )
+    expect(first).toMatch(/frozen/i)
+    const second = await executeWorkerTool(
+      "send_email",
+      { to: "two@new.com", subject: "s", body: "b" },
+      available, null, null, ctx,
+    )
+    expect(second).toMatch(/already an email waiting/i)
+    expect(prepareWorkerEmailSend).toHaveBeenCalledOnce()
+    expect(executeTool).not.toHaveBeenCalled()
+  })
+
+  it("a QUOTED display name on an EXEMPT address still sends — no nonsense refusal", async () => {
+    // The two parsers disagree on quoted names; comparing raw strings produced
+    // "this screen has no confirmation step" on a screen that has one. Exemption is
+    // now judged on the parsed address.
+    const r = await executeWorkerTool(
+      "send_email",
+      { to: '"Rossi, Mario" <client@acme.com>', subject: "s", body: "b" },
+      available, null, null,
+      {
+        emailConfirmExempt: ["client@acme.com"],
+        emailSendPrep: { threadUuid: "t1", mailbox: "support@tonydurante.us", sendable: [] },
+      },
+    )
+    expect(r).not.toMatch(/no confirmation step/i)
+    expect(prepareWorkerEmailSend).not.toHaveBeenCalled()
+  })
+
+  it("a QUOTED display name on a NEW address freezes the BARE address", async () => {
+    await executeWorkerTool(
+      "send_email",
+      { to: 'Giulia <giulia@studio.it>', subject: "s", body: "b" },
+      available, null, null,
+      {
+        emailConfirmExempt: ["client@acme.com"],
+        emailSendPrep: { threadUuid: "t1", mailbox: "support@tonydurante.us", sendable: [] },
+      },
+    )
+    expect(prepareWorkerEmailSend).toHaveBeenCalledOnce()
+    expect(prepareWorkerEmailSend.mock.calls[0][0].to).toBe("giulia@studio.it")
   })
 
   it("forceMailbox overrides the model's `from` — a surface with no mailbox gate cannot send as Antonio", async () => {

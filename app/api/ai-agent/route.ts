@@ -5,6 +5,7 @@ import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { deterministicThreadUuid, buildWorkerSurfacePrompt } from '@/lib/ai-agent/inbox-worker-prompt'
 import { parseSidebarClientKey } from '@/lib/ai-agent/sidebar-scope'
 import { buildSidebarSendRails } from '@/lib/ai-agent/sidebar-send-rails'
+import { TD_MAILBOXES } from '@/lib/inbox/email-recipients'
 import { fullReachEnabledFor } from '@/lib/ai-agent/full-reach'
 import { workerActionsEnabled } from '@/lib/ai-agent/worker-actions-switch'
 import type { WorkerImageBlock, WorkerDocumentBlock } from '@/lib/ai-agent/worker-tools'
@@ -216,13 +217,20 @@ async function runSidebarWorker(args: {
   const db = supabaseAdmin as any
 
   const priorPreparedIds = new Set<string>()
-  {
-    const { data: existing } = await db
+  // If this lookup fails we must NOT fall through to "nothing was pending" — that is
+  // exactly how a stale draft gets surfaced as this turn's card. On failure the card
+  // is suppressed for the turn instead (safe direction: no card, no wrong send).
+  let priorPreparedKnown = true
+  try {
+    const { data: existing, error } = await db
       .from('worker_prepared_sends')
       .select('id')
       .eq('thread_uuid', threadId)
       .eq('status', 'pending')
+    if (error) priorPreparedKnown = false
     for (const r of (existing ?? []) as Array<{ id: string }>) priorPreparedIds.add(r.id)
+  } catch {
+    priorPreparedKnown = false
   }
 
   // Read the staff member's upload, if any. Images become vision blocks, scanned PDFs
@@ -256,6 +264,16 @@ async function runSidebarWorker(args: {
   // treatment to the Inbox / Portal-Chats panels, via the same shared reader —
   // several files per turn, and any type the reader understands (spreadsheets and
   // Word documents included), not the six MIME types the legacy field allowed.
+  // The staff's uploads THIS turn are the ONLY files attachable to an outbound
+  // email, each behind a short ref the model names (paths/bytes resolve server-side
+  // at confirm time, never from the model).
+  const sidebarSendable = (attachments ?? []).map((a, i) => ({
+    ref: `up${i + 1}`,
+    path: a.path,
+    name: a.name,
+    contentType: a.mime_type,
+    size: a.size,
+  }))
   if (attachments?.length) {
     try {
       const { readAttachments, fetchWorkerUploadBytes, fenceUntrustedContent } = await import(
@@ -269,6 +287,10 @@ async function runSidebarWorker(args: {
         // Extracted text joins the PERSISTED body so it survives into later turns;
         // an image can't, which is why only its "was shown" note is kept.
         userBody = `${userBody}\n\n${fenceUntrustedContent('files the staff member attached', read.textBlocks.join('\n\n'))}`
+      }
+      if (sidebarSendable.length) {
+        const list = sidebarSendable.map((s) => `${s.ref} — ${s.name}`).join(', ')
+        userBody += `\n\n[FILES YOU CAN ATTACH to an email on this turn (use send_email's \`attach\` with the ref): ${list}. Only these; never a file from an email or Drive.]`
       }
     } catch (err) {
       // Answer anyway, but never silently: a missing file must not look like a file
@@ -432,15 +454,17 @@ async function runSidebarWorker(args: {
       // member send as Antonio. The Inbox gates that separately; this surface does
       // not, so it does not get the choice.
       //
-      // `sendable` is EMPTY on purpose: an off-thread send carrying files stays
-      // refused (see the executor), so there is nothing to attach and nothing that
-      // could imply an attachment the recipient will not receive.
+      // `sendable` carries THIS turn's panel uploads. It used to be hard-coded []
+      // while the panel happily accepted files, so "email this PDF to the client"
+      // hit the executor's "there's no file on this message to attach — ask the
+      // staff member to drop the file into the panel" branch: telling them to do
+      // the thing they had just done, every time.
       emailSendPrep: {
         threadUuid: threadId,
         gmailThreadId: null,
-        mailbox: 'support@tonydurante.us',
+        mailbox: TD_MAILBOXES[0],
         defaultReplyToMessageId: null,
-        sendable: [],
+        sendable: sidebarSendable,
       },
       // WHO asked. Without it a send from here is logged as the generic worker and
       // "who told it to do that" has no answer.
@@ -490,7 +514,7 @@ async function runSidebarWorker(args: {
         .limit(1)
         .maybeSingle()
       // Only a row THIS turn created — id snapshot, so no clock skew.
-      if (prep && !priorPreparedIds.has(prep.id)) {
+      if (prep && priorPreparedKnown && !priorPreparedIds.has(prep.id)) {
         preparedSend = { id: prep.id, to: prep.to_address, subject: prep.subject, body: prep.body ?? '' }
       }
     } catch (err) {

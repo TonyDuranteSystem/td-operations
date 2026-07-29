@@ -225,7 +225,13 @@ export async function processClaudeReply(params: {
     emailConfirmExempt?: string[]
     forceMailbox?: 'support' | 'antonio'
   } = {}
-  if (thread?.account_id || thread?.contact_id) {
+  {
+    // EVERY team thread, not only client-linked ones. Gating this on a client link
+    // meant "@claude email our accountant about MFCompany" inside #td-taxreturn —
+    // a channel thread, which carries NULL client ids — got no send_email tool at
+    // all, while the shared prompt still told it to call send_email: a false
+    // capability on the very channel the work happens in.
+    //
     // NO CONFIRM STEP HERE, DELIBERATELY — and this is the case the whole change was
     // reported for (MFCompany: "email our accountant Smit about this client").
     //

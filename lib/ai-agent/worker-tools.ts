@@ -467,7 +467,7 @@ export const SEND_EMAIL_TOOL: ToolDef = {
       attach: {
         type: "array",
         items: { type: "string" },
-        description: "Inbox only. Refs (from the FILES THE STAFF MEMBER ATTACHED list) of the staff's uploaded file(s) to attach to this email. When set, the email is PREPARED and the staff confirms with a Confirm button — it is NOT sent immediately. You may only attach a file the staff uploaded to THIS message; never a file from an email/attachment or from Drive.",
+        description: "Inbox and client-chat worker panels. Refs (from the FILES THE STAFF MEMBER ATTACHED list) of the staff's uploaded file(s) to attach to this email. When set, the email is PREPARED and the staff confirms with a Confirm button — it is NOT sent immediately. You may only attach a file the staff uploaded to THIS message; never a file from an email/attachment or from Drive.",
       },
     },
     required: ["to", "subject", "body"],
@@ -2297,10 +2297,19 @@ export async function executeWorkerTool(
     // every address is confirmed — which is what the Inbox uses when it could not
     // read the thread's participants.
     if (sendContext?.emailConfirmExempt !== undefined) {
-      const { checkRecipientsAllowed } = await import("@/lib/inbox/email-recipients")
+      const { extractEmailAddresses } = await import("@/lib/inbox/email-recipients")
       const to = typeof params.to === "string" ? params.to : ""
-      const verdict = checkRecipientsAllowed(to, sendContext.emailConfirmExempt)
-      if (verdict.ok === false) {
+      // ONE parser for the whole decision. `checkRecipientsAllowed` refuses a quoted
+      // display name outright, so using it to decide "is this already known?" made a
+      // quoted form of an ON-THREAD address fail with "this screen has no confirmation
+      // step" — on a screen that has one. Parse first, judge the parsed addresses.
+      const parsedTo = extractEmailAddresses(to)
+      const exemptLower = new Set(sendContext.emailConfirmExempt.map((a) => a.toLowerCase()))
+      const newRecipients = parsedTo.filter((a) => !exemptLower.has(a.toLowerCase()))
+      // Unparseable `to` never proceeds: it would be frozen or sent verbatim, and a
+      // CRLF/quoted-local-part payload could smuggle a second recipient.
+      const needsConfirm = parsedTo.length === 0 || newRecipients.length > 0
+      if (needsConfirm) {
         const allowed = sendContext.emailConfirmExempt
         // The legacy "confirm this ADDRESS then re-run the model" capture is
         // DELIBERATELY not populated any more. It produced a second button beside
@@ -2344,10 +2353,19 @@ export async function executeWorkerTool(
         //    the client from an "email the client and their accountant" request,
         //    while the card named only the accountant. Staff would believe both
         //    were covered.
-        // So: freeze only when the whole `to` is exactly one clean address.
-        const { extractEmailAddresses } = await import("@/lib/inbox/email-recipients")
-        const parsedTo = extractEmailAddresses(to)
-        const freezable = parsedTo.length === 1 && verdict.rejected.length === 1 && parsedTo[0] === verdict.rejected[0]
+        // So: freeze only when the whole `to` is exactly ONE clean address that needs
+        // confirming. A display name around it is fine — the bare address is frozen.
+        const freezable = parsedTo.length === 1 && newRecipients.length === 1
+        // ONE FROZEN DRAFT PER TURN. The model, told to split a mixed-recipient send,
+        // would otherwise call send_email twice — and only the NEWEST row gets a card,
+        // so the first became invisible (dying at its TTL) while the reply claimed both
+        // were awaiting confirmation. Staff would confirm one and believe both went.
+        if (sendContext.emailSendPrep && freezable && sendContext.frozenThisTurn) {
+          return [
+            `⏸️ There is already an email waiting for the staff member's confirmation on this turn.`,
+            `Only one can be confirmed at a time. Tell them to confirm (or cancel) that one first, then ask again for ${parsedTo[0]} — and do NOT claim this second email is pending.`,
+          ].join(" ")
+        }
         if (sendContext.emailSendPrep && freezable) {
           const prep = sendContext.emailSendPrep
           const { prepareWorkerEmailSend } = await import("@/lib/inbox/worker-email-send")
@@ -2359,7 +2377,7 @@ export async function executeWorkerTool(
             gmailThreadId: null,
             mailbox: prep.mailbox,
             replyToMessageId: null,
-            to: verdict.rejected[0],
+            to: parsedTo[0],
             subject: typeof params.subject === "string" ? params.subject : "",
             body: typeof params.body === "string" ? params.body : "",
             attachRefs,
@@ -2371,10 +2389,11 @@ export async function executeWorkerTool(
             actor: sendContext.actor ?? "unknown",
           })
           if (proposed.ok) {
+            sendContext.frozenThisTurn = true
             return [
               `📋 New recipient — frozen for the staff member to confirm.`,
               proposed.message,
-              `Show them the exact address (${verdict.rejected[0]})${attachRefs.length ? ` and the attached file(s)` : ""} and the message. Do NOT claim it has been sent.`,
+              `Show them the exact address (${parsedTo[0]})${attachRefs.length ? ` and the attached file(s)` : ""} and the message. Do NOT claim it has been sent.`,
             ].join(" ")
           }
           // Preparing failed (bad ref, oversize, storage) — surface the real reason
@@ -2388,9 +2407,9 @@ export async function executeWorkerTool(
         // codebase has repeatedly proven that naming a control that isn't on the
         // screen sends staff hunting for it (reported 2026-07-20 and 2026-07-28).
         return [
-          `❌ I can't send to ${verdict.rejected.join(", ")} on this turn.`,
+          `❌ I can't send to ${(parsedTo.length ? newRecipients.join(", ") : to) || "that address"} on this turn.`,
           parsedTo.length > 1
-            ? `Send to ONE address per email when a NEW recipient is involved: a new recipient is confirmed by the staff member, and that confirmation covers a single address. Send the known recipient(s) in one email and the new one in another, or ask the staff member to confirm each.`
+            ? `A NEW recipient is confirmed by the staff member one address at a time, so an email mixing several recipients can't be prepared. Show them the draft and the full list of addresses and ask which single recipient to prepare first — do NOT quietly send two emails.`
             : parsedTo.length !== 1
               ? `I couldn't read "${to}" as a single valid email address.`
               : `This screen has no confirmation step wired for a new recipient.`,
@@ -3136,6 +3155,12 @@ export interface WorkerSendContext {
    * recipient is confirmed — what the Inbox uses when it could not read the thread.
    */
   emailConfirmExempt?: string[]
+  /**
+   * MUTABLE latch: an email has already been frozen for confirmation on this turn.
+   * Only one can be confirmed at a time, and a second frozen row would be invisible
+   * (only the newest gets a card) while the reply claimed it was pending.
+   */
+  frozenThisTurn?: boolean
   /**
    * The mailbox this surface may send as ("support" | "antonio"), overriding the
    * model's choice. Set by any surface that has no mailbox-authorisation check of
