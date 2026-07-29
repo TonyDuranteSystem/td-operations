@@ -83,7 +83,7 @@ describe("isOwnerLedgerFeed — what goes to MY FINANCES", () => {
 
 describe("buildOwnerLedgerRow — the safety rules", () => {
   it("ALWAYS pins the owner account — never a client's", () => {
-    expect(buildOwnerLedgerRow(base)!.account_id).toBe(OWNER_ACCOUNT_ID)
+    expect(buildOwnerLedgerRow(base)!.entity_id).toBe(OWNER_ACCOUNT_ID)
   })
 
   it("signs the amount — money out negative, money in positive", () => {

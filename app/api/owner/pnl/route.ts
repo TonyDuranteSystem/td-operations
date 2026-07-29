@@ -22,22 +22,8 @@ export async function GET(req: Request) {
     return NextResponse.json({ pnl: current })
   }
 
+  // The tab computes per-currency variance client-side from the two P&Ls — no separate
+  // variance payload (a second copy of the math would only drift).
   const prior = await getOwnerPnL(year - 1)
-
-  const variance = {
-    income: current.income - prior.income,
-    income_pct: prior.income !== 0 ? (current.income - prior.income) / prior.income : null,
-    cogs: current.cogs - prior.cogs,
-    gross_profit: current.gross_profit - prior.gross_profit,
-    gross_profit_pct: prior.gross_profit !== 0
-      ? (current.gross_profit - prior.gross_profit) / prior.gross_profit
-      : null,
-    expenses: current.expenses - prior.expenses,
-    net_profit: current.net_profit - prior.net_profit,
-    net_profit_pct: prior.net_profit !== 0
-      ? (current.net_profit - prior.net_profit) / prior.net_profit
-      : null,
-  }
-
-  return NextResponse.json({ pnl: current, prior, variance })
+  return NextResponse.json({ pnl: current, prior })
 }

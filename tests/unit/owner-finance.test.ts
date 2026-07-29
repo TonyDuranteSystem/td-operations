@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { applyVendorRules, estimateQuarterlyTax, OWNER_ACCOUNT_ID, type OwnerTransaction, type VendorRule } from '@/lib/owner-finance'
+import {
+  applyVendorRules,
+  computeInvoiceIncome,
+  computeOwnerPnL,
+  OWNER_ACCOUNT_ID,
+  TD_ENTITY_ID,
+  type InvoiceIncomeRow,
+  type OwnerTransaction,
+  type VendorRule,
+} from '@/lib/owner-finance'
 
 const makeTx = (overrides: Partial<OwnerTransaction> = {}): OwnerTransaction => ({
   id: 'test-id',
@@ -97,30 +106,233 @@ describe('applyVendorRules', () => {
   })
 })
 
-describe('estimateQuarterlyTax', () => {
-  it('returns 25% of net profit as annual tax by default', () => {
-    const { annual } = estimateQuarterlyTax(100000)
-    expect(annual).toBe(25000)
+describe('TD_ENTITY_ID', () => {
+  it('equals the historical owner sentinel (ids were preserved across the migration)', () => {
+    expect(TD_ENTITY_ID).toBe(OWNER_ACCOUNT_ID)
+  })
+})
+
+const makeIncomeRow = (overrides: Partial<InvoiceIncomeRow> = {}): InvoiceIncomeRow => ({
+  amount_paid: 1000,
+  amount_currency: 'USD',
+  paid_date: '2026-03-10',
+  issue_date: '2026-03-01',
+  created_at: '2026-03-01T00:00:00Z',
+  status: 'Paid',
+  invoice_number: 'INV-001234',
+  total: 1000,
+  amount: 1000,
+  ...overrides,
+})
+
+describe('computeInvoiceIncome', () => {
+  it('sums paid cash by paid-date year and month, per currency', () => {
+    const rows = [
+      makeIncomeRow({ amount_paid: 1000, paid_date: '2026-01-15' }),
+      makeIncomeRow({ amount_paid: 2500, paid_date: '2026-01-20' }),
+      makeIncomeRow({ amount_paid: 700, paid_date: '2026-06-05' }),
+    ]
+    const inc = computeInvoiceIncome(rows, 2026)
+    expect(inc.byCurrency.USD.total).toBe(4200)
+    expect(inc.byCurrency.USD.monthly[0]).toBe(3500)
+    expect(inc.byCurrency.USD.monthly[5]).toBe(700)
+    expect(inc.anomalies).toHaveLength(0)
   })
 
-  it('splits annual tax into 4 quarterly payments', () => {
-    const { quarterly } = estimateQuarterlyTax(100000)
-    expect(quarterly).toBe(6250)
+  it('never mixes currencies', () => {
+    const rows = [
+      makeIncomeRow({ amount_paid: 1000, amount_currency: 'USD' }),
+      makeIncomeRow({ amount_paid: 800, amount_currency: 'EUR' }),
+    ]
+    const inc = computeInvoiceIncome(rows, 2026)
+    expect(inc.byCurrency.USD.total).toBe(1000)
+    expect(inc.byCurrency.EUR.total).toBe(800)
   })
 
-  it('respects custom effective rate', () => {
-    const { annual } = estimateQuarterlyTax(100000, 0.30)
-    expect(annual).toBe(30000)
+  it('excludes other years', () => {
+    const rows = [
+      makeIncomeRow({ paid_date: '2025-12-31' }),
+      makeIncomeRow({ paid_date: '2026-01-01', amount_paid: 50 }),
+    ]
+    const inc = computeInvoiceIncome(rows, 2026)
+    expect(inc.byCurrency.USD.total).toBe(50)
   })
 
-  it('returns 0 for negative net profit', () => {
-    const { annual, quarterly } = estimateQuarterlyTax(-50000)
-    expect(annual).toBe(0)
-    expect(quarterly).toBe(0)
+  it('counts undated cash via issue-date fallback and flags it approximated', () => {
+    const rows = [
+      makeIncomeRow({ paid_date: null, issue_date: '2026-04-01', amount_paid: 500 }),
+    ]
+    const inc = computeInvoiceIncome(rows, 2026)
+    expect(inc.byCurrency.USD.total).toBe(500)
+    expect(inc.byCurrency.USD.monthly[3]).toBe(500)
+    expect(inc.byCurrency.USD.approximated_count).toBe(1)
   })
 
-  it('returns 0 for zero net profit', () => {
-    const { annual } = estimateQuarterlyTax(0)
-    expect(annual).toBe(0)
+  it('falls back to created date when both paid and issue dates are missing', () => {
+    const rows = [
+      makeIncomeRow({ paid_date: null, issue_date: null, created_at: '2026-07-09T12:00:00Z', amount_paid: 250 }),
+    ]
+    const inc = computeInvoiceIncome(rows, 2026)
+    expect(inc.byCurrency.USD.total).toBe(250)
+    expect(inc.byCurrency.USD.monthly[6]).toBe(250)
+  })
+
+  it('routes cash on Cancelled/Refunded rows to anomalies, excluded from totals', () => {
+    const rows = [
+      makeIncomeRow({ status: 'Cancelled', amount_paid: 1250 }),
+      makeIncomeRow({ status: 'Refunded', amount_paid: 300 }),
+      makeIncomeRow({ status: 'Paid', amount_paid: 100 }),
+    ]
+    const inc = computeInvoiceIncome(rows, 2026)
+    expect(inc.byCurrency.USD.total).toBe(100)
+    expect(inc.anomalies).toHaveLength(2)
+    expect(inc.anomalies[0].status).toBe('Cancelled')
+  })
+
+  it('year-scopes anomalies — a 2025 refund does not haunt the 2026 banner', () => {
+    const rows = [
+      makeIncomeRow({ status: 'Refunded', amount_paid: 500, paid_date: '2025-06-01' }),
+      makeIncomeRow({ status: 'Cancelled', amount_paid: 200, paid_date: '2026-02-01' }),
+    ]
+    expect(computeInvoiceIncome(rows, 2026).anomalies.map(a => a.status)).toEqual(['Cancelled'])
+    expect(computeInvoiceIncome(rows, 2025).anomalies.map(a => a.status)).toEqual(['Refunded'])
+  })
+
+  it('a dateless anomaly cannot be scoped and shows every year (safe side)', () => {
+    const rows = [makeIncomeRow({ status: 'Cancelled', amount_paid: 50, paid_date: null, issue_date: null, created_at: null })]
+    expect(computeInvoiceIncome(rows, 2026).anomalies).toHaveLength(1)
+    expect(computeInvoiceIncome(rows, 2027).anomalies).toHaveLength(1)
+  })
+
+  it('flags part-paid rows — cumulative cash pinned to one date is only approximately monthly', () => {
+    const rows = [
+      makeIncomeRow({ amount_paid: 500, total: 2200 }),
+      makeIncomeRow({ amount_paid: 1000, total: 1000 }),
+    ]
+    const inc = computeInvoiceIncome(rows, 2026)
+    expect(inc.byCurrency.USD.total).toBe(1500)
+    expect(inc.byCurrency.USD.partial_count).toBe(1)
+  })
+
+  it('ignores rows with no cash received', () => {
+    const rows = [
+      makeIncomeRow({ amount_paid: 0 }),
+      makeIncomeRow({ amount_paid: null }),
+    ]
+    const inc = computeInvoiceIncome(rows, 2026)
+    expect(Object.keys(inc.byCurrency)).toHaveLength(0)
+  })
+
+  it('includes part-payments on non-terminal invoices (cash method: money received counts)', () => {
+    const rows = [
+      makeIncomeRow({ status: 'Overdue', amount_paid: 500, paid_date: null, issue_date: '2026-02-10' }),
+    ]
+    const inc = computeInvoiceIncome(rows, 2026)
+    expect(inc.byCurrency.USD.total).toBe(500)
+  })
+})
+
+const emptyIncome = { year: 2026, byCurrency: {}, anomalies: [] }
+
+describe('computeOwnerPnL', () => {
+  it('income comes from the invoice ledger; books income rows are Other Income', () => {
+    const income = computeInvoiceIncome([makeIncomeRow({ amount_paid: 10000, paid_date: '2026-02-01' })], 2026)
+    const txs = [makeTx({ category: 'income', amount: 250, transaction_date: '2026-03-05', tax_year: 2026 })]
+    const pnl = computeOwnerPnL(txs, income, 2026)
+    const usd = pnl.blocks.find(b => b.currency === 'USD')!
+    expect(usd.invoice_income).toBe(10000)
+    expect(usd.other_income).toBe(250)
+    expect(usd.gross_profit).toBe(10250)
+    expect(usd.monthly[1].income).toBe(10000)
+    expect(usd.monthly[2].income).toBe(250)
+  })
+
+  it('transfer rows never touch the P&L — Stripe money is counted exactly once', () => {
+    const income = computeInvoiceIncome([makeIncomeRow({ amount_paid: 5000, paid_date: '2026-01-10' })], 2026)
+    const payout = makeTx({ category: 'transfer', amount: 4855, transaction_date: '2026-01-14', tax_year: 2026 })
+    const pnl = computeOwnerPnL([payout], income, 2026)
+    const usd = pnl.blocks.find(b => b.currency === 'USD')!
+    expect(usd.invoice_income).toBe(5000)
+    expect(usd.other_income).toBe(0)
+    expect(usd.net_profit).toBe(5000)
+    expect(usd.by_subcategory).toEqual({})
+  })
+
+  it('expenses, fees and cogs reduce profit; equity moves are separate', () => {
+    const txs = [
+      makeTx({ category: 'expense', amount: -300, subcategory: 'saas', transaction_date: '2026-05-01' }),
+      makeTx({ category: 'fee', amount: -20, subcategory: 'bank_fee', transaction_date: '2026-05-02' }),
+      makeTx({ category: 'cogs', amount: -1000, subcategory: 'contractor', transaction_date: '2026-05-03' }),
+      makeTx({ category: 'distribution', amount: -2000, transaction_date: '2026-05-04' }),
+      makeTx({ category: 'contribution', amount: 500, transaction_date: '2026-05-05' }),
+    ]
+    const pnl = computeOwnerPnL(txs, emptyIncome, 2026)
+    const usd = pnl.blocks.find(b => b.currency === 'USD')!
+    expect(usd.expenses).toBe(320)
+    expect(usd.cogs).toBe(1000)
+    expect(usd.net_profit).toBe(-1320)
+    expect(usd.distributions).toBe(2000)
+    expect(usd.contributions).toBe(500)
+    expect(usd.by_subcategory).not.toHaveProperty('distribution')
+    expect(usd.by_subcategory).not.toHaveProperty('contribution')
+  })
+
+  it('keeps each currency in its own block — nothing is summed across currencies', () => {
+    const income = computeInvoiceIncome([
+      makeIncomeRow({ amount_paid: 1000, amount_currency: 'USD', paid_date: '2026-01-05' }),
+      makeIncomeRow({ amount_paid: 900, amount_currency: 'EUR', paid_date: '2026-01-06' }),
+    ], 2026)
+    const txs = [makeTx({ currency: 'EUR', category: 'expense', amount: -100, transaction_date: '2026-02-01' })]
+    const pnl = computeOwnerPnL(txs, income, 2026)
+    expect(pnl.blocks[0].currency).toBe('USD')
+    expect(pnl.blocks[0].net_profit).toBe(1000)
+    const eur = pnl.blocks.find(b => b.currency === 'EUR')!
+    expect(eur.net_profit).toBe(800)
+  })
+
+  it('surfaces income anomalies and approximated dates on the result', () => {
+    const income = computeInvoiceIncome([
+      makeIncomeRow({ status: 'Cancelled', amount_paid: 99 }),
+      makeIncomeRow({ paid_date: null, issue_date: '2026-01-01', amount_paid: 10 }),
+    ], 2026)
+    const pnl = computeOwnerPnL([], income, 2026)
+    expect(pnl.income_anomalies).toHaveLength(1)
+    expect(pnl.approximated_date_count).toBe(1)
+  })
+
+  it('uncategorized cash reaches net profit AND the monthly series — chart ties to KPI', () => {
+    const txs = [
+      makeTx({ category: 'uncategorized', amount: 400, transaction_date: '2026-06-01' }),
+      makeTx({ category: 'uncategorized', amount: -150, transaction_date: '2026-06-02' }),
+    ]
+    const pnl = computeOwnerPnL(txs, emptyIncome, 2026)
+    const usd = pnl.blocks.find(b => b.currency === 'USD')!
+    expect(usd.uncategorized_income).toBe(400)
+    expect(usd.uncategorized_expense).toBe(150)
+    expect(usd.net_profit).toBe(250)
+    expect(usd.monthly[5].income).toBe(400)
+    expect(usd.monthly[5].expenses).toBe(150)
+    const monthlyNetSum = usd.monthly.reduce((s, m) => s + m.net, 0)
+    expect(monthlyNetSum).toBe(usd.net_profit)
+  })
+
+  it('a currency with ONLY non-P&L rows gets no block — no all-zero tables', () => {
+    const txs = [makeTx({ currency: 'DKK', category: 'transfer', amount: 3730, transaction_date: '2026-04-01' })]
+    const pnl = computeOwnerPnL(txs, emptyIncome, 2026)
+    expect(pnl.blocks.find(b => b.currency === 'DKK')).toBeUndefined()
+  })
+
+  it('exposes the part-paid attribution count on the P&L', () => {
+    const income = computeInvoiceIncome([makeIncomeRow({ amount_paid: 300, total: 900 })], 2026)
+    const pnl = computeOwnerPnL([], income, 2026)
+    expect(pnl.partial_attribution_count).toBe(1)
+  })
+
+  it('month attribution slices the date string — no timezone drift on month boundaries', () => {
+    const txs = [makeTx({ category: 'expense', amount: -50, transaction_date: '2026-03-01' })]
+    const pnl = computeOwnerPnL(txs, emptyIncome, 2026)
+    const usd = pnl.blocks.find(b => b.currency === 'USD')!
+    expect(usd.monthly[2].expenses).toBe(50)
+    expect(usd.monthly[1].expenses).toBe(0)
   })
 })

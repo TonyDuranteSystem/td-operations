@@ -6,7 +6,6 @@ import {
   getCashPosition,
   getUncategorizedCount,
   getVendorRules,
-  estimateQuarterlyTax,
 } from '@/lib/owner-finance'
 
 export const dynamic = 'force-dynamic'
@@ -28,14 +27,11 @@ export async function GET(req: Request) {
     getVendorRules(),
   ])
 
-  const tax = estimateQuarterlyTax(pnl.net_profit)
-
   return NextResponse.json({
     year,
     pnl,
     cash,
     uncategorized_count: uncategorized,
     vendor_rules_count: rules.length,
-    tax_estimate: tax,
   })
 }

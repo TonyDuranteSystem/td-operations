@@ -12,7 +12,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink } from 'lucide-react'
+import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink, Trash2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { readPositions, writePosition, prunePositions, cascadePos, clampFrac } from '@/lib/notes/note-position'
 import { NoteEditor } from '@/components/dashboard/note-editor'
@@ -279,8 +279,29 @@ function NoteCardBody({ note, members, meId, onChange, onOpen }: { note: Note; m
   const [menu, setMenu] = useState<'none' | 'snooze' | 'share'>('none')
   const [err, setErr] = useState<string | null>(null)
   const [discussing, setDiscussing] = useState(false)
+  // Delete straight from the card (Luca's ask, 2026-07-22) — author-only, two-tap confirm.
+  const [confirmDelete, setConfirmDelete] = useState(false)
   // held until Save — see the picker below
   const [customWhen, setCustomWhen] = useState('')
+
+  /** Delete COMPLETELY, for everyone — same author-only endpoint the editor uses.
+   *  Distinct from Done (per-person). Two taps: first turns the icon into a red
+   *  "Delete forever?", second actually deletes. */
+  const del = async () => {
+    setBusy(true); setErr(null)
+    try {
+      const res = await fetch(`${API}?id=${note.id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not delete the note.')
+      }
+      onChange()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not delete the note.')
+    } finally {
+      setBusy(false); setConfirmDelete(false)
+    }
+  }
 
   /**
    * "Discuss this note" — ask the server WHERE the conversation lives (the
@@ -387,8 +408,27 @@ function NoteCardBody({ note, members, meId, onChange, onOpen }: { note: Note; m
             <button data-no-drag onClick={() => setMenu(menu === 'share' ? 'none' : 'share')}
               className="rounded p-0.5 hover:bg-black/10" title="Share"><Share2 className="h-3.5 w-3.5" /></button>
           )}
+          {isAuthor && (
+            <button data-no-drag onClick={() => setConfirmDelete((v) => !v)}
+              className={`rounded p-0.5 hover:bg-black/10 ${confirmDelete ? 'bg-red-600/20 text-red-700' : ''}`}
+              title="Delete this note for everyone"><Trash2 className="h-3.5 w-3.5" /></button>
+          )}
         </span>
       </div>
+
+      {/* Second tap happens on a full-width red bar, never on the tiny icon — a stray
+          tap can't destroy a note. Deleting removes it for EVERYONE (unlike Done). */}
+      {confirmDelete && (
+        <div data-no-drag className="mt-2 flex gap-1 text-xs">
+          <button onClick={del} disabled={busy}
+            className="flex flex-1 items-center justify-center gap-1 rounded bg-red-600 px-2 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50">
+            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+            Delete forever?
+          </button>
+          <button onClick={() => setConfirmDelete(false)} disabled={busy}
+            className="rounded bg-black/10 px-2 py-1">Keep</button>
+        </div>
+      )}
 
       {err && <p data-no-drag className="mt-1 text-xs text-red-700">{err}</p>}
 

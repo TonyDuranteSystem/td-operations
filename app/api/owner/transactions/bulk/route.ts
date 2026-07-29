@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isAdmin } from '@/lib/auth'
 import { NextResponse } from 'next/server'
-import { OWNER_ACCOUNT_ID } from '@/lib/owner-finance'
+import { isOwnerCategory, TD_ENTITY_ID } from '@/lib/owner-finance'
 
 export const dynamic = 'force-dynamic'
 
@@ -22,6 +22,9 @@ export async function POST(req: Request) {
   if (!category) {
     return NextResponse.json({ error: 'category is required' }, { status: 400 })
   }
+  if (!isOwnerCategory(category)) {
+    return NextResponse.json({ error: `Unknown category "${category}"` }, { status: 400 })
+  }
 
   const update: Record<string, unknown> = { category }
   if (subcategory !== undefined) update.subcategory = subcategory
@@ -29,10 +32,10 @@ export async function POST(req: Request) {
   if (is_related_party !== undefined) update.is_related_party = is_related_party
 
   const { error, count } = await supabaseAdmin
-    .from('bank_transactions')
+    .from('td_books_transactions')
     .update(update)
     .in('id', ids)
-    .eq('account_id', OWNER_ACCOUNT_ID)
+    .eq('entity_id', TD_ENTITY_ID)
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
