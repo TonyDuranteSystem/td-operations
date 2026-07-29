@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import { NotesBoard } from '@/components/dashboard/notes-board'
 
 export const dynamic = 'force-dynamic'
@@ -9,6 +10,9 @@ export const metadata = { title: 'Notes — TD Operations' }
  * snoozed (and when it comes back), and what I've cleared. The floating layer only ever
  * shows the active ones, so this is where a snoozed or done note is found again.
  * Staff-only by the dashboard layout's auth gate; the feed itself re-checks.
+ *
+ * Suspense is required: the board reads ?note= (push deep links open the exact note)
+ * via useSearchParams, which Next demands be wrapped from a server page.
  */
 export default function NotesPage() {
   return (
@@ -17,7 +21,9 @@ export default function NotesPage() {
       <p className="mb-4 text-sm text-zinc-500">
         Your post-its — active, snoozed, and done. Notes others shared with you appear here too.
       </p>
-      <NotesBoard />
+      <Suspense fallback={null}>
+        <NotesBoard />
+      </Suspense>
     </div>
   )
 }

@@ -5,13 +5,14 @@
  * Reuses the SAME visibility rule as the floating layer (the server decides; this only groups).
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Lock, Share2, Users, Building2, Clock, RotateCcw, Check, List, CalendarDays } from 'lucide-react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { Loader2, Lock, Share2, Users, Building2, Clock, RotateCcw, Check, List, CalendarDays, Plus } from 'lucide-react'
 import { noteClientName } from '@/components/dashboard/sticky-notes-layer'
 import { NotesCalendar } from '@/components/dashboard/notes-calendar'
 import { NoteEditor, type EditableNote, type Member } from '@/components/dashboard/note-editor'
-import { isArchivedFor, isSnoozedFor, otherPersonState, otherViewersOf } from '@/lib/notes/staff-notes'
+import { isArchivedFor, isSnoozedFor, noteStateFor, otherPersonState, otherViewersOf } from '@/lib/notes/staff-notes'
 
 interface Note {
   id: string
@@ -85,8 +86,12 @@ function ViewSwitch({ view, setView }: { view: 'list' | 'calendar'; setView: (v:
 
 export function NotesBoard() {
   const qc = useQueryClient()
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const [view, setView] = useState<'list' | 'calendar'>('list')
   const [editing, setEditing] = useState<Note | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [gone, setGone] = useState(false)
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['staff-notes-all'],
     queryFn: fetchAll,
@@ -97,6 +102,20 @@ export function NotesBoard() {
   const members = useMemo(() => data?.members ?? [], [data])
   const me: string | null = data?.me?.id ?? null
   const now = Date.now()
+
+  // Deep link from a push: /notes?note=<id> opens that exact note, whatever state it's in
+  // here (this feed includes snoozed + done). A note that was deleted or made private in
+  // the meantime simply isn't in the feed — say so instead of silently doing nothing.
+  const consumedDeepLink = useRef(false)
+  const deepLinkId = searchParams.get('note')
+  useEffect(() => {
+    if (!deepLinkId || consumedDeepLink.current || !data) return
+    consumedDeepLink.current = true
+    const hit = notes.find((n) => n.id === deepLinkId)
+    if (hit) setEditing(hit)
+    else setGone(true)
+    router.replace('/notes', { scroll: false })
+  }, [deepLinkId, data, notes, router])
 
   /** Refresh BOTH note feeds — the tab and the floating layer must never disagree. */
   const refresh = () => {
@@ -145,28 +164,65 @@ export function NotesBoard() {
     return <p className="py-10 text-sm text-red-700">{error instanceof Error ? error.message : 'Could not load your notes.'}</p>
   }
 
+  const header = (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <ViewSwitch view={view} setView={setView} />
+        <button
+          onClick={() => setCreating(true)}
+          className="flex items-center gap-1 rounded bg-amber-400 px-3 py-1.5 text-sm font-medium text-amber-950 hover:bg-amber-300"
+        >
+          <Plus className="h-4 w-4" /> New note
+        </button>
+      </div>
+      {gone && (
+        <div className="flex items-center justify-between rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <span>That note is gone — it was deleted or is no longer shared with you.</span>
+          <button onClick={() => setGone(false)} className="rounded px-2 py-0.5 text-xs hover:bg-black/5">Dismiss</button>
+        </div>
+      )}
+    </div>
+  )
+
+  const overlays = (
+    <>
+      {editing && (
+        <NoteEditor
+          note={editing as unknown as EditableNote}
+          members={members}
+          meId={me}
+          onClose={() => setEditing(null)}
+          onChanged={refresh}
+        />
+      )}
+      {creating && (
+        <NoteEditor
+          note={null}
+          members={members}
+          meId={me}
+          createDefaults={{ originUrl: '/notes' }}
+          onClose={() => setCreating(false)}
+          onChanged={refresh}
+        />
+      )}
+    </>
+  )
+
   if (view === 'calendar') {
     return (
       <div>
-        <ViewSwitch view={view} setView={setView} />
+        {header}
         {/* The calendar only declares the fields it renders, but it is handed the FULL note
             objects from the feed — so the value coming back is a complete Note. */}
         <NotesCalendar notes={notes} onOpen={(n) => setEditing(n as unknown as Note)} />
-        {editing && (
-          <NoteEditor
-            note={editing as unknown as EditableNote}
-            members={members}
-            onClose={() => setEditing(null)}
-            onChanged={refresh}
-          />
-        )}
+        {overlays}
       </div>
     )
   }
 
   return (
     <div className="flex flex-col gap-6">
-      <ViewSwitch view={view} setView={setView} />
+      {header}
 
       <Section title="On your screen" count={active.length} empty="Nothing on screen right now.">
         {active.map((n) => <Card key={n.id} n={n} onAct={act} showDone onOpen={setEditing} me={me} members={members} />)}
@@ -183,14 +239,7 @@ export function NotesBoard() {
         {done.map((n) => <Card key={n.id} n={n} onAct={act} showRestore onOpen={setEditing} me={me} members={members} />)}
       </Section>
 
-      {editing && (
-        <NoteEditor
-          note={editing as unknown as EditableNote}
-          members={members}
-          onClose={() => setEditing(null)}
-          onChanged={refresh}
-        />
-      )}
+      {overlays}
     </div>
   )
 }
@@ -254,8 +303,19 @@ function Card({ n, onAct, showDone, showUnsnooze, showRestore, footer, onOpen, m
   members?: Member[]
 }) {
   const client = noteClientName(n as never)
+  // Someone changed the note AFTER this person cleared it — the only screen-side signal
+  // (per-person Done is never overwritten by someone else's edit, so a cleared note would
+  // otherwise hide the update forever). Read-side compare only; nobody's state is touched.
+  const myState = me ? noteStateFor(n, me) : null
+  const updatedSinceDone =
+    showRestore && myState?.archived_at != null && Date.parse(n.updated_at) > Date.parse(myState.archived_at)
   return (
     <div className={`rounded-md border p-3 ${COLORS[n.color] || COLORS.yellow}`}>
+      {updatedSinceDone && (
+        <p className="mb-1 inline-flex rounded bg-amber-400/60 px-1.5 py-0.5 text-[11px] font-medium text-amber-950">
+          Updated after you marked it done
+        </p>
+      )}
       <p
         onClick={() => onOpen?.(n)}
         title="Open"

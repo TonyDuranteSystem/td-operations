@@ -12,14 +12,15 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { StickyNote, Plus, X, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare } from 'lucide-react'
+import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { readPositions, writePosition, prunePositions, cascadePos, clampFrac } from '@/lib/notes/note-position'
-import { AccountCombobox } from '@/components/shared/account-combobox'
 import { NoteEditor } from '@/components/dashboard/note-editor'
+// AccountCombobox no longer needed here — the create UI is the full NoteEditor now.
 import { useDraggableFab } from '@/components/ui/use-draggable-fab'
 import { FAB_KEYS } from '@/lib/ui/draggable-fab'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
+import { safeOriginPath, describeOrigin } from '@/lib/notes/note-origin'
 
 interface Note {
   id: string
@@ -75,6 +76,12 @@ function subjectFromPath(): { account_id?: string; contact_id?: string } {
   return m[1].toLowerCase() === 'accounts' ? { account_id: m[2] } : { contact_id: m[2] }
 }
 
+/** The same page subject, shaped for the editor's create mode. */
+function creationSubjectDefaults(): { accountId?: string; contactId?: string } {
+  const s = subjectFromPath()
+  return { accountId: s.account_id, contactId: s.contact_id }
+}
+
 class Boundary extends React.Component<{ children: React.ReactNode }, { dead: boolean }> {
   state = { dead: false }
   static getDerivedStateFromError() { return { dead: true } }
@@ -100,6 +107,7 @@ function StickyNotesInner() {
   })
   const notes = useMemo(() => data?.notes ?? [], [data])
   const members = useMemo(() => data?.members ?? [], [data])
+  const meId = data?.me?.id ?? null
 
   const [composing, setComposing] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -144,12 +152,25 @@ function StickyNotesInner() {
       {/* DESKTOP: floating draggable notes */}
       <div className="hidden lg:block">
         {notes.map((n, i) => (
-          <DesktopNote key={n.id} note={n} index={i} members={members} onChange={invalidate} onOpen={setEditing} />
+          <DesktopNote key={n.id} note={n} index={i} members={members} meId={meId} onChange={invalidate} onOpen={setEditing} />
         ))}
       </div>
 
-      {/* Composer (both desktop + mobile) */}
-      {composing && <Composer members={members} onClose={() => setComposing(false)} onCreated={invalidate} />}
+      {/* New note = the FULL editor (text, client, come-back date, who's it for) — not a
+          mini popup (Antonio, 2026-07-29). Pre-fills the client from the page you're on. */}
+      {composing && (
+        <NoteEditor
+          note={null}
+          members={members}
+          meId={meId}
+          createDefaults={{
+            ...creationSubjectDefaults(),
+            originUrl: typeof window !== 'undefined' ? window.location.pathname + window.location.search : undefined,
+          }}
+          onClose={() => setComposing(false)}
+          onChanged={invalidate}
+        />
+      )}
 
       {/* DESKTOP: + button, bottom-left. Draggable (double-click resets). */}
       <button
@@ -185,6 +206,7 @@ function StickyNotesInner() {
         <MobileSheet
           notes={notes}
           members={members}
+          meId={meId}
           onClose={() => setSheetOpen(false)}
           onNew={() => { setSheetOpen(false); setComposing(true) }}
           onChange={invalidate}
@@ -196,6 +218,7 @@ function StickyNotesInner() {
         <NoteEditor
           note={editing}
           members={members}
+          meId={meId}
           onClose={() => setEditing(null)}
           onChanged={invalidate}
         />
@@ -206,7 +229,7 @@ function StickyNotesInner() {
 
 /* ─────────────────────────── desktop draggable note ─────────────────────────── */
 
-function DesktopNote({ note, index, members, onChange, onOpen }: { note: Note; index: number; members: Member[]; onChange: () => void; onOpen: (n: Note) => void }) {
+function DesktopNote({ note, index, members, meId, onChange, onOpen }: { note: Note; index: number; members: Member[]; meId: string | null; onChange: () => void; onOpen: (n: Note) => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ x: number; y: number }>(() => {
     const stored = readPositions()[note.id]
@@ -239,15 +262,19 @@ function DesktopNote({ note, index, members, onChange, onOpen }: { note: Note; i
       style={{ left: `${pos.x * 100}vw`, top: `${pos.y * 100}vh` }}
       className={`fixed z-[45] w-60 cursor-grab active:cursor-grabbing rounded-md border shadow-lg ${COLORS[note.color] || COLORS.yellow}`}
     >
-      <NoteCardBody note={note} members={members} onChange={onChange} onOpen={onOpen} />
+      <NoteCardBody note={note} members={members} meId={meId} onChange={onChange} onOpen={onOpen} />
     </div>
   )
 }
 
 /* ─────────────────────────── shared card body + actions ─────────────────────────── */
 
-function NoteCardBody({ note, members, onChange, onOpen }: { note: Note; members: Member[]; onChange: () => void; onOpen?: (n: Note) => void }) {
+function NoteCardBody({ note, members, meId, onChange, onOpen }: { note: Note; members: Member[]; meId: string | null; onChange: () => void; onOpen?: (n: Note) => void }) {
   const router = useRouter()
+  // WHO SEES a note is the author's call alone (2026-07-28 share-back incident) — the
+  // share menu is hidden, not disabled, for everyone else. Fail-closed when me is unknown.
+  const isAuthor = meId != null && meId === note.author_user_id
+  const origin = note.origin_url ? safeOriginPath(note.origin_url) : null
   const [busy, setBusy] = useState(false)
   const [menu, setMenu] = useState<'none' | 'snooze' | 'share'>('none')
   const [err, setErr] = useState<string | null>(null)
@@ -331,6 +358,19 @@ function NoteCardBody({ note, members, onChange, onOpen }: { note: Note; members
         </p>
       )}
 
+      {/* Where the note came from — one tap back to the email / chat / page. */}
+      {origin && (
+        <button
+          data-no-drag
+          onClick={() => router.push(origin)}
+          title={origin}
+          className="mt-1 flex items-center gap-1 text-xs opacity-70 hover:underline"
+        >
+          <ExternalLink className="h-3 w-3 shrink-0" />
+          <span className="truncate">From: {describeOrigin(origin)}</span>
+        </button>
+      )}
+
       <div className="mt-2 flex items-center gap-1 text-xs opacity-70">
         {note.visibility === 'private' && <Lock className="h-3 w-3" />}
         {note.visibility === 'shared' && <><Share2 className="h-3 w-3" />{note.shared_with_name}</>}
@@ -343,8 +383,10 @@ function NoteCardBody({ note, members, onChange, onOpen }: { note: Note; members
           </button>
           <button data-no-drag onClick={() => setMenu(menu === 'snooze' ? 'none' : 'snooze')}
             className="rounded p-0.5 hover:bg-black/10" title="Snooze"><Clock className="h-3.5 w-3.5" /></button>
-          <button data-no-drag onClick={() => setMenu(menu === 'share' ? 'none' : 'share')}
-            className="rounded p-0.5 hover:bg-black/10" title="Share"><Share2 className="h-3.5 w-3.5" /></button>
+          {isAuthor && (
+            <button data-no-drag onClick={() => setMenu(menu === 'share' ? 'none' : 'share')}
+              className="rounded p-0.5 hover:bg-black/10" title="Share"><Share2 className="h-3.5 w-3.5" /></button>
+          )}
         </span>
       </div>
 
@@ -383,7 +425,7 @@ function NoteCardBody({ note, members, onChange, onOpen }: { note: Note; members
         </div>
       )}
 
-      {menu === 'share' && (
+      {menu === 'share' && isAuthor && (
         <div data-no-drag className="mt-2 flex flex-col gap-1 text-xs">
           {members.map((m) => (
             <button key={m.id} onClick={() => act({ action: 'share', shared_with_user_id: m.id })}
@@ -399,105 +441,11 @@ function NoteCardBody({ note, members, onChange, onOpen }: { note: Note; members
   )
 }
 
-/* ─────────────────────────── composer ─────────────────────────── */
-
-/** One "Who's it for?" pill. */
-function RecipientChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-        active ? 'bg-amber-500 text-white' : 'bg-amber-200 text-amber-900 hover:bg-amber-300'
-      }`}
-    >
-      {label}
-    </button>
-  )
-}
-
-function Composer({ members, onClose, onCreated }: { members: Member[]; onClose: () => void; onCreated: () => void }) {
-  const [body, setBody] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-  // Pre-fill with the company whose page you're on; you can change or clear it.
-  const fromPage = subjectFromPath()
-  const [accountId, setAccountId] = useState<string | undefined>(fromPage.account_id)
-  const [accountName, setAccountName] = useState<string | undefined>(undefined)
-  // Who's it for? 'me' (default) | 'team' | a teammate's id. Chosen up-front now
-  // instead of created-private-then-shared from the card.
-  const [recipient, setRecipient] = useState<string>('me')
-
-  const save = async () => {
-    if (!body.trim()) { onClose(); return }
-    setBusy(true); setErr(null)
-    try {
-      // an explicitly picked company wins; otherwise fall back to whatever the page implied
-      const subject = accountId ? { account_id: accountId } : fromPage
-      const res = await fetch(API, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body, origin_url: window.location.pathname, recipient, ...subject }),
-      })
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}))
-        throw new Error(d.error || 'Could not save — try again.')
-      }
-      onCreated(); onClose()
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Could not save — your text is still here, try again.')
-      setBusy(false) // keep the text on failure — never lose what was typed
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/30 p-0 sm:items-center sm:p-4" onClick={onClose}>
-      <div className="w-full sm:max-w-sm rounded-t-xl sm:rounded-xl bg-amber-100 p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-sm font-medium text-amber-950">New note</span>
-          <button onClick={onClose} className="rounded p-1 hover:bg-black/10"><X className="h-4 w-4" /></button>
-        </div>
-        <textarea
-          autoFocus value={body} onChange={(e) => setBody(e.target.value)} maxLength={4000}
-          placeholder="e.g. call IRS about the EIN"
-          className="h-28 w-full resize-none rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-950 outline-none focus:border-amber-500"
-        />
-        <div className="mt-2">
-          <label className="mb-1 block text-xs font-medium text-amber-900">Who&apos;s it for?</label>
-          <div className="flex flex-wrap gap-1">
-            <RecipientChip label="Just me" active={recipient === 'me'} onClick={() => setRecipient('me')} />
-            {members.map((m) => (
-              <RecipientChip key={m.id} label={m.name} active={recipient === m.id} onClick={() => setRecipient(m.id)} />
-            ))}
-            <RecipientChip label="Whole team" active={recipient === 'team'} onClick={() => setRecipient('team')} />
-          </div>
-        </div>
-        <div className="mt-2">
-          <label className="mb-1 block text-xs font-medium text-amber-900">About a client (optional)</label>
-          <AccountCombobox
-            value={accountId}
-            displayValue={accountName}
-            onChange={(id, name) => { setAccountId(id); setAccountName(name) }}
-            placeholder="Search company or person…"
-          />
-        </div>
-        {err && <p className="mt-1 text-xs text-red-700">{err}</p>}
-        <div className="mt-2 flex justify-end gap-2">
-          <button onClick={onClose} className="rounded px-3 py-1.5 text-sm text-amber-900 hover:bg-black/10">Cancel</button>
-          <button onClick={save} disabled={busy}
-            className="flex items-center gap-1 rounded bg-amber-400 px-3 py-1.5 text-sm font-medium text-amber-950 hover:bg-amber-300 disabled:opacity-60">
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />} Stick it
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 /* ─────────────────────────── mobile bottom sheet ─────────────────────────── */
+// (The old mini Composer lived here — creation now opens the FULL NoteEditor instead.)
 
-function MobileSheet({ notes, members, onClose, onNew, onChange, onOpen }: {
-  notes: Note[]; members: Member[]; onClose: () => void; onNew: () => void; onChange: () => void; onOpen: (n: Note) => void
+function MobileSheet({ notes, members, meId, onClose, onNew, onChange, onOpen }: {
+  notes: Note[]; members: Member[]; meId: string | null; onClose: () => void; onNew: () => void; onChange: () => void; onOpen: (n: Note) => void
 }) {
   return (
     <div className="lg:hidden fixed inset-0 z-[46] flex flex-col justify-end bg-black/30" onClick={onClose}>
@@ -512,7 +460,7 @@ function MobileSheet({ notes, members, onClose, onNew, onChange, onOpen }: {
         <div className="flex flex-col gap-2">
           {notes.map((n) => (
             <div key={n.id} className={`rounded-md border ${COLORS[n.color] || COLORS.yellow}`}>
-              <NoteCardBody note={n} members={members} onChange={onChange} onOpen={onOpen} />
+              <NoteCardBody note={n} members={members} meId={meId} onChange={onChange} onOpen={onOpen} />
             </div>
           ))}
         </div>
