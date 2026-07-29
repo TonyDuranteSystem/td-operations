@@ -37,7 +37,14 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isTerminalInvoice, terminalReason } from "@/lib/finance/invoice-matchability"
-import { resolveInvoiceStatusAfterPayment } from "@/lib/finance/invoice-money"
+import {
+  resolveInvoiceStatusAfterPayment,
+  resolveInvoiceStatusAfterReversal,
+} from "@/lib/finance/invoice-money"
+import { capturePreVoidState, resolveReactivateTarget } from "@/lib/billing/invoice-reactivate"
+import { reportSystemError } from "@/lib/system-errors"
+import type { Json } from "@/lib/database.types"
+import { describeReversalSideEffects, resolveTargetTaxYear } from "@/lib/finance/reversal-side-effects"
 
 export type ApplyMode =
   /** Add `appliedAmount` to whatever is already paid (bank feed, part-payment). */
@@ -542,4 +549,446 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
     newAmountPaid,
     newAmountDue,
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════
+// REVERSAL — taking one transaction's money back off an invoice.
+//
+// ⛔ WHY THIS LIVES HERE AND NOT IN THE SERVER ACTION THAT CALLS IT.
+// The compare-and-swap above is only sufficient "because every money writer goes through
+// this function, and this function always writes amount_paid". A reversal helper written
+// next to the UI would be a SECOND money writer and would silently retire that guarantee —
+// the exact shape of the three-disagreeing-algorithms bug this module was created to end.
+//
+// ⛔ WHY THE LEDGER ROW IS UN-CONFIRMED, NOT DELETED (2026-07-29, Council).
+// The first draft of this fix deleted the `payment_applications` row. That recreates, word
+// for word, the failure `scripts/migrations/20260714-2200-…-restrict-delete.sql` was written
+// to prevent: if the delete lands and the money write does not, the idempotency record is
+// gone while the effect remains, and the next sync is free to credit that invoice again.
+// Clearing `confirmed_at` instead keeps the row (and its history), and every existing reader
+// already does the right thing with it:
+//   • `hasConfirmedApplication` returns false → a legitimate re-match is possible again.
+//   • the UNIQUE (feed_id, payment_id) insert still collides, and the collision branch above
+//     treats an OLD unconfirmed claim as the debris of a crashed attempt and re-takes it
+//     under a compare-and-swap. That is why `applied_at` is aged here.
+//   • the scoped invariant sum(CONFIRMED applications) == amount_paid keeps holding.
+// It needs no schema change, which matters: production DDL on this project is run by hand.
+//
+// ⛔ WHY MONEY MOVES FIRST AND THE LEDGER SECOND.
+// Both orders can be interrupted; only one fails safe. Money-first, then ledger: if the
+// second write dies, the row stays CONFIRMED on a re-opened invoice, which BLOCKS a
+// re-credit. Ledger-first: the row is unconfirmed while the money is still applied, and the
+// next pass credits it twice. The order is not a detail, it is the guarantee.
+// ════════════════════════════════════════════════════════════════════════════════════════
+
+export interface ReverseApplicationParams {
+  feedId: string
+  paymentId: string
+  /** Who did this — lands in the audit row and on the reversed ledger row. */
+  actor: string
+  /** ISO `YYYY-MM-DD`, passed in so the open-state decision is testable. */
+  today: string
+}
+
+export interface ReverseApplicationResult {
+  reversed: boolean
+  /** 'no_application' = this transaction never credited this invoice: nothing to reverse
+   *  (the audit-link case). The caller must then NOT touch the invoice at all. */
+  reason?: "no_application" | "not_found" | "write_failed" | "concurrent_change" | "indeterminate"
+  detail?: string
+  /** How much was taken back off the invoice. */
+  amountReversed?: number
+  newAmountPaid?: number
+  newAmountDue?: number
+  newInvoiceStatus?: string
+  /** Set when the money was reversed but the ledger row could not be un-confirmed. The
+   *  invoice is correct; the pair is locked until a human clears it. */
+  warning?: string
+  /** Plain-English statements about what the original payment set in motion that this
+   *  reversal does NOT undo (a lifted tax gate, an internal email already sent). */
+  sideEffects?: string[]
+}
+
+/**
+ * Reverse the money ONE bank transaction applied to ONE invoice.
+ *
+ * Returns `reversed: false, reason: 'no_application'` when there is no confirmed ledger row
+ * for the pair. That is not a failure — it is the audit-link case (a card charge tied to an
+ * invoice its own webhook had already closed), and the caller must leave the invoice alone.
+ * The first draft of this fix would have re-opened such an invoice and put a client who had
+ * already paid back into the overdue-chaser population.
+ */
+export async function reverseFeedApplication(
+  params: ReverseApplicationParams,
+): Promise<ReverseApplicationResult> {
+  const { feedId, paymentId, actor, today } = params
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- table not in generated types
+  const db = supabaseAdmin as any
+
+  const { data: ledgerRow } = await db
+    .from("payment_applications")
+    .select("id, amount, applied_at, applied_by")
+    .eq("feed_id", feedId)
+    .eq("payment_id", paymentId)
+    .not("confirmed_at", "is", null)
+    .maybeSingle()
+
+  if (!ledgerRow) {
+    return {
+      reversed: false,
+      reason: "no_application",
+      detail: "This transaction never applied money to this invoice — nothing to reverse.",
+    }
+  }
+
+  const { data: payment } = await supabaseAdmin
+    .from("payments")
+    .select(
+      "id, invoice_number, invoice_status, status, total, amount, amount_paid, amount_due, paid_date, due_date, sent_at, portal_invoice_id, account_id, contact_id, credit_remaining, installment, description, year",
+    )
+    .eq("id", paymentId)
+    .maybeSingle()
+
+  if (!payment) {
+    return { reversed: false, reason: "not_found", detail: "Invoice not found." }
+  }
+
+  const invoiceTotal = Number(payment.total ?? payment.amount ?? 0)
+  const currentPaid = Number(payment.amount_paid ?? 0)
+  const credited = Number(ledgerRow.amount ?? 0)
+
+  const { newAmountPaid, newAmountDue, keepPaidDate } = resolveInvoiceStatusAfterReversal(
+    invoiceTotal,
+    currentPaid,
+    credited,
+  )
+  const amountReversed = Math.round((currentPaid - newAmountPaid) * 100) / 100
+
+  // What state is this invoice honestly in now? Derived from the truth (remaining balance,
+  // due date, whether it was ever emailed) — NOT restored from a snapshot, because a
+  // snapshot carries the PRE-reversal amount_paid and restoring it verbatim would put the
+  // reversed money straight back on the invoice. The snapshot is written to the audit row
+  // for forensics only, under its own key, and is never read back as a restore source.
+  const target = resolveReactivateTarget({
+    prior: null,
+    total: invoiceTotal,
+    amountPaid: newAmountPaid,
+    dueDate: (payment.due_date as string | null) ?? null,
+    today,
+    wasSent: !!payment.sent_at,
+  })
+
+  const now = new Date().toISOString()
+  const updates: Record<string, unknown> = {
+    invoice_status: target.invoice_status,
+    status: target.status,
+    amount_paid: newAmountPaid,
+    amount_due: newAmountDue,
+    updated_at: now,
+    ...(keepPaidDate ? {} : { paid_date: null }),
+  }
+
+  // ── MONEY FIRST, under the same compare-and-swap the apply path uses ──────────────────
+  // eslint-disable-next-line no-restricted-syntax -- the money choke-point (dev_task 7ebb1e0c)
+  const casQuery = supabaseAdmin.from("payments").update(updates).eq("id", paymentId)
+  const guarded =
+    payment.amount_paid === null || payment.amount_paid === undefined
+      ? casQuery.is("amount_paid", null)
+      : casQuery.eq("amount_paid", payment.amount_paid)
+
+  const { data: updatedRows, error: updErr } = await guarded.select("id")
+
+  if (updErr) {
+    // Same reasoning as the apply path: an error is not proof of failure. Go and look.
+    const { data: after, error: afterErr } = await supabaseAdmin
+      .from("payments")
+      .select("amount_paid")
+      .eq("id", paymentId)
+      .maybeSingle()
+
+    if (afterErr) {
+      console.error(
+        `[apply-payment] REVERSAL could not be verified for ${paymentId}: ${afterErr.message}. Ledger row left CONFIRMED (blocks re-credit).`,
+      )
+      return {
+        reversed: false,
+        reason: "indeterminate",
+        detail:
+          "The reversal could not be confirmed and the invoice could not be re-read. Nothing was unlocked — please check this invoice before matching it again.",
+      }
+    }
+
+    const afterPaid = after?.amount_paid ?? null
+    const landed = afterPaid !== null && Math.abs(Number(afterPaid) - newAmountPaid) < 0.005
+    if (!landed) {
+      return {
+        reversed: false,
+        reason: "write_failed",
+        detail: `The invoice could not be updated: ${updErr.message}. Nothing was reversed.`,
+      }
+    }
+    console.warn(`[apply-payment] REVERSAL on ${paymentId} reported an error but LANDED.`)
+  } else if (!updatedRows || updatedRows.length === 0) {
+    // Another process moved this invoice between our read and our write. Reversing from a
+    // stale read could erase money that arrived in the meantime. Stand down — and leave the
+    // ledger row confirmed, so nothing can be re-credited either.
+    console.warn(
+      `[apply-payment] Concurrent change on ${paymentId} — reversal stood down, nothing written.`,
+    )
+    return {
+      reversed: false,
+      reason: "concurrent_change",
+      detail:
+        "This invoice changed while the reversal was being prepared, so nothing was reversed. Try again.",
+    }
+  }
+
+  // ── LEDGER SECOND: un-confirm, and age the claim so the stale-claim takeover can re-take
+  // it if this transaction is later legitimately matched to this same invoice again. ──────
+  const AGED_MS = 10 * 60 * 1000 // comfortably past the 5-minute stale-claim window
+  let warning: string | undefined
+  const { error: unconfirmErr } = await db
+    .from("payment_applications")
+    .update({
+      confirmed_at: null,
+      applied_at: new Date(Date.now() - AGED_MS).toISOString(),
+      applied_by: `reversed:${actor}`,
+    })
+    .eq("id", ledgerRow.id)
+
+  if (unconfirmErr) {
+    warning =
+      "The money was taken off the invoice, but the transaction could not be unlocked. It cannot be matched again until that is cleared."
+    console.error(
+      `[apply-payment] MONEY REVERSED BUT LEDGER ROW ${ledgerRow.id} STILL CONFIRMED (feed=${feedId} payment=${paymentId}):`,
+      unconfirmErr.message,
+    )
+    await reportSystemError({
+      source: "server",
+      route: "lib/finance/apply-payment#reverseFeedApplication",
+      message: `Reversal left a confirmed ledger row: feed ${feedId} / invoice ${paymentId}. The invoice is correct but the pair is locked.`,
+      context: { feedId, paymentId, ledgerRowId: ledgerRow.id, error: unconfirmErr.message },
+    }).catch(() => {})
+  }
+
+  // ── Mirrors: ADD the balance projection, never REPLACE the status sync ────────────────
+  // syncTDInvoiceStatus is the ONLY emitter of the staff "Client paid" note, so it must keep
+  // being called; it maps the STATUS only and leaves the mirror's balances stale (which is
+  // how a Paid mirror ended up still demanding the full amount). syncTDInvoiceMirror is the
+  // authoritative projection. Both, status first.
+  try {
+    const { syncTDInvoiceStatus } = await import("@/lib/portal/td-invoice")
+    await syncTDInvoiceStatus(paymentId, target.invoice_status, undefined, newAmountPaid)
+  } catch (err) {
+    console.error(`[apply-payment] reversal status mirror failed for ${paymentId}:`, err)
+  }
+  try {
+    const { syncTDInvoiceMirror } = await import("@/lib/portal/td-invoice-mirror")
+    await syncTDInvoiceMirror(paymentId)
+  } catch (err) {
+    console.error(`[apply-payment] reversal balance mirror failed for ${paymentId}:`, err)
+  }
+
+  // Legacy client_invoices copy — the apply path mirrors it, so the reversal must too, or a
+  // client-visible record keeps saying Paid with the full amount credited.
+  if (payment.portal_invoice_id) {
+    const { error: mirrorErr } = await supabaseAdmin
+      .from("client_invoices")
+      .update({
+        status: target.invoice_status,
+        amount_paid: newAmountPaid,
+        amount_due: newAmountDue,
+        updated_at: now,
+        ...(keepPaidDate ? {} : { paid_date: null }),
+      })
+      .eq("id", payment.portal_invoice_id)
+    if (mirrorErr) {
+      console.error(
+        `[apply-payment] client_invoices reversal mirror FAILED for ${paymentId}:`,
+        mirrorErr.message,
+      )
+    }
+  }
+
+  // ── What else did settling this invoice set in motion? ───────────────────────────────────
+  // Derived from live state, never from a stored inventory (see reversal-side-effects.ts).
+  // Anything that fired and is NOT rolled back is raised where staff actually look, because a
+  // consequence recorded only in an audit table nobody opens is not visibility — this codebase
+  // already lost months to a review queue that was empty because nothing surfaced it.
+  const targetTaxYear = resolveTargetTaxYear({
+    installment: (payment.installment as string | null) ?? null,
+    description: (payment.description as string | null) ?? null,
+    year: (payment.year as number | null) ?? null,
+  })
+
+  let taxReturnRow: { tax_year: number; paid: boolean; status: string | null } | null = null
+  let otherPaidPaymentExists = false
+  if (targetTaxYear != null && payment.account_id) {
+    const { data: tr } = await supabaseAdmin
+      .from("tax_returns")
+      .select("tax_year, paid, status")
+      .eq("account_id", payment.account_id)
+      .eq("tax_year", targetTaxYear)
+      .maybeSingle()
+    if (tr) {
+      taxReturnRow = {
+        tax_year: Number(tr.tax_year),
+        paid: !!tr.paid,
+        status: (tr.status as string | null) ?? null,
+      }
+    }
+    const { data: siblings } = await supabaseAdmin
+      .from("payments")
+      .select("id, installment, description")
+      .eq("account_id", payment.account_id)
+      .eq("year", payment.year as number)
+      .eq("status", "Paid")
+      .neq("id", paymentId)
+    otherPaidPaymentExists = (siblings ?? []).some((sib) => {
+      const inst = (sib.installment as string | null) ?? ""
+      const desc = ((sib.description as string | null) ?? "").toLowerCase()
+      return /^Installment/i.test(inst) || desc.includes("tax return") || desc.includes("tax filing")
+    })
+  }
+
+  const sideEffects = describeReversalSideEffects({
+    invoiceNumber: (payment.invoice_number as string | null) ?? null,
+    installment: (payment.installment as string | null) ?? null,
+    description: (payment.description as string | null) ?? null,
+    year: (payment.year as number | null) ?? null,
+    taxReturn: taxReturnRow,
+    otherPaidPaymentExists,
+  })
+
+  if (sideEffects.needsAttention) {
+    await reportSystemError({
+      source: "server",
+      route: "lib/finance/apply-payment#reverseFeedApplication",
+      message:
+        `Un-matching ${payment.invoice_number ?? "an invoice"} did not undo everything the original payment set in motion: ` +
+        sideEffects.statements.join(" "),
+      context: { paymentId, feedId, statements: sideEffects.statements, targetTaxYear },
+    }).catch(() => {})
+  }
+
+  // ── Audit: one row, and it is also what the "what fired" checklist renders from ──
+  try {
+    await supabaseAdmin.from("action_log").insert({
+      actor,
+      action_type: "payment_reversed",
+      table_name: "payments",
+      record_id: paymentId,
+      account_id: payment.account_id,
+      contact_id: payment.contact_id,
+      summary: `Reversed ${amountReversed} from ${payment.invoice_number ?? "invoice"} — bank transaction un-matched`,
+      details: {
+        payment_id: paymentId,
+        feed_id: feedId,
+        ledger_row_id: ledgerRow.id,
+        amount_reversed: amountReversed,
+        credited_amount_on_ledger: credited,
+        previous_amount_paid: currentPaid,
+        new_amount_paid: newAmountPaid,
+        new_amount_due: newAmountDue,
+        new_invoice_status: target.invoice_status,
+        new_status: target.status,
+        ledger_unconfirmed: !unconfirmErr,
+        side_effects: sideEffects.statements,
+        side_effects_need_attention: sideEffects.needsAttention,
+        // Forensics only — deliberately NOT under `pre_void_state`, which the un-cancel path
+        // scans for and would otherwise restore, bringing a cancelled invoice back as Paid.
+        pre_unlink_state: capturePreVoidState({
+          status: payment.status as string | null,
+          invoice_status: payment.invoice_status as string | null,
+          amount_due: payment.amount_due as number | null,
+          amount_paid: payment.amount_paid as number | null,
+          paid_date: payment.paid_date as string | null,
+          credit_remaining: payment.credit_remaining as number | null,
+        }),
+      } as unknown as Json,
+    })
+  } catch (err) {
+    console.error(`[apply-payment] reversal audit row failed for ${paymentId}:`, err)
+  }
+
+  return {
+    reversed: true,
+    amountReversed,
+    newAmountPaid,
+    newAmountDue,
+    newInvoiceStatus: target.invoice_status,
+    warning,
+    sideEffects: sideEffects.statements,
+  }
+}
+
+/**
+ * Every CONFIRMED (transaction → this invoice) application, so a caller un-matching an
+ * invoice can reverse each one with its OWN recorded amount.
+ *
+ * ⛔ DO NOT find these by `td_bank_feeds.matched_payment_id`. A wire split across several
+ * invoices stamps that column with only the FIRST one, so invoices 2..N of a waterfall are
+ * invisible to a search by pointer — reversing "the" feed would leave their money credited
+ * with no transaction behind it. The ledger is the only complete record.
+ */
+export async function listConfirmedApplications(
+  paymentId: string,
+): Promise<Array<{ id: string; feed_id: string; amount: number }>> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- table not in generated types
+  const db = supabaseAdmin as any
+  const { data } = await db
+    .from("payment_applications")
+    .select("id, feed_id, amount")
+    .eq("payment_id", paymentId)
+    .not("confirmed_at", "is", null)
+  return (data ?? []) as Array<{ id: string; feed_id: string; amount: number }>
+}
+
+/**
+ * The stronger form of {@link hasConfirmedApplication}: is this transaction's money not just
+ * RECORDED against this invoice, but actually SITTING on it?
+ *
+ * ⛔ WHY THE WEAKER CHECK IS NOT ENOUGH ON THE MANUAL PATH.
+ * A confirmed ledger row is normally proof that money moved. But a reversal that removed the
+ * money and then failed to un-confirm the row leaves the two disagreeing — and the manual
+ * match path reads that row, concludes "the money is already there", marks the transaction
+ * matched and reports SUCCESS to the operator while applying nothing. Staff would then go
+ * looking for money that is not on the invoice. Comparing the row against the invoice's own
+ * balance closes it: the ledger must be corroborated by the money it claims to describe.
+ */
+export async function confirmedApplicationIsBackedByMoney(
+  feedId: string,
+  paymentId: string,
+): Promise<boolean> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- table not in generated types
+  const db = supabaseAdmin as any
+  const { data: row } = await db
+    .from("payment_applications")
+    .select("amount")
+    .eq("feed_id", feedId)
+    .eq("payment_id", paymentId)
+    .not("confirmed_at", "is", null)
+    .maybeSingle()
+  if (!row) return false
+
+  const { data: payment } = await supabaseAdmin
+    .from("payments")
+    .select("amount_paid")
+    .eq("id", paymentId)
+    .maybeSingle()
+
+  const paid = Number(payment?.amount_paid ?? 0)
+  const claimed = Number(row.amount ?? 0)
+  if (paid + 0.005 >= claimed) return true
+
+  console.error(
+    `[apply-payment] LEDGER DISAGREES WITH THE INVOICE: feed ${feedId} claims ${claimed} applied to ${paymentId}, which shows ${paid} paid. Treating the money as NOT applied.`,
+  )
+  await reportSystemError({
+    source: "server",
+    route: "lib/finance/apply-payment#confirmedApplicationIsBackedByMoney",
+    message: `A confirmed payment application is not backed by the invoice's balance (feed ${feedId} / invoice ${paymentId}): ledger says ${claimed}, invoice shows ${paid} paid.`,
+    context: { feedId, paymentId, claimed, paid },
+  }).catch(() => {})
+  return false
 }

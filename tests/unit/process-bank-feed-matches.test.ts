@@ -54,6 +54,10 @@ vi.mock("@/lib/supabase-admin", () => {
             in: vi.fn().mockReturnThis(),
             order: vi.fn().mockReturnThis(),
             limit: vi.fn(() => Promise.resolve({ data: [], error: null })),
+            // `updateFeed` now READS the row before writing `review_metadata`, so it can merge
+            // rather than replace it (a wholesale replace destroyed the multi-invoice
+            // allocation record, the refund flag, and the "a human said no" memory).
+            maybeSingle: vi.fn(() => Promise.resolve({ data: { review_metadata: null }, error: null })),
             update: vi.fn((payload: Record<string, unknown>) => {
               lastPayload = payload
               return {

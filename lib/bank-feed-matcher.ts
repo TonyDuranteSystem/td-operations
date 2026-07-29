@@ -18,38 +18,53 @@ import { syncPaymentToQB } from "@/lib/qb-sync"
 import { runActivation } from "@/lib/operations/activate-service"
 import { getAppSetting } from "@/lib/settings"
 import { isMatchableInvoice, isTerminalInvoice, isPaidInvoice } from "@/lib/finance/invoice-matchability"
-import { applyMoneyToInvoice, hasConfirmedApplication } from "@/lib/finance/apply-payment"
+import { applyMoneyToInvoice, confirmedApplicationIsBackedByMoney } from "@/lib/finance/apply-payment"
 import { resolveInvoiceStatusAfterPayment } from "@/lib/finance/invoice-money"
 import {
   extractStripePaymentIntent,
   extractFeedEmails,
   extractInvoiceReference,
+  bestNameEvidence,
+  evaluateNameEvidence,
 } from "@/lib/finance/feed-signals"
 import { isChargeRefundedNow } from "@/lib/stripe-sync"
 import { updateFeed } from "@/lib/finance/feed-write"
-import { auditLinkMetadata } from "@/lib/finance/feed-vocabulary"
+import {
+  auditLinkMetadata,
+  contestedMetadata,
+  readRejectedPairs,
+  type ContestedCandidate,
+} from "@/lib/finance/feed-vocabulary"
+import {
+  selectBestCandidate,
+  type ScoredCandidate,
+} from "@/lib/finance/candidate-selection"
 
 // Re-exported: the money math moved to lib/finance/invoice-money.ts so the single
 // money writer (lib/finance/apply-payment.ts) can use it without a circular import.
 export { resolveInvoiceStatusAfterPayment }
 
-// Common business words excluded from name matching to prevent false positives
-const STOP_WORDS = new Set([
-  // Legal suffixes
-  "llc", "inc", "ltd", "corp", "co", "plc", "gmbh", "srl",
-  // Generic business words (cause cross-company false matches)
-  "consulting", "commerce", "international", "services", "holdings",
-  "management", "solutions", "ventures", "capital", "partners",
-  "trading", "digital", "global", "group", "media", "investments",
-  "properties", "enterprises", "advisors", "associates", "agency",
-  "solution", "strategies", "accelerator",
-  // Common filler words
-  "the", "and", "for", "via", "from", "tax", "return", "annual",
-  "service", "fee", "payment", "invoice", "contractor", "vendor",
-  "company", "first",
-  // Payment processor names (appear in sender but aren't the actual client)
-  "wise",
-])
+/*
+ * REMOVED 2026-07-29 — the local STOP_WORDS list and the "any one word matched" name test.
+ *
+ * A hand-maintained blocklist was the ONLY thing standing between two unrelated clients and
+ * each other's money, and it was missing "marketing" — which is how a $1,000 wire from LC
+ * Marketing Consulting settled Aces Marketing Solutions' invoice on 2026-07-22. The rule now
+ * lives in ONE place, `lib/finance/feed-signals.ts`, and requires the matched words to COVER a
+ * minimum share of the client's name; the Finance review picker calls the same function, so the
+ * screen a human is sent to can no longer rank names by a looser rule than the server used.
+ */
+
+/** Map the tied candidates onto the record a human reads in the review queue. */
+function toContestedCandidates(tied: ScoredCandidate[]): ContestedCandidate[] {
+  return tied.map((t) => ({
+    payment_id: t.id,
+    invoice_number: t.invoiceNumber,
+    client_name: t.clientName ?? null,
+    score: t.score,
+    confidence: t.confidence,
+  }))
+}
 
 interface MatchResult {
   matched: boolean
@@ -449,15 +464,9 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       if (!identityResolved) return { matched: false }
     }
 
-    // Score each invoice
-    type ScoredInvoice = {
-      id: string
-      invoiceNumber: string | null
-      confidence: "exact" | "high" | "medium"
-      score: number
-    }
-
-    const candidates: ScoredInvoice[] = []
+    // Score each invoice. The shape is the shared `ScoredCandidate` so the pure, unit-tested
+    // ambiguity guard consumes it directly — a local look-alike type would let the two drift.
+    const candidates: ScoredCandidate[] = []
     const feedText = `${memoLower} ${refLower} ${effectiveSender} ${senderLower}`
 
     for (const inv of currencyFiltered) {
@@ -490,23 +499,23 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       const linkedCompanyNames = (contactToLinkedCompanies[inv.contact_id || ""] || []).map(n => n.toLowerCase())
       const companyNamePool = Array.from(new Set([directCompanyName, ...linkedCompanyNames].filter(Boolean)))
 
-      // Check if sender/memo/reference contains any of the candidate company names.
-      // Use word boundary regex to avoid substring false matches (e.g. "solution" inside "solutions").
-      const nameMatch = companyNamePool.some(cname => {
-        const nameWords = cname.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
-        return nameWords.length > 0 && nameWords.some(w => {
-          const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
-          return re.test(effectiveSender) || re.test(senderLower) || re.test(memoLower) || re.test(refLower)
-        })
-      })
+      // ⛔ NAME EVIDENCE IS NOW A COVERAGE TEST, NOT "ANY ONE WORD MATCHED" (2026-07-29).
+      // The old rule counted a name as matched when a SINGLE significant word appeared in the
+      // payment text. On 2026-07-22 that word was "marketing" — shared by two unrelated
+      // clients, identifying neither — and it auto-settled the wrong client's $1,000 invoice.
+      // The rule lives in ONE place now (lib/finance/feed-signals.ts), shared with the Finance
+      // review picker, so the screen a human is sent to cannot rank names by a looser rule
+      // than the server used.
+      const feedTexts = [effectiveSender, senderLower, memoLower, refLower]
+      const companyEvidence = bestNameEvidence(companyNamePool, feedTexts)
+      const nameMatch = companyEvidence.sufficient
 
       // Contact-first resolution: also match against contact full_name
       const contactName = ((inv.contacts as unknown as { full_name: string })?.full_name || "").toLowerCase()
-      const contactWords = contactName.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
-      const contactMatch = contactWords.length > 0 && contactWords.some(w => {
-        const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
-        return re.test(effectiveSender) || re.test(senderLower) || re.test(memoLower) || re.test(refLower)
-      })
+      const contactEvidence = evaluateNameEvidence(contactName, feedTexts)
+      const contactMatch = contactEvidence.sufficient
+      // Something matched but not enough of the name: real evidence, too weak to settle on.
+      const weakNameEvidence = !nameMatch && !contactMatch && (companyEvidence.weak || contactEvidence.weak)
 
       // Identity from the payer's email — the reliable signal on a card payment.
       // (The candidate pool is ALREADY scoped to the payer when identity resolved, so
@@ -547,6 +556,13 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
         // Company/contact name match + amount within 5% → high confidence
         confidence = "high"
         score = 70
+      } else if (weakNameEvidence && amountDiff <= tolerance) {
+        // PART of the name matched, but not enough of it to say who paid — e.g. a generic
+        // industry word, or one word of a two-word name. Real evidence, so the invoice stays
+        // a candidate and a human sees it; NEVER auto-settled, which is why this is 'medium'
+        // and not 'high' (under the `exact_or_high` threshold setting, 'high' would settle).
+        confidence = "medium"
+        score = 55
       } else {
         // Amount-only match (no identity, no name, no invoice ref) → manual review only
         confidence = "medium"
@@ -573,6 +589,15 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
         invoiceNumber: inv.invoice_number,
         confidence,
         score,
+        // Carried so the ambiguity guard can tell a duplicate-row tie (same client) from a
+        // two-different-clients tie, and so the contested record names the client a human
+        // would otherwise have to look up.
+        accountId: inv.account_id,
+        contactId: inv.contact_id,
+        clientName:
+          (inv.accounts as unknown as { company_name?: string } | null)?.company_name ??
+          (inv.contacts as unknown as { full_name?: string } | null)?.full_name ??
+          null,
       })
     }
 
@@ -627,8 +652,15 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
         const retroMatchedIds = new Set((alreadyMatched ?? []).map(f => f.matched_payment_id))
 
-        // Score retroactive candidates — pick the best, don't just take the first
-        let bestRetro: { id: string; invoiceNumber: string | null; score: number } | null = null
+        // ⛔ THIS PASS NEEDS THE SAME TWO GUARDS AS THE OPEN-INVOICE PASS ABOVE (2026-07-29).
+        // It was missed by the first draft of this fix, which was worse than leaving it alone:
+        // tightening the name rule upstream turns 'medium' into the COMMON outcome, and
+        // `shouldTryRetroactive` fires precisely on 'medium' — so the incident feed would have
+        // been routed straight into a pass that still used the old any-one-word name test and
+        // still broke ties first-wins. The wire would have been audit-linked to the WRONG
+        // client's already-paid invoice, marked `matched`, and dropped out of the review queue
+        // with nobody credited. Same bug, quieter failure.
+        const retroCandidates: ScoredCandidate[] = []
 
         for (const inv of paidFiltered) {
           // Skip if this invoice is already retroactively matched to another feed
@@ -649,21 +681,12 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
           const paidLinkedCompanies = (contactToLinkedCompanies[inv.contact_id || ""] || []).map(n => n.toLowerCase())
           const paidCompanyPool = Array.from(new Set([paidDirectCompany, ...paidLinkedCompanies].filter(Boolean)))
 
-          const paidNameMatch = paidCompanyPool.some(cname => {
-            const paidNameWords = cname.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
-            return paidNameWords.length > 0 && paidNameWords.some(w => {
-              const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
-              return re.test(feedText)
-            })
-          })
+          // Same shared coverage rule as the open pass — one implementation, no drift.
+          const paidNameMatch = bestNameEvidence(paidCompanyPool, [feedText]).sufficient
 
           // Contact-first resolution for retroactive pass
           const paidContactName = ((inv.contacts as unknown as { full_name: string })?.full_name || "").toLowerCase()
-          const paidContactWords = paidContactName.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
-          const paidContactMatch = paidContactWords.length > 0 && paidContactWords.some(w => {
-            const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
-            return re.test(feedText)
-          })
+          const paidContactMatch = evaluateNameEvidence(paidContactName, [feedText]).sufficient
 
           const paidInvRefMatch = invoiceRefInText(feedText, paidInvNum)
 
@@ -682,10 +705,47 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
           ) continue
 
           const score = paidInvRefMatch ? 100 : paidIdentityMatch ? 90 : 80
-          if (!bestRetro || score > bestRetro.score) {
-            bestRetro = { id: inv.id, invoiceNumber: inv.invoice_number, score }
+          retroCandidates.push({
+            id: inv.id,
+            invoiceNumber: inv.invoice_number,
+            confidence: "medium",
+            score,
+            accountId: inv.account_id,
+            contactId: inv.contact_id,
+            clientName:
+              (inv.accounts as unknown as { company_name?: string } | null)?.company_name ??
+              (inv.contacts as unknown as { full_name?: string } | null)?.full_name ??
+              null,
+          })
+        }
+
+        const retroSelection = selectBestCandidate(retroCandidates)
+
+        if (retroSelection.contested) {
+          // Two already-paid invoices are equally plausible homes for this transaction. An
+          // audit link moves no money, but it is NOT harmless: it marks the feed `matched`,
+          // removes it from the review queue, and permanently consumes that invoice's slot in
+          // the 1-invoice-many-feeds guard — so the transaction that really belongs there can
+          // never be linked. Park it instead.
+          await updateFeed(feedId, {
+            matched_payment_id: retroSelection.best?.id ?? null,
+            match_confidence: "medium",
+            status: "needs_review",
+            review_metadata: contestedMetadata(
+              toContestedCandidates(retroSelection.tied),
+              new Date().toISOString(),
+            ),
+          }, "matcher:retroactive-contested")
+
+          return {
+            matched: false,
+            paymentId: retroSelection.best?.id,
+            invoiceNumber: retroSelection.best?.invoiceNumber ?? undefined,
+            confidence: "medium",
           }
         }
+
+        const bestRetro = retroSelection.best
 
         if (bestRetro) {
           // Link feed to the Paid invoice for audit trail — do NOT change invoice status
@@ -723,9 +783,48 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     }
 
 
-    // Sort by score descending — take the best match
-    candidates.sort((a, b) => b.score - a.score)
-    const best = candidates[0]
+    // ⛔ A PAIR A HUMAN ALREADY REJECTED IS NOT A CANDIDATE (2026-07-29).
+    // Un-matching returns this transaction to the unmatched pool and the bank sync re-runs
+    // every 15 minutes. Without this, the matcher re-proposes — and can re-apply — the exact
+    // pair someone just undid, so a corrected mis-match silently un-corrects itself within the
+    // quarter hour. A human may still match a rejected pair BY HAND; only the machine is bound.
+    const rejected = readRejectedPairs(feed?.review_metadata)
+    const allowedCandidates =
+      rejected.length === 0
+        ? candidates
+        : candidates.filter((c) => !rejected.some((r) => r.payment_id === c.id))
+
+    if (allowedCandidates.length === 0) {
+      // Everything that fit was already rejected by a person. Leave the transaction where a
+      // human put it rather than proposing the same wrong answer again.
+      return { matched: false }
+    }
+
+    // ⛔ NEVER SETTLE A TIE. This is the guard the 2026-07-22 incident needed: two candidates
+    // shared the top score and `candidates.sort(...)[0]` handed $1,000 to whichever row the
+    // database returned first. `selectBestCandidate` is pure and unit-tested, orders
+    // deterministically, and reports a tie instead of resolving one.
+    const selection = selectBestCandidate(allowedCandidates)
+    const best = selection.best!
+
+    if (selection.contested) {
+      await updateFeed(feedId, {
+        matched_payment_id: best.id,
+        match_confidence: best.confidence,
+        status: "needs_review",
+        review_metadata: contestedMetadata(
+          toContestedCandidates(selection.tied),
+          new Date().toISOString(),
+        ),
+      }, "matcher:contested-candidates")
+
+      return {
+        matched: false,
+        paymentId: best.id,
+        invoiceNumber: best.invoiceNumber ?? undefined,
+        confidence: best.confidence,
+      }
+    }
 
     // Threshold-gated auto-activation. Antonio's decision (2026-05-13):
     //   * 'exact' (default) — only `exact` confidence auto-marks the invoice
@@ -1157,9 +1256,16 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
     // after a failed link hits the terminal guard first, and the transaction would have been
     // recorded and rendered as "audit link · no money applied" while its money sat on that
     // very invoice. Staff would go looking for money that was already booked.
+    //
+    // ⛔ AND THE LEDGER MUST BE CORROBORATED BY THE INVOICE (2026-07-29). A confirmed row is
+    // normally proof, but a reversal that removed the money and then failed to un-confirm the
+    // row leaves the two disagreeing — and trusting the row alone would mark this transaction
+    // matched and report SUCCESS to the operator while applying nothing, sending staff to look
+    // for money that is not there. `confirmedApplicationIsBackedByMoney` checks the invoice's
+    // own balance and reports the mismatch loudly instead of inheriting it.
     const alreadyOnThisInvoice = settle.applied
       ? false
-      : await hasConfirmedApplication(feedId, paymentId)
+      : await confirmedApplicationIsBackedByMoney(feedId, paymentId)
 
     const moneyIsApplied = settle.applied || alreadyOnThisInvoice
 

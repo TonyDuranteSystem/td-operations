@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { usePlaidLink } from 'react-plaid-link'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
+import { readContestedCandidates, type ContestedCandidate } from '@/lib/finance/feed-vocabulary'
 import { toast } from 'sonner'
 import {
   Landmark, RefreshCw, Plus, Link2, Ban, X,
@@ -158,6 +159,19 @@ function isAuditLink(feed: BankFeedRecord): boolean {
   const meta = feed.review_metadata
   if (!meta || typeof meta !== 'object') return false
   return (meta as { audit_link?: unknown }).audit_link === true
+}
+
+/**
+ * Is this transaction parked because SEVERAL invoices were equally plausible?
+ *
+ * ⛔ WHY THIS MUST BE ON THE SCREEN (2026-07-29). The guard that stopped the wrong-client
+ * auto-match parks the transaction and pins the top-scoring candidate. Without this block the
+ * row looks EXACTLY like an ordinary suggestion — one pinned invoice behind a green "Confirm
+ * this match" — and in the real incident the pinned candidate was the WRONG company. That
+ * would move the mistake from the machine to the person, which is not a fix.
+ */
+function contestedCandidates(feed: BankFeedRecord): ContestedCandidate[] {
+  return readContestedCandidates(feed.review_metadata)
 }
 
 function auditLinkNote(feed: BankFeedRecord): string | null {
@@ -501,6 +515,8 @@ function UnmatchedRow({
   const [isPending, startTransition] = useTransition()
   const [candidateBusy, setCandidateBusy] = useState<null | 'confirm' | 'reject'>(null)
   const amount = Number(feed.amount)
+  // Several invoices fitted this payment equally well — see the block below the row.
+  const contested = contestedCandidates(feed)
 
   async function callAdminEndpoint(path: string, body: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
     try {
@@ -834,8 +850,45 @@ function UnmatchedRow({
         </div>
       )}
 
+      {/* CONTESTED — several invoices fitted equally well, so nothing was applied. This block
+          must come BEFORE the ordinary candidate banner: the pinned candidate below is only the
+          first of the tied set, and in the incident that produced this guard it was the wrong
+          company. Stacks vertically so it stays readable on a ~380px phone. */}
+      {contested.length > 1 && (
+        <div className="px-4 pb-3">
+          <div className="border-2 border-orange-400 bg-orange-50 rounded-md p-3 space-y-2">
+            <div className="flex items-start gap-2 text-xs text-orange-900">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <p>
+                <span className="font-bold">MORE THAN ONE INVOICE FITS THIS PAYMENT.</span>{' '}
+                Nothing has been applied. The evidence on this transaction cannot say which of
+                these it settles — choose deliberately, or leave it if you are not sure.
+              </p>
+            </div>
+            <ul className="space-y-1">
+              {contested.map((c) => (
+                <li
+                  key={c.payment_id}
+                  className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2 text-xs bg-white border border-orange-200 rounded px-2 py-1.5"
+                >
+                  <span className="font-mono font-medium">{c.invoice_number ?? 'no number'}</span>
+                  <span className="font-medium text-zinc-800">{c.client_name ?? 'unknown client'}</span>
+                  <span className="text-[11px] text-muted-foreground sm:ml-auto">
+                    equally scored ({c.confidence})
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[11px] text-orange-900">
+              Use the link icon (↗) above to pick the right invoice. If the payment carries an
+              invoice number, that is the only thing that can settle this for certain.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Auto-matched candidate banner — shown only when feed.status='needs_review' */}
-      {candidateInfo && (
+      {candidateInfo && contested.length <= 1 && (
         <div className="px-4 pb-3">
           <div className="border border-amber-300 bg-amber-50 rounded-md p-3 space-y-2">
             <div className="flex items-start gap-2 text-xs text-amber-900">

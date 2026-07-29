@@ -33,6 +33,51 @@ export interface FeedWriteResult {
   error?: string
 }
 
+export interface UpdateFeedOptions {
+  /**
+   * Replace `review_metadata` wholesale instead of merging into it. Almost never what you
+   * want — see `mergeReviewMetadata` below for why. Reserved for a deliberate reset.
+   */
+  replaceReviewMetadata?: boolean
+}
+
+/**
+ * Top-level merge of a `review_metadata` patch onto what the row already holds.
+ *
+ * ⛔ WHY MERGING IS THE DEFAULT (2026-07-29, Council finding — five reviewers, independently).
+ *
+ * `review_metadata` is ONE jsonb column carrying several UNRELATED facts, written by
+ * different code paths at different times:
+ *
+ *   - `matched_payment_ids` / `multi_match_allocations` / `multi_match_leftover` — the ONLY
+ *     record of how a single wire was split across several invoices. `matched_payment_id`
+ *     holds just the FIRST funded invoice, so if this key is lost the allocation is
+ *     unrecoverable. Two production feeds carried it when this was written.
+ *   - `refunded_or_disputed` — the only thing that renders the red REFUNDED block in the
+ *     Finance UI. Lose it and a refunded charge shows as an ordinary confirmable candidate.
+ *   - `rejected_pairs` — "a human already said NO to this transaction/invoice pair". The
+ *     auto-matcher obeys it, so losing it re-opens a wrong-client re-credit.
+ *   - `contested` — why a row was parked for review, and the alternatives.
+ *
+ * Every one of those was previously destroyed by the next writer: this function used to
+ * assign the column, and six call sites passed a freshly built object. So a rejection
+ * recorded at 12:28 was gone by the next cron pass, and the "one wire, four invoices"
+ * allocation was one park away from being erased.
+ *
+ * A shallow (top-level key) merge is deliberately enough: every fact above owns a distinct
+ * top-level key, so a writer replaces its OWN key and touches nobody else's.
+ */
+function mergeReviewMetadata(
+  previous: unknown,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const prev =
+    previous && typeof previous === "object" && !Array.isArray(previous)
+      ? (previous as Record<string, unknown>)
+      : {}
+  return { ...prev, ...patch }
+}
+
 /**
  * Update one bank-feed row, verifying that the database accepted it.
  *
@@ -47,6 +92,7 @@ export async function updateFeed(
   feedId: string,
   patch: Record<string, unknown>,
   context: string,
+  options: UpdateFeedOptions = {},
 ): Promise<FeedWriteResult> {
   // Fail fast on a value the database will certainly reject. Without this the write goes
   // out, comes back rejected, and we learn about it only from the error report. Cheaper
@@ -81,10 +127,38 @@ export async function updateFeed(
     return { ok: false, error: message }
   }
 
+  // Merge `review_metadata` rather than replacing it (see mergeReviewMetadata above).
+  // Read-modify-write: two writers racing on DIFFERENT keys can still lose one update, which
+  // is acceptable for advisory triage data — but a writer replacing keys it never heard of is
+  // NOT, and that is what this closes. The one key where a lost write would matter
+  // (`rejected_pairs`, which the matcher obeys) is additionally re-read and re-checked at the
+  // moment it is used, so a dropped append delays the memory, it does not defeat it.
+  let effectivePatch = patch
+  const metaPatch = patch.review_metadata
+  if (
+    !options.replaceReviewMetadata &&
+    metaPatch &&
+    typeof metaPatch === "object" &&
+    !Array.isArray(metaPatch)
+  ) {
+    const { data: existing } = await supabaseAdmin
+      .from("td_bank_feeds")
+      .select("review_metadata")
+      .eq("id", feedId)
+      .maybeSingle()
+    effectivePatch = {
+      ...patch,
+      review_metadata: mergeReviewMetadata(
+        existing?.review_metadata,
+        metaPatch as Record<string, unknown>,
+      ),
+    }
+  }
+
   // eslint-disable-next-line no-restricted-syntax -- THIS is the single verified write path for td_bank_feeds
   const { error } = await supabaseAdmin
     .from("td_bank_feeds")
-    .update({ ...patch, updated_at: new Date().toISOString() })
+    .update({ ...effectivePatch, updated_at: new Date().toISOString() })
     .eq("id", feedId)
 
   if (error) {
@@ -115,6 +189,21 @@ export async function updateFeeds(
   context: string,
 ): Promise<FeedWriteResult> {
   if (feedIds.length === 0) return { ok: true }
+
+  // A bulk UPDATE cannot merge per-row jsonb, and a bulk REPLACE of review_metadata would
+  // erase a different set of facts on every row it touched (allocations, refund flags,
+  // rejections). Refuse rather than offer a footgun; write those one row at a time.
+  if ("review_metadata" in patch) {
+    const message = `Refusing to bulk-write review_metadata (from ${context}). It is a per-row merge (see updateFeed) — a bulk write would replace unrelated keys on every row.`
+    console.error(`[feed-write] ${message}`)
+    await reportSystemError({
+      source: "server",
+      route: "lib/finance/feed-write",
+      message,
+      context: { context, feedIds: feedIds.length },
+    }).catch(() => {})
+    return { ok: false, error: message }
+  }
 
   const status = patch.status
   if (typeof status === "string" && !(FEED_STATUSES as readonly string[]).includes(status)) {

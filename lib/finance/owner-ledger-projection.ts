@@ -29,6 +29,7 @@ import {
 } from "@/lib/finance/feed-signals"
 import { isMatchableInvoice } from "@/lib/finance/invoice-matchability"
 import { updateFeeds } from "@/lib/finance/feed-write"
+import { readRejectedPairs } from "@/lib/finance/feed-vocabulary"
 
 import { TD_ENTITY_ID } from "@/lib/owner-finance"
 
@@ -46,6 +47,9 @@ export interface ProjectableFeed extends FeedSignalSource {
   status?: string | null
   external_id?: string | null
   matched_payment_id?: string | null
+  /** Carries the human-triage record (rejected pairs, contested set). Read as EVIDENCE that a
+   *  person has already considered this money against a client invoice. */
+  review_metadata?: unknown
 }
 
 /** A row as My Finances stores it (td_books_transactions — the books' OWN table since
@@ -123,6 +127,16 @@ export function isClientInvoicePayment(feed: ProjectableFeed, openInvoices: Open
 
   // A payer email — resolves to a contact, and only client payments carry one.
   if (extractFeedEmails(feed).length > 0) return true
+
+  // ⛔ A HUMAN HAS ALREADY TRIAGED THIS AS CLIENT MONEY (2026-07-29).
+  // Rejecting a candidate, or un-matching a wrong match, clears the invoice pointer and returns
+  // the transaction to `unmatched` — stripping exactly the evidence the checks above rely on. A
+  // Mercury wire with no email and no invoice number would then look unrecognised, and this
+  // sweep (which runs BEFORE the matcher on every cycle) would move a real client payment into
+  // the owner's books, where it is hidden from Finance for everyone and double-counted in the
+  // owner P&L against the invoice it is later matched to. A recorded rejection is proof a person
+  // considered this money against a client invoice: it stays in Finance.
+  if (readRejectedPairs(feed.review_metadata).length > 0) return true
 
   // The amount matches something a client currently owes. Deliberately the WIDEST tolerance
   // in the system (20% or $50, whichever is larger): this is a VETO protecting a client's
@@ -203,7 +217,7 @@ export async function sendFeedToOwnerLedger(
 ): Promise<{ ok: boolean; error?: string }> {
   const { data: feed, error: readErr } = await supabaseAdmin
     .from("td_bank_feeds")
-    .select("id, transaction_date, amount, currency, source, sender_name, memo, sender_reference, raw_data, status, external_id, matched_payment_id")
+    .select("id, transaction_date, amount, currency, source, sender_name, memo, sender_reference, raw_data, status, external_id, matched_payment_id, review_metadata")
     .eq("id", feedId)
     .maybeSingle()
 
@@ -300,7 +314,7 @@ export async function sweepFeedsToOwnerLedger(): Promise<ProjectionResult> {
 
   const { data, error } = await supabaseAdmin
     .from("td_bank_feeds")
-    .select("id, transaction_date, amount, currency, source, sender_name, memo, sender_reference, raw_data, status, external_id, matched_payment_id")
+    .select("id, transaction_date, amount, currency, source, sender_name, memo, sender_reference, raw_data, status, external_id, matched_payment_id, review_metadata")
     .not("status", "in", '("owner_ledger")')
     .order("transaction_date", { ascending: false })
     .limit(2000)

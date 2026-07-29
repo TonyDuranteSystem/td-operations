@@ -47,6 +47,34 @@ export interface DunningSummary {
 }
 
 /**
+ * Invoices with an incoming bank payment WAITING FOR A HUMAN TO CONFIRM IT — pure filter.
+ *
+ * ⛔ WHY CHASING THESE IS WRONG (2026-07-29, Antonio's decision when this fix was approved).
+ * The ambiguity guard deliberately parks a transaction for review when the system cannot tell
+ * which client's invoice it settles. And un-matching now restores an invoice to its true state
+ * (Sent / Overdue) instead of hiding it as a Draft, which is honest but re-arms this pass. Put
+ * together, an invoice can be genuinely PAID — the money sitting in the bank, pinned to that
+ * invoice, waiting for a click — while this pass emails the client "Payment Overdue". The old
+ * behaviour concealed it by accident; suppressing it is deliberate.
+ *
+ * It is a PAUSE, not a cancellation: `reminder_count` is untouched, so once the review is
+ * resolved (confirmed, or rejected as not-for-this-invoice) chasing resumes exactly where it
+ * left off.
+ */
+export function suppressWhilePaymentAwaitsReview(
+  invoiceIds: string[],
+  pinnedForReview: Array<{ matched_payment_id: string | null }>,
+): { keep: string[]; suppressed: string[] } {
+  const pinned = new Set(
+    pinnedForReview.map((f) => f.matched_payment_id).filter((id): id is string => !!id),
+  )
+  const keep: string[] = []
+  const suppressed: string[] = []
+  for (const id of invoiceIds) (pinned.has(id) ? suppressed : keep).push(id)
+  return { keep, suppressed }
+}
+
+/**
  * Pure eligibility decision for one overdue invoice: send a reminder when it's
  * reached the 1st-reminder threshold (none sent) or the 2nd-reminder threshold
  * (one sent). Caps at 2 reminders total.
@@ -261,6 +289,27 @@ async function enqueueDueReminders(cap: number, errors: string[]): Promise<{ que
   }
 
   if (eligible.length === 0) return { queued: 0, skipped: 0, considered, capped }
+
+  // Never chase a client whose money is already in the bank waiting for a human to confirm it.
+  const { data: pinnedFeeds } = await supabaseAdmin
+    .from("td_bank_feeds")
+    .select("matched_payment_id")
+    .eq("status", "needs_review")
+    .not("matched_payment_id", "is", null)
+  const { suppressed } = suppressWhilePaymentAwaitsReview(
+    eligible.map((e) => e.id),
+    (pinnedFeeds ?? []) as Array<{ matched_payment_id: string | null }>,
+  )
+  if (suppressed.length > 0) {
+    const held = new Set(suppressed)
+    for (let i = eligible.length - 1; i >= 0; i--) {
+      if (held.has(eligible[i].id)) eligible.splice(i, 1)
+    }
+    console.warn(
+      `[dunning] Holding ${suppressed.length} reminder(s): an incoming bank payment is pinned to these invoices and awaiting review.`,
+    )
+    if (eligible.length === 0) return { queued: 0, skipped: 0, considered, capped }
+  }
 
   // 2) Dedup in ONE query — drop invoices that already have a pending/processing
   //    reminder job (a re-run or overlapping cron shouldn't double-queue).
