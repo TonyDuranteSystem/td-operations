@@ -15,6 +15,12 @@ export interface ReplyRow {
   created_at: string
   sender_id: string
   sender_name: string
+  /**
+   * Staff user who DICTATED this Claude-sent reply (null for ordinary rows).
+   * Their own dictated reply must never mark a thread unread for them — same
+   * rule as a reply they typed (2026-07-29, dev job 8537adf9).
+   */
+  on_behalf_of_user_id?: string | null
 }
 
 export interface RootReadRow {
@@ -62,7 +68,9 @@ export function computeThreadMeta(
     // replyRows are ascending, so the last one seen is the newest.
     cur.last_reply_at = r.created_at
     cur.last_reply_sender = r.sender_name
-    if (r.sender_id !== currentUserId) cur.last_other_at = r.created_at
+    // "Other people's replies" excludes rows the caller dictated via Claude —
+    // sender is the Claude sentinel there, but the message is theirs in spirit.
+    if (r.sender_id !== currentUserId && r.on_behalf_of_user_id !== currentUserId) cur.last_other_at = r.created_at
     acc.set(r.root_id, cur)
   }
 

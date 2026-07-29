@@ -2500,6 +2500,10 @@ export async function executeWorkerTool(
         dm_user_id: p.dm_user_id,
         root_id: p.root_id,
         message: p.message ?? "",
+        // The staff member driving this turn (explicit identity, never parsed
+        // from the actor audit label) — silences THEIR notifications for their
+        // own dictated message. Absent → null → everyone notified.
+        on_behalf_of: sendContext?.onBehalfOf ?? null,
       })
       const where = result.root_id ? ` inside thread ${result.root_id}` : ""
       return `✅ Posted to team chat (${result.thread_type} thread ${result.thread_id})${where}${result.mentioned_user_ids.length ? `, pushed ${result.mentioned_user_ids.length} mentioned teammate(s)` : ""}.`
@@ -2993,6 +2997,13 @@ export interface CallWorkerOptions {
    *   message anyone else — the executor overrides whatever ids the model supplies.
    */
   sendActor?: string | null
+  /**
+   * The STAFF user (auth uuid or email) driving this worker turn, when the
+   * surface knows it for certain — see WorkerSendContext.onBehalfOf. Used by
+   * team_chat_send to silence that person's own-message notifications. Never
+   * derived from sendActor (an audit label); absent = everyone notified.
+   */
+  onBehalfOf?: string | null
   pinnedPortalRecipient?: { account_id?: string | null; contact_id?: string | null } | null
   /**
    * The email attachments the worker is ALLOWED to open on this call, keyed by a
@@ -3050,6 +3061,17 @@ export interface PinnedEmailAttachment {
  */
 export interface WorkerSendContext {
   actor?: string | null
+  /**
+   * The STAFF auth-user (uuid or email) who is driving this worker turn, when
+   * the calling surface knows it FOR CERTAIN (e.g. the Team-Chat @claude
+   * trigger's prompt sender). Used by team_chat_send to stamp
+   * internal_messages.on_behalf_of_user_id so that person is not notified of
+   * their own dictated message. COUNCIL RULE (2026-07-29): never derive this
+   * from the `actor` audit label (it carries display names / surface tags, not
+   * identities) and never default it — absent means null means everyone is
+   * notified.
+   */
+  onBehalfOf?: string | null
   /**
    * The `agent_messages` row this turn was created from. Used ONLY as the
    * idempotency key for a client-facing send: a turn that is retried (a timeout,
@@ -3131,6 +3153,8 @@ export interface WorkerSendContext {
 export function buildWorkerSendContext(
   opts: {
     sendActor?: string | null
+    /** The staff user (uuid/email) driving this turn — see WorkerSendContext.onBehalfOf. */
+    onBehalfOf?: string | null
     pinnedPortalRecipient?: { account_id?: string | null; contact_id?: string | null } | null
     pinnedEmailAttachments?: PinnedEmailAttachment[] | null
     pinnedEmailRecipients?: string[]
@@ -3144,6 +3168,7 @@ export function buildWorkerSendContext(
 ): WorkerSendContext | undefined {
   const hasContext =
     opts.sendActor ||
+    opts.onBehalfOf ||
     opts.pinnedPortalRecipient ||
     opts.pinnedEmailAttachments?.length ||
     opts.pinnedEmailRecipients !== undefined ||
@@ -3157,6 +3182,7 @@ export function buildWorkerSendContext(
   if (!hasContext) return undefined
   return {
     actor: opts.sendActor ?? null,
+    onBehalfOf: opts.onBehalfOf ?? null,
     pinnedPortalRecipient: opts.pinnedPortalRecipient ?? null,
     pinnedEmailAttachments: opts.pinnedEmailAttachments ?? null,
     capturedOffThreadAttempts,

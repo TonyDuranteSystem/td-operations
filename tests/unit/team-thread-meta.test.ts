@@ -32,6 +32,18 @@ describe('computeThreadMeta', () => {
     expect(meta['R1'].unread).toBe(false)
   })
 
+  it('does NOT mark unread for a Claude reply I dictated (on_behalf_of me)', () => {
+    const dictated: ReplyRow = { root_id: 'R1', created_at: '2026-07-17T10:00:00Z', sender_id: 'claude-sentinel', sender_name: 'Claude', on_behalf_of_user_id: ME }
+    const meta = computeThreadMeta([dictated], [], ME)
+    expect(meta['R1'].unread).toBe(false)
+  })
+
+  it('DOES mark unread for a Claude reply someone ELSE dictated', () => {
+    const dictated: ReplyRow = { root_id: 'R1', created_at: '2026-07-17T10:00:00Z', sender_id: 'claude-sentinel', sender_name: 'Claude', on_behalf_of_user_id: OTHER }
+    const meta = computeThreadMeta([dictated], [], ME)
+    expect(meta['R1'].unread).toBe(true)
+  })
+
   it('clears unread when my read pointer is newer than the last other reply', () => {
     const rows = [reply('R1', '2026-07-17T10:00:00Z')]
     const reads: RootReadRow[] = [{ root_message_id: 'R1', last_read_at: '2026-07-17T10:30:00Z' }]
