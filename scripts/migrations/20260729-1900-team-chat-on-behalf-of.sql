@@ -243,3 +243,83 @@ AS $function$
       )
     );
 $function$;
+
+-- ── list_all_threads: the All-Threads board + notifications dropdown ────────
+-- Found by the post-build verification pass: this THIRD unread reader kept the
+-- bare sender check, so the All-Threads board and the sidebar dropdown showed
+-- "New" (and pushed a dropdown row) for a message the caller themself dictated,
+-- disagreeing with the two readers above. Base: live PROD definition
+-- (2026-07-29, md5-identical on sandbox).
+
+CREATE OR REPLACE FUNCTION public.list_all_threads(p_user_id uuid, p_limit integer DEFAULT 300, p_include_archived boolean DEFAULT false)
+ RETURNS TABLE(root_message_id uuid, thread_id uuid, channel_label text, title text, status text, assignee_id uuid, reply_count integer, last_activity_at timestamp with time zone, unread boolean, following boolean, archived boolean, later boolean)
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  WITH roots AS (
+    SELECT
+      m.id, m.thread_id, m.message, m.sender_id, m.on_behalf_of_user_id, m.created_at, m.deleted_at,
+      t.channel_slug, t.channel_name,
+      ts.status, ts.assignee_id, ts.title AS state_title, ts.created_as_thread, ts.archived_at,
+      rr.last_read_at, COALESCE(rr.manual_unread, false) AS manual_unread
+    FROM public.internal_messages m
+    JOIN public.internal_threads t
+      ON t.id = m.thread_id AND t.thread_type IN ('channel', 'general') AND t.archived_at IS NULL
+    LEFT JOIN public.internal_thread_state ts ON ts.root_message_id = m.id
+    LEFT JOIN public.internal_root_reads  rr ON rr.root_message_id = m.id AND rr.user_id = p_user_id
+    WHERE m.root_id IS NULL
+      AND (p_include_archived OR ts.archived_at IS NULL)
+      AND (
+        ts.created_as_thread IS TRUE
+        OR ts.title IS NOT NULL
+        OR ts.archived_at IS NOT NULL
+        OR ts.assignee_id IS NOT NULL
+        OR ts.status IS DISTINCT FROM 'todo'
+        OR EXISTS (SELECT 1 FROM public.internal_messages c
+                    WHERE c.root_id = m.id AND c.deleted_at IS NULL)
+      )
+  )
+  SELECT
+    r.id,
+    r.thread_id,
+    COALESCE(r.channel_slug, r.channel_name, 'general'),
+    COALESCE(
+      NULLIF(r.state_title, ''),
+      CASE WHEN r.deleted_at IS NOT NULL THEN 'Message deleted'
+           ELSE COALESCE(NULLIF(r.message, ''), 'Attachment') END
+    ),
+    COALESCE(r.status, 'todo'),
+    r.assignee_id,
+    (SELECT COUNT(*)::int FROM public.internal_messages c
+      WHERE c.root_id = r.id AND c.deleted_at IS NULL),
+    GREATEST(
+      r.created_at,
+      COALESCE((SELECT MAX(c.created_at) FROM public.internal_messages c
+                 WHERE c.root_id = r.id AND c.deleted_at IS NULL), r.created_at)
+    ),
+    -- New for me: manually marked unread, an unseen root from someone else, or
+    -- an unseen other-reply. A message the caller DICTATED via Claude counts as
+    -- their own, never as new.
+    (
+      r.manual_unread
+      OR (r.sender_id <> p_user_id AND r.deleted_at IS NULL
+          AND (r.on_behalf_of_user_id IS NULL OR r.on_behalf_of_user_id <> p_user_id)
+          AND r.created_at > COALESCE(r.last_read_at, '-infinity'::timestamptz))
+      OR EXISTS (
+        SELECT 1 FROM public.internal_messages c
+         WHERE c.root_id = r.id AND c.deleted_at IS NULL
+           AND c.sender_id <> p_user_id
+           AND (c.on_behalf_of_user_id IS NULL OR c.on_behalf_of_user_id <> p_user_id)
+           AND c.created_at > COALESCE(r.last_read_at, '-infinity'::timestamptz)
+      )
+    ),
+    EXISTS (SELECT 1 FROM public.internal_root_follows f
+             WHERE f.root_message_id = r.id AND f.user_id = p_user_id),
+    (r.archived_at IS NOT NULL),
+    EXISTS (SELECT 1 FROM public.internal_root_later l
+             WHERE l.root_message_id = r.id AND l.user_id = p_user_id)
+  FROM roots r
+  ORDER BY 8 DESC
+  LIMIT GREATEST(p_limit, 1);
+$function$;
