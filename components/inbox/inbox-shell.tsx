@@ -618,6 +618,12 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       }
       return res.json()
     },
+    onError: (err) => {
+      // Without this, a failed action was a SILENT no-op — the throw above had
+      // no catcher, so e.g. snooze-before-the-prod-migration looked like a dead
+      // button (R093 verifier caught the unverified claim, 2026-07-29).
+      toast.error(err instanceof Error && err.message ? err.message : 'Action failed. Please try again.')
+    },
     onSuccess: (data, variables) => {
       // `acted` is the row the REQUEST was about — never `selected`, which by now
       // may be a different email entirely (see mutationFn).
