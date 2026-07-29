@@ -1,6 +1,14 @@
 import { encodeAddressHeader } from "@/lib/gmail"
 import { escapeHtml } from "@/lib/inbox/email-quote"
 
+export interface ReplyMimeAttachment {
+  /** Already sanitized/RFC 2047-encoded by the staging loader — safe in headers. */
+  filename: string
+  /** Base64-encoded file bytes. */
+  content: string
+  contentType?: string
+}
+
 export interface BuildReplyMimeInput {
   /** Sending mailbox address (From) */
   asUser: string
@@ -22,6 +30,8 @@ export interface BuildReplyMimeInput {
   lastFrom: string
   /** Boundary override for deterministic tests */
   boundary?: string
+  /** Staged file attachments (loaded server-side from the private bucket). */
+  attachments?: ReplyMimeAttachment[]
 }
 
 /**
@@ -80,6 +90,16 @@ export function buildReplyMime(input: BuildReplyMimeInput): string {
   // '_' is not in the base64 alphabet, so '--td_...' can never collide with
   // an encoded body line.
   const boundary = input.boundary ?? `td_${Date.now().toString(36)}`
+  const attachments = input.attachments ?? []
+
+  // With attachments the structure Gmail expects is multipart/mixed wrapping
+  // the multipart/alternative body plus one part per file. Without them the
+  // historical alternative-only shape is kept byte-for-byte.
+  const mixedBoundary = `${boundary}_mixed`
+  const topContentType = attachments.length
+    ? `multipart/mixed; boundary="${mixedBoundary}"`
+    : `multipart/alternative; boundary="${boundary}"`
+
   const headers = [
     `From: ${asUser}`,
     `To: ${encodeAddressHeader(replyTo)}`,
@@ -87,14 +107,13 @@ export function buildReplyMime(input: BuildReplyMimeInput): string {
     `In-Reply-To: ${inReplyTo}`,
     `References: ${references ? references + " " : ""}${inReplyTo}`,
     "MIME-Version: 1.0",
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    `Content-Type: ${topContentType}`,
   ]
 
   const plainBase64 = Buffer.from(message + quotedPlain, "utf-8").toString("base64")
   const htmlBase64 = Buffer.from(htmlBody, "utf-8").toString("base64")
-  return (
-    headers.join("\r\n") +
-    "\r\n\r\n" +
+
+  const alternativePart =
     `--${boundary}\r\n` +
     "Content-Type: text/plain; charset=utf-8\r\n" +
     "Content-Transfer-Encoding: base64\r\n\r\n" +
@@ -106,5 +125,33 @@ export function buildReplyMime(input: BuildReplyMimeInput): string {
     htmlBase64 +
     "\r\n" +
     `--${boundary}--`
+
+  if (!attachments.length) {
+    return headers.join("\r\n") + "\r\n\r\n" + alternativePart
+  }
+
+  const attachmentParts = attachments
+    .map((att) => {
+      const ct = att.contentType || "application/octet-stream"
+      return (
+        `--${mixedBoundary}\r\n` +
+        `Content-Type: ${ct}; name="${att.filename}"\r\n` +
+        "Content-Transfer-Encoding: base64\r\n" +
+        `Content-Disposition: attachment; filename="${att.filename}"\r\n\r\n` +
+        att.content +
+        "\r\n"
+      )
+    })
+    .join("")
+
+  return (
+    headers.join("\r\n") +
+    "\r\n\r\n" +
+    `--${mixedBoundary}\r\n` +
+    `Content-Type: multipart/alternative; boundary="${boundary}"\r\n\r\n` +
+    alternativePart +
+    "\r\n" +
+    attachmentParts +
+    `--${mixedBoundary}--`
   )
 }

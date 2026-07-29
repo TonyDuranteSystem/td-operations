@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
-import { sendEmail, renderEmailTemplate } from "@/lib/operations/email"
+import { sendEmail, renderEmailTemplate, type SendEmailAttachment } from "@/lib/operations/email"
+import {
+  parseStagedAttachmentInputs,
+  loadStagedEmailAttachments,
+  deleteStagedEmailAttachments,
+  type StagedEmailAttachmentInput,
+} from "@/lib/inbox/email-attachment-staging"
 
 export const dynamic = "force-dynamic"
 
@@ -21,6 +27,8 @@ interface ComposeRequest {
   track_opens?: boolean
   // Attachments
   drive_file_ids?: string[]
+  /** Staged uploads from the composer (paths minted by /api/inbox/attachments/upload-url). */
+  attachments?: Array<{ path: string; name: string; mime_type?: string }>
   // Template
   template_id?: string
   template_vars?: Record<string, unknown>
@@ -49,6 +57,20 @@ export async function POST(req: NextRequest) {
 
     if (!payload.to) {
       return NextResponse.json({ error: "to is required" }, { status: 400 })
+    }
+
+    // Staged file attachments — validate + load up front so a missing or
+    // oversized file fails the send before anything goes out.
+    let stagedInputs: StagedEmailAttachmentInput[] | null = null
+    let attachments: SendEmailAttachment[] | undefined
+    try {
+      stagedInputs = parseStagedAttachmentInputs(payload.attachments)
+      if (stagedInputs) attachments = await loadStagedEmailAttachments(stagedInputs)
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : "Could not read an attachment." },
+        { status: 400 }
+      )
     }
 
     let subject = payload.subject || ""
@@ -97,6 +119,7 @@ export async function POST(req: NextRequest) {
       lead_id: payload.lead_id,
       tag: payload.tag,
       drive_file_ids: payload.drive_file_ids,
+      attachments,
       skip_duplicate_check: payload.skip_duplicate_check,
       wrap_with_brand: wrap,
     })
@@ -116,6 +139,12 @@ export async function POST(req: NextRequest) {
         { error: result.error || "Send failed" },
         { status: 500 }
       )
+    }
+
+    // Send succeeded — clear the staged objects (best-effort; a failed send
+    // above keeps them so a retry with the same paths still works).
+    if (stagedInputs) {
+      await deleteStagedEmailAttachments(stagedInputs.map((a) => a.path))
     }
 
     return NextResponse.json({

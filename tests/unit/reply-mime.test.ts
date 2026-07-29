@@ -67,3 +67,41 @@ describe('buildReplyMime', () => {
     expect(first).toContain('References: <msg-1@mail.gmail.com>')
   })
 })
+
+describe('buildReplyMime with attachments', () => {
+  const pdfBytes = Buffer.from('%PDF-1.4 fake little pdf')
+  const withAtt = buildReplyMime({
+    ...base,
+    attachments: [
+      { filename: 'invoice.pdf', content: pdfBytes.toString('base64'), contentType: 'application/pdf' },
+      { filename: 'notes.txt', content: Buffer.from('hello').toString('base64') },
+    ],
+  })
+  const headerBlock = withAtt.slice(0, withAtt.indexOf('\r\n\r\n'))
+
+  it('switches the top level to multipart/mixed and nests the alternative body', () => {
+    expect(headerBlock).toContain('Content-Type: multipart/mixed; boundary="td_test_mixed"')
+    expect(withAtt).toContain('Content-Type: multipart/alternative; boundary="td_test"')
+    // Body parts still decode
+    const plain = decodePart(withAtt, 'text/plain')
+    expect(plain).toContain('Hi Tamás,')
+    expect(withAtt.trimEnd().endsWith('--td_test_mixed--')).toBe(true)
+  })
+
+  it('emits one part per attachment with disposition, name and the exact bytes', () => {
+    expect(withAtt).toContain('Content-Type: application/pdf; name="invoice.pdf"')
+    expect(withAtt).toContain('Content-Disposition: attachment; filename="invoice.pdf"')
+    expect(withAtt).toContain(pdfBytes.toString('base64'))
+    // Missing contentType falls back to octet-stream
+    expect(withAtt).toContain('Content-Type: application/octet-stream; name="notes.txt"')
+  })
+
+  it('keeps the historical alternative-only shape byte-for-byte when there are no attachments', () => {
+    expect(buildReplyMime({ ...base, attachments: [] })).toBe(buildReplyMime(base))
+  })
+
+  it('threads and encodes headers identically with attachments present', () => {
+    expect(headerBlock).toContain('In-Reply-To: <msg-1@mail.gmail.com>')
+    expect(/^[\x20-\x7E\r\n]+$/.test(headerBlock)).toBe(true)
+  })
+})

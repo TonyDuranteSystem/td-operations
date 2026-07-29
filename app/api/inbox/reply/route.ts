@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import { gmailGet, gmailPost, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
-import { buildReplyMime } from "@/lib/inbox/reply-mime"
+import { buildReplyMime, type ReplyMimeAttachment } from "@/lib/inbox/reply-mime"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
+import {
+  parseStagedAttachmentInputs,
+  loadStagedEmailAttachments,
+  deleteStagedEmailAttachments,
+} from "@/lib/inbox/email-attachment-staging"
 
 export const dynamic = "force-dynamic"
 
@@ -22,13 +27,51 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // Staged file attachments (email only — the chat channels have their own
+    // media pipeline and this route would silently drop the files otherwise).
+    let stagedInputs: ReturnType<typeof parseStagedAttachmentInputs> = null
+    try {
+      stagedInputs = parseStagedAttachmentInputs((body as { attachments?: unknown }).attachments)
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : "Invalid attachments." },
+        { status: 400 }
+      )
+    }
+    const isGmail = channel === "gmail" || conversationId.startsWith("gmail:")
+    if (stagedInputs && !isGmail) {
+      return NextResponse.json(
+        { error: "Attachments are only supported on email replies." },
+        { status: 400 }
+      )
+    }
+
     if (!(await checkMailboxAccess(mailbox))) {
       return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
     }
 
     // ─── Gmail reply ─────────────────────────────────
-    if (channel === "gmail" || conversationId.startsWith("gmail:")) {
+    if (isGmail) {
       const threadId = conversationId.replace("gmail:", "")
+
+      // Load staged attachments BEFORE any Gmail call — a missing/oversized
+      // file must fail the whole reply up front, not after fetching the thread.
+      let attachments: ReplyMimeAttachment[] | undefined
+      if (stagedInputs) {
+        try {
+          const loaded = await loadStagedEmailAttachments(stagedInputs)
+          attachments = loaded.map((a) => ({
+            filename: a.filename,
+            content: a.content,
+            contentType: a.content_type,
+          }))
+        } catch (err) {
+          return NextResponse.json(
+            { error: err instanceof Error ? err.message : "Could not read an attachment." },
+            { status: 400 }
+          )
+        }
+      }
 
       // Thread IDs are mailbox-scoped: fetch AND send through the mailbox the
       // user is viewing, otherwise replies from antonio@ fail (thread not
@@ -74,6 +117,7 @@ export async function POST(req: NextRequest) {
         lastBody,
         lastDate,
         lastFrom: from,
+        attachments,
       })
       const encodedRaw = Buffer.from(raw).toString("base64url")
 
@@ -81,6 +125,12 @@ export async function POST(req: NextRequest) {
         raw: encodedRaw,
         threadId,
       }, asUser)
+
+      // Send succeeded — clear the staged objects (best-effort; a failed send
+      // above keeps them so a retry with the same paths still works).
+      if (stagedInputs) {
+        await deleteStagedEmailAttachments(stagedInputs.map((a) => a.path))
+      }
 
       // Ensure thread stays in INBOX after reply (Gmail API may remove INBOX label)
       try {
