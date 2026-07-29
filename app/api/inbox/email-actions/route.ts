@@ -356,7 +356,8 @@ export async function POST(req: NextRequest) {
         // cron's wake is a no-op on an inboxed thread), while a labeled thread
         // without a row is a client email nothing will ever bring back
         // (council bug-hunter blocker, 2026-07-28).
-        const { error: upsertErr } = await supabaseAdmin
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error: upsertErr } = await (supabaseAdmin as any)
           .from("email_snoozes")
           .upsert(
             {
@@ -381,7 +382,8 @@ export async function POST(req: NextRequest) {
           }, asUser)
         } catch (err) {
           // Roll the row back so a failed snooze isn't half-armed.
-          await supabaseAdmin
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (supabaseAdmin as any)
             .from("email_snoozes")
             .delete()
             .eq("mailbox", mailbox === "antonio" ? "antonio" : "support")
@@ -403,7 +405,8 @@ export async function POST(req: NextRequest) {
           addLabelIds: ["INBOX"],
           removeLabelIds: [snoozeLabelId],
         }, asUser)
-        await supabaseAdmin
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabaseAdmin as any)
           .from("email_snoozes")
           .delete()
           .eq("mailbox", mailbox === "antonio" ? "antonio" : "support")

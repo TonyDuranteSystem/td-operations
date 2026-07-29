@@ -32,7 +32,11 @@ export async function GET(request: NextRequest) {
   }
 
   const nowIso = new Date().toISOString()
-  const { data: due, error } = await supabaseAdmin
+  // email_snoozes is not in the generated DB types yet — same cast pattern as
+  // worker_prepared_sends (a types resync is a known prod-build hazard).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  const { data: due, error } = await db
     .from("email_snoozes")
     .select("id, mailbox, thread_id, snooze_until, snoozed_last_message_id")
     .lte("snooze_until", nowIso)
@@ -115,7 +119,7 @@ export async function GET(request: NextRequest) {
 
       // Conditional: only retire the row if it still has the due time we
       // acted on — a re-snooze that landed mid-run survives.
-      await supabaseAdmin
+      await db
         .from("email_snoozes")
         .delete()
         .eq("id", row.id)
