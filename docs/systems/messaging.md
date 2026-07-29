@@ -1,5 +1,6 @@
 # Messaging (WhatsApp / Telegram)
-_Last verified against code: 2026-06-23 — periskope-cleanup branch_
+_Last verified against code: 2026-07-29 — Claude (inbox staff-gate sweep, dev job 7e63fcd2: the WhatsApp inbox routes — `app/api/inbox/new-whatsapp`, `app/api/inbox/whatsapp/conversations`, `app/api/inbox/whatsapp/messages/[groupId]` — now call `requireStaffRoute()` first-line. They previously relied only on middleware's "is logged in", which a portal client satisfies; group listings and message history were readable by any logged-in account. No behavior change for staff.)_
+_Prior: 2026-06-23 — periskope-cleanup branch_
 
 ## What it is
 A legacy WhatsApp/Telegram inbox stored in Supabase. Staff can read messages and send
