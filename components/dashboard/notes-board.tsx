@@ -12,7 +12,7 @@ import { Loader2, Lock, Share2, Users, Building2, Clock, RotateCcw, Check, List,
 import { noteClientName } from '@/components/dashboard/sticky-notes-layer'
 import { NotesCalendar } from '@/components/dashboard/notes-calendar'
 import { NoteEditor, type EditableNote, type Member } from '@/components/dashboard/note-editor'
-import { isArchivedFor, isSnoozedFor, noteStateFor, otherPersonState, otherViewersOf } from '@/lib/notes/staff-notes'
+import { isArchivedFor, isSnoozedFor, noteStateFor, noteActivityAt, latestReplyOf, otherPersonState, otherViewersOf, type NoteReplyRow } from '@/lib/notes/staff-notes'
 
 interface Note {
   id: string
@@ -30,6 +30,7 @@ interface Note {
   archived_at: string | null
   /** One row per person who has marked this done / snoozed it. */
   staff_note_state?: Array<{ user_id: string; archived_at: string | null; snoozed_until: string | null }> | null
+  staff_note_replies?: NoteReplyRow[] | null
   created_at: string
   updated_at: string
   accounts?: { company_name: string | null } | null
@@ -306,9 +307,11 @@ function Card({ n, onAct, showDone, showUnsnooze, showRestore, footer, onOpen, m
   // Someone changed the note AFTER this person cleared it — the only screen-side signal
   // (per-person Done is never overwritten by someone else's edit, so a cleared note would
   // otherwise hide the update forever). Read-side compare only; nobody's state is touched.
+  // Activity includes REPLIES (which deliberately never bump the note row itself).
   const myState = me ? noteStateFor(n, me) : null
   const updatedSinceDone =
-    showRestore && myState?.archived_at != null && Date.parse(n.updated_at) > Date.parse(myState.archived_at)
+    showRestore && myState?.archived_at != null && Date.parse(noteActivityAt(n)) > Date.parse(myState.archived_at)
+  const latest = latestReplyOf(n)
   return (
     <div className={`rounded-md border p-3 ${COLORS[n.color] || COLORS.yellow}`}>
       {updatedSinceDone && (
@@ -321,6 +324,15 @@ function Card({ n, onAct, showDone, showUnsnooze, showRestore, footer, onOpen, m
         title="Open"
         className="cursor-pointer whitespace-pre-wrap break-words text-sm leading-snug hover:underline"
       >{n.body}</p>
+
+      {latest && (
+        <p className={`mt-1 truncate rounded px-1.5 py-0.5 text-xs ${
+          latest.author_user_id != null && latest.author_user_id === n.author_user_id
+            ? 'bg-amber-200/70 text-amber-950' : 'bg-sky-200/80 text-sky-950'}`}>
+          ↳ {latest.author_name || 'Teammate'}: {latest.body}
+          {(n.staff_note_replies ?? []).length > 1 ? `  (+${(n.staff_note_replies ?? []).length - 1})` : ''}
+        </p>
+      )}
 
       {client && (
         <p className="mt-1 flex items-center gap-1 text-xs font-medium opacity-80">

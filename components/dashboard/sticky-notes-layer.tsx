@@ -21,6 +21,7 @@ import { useDraggableFab } from '@/components/ui/use-draggable-fab'
 import { FAB_KEYS } from '@/lib/ui/draggable-fab'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 import { safeOriginPath, describeOrigin } from '@/lib/notes/note-origin'
+import { latestReplyOf, type NoteReplyRow } from '@/lib/notes/staff-notes'
 
 interface Note {
   id: string
@@ -38,6 +39,7 @@ interface Note {
   archived_at: string | null
   created_at: string
   updated_at: string
+  staff_note_replies?: NoteReplyRow[] | null
   // resolved at read time from the foreign keys — never stored, so a renamed company is never stale
   accounts?: { company_name: string | null } | null
   contacts?: { full_name: string | null } | null
@@ -379,6 +381,19 @@ function NoteCardBody({ note, members, meId, onChange, onOpen }: { note: Note; m
         </p>
       )}
 
+      {/* Latest answer, in the reply colour — see who answered without opening. */}
+      {(() => {
+        const latest = latestReplyOf(note)
+        if (!latest) return null
+        const count = (note.staff_note_replies ?? []).length
+        const byAuthor = latest.author_user_id != null && latest.author_user_id === note.author_user_id
+        return (
+          <p className={`mt-1 truncate rounded px-1.5 py-0.5 text-xs ${byAuthor ? 'bg-amber-200/70 text-amber-950' : 'bg-sky-200/80 text-sky-950'}`}>
+            ↳ {latest.author_name || 'Teammate'}: {latest.body}{count > 1 ? `  (+${count - 1})` : ''}
+          </p>
+        )
+      })()}
+
       {/* Where the note came from — one tap back to the email / chat / page. */}
       {origin && (
         <button
@@ -421,9 +436,10 @@ function NoteCardBody({ note, members, meId, onChange, onOpen }: { note: Note; m
       {confirmDelete && (
         <div data-no-drag className="mt-2 flex gap-1 text-xs">
           <button onClick={del} disabled={busy}
+            title="Deletes the note for everyone — replies go with it"
             className="flex flex-1 items-center justify-center gap-1 rounded bg-red-600 px-2 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50">
             {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-            Delete forever?
+            {(note.staff_note_replies ?? []).length > 0 ? 'Delete forever, replies too?' : 'Delete forever?'}
           </button>
           <button onClick={() => setConfirmDelete(false)} disabled={busy}
             className="rounded bg-black/10 px-2 py-1">Keep</button>
