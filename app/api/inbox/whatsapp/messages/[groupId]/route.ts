@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 
 export const dynamic = "force-dynamic"
 
@@ -7,6 +8,12 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: { groupId: string } }
 ) {
+  // Staff gate — middleware only guarantees "is logged in" for /api routes,
+  // and a portal CLIENT has a login (2026-07-21 invariant; council find 2026-07-29,
+  // dev job 7e63fcd2).
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const { groupId } = params
 
   if (!groupId) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dispatchWhatsAppMessage } from '@/lib/messaging/send-dispatcher'
+import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 
 export const dynamic = 'force-dynamic'
 
@@ -9,6 +10,12 @@ export const dynamic = 'force-dynamic'
  * Body: { contactId, phone, message, accountId? }
  */
 export async function POST(req: NextRequest) {
+  // Staff gate — middleware only guarantees "is logged in" for /api routes,
+  // and a portal CLIENT has a login (2026-07-21 invariant; council find 2026-07-29,
+  // dev job 7e63fcd2).
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   try {
     const { contactId, phone, message, accountId } = await req.json() as {
       contactId: string
