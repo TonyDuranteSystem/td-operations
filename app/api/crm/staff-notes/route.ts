@@ -26,6 +26,9 @@ import {
   validateNoteBody,
   safeOriginPath,
   computeSnoozeUntil,
+  mayTouchNote,
+  editNotifyTargets,
+  shouldSendEditPush,
 } from "@/lib/notes/staff-notes"
 import type { User } from "@supabase/supabase-js"
 
@@ -87,6 +90,15 @@ export async function GET(req: NextRequest) {
       if (res.error) return fail(res.error.message || "Could not load notes.", 500)
       return NextResponse.json({ notes: res.data ?? [] })
     }
+    // scope=members → just me + the shareable staff, no notes. Lets any surface open the
+    // full note editor in create mode (it needs the "who's it for" chips) without paying
+    // for a feed it won't render.
+    if (sp.get("scope") === "members") {
+      const members = (await listTeamMembers())
+        .filter((m) => (m.role === "admin" || m.role === "team") && m.id !== user.id)
+        .map((m) => ({ id: m.id, name: m.name }))
+      return NextResponse.json({ me: { id: user.id, name: getUserDisplayName(user) }, members })
+    }
     // scope=all → the Notes page (everything visible to me, incl. snoozed + done)
     // otherwise → the floating feed (live, not snoozed)
     const res = sp.get("scope") === "all"
@@ -142,6 +154,21 @@ export async function POST(req: NextRequest) {
     pushTargetId = target.id
   }
 
+  // Optional come-back date, chosen at creation (full-editor creation, 2026-07-29).
+  // Validated the same way a custom snooze is: a real instant, in the future.
+  let comeBackIso: string | null = null
+  if (payload.come_back != null && payload.come_back !== "") {
+    const { iso, error } = computeSnoozeUntil("custom", new Date(), String(payload.come_back))
+    if (error || !iso) return fail(error ?? "That come-back date didn't make sense.")
+    comeBackIso = iso
+  }
+  // The date as the CREATOR saw it, for the push text only — the server can't render the
+  // user's timezone, so the client sends the words it showed. Plain text, hard-capped.
+  const comeBackDisplay =
+    typeof payload.come_back_display === "string"
+      ? payload.come_back_display.replace(/[\r\n]+/g, " ").trim().slice(0, 60)
+      : ""
+
   const insert = {
     body,
     color,
@@ -158,18 +185,47 @@ export async function POST(req: NextRequest) {
   const { data, error } = await notesTable().insert(insert).select(NOTE_COLUMNS).single()
   if (error) return fail(error.message || "Could not save the note.", 500)
 
+  // A come-back date set at creation applies to EVERY initial viewer (per-person snooze
+  // rows) — a note made "for Luca, back Monday" must not float on Luca's screen today.
+  // Written BEFORE the realtime emit so no tab can render the note un-snoozed first.
+  let warning: string | null = null
+  if (comeBackIso) {
+    const viewerIds =
+      visibility === "team"
+        ? (await listTeamMembers()).filter((m) => m.role === "admin" || m.role === "team").map((m) => m.id)
+        : visibility === "shared" && sharedWithId
+          ? [user.id, sharedWithId]
+          : [user.id]
+    const rows = Array.from(new Set(viewerIds)).map((uid) => ({
+      note_id: data.id,
+      user_id: uid,
+      snoozed_until: comeBackIso,
+      updated_at: new Date().toISOString(),
+    }))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: stateErr } = await (supabaseAdmin as any)
+      .from("staff_note_state")
+      .upsert(rows, { onConflict: "note_id,user_id" })
+    if (stateErr) {
+      // The note EXISTS but is undated — say so plainly instead of pretending success.
+      warning = "The note was saved, but the come-back date could not be set. Open the note and set the date again."
+    }
+  }
+
   // Tell the recipient, same push the share action sends. Best-effort.
+  // Deep-links to the exact note (the Notes page opens it), never just the dashboard.
   if (pushTargetId) {
+    const dateSuffix = comeBackIso && !warning ? ` (comes back ${comeBackDisplay || "later"})` : ""
     void sendPushToAdminUsers([pushTargetId], {
       title: `${getUserDisplayName(user)} shared a note`,
-      body: body.slice(0, 120),
-      url: `/`,
+      body: `${body.slice(0, 120)}${dateSuffix}`,
+      url: `/notes?note=${data.id}`,
       tag: `staff-note-${data.id}`,
     }).catch(() => {})
   }
 
   emitUiEvent("notes") // NO payload — the bus reaches every staff tab
-  return NextResponse.json({ note: data })
+  return NextResponse.json({ note: data, ...(warning ? { warning } : {}) })
 }
 
 export async function PATCH(req: NextRequest) {
@@ -181,14 +237,28 @@ export async function PATCH(req: NextRequest) {
   const action = typeof p.action === "string" ? p.action : ""
   if (!id) return fail("Which note?")
 
-  // Only the author or the current shared-with recipient may touch a note. Load it first.
+  // Everyone the note REACHES may touch it (edit / done / snooze) — author, shared-with,
+  // or any staff member on a team note. The old inline guard forgot team notes entirely
+  // (they carry no shared_with by design), locking every non-author out of Done/snooze.
   const { data: note, error: loadErr } = await notesTable().select(NOTE_COLUMNS).eq("id", id).single()
   if (loadErr || !note) return fail("That note is gone.", 404)
-  const mayTouch = note.author_user_id === user.id || note.shared_with_user_id === user.id
-  if (!mayTouch) return fail("That isn't your note.", 403)
+  if (!mayTouchNote(note, user.id)) return fail("That isn't your note.", 403)
+
+  // Changing WHO SEES a note is the AUTHOR's call alone. This is the guard that was
+  // missing on 2026-07-28: Luca "shared back" a note to its author, which overwrote the
+  // one shared-with slot (him) and made the note vanish from his own screens.
+  const changesVisibility = action === "share" || action === "team" || action === "private"
+  if (changesVisibility && note.author_user_id !== user.id) {
+    return fail(
+      `Only ${note.author_name || "the person who wrote this note"} can change who sees it. ` +
+        "To answer, type your reply and press Save — they already see this note.",
+      403,
+    )
+  }
 
   let patch: Record<string, unknown> = {}
   let pushTo: { userId: string; noteBody: string } | null = null
+  let editedBody: string | null = null
 
   if (action === "edit") {
     const { body, error } = validateNoteBody(p.body)
@@ -201,6 +271,7 @@ export async function PATCH(req: NextRequest) {
       }
     }
     patch = { body }
+    editedBody = body
   } else if (action === "snooze") {
     const { iso, error } = computeSnoozeUntil(p.preset, new Date(), p.custom)
     if (error || !iso) return fail(error ?? "Pick when to bring it back.")
@@ -267,13 +338,37 @@ export async function PATCH(req: NextRequest) {
   if (error) return fail(error.message || "Could not update the note.", 500)
 
   // Push to the person a note was just handed to — fire-and-forget, never blocks the response.
+  // Deep-links to the exact note: the Notes page opens it, whatever state it's in there.
   if (pushTo) {
     void sendPushToAdminUsers([pushTo.userId], {
       title: `${getUserDisplayName(user)} shared a note`,
       body: pushTo.noteBody.slice(0, 120),
-      url: `/`, // opens the CRM dashboard where the shared note floats
+      url: `/notes?note=${id}`,
       tag: `staff-note-${id}`,
     }).catch(() => {})
+  }
+
+  // An EDITED shared/team note tells the other person — this is how a reply typed into a
+  // note reaches its author (the missing signal in the 2026-07-28 incident: Luca answered,
+  // Antonio was never told). Rules:
+  //  - suppressed when the editor asked (`suppress_notify`): the editor's auto-save right
+  //    before "Only me" must not broadcast the new text to the person being removed;
+  //  - burst-guarded: rapid consecutive saves buzz once, but the FIRST change after
+  //    creation always pushes (shouldSendEditPush reads the PRE-edit timestamps);
+  //  - fans out to everyone the note reaches except the editor (team → all staff).
+  if (editedBody && p.suppress_notify !== true && shouldSendEditPush(note, new Date())) {
+    const staffIds = (await listTeamMembers())
+      .filter((m) => m.role === "admin" || m.role === "team")
+      .map((m) => m.id)
+    const targets = editNotifyTargets(note, user.id, staffIds)
+    if (targets.length > 0) {
+      void sendPushToAdminUsers(targets, {
+        title: `${getUserDisplayName(user)} updated a note`,
+        body: editedBody.slice(0, 120),
+        url: `/notes?note=${id}`,
+        tag: `staff-note-${id}`,
+      }).catch(() => {})
+    }
   }
 
   emitUiEvent("notes")

@@ -163,20 +163,67 @@ export function notSnoozedOrClause(nowIso: string): string {
   return `snoozed_until.is.null,snoozed_until.lte.${nowIso}`
 }
 
+// Moved to the PURE module so client components can import it without dragging the
+// service-role client into the browser bundle. Re-exported here so server callers
+// (and the existing tests) keep their import path.
+export { safeOriginPath, describeOrigin } from "./note-origin"
+
 /**
- * Validate an in-app origin path. Must be a same-origin absolute path and NOT a protocol-relative
- * or backslash-smuggled off-site URL. Fixes the `/\evil.com` bypass in the dev-tracker helper
- * (browsers normalise `\`→`/`, so `startsWith('/') && !startsWith('//')` alone lets it through).
+ * Who may TOUCH a note at all (edit the body, mark done, snooze, discuss) — everyone the
+ * note reaches: the author, the shared-with person, or (for a team note) any staff member.
+ *
+ * This is deliberately the SAME shape as `isNoteVisibleTo` for staff users. It exists as its
+ * own named predicate because the API's old inline guard (`author || shared_with`) forgot team
+ * notes — a team note has NO shared_with (the DB coherence CHECK requires it null), so every
+ * non-author got 403 on Done/snooze/edit. Found during the 2026-07-29 share-back incident review.
+ *
+ * NOTE: changing WHO SEES a note (share / team / private) is stricter — AUTHOR ONLY, enforced
+ * separately in the route. That rule is what stops a recipient "sharing back" to the author,
+ * which overwrote shared_with and made the note vanish for themselves (Luca, 2026-07-28).
  */
-export function safeOriginPath(raw: unknown): string | null {
-  if (typeof raw !== "string") return null
-  const s = raw.trim()
-  if (!s.startsWith("/")) return null // must be a relative in-app path
-  if (s.startsWith("//") || s.startsWith("/\\")) return null // protocol-relative / backslash smuggle
-  if (s.includes("\\")) return null // no backslashes at all — browsers fold them to '/'
-  if (/[\x00-\x1f]/.test(s)) return null // no control chars
-  if (s.length > 512) return null
-  return s
+export function mayTouchNote(
+  note: { author_user_id: string | null; visibility: NoteVisibility; shared_with_user_id: string | null },
+  userId: string,
+): boolean {
+  return isNoteVisibleTo(note, userId)
+}
+
+/**
+ * Who should hear that a note's TEXT changed — everyone it reaches except the person editing.
+ * Private notes notify nobody (only the author can see them).
+ */
+export function editNotifyTargets(
+  note: { author_user_id: string | null; visibility: NoteVisibility; shared_with_user_id: string | null },
+  editorId: string,
+  allStaffIds: readonly string[],
+): string[] {
+  if (note.visibility === "private") return []
+  return otherViewersOf(note, editorId, allStaffIds)
+}
+
+/**
+ * Burst guard for edit pushes: a run of quick consecutive saves should buzz the other
+ * person's phone ONCE, not once per save.
+ *
+ * The rule: skip the push when the note was already modified in the last few minutes —
+ * UNLESS that last modification was the note's creation. The first reply after a note is
+ * created must ALWAYS push (that is exactly the Luca-answer scenario this feature exists
+ * for), no matter how quickly it comes.
+ *
+ * Deliberately approximate: `updated_at` also moves on non-edit changes (share, client
+ * link), so an edit right after one of those may stay quiet. Accepted — the alternative
+ * is a push-log table, and the OS already coalesces same-tag notifications.
+ */
+export const EDIT_PUSH_QUIET_MS = 2 * 60_000
+
+export function shouldSendEditPush(
+  note: { created_at: string; updated_at: string },
+  now: Date,
+): boolean {
+  const updated = Date.parse(note.updated_at)
+  if (!Number.isFinite(updated)) return true
+  if (note.updated_at === note.created_at) return true // first change since creation — always push
+  return now.getTime() - updated >= EDIT_PUSH_QUIET_MS
 }
 
 /** Bounds mirror the DB CHECK so we return a friendly error before Postgres does. */
