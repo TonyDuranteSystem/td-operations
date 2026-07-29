@@ -36,7 +36,102 @@ export interface StaffNoteInput {
  * copy that would go stale when a company is renamed.
  */
 export const NOTE_COLUMNS =
-  "id, body, color, author_user_id, author_name, visibility, shared_with_user_id, shared_with_name, account_id, contact_id, origin_url, snoozed_until, archived_at, created_at, updated_at, accounts(company_name), contacts(full_name), staff_note_state(user_id, archived_at, snoozed_until)"
+  "id, body, color, author_user_id, author_name, visibility, shared_with_user_id, shared_with_name, account_id, contact_id, origin_url, snoozed_until, archived_at, created_at, updated_at, accounts(company_name), contacts(full_name), staff_note_state(user_id, archived_at, snoozed_until), staff_note_replies(id, author_user_id, author_name, body, created_at)"
+
+/** Table accessor for replies — same generated-types escape hatch as notesTable(). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const repliesTable = () => (supabaseAdmin as any).from("staff_note_replies")
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * REPLIES. A reply is its own row with its own author (2026-07-29, Antonio:
+ * a reply must be a different colour and notify the person it's aimed at).
+ * The note BODY stays the author's text; everyone else answers in replies.
+ *
+ * Replies deliberately do NOT touch the parent's updated_at — bumping it gave
+ * the author a false edit-conflict on their own next Save and silenced the
+ * edit push's burst guard (council, 2026-07-29). Activity is derived read-side.
+ */
+
+export interface NoteReplyRow {
+  id: string
+  author_user_id: string | null
+  author_name: string | null
+  body: string
+  created_at: string
+}
+
+/** Replies oldest-first. PostgREST gives NO order guarantee on embedded rows —
+ *  sorting is done here, with the id as a stable tiebreak for equal instants. */
+export function sortReplies(rows: NoteReplyRow[] | null | undefined): NoteReplyRow[] {
+  return [...(rows ?? [])].sort((a, b) => {
+    const ta = Date.parse(a.created_at), tb = Date.parse(b.created_at)
+    if (ta !== tb) return (Number.isFinite(ta) ? ta : 0) - (Number.isFinite(tb) ? tb : 0)
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  })
+}
+
+/** The newest reply, or null — the card's one-line preview. */
+export function latestReplyOf(note: { staff_note_replies?: NoteReplyRow[] | null }): NoteReplyRow | null {
+  const sorted = sortReplies(note.staff_note_replies)
+  return sorted.length ? sorted[sorted.length - 1] : null
+}
+
+/**
+ * When did ANYTHING last happen to this note — body/visibility change OR a reply.
+ * Read-side replacement for the updated_at bump the design rejected; feeds the
+ * "updated after you marked it done" badge.
+ */
+export function noteActivityAt(note: { updated_at: string; staff_note_replies?: NoteReplyRow[] | null }): string {
+  let max = note.updated_at
+  for (const r of note.staff_note_replies ?? []) {
+    if (Date.parse(r.created_at) > (Date.parse(max) || 0)) max = r.created_at
+  }
+  return max
+}
+
+/**
+ * Who may edit the note's TEXT — the AUTHOR alone, on every visibility including
+ * team. Everyone else answers in the Reply box. Deliberately a separate predicate
+ * from mayTouchNote (done/snooze/reply stay open to everyone the note reaches):
+ * collapsing the two is what let a recipient rewrite the author's words.
+ */
+export function mayEditBody(
+  note: { author_user_id: string | null },
+  userId: string,
+): boolean {
+  return note.author_user_id != null && note.author_user_id === userId
+}
+
+/** Reply text rules — same bounds as the note body, reply-worded errors. */
+export function validateReplyBody(raw: unknown): { body: string | null; error: string | null } {
+  if (typeof raw !== "string" || !raw.trim()) return { body: null, error: "A reply needs some text." }
+  const body = raw.trim()
+  if (body.length > NOTE_BODY_MAX) {
+    return { body: null, error: `That reply is too long (max ${NOTE_BODY_MAX} characters). Trim it and try again.` }
+  }
+  return { body, error: null }
+}
+
+/**
+ * Who hears about a new reply: everyone the note reaches except the replier —
+ * MINUS anyone the note is currently snoozed away from (their come-back date
+ * exists precisely so the note leaves them alone until then; they catch up via
+ * the Notes tab badge when it returns).
+ */
+export function replyNotifyTargets(
+  note: NoteWithState & {
+    author_user_id: string | null
+    visibility: NoteVisibility
+    shared_with_user_id: string | null
+  },
+  replierId: string,
+  allStaffIds: readonly string[],
+  now: Date,
+): string[] {
+  if (note.visibility === "private") return []
+  return otherViewersOf(note, replierId, allStaffIds).filter((id) => !isSnoozedFor(note, id, now))
+}
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────
