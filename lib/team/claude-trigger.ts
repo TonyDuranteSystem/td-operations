@@ -23,6 +23,8 @@ import { CLAUDE_SENDER_UUID, CLAUDE_SENDER_NAME, mentionsClaude } from '@/lib/te
 import { channelNotifiesStaff } from '@/lib/team/channel-notify'
 import type { WorkerImageBlock, WorkerDocumentBlock } from '@/lib/ai-agent/worker-tools'
 import { fullReachEnabledFor } from '@/lib/ai-agent/full-reach'
+import { surfaceApiKeyOverride } from '@/lib/ai-agent/surface-api-key'
+import { reportSystemError } from '@/lib/system-errors'
 
 const THINKING_PLACEHOLDER = '…'
 
@@ -329,7 +331,11 @@ export async function processClaudeReply(params: {
       threadId,
       systemPromptOverride: systemPrompt,
       surface: 'team_chat',
-      apiKeyOverride: process.env.SLACK_WORKER_ANTHROPIC_KEY,
+      // Per-surface key config (WORKER_KEY_TEAM_CHAT, unset ⇒ shared key). This
+      // surface used to hardwire SLACK_WORKER_ANTHROPIC_KEY — so disabling the
+      // Slack key at Anthropic took Team Chat down with it (2026-07-29 outage,
+      // Luca's "Claude in td-taxreturn doesn't work"). See surface-api-key.ts.
+      apiKeyOverride: surfaceApiKeyOverride('team_chat'),
       maxIterations: 20,
       // Files shared in the thread, handed to the model directly (vision for
       // images, native blocks for scanned PDFs). Extracted text for everything
@@ -378,6 +384,17 @@ export async function processClaudeReply(params: {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error('[team-claude] worker failed:', msg)
+    // Report BEFORE replying. During the 2026-07-29 outage (Team Chat's key
+    // disabled at Anthropic) every request failed here for hours with ZERO rows in
+    // system_errors — the failure was invisible to /system-health and the 15-min
+    // audit cron, and we learned about it from Luca's bug report instead. Never
+    // throws (reportSystemError catches internally), so the user reply is safe.
+    await reportSystemError({
+      source: 'server',
+      route: 'team-chat/claude-trigger',
+      message: `@claude worker call failed: ${msg}`,
+      context: { thread_id: threadId, sender: prompt.sender_name ?? prompt.sender_id ?? null },
+    })
     return await failPlaceholder(
       placeholderId,
       msg.includes('ANTHROPIC_API_KEY')

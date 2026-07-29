@@ -1,9 +1,12 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
 import { X, Send, Loader2, Sparkles, Paperclip, Link2, Eye, EyeOff, Settings } from 'lucide-react'
+import { WorkerDropZone } from '@/components/chat/worker-dropzone'
+import { useEmailAttachments } from './use-email-attachments'
+import { EmailAttachmentChips } from './email-attachment-chips'
 
 interface EmailTemplate {
   id: string
@@ -56,7 +59,41 @@ export function ComposeDialog({
   const [contactId, setContactId] = useState(prefillContactId)
   const [leadId, setLeadId] = useState(prefillLeadId)
   const [linkLabel, setLinkLabel] = useState(prefillLinkLabel)
+  const [attachNotice, setAttachNotice] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  // Synchronous double-click guard — isPending is render-state and two clicks
+  // can land inside one render window, firing two POSTs.
+  const sendingRef = useRef(false)
+  const attachments = useEmailAttachments()
   const queryClient = useQueryClient()
+
+  // Closing without sending must drop the staged files — the dialog stays
+  // mounted with `open` toggled, so without this a file staged for client A
+  // silently rides the next email to client B (council 2026-07-29). The
+  // uploaded objects become bucket orphans (accepted; TTL sweep is a
+  // follow-up card).
+  const clearAttachments = attachments.clear
+  useEffect(() => {
+    if (!open) {
+      clearAttachments()
+      setAttachNotice(null)
+    }
+  }, [open, clearAttachments])
+
+  // While the dialog is open, a drop that MISSES the drop zone must not make
+  // the browser navigate to the file and destroy the draft.
+  useEffect(() => {
+    if (!open) return
+    const swallow = (e: DragEvent) => {
+      if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) e.preventDefault()
+    }
+    window.addEventListener('dragover', swallow)
+    window.addEventListener('drop', swallow)
+    return () => {
+      window.removeEventListener('dragover', swallow)
+      window.removeEventListener('drop', swallow)
+    }
+  }, [open])
 
   useEffect(() => { setTo(prefillTo) }, [prefillTo])
   useEffect(() => { setSubject(prefillSubject) }, [prefillSubject])
@@ -110,6 +147,7 @@ export function ComposeDialog({
 
   const sendMutation = useMutation({
     mutationFn: async () => {
+      const staged = attachments.uploaded()
       const res = await fetch('/api/inbox/compose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -123,6 +161,7 @@ export function ComposeDialog({
           ...(leadId && { lead_id: leadId }),
           ...(prefillTag && { tag: prefillTag }),
           ...(parsedDriveIds.length > 0 && { drive_file_ids: parsedDriveIds }),
+          ...(staged.length > 0 && { attachments: staged }),
           track_opens: trackOpens,
           wrap_with_brand: true,
         }),
@@ -143,10 +182,30 @@ export function ComposeDialog({
       setTemplateId('')
       setDriveFileIds('')
       setTrackOpens(true)
+      attachments.clear()
+      setAttachNotice(null)
       queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
       onClose()
     },
   })
+
+  const handleSend = () => {
+    if (sendMutation.isPending || sendingRef.current) return
+    // Never send while a file is mid-upload or silently drop one that failed —
+    // the staff member attached it because the recipient needs it. Per-file
+    // pending check, NOT the uploading boolean (which races across batches).
+    if (attachments.pending().length > 0) {
+      setAttachNotice('Wait for the upload to finish, then send.')
+      return
+    }
+    if (attachments.failed().length > 0) {
+      setAttachNotice('An attachment failed — remove it (×) or re-attach it before sending.')
+      return
+    }
+    setAttachNotice(null)
+    sendingRef.current = true
+    sendMutation.mutate(undefined, { onSettled: () => { sendingRef.current = false } })
+  }
 
   const handleAiCompose = async () => {
     if (aiLoading || !aiInstruction.trim()) return
@@ -183,7 +242,15 @@ export function ComposeDialog({
   const hasCrmLink = accountId || contactId || leadId
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+    // The ENTIRE overlay (backdrop included) is the drop target — a drop that
+    // misses the card by 40px must attach, not navigate the browser to the
+    // file (council major 2026-07-29). The window-level dragover/drop
+    // preventDefault above is the second net for drops outside the overlay.
+    <WorkerDropZone
+      onFiles={(f) => void attachments.add(f)}
+      label="Drop files to attach"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+    >
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 flex flex-col max-h-[85vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b">
@@ -331,19 +398,47 @@ export function ComposeDialog({
             />
           </div>
 
-          {/* Attachments (Drive file IDs) */}
-          <div className="flex items-start border-b px-5 py-2">
-            <label className="text-sm text-zinc-400 w-20 shrink-0 pt-1 flex items-center gap-1">
-              <Paperclip className="h-3.5 w-3.5" />
-              Files
-            </label>
-            <input
-              type="text"
-              value={driveFileIds}
-              onChange={(e) => setDriveFileIds(e.target.value)}
-              placeholder="Drive file IDs, comma-separated (optional)"
-              className="flex-1 text-sm outline-none bg-transparent"
-            />
+          {/* Attachments — real file uploads + optional Drive file IDs */}
+          <div className="border-b px-5 py-2">
+            <div className="flex items-center">
+              <label className="text-sm text-zinc-400 w-20 shrink-0 flex items-center gap-1">
+                <Paperclip className="h-3.5 w-3.5" />
+                Files
+              </label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const picked = Array.from(e.target.files ?? [])
+                  if (picked.length) void attachments.add(picked)
+                  e.target.value = '' // re-picking the same file must fire again
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50
+                  px-2.5 py-1 text-xs text-zinc-600 hover:bg-zinc-100 transition-colors"
+              >
+                <Paperclip className="h-3 w-3" />
+                Attach files
+              </button>
+              <span className="ml-2 text-xs text-zinc-400">or drag &amp; drop anywhere</span>
+              <input
+                type="text"
+                value={driveFileIds}
+                onChange={(e) => setDriveFileIds(e.target.value)}
+                placeholder="Drive file IDs (optional)"
+                className="flex-1 min-w-[120px] ml-3 text-xs outline-none bg-transparent placeholder:text-zinc-300"
+              />
+            </div>
+            {(attachments.files.length > 0 || attachments.limitNotice) && (
+              <div className="mt-2 pl-20">
+                <EmailAttachmentChips attachments={attachments} />
+              </div>
+            )}
           </div>
 
           {/* Body */}
@@ -368,10 +463,14 @@ export function ComposeDialog({
               {trackOpens ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
               {trackOpens ? 'Track' : 'No track'}
             </button>
-            {parsedDriveIds.length > 0 && (
+            {parsedDriveIds.length + attachments.files.filter((f) => !f.error).length > 0 && (
               <span className="text-xs text-zinc-500">
-                {parsedDriveIds.length} file{parsedDriveIds.length === 1 ? '' : 's'}
+                {parsedDriveIds.length + attachments.files.filter((f) => !f.error).length} file
+                {parsedDriveIds.length + attachments.files.filter((f) => !f.error).length === 1 ? '' : 's'}
               </span>
+            )}
+            {attachNotice && (
+              <p className="text-xs text-amber-600 max-w-xs truncate">{attachNotice}</p>
             )}
             {sendMutation.isError && (
               <p className="text-xs text-red-500 max-w-xs truncate">
@@ -380,8 +479,14 @@ export function ComposeDialog({
             )}
           </div>
           <button
-            onClick={() => sendMutation.mutate()}
-            disabled={!to.trim() || !subject.trim() || !body.trim() || sendMutation.isPending}
+            onClick={handleSend}
+            disabled={
+              !to.trim() ||
+              !subject.trim() ||
+              !body.trim() ||
+              sendMutation.isPending ||
+              attachments.files.some((f) => !f.path && !f.error)
+            }
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-500 text-white text-sm font-medium
               hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
@@ -394,6 +499,6 @@ export function ComposeDialog({
           </button>
         </div>
       </div>
-    </div>
+    </WorkerDropZone>
   )
 }

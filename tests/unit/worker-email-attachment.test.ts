@@ -122,8 +122,13 @@ describe("executeWorkerTool — read_email_attachment gating", () => {
 })
 
 describe("READ_EMAIL_ATTACHMENT_TOOL", () => {
-  it("exposes ONLY a ref — no message id, no mailbox, nothing the model could aim", () => {
-    expect(Object.keys(READ_EMAIL_ATTACHMENT_TOOL.parameters.properties)).toEqual(["ref"])
+  it("exposes NOTHING the model could aim — no message id, no mailbox, no attachment id", () => {
+    // `ref` resolves against the server-pinned allow-list for THIS call, and
+    // `offset` (2026-07-29, continue-reading for long files) is only a position
+    // WITHIN that same pinned file. The security property is that no parameter
+    // names a message, mailbox or attachment — pinned here as an exact list so a
+    // future addition has to argue its case in this test.
+    expect(Object.keys(READ_EMAIL_ATTACHMENT_TOOL.parameters.properties).sort()).toEqual(["offset", "ref"])
     expect(READ_EMAIL_ATTACHMENT_TOOL.parameters.required).toEqual(["ref"])
   })
 })

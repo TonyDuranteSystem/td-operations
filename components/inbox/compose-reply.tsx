@@ -1,9 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Send, Sparkles, Loader2 } from 'lucide-react'
+import { Send, Sparkles, Loader2, Paperclip } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { WorkerDropZone } from '@/components/chat/worker-dropzone'
+import { useEmailAttachments } from './use-email-attachments'
+import { EmailAttachmentChips } from './email-attachment-chips'
 import type { InboxConversation } from '@/lib/types'
 
 interface ComposeReplyProps {
@@ -16,10 +19,44 @@ interface ComposeReplyProps {
 export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
   const [message, setMessage] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
+  const [attachNotice, setAttachNotice] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  // Synchronous double-click guard — isPending is render-state and two clicks
+  // can land inside one render window, firing two POSTs (the route has no
+  // idempotency key).
+  const sendingRef = useRef(false)
   const queryClient = useQueryClient()
+  const attachments = useEmailAttachments()
+
+  const isEmail = conversation.channel === 'gmail'
+
+  // Belt-and-braces to the key={conversation.id} at both mount sites: staged
+  // attachments must NEVER survive a thread switch (council blocker
+  // 2026-07-29 — a passport staged on thread A must not ride a reply to B).
+  const clearAttachments = attachments.clear
+  useEffect(() => {
+    clearAttachments()
+    setAttachNotice(null)
+  }, [conversation.id, clearAttachments])
+
+  // While the email composer is on screen, a drop that MISSES the drop zone
+  // must not make the browser navigate to the file and destroy the draft.
+  useEffect(() => {
+    if (!isEmail) return
+    const swallow = (e: DragEvent) => {
+      if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) e.preventDefault()
+    }
+    window.addEventListener('dragover', swallow)
+    window.addEventListener('drop', swallow)
+    return () => {
+      window.removeEventListener('dragover', swallow)
+      window.removeEventListener('drop', swallow)
+    }
+  }, [isEmail])
 
   const sendMutation = useMutation({
     mutationFn: async (text: string) => {
+      const staged = attachments.uploaded()
       const res = await fetch('/api/inbox/reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -28,6 +65,7 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
           message: text,
           channel: conversation.channel,
           mailbox,
+          ...(staged.length > 0 && { attachments: staged }),
         }),
       })
       if (!res.ok) {
@@ -38,6 +76,8 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
     },
     onSuccess: () => {
       setMessage('')
+      attachments.clear()
+      setAttachNotice(null)
       const refetch = () => {
         queryClient.invalidateQueries({
           queryKey: ['inbox-messages', conversation.id],
@@ -55,11 +95,22 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
 
   const handleSend = () => {
     const text = message.trim()
-    if (!text || sendMutation.isPending) return
-    sendMutation.mutate(text)
+    if (!text || sendMutation.isPending || sendingRef.current) return
+    // Never send while a file is mid-upload or silently drop one that failed —
+    // the staff member attached it because the recipient needs it. Per-file
+    // pending check, NOT the uploading boolean (which races across batches).
+    if (attachments.pending().length > 0) {
+      setAttachNotice('Wait for the upload to finish, then send.')
+      return
+    }
+    if (attachments.failed().length > 0) {
+      setAttachNotice('An attachment failed — remove it (×) or re-attach it before sending.')
+      return
+    }
+    setAttachNotice(null)
+    sendingRef.current = true
+    sendMutation.mutate(text, { onSettled: () => { sendingRef.current = false } })
   }
-
-  const isEmail = conversation.channel === 'gmail'
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key !== 'Enter') return
@@ -106,12 +157,20 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
     }
   }
 
-  return (
+  const composer = (
     <div className="border-t bg-white px-4 py-3">
       {sendMutation.isError && (
         <p className="text-xs text-red-500 mb-2">
           Failed to send: {sendMutation.error.message}
         </p>
+      )}
+      {attachNotice && (
+        <p className="text-xs text-amber-600 mb-2">{attachNotice}</p>
+      )}
+      {isEmail && (
+        <div className="mb-2 empty:hidden">
+          <EmailAttachmentChips attachments={attachments} />
+        </div>
       )}
 
       <div className="flex items-end gap-2">
@@ -119,9 +178,10 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={isEmail ? attachments.onPaste : undefined}
           placeholder={
             isEmail
-              ? 'Reply via gmail... (Enter = new line, ⌘+Enter = send)'
+              ? 'Reply via gmail... (Enter = new line, ⌘+Enter = send, drop files to attach)'
               : `Reply via ${conversation.channel}...`
           }
           rows={isEmail ? 4 : 1}
@@ -133,26 +193,51 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
           style={isEmail ? undefined : { minHeight: '42px' }}
         />
 
-        {/* AI Suggest button — only for Gmail */}
-        {conversation.channel === 'gmail' && (
-          <button
-            onClick={handleAiSuggest}
-            disabled={aiLoading}
-            className="shrink-0 p-2.5 rounded-xl bg-violet-100 text-violet-600 hover:bg-violet-200
-              disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            title="AI Draft Reply"
-          >
-            {aiLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Sparkles className="h-4 w-4" />
-            )}
-          </button>
+        {/* Attach + AI buttons — only for Gmail */}
+        {isEmail && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const picked = Array.from(e.target.files ?? [])
+                if (picked.length) void attachments.add(picked)
+                e.target.value = '' // re-picking the same file must fire again
+              }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="shrink-0 p-2.5 rounded-xl bg-zinc-100 text-zinc-500 hover:bg-zinc-200
+                hover:text-zinc-700 transition-colors"
+              title="Attach files"
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
+            <button
+              onClick={handleAiSuggest}
+              disabled={aiLoading}
+              className="shrink-0 p-2.5 rounded-xl bg-violet-100 text-violet-600 hover:bg-violet-200
+                disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="AI Draft Reply"
+            >
+              {aiLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="h-4 w-4" />
+              )}
+            </button>
+          </>
         )}
 
         <button
           onClick={handleSend}
-          disabled={!message.trim() || sendMutation.isPending}
+          disabled={
+            !message.trim() ||
+            sendMutation.isPending ||
+            attachments.files.some((f) => !f.path && !f.error)
+          }
           className="shrink-0 p-2.5 rounded-xl bg-blue-500 text-white hover:bg-blue-600
             disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
@@ -164,5 +249,13 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
         </button>
       </div>
     </div>
+  )
+
+  if (!isEmail) return composer
+
+  return (
+    <WorkerDropZone onFiles={(f) => void attachments.add(f)} label="Drop files to attach to the reply">
+      {composer}
+    </WorkerDropZone>
   )
 }
