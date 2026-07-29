@@ -53,10 +53,14 @@ describe("renderCapabilityBlock — rails on", () => {
     expect(block).toMatch(/send ONCE/i)
   })
 
-  it("PORTAL: says the client is fixed server-side and cannot be redirected", () => {
+  it("PORTAL: names the open client as the DEFAULT recipient, not a lock", () => {
+    // Antonio 2026-07-29 (dev job f55ea3bb): the portal recipient became a default
+    // — staff may direct a message to another client. The block must not claim an
+    // impossibility, or the worker refuses a legitimate instruction on its own.
     const block = renderCapabilityBlock({ canSendPortal: true, clientName: "Acme LLC" })
-    expect(block).toMatch(/fixed server-side/i)
-    expect(block).toMatch(/cannot reach another client/i)
+    expect(block).toMatch(/defaults to \*\*Acme LLC\*\*/i)
+    expect(block).toMatch(/only if the staff member explicitly asks/i)
+    expect(block).not.toMatch(/cannot reach another client/i)
   })
 
   it("EMAIL: states there is NO address restriction — staff name the recipient", () => {

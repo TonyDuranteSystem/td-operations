@@ -45,11 +45,12 @@ describe('buildWorkerSurfacePrompt', () => {
     expect(prompt).not.toMatch(/only lets you email addresses already on this thread/i)
   })
 
-  it('portal-chats surface authorizes a pinned portal-message send (not "cannot send")', () => {
+  it('portal-chats surface authorizes a portal-message send, open client as DEFAULT', () => {
     const prompt = buildWorkerSurfacePrompt('portal-chats')
     expect(prompt).toContain('SENDING A PORTAL MESSAGE')
     expect(prompt).toContain('send_portal_message')
-    expect(prompt).toContain('recipient is fixed to the client')
+    expect(prompt).toMatch(/DEFAULT recipient/i)
+    expect(prompt).toMatch(/different client/i)
     expect(prompt).not.toContain('You cannot send messages from here')
   })
 

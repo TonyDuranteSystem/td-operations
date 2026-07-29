@@ -181,20 +181,39 @@ describe("CRM Portal Chats panel — send attribution + recipient pin", () => {
     expect(arg.summary).toContain("Slack worker")
   })
 
-  it("HARD-PINS the recipient: a model-supplied contact_id is overridden by the panel's client", async () => {
-    responses.accountContacts = [{ contact_id: "cnt-PINNED" }]
-    // Model tries to message a DIFFERENT client; the pin forces the open account.
+  it("DEFAULTS to the panel's client when the model names no recipient", async () => {
+    responses.accountContacts = [{ contact_id: "cnt-DEFAULT" }]
+    // The panel's prompt says "pass only the message" — the surface's own client
+    // fills in. This is what keeps the everyday flow working now that the
+    // recipient is a DEFAULT rather than a lock (Antonio, 2026-07-29).
     const r = await executeWorkerTool(
       "send_portal_message",
-      { contact_id: "cnt-ATTACKER", message: "pinned" },
+      { message: "no recipient supplied" },
       undefined,
       undefined,
       undefined,
       { actor: "crm-portal:luca@tonydurante.us", pinnedPortalRecipient: { account_id: "acc-PIN" } },
     )
     expect(r).toContain("✅ Portal message sent")
-    expect(lastInsertedRow).toMatchObject({ account_id: "acc-PIN", contact_id: "cnt-PINNED" })
-    // the attacker-supplied contact id never reached the insert
-    expect(lastInsertedRow).not.toMatchObject({ contact_id: "cnt-ATTACKER" })
+    expect(lastInsertedRow).toMatchObject({ account_id: "acc-PIN", contact_id: "cnt-DEFAULT" })
+  })
+
+  it("HONOURS a staff-directed recipient over the panel's default (the unlock)", async () => {
+    // Antonio 2026-07-29: "the worker in the Portal chat must have the same
+    // capabilities it has everywhere" — it may message another client when the
+    // staff member asks. This previously OVERRODE the supplied id.
+    responses.accountContacts = []
+    const r = await executeWorkerTool(
+      "send_portal_message",
+      { contact_id: "cnt-OTHER-CLIENT", message: "as staff directed" },
+      undefined,
+      undefined,
+      undefined,
+      { actor: "crm-portal:luca@tonydurante.us", pinnedPortalRecipient: { account_id: "acc-PIN" } },
+    )
+    expect(r).toContain("✅ Portal message sent")
+    expect(lastInsertedRow).toMatchObject({ contact_id: "cnt-OTHER-CLIENT" })
+    // The panel's own client is NOT forced in when staff named someone else.
+    expect(lastInsertedRow).not.toMatchObject({ account_id: "acc-PIN" })
   })
 })

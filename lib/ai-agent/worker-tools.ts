@@ -397,7 +397,7 @@ export const SEND_PORTAL_MESSAGE_TOOL: ToolDef = {
     "Send a message to a client in their PORTAL CHAT (portal.tonydurante.us). This is the client's in-portal messaging — it is NOT an email.",
     "Use this to deliver a reply to a client AFTER the staff member has explicitly approved the draft in THIS conversation ('send it', 'go', 'send', or similar). Show the draft first, wait for their OK, then call this ONCE.",
     "LANGUAGE: write the message in the CLIENT'S CRM language (contacts.language) — an Italian client gets an Italian message, automatically. A server-side check refuses a clearly-English draft to an Italian-language client.",
-    "Recipient: some surfaces fix the recipient to the open client (pass only the message there). Otherwise provide account_id for an LLC-related message, OR contact_id for a person without an LLC. The message posts as the Tony Durante team and the client is notified by in-portal alert + email automatically.",
+    "Recipient: on a client-scoped surface the open client is the DEFAULT — pass only the message and it goes to them. To message a DIFFERENT client (only when the staff member asks for that), provide account_id for an LLC-related message OR contact_id for a person without an LLC, and name who it is going to in the draft you show them. The message posts as the Tony Durante team and the client is notified by in-portal alert + email automatically.",
     "Do NOT call this speculatively, without an explicit approval in the conversation, or for a team-only note (clients see portal chat).",
   ].join("\n"),
   parameters: {
@@ -2445,20 +2445,36 @@ export async function executeWorkerTool(
     // Reaches here only when the model was actually handed the tool, same as
     // start_code_task above.
     //
-    // CRM Portal Chats panel: the send is HARD-PINNED to the client whose chat is
-    // open (sendContext.pinnedPortalRecipient) — override whatever ids the model
-    // supplied so it can NEVER message another client. The Slack path sets no pin,
-    // so the model-supplied ids stand there (unchanged behaviour).
+    // RECIPIENT IS A DEFAULT, NOT A LOCK (Antonio, 2026-07-29, dev job f55ea3bb:
+    // "the worker in the Portal chat must have the same capabilities it has
+    // everywhere"). `pinnedPortalRecipient` used to OVERRIDE the model's ids so a
+    // panel send could never reach another client. Staff decide now: ids the model
+    // was GIVEN by the staff member win, and the surface's own client fills in when
+    // none were supplied — which is what keeps the "pass only the message" flow on
+    // the client-chat panel working. The Slack path supplies no default, unchanged.
+    // NOTE the field keeps its `pinned…` name for now (it is threaded through three
+    // callers and their wiring tests); it is a DEFAULT. Rename is a follow-up.
     const pin = sendContext?.pinnedPortalRecipient
+    const modelNamedRecipient = Boolean(
+      (params as { account_id?: unknown }).account_id || (params as { contact_id?: unknown }).contact_id,
+    )
     const portalParams =
-      pin && (pin.account_id || pin.contact_id)
+      !modelNamedRecipient && pin && (pin.account_id || pin.contact_id)
         ? { ...params, account_id: pin.account_id ?? undefined, contact_id: pin.contact_id ?? undefined }
         : params
-    // LANGUAGE GUARD + SEND LATCH — pinned (CRM Portal Chats) surface only for
-    // v1: Slack has no composer escape hatch, so it keeps prompt-rule-only
-    // behaviour for now. Once refused, sending stays off for the whole turn so
-    // the model cannot ship a self-translated draft the staff never reviewed.
-    if (pin && (pin.account_id || pin.contact_id) && sendContext) {
+    // LANGUAGE GUARD + SEND LATCH — DECOUPLED from the pin (2026-07-29). It used to
+    // fire only when a pin existed, so making the recipient staff-directable would
+    // have silently switched off the check that stops an English message reaching an
+    // Italian-language client (the Gritti / Adam-Marra incidents, R109). It now runs
+    // on ANY resolved recipient once a send context exists — so it covers a
+    // staff-directed recipient on the CRM panels, not just the panel's own client.
+    // The Slack path builds NO send context at all, so it stays prompt-rule-only
+    // exactly as before (unchanged, and named here so nobody reads this as parity).
+    // Once refused, sending stays off for the whole turn so the model cannot ship a
+    // self-translated draft the staff never reviewed.
+    const guardRecipient =
+      (portalParams as { account_id?: string }).account_id || (portalParams as { contact_id?: string }).contact_id
+    if (guardRecipient && sendContext) {
       if (sendContext.portalSendLatched) {
         return PORTAL_LANGUAGE_REFUSAL
       }

@@ -328,8 +328,11 @@ export async function POST(req: NextRequest) {
         // them, and the model must not read instructions out of it.
         userBody += `\n\n${fenceUntrustedContent("files the staff member attached", read.textBlocks.join("\n\n"))}`
       }
-      // Tell the worker which refs it may attach to an email (Inbox only).
-      if (surface === "inbox" && sendableUploads.length) {
+      // Tell the worker which refs it may attach to an email. BOTH surfaces now:
+      // the client-chat panel has the same email capability as the Inbox
+      // (Antonio, 2026-07-29, dev job f55ea3bb — "the worker in the Portal chat
+      // must have the same capabilities it has everywhere").
+      if (sendableUploads.length) {
         const list = sendableUploads.map((s) => `${s.ref} — ${s.name}`).join(", ")
         userBody += `\n\n[FILES YOU CAN ATTACH to an email on this turn (use send_email's \`attach\` with the ref): ${list}. Only these; never a file from an email or Drive.]`
       }
@@ -490,6 +493,24 @@ export async function POST(req: NextRequest) {
           // and staff choose per message. Unpinned, like every other surface.
           enableEmailSend: true,
           sendActor: `crm-portal:${actorEmail}`,
+          // ATTACHMENTS from the client-chat panel too (Antonio, 2026-07-29:
+          // "must have the same capabilities it has everywhere"). No open Gmail
+          // thread here, so the email is a NEW one, not a reply: gmailThreadId
+          // and defaultReplyToMessageId are null. The mailbox is FIXED to
+          // support@ — this surface has no mailbox-authorisation check, so
+          // honouring a model-chosen `from: antonio` would let any team member
+          // send as Antonio (same reasoning as the sidebar).
+          ...(sendableUploads.length
+            ? {
+                emailSendPrep: {
+                  threadUuid: threadId,
+                  gmailThreadId: null,
+                  mailbox: "support@tonydurante.us",
+                  defaultReplyToMessageId: null,
+                  sendable: sendableUploads,
+                },
+              }
+            : {}),
           // Server-enforced client boundary (council Security blocker): on this
           // panel the worker may only look up the client whose chat is open.
           // NOTE this bounds READS, not the email recipient — staff name that.
@@ -509,7 +530,7 @@ export async function POST(req: NextRequest) {
   // box for a message the staff didn't just ask about — only a row created DURING
   // this turn counts. ID-based, so no clock skew.
   const priorPendingIds = new Set<string>()
-  if (surface === "inbox" && sendableUploads.length) {
+  if (sendableUploads.length) {
     const { data: existing } = await db
       .from("worker_prepared_sends")
       .select("id")
@@ -668,7 +689,8 @@ export async function POST(req: NextRequest) {
     // WITH an attachment could ever produce a confirm card — which is why a plain
     // email to someone off the thread fell back to the re-run path and the staff
     // member confirmed an address rather than a message.
-    if (surface === "inbox") {
+    // BOTH surfaces — the client-chat panel renders the same Confirm card.
+    {
       const { data: prep } = await db
         .from("worker_prepared_sends")
         .select("id, to_address, subject, body, attachments")
