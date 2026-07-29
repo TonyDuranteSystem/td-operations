@@ -68,9 +68,9 @@ export async function GET(req: Request) {
     ids: similar.map(s => s.id),
     suggested_pattern: suggestedPattern,
     // The human must SEE what they're about to label, not trust a count — the modal
-    // renders these (bug-hunter: "every apply surface trusts a match the human never
-    // actually sees").
-    preview: similar.slice(0, 8).map(s => ({
+    // renders ALL of these in a scrollable list (Antonio: "I want to see all
+    // transactions"). Cap only as an anti-blowup backstop.
+    preview: similar.slice(0, 500).map(s => ({
       text: s.counterparty ?? s.description,
       amount: Number(s.amount),
     })),
@@ -79,7 +79,8 @@ export async function GET(req: Request) {
     // A full candidate page means the scan may have missed rows — say so, never imply
     // completeness that wasn't checked.
     truncated: (candidates ?? []).length === CANDIDATE_LIMIT,
-    // The income double-count guard needs to know if ANY matched row is a bank deposit.
-    has_positive_feed_rows: similar.some(s => Number(s.amount) > 0 && s.transaction_ref?.startsWith('feed:')),
+    // The income double-count guard needs to know if ANY matched row is a bank deposit —
+    // live-feed OR statement-imported (after a backfill, most deposits are stmt: rows).
+    has_positive_feed_rows: similar.some(s => Number(s.amount) > 0 && (s.transaction_ref?.startsWith('feed:') || s.transaction_ref?.startsWith('stmt:'))),
   })
 }

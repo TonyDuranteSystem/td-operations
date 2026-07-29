@@ -48,6 +48,9 @@ export async function PUT(req: Request) {
   if (bank_key.includes('|')) {
     return NextResponse.json({ error: 'bank_key must not contain "|"' }, { status: 400 })
   }
+  if (!/^[A-Za-z]{3}$/.test(currency)) {
+    return NextResponse.json({ error: 'currency must be a 3-letter code (e.g. USD, EUR)' }, { status: 400 })
+  }
   // Coerce ONCE, write the coerced value: "" and true are Number-finite-ish trapdoors
   // that would otherwise reach Postgres raw and 500. null = clear; undefined = invalid.
   const coerceBalance = (v: unknown): number | null | undefined => {

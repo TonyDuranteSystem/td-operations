@@ -218,11 +218,23 @@ export async function sendFeedToOwnerLedger(
   const row = buildOwnerLedgerRow(feed as ProjectableFeed)
   if (!row) return { ok: false, error: "This transaction cannot be moved safely (bad date or amount)." }
 
-  // COPY FIRST — the row must exist in My Finances before it leaves the Bank Feed.
-  const { error: insErr } = await supabaseAdmin
-    .from("td_books_transactions")
-    .upsert([row], { onConflict: "entity_id,transaction_ref", ignoreDuplicates: true })
-  if (insErr) return { ok: false, error: `Could not copy it into My Finances: ${insErr.message}` }
+  // If a statement import already put this money in the books (`stmt:` twin), copying
+  // would double-book it — mark the feed as home WITHOUT a second copy.
+  let alreadyInBooks = false
+  try {
+    const { statementCovered } = await filterFeedsCoveredByStatements([feed as ProjectableFeed])
+    alreadyInBooks = statementCovered > 0
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+
+  if (!alreadyInBooks) {
+    // COPY FIRST — the row must exist in My Finances before it leaves the Bank Feed.
+    const { error: insErr } = await supabaseAdmin
+      .from("td_books_transactions")
+      .upsert([row], { onConflict: "entity_id,transaction_ref", ignoreDuplicates: true })
+    if (insErr) return { ok: false, error: `Could not copy it into My Finances: ${insErr.message}` }
+  }
 
   // MARK AFTER — and drop any stale candidate pin with it.
   const res = await updateFeeds([feedId], { status: "owner_ledger", matched_payment_id: null, match_confidence: null }, "owner-ledger-manual-claim")
@@ -331,13 +343,78 @@ export interface ProjectionResult {
  * Project every owner-ledger feed into My Finances. Idempotent: upserts on the table's real
  * unique key, so a re-run refreshes rather than duplicates. Never writes a client account.
  */
+/**
+ * REVERSE-direction double-count guard (bug-hunter, Phase 2 final hunt): a statement
+ * uploaded BEFORE the feed backfill puts the transaction in the books under a `stmt:`
+ * ref; the later sweep would add the SAME money again under `feed:<id>` — a different
+ * ref, invisible to the upsert. So before projecting, feeds whose (bank, date, signed
+ * amount, currency) matches an existing `stmt:` books row are SKIPPED (multiset —
+ * one stmt row absorbs one feed twin). Statuses reaching projection are direction-
+ * reliable except 'ignored', which consumes on either sign (skip-leaning).
+ */
+export async function filterFeedsCoveredByStatements(
+  feeds: ProjectableFeed[],
+): Promise<{ kept: ProjectableFeed[]; statementCovered: number }> {
+  if (feeds.length === 0) return { kept: feeds, statementCovered: 0 }
+  const dates = feeds.map(f => f.transaction_date).filter(Boolean).sort()
+  if (dates.length === 0) return { kept: feeds, statementCovered: 0 }
+
+  const counts = new Map<string, number>()
+  const PAGE = 1000
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from("td_books_transactions")
+      .select("bank_name, transaction_date, amount, currency")
+      .eq("entity_id", TD_ENTITY_ID)
+      .like("transaction_ref", "stmt:%")
+      .gte("transaction_date", dates[0])
+      .lte("transaction_date", dates[dates.length - 1])
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1)
+    // Fail OPEN here would double-book; fail CLOSED (skip everything) would silently
+    // starve the books — so surface the error to the caller instead.
+    if (error) throw new Error(`statement-coverage check: ${error.message}`)
+    for (const b of data ?? []) {
+      const key = `${b.bank_name}|${b.transaction_date}|${Number(b.amount).toFixed(2)}|${(b.currency ?? "USD").toUpperCase()}`
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    if ((data ?? []).length < PAGE) break
+  }
+  if (counts.size === 0) return { kept: feeds, statementCovered: 0 }
+
+  const kept: ProjectableFeed[] = []
+  let statementCovered = 0
+  for (const feed of feeds) {
+    const bank = BANK_LABELS[feed.source ?? ""] ?? "Other"
+    const abs = Math.abs(Number(feed.amount))
+    const currency = (feed.currency ?? "USD").toUpperCase()
+    const signs = feed.status === "ignored" ? [abs, -abs] : [feed.status === "outgoing" ? -abs : abs]
+    const hit = signs.map(s => `${bank}|${feed.transaction_date}|${s.toFixed(2)}|${currency}`)
+      .find(k => (counts.get(k) ?? 0) > 0)
+    if (hit) {
+      counts.set(hit, (counts.get(hit) ?? 0) - 1)
+      statementCovered++
+    } else {
+      kept.push(feed)
+    }
+  }
+  return { kept, statementCovered }
+}
+
 export async function projectFeedsToOwnerLedger(
   feeds: ProjectableFeed[],
   opts: { markFeeds?: boolean; openInvoices?: OpenInvoiceRef[] } = {},
 ): Promise<ProjectionResult> {
+  let projectable: ProjectableFeed[]
+  try {
+    projectable = (await filterFeedsCoveredByStatements(feeds)).kept
+  } catch (e) {
+    return { ok: false, considered: feeds.length, projected: 0, skipped: feeds.length, error: e instanceof Error ? e.message : String(e) }
+  }
+
   const rows: OwnerLedgerRow[] = []
   const markable: string[] = []
-  for (const feed of feeds) {
+  for (const feed of projectable) {
     if (!isOwnerLedgerFeed(feed, opts.openInvoices ?? [])) continue
     const row = buildOwnerLedgerRow(feed)
     if (!row) continue

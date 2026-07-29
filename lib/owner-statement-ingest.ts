@@ -88,18 +88,26 @@ const DIRECTION_RELIABLE_STATUSES = new Set([
   "unmatched", "matched", "needs_review", "outgoing", "activation_crashed",
 ])
 
+/** Banks with statements but NO feed source — still folded so "Wise (TransferWise)"
+ * and "WISE" group as one bank in the books and the tie-out. */
+const FEEDLESS_BANK_LABELS = ["Wise"]
+
 /** Normalize a bank label from either world (parser labels, feed sources, AI free text)
- * to ONE label per bank. Token-based: "JPMorgan Chase" and "chase" both → "Chase" —
- * an unmatched AI label would otherwise silently disable the whole coverage check. */
+ * to ONE label per bank. Whole-token-SEQUENCE containment: "JPMorgan Chase"→"Chase",
+ * "Banking Circle S.A."→"Banking Circle", "BANKING CIRCLE"→"Banking Circle" — an
+ * unmatched AI label silently disables the whole coverage check and splits the
+ * tie-out, so folding must survive casing, suffixes and multi-word names. */
 export function canonicalBankLabel(raw: string | null | undefined): string {
   const s = (raw ?? "").trim()
   if (!s) return "Other"
   const bySource = BANK_LABELS[s.toLowerCase()]
   if (bySource) return bySource
-  const tokens = new Set(s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean))
-  for (const label of Array.from(new Set(Object.values(BANK_LABELS)))) {
+  const norm = (v: string) => v.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).join(" ")
+  const ns = ` ${norm(s)} `
+  const candidates = Array.from(new Set(Object.values(BANK_LABELS))).concat(FEEDLESS_BANK_LABELS)
+  for (const label of candidates) {
     if (label === "Other") continue
-    if (tokens.has(label.toLowerCase())) return label
+    if (ns.includes(` ${norm(label)} `)) return label
   }
   return s
 }

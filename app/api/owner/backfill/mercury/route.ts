@@ -36,6 +36,11 @@ export async function POST(req: Request) {
   try {
     const sync = await syncMercuryTransactions(from_date, to_date)
     const sweep = await sweepFeedsToOwnerLedger()
+    if (!sweep.ok) {
+      // The sweep failing means nothing reached the books yet (self-heals on the next
+      // cron cycle) — say so with a real error status, not a 200 with a buried flag.
+      return NextResponse.json({ error: `Synced ${sync.added} but the books sweep failed: ${sweep.error ?? 'unknown'} — it will retry on the next cycle.`, sync, sweep }, { status: 500 })
+    }
     return NextResponse.json({ sync, sweep })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Backfill failed' }, { status: 500 })

@@ -177,22 +177,32 @@ export interface VendorRule {
   notes: string | null
 }
 
+const FETCH_PAGE = 1000
+
+/** PAGED — PostgREST silently caps un-ranged selects at 1000 rows, and after a
+ * full-year statement backfill a year easily exceeds that. A truncated read here
+ * silently understates the P&L. */
 export async function getOwnerTransactions(
   year: number,
   category?: OwnerCategory
 ): Promise<OwnerTransaction[]> {
-  let q = supabaseAdmin
-    .from('td_books_transactions')
-    .select('*')
-    .eq('entity_id', TD_ENTITY_ID)
-    .eq('tax_year', year)
-    .order('transaction_date', { ascending: false })
-
-  if (category) q = q.eq('category', category)
-
-  const { data, error } = await q
-  if (error) throw new Error(`getOwnerTransactions: ${error.message}`)
-  return (data ?? []) as OwnerTransaction[]
+  const all: OwnerTransaction[] = []
+  for (let from = 0; ; from += FETCH_PAGE) {
+    let q = supabaseAdmin
+      .from('td_books_transactions')
+      .select('*')
+      .eq('entity_id', TD_ENTITY_ID)
+      .eq('tax_year', year)
+      .order('transaction_date', { ascending: false })
+      .order('id', { ascending: true })
+      .range(from, from + FETCH_PAGE - 1)
+    if (category) q = q.eq('category', category)
+    const { data, error } = await q
+    if (error) throw new Error(`getOwnerTransactions: ${error.message}`)
+    all.push(...((data ?? []) as OwnerTransaction[]))
+    if ((data ?? []).length < FETCH_PAGE) break
+  }
+  return all
 }
 
 export async function getOwnerTransactionsPaginated(
@@ -449,15 +459,24 @@ export async function getOwnerPnL(year: number): Promise<OwnerPnL> {
 }
 
 export async function getCashPosition(): Promise<CashPosition> {
-  const { data, error } = await supabaseAdmin
-    .from('td_books_transactions')
-    .select('bank_name, currency, balance_after, transaction_date')
-    .eq('entity_id', TD_ENTITY_ID)
-    .not('balance_after', 'is', null)
-    .not('bank_name', 'is', null)
-    .order('transaction_date', { ascending: false })
-
-  if (error) throw new Error(`getCashPosition: ${error.message}`)
+  // PAGED — after a big backfill, >1000 rows carry balances; unpaged, a dormant
+  // bank's newest balance beyond the cap would VANISH (not stale — gone).
+  type BalRow = { bank_name: string; currency: string | null; balance_after: number | string; transaction_date: string }
+  const data: BalRow[] = []
+  for (let from = 0; ; from += FETCH_PAGE) {
+    const { data: page, error } = await supabaseAdmin
+      .from('td_books_transactions')
+      .select('bank_name, currency, balance_after, transaction_date')
+      .eq('entity_id', TD_ENTITY_ID)
+      .not('balance_after', 'is', null)
+      .not('bank_name', 'is', null)
+      .order('transaction_date', { ascending: false })
+      .order('id', { ascending: true })
+      .range(from, from + FETCH_PAGE - 1)
+    if (error) throw new Error(`getCashPosition: ${error.message}`)
+    data.push(...((page ?? []) as BalRow[]))
+    if ((page ?? []).length < FETCH_PAGE) break
+  }
 
   // Latest balance per (bank, currency) — a bank holding USD and EUR is two balances,
   // and the totals stay per-currency (never a $-labeled EUR+USD sum).

@@ -4,7 +4,10 @@ import { NextResponse } from 'next/server'
 import { ingestOwnerStatement } from '@/lib/owner-statement-ingest'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 60
+// A year-of-PDFs zip AI-extracts every inner file inline — 60s was proven too tight
+// for exactly that flow in the tax pipeline. Failure would be safe (parse-then-insert,
+// idempotent retry) but the headline use case must not error.
+export const maxDuration = 300
 
 const MAX_BYTES = 25 * 1024 * 1024
 

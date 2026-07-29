@@ -411,7 +411,8 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                     />
                     <span><strong>{modal.similar.truncated ? 'At least ' : ''}{modal.similar.count} more</strong> transaction{modal.similar.count !== 1 ? 's look' : ' looks'} like this — apply to all {modal.similar.count + 1}</span>
                   </label>
-                  <div className="max-h-24 space-y-0.5 overflow-y-auto rounded bg-white/60 px-2 py-1 text-xs text-blue-800">
+                  {/* ALL matched rows, scrollable — Antonio: "I want to see all transactions". */}
+                  <div className="max-h-48 space-y-0.5 overflow-y-auto rounded bg-white/60 px-2 py-1 text-xs text-blue-800">
                     {modal.similar.preview.map((p, i) => (
                       <div key={i} className="flex justify-between gap-2">
                         <span className="truncate">{p.text}</span>
