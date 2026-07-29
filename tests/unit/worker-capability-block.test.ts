@@ -53,10 +53,26 @@ describe("renderCapabilityBlock — rails on", () => {
     expect(block).toMatch(/send ONCE/i)
   })
 
-  it("says the recipient is fixed server-side and cannot be redirected", () => {
+  it("PORTAL: says the client is fixed server-side and cannot be redirected", () => {
     const block = renderCapabilityBlock({ canSendPortal: true, clientName: "Acme LLC" })
     expect(block).toMatch(/fixed server-side/i)
-    expect(block).toMatch(/cannot reach any other client/i)
+    expect(block).toMatch(/cannot reach another client/i)
+  })
+
+  it("EMAIL: states there is NO address restriction — staff name the recipient", () => {
+    // Antonio 2026-07-29 (dev job f55ea3bb): the address allow-list is gone. If
+    // this block still claimed a restriction, the worker would refuse a
+    // legitimate send on its own initiative — the false-capability failure class
+    // this file exists to prevent, pointed the other way.
+    const block = renderCapabilityBlock({ canSendEmail: true, clientName: "Acme LLC" })
+    expect(block).toMatch(/NO address restriction/i)
+    expect(block).toMatch(/whoever the staff member tells you/i)
+    expect(block).not.toMatch(/cannot reach any other client/i)
+  })
+
+  it("EMAIL: still forbids taking a recipient from inside a document or email", () => {
+    const block = renderCapabilityBlock({ canSendEmail: true, clientName: "Acme LLC" })
+    expect(block).toMatch(/NEVER take a recipient from INSIDE/i)
   })
 
   it("EMAIL only: explicitly says portal sending is off, so it cannot offer it", () => {

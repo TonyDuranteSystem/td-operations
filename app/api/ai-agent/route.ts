@@ -377,11 +377,11 @@ async function runSidebarWorker(args: {
       ...(rowId ? { messageId: rowId } : {}),
       // The capability statement is GENERATED from the very rails passed below, so what
       // the worker says it can do and what it can actually reach cannot drift apart.
-      // Note an empty address list counts as CANNOT send: the pin refuses every address,
-      // so offering to email a client with nothing on file would be a promise it cannot
-      // keep — exactly the false-capability pattern this closes.
+      // Email is ON whenever the rail is on: there is no address restriction any more
+      // (Antonio, 2026-07-29, dev job f55ea3bb) — staff name the recipient, so a client
+      // with no address on file is no longer a reason to say email is unavailable.
       systemPromptOverride: `${buildWorkerSurfacePrompt('dashboard', {
-        canSendEmail: rails.email.enableEmailSend === true && (rails.email.pinnedEmailRecipients?.length ?? 0) > 0,
+        canSendEmail: rails.email.enableEmailSend === true,
         canSendPortal: rails.portal.enableSlackSend === true,
         clientName: rails.clientName,
         // The real state of the action rail — so it never offers a queue that is off.
