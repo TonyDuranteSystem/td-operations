@@ -480,9 +480,19 @@ export async function POST(req: NextRequest) {
         }
       : {
           enableSlackSend: true,
+          // EMAIL FROM THE CLIENT-CHAT PANEL (Antonio, 2026-07-29, dev job
+          // f55ea3bb): "if I am reading a chat with a client with the worker and
+          // from there I have to send an email to someone related to the chat, I
+          // have to be able to send an email from the worker in the chat."
+          // This surface used to send through the portal channel ONLY — email was
+          // not merely restricted here, the tool was never loaded, so the worker
+          // said "email is off, don't offer it". Now both channels are available
+          // and staff choose per message. Unpinned, like every other surface.
+          enableEmailSend: true,
           sendActor: `crm-portal:${actorEmail}`,
           // Server-enforced client boundary (council Security blocker): on this
           // panel the worker may only look up the client whose chat is open.
+          // NOTE this bounds READS, not the email recipient — staff name that.
           clientScope: buildClientScope(
             clientKey!.startsWith("acct-")
               ? `account:${clientKey!.slice("acct-".length)}`
@@ -525,12 +535,12 @@ export async function POST(req: NextRequest) {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
       // Capability statement GENERATED from the rails actually assigned above, so what
-      // the worker claims and what it can reach cannot drift. Each surface sends through
-      // exactly one channel: the Inbox replies by email (to any address the staff
-      // member names — no address restriction, so email is simply ON here),
-      // Portal Chats posts to the pinned client. Never both.
+      // the worker claims and what it can reach cannot drift. The Inbox replies by
+      // email. Portal Chats has BOTH channels now (Antonio, 2026-07-29): a portal
+      // message to the open client, AND email to whoever the staff member names —
+      // the everyday "reply to the client, then email their accountant" flow.
       systemPromptOverride: `${buildWorkerSurfacePrompt(surface, {
-        canSendEmail: surface === "inbox",
+        canSendEmail: true,
         canSendPortal: surface === "portal-chats",
         clientName: body.clientName ?? null,
         // The real state of the action rail — so it never offers a queue that is off.
