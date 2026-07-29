@@ -6,6 +6,8 @@ import type { MonthlyBreakdown, CashPosition } from '@/lib/owner-finance'
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n)
+const fmtIn = (currency: string) => (n: number) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(n)
 
 interface CashFlowTabProps {
   year: number
@@ -28,7 +30,11 @@ export function CashFlowTab({ year, monthly, cash }: CashFlowTabProps) {
     ? last3.reduce((s, m) => s + m.cogs + m.expenses, 0) / last3.length
     : 0
 
-  const runway = burnRate > 0 ? cash.total / burnRate : null
+  // Burn is computed from the USD monthly series, so runway divides USD cash only —
+  // never a mixed-currency total.
+  const usdCash = cash.totals.USD ?? 0
+  const nonUsdCash = Object.entries(cash.totals).filter(([cur]) => cur !== 'USD')
+  const runway = burnRate > 0 ? usdCash / burnRate : null
 
   return (
     <div className="space-y-6">
@@ -36,8 +42,12 @@ export function CashFlowTab({ year, monthly, cash }: CashFlowTabProps) {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="rounded-lg border border-zinc-200 bg-white p-4">
           <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Cash Position</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums text-zinc-900">{fmt(cash.total)}</p>
-          <p className="mt-0.5 text-xs text-zinc-400">across {cash.accounts.length} account{cash.accounts.length !== 1 ? 's' : ''}</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums text-zinc-900">{fmt(usdCash)}</p>
+          <p className="mt-0.5 text-xs text-zinc-400">
+            {nonUsdCash.length > 0
+              ? `USD only — plus ${nonUsdCash.map(([cur, v]) => fmtIn(cur)(v)).join(', ')}`
+              : `across ${cash.accounts.length} account${cash.accounts.length !== 1 ? 's' : ''}`}
+          </p>
         </div>
         <div className="rounded-lg border border-zinc-200 bg-white p-4">
           <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Monthly Burn Rate</p>
@@ -75,12 +85,12 @@ export function CashFlowTab({ year, monthly, cash }: CashFlowTabProps) {
           <h3 className="mb-3 text-sm font-medium text-zinc-700">Account Balances</h3>
           <div className="space-y-3">
             {cash.accounts.map(a => (
-              <div key={a.bank_name} className="flex items-center justify-between">
+              <div key={`${a.bank_name}|${a.currency}`} className="flex items-center justify-between">
                 <div>
-                  <div className="text-sm font-medium text-zinc-800">{a.bank_name}</div>
+                  <div className="text-sm font-medium text-zinc-800">{a.bank_name}{a.currency !== 'USD' ? ` (${a.currency})` : ''}</div>
                   <div className="text-xs text-zinc-400">As of {a.as_of}</div>
                 </div>
-                <div className="text-sm font-semibold tabular-nums text-zinc-900">{fmt(a.balance)}</div>
+                <div className="text-sm font-semibold tabular-nums text-zinc-900">{fmtIn(a.currency)(a.balance)}</div>
               </div>
             ))}
           </div>

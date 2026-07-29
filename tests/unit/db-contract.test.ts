@@ -148,14 +148,16 @@ describe("checksumDefs", () => {
     // The snapshot was not hand-verified by eye; the database fingerprinted its own rules and
     // we recomputed the same fingerprint over the file. This test pins that agreement, so a
     // future edit of the file cannot quietly diverge from the database it claims to describe.
-    // Re-pinned 2026-07-27 after regenerating the snapshot from PRODUCTION via
+    // Re-pinned 2026-07-29 after regenerating the snapshot from PRODUCTION via
     // `npm run snapshot:constraints` (which refuses to run against any other
-    // database). The value below is the digest PRODUCTION computed over its own
-    // constraints, not one recomputed to make a red test pass — the previous
-    // pin was 9c43924c747b933a5336c5bcd57e780a over 200 (re-pinned again 2026-07-28
-    // after adding 'revolut' to the source CHECK), before that 4d0d3a38… over 194, and before
-    // that 665364ba9d4e7746d9f3fd558dc6ff55 over 190.
-    expect(checksumDefs(prodConstraints())).toBe("3f58eb3fcf707e5cc3751583ee212ac6")
+    // database) — the S-corp books table (td_books_transactions) added two CHECKs
+    // (category vocabulary incl. 'transfer', non-blank ref), 200 -> 202. The value
+    // below is the digest PRODUCTION computed over its own constraints, not one
+    // recomputed to make a red test pass — the previous pin was
+    // 3f58eb3fcf707e5cc3751583ee212ac6 over 200 (2026-07-28, 'revolut' source),
+    // before that 9c43924c747b933a5336c5bcd57e780a over 200, 4d0d3a38… over 194,
+    // and 665364ba9d4e7746d9f3fd558dc6ff55 over 190.
+    expect(checksumDefs(prodConstraints())).toBe("9c3dfb6d1288e2c73de950a38dd2ba93")
   })
 })
 
@@ -165,12 +167,13 @@ describe("the committed production snapshot", () => {
   })
 
   it("holds production's full constraint set", () => {
-    // 190 -> 194 -> 200: production keeps gaining CHECK constraints between snapshots
+    // 190 -> 194 -> 200 -> 202: production keeps gaining CHECK constraints between snapshots
     // (prod DDL is applied by hand), and a stale file hides them — the 07-27 refresh
     // surfaced three unregistered constrained columns that had been invisible since 07-21.
-    // Re-pinned in the same change that regenerated the file.
-    expect(prodSnapshotMeta().count).toBe(200)
-    expect(Object.keys(prodConstraints())).toHaveLength(200)
+    // 07-29: +2 from the S-corp books table. Re-pinned in the same change that regenerated
+    // the file.
+    expect(prodSnapshotMeta().count).toBe(202)
+    expect(Object.keys(prodConstraints())).toHaveLength(202)
   })
 
   it("PRODUCTION accepts every value the code can write", () => {

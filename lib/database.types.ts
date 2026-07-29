@@ -11773,6 +11773,72 @@ export type Database = {
         }
         Relationships: []
       }
+      td_books_transactions: {
+        Row: {
+          account_type: string | null
+          amount: number
+          balance_after: number | null
+          bank_name: string | null
+          category: string
+          counterparty: string | null
+          created_at: string
+          currency: string
+          description: string | null
+          entity_id: string
+          id: string
+          is_related_party: boolean
+          notes: string | null
+          source_file_id: string | null
+          subcategory: string | null
+          tax_year: number
+          transaction_date: string
+          transaction_ref: string
+          updated_at: string
+        }
+        Insert: {
+          account_type?: string | null
+          amount: number
+          balance_after?: number | null
+          bank_name?: string | null
+          category?: string
+          counterparty?: string | null
+          created_at?: string
+          currency?: string
+          description?: string | null
+          entity_id?: string
+          id?: string
+          is_related_party?: boolean
+          notes?: string | null
+          source_file_id?: string | null
+          subcategory?: string | null
+          tax_year: number
+          transaction_date: string
+          transaction_ref: string
+          updated_at?: string
+        }
+        Update: {
+          account_type?: string | null
+          amount?: number
+          balance_after?: number | null
+          bank_name?: string | null
+          category?: string
+          counterparty?: string | null
+          created_at?: string
+          currency?: string
+          description?: string | null
+          entity_id?: string
+          id?: string
+          is_related_party?: boolean
+          notes?: string | null
+          source_file_id?: string | null
+          subcategory?: string | null
+          tax_year?: number
+          transaction_date?: string
+          transaction_ref?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       stripe_payouts: {
         Row: {
           amount: number

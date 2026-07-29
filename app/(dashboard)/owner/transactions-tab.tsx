@@ -4,13 +4,15 @@ import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 import type { OwnerTransaction, OwnerCategory } from '@/lib/owner-finance'
 
-const CATEGORIES: OwnerCategory[] = ['income', 'cogs', 'expense', 'distribution', 'fee', 'conversion', 'refund', 'uncategorized']
+const CATEGORIES: OwnerCategory[] = ['income', 'cogs', 'expense', 'distribution', 'contribution', 'transfer', 'fee', 'conversion', 'refund', 'uncategorized']
 
 const CATEGORY_LABELS: Record<string, string> = {
-  income: 'Income',
+  income: 'Other Income',
   cogs: 'Cost of Goods (COGS)',
   expense: 'Operating Expense',
   distribution: 'Owner Distribution',
+  contribution: 'Owner Contribution',
+  transfer: 'Transfer (own accounts / Stripe payout)',
   fee: 'Bank / Processing Fee',
   conversion: 'Currency Conversion',
   refund: 'Refund',
@@ -65,7 +67,13 @@ const SUBCATEGORIES: Record<string, { value: string; label: string }[]> = {
   ],
   distribution: [
     { value: 'distribution', label: 'Owner Distribution' },
+  ],
+  contribution: [
     { value: 'contribution', label: 'Owner Contribution' },
+  ],
+  transfer: [
+    { value: 'stripe_payout', label: 'Stripe Payout (clearing)' },
+    { value: 'own_account', label: 'Between Own Bank Accounts' },
   ],
   fee: [
     { value: 'bank_fee', label: 'Bank Fee' },
@@ -83,8 +91,9 @@ const SUBCATEGORIES: Record<string, { value: string; label: string }[]> = {
   uncategorized: [],
 }
 
-const fmt = (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Math.abs(n))
+/** Row amounts render in the ROW's currency — a €500 line must never display as $500. */
+const fmtRow = (n: number, currency: string | null) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: currency || 'USD', maximumFractionDigits: 0 }).format(Math.abs(n))
 
 interface TransactionsTabProps {
   year: number
@@ -213,7 +222,7 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
             <div className="mb-3 flex items-center justify-between rounded-lg bg-zinc-50 px-3 py-2">
               <span className="text-sm text-zinc-500">{modal.tx.transaction_date} · {modal.tx.bank_name}</span>
               <span className={`text-sm font-semibold tabular-nums ${modal.tx.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                {modal.tx.amount < 0 ? '-' : '+'}{fmt(modal.tx.amount)}
+                {modal.tx.amount < 0 ? '-' : '+'}{fmtRow(modal.tx.amount, modal.tx.currency)}
               </span>
             </div>
 
@@ -230,6 +239,18 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                   ))}
                 </select>
               </div>
+
+              {/* Double-count guard: invoice money is already counted from the payments
+                  ledger — a bank deposit for a client invoice marked "income" here would
+                  count the same money twice. */}
+              {modal.category === 'income' && modal.tx.amount > 0 && modal.tx.transaction_ref?.startsWith('feed:') && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                  ⚠ Is this a client paying an invoice? Then do NOT mark it Income — use the
+                  &quot;This is for a client →&quot; button instead, or the money will be counted twice
+                  (invoice income already includes it). &quot;Other Income&quot; is only for money that is
+                  not an invoice payment (rewards, referral bonuses).
+                </div>
+              )}
 
               {(SUBCATEGORIES[modal.category] ?? []).length > 0 && (
                 <div>
@@ -325,6 +346,11 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
             Apply to {selected.size}
           </button>
           <button onClick={() => setSelected(new Set())} className="text-xs text-blue-600 hover:underline">Clear</button>
+          {bulkCategory === 'income' && rows.some(r => selected.has(r.id) && r.amount > 0 && r.transaction_ref?.startsWith('feed:')) && (
+            <span className="text-xs text-red-700">
+              ⚠ Client invoice payments must NOT be marked Income (already counted from invoices) — use &quot;This is for a client →&quot; for those.
+            </span>
+          )}
         </div>
       )}
 
@@ -371,7 +397,7 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                   <div className="truncate text-xs text-zinc-400">{tx.description}</div>
                 </td>
                 <td className={`px-3 py-2.5 text-right font-mono text-xs font-medium tabular-nums ${tx.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                  {tx.amount < 0 ? '-' : '+'}{fmt(tx.amount)}
+                  {tx.amount < 0 ? '-' : '+'}{fmtRow(tx.amount, tx.currency)}
                 </td>
                 <td className="px-3 py-2.5">
                   <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tx.category === 'uncategorized' ? 'bg-orange-100 text-orange-700' : 'bg-zinc-100 text-zinc-600'}`}>

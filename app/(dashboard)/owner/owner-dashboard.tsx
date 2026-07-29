@@ -28,7 +28,6 @@ interface OwnerDashboardProps {
   uncategorizedCount: number
   initialTransactions: OwnerTransaction[]
   initialTransactionTotal: number
-  taxEstimate: { annual: number; quarterly: number }
 }
 
 export function OwnerDashboard({
@@ -39,8 +38,8 @@ export function OwnerDashboard({
   uncategorizedCount,
   initialTransactions,
   initialTransactionTotal,
-  taxEstimate,
 }: OwnerDashboardProps) {
+  const usd = pnl.blocks.find(b => b.currency === 'USD')
   const router = useRouter()
   const pathname = usePathname()
   const [currentTab, setCurrentTab] = useState(activeTab)
@@ -103,7 +102,7 @@ export function OwnerDashboard({
       </div>
 
       {currentTab === 'dashboard' && (
-        <DashboardTab pnl={pnl} cash={cash} uncategorizedCount={uncategorizedCount} taxEstimate={taxEstimate} year={year} onTabSwitch={switchTab} />
+        <DashboardTab pnl={pnl} cash={cash} uncategorizedCount={uncategorizedCount} year={year} onTabSwitch={switchTab} />
       )}
       {currentTab === 'transactions' && (
         <TransactionsTab year={year} initialRows={initialTransactions} initialTotal={initialTransactionTotal} />
@@ -112,10 +111,10 @@ export function OwnerDashboard({
         <PnLTab year={year} pnl={pnl} />
       )}
       {currentTab === 'cashflow' && (
-        <CashFlowTab year={year} monthly={pnl.monthly} cash={cash} />
+        <CashFlowTab year={year} monthly={usd?.monthly ?? []} cash={cash} />
       )}
       {currentTab === 'tax' && (
-        <TaxTab year={year} netProfit={pnl.net_profit} />
+        <TaxTab year={year} pnl={pnl} />
       )}
       {currentTab === 'bookkeeper' && (
         <BookkeeperTab year={year} />

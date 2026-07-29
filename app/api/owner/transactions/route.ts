@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isAdmin } from '@/lib/auth'
 import { NextResponse } from 'next/server'
-import { getOwnerTransactionsPaginated, OWNER_ACCOUNT_ID, type OwnerCategory } from '@/lib/owner-finance'
+import { getOwnerTransactionsPaginated, isOwnerCategory, TD_ENTITY_ID, type OwnerCategory } from '@/lib/owner-finance'
 
 export const dynamic = 'force-dynamic'
 
@@ -46,6 +46,10 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: 'id is required' }, { status: 400 })
   }
 
+  if (category !== undefined && !isOwnerCategory(category)) {
+    return NextResponse.json({ error: `Unknown category "${category}"` }, { status: 400 })
+  }
+
   const update: Record<string, unknown> = {}
   if (category !== undefined) update.category = category
   if (subcategory !== undefined) update.subcategory = subcategory
@@ -53,10 +57,10 @@ export async function PATCH(req: Request) {
   if (is_related_party !== undefined) update.is_related_party = is_related_party
 
   const { data, error } = await supabaseAdmin
-    .from('bank_transactions')
+    .from('td_books_transactions')
     .update(update)
     .eq('id', id)
-    .eq('account_id', OWNER_ACCOUNT_ID)
+    .eq('entity_id', TD_ENTITY_ID)
     .select()
     .single()
 

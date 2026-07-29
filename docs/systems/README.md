@@ -96,6 +96,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [offers.md](offers.md) | Offers & contracts — publish→sign→pay→activate, the 3 states (R094) | ✅ written |
 | [banking-bankfeed.md](banking-bankfeed.md) | Banking applications + bank-feed auto-reconciliation (matcher, td_bank_feeds) | ✅ written |
 | [pnl-engine.md](pnl-engine.md) | P&L / Balance Sheet engine — one `buildPnlWorkbook`, `/tools/pnl` (client + external), K-1/M-2 | ✅ written |
+| [td-books.md](td-books.md) | TD Books (My Finances) — `td_books_transactions`, invoice-first routing target, S-corp books foundation | ✅ written |
 | [tax-returns.md](tax-returns.md) | Tax returns — status pipeline, accountant hand-off, tax pause + installment resume | ✅ written |
 | [portal.md](portal.md) | Client portal — 4 tiers (R102), syncTier, chat/notifications/docs, account types | ✅ written |
 | [referrals-circleback.md](referrals-circleback.md) | Referrals — 10% credit notes, partner commissions, Calendly intake | ✅ written |

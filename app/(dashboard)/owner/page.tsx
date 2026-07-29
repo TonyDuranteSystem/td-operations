@@ -7,7 +7,6 @@ import {
   getCashPosition,
   getUncategorizedCount,
   getOwnerTransactionsPaginated,
-  estimateQuarterlyTax,
 } from '@/lib/owner-finance'
 
 export const dynamic = 'force-dynamic'
@@ -31,8 +30,6 @@ export default async function OwnerPage({
     getOwnerTransactionsPaginated(year, { category: 'uncategorized', limit: 50 }),
   ])
 
-  const taxEstimate = estimateQuarterlyTax(pnl.net_profit)
-
   return (
     <div className="h-full">
       <OwnerDashboard
@@ -43,7 +40,6 @@ export default async function OwnerPage({
         uncategorizedCount={uncategorized}
         initialTransactions={txResult.rows}
         initialTransactionTotal={txResult.total}
-        taxEstimate={taxEstimate}
       />
     </div>
   )
