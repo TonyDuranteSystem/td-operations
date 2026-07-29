@@ -33,12 +33,29 @@ async function fetchMembers(): Promise<{ me: { id: string; name: string }; membe
  * The dialog on its own, opened by the caller — so a dropdown menu item (portal-chats
  * per-message menu) can raise it without rendering a button of its own.
  */
+/**
+ * Where a note "comes from" when the caller didn't say: the current page — MINUS any
+ * inherited ?message= anchor. If this page was itself opened via someone else's
+ * message deep link, a note about something ELSE must not point at that old message.
+ */
+function fallbackOrigin(): string | undefined {
+  if (typeof window === 'undefined') return undefined
+  const params = new URLSearchParams(window.location.search)
+  params.delete('message')
+  const qs = params.toString()
+  return window.location.pathname + (qs ? `?${qs}` : '')
+}
+
 export function NoteComposeDialog({
-  accountId, contactId, prefill, onClose,
+  accountId, contactId, prefill, originUrl, onClose,
 }: {
   accountId?: string | null
   contactId?: string | null
   prefill?: string
+  /** RELATIVE in-app path (pathname+search) — an absolute URL is silently rejected
+   *  by the server's origin validator. Callers that know the exact message/thread
+   *  pass it here; otherwise the current page (sans stale message anchor) is used. */
+  originUrl?: string
   onClose: () => void
 }) {
   const qc = useQueryClient()
@@ -55,7 +72,7 @@ export function NoteComposeDialog({
         accountId: accountId || undefined,
         contactId: accountId ? undefined : contactId || undefined,
         // where it came from, so the note can take you back weeks later
-        originUrl: typeof window !== 'undefined' ? window.location.pathname + window.location.search : undefined,
+        originUrl: originUrl ?? fallbackOrigin(),
       }}
       onClose={onClose}
       onChanged={() => {
@@ -68,11 +85,13 @@ export function NoteComposeDialog({
 
 /** Button + dialog, for surfaces that want their own control (the Inbox email header). */
 export function NoteQuickCreate({
-  accountId, contactId, prefill, label = 'Note', className,
+  accountId, contactId, prefill, originUrl, label = 'Note', className,
 }: {
   accountId?: string | null
   contactId?: string | null
   prefill?: string
+  /** RELATIVE in-app path for the note's From: link — see NoteComposeDialog. */
+  originUrl?: string
   label?: string
   className?: string
 }) {
@@ -92,6 +111,7 @@ export function NoteQuickCreate({
           accountId={accountId}
           contactId={contactId}
           prefill={prefill}
+          originUrl={originUrl}
           onClose={() => setOpen(false)}
         />
       )}

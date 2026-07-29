@@ -25,6 +25,36 @@ export function safeOriginPath(raw: unknown): string | null {
 }
 
 /**
+ * Split text into plain and link segments so pasted URLs render as clickable
+ * anchors WITHOUT any HTML injection — callers map segments to React elements.
+ * Strictly http(s) (a `javascript:` scheme can never match), and trailing
+ * sentence punctuation stays outside the link ("see https://x.com." → link
+ * ends before the dot).
+ */
+export type TextSegment = { type: "text" | "link"; value: string }
+
+export function splitLinkSegments(text: string): TextSegment[] {
+  const out: TextSegment[] = []
+  const re = /https?:\/\/[^\s]+/g
+  let last = 0
+  let m: RegExpExecArray | null
+  // exec loop (not matchAll) — the TS build target can't iterate matchAll's iterator
+  while ((m = re.exec(text)) !== null) {
+    let url = m[0]
+    // peel trailing punctuation that belongs to the sentence, not the URL
+    while (/[.,;:!?)\]]$/.test(url)) url = url.slice(0, -1)
+    if (!url) continue
+    const start = m.index
+    if (start > last) out.push({ type: "text", value: text.slice(last, start) })
+    out.push({ type: "link", value: url })
+    last = start + url.length
+    re.lastIndex = last // continue right after the peeled URL, not the raw match
+  }
+  if (last < text.length) out.push({ type: "text", value: text.slice(last) })
+  return out
+}
+
+/**
  * A short human label for where a note came from — "Inbox", "Portal chats", the client page…
  * Falls back to a cleaned-up first path segment so a new page never renders as raw slug soup.
  */

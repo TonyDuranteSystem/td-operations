@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, AlertTriangle, StickyNote } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, AlertTriangle, StickyNote, Link2 } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -210,6 +210,7 @@ export default function PortalChatsPage() {
   const [targetMessageId] = useState<string | null>(urlParams.get('message'))
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const didScrollToTargetRef = useRef(false)
+  const deepLinkPagesRef = useRef(0) // bounded back-paging when the target is older than the live window
   // Unified thread state: which company the admin is sending as, and all companies for badge lookup
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
   const [selectedThreadCompanies, setSelectedThreadCompanies] = useState<{ id: string; name: string; overdue?: OverdueSummary | null; closed?: boolean }[]>([])
@@ -241,7 +242,7 @@ export default function PortalChatsPage() {
   // text) so staff can write/trim the note before the card is created.
   const [todoNote, setTodoNote] = useState<{ messageId: string; note: string } | null>(null)
   // seed for the "Make a note" post-it dialog raised from a message's menu
-  const [noteSeed, setNoteSeed] = useState<{ accountId: string | null; contactId: string | null; prefill: string } | null>(null)
+  const [noteSeed, setNoteSeed] = useState<{ accountId: string | null; contactId: string | null; prefill: string; originUrl?: string } | null>(null)
   const [shareItems, setShareItems] = useState<ShareItem[] | null>(null)
   const [pendingAdminFiles, setPendingAdminFiles] = useState<PendingAdminFile[]>([])
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
@@ -534,6 +535,30 @@ export default function PortalChatsPage() {
     : selectedContactId
       ? `contact_id=${selectedContactId}`
       : null
+  // The COPYABLE link scope of the open thread — MUST mirror chatQueryParam (the
+  // scope the messages fetch actually uses). Never selectedCompanyId: person-context
+  // messages carry NO account id, so a company-scoped link would open a narrower
+  // thread that silently lacks them (council, 2026-07-29).
+  const threadLinkScope = selectedAccountId
+    ? `account=${selectedAccountId}`
+    : selectedContactId
+      ? `contact=${selectedContactId}`
+      : null
+  /** Relative deep link to this thread (and optionally one exact message). */
+  const threadDeepLink = useCallback((msgId?: string) => {
+    if (!threadLinkScope) return null
+    return `/portal-chats?${threadLinkScope}${msgId ? `&message=${msgId}` : ''}`
+  }, [threadLinkScope])
+  /** Copy an absolute link for pasting anywhere. Synchronous write (iOS PWA needs
+   *  the user gesture) + honest then/catch — never a false "Copied". */
+  const copyDeepLink = useCallback((msgId?: string) => {
+    const rel = threadDeepLink(msgId)
+    if (!rel) return
+    navigator.clipboard.writeText(`${window.location.origin}${rel}`)
+      .then(() => toast.success('Link copied.'))
+      .catch(() => toast.error('Could not copy the link on this device.'))
+  }, [threadDeepLink])
+
   const { data: messages, isLoading: messagesLoading } = useQuery<ChatMessage[]>({
     queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId],
     queryFn: () => fetch(`/api/portal/chat?${chatQueryParam}&limit=50`).then(r => r.json()).then(d => d.messages),
@@ -661,9 +686,20 @@ export default function PortalChatsPage() {
   // the view back. Missing/old message → no-op, never crashes.
   useEffect(() => {
     if (!targetMessageId || didScrollToTargetRef.current) return
-    if (!messages || messages.length === 0) return
-    const target = messages.find(m => m.id === targetMessageId)
-    if (!target) { didScrollToTargetRef.current = true; return } // outside the loaded window
+    if (!combinedMessages || combinedMessages.length === 0) return
+    const target = combinedMessages.find(m => m.id === targetMessageId)
+    if (!target) {
+      // Not in what's loaded. Copyable links get clicked WEEKS later, so dig
+      // backward through history (bounded) instead of silently giving up —
+      // the old behaviour opened the chat with no jump and no explanation.
+      if (hasMoreOlder && deepLinkPagesRef.current < 10) {
+        if (!loadingOlder) { deepLinkPagesRef.current += 1; void loadOlderMessages() }
+        return // effect re-runs as older pages land in combinedMessages
+      }
+      didScrollToTargetRef.current = true
+      toast.error("Couldn't find that message — it may be much older or deleted.")
+      return
+    }
     didScrollToTargetRef.current = true
     setAdminActiveTopic(target.topic ?? null)
     const flash = window.setTimeout(() => {
@@ -674,7 +710,7 @@ export default function PortalChatsPage() {
       window.setTimeout(() => setHighlightedMessageId(null), 2800)
     }, 120) // let the topic switch re-render the list first
     return () => window.clearTimeout(flash)
-  }, [targetMessageId, messages])
+  }, [targetMessageId, combinedMessages, hasMoreOlder, loadingOlder, loadOlderMessages])
 
   // Unread count per topic tab (client + system messages not yet read by admin).
   // System messages are auto-emitted on client actions (wizard submitted,
@@ -2493,6 +2529,15 @@ export default function PortalChatsPage() {
                           <p className="text-sm font-semibold text-zinc-900">{displayName}</p>
                         )}
                         {currentThread?.overdue && <OverdueBadge summary={currentThread.overdue} />}
+                        {threadLinkScope && (
+                          <button
+                            onClick={() => copyDeepLink()}
+                            title="Copy link to this chat"
+                            className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600"
+                          >
+                            <Link2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </div>
                       {companies.length > 0 && (
                         <div className="flex flex-wrap items-center gap-1 mt-0.5">
@@ -3051,6 +3096,15 @@ export default function PortalChatsPage() {
                           >
                             <Reply className="h-3.5 w-3.5 text-zinc-400" /> Reply
                           </DropdownMenu.Item>
+                          {/* Copy a link that opens this chat AND jumps to this exact
+                              message (highlight ring) — paste it in a note, team chat,
+                              anywhere internal. */}
+                          <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
+                            onSelect={() => copyDeepLink(msg.id)}
+                          >
+                            <Link2 className="h-3.5 w-3.5 text-zinc-400" /> Copy link
+                          </DropdownMenu.Item>
                           <DropdownMenu.Item
                             className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
                             onSelect={() => { const acctId = selectedCompanyId || selectedAccountId; if (acctId) createInternalThread(acctId, msg.id, msg.message) }}
@@ -3060,13 +3114,10 @@ export default function PortalChatsPage() {
                           <DropdownMenu.Item
                             className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
                             onSelect={() => {
-                              const acctId = selectedCompanyId || selectedAccountId
                               const clientName = selectedName?.company || selectedName?.contact || 'Client'
-                              const backUrl = acctId
-                                ? `/portal-chats?account=${acctId}&message=${msg.id}`
-                                : selectedContactId
-                                  ? `/portal-chats?contact=${selectedContactId}&message=${msg.id}`
-                                  : undefined
+                              // Same scope rule as Copy link — the send-as company id used to
+                              // leak in here, producing links that missed person-context messages.
+                              const backUrl = threadDeepLink(msg.id) ?? undefined
                               setShareItems([{
                                 kind: 'client_message',
                                 title: clientName,
@@ -3094,6 +3145,9 @@ export default function PortalChatsPage() {
                               accountId: selectedCompanyId || selectedAccountId || null,
                               contactId: selectedContactId || selectedThreadContactId || null,
                               prefill: msg.message,
+                              // RELATIVE path (safeOriginPath rejects absolute URLs) anchored
+                              // to this exact message — the note's From: link lands right on it.
+                              originUrl: threadDeepLink(msg.id) ?? undefined,
                             })}
                           >
                             <StickyNote className="h-3.5 w-3.5 text-amber-500" /> Make a note
@@ -3993,6 +4047,7 @@ export default function PortalChatsPage() {
           accountId={noteSeed.accountId}
           contactId={noteSeed.contactId}
           prefill={noteSeed.prefill}
+          originUrl={noteSeed.originUrl}
           onClose={() => setNoteSeed(null)}
         />
       )}
