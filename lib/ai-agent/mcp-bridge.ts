@@ -18,6 +18,7 @@
 
 import { z } from "zod"
 import { coerceBridgeParams } from "./bridge-param-coercion"
+import { describeZodShape, type ToolParam } from "./tool-params"
 import { executeTool, AGENT_TOOLS } from "./tools"
 
 import { registerCrmTools } from "@/lib/mcp/tools/crm"
@@ -117,9 +118,20 @@ export function buildMcpToolRegistry(): Map<string, ToolEntry> {
   return reg
 }
 
-/** Lightweight catalog (name + description) for the find_tool discovery helper. */
-export function listBridgeTools(): Array<{ name: string; description: string }> {
-  return Array.from(buildMcpToolRegistry().entries()).map(([name, e]) => ({ name, description: e.description }))
+/**
+ * Catalog for the find_tool discovery helper: name, description AND settings.
+ *
+ * The settings are the point. Without them the assistant reached a tool knowing only
+ * what it was for, guessed the parameters, and any behaviour behind an unguessed
+ * setting was unreachable — Luca's PDF letterhead is exactly that shape (see
+ * lib/ai-agent/tool-params.ts for the full root cause).
+ */
+export function listBridgeTools(): Array<{ name: string; description: string; params: ToolParam[] }> {
+  return Array.from(buildMcpToolRegistry().entries()).map(([name, e]) => ({
+    name,
+    description: e.description,
+    params: describeZodShape(e.schema),
+  }))
 }
 
 /**

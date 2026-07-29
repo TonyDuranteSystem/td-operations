@@ -152,6 +152,9 @@ export async function readAttachmentBuffer(
   buffer: Buffer,
   ref: AttachmentRef,
   allowDocumentBlock = true,
+  // Continue-reading position for long files: text past the per-read cap comes
+  // back windowed, and the INCOMPLETE READ marker names the next offset. 0 = start.
+  offset = 0,
 ): Promise<AttachmentRead> {
   const label = ref.name ?? "unnamed file"
 
@@ -172,7 +175,7 @@ export async function readAttachmentBuffer(
     }
   }
 
-  const { classifySlackFile, extractTextFromBuffer, capText, SLACK_FILE_TEXT_CHAR_CAP } = await import(
+  const { classifySlackFile, extractTextFromBuffer, windowText, SLACK_FILE_TEXT_CHAR_CAP } = await import(
     "@/lib/ai-agent/slack-file-reader"
   )
   const mimetype = ref.mimetype && ref.mimetype !== "application/octet-stream" ? ref.mimetype : mimeFromFileName(ref.name)
@@ -195,7 +198,7 @@ export async function readAttachmentBuffer(
         // Unparseable text layer — fall through to the scanned path.
       }
       if (pdfText.trim().length >= PDF_TEXT_LAYER_MIN_CHARS) {
-        return { kind: "text", text: `[Attached file "${label}"]\n${capText(pdfText, SLACK_FILE_TEXT_CHAR_CAP).trim()}` }
+        return { kind: "text", text: `[Attached file "${label}"]\n${windowText(pdfText, offset, SLACK_FILE_TEXT_CHAR_CAP).trim()}` }
       }
       if (!allowDocumentBlock) {
         // No wasted base64 for a block the caller can't use.
@@ -209,7 +212,7 @@ export async function readAttachmentBuffer(
     }
 
     const text = await extractTextFromBuffer(buffer, kind)
-    const capped = capText(text, SLACK_FILE_TEXT_CHAR_CAP).trim()
+    const capped = windowText(text, offset, SLACK_FILE_TEXT_CHAR_CAP).trim()
     return { kind: "text", text: `[Attached file "${label}"]\n${capped || "(empty file)"}` }
   } catch (err) {
     return {

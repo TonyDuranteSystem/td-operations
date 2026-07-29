@@ -60,6 +60,14 @@ import {
   TRUNCATED_EMPTY_REPLY,
 } from "./answer-guards"
 import {
+  type PendingRead,
+  updatePendingReads,
+  pendingReadsSignature,
+  buildIncompleteReadNudge,
+  stampPartialReads,
+  MAX_READ_CONTINUATION_NUDGES,
+} from "./read-completion"
+import {
   readCodebaseFile,
   searchCodebase,
   CODEBASE_READ_DESCRIPTION,
@@ -920,11 +928,16 @@ export const READ_PORTAL_ATTACHMENT_TOOL: ToolDef = {
     "Pass the URL exactly as shown in the portal_chat_read output (the URL after the 📎 filename).",
     "Works for PDFs (text layer), DOCX, XLSX, CSV, and plain text files hosted on our Supabase storage.",
     "Use this whenever portal_chat_read shows 📎 attachments and you need to know what's inside them.",
+    "LONG FILES: a long document comes back one section at a time. If the result says INCOMPLETE READ, call this tool AGAIN with the `offset` it gives you, and repeat until the end — never answer about totals, counts, or something being absent until you have read the whole file.",
   ].join("\n"),
   parameters: {
     type: "object",
     properties: {
       url: { type: "string", description: "Full URL of the portal chat attachment from portal_chat_read output." },
+      offset: {
+        type: "number",
+        description: "Character position to continue reading from — use the exact offset given by a previous INCOMPLETE READ result. Omit to start from the beginning.",
+      },
     },
     required: ["url"],
   },
@@ -937,11 +950,16 @@ export const READ_EMAIL_ATTACHMENT_TOOL: ToolDef = {
     "Pass the `ref` exactly as listed under ATTACHMENTS ON THIS EMAIL in the message above — nothing else is readable.",
     "Images attached to the email are already shown to you directly; you do NOT need this tool for them.",
     "Use this when you need to know what a document actually says before answering or drafting.",
+    "LONG FILES: a long document comes back one section at a time. If the result says INCOMPLETE READ, call this tool AGAIN with the `offset` it gives you, and repeat until the end — never answer about totals, counts, or something being absent until you have read the whole file.",
   ].join("\n"),
   parameters: {
     type: "object",
     properties: {
       ref: { type: "string", description: "The attachment ref from the ATTACHMENTS ON THIS EMAIL list (e.g. 'att1')." },
+      offset: {
+        type: "number",
+        description: "Character position to continue reading from — use the exact offset given by a previous INCOMPLETE READ result. Omit to start from the beginning.",
+      },
     },
     required: ["ref"],
   },
@@ -968,12 +986,14 @@ export async function readEmailAttachmentForWorker(
     const available = pinned.map((a) => `${a.ref} (${a.name})`).join(", ")
     return `❌ "${ref}" is not an attachment on this email. Available: ${available}.`
   }
+  // Continue-reading position (long files come back one window at a time).
+  const offset = Number.isFinite(Number(params.offset)) ? Math.max(0, Math.floor(Number(params.offset))) : 0
 
   try {
     const { getGmailAttachment } = await import("@/lib/gmail")
     const { data } = await getGmailAttachment(match.messageId, match.attachmentId, match.mailbox)
     const { readAttachmentBuffer, fenceUntrustedContent } = await import("@/lib/ai-agent/attachment-reader")
-    const read = await readAttachmentBuffer(data, { id: match.ref, name: match.name, mimetype: match.mimetype }, false)
+    const read = await readAttachmentBuffer(data, { id: match.ref, name: match.name, mimetype: match.mimetype }, false, offset)
     switch (read.kind) {
       case "text":
         // Anyone can email us a PDF. Its text is data, never an instruction.
@@ -1003,6 +1023,8 @@ const TRUSTED_STORAGE_HOSTS = new Set([
 export async function readPortalAttachmentForWorker(params: Record<string, unknown>): Promise<string> {
   const url = typeof params.url === "string" ? params.url.trim() : ""
   if (!url) return "url is required."
+  // Continue-reading position (long files come back one window at a time).
+  const offset = Number.isFinite(Number(params.offset)) ? Math.max(0, Math.floor(Number(params.offset))) : 0
 
   let parsed: URL
   try {
@@ -1019,7 +1041,7 @@ export async function readPortalAttachmentForWorker(params: Record<string, unkno
     if (!res.ok) return `❌ Couldn't download attachment (HTTP ${res.status}).`
     const buffer = Buffer.from(await res.arrayBuffer())
 
-    const { classifySlackFile, extractTextFromBuffer, capText, SLACK_FILE_TEXT_CHAR_CAP } = await import(
+    const { classifySlackFile, extractTextFromBuffer, windowText, SLACK_FILE_TEXT_CHAR_CAP } = await import(
       "@/lib/ai-agent/slack-file-reader"
     )
     const ext = parsed.pathname.split(".").pop()?.toLowerCase() ?? ""
@@ -1046,12 +1068,12 @@ export async function readPortalAttachmentForWorker(params: Record<string, unkno
       } catch {
         // fall through — treat as scanned
       }
-      if (pdfText.trim().length >= 80) return capText(pdfText, SLACK_FILE_TEXT_CHAR_CAP)
+      if (pdfText.trim().length >= 80) return windowText(pdfText, offset, SLACK_FILE_TEXT_CHAR_CAP)
       return "(Scanned PDF — no text layer found. This file contains images/scans only and cannot be read as text.)"
     }
 
     const text = await extractTextFromBuffer(buffer, kind)
-    return capText(text, SLACK_FILE_TEXT_CHAR_CAP) || "(empty file)"
+    return windowText(text, offset, SLACK_FILE_TEXT_CHAR_CAP) || "(empty file)"
   } catch (err) {
     return `❌ Couldn't read attachment: ${err instanceof Error ? err.message : String(err)}`
   }
@@ -3358,7 +3380,7 @@ export async function runWorkerLoop(
   priorTurns: ReplayTurn[] = [],
 ): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean
   /** Walls worth a #td-worker-bug thread (only code can fix these). */
-  wallsHit?: Array<"absence_without_looking" | "cannot_do">
+  wallsHit?: Array<"absence_without_looking" | "cannot_do" | "partial_read_shipped">
   /**
    * Files the worker PRODUCED this turn, captured from the tool result server-side.
    *
@@ -3390,13 +3412,23 @@ export async function runWorkerLoop(
   let surfaceRedirectLatched = false
   // One rewrite only, like the others.
   let phantomFileLatched = false
+  // READ-TO-THE-END enforcement (2026-07-29, Antonio: "I can't rely on … obeying
+  // the instruction"). The ledger is OUR record of files the model started but has
+  // not finished reading, built from our own windowText markers. Unlike the other
+  // latches this one re-fires — a 125k file needs ~6 continuations — but ONLY while
+  // progress is being made (signature changed since the last nudge) and under a
+  // hard cap. No progress twice in a row ⇒ stop nudging, ship WITH the server
+  // stamp instead: a stamped answer beats a burned loop budget.
+  const pendingReads = new Map<string, PendingRead>()
+  let readNudges = 0
+  let lastReadNudgeSignature: string | null = null
   // Lookups that actually RETURNED something (not an error). This — not the
   // raw call list — is what counts as proof the worker searched.
   const succeededTools: string[] = []
   // WALLS worth telling Antonio about in #td-worker-bug — things only CODE can
   // fix. NOT ordinary corrections: a correction that lands is the system working
   // (Antonio 2026-07-18: "it's a part of the learning process").
-  const wallsHit: Array<"absence_without_looking" | "cannot_do"> = []
+  const wallsHit: Array<"absence_without_looking" | "cannot_do" | "partial_read_shipped"> = []
   const artifacts: WorkerArtifact[] = []
   // The staff member's own words this turn, used to detect a push-back. Derived
   // once from the user content (which may be a string or a block array).
@@ -3571,6 +3603,27 @@ export async function runWorkerLoop(
             ]
             continue
           }
+          // (e) It is answering while a file it STARTED reading still has an unread
+          //     remainder. Unlike the one-shot latches above, this one re-fires — a
+          //     125k-char file needs ~6 continuations — but only while the model is
+          //     actually advancing: if a nudge produced NO movement in the ledger,
+          //     it gets no second identical nudge, and the reply ships with the
+          //     server stamp instead. Antonio, 2026-07-29: "I can't rely on …
+          //     obeying the instruction" — so the instruction is now a refusal.
+          if (pendingReads.size > 0 && readNudges < MAX_READ_CONTINUATION_NUDGES) {
+            const sig = pendingReadsSignature(pendingReads)
+            if (sig !== lastReadNudgeSignature) {
+              readNudges++
+              lastReadNudgeSignature = sig
+              console.warn(`[worker] answer attempted with ${pendingReads.size} unfinished file read(s) — forcing continuation (${readNudges}/${MAX_READ_CONTINUATION_NUDGES})`)
+              currentMessages = [
+                ...currentMessages,
+                { role: "assistant", content: data.content },
+                { role: "user", content: buildIncompleteReadNudge(pendingReads) },
+              ]
+              continue
+            }
+          }
         } catch (err) {
           // Never let a guard cost the staff member their answer.
           console.warn("[worker] answer guard failed (allowing the reply):", err)
@@ -3595,8 +3648,12 @@ export async function runWorkerLoop(
       if (reply) {
         // A flat "I can't do this" is a capability gap — no correction can teach it.
         if (assertsCannotDo(reply) && !wallsHit.includes("cannot_do")) wallsHit.push("cannot_do")
+        // LAYER 2 of read-to-the-end: an answer shipping over an unfinished read
+        // (nudge cap hit, or the model stalled) is stamped by the SERVER — the
+        // model never touches this text, so the disclosure cannot be omitted.
+        if (pendingReads.size > 0 && !wallsHit.includes("partial_read_shipped")) wallsHit.push("partial_read_shipped")
         return {
-          reply: finalizeReplyForStopReason(reply, data.stop_reason),
+          reply: stampPartialReads(finalizeReplyForStopReason(reply, data.stop_reason), pendingReads),
           toolsUsed,
           reachedMaxLoops: false,
           wallsHit,
@@ -3605,10 +3662,14 @@ export async function runWorkerLoop(
         }
       }
       if (toolUseBlocks.length === 0) {
+        // Empty reply — nothing to stamp onto, but the wall is still reported so a
+        // partial read that died into an empty answer is not invisible.
+        if (pendingReads.size > 0 && !wallsHit.includes("partial_read_shipped")) wallsHit.push("partial_read_shipped")
         return {
           reply: ranOutOfRoom ? TRUNCATED_EMPTY_REPLY : "(no response generated)",
           toolsUsed,
           reachedMaxLoops: false,
+          wallsHit,
         }
       }
     }
@@ -3633,6 +3694,10 @@ export async function runWorkerLoop(
       if (!looksLikeFailedLookup(result) && !looksLikeIncompleteRead(result)) {
         succeededTools.push(toolBlock.name)
       }
+      // READ-TO-THE-END ledger: our own record of files started but not finished,
+      // parsed from OUR windowText marker (never model prose). Consumed by the
+      // incomplete-read guard at the answer chokepoint and by the reply stamp.
+      updatePendingReads(pendingReads, toolBlock.name, toolBlock.input || {}, result)
       // A produced file is captured HERE, from our own tool output, not from whatever
       // the model later writes about it.
       const artifact = extractArtifact(toolBlock.name, result)
@@ -3677,6 +3742,13 @@ export async function runWorkerLoop(
         "You've used all your investigation steps. Stop using tools and answer NOW with what you've found so far — be concrete and specific. If something is still unconfirmed, say so in one line, but give your best answer."
       if (last?.role === "user" && Array.isArray(last.content)) {
         last.content.push({ type: "text", text: nudge })
+      } else if (last?.role === "user" && typeof last.content === "string") {
+        // A guard nudge (string user turn) can be the final message when the loop
+        // exhausts right after it — pushing a NEW user turn here built the exact
+        // two-consecutive-user shape this merge exists to avoid, the API rejected
+        // the synthesis call, and the staff member got the generic limit message
+        // instead of a real summary. Append to the same turn instead.
+        last.content = `${last.content}\n\n${nudge}`
       } else {
         currentMessages.push({ role: "user", content: nudge })
       }
@@ -3709,10 +3781,14 @@ export async function runWorkerLoop(
         // ran out of room is cut off mid-sentence, and shipping it unmarked reads
         // as a finished answer.
         if (reply) {
+          // Same stamp rule as the main exit: the loop-exhausted synthesis is the
+          // MOST likely path to ship over an unfinished read (the budget ran out).
+          if (pendingReads.size > 0 && !wallsHit.includes("partial_read_shipped")) wallsHit.push("partial_read_shipped")
           return {
-            reply: finalizeReplyForStopReason(reply, data.stop_reason),
+            reply: stampPartialReads(finalizeReplyForStopReason(reply, data.stop_reason), pendingReads),
             toolsUsed,
             reachedMaxLoops: true,
+            wallsHit,
           }
         }
       }
@@ -3721,10 +3797,17 @@ export async function runWorkerLoop(
     }
   }
 
+  // Even the generic limit message names any file left unfinished — "may be
+  // incomplete" is vague; the stamp says exactly what was not read.
+  if (pendingReads.size > 0 && !wallsHit.includes("partial_read_shipped")) wallsHit.push("partial_read_shipped")
   return {
-    reply: `I reached my working limit on this one (up to ${maxLoops} steps within the time budget), so my findings may be incomplete. Try narrowing it down or asking for one thing at a time.`,
+    reply: stampPartialReads(
+      `I reached my working limit on this one (up to ${maxLoops} steps within the time budget), so my findings may be incomplete. Try narrowing it down or asking for one thing at a time.`,
+      pendingReads,
+    ),
     toolsUsed,
     reachedMaxLoops: true,
+    wallsHit,
   }
 }
 

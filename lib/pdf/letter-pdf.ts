@@ -45,7 +45,15 @@ export interface LetterOptions {
   dateLine?: string | null
   /** Small grey lines under the title, e.g. "Re: EIN 12-3456789". */
   reference?: string[] | null
-  /** Sender block at the very top. Defaults to the firm. */
+  /**
+   * Sender block at the very top.
+   *
+   * OMIT for the firm's default. Pass `''` OR `null` for a bare document — both mean
+   * "no letterhead". Previously only `''` worked and `null` silently restored the
+   * default, so a caller saying "no header" in the more obvious of the two ways got a
+   * header. Only one caller exists (the pdf_create tool), so the meaning of `null` is
+   * safe to pin here rather than at each call site.
+   */
   letterhead?: string | null
 }
 
@@ -120,7 +128,9 @@ export async function renderLetterPdf(opts: LetterOptions): Promise<Uint8Array> 
 
   const cur: Cursor = { page: pdf.addPage([PAGE_W, PAGE_H]), y: PAGE_H - MARGIN }
 
-  const letterhead = (opts.letterhead ?? DEFAULT_LETTERHEAD).trim()
+  // `undefined` (key absent) means "use the firm's default"; an explicit `''` or
+  // `null` both mean "no letterhead". `??` alone would fold null into the default.
+  const letterhead = (opts.letterhead === undefined ? DEFAULT_LETTERHEAD : (opts.letterhead ?? '')).trim()
   if (letterhead) {
     drawWrapped(pdf, cur, letterhead, bold, HEADING_SIZE)
     cur.y -= PARA_GAP

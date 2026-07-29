@@ -16,6 +16,7 @@
 
 import { randomUUID, createHmac, timingSafeEqual } from "crypto"
 import { fullReachEnabledFor } from "@/lib/ai-agent/full-reach"
+import { surfaceApiKeyOverride } from "@/lib/ai-agent/surface-api-key"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { callWorker, type CallWorkerOptions, type WorkerImageBlock, type WorkerDocumentBlock } from "@/lib/ai-agent/worker-tools"
 import { workerActionsEnabled } from "@/lib/ai-agent/worker-actions-switch"
@@ -2029,7 +2030,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     messageId: row.id,
     // Dedicated key so the Slack worker's spend bills to its own Console line.
     // Unset → falls back to ANTHROPIC_API_KEY inside the worker (never breaks).
-    apiKeyOverride: process.env.SLACK_WORKER_ANTHROPIC_KEY,
+    apiKeyOverride: surfaceApiKeyOverride("slack"),
     systemPromptOverride: slackSystemPrompt,
     // Code-task rail OFF (2026-07-10, Antonio): no worker launches or ships a
     // coding job anymore — he does code himself. The worker investigates a bug
@@ -2198,7 +2199,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           threadId: row.thread_id,
           messageId: row.id,
           // Dedicated key (cost isolation); unset → falls back to ANTHROPIC_API_KEY.
-          apiKeyOverride: process.env.SLACK_WORKER_ANTHROPIC_KEY,
+          apiKeyOverride: surfaceApiKeyOverride("slack"),
           systemPromptOverride: slackSystemPrompt,
           // Code-task rail OFF (2026-07-10, Antonio) — same as the primary call.
           enableCodeTasks: false,

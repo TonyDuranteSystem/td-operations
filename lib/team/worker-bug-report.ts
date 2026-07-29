@@ -41,7 +41,7 @@ import { redactIdentifiers } from '@/lib/team/redact-identifiers'
 export const WORKER_BUG_CHANNEL = 'td-worker-bug'
 
 /** The only two things worth interrupting him for. */
-export type WorkerWallKind = 'absence_without_looking' | 'cannot_do'
+export type WorkerWallKind = 'absence_without_looking' | 'cannot_do' | 'partial_read_shipped'
 
 export interface WorkerWallReport {
   kind: WorkerWallKind
@@ -125,12 +125,16 @@ export async function reportWorkerWall(input: WorkerWallReport): Promise<string 
     const headline =
       input.kind === 'absence_without_looking'
         ? 'Nearly said something is not in the system — without looking'
-        : "Couldn't do it at all — capability missing"
+        : input.kind === 'partial_read_shipped'
+          ? 'Answered off a partially-read file — server stamped the reply'
+          : "Couldn't do it at all — capability missing"
 
     const why =
       input.kind === 'absence_without_looking'
         ? 'A lookup is missing, badly described, or unreachable. No correction can teach this — it needs a tool or a fix.'
-        : 'The worker has no way to do this. Correcting it will not help; the capability has to be built.'
+        : input.kind === 'partial_read_shipped'
+          ? 'A file was too long to finish within the turn budget (or the model stalled on continuing). The reply carries an automatic server note naming what was left unread. If this recurs on the same file class, the read budget or window size needs tuning.'
+          : 'The worker has no way to do this. Correcting it will not help; the capability has to be built.'
 
     const tried = (input.toolsTried ?? []).filter(Boolean)
     const title = `${headline} — ${surfaceLabel(input.surface)}`
