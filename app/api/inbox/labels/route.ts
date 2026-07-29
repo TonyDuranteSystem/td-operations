@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { gmailGet, gmailPost, gmailDelete } from '@/lib/gmail'
 import { checkMailboxAccess } from '@/lib/inbox/mailbox-access'
+import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 
 export const dynamic = 'force-dynamic'
 
@@ -19,6 +20,12 @@ interface GmailLabel {
  * GET /api/inbox/labels — List Gmail labels (system + user-created)
  */
 export async function GET(req: NextRequest) {
+  // Staff gate — middleware only guarantees "is logged in" for /api routes,
+  // and a portal CLIENT has a login (2026-07-21 invariant; council find 2026-07-29,
+  // dev job 7e63fcd2).
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -83,6 +90,12 @@ export async function GET(req: NextRequest) {
  * POST /api/inbox/labels — Create a new Gmail label (folder)
  */
 export async function POST(req: NextRequest) {
+  // Staff gate — middleware only guarantees "is logged in" for /api routes,
+  // and a portal CLIENT has a login (2026-07-21 invariant; council find 2026-07-29,
+  // dev job 7e63fcd2).
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -120,6 +133,12 @@ export async function POST(req: NextRequest) {
  * DELETE /api/inbox/labels — Delete a user-created Gmail label
  */
 export async function DELETE(req: NextRequest) {
+  // Staff gate — middleware only guarantees "is logged in" for /api routes,
+  // and a portal CLIENT has a login (2026-07-21 invariant; council find 2026-07-29,
+  // dev job 7e63fcd2).
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

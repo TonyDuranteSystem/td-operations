@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getGmailAttachment } from "@/lib/gmail"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
+import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 
 export const dynamic = "force-dynamic"
 
@@ -9,6 +10,12 @@ export const dynamic = "force-dynamic"
  * Downloads a Gmail attachment and returns it as a binary response.
  */
 export async function GET(req: NextRequest) {
+  // Staff gate — middleware only guarantees "is logged in" for /api routes,
+  // and a portal CLIENT has a login (2026-07-21 invariant; council find 2026-07-29,
+  // dev job 7e63fcd2).
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   try {
     const messageId = req.nextUrl.searchParams.get("messageId")
     const attachmentId = req.nextUrl.searchParams.get("attachmentId")

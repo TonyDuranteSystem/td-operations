@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 
 export const dynamic = 'force-dynamic'
 
@@ -10,6 +11,12 @@ export const dynamic = 'force-dynamic'
  * Also links the Gmail thread to the account via email_links table.
  */
 export async function POST(req: NextRequest) {
+  // Staff gate — middleware only guarantees "is logged in" for /api routes,
+  // and a portal CLIENT has a login (2026-07-21 invariant; council find 2026-07-29,
+  // dev job 7e63fcd2).
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
