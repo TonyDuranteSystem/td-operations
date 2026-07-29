@@ -158,11 +158,49 @@ export function windowText(text: string, offset: number, cap: number = SLACK_FIL
   ].join('\n')
 }
 
+/**
+ * Strip every <mergeCells> element from a workbook's worksheet XML.
+ *
+ * Apple Numbers → Excel exports routinely write OVERLAPPING merged-cell ranges,
+ * which exceljs refuses to load ("Cannot merge already merged cells") — so the
+ * whole read died and the worker told staff to convert the file yet again
+ * (Luca's tax-returns tracking sheet, td-bug 2026-07-29). Merges carry zero
+ * information for flattening to rows, so dropping them loses nothing.
+ */
+async function stripMergeCells(buffer: Buffer): Promise<Buffer> {
+  const JSZip = (await import("jszip")).default
+  const zip = await JSZip.loadAsync(buffer)
+  const sheets = Object.values(zip.files).filter((f) => !f.dir && /^xl\/worksheets\/[^/]+\.xml$/i.test(f.name))
+  for (const sheet of sheets) {
+    const xml = await sheet.async("string")
+    const cleaned = xml.replace(/<mergeCells[^>]*\/>|<mergeCells[^>]*>[\s\S]*?<\/mergeCells>/g, "")
+    if (cleaned !== xml) zip.file(sheet.name, cleaned)
+  }
+  return Buffer.from(await zip.generateAsync({ type: "nodebuffer" }))
+}
+
 /** Flatten an exceljs workbook buffer to tab-separated rows, sheet by sheet. */
 async function extractXlsx(buffer: Buffer): Promise<string> {
   const ExcelJS = (await import("exceljs")).default
-  const workbook = new ExcelJS.Workbook()
-  await workbook.xlsx.load(buffer as unknown as ArrayBuffer)
+  let workbook = new ExcelJS.Workbook()
+  try {
+    await workbook.xlsx.load(buffer as unknown as ArrayBuffer)
+  } catch (err) {
+    // Retry once with merges stripped (the Numbers-export failure). Any error on
+    // the retry path rethrows the ORIGINAL error — it names the real problem.
+    let cleaned: Buffer
+    try {
+      cleaned = await stripMergeCells(buffer)
+    } catch {
+      throw err
+    }
+    workbook = new ExcelJS.Workbook()
+    try {
+      await workbook.xlsx.load(cleaned as unknown as ArrayBuffer)
+    } catch {
+      throw err
+    }
+  }
   const parts: string[] = []
   workbook.eachSheet((sheet) => {
     const rows: string[] = []

@@ -500,32 +500,17 @@ export async function getVendorRules(): Promise<VendorRule[]> {
   return data as VendorRule[]
 }
 
+// Vendor matching (normalizeVendorKey / isSimilarVendor / rule application) lives in
+// lib/owner-vendor-match.ts — CLIENT-SAFE, no DB imports (the transactions tab uses it
+// at render time for rule suggestions). Re-exported here for server-side callers.
+export { normalizeVendorKey, isSimilarVendor } from '@/lib/owner-vendor-match'
+import { applyVendorRulesTo } from '@/lib/owner-vendor-match'
+
 export function applyVendorRules(
   transactions: OwnerTransaction[],
   rules: VendorRule[]
 ): OwnerTransaction[] {
-  return transactions.map(tx => {
-    if (tx.category !== 'uncategorized') return tx
-
-    const counterparty = (tx.counterparty ?? tx.description ?? '').toLowerCase()
-    const matched = rules.find(rule => {
-      const pattern = rule.counterparty_pattern.toLowerCase()
-      if (rule.match_type === 'exact') return counterparty === pattern
-      if (rule.match_type === 'contains') return counterparty.includes(pattern)
-      if (rule.match_type === 'regex') {
-        try { return new RegExp(pattern, 'i').test(counterparty) } catch { return false }
-      }
-      return false
-    })
-
-    if (!matched) return tx
-    return {
-      ...tx,
-      category: matched.category as OwnerCategory,
-      subcategory: matched.subcategory,
-      is_related_party: matched.is_related_party,
-    }
-  })
+  return applyVendorRulesTo(transactions, rules)
 }
 
 // estimateQuarterlyTax DELETED (Phase 1b, 2026-07-29). The flat 25%+SE math was sole-prop

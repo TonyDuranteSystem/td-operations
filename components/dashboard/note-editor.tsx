@@ -22,12 +22,12 @@
  */
 
 import { useState } from 'react'
-import { X, Loader2, Check, Lock, Share2, Users, RotateCcw, MessageSquare, Trash2, ExternalLink } from 'lucide-react'
+import { X, Loader2, Check, Lock, Share2, Users, RotateCcw, MessageSquare, Trash2, ExternalLink, Send } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 import { safeOriginPath, describeOrigin } from '@/lib/notes/note-origin'
-import { isArchivedFor } from '@/lib/notes/staff-notes'
+import { isArchivedFor, sortReplies, type NoteReplyRow } from '@/lib/notes/staff-notes'
 
 const API = '/api/crm/staff-notes'
 
@@ -47,6 +47,7 @@ export interface EditableNote {
   archived_at: string | null
   updated_at: string
   staff_note_state?: Array<{ user_id: string; archived_at: string | null; snoozed_until: string | null }> | null
+  staff_note_replies?: NoteReplyRow[] | null
   accounts?: { company_name: string | null } | null
   contacts?: { full_name: string | null } | null
 }
@@ -112,10 +113,17 @@ export function NoteEditor({
   const [err, setErr] = useState<string | null>(null)
   const [discussing, setDiscussing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  // REPLIES — each person's answers in their own colour (Antonio, 2026-07-29).
+  // Local list so a just-sent reply shows instantly; the draft is guarded like the
+  // body: sent BEFORE any other action, never lost to a stray tap.
+  const [replies, setReplies] = useState<NoteReplyRow[]>(() => sortReplies(note?.staff_note_replies))
+  const [replyDraft, setReplyDraft] = useState('')
   const router = useRouter()
 
   const isAuthor = !isCreate && meId != null && meId === note.author_user_id
-  const dirty = !isCreate && body.trim() !== baseline.body
+  const canEditBody = isCreate || isAuthor
+  const dirty = !isCreate && canEditBody && body.trim() !== baseline.body
+  const replyDirty = !isCreate && replyDraft.trim().length > 0
   const archivedForMe = !isCreate && (meId ? isArchivedFor(note, meId) : note.archived_at != null)
   const origin = !isCreate && note.origin_url ? safeOriginPath(note.origin_url) : null
 
@@ -188,6 +196,20 @@ export function NoteEditor({
     return true
   }
 
+  /**
+   * Send an unsent reply BEFORE anything else happens — the reply-box twin of
+   * saveBodyIfDirty. A typed answer must never die to a button tap (the 2026-07-28
+   * lost-reply incident, in its new shape). Fail-closed: a failed send aborts the
+   * caller's action and the draft stays on screen.
+   */
+  const sendReplyIfDirty = async (): Promise<void> => {
+    if (!replyDirty) return
+    const d = await call({ action: 'reply', body: replyDraft })
+    const fresh = d?.note
+    if (fresh?.staff_note_replies) setReplies(sortReplies(fresh.staff_note_replies))
+    setReplyDraft('')
+  }
+
   /** Save the text, the client and the date together — one Save, as Antonio asked. */
   const saveAll = async () => {
     setBusy(true); setErr(null)
@@ -220,6 +242,7 @@ export function NoteEditor({
         return
       }
 
+      await sendReplyIfDirty()
       await saveBodyIfDirty(false)
       if ((accountId ?? null) !== note.account_id) {
         await call({ action: 'set_client', account_id: accountId ?? null })
@@ -250,12 +273,34 @@ export function NoteEditor({
     setBusy(true); setErr(null)
     try {
       const changesVisibility = payload.action === 'share' || payload.action === 'team' || payload.action === 'private'
+      await sendReplyIfDirty()
       await saveBodyIfDirty(changesVisibility)
       await call(payload)
       onChanged(); onClose()
     } catch (e) {
       setErr(e instanceof Error ? e.message : "That didn't work."); setBusy(false)
     }
+  }
+
+  /** Explicit send from the reply composer — stays open so a back-and-forth reads naturally. */
+  const sendReply = async () => {
+    setBusy(true); setErr(null)
+    try {
+      await sendReplyIfDirty()
+      onChanged()
+      setBusy(false)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not send the reply."); setBusy(false)
+    }
+  }
+
+  /** Backdrop tap: NEVER discard typed words — close only when nothing is unsaved. */
+  const backdropClose = () => {
+    if (dirty || replyDirty) {
+      setErr('You have unsent text — press Save (or Send reply), or Cancel to discard.')
+      return
+    }
+    onClose()
   }
 
   const openOrigin = () => {
@@ -265,7 +310,7 @@ export function NoteEditor({
   }
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={backdropClose}>
       <div
         className="max-h-[90vh] w-full overflow-y-auto rounded-t-xl bg-amber-50 p-4 shadow-2xl sm:max-w-md sm:rounded-xl"
         onClick={(e) => e.stopPropagation()}
@@ -277,12 +322,65 @@ export function NoteEditor({
           </button>
         </div>
 
-        <label className="mb-1 block text-xs font-medium text-amber-900">Note</label>
-        <textarea
-          autoFocus value={body} onChange={(e) => setBody(e.target.value)} maxLength={4000}
-          placeholder="e.g. call IRS about the EIN"
-          className="mb-3 h-32 w-full resize-none rounded border border-amber-300 bg-white p-2 text-sm text-amber-950 outline-none focus:border-amber-500"
-        />
+        {/* The note's TEXT belongs to its author; everyone else answers below in replies.
+            (Recipients used to co-edit this box — that's how a reply got lost on 2026-07-28.) */}
+        <label className="mb-1 block text-xs font-medium text-amber-900">
+          {isCreate || isAuthor ? 'Note' : `Note — by ${note.author_name || 'teammate'}`}
+        </label>
+        {canEditBody ? (
+          <textarea
+            autoFocus value={body} onChange={(e) => setBody(e.target.value)} maxLength={4000}
+            placeholder="e.g. call IRS about the EIN"
+            className="mb-3 h-32 w-full resize-none rounded border border-amber-300 bg-white p-2 text-sm text-amber-950 outline-none focus:border-amber-500"
+          />
+        ) : (
+          <div className="mb-3 max-h-40 w-full overflow-y-auto whitespace-pre-wrap break-words rounded border border-amber-300 bg-amber-100/60 p-2 text-sm text-amber-950">
+            {body}
+          </div>
+        )}
+
+        {/* Replies — oldest first, each person in their own colour. */}
+        {!isCreate && replies.length > 0 && (
+          <div className="mb-3 flex flex-col gap-1.5">
+            {replies.map((r) => {
+              const byAuthor = r.author_user_id != null && r.author_user_id === note.author_user_id
+              return (
+                <div key={r.id}
+                  className={`rounded border p-2 text-sm ${byAuthor
+                    ? 'border-amber-300 bg-amber-100/70 text-amber-950'
+                    : 'border-sky-300 bg-sky-100/80 text-sky-950'}`}>
+                  <p className="mb-0.5 text-[11px] font-semibold opacity-80">
+                    {r.author_name || 'Teammate'} · {new Date(r.created_at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                  <p className="whitespace-pre-wrap break-words">{r.body}</p>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {/* Reply composer — the way to ANSWER a note. Guarded like the body: an unsent
+            draft is sent before any other button acts, and a stray backdrop tap never
+            discards it. Hidden in create mode (there is no note to reply to yet). */}
+        {!isCreate && (
+          <div className="mb-3">
+            <label className="mb-1 block text-xs font-medium text-amber-900">Reply</label>
+            <div className="flex items-end gap-2">
+              <textarea
+                value={replyDraft} onChange={(e) => setReplyDraft(e.target.value)} maxLength={4000}
+                placeholder="Write your answer…" rows={2}
+                className="w-full resize-none rounded border border-sky-300 bg-white p-2 text-sm text-sky-950 outline-none focus:border-sky-500"
+              />
+              <button
+                onClick={sendReply} disabled={busy || !replyDirty}
+                title="Send reply — the other person gets a notification"
+                className="flex shrink-0 items-center gap-1 rounded bg-sky-500 px-3 py-2 text-sm font-medium text-white hover:bg-sky-600 disabled:opacity-50"
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Where this note came from — the email / chat / page it was written on. */}
         {origin && (
@@ -393,7 +491,7 @@ export function NoteEditor({
               <p className="mb-3 flex items-center gap-1 text-xs text-amber-800/80">
                 {note.visibility === 'team' ? <Users className="h-3 w-3" /> : <Share2 className="h-3 w-3" />}
                 {note.visibility === 'team' ? 'Team note' : 'Shared with you'}
-                {note.author_name ? ` by ${note.author_name}` : ''} — type your answer and press Save; they&apos;ll be notified.
+                {note.author_name ? ` by ${note.author_name}` : ''} — answer in the Reply box above; they&apos;ll be notified.
               </p>
             )}
 
@@ -419,9 +517,10 @@ export function NoteEditor({
                   come back, unlike Done which is per-person. */}
               {isAuthor && (confirmDelete ? (
                 <button onClick={del} disabled={busy}
+                  title="Deletes the note for everyone — replies go with it"
                   className="ml-auto flex items-center gap-1 rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50">
                   {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                  Delete forever?
+                  {replies.length > 0 ? 'Delete forever, replies too?' : 'Delete forever?'}
                 </button>
               ) : (
                 <button onClick={() => setConfirmDelete(true)} disabled={busy}

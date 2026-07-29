@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { toast } from 'sonner'
+import { applyVendorRulesTo, normalizeVendorKey, type VendorRule } from '@/lib/owner-vendor-match'
 import type { OwnerTransaction, OwnerCategory } from '@/lib/owner-finance'
 
 const CATEGORIES: OwnerCategory[] = ['income', 'cogs', 'expense', 'distribution', 'contribution', 'transfer', 'fee', 'conversion', 'refund', 'uncategorized']
@@ -106,6 +107,18 @@ interface ModalState {
   category: OwnerCategory
   subcategory: string
   notes: string
+  /** "Transactions like this" (whole-year, server-computed). null = still loading. */
+  similar: {
+    count: number
+    ids: string[]
+    suggested_pattern: string
+    preview: { text: string; amount: number }[]
+    mixed_signs: boolean
+    truncated: boolean
+    has_positive_feed_rows: boolean
+  } | null
+  applyToAll: boolean
+  saveRule: boolean
 }
 
 export function TransactionsTab({ year, initialRows, initialTotal }: TransactionsTabProps) {
@@ -122,7 +135,50 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [bulkCategory, setBulkCategory] = useState<OwnerCategory>('expense')
   const [bulkSubcategory, setBulkSubcategory] = useState('')
+  const [rules, setRules] = useState<VendorRule[]>([])
   const LIMIT = 50
+
+  const loadRules = useCallback(() => {
+    fetch('/api/owner/vendor-rules')
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => { if (data?.rules) setRules(data.rules) })
+      .catch(() => { /* suggestions are an assist; the tab works without them */ })
+  }, [])
+  useEffect(() => { loadRules() }, [loadRules])
+
+  /** Saved-rule SUGGESTIONS for uncategorized rows — shown as a chip the user confirms.
+   * Nothing is ever auto-booked: a rule proposes, Antonio clicks. */
+  const suggestionFor = useCallback((tx: OwnerTransaction): { category: OwnerCategory; subcategory: string | null; is_related_party: boolean } | null => {
+    if (tx.category !== 'uncategorized' || rules.length === 0) return null
+    const [applied] = applyVendorRulesTo([tx], rules)
+    if (applied.category === 'uncategorized') return null
+    return { category: applied.category as OwnerCategory, subcategory: applied.subcategory, is_related_party: applied.is_related_party }
+  }, [rules])
+
+  async function acceptSuggestion(tx: OwnerTransaction) {
+    const s = suggestionFor(tx)
+    if (!s) return
+    // The double-count guard must cover EVERY apply surface, not just the modal: a bank
+    // deposit chip-accepted as Income would silently double-count invoice money.
+    if (s.category === 'income' && tx.amount > 0 && tx.transaction_ref?.startsWith('feed:')) {
+      const ok = window.confirm(
+        'This is a bank deposit. If it is a client paying an invoice, do NOT mark it Income — use "This is for a client →" instead, or the money will be counted twice. Mark as Income anyway (rewards/bonuses only)?'
+      )
+      if (!ok) return
+    }
+    try {
+      const res = await fetch('/api/owner/transactions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: tx.id, category: s.category, subcategory: s.subcategory, is_related_party: s.is_related_party }),
+      })
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Save failed') }
+      toast.success('Suggestion applied')
+      load(offset)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Save failed')
+    }
+  }
 
   const load = useCallback(async (newOffset = 0, cat = filterCategory, q = search) => {
     setLoading(true)
@@ -144,20 +200,64 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
   }, [year, filterCategory, search])
 
   function openModal(tx: OwnerTransaction) {
-    setModal({ tx, category: tx.category, subcategory: tx.subcategory ?? '', notes: tx.notes ?? '' })
+    setModal({ tx, category: tx.category, subcategory: tx.subcategory ?? '', notes: tx.notes ?? '', similar: null, applyToAll: false, saveRule: false })
+    if (tx.category === 'uncategorized') {
+      fetch(`/api/owner/transactions/similar?id=${tx.id}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => { if (data) setModal(m => m && m.tx.id === tx.id ? { ...m, similar: data } : m) })
+        .catch(() => { /* the count is an assist; the modal works without it */ })
+    }
   }
 
   async function saveModal() {
     if (!modal) return
     setSaving(true)
     try {
-      const res = await fetch('/api/owner/transactions', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: modal.tx.id, category: modal.category, subcategory: modal.subcategory || null, notes: modal.notes || null }),
-      })
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Save failed') }
-      toast.success('Categorized')
+      const applyingToAll = modal.applyToAll && (modal.similar?.ids.length ?? 0) > 0
+      let actuallyUpdated: number | null = null
+      if (applyingToAll) {
+        const res = await fetch('/api/owner/transactions/bulk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          // only_uncategorized: the id set was snapshotted at modal-open — a row
+          // categorized meanwhile (other device/tab) must not be silently overwritten.
+          body: JSON.stringify({ ids: [modal.tx.id, ...modal.similar!.ids], category: modal.category, subcategory: modal.subcategory || null, notes: modal.notes || null, only_uncategorized: true }),
+        })
+        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Save failed') }
+        const d = await res.json().catch(() => ({}))
+        actuallyUpdated = typeof d.updated === 'number' ? d.updated : null
+      } else {
+        const res = await fetch('/api/owner/transactions', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: modal.tx.id, category: modal.category, subcategory: modal.subcategory || null, notes: modal.notes || null }),
+        })
+        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Save failed') }
+      }
+
+      if (modal.saveRule && modal.subcategory) {
+        // The pattern must cover the whole matched SET (shortest member), not the wording
+        // of whichever row the modal opened on — a rule saved from the long Mercury
+        // wording would never suggest on the short Relay wording again.
+        const pattern = modal.similar?.suggested_pattern || normalizeVendorKey(modal.tx.counterparty ?? modal.tx.description)
+        const res = await fetch('/api/owner/vendor-rules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ counterparty_pattern: pattern, match_type: 'contains', category: modal.category, subcategory: modal.subcategory }),
+        })
+        if (!res.ok) { const d = await res.json().catch(() => ({})); toast.error(d.error || 'Categorized, but the rule was not saved.') }
+        else { loadRules() }
+      } else if (modal.saveRule && !modal.subcategory) {
+        toast.error('Rule not saved — pick a subcategory to save a rule.')
+      }
+
+      toast.success(
+        applyingToAll
+          ? actuallyUpdated !== null && actuallyUpdated < 1 + modal.similar!.ids.length
+            ? `Categorized ${actuallyUpdated} transactions (${1 + modal.similar!.ids.length - actuallyUpdated} were already categorized elsewhere and kept their label)`
+            : `Categorized ${actuallyUpdated ?? 1 + modal.similar!.ids.length} transactions`
+          : 'Categorized'
+      )
       setModal(null)
       load(offset)
     } catch (e) {
@@ -231,7 +331,7 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                 <label className="mb-1 block text-xs font-medium text-zinc-600">Category</label>
                 <select
                   value={modal.category}
-                  onChange={e => setModal(m => m ? { ...m, category: e.target.value as OwnerCategory, subcategory: '' } : null)}
+                  onChange={e => setModal(m => m ? { ...m, category: e.target.value as OwnerCategory, subcategory: '', saveRule: false } : null)}
                   className="w-full rounded-md border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900"
                 >
                   {CATEGORIES.map(c => (
@@ -240,15 +340,63 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                 </select>
               </div>
 
+              {/* "Transactions like this" — the QuickBooks pattern. The matched rows are
+                  SHOWN, never just counted: the human must see what one click will label. */}
+              {modal.tx.category === 'uncategorized' && modal.similar && modal.similar.count > 0 && (
+                <div className="space-y-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
+                  <label className="flex items-center gap-2 text-sm text-blue-900">
+                    <input
+                      type="checkbox"
+                      checked={modal.applyToAll}
+                      onChange={e => setModal(m => m ? { ...m, applyToAll: e.target.checked } : null)}
+                    />
+                    <span><strong>{modal.similar.truncated ? 'At least ' : ''}{modal.similar.count} more</strong> transaction{modal.similar.count !== 1 ? 's look' : ' looks'} like this — apply to all {modal.similar.count + 1}</span>
+                  </label>
+                  <div className="max-h-24 space-y-0.5 overflow-y-auto rounded bg-white/60 px-2 py-1 text-xs text-blue-800">
+                    {modal.similar.preview.map((p, i) => (
+                      <div key={i} className="flex justify-between gap-2">
+                        <span className="truncate">{p.text}</span>
+                        <span className={`tabular-nums shrink-0 ${p.amount < 0 ? 'text-red-600' : 'text-green-700'}`}>
+                          {p.amount < 0 ? '-' : '+'}{fmtRow(p.amount, modal.tx.currency)}
+                        </span>
+                      </div>
+                    ))}
+                    {modal.similar.count > modal.similar.preview.length && (
+                      <div className="text-blue-500">…and {modal.similar.count - modal.similar.preview.length} more</div>
+                    )}
+                  </div>
+                  {modal.similar.mixed_signs && modal.applyToAll && (
+                    <div className="rounded bg-amber-100 px-2 py-1 text-xs text-amber-800">
+                      ⚠ This set mixes money IN and money OUT — one label is probably wrong for some of them. Check the list above.
+                    </div>
+                  )}
+                  {(modal.similar.suggested_pattern || normalizeVendorKey(modal.tx.counterparty ?? modal.tx.description)) && (
+                    <label className={`flex items-center gap-2 text-sm ${modal.subcategory ? 'text-blue-900' : 'text-blue-400'}`}>
+                      <input
+                        type="checkbox"
+                        checked={modal.saveRule}
+                        disabled={!modal.subcategory}
+                        onChange={e => setModal(m => m ? { ...m, saveRule: e.target.checked } : null)}
+                      />
+                      <span>Always do this for &quot;{modal.similar.suggested_pattern || normalizeVendorKey(modal.tx.counterparty ?? modal.tx.description)}&quot;{!modal.subcategory ? ' (pick a subcategory first)' : ' — future ones arrive pre-suggested'}</span>
+                    </label>
+                  )}
+                </div>
+              )}
+
               {/* Double-count guard: invoice money is already counted from the payments
                   ledger — a bank deposit for a client invoice marked "income" here would
                   count the same money twice. */}
-              {modal.category === 'income' && modal.tx.amount > 0 && modal.tx.transaction_ref?.startsWith('feed:') && (
+              {modal.category === 'income' && (
+                (modal.tx.amount > 0 && modal.tx.transaction_ref?.startsWith('feed:')) ||
+                (modal.applyToAll && modal.similar?.has_positive_feed_rows)
+              ) && (
                 <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
                   ⚠ Is this a client paying an invoice? Then do NOT mark it Income — use the
                   &quot;This is for a client →&quot; button instead, or the money will be counted twice
                   (invoice income already includes it). &quot;Other Income&quot; is only for money that is
                   not an invoice payment (rewards, referral bonuses).
+                  {modal.applyToAll ? ' This warning covers the whole "apply to all" set.' : ''}
                 </div>
               )}
 
@@ -257,7 +405,7 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                   <label className="mb-1 block text-xs font-medium text-zinc-600">Subcategory</label>
                   <select
                     value={modal.subcategory}
-                    onChange={e => setModal(m => m ? { ...m, subcategory: e.target.value } : null)}
+                    onChange={e => setModal(m => m ? { ...m, subcategory: e.target.value, saveRule: e.target.value ? m.saveRule : false } : null)}
                     className="w-full rounded-md border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900"
                   >
                     <option value="">— select subcategory —</option>
@@ -403,6 +551,18 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                   <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tx.category === 'uncategorized' ? 'bg-orange-100 text-orange-700' : 'bg-zinc-100 text-zinc-600'}`}>
                     {CATEGORY_LABELS[tx.category] ?? tx.category}
                   </span>
+                  {(() => {
+                    const s = suggestionFor(tx)
+                    return s ? (
+                      <button
+                        onClick={() => acceptSuggestion(tx)}
+                        title="Suggested by your saved rule — click to apply"
+                        className="ml-1.5 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                      >
+                        → {CATEGORY_LABELS[s.category] ?? s.category}{s.subcategory ? ` · ${s.subcategory.replace(/_/g, ' ')}` : ''} ✓
+                      </button>
+                    ) : null
+                  })()}
                 </td>
                 <td className="px-3 py-2.5 text-xs text-zinc-500">{tx.subcategory?.replace(/_/g, ' ') ?? '—'}</td>
                 <td className="px-3 py-2.5 text-xs text-zinc-400 max-w-[120px] truncate">{tx.notes ?? ''}</td>

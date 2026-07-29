@@ -27,8 +27,12 @@ import {
   safeOriginPath,
   computeSnoozeUntil,
   mayTouchNote,
+  mayEditBody,
   editNotifyTargets,
   shouldSendEditPush,
+  repliesTable,
+  validateReplyBody,
+  replyNotifyTargets,
 } from "@/lib/notes/staff-notes"
 import type { User } from "@supabase/supabase-js"
 
@@ -251,9 +255,51 @@ export async function PATCH(req: NextRequest) {
   if (changesVisibility && note.author_user_id !== user.id) {
     return fail(
       `Only ${note.author_name || "the person who wrote this note"} can change who sees it. ` +
-        "To answer, type your reply and press Save — they already see this note.",
+        "To answer, write in the Reply box — they'll be notified.",
       403,
     )
+  }
+
+  // REPLY — its own branch, not the shared update tail (there is no note-row patch).
+  // A reply never touches the parent's updated_at (council 2026-07-29: bumping gave the
+  // author a false edit-conflict on their own next Save and muted the edit push's guard).
+  if (action === "reply") {
+    const { body, error } = validateReplyBody(p.body)
+    if (error || !body) return fail(error ?? "A reply needs some text.")
+    const { error: insErr } = await repliesTable().insert({
+      note_id: id,
+      author_user_id: user.id,
+      author_name: getUserDisplayName(user),
+      body,
+    })
+    if (insErr) {
+      // Most likely race: the author hard-deleted the note while this reply was typed.
+      // The FK insert fails — say the note is gone, never pretend the reply landed.
+      const code = (insErr as { code?: string }).code
+      if (code === "23503") return fail("That note was just deleted — your reply has nowhere to go.", 404)
+      return fail(insErr.message || "Could not send the reply.", 500)
+    }
+
+    // Push ONLY after the checked insert — everyone the note reaches except the
+    // replier, minus anyone the note is snoozed away from (their come-back date
+    // exists to shield them; they catch up when it returns).
+    const staffIds = (await listTeamMembers())
+      .filter((m) => m.role === "admin" || m.role === "team")
+      .map((m) => m.id)
+    const targets = replyNotifyTargets(note, user.id, staffIds, new Date())
+    if (targets.length > 0) {
+      void sendPushToAdminUsers(targets, {
+        title: `${getUserDisplayName(user)} replied to a note`,
+        body: body.slice(0, 120),
+        url: `/notes?note=${id}`,
+        tag: `staff-note-${id}`,
+      }).catch(() => {})
+    }
+
+    emitUiEvent("notes")
+    // Return the fresh row (replies embedded) so the editor can show the thread at once.
+    const { data: freshNote } = await notesTable().select(NOTE_COLUMNS).eq("id", id).single()
+    return NextResponse.json({ note: freshNote ?? note })
   }
 
   let patch: Record<string, unknown> = {}
@@ -261,6 +307,15 @@ export async function PATCH(req: NextRequest) {
   let editedBody: string | null = null
 
   if (action === "edit") {
+    // The note's TEXT is the author's alone — everyone else answers in replies.
+    // Server-enforced: a stale tab from before this rule must not rewrite it.
+    if (!mayEditBody(note, user.id)) {
+      return fail(
+        `Only ${note.author_name || "the author"} can change the note's text. ` +
+          "Write your answer in the Reply box instead.",
+        403,
+      )
+    }
     const { body, error } = validateNoteBody(p.body)
     if (error || !body) return fail(error ?? "A note needs some text.")
     // stale-edit guard: only write if the row hasn't changed since the client loaded it

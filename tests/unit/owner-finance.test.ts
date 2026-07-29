@@ -3,6 +3,8 @@ import {
   applyVendorRules,
   computeInvoiceIncome,
   computeOwnerPnL,
+  isSimilarVendor,
+  normalizeVendorKey,
   OWNER_ACCOUNT_ID,
   TD_ENTITY_ID,
   type InvoiceIncomeRow,
@@ -103,6 +105,65 @@ describe('applyVendorRules', () => {
     const rule = makeRule({ counterparty_pattern: 'luca deg', match_type: 'exact', is_related_party: true, category: 'cogs', subcategory: 'contractor' })
     const result = applyVendorRules([tx], [rule])
     expect(result[0].is_related_party).toBe(true)
+  })
+})
+
+describe('normalizeVendorKey / isSimilarVendor', () => {
+  it('normalizes punctuation and case to one canonical form', () => {
+    expect(normalizeVendorKey('STRIPE - TRANSFER')).toBe('stripe transfer')
+    expect(normalizeVendorKey('  Zoho-One  ')).toBe('zoho one')
+    expect(normalizeVendorKey(null)).toBe('')
+  })
+
+  it('groups the SAME vendor worded differently by different banks', () => {
+    expect(isSimilarVendor(
+      'STRIPE - TRANSFER',
+      'STRIPE; TRANSFER; TONY DURANTE LLC; Merchant name: STRIPE'
+    )).toBe(true)
+    expect(isSimilarVendor('Zoho-One', 'ZOHO ONE MONTHLY')).toBe(true)
+  })
+
+  it('does not match unrelated vendors or trivially short keys', () => {
+    expect(isSimilarVendor('Chase', 'American Express')).toBe(false)
+    expect(isSimilarVendor('AWS', 'SAWS PLUMBING AWS123')).toBe(false) // shorter side < 4 chars
+    expect(isSimilarVendor('', 'Chase')).toBe(false)
+  })
+
+  it('matches whole tokens only — "Chase" must NOT match "POS PURCHASE" wording', () => {
+    expect(isSimilarVendor('Chase', 'POS PURCHASE MERCHANT 4421')).toBe(false)
+    expect(isSimilarVendor('Chase', 'CHASE CREDIT CRD EPAY')).toBe(true)
+  })
+
+  it('folds accents so Italian vendor names keep their full key', () => {
+    expect(normalizeVendorKey('CAFFÈ ROMA')).toBe('caffe roma')
+    expect(isSimilarVendor('CAFFÈ', 'CAFFO DISTILLERIA')).toBe(false)
+  })
+
+  it('contains-rules match across bank wordings after normalization', () => {
+    const tx = makeTx({ counterparty: 'STRIPE; TRANSFER; TONY DURANTE LLC; Merchant name: STRIPE' })
+    const rule = makeRule({ counterparty_pattern: 'stripe transfer', match_type: 'contains', category: 'transfer', subcategory: 'stripe_payout' })
+    expect(applyVendorRules([tx], [rule])[0].category).toBe('transfer')
+  })
+
+  it('contains-rules respect token boundaries — a "chase" rule never chips "purchase" rows', () => {
+    const tx = makeTx({ counterparty: 'POS PURCHASE MERCHANT 4421' })
+    const rule = makeRule({ counterparty_pattern: 'chase', match_type: 'contains', category: 'expense', subcategory: 'other_expense' })
+    expect(applyVendorRules([tx], [rule])[0].category).toBe('uncategorized')
+  })
+
+  it('the most specific rule wins — "stripe fee" beats "stripe" for a STRIPE FEE row', () => {
+    const feeRow = makeTx({ counterparty: 'STRIPE FEE' })
+    const rules = [
+      makeRule({ id: 'broad', counterparty_pattern: 'stripe', match_type: 'contains', category: 'transfer', subcategory: 'stripe_payout' }),
+      makeRule({ id: 'narrow', counterparty_pattern: 'stripe fee', match_type: 'contains', category: 'expense', subcategory: 'stripe_fees' }),
+    ]
+    expect(applyVendorRules([feeRow], rules)[0].category).toBe('expense')
+  })
+
+  it('a contains-rule whose pattern normalizes to nothing matches NOTHING, not everything', () => {
+    const tx = makeTx({ counterparty: 'Anything At All' })
+    const rule = makeRule({ counterparty_pattern: '&&', match_type: 'contains', category: 'expense', subcategory: 'other_expense' })
+    expect(applyVendorRules([tx], [rule])[0].category).toBe('uncategorized')
   })
 })
 

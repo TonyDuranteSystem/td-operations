@@ -194,6 +194,44 @@ describe("extractTextFromBuffer", () => {
     expect(out).toContain("Feb\t2000")
   })
 
+  it("reads an xlsx with overlapping merged cells (Numbers → Excel export) via the strip-and-retry path", async () => {
+    // Build a clean workbook, then inject OVERLAPPING mergeCell ranges into the
+    // sheet XML — the artifact Apple Numbers writes, which makes a plain
+    // exceljs load throw "Cannot merge already merged cells".
+    const ExcelJS = (await import("exceljs")).default
+    const wb = new ExcelJS.Workbook()
+    const sheet = wb.addWorksheet("All Companies")
+    sheet.addRow(["Company", "Status"])
+    sheet.addRow(["Acme LLC", "Filed"])
+    const clean = Buffer.from(await wb.xlsx.writeBuffer())
+
+    const JSZip = (await import("jszip")).default
+    const zip = await JSZip.loadAsync(clean)
+    const sheetPath = "xl/worksheets/sheet1.xml"
+    const xml = await zip.file(sheetPath)!.async("string")
+    zip.file(
+      sheetPath,
+      xml.replace(
+        "</sheetData>",
+        '</sheetData><mergeCells count="2"><mergeCell ref="A1:B1"/><mergeCell ref="B1:C1"/></mergeCells>',
+      ),
+    )
+    const poisoned = Buffer.from(await zip.generateAsync({ type: "nodebuffer" }))
+
+    // Sanity: the poisoned buffer really does kill a plain load.
+    const direct = new ExcelJS.Workbook()
+    await expect(direct.xlsx.load(poisoned as unknown as ArrayBuffer)).rejects.toThrow(/merge/i)
+
+    const out = await extractTextFromBuffer(poisoned, "xlsx")
+    expect(out).toContain("Sheet: All Companies")
+    expect(out).toContain("Company\tStatus")
+    expect(out).toContain("Acme LLC\tFiled")
+  })
+
+  it("still throws the original error for a genuinely unreadable xlsx buffer", async () => {
+    await expect(extractTextFromBuffer(Buffer.from("not a zip at all"), "xlsx")).rejects.toThrow()
+  })
+
   it("throws for image/unsupported (routed elsewhere by the caller)", async () => {
     await expect(extractTextFromBuffer(Buffer.from("x"), "image")).rejects.toThrow(/unsupported/)
     await expect(extractTextFromBuffer(Buffer.from("x"), "unsupported")).rejects.toThrow(/unsupported/)
