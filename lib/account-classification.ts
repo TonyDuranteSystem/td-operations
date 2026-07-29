@@ -202,10 +202,24 @@ export function classifyAccount(input: ClassificationInput): AccountClassificati
     // Formation in progress: only the formation SD is expected
     expectedSDs = ['Company Formation']
   } else if (category === 'active_client' || category === 'legacy_client' || category === 'pending_ein') {
-    // Standard client bundle
-    expectedSDs = [...STANDARD_CLIENT_SDS]
-    if (taxReturnExpected) {
-      expectedSDs.push(TAX_RETURN_SD)
+    if (formedThisYear) {
+      // Formation-year client: the recurring bundle (RA renewal, annual
+      // report, CMRA, renewal billing) starts with the FIRST renewal cycle —
+      // the Jan-1 MSA cron skips the formation year entirely
+      // (lib/billing/renewal-guard.ts: setup fee covers through Dec 31).
+      // Expecting the bundle here produced the false "Missing: 4 services"
+      // errors for every newly formed company (LUMA cohort, plan c2d97552).
+      // NOTE: NULL formation_date deliberately does NOT take this branch —
+      // imported legacy clients without a recorded formation date keep the
+      // full bundle expectation (a false negative there would silently hide
+      // genuinely missing services).
+      expectedSDs = []
+    } else {
+      // Standard client bundle
+      expectedSDs = [...STANDARD_CLIENT_SDS]
+      if (taxReturnExpected) {
+        expectedSDs.push(TAX_RETURN_SD)
+      }
     }
   }
   // 'incomplete' → empty expectedSDs (can't determine)

@@ -59,10 +59,24 @@ export async function GET(req: NextRequest) {
 
     const { data: accountContacts } = await supabaseAdmin
       .from("account_contacts")
-      .select("contact_id, role, contacts(id, full_name, email, portal_tier, portal_role)")
+      .select("contact_id, role, is_primary, contacts(id, full_name, email, portal_tier, portal_role)")
       .eq("account_id", accountId)
 
-    const primaryContact = accountContacts?.[0]?.contacts as unknown as {
+    // Deterministic primary pick — row order from PostgREST is unstable, and
+    // on MMLLCs the arbitrary [0] used to cascade wrong lead/payment/tier
+    // checks. Precedence: is_primary flag → owner-ish role (live data holds
+    // 'owner'/'Owner'/'Sole Member' free text) → stable contact_id order.
+    const ownerish = (r: string | null) => /owner|sole member/i.test(r || "")
+    const sortedContacts = [...(accountContacts || [])].sort((a, b) => {
+      const ap = a.is_primary ? 0 : 1
+      const bp = b.is_primary ? 0 : 1
+      if (ap !== bp) return ap - bp
+      const ao = ownerish(a.role) ? 0 : 1
+      const bo = ownerish(b.role) ? 0 : 1
+      if (ao !== bo) return ao - bo
+      return String(a.contact_id).localeCompare(String(b.contact_id))
+    })
+    const primaryContact = sortedContacts[0]?.contacts as unknown as {
       id: string; full_name: string; email: string; portal_tier: string; portal_role: string
     } | null
     const contactId = primaryContact?.id || null
@@ -176,7 +190,8 @@ export async function GET(req: NextRequest) {
     const bankingForms = (bankingResult.data || []) as { id: string; token: string; status: string; provider: string; submitted_data: Record<string, unknown> }[]
     const authUsers = (authUsersResult.data || []) as { id: string; email: string }[]
     const taxReturn = (taxReturnResult.data as unknown[])?.[0] as { id: string; tax_year: number; status: string; extension_filed: boolean; first_year_skip: boolean } | undefined
-    const deadlines = (deadlinesResult.data || []) as { id: string; deadline_type: string; due_date: string; status: string }[]
+    const _deadlines = (deadlinesResult.data || []) as { id: string; deadline_type: string; due_date: string; status: string }[]
+    void _deadlines // deadlines-table checks demoted (plan c2d97552 C2) — account date columns are the source of truth
 
     // ── Shared classification ──
     const formationSD = services.find(s => s.service_type === "Company Formation" && s.status === "active")
@@ -494,9 +509,9 @@ export async function GET(req: NextRequest) {
           action: "create_service_deliveries",
           label: `Create ${classification.missingSDs.length} missing service(s)`,
           params: { pipelines: classification.missingSDs, account_id: accountId, contact_id: contactId },
-          description: `Creates service deliveries for: ${classification.missingSDs.join(", ")}. Each starts at Stage 1.`,
+          description: `Creates service deliveries for: ${classification.missingSDs.join(", ")}. Each starts at Stage 1. NOTE: bypasses the renewal billing gate (normally these spawn from the installment/renewal flows after payment) — use for genuinely missing services, not to pre-create a renewal cycle.`,
           impact: classification.missingSDs.map(m => `${m} SD created at first stage`),
-          risk: "safe" as const,
+          risk: "moderate" as const,
         },
       })
     } else if (services.length === 0 && classification.category !== "one_time") {
@@ -545,14 +560,7 @@ export async function GET(req: NextRequest) {
         detail: formationSub
           ? `Status: ${formationSub.status}${formationSub.completed_at ? ` (${formationSub.completed_at.split("T")[0]})` : ""}`
           : "No formation form created",
-        fix: !formationSub && lead ? {
-          action: "create_formation_form",
-          label: "Create formation wizard",
-          params: { lead_id: lead.id, contact_id: contactId },
-          description: "Creates a formation data collection form pre-filled with the lead's info. The client receives a link to fill in their personal details (address, DOB, passport).",
-          impact: ["A new formation_submissions row is created in draft status", "Form URL is generated but NOT sent to the client automatically — must be sent separately via email"],
-          risk: "safe" as const,
-        } : undefined,
+        // (old "Create formation wizard" fix removed — dead button, no POST handler)
       })
     }
 
@@ -609,22 +617,20 @@ export async function GET(req: NextRequest) {
     // ═══════════════════════════════
     // CATEGORY: Documents
     // ═══════════════════════════════
+    // OA is CLIENT-generated (portal self-service) — TD generates the lease,
+    // never the OA (docs/systems/lease-oa.md). Absence is informational, not a
+    // staff to-do; the old "Create OA (draft)" fix button was also dead (no
+    // POST handler) and contradicted the ownership model.
     checks.push({
       id: "oa_status",
       category: "Documents",
       label: "Operating Agreement",
       status: oa
         ? (oa.status === "signed" ? "ok" : oa.status === "sent" ? "info" : "warning")
-        : "warning",
-      detail: oa ? `${oa.status}${oa.signed_at ? ` (signed ${oa.signed_at.split("T")[0]})` : ""}` : "Not created",
-      fix: !oa ? {
-        action: "create_oa",
-        label: "Create OA (draft)",
-        params: { account_id: accountId },
-        description: "Creates an Operating Agreement in draft status, pre-filled with the LLC's company name, state, and member info from the CRM.",
-        impact: ["A new oa_agreements row is created in draft status", "OA will appear in the client's portal under Sign Documents once sent", "Does NOT send anything to the client — must be reviewed and sent separately"],
-        risk: "safe" as const,
-      } : undefined,
+        : "info",
+      detail: oa
+        ? `${oa.status}${oa.signed_at ? ` (signed ${oa.signed_at.split("T")[0]})` : ""}`
+        : "Not created — the client self-generates the OA in their portal (Documents → Generate)",
     })
 
     checks.push({
@@ -635,14 +641,7 @@ export async function GET(req: NextRequest) {
         ? (lease.status === "signed" ? "ok" : lease.status === "sent" ? "info" : "warning")
         : "warning",
       detail: lease ? `${lease.status} (Suite ${lease.suite_number || "N/A"})` : "Not created",
-      fix: !lease ? {
-        action: "create_lease",
-        label: "Create Lease (draft)",
-        params: { account_id: accountId },
-        description: "Creates a Lease Agreement in draft status with an auto-assigned suite number, pre-filled with the LLC's company name and primary contact info.",
-        impact: ["A new lease_agreements row is created in draft status", "A suite number is assigned to this client", "Lease will appear in the client's portal under Sign Documents once sent", "Does NOT send anything to the client — must be reviewed and sent separately"],
-        risk: "safe" as const,
-      } : undefined,
+      // (old "Create Lease (draft)" fix removed — dead button, no POST handler)
     })
 
     // EIN / SS-4 — uses classification to distinguish pending vs missing
@@ -765,14 +764,7 @@ export async function GET(req: NextRequest) {
       label: "Google Drive folder",
       status: account.drive_folder_id ? "ok" : "warning",
       detail: account.drive_folder_id ? "Exists" : "No Drive folder",
-      fix: !account.drive_folder_id ? {
-        action: "create_drive_folder",
-        label: "Create Drive folder",
-        params: { account_id: accountId, company_name: account.company_name },
-        description: "Creates the client's Google Drive folder structure on the Shared Drive (Companies/{State}/{Company Name}/ with subfolders 1-5) and links it to the account record.",
-        impact: ["A new folder tree is created on Google Drive", "Account's drive_folder_id is updated with the new folder ID", "Document processing and uploads will use this folder going forward"],
-        risk: "safe" as const,
-      } : undefined,
+      // (old "Create Drive folder" fix removed — dead button, no POST handler)
     })
 
     if (taxReturn) {
@@ -783,53 +775,67 @@ export async function GET(req: NextRequest) {
         status: "ok",
         detail: `Status: ${taxReturn.status}`,
       })
-    } else if (account.status === "Active") {
+    } else if (classification.taxReturnExpected) {
+      // Consume the classifier (single source of truth) instead of the old
+      // status==='Active' gate, which warned on every formation-year company
+      // whose first return isn't due until next year.
       checks.push({
         id: "tax_return",
         category: "Infrastructure",
         label: "Tax return",
         status: "warning",
-        detail: "No tax return record for this account",
+        detail: `No tax return record — ${classification.taxReturnReason}`,
       })
     }
 
-    const hasAnnualReport = deadlines.some(d => d.deadline_type === "Annual Report")
-    const hasRaRenewal = deadlines.some(d => d.deadline_type === "RA Renewal")
+    // Deadline checks read the ACCOUNT date columns — the source of truth the
+    // compliance calendar and the RA/AR reminder crons actually consume. The
+    // old checks read the legacy `deadlines` table (which the calendar
+    // ignores), flagging "missing" on correctly-tracked accounts, and their
+    // create_deadline fix buttons were dead (no POST handler). NM has no
+    // annual report; formation-year absence is normal only until the intake
+    // fills land, so a null here is a real signal either way.
+    const todayIso = new Date().toISOString().split("T")[0]
+    const stateNorm = (account.state_of_formation || "").toUpperCase().replace("NEW MEXICO", "NM")
 
-    if (!hasAnnualReport && account.status === "Active") {
-      checks.push({
-        id: "deadline_ar",
-        category: "Infrastructure",
-        label: "Annual Report deadline",
-        status: "warning",
-        detail: "No Annual Report deadline set",
-        fix: {
-          action: "create_deadline",
-          label: "Create deadline",
-          params: { account_id: accountId, type: "Annual Report" },
-          description: "Creates an Annual Report deadline for this account based on the state's filing rules. The due date is calculated from the state of formation.",
-          impact: ["A new deadline row is created in the deadlines table", "Deadline will appear in the compliance dashboard and upcoming deadlines view", "Automated reminder emails will fire as the due date approaches"],
-          risk: "moderate" as const,
-        },
-      })
-    }
+    if (account.status === "Active") {
+      if (!account.ra_renewal_date) {
+        checks.push({
+          id: "deadline_ra",
+          category: "Infrastructure",
+          label: "RA renewal date",
+          status: "warning",
+          detail: "No RA renewal date on the account — invisible to the compliance calendar and the renewal reminder",
+        })
+      } else if (account.ra_renewal_date < todayIso) {
+        checks.push({
+          id: "deadline_ra",
+          category: "Infrastructure",
+          label: "RA renewal date",
+          status: "warning",
+          detail: `RA renewal date is in the past (${account.ra_renewal_date}) — verify the renewal was filed, then Mark Filed on the calendar to roll it forward`,
+        })
+      }
 
-    if (!hasRaRenewal && account.status === "Active") {
-      checks.push({
-        id: "deadline_ra",
-        category: "Infrastructure",
-        label: "RA Renewal deadline",
-        status: "warning",
-        detail: "No RA Renewal deadline set",
-        fix: {
-          action: "create_deadline",
-          label: "Create deadline",
-          params: { account_id: accountId, type: "RA Renewal" },
-          description: "Creates a Registered Agent Renewal deadline for this account. The due date is based on the RA service expiration from Harbor Compliance.",
-          impact: ["A new deadline row is created in the deadlines table", "Deadline will appear in the compliance dashboard and upcoming deadlines view", "Automated reminder emails will fire as the due date approaches"],
-          risk: "moderate" as const,
-        },
-      })
+      if (stateNorm !== "NM") {
+        if (!account.annual_report_due_date) {
+          checks.push({
+            id: "deadline_ar",
+            category: "Infrastructure",
+            label: "Annual report date",
+            status: "warning",
+            detail: "No annual report due date on the account — invisible to the compliance calendar and the report reminder",
+          })
+        } else if (account.annual_report_due_date < todayIso) {
+          checks.push({
+            id: "deadline_ar",
+            category: "Infrastructure",
+            label: "Annual report date",
+            status: "warning",
+            detail: `Annual report date is in the past (${account.annual_report_due_date}) — verify the filing, then Mark Filed on the calendar to roll it forward`,
+          })
+        }
+      }
     }
 
     // ─── Summary ───
@@ -1004,7 +1010,20 @@ export async function POST(req: NextRequest) {
         const pipelines = params.pipelines as string[]
         let created = 0
         const errors: string[] = []
+        // Duplicate guard: skip any type that already has an active/blocked SD
+        // (same cycle notion as the renewal crons' dedup) — a staff click right
+        // after a cron run must not double-create.
+        const { data: existingSDs } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("service_type")
+          .eq("account_id", params.account_id as string)
+          .in("status", ["active", "blocked"])
+        const existingTypes = new Set((existingSDs || []).map(s => s.service_type))
         for (const p of pipelines) {
+          if (existingTypes.has(p)) {
+            errors.push(`${p}: skipped — an active/blocked SD of this type already exists`)
+            continue
+          }
           try {
             await createSD({
               service_type: p,

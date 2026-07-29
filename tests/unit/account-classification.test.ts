@@ -387,8 +387,23 @@ describe('classifyAccount — real cases', () => {
     expect(r.formationInProgress).toBe(true)
     expect(r.isWaitingForEIN).toBe(true)
     expect(r.taxReturnExpected).toBe(false)
-    expect(r.expectedSDs).toContain('State RA Renewal') // pending_ein gets standard bundle
-    expect(r.missingSDs.length).toBeGreaterThan(0) // missing standard SDs is expected at this stage
+    // Formation-year rule (plan c2d97552 C1): the recurring bundle starts with
+    // the FIRST renewal cycle — a company formed this year expects NO renewal
+    // SDs yet (the Jan-1 MSA cron skips the formation year). The old assertion
+    // ("pending_ein gets standard bundle") produced the false "Missing: 4
+    // services" error on every new formation (LUMA cohort).
+    expect(r.expectedSDs).toEqual([])
+    expect(r.missingSDs).toEqual([])
+  })
+
+  it('formation-year rule does NOT apply to NULL formation_date (legacy import stays on full bundle)', () => {
+    const r = classifyAccount(base({
+      formationDate: null,
+      einNumber: '12-3456789',
+      activeServiceTypes: [],
+    }))
+    expect(r.category).toBe('legacy_client')
+    expect(r.expectedSDs).toContain('State RA Renewal') // no false-negative hole for legacy imports
   })
 
   it('Stepwell Dynamics: no EIN, no formation SD, has renewal SDs', () => {
