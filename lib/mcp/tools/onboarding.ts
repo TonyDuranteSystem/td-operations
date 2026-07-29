@@ -456,7 +456,13 @@ export function registerOnboardingTools(server: McpServer) {
             if (submitted.formation_date) acctFields.formation_date = submitted.formation_date
             if (submitted.filing_id) acctFields.filing_id = submitted.filing_id
             acctFields.entity_type = entityTypeMapped
-            acctFields.ra_renewal_date = now.slice(0, 10)  // Onboarding: RA renewal = date of RA change (today)
+            // Onboarding review = the RA-change moment. Record the switch date;
+            // the renewal date is its ANNIVERSARY (+1yr), filled null-only via
+            // the shared helper AFTER the upsert below. The old line here wrote
+            // ra_renewal_date = TODAY unconditionally — which clobbered correct
+            // dates on re-runs and put the account inside the RA cron's 30-day
+            // window, spawning a renewal SD one year early (plan c2d97552 B2d).
+            acctFields.ra_switch_date = now.slice(0, 10)
             acctFields.updated_at = now
 
             // ─── Referral propagation: lead/offer → account ───
@@ -569,6 +575,14 @@ export function registerOnboardingTools(server: McpServer) {
             acctFields.account_type = derivedAccountType
 
             if (accountId) {
+              // Re-runs must not move an already-recorded RA-switch date
+              // (billing derives the TD-start from it).
+              const { data: existingAcct } = await supabaseAdmin
+                .from("accounts")
+                .select("ra_switch_date")
+                .eq("id", accountId)
+                .maybeSingle()
+              if (existingAcct?.ra_switch_date) delete acctFields.ra_switch_date
               // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
               const { error: acctErr } = await supabaseAdmin
                 .from("accounts")
@@ -595,7 +609,41 @@ export function registerOnboardingTools(server: McpServer) {
               }
             }
             if (servicesBundlePopulated) lines.push(`✅ services_bundle populated from offer`)
-            lines.push(`✅ account_type = ${derivedAccountType} (from offer), ra_renewal_date = ${now.slice(0, 10)}`)
+            lines.push(`✅ account_type = ${derivedAccountType} (from offer)`)
+
+            // Renewal dates — anniversary derivation, null-only, shared helper
+            // (plan c2d97552 B2d; replaces the old ra_renewal_date=today write).
+            if (accountId) {
+              try {
+                const { data: acctNow } = await supabaseAdmin
+                  .from("accounts")
+                  .select("ra_renewal_date, cmra_renewal_date, annual_report_due_date, ra_switch_date, client_since, formation_date, state_of_formation")
+                  .eq("id", accountId)
+                  .single()
+                if (acctNow) {
+                  const { deriveRenewalDates, applyRenewalDateFills } = await import("@/lib/operations/renewal-dates")
+                  const fills = deriveRenewalDates({
+                    intake: "onboarding",
+                    formation_date: acctNow.formation_date,
+                    ra_switch_date: acctNow.ra_switch_date,
+                    client_since: acctNow.client_since,
+                    state_of_formation: acctNow.state_of_formation,
+                    existing: {
+                      ra_renewal_date: acctNow.ra_renewal_date,
+                      annual_report_due_date: acctNow.annual_report_due_date,
+                      cmra_renewal_date: acctNow.cmra_renewal_date,
+                    },
+                  })
+                  const appliedDates = await applyRenewalDateFills(accountId, fills, {
+                    state: acctNow.state_of_formation,
+                    actor: "onboarding-review",
+                  })
+                  if (appliedDates.length) lines.push(`✅ Renewal dates: ${appliedDates.join(", ")}`)
+                }
+              } catch (rdErr) {
+                lines.push(`⚠️ Renewal-date derivation failed: ${rdErr instanceof Error ? rdErr.message : String(rdErr)}`)
+              }
+            }
           } catch (e) {
             lines.push(`❌ Account step failed: ${e instanceof Error ? e.message : String(e)}`)
           }
