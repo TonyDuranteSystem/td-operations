@@ -91,8 +91,13 @@ export function NoteEditor({
   createDefaults?: CreateDefaults
 }) {
   const isCreate = note === null
+  // MY come-back date lives in the per-person state row (since 2026-07-23); the note's own
+  // column is the frozen legacy fallback. Without this the field shows empty on a note that
+  // very much has a date — found in the 2026-07-29 sandbox QA.
+  const myStateRow = note && meId ? (note.staff_note_state ?? []).find((r) => r.user_id === meId) ?? null : null
+  const myWhenIso = note ? (myStateRow ? myStateRow.snoozed_until : note.snoozed_until) : null
   const [body, setBody] = useState(note?.body ?? createDefaults?.body ?? '')
-  const [when, setWhen] = useState(toLocalInputValue(note?.snoozed_until ?? null))
+  const [when, setWhen] = useState(toLocalInputValue(myWhenIso))
   const [accountId, setAccountId] = useState<string | undefined>(note?.account_id ?? createDefaults?.accountId)
   const [accountName, setAccountName] = useState<string | undefined>(
     note?.accounts?.company_name ?? note?.contacts?.full_name ?? createDefaults?.accountName,
@@ -219,7 +224,7 @@ export function NoteEditor({
       if ((accountId ?? null) !== note.account_id) {
         await call({ action: 'set_client', account_id: accountId ?? null })
       }
-      const currentWhen = toLocalInputValue(note.snoozed_until)
+      const currentWhen = toLocalInputValue(myWhenIso)
       if (when !== currentWhen) {
         if (!when) {
           await call({ action: 'unsnooze' })
