@@ -35,6 +35,7 @@ import { PAYMENT_CATEGORIES } from "@/lib/billing/payment-classification"
 import { PAYMENT_ITEM_TYPES } from "@/lib/finance/payment-item-vocabulary"
 import { TEAM_WORK_STATUSES } from "@/lib/team/workspace"
 import { OA_AGREEMENT_SIGNATURE_METHODS, OA_SIGNATURE_METHODS } from "@/lib/oa/signature-vocabulary"
+import { OWNER_CATEGORIES } from "@/lib/owner-finance"
 import { STAFF_NOTE_VISIBILITIES } from "@/lib/notes/staff-notes"
 
 /** name → `pg_get_constraintdef()` text, exactly as Postgres prints it. */
@@ -91,6 +92,10 @@ export const CONSTRAINT_CONTRACTS = [
   { table: "oa_agreements", column: "signature_method", constraint: "oa_agreements_signature_method_check", values: OA_AGREEMENT_SIGNATURE_METHODS },
   { table: "oa_signatures", column: "signature_method", constraint: "oa_signatures_signature_method_check", values: OA_SIGNATURE_METHODS },
   { table: "staff_notes", column: "visibility", constraint: "staff_notes_visibility", values: STAFF_NOTE_VISIBILITIES },
+  // Registered 2026-07-29 (S-corp books Phase 1b, same push that created the table on prod).
+  // A MONEY column: a category the database rejects is a books row that silently never
+  // gets categorized — and 'transfer' is what keeps Stripe payouts out of the P&L.
+  { table: "td_books_transactions", column: "category", constraint: "td_books_transactions_category_check", values: OWNER_CATEGORIES },
 ] as const
 
 /**
@@ -102,6 +107,7 @@ export const NOT_A_VOCABULARY = new Set([
   "invoice_has_owner",
   "payments_bank_preference_check", // regex + enum hybrid
   "client_invoices_recurring_frequency_check",
+  "td_books_transactions_transaction_ref_check", // shape rule: non-blank ref, not a value list
 ])
 
 /**
