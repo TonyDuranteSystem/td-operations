@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server"
 import { gmailGet, gmailPost, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
 import { COLOR_MARKS, MARK_LABEL_PREFIX } from "@/lib/inbox/color-marks"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
+import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { supabaseAdmin } from "@/lib/supabase-admin"
+import { SNOOZE_LABEL_NAME, isValidSnoozeUntil } from "@/lib/inbox/email-snooze"
+import { resolveMailbox } from "@/lib/inbox/mailbox"
 import {
   captureRestorableLabels,
   sanitizeRestorePayload,
@@ -10,12 +14,33 @@ import {
 
 export const dynamic = "force-dynamic"
 
-type EmailAction = "archive" | "star" | "unstar" | "trash" | "untrash" | "forward" | "mark_unread" | "move_to_label" | "set_color"
+type EmailAction = "archive" | "star" | "unstar" | "trash" | "untrash" | "forward" | "mark_unread" | "move_to_label" | "set_color" | "snooze" | "unsnooze"
 
-function resolveMailbox(mailbox?: string): string {
-  return mailbox === 'antonio'
-    ? 'antonio.durante@tonydurante.us'
-    : 'support@tonydurante.us'
+
+/**
+ * Per-mailbox id of the "Snoozed" user label, created if absent. On a create
+ * failure (e.g. a concurrent create 409ing), the list is re-fetched before
+ * giving up — the label usually exists by then.
+ */
+async function getSnoozeLabelId(asUser: string): Promise<string> {
+  const list = async () => {
+    const res = (await gmailGet("/labels", {}, asUser)) as { labels?: Array<{ id: string; name: string }> }
+    return (res.labels ?? []).find((l) => l.name === SNOOZE_LABEL_NAME)?.id
+  }
+  const existing = await list()
+  if (existing) return existing
+  try {
+    const created = (await gmailPost("/labels", {
+      name: SNOOZE_LABEL_NAME,
+      labelListVisibility: "labelShow",
+      messageListVisibility: "show",
+    }, asUser)) as { id: string }
+    return created.id
+  } catch (err) {
+    const retry = await list()
+    if (retry) return retry
+    throw err
+  }
 }
 
 type MinimalThread = { messages?: Array<{ id?: string; labelIds?: string[] }> }
@@ -104,8 +129,15 @@ async function untrashThread(threadId: string, asUser: string, restore: RestoreE
 
 export async function POST(req: NextRequest) {
   try {
+    // Staff only. /api/* inherits just "is logged in" from middleware, and a
+    // portal CLIENT has a login — without this line a client could archive,
+    // trash or snooze support@ mail (the 2026-07-21 templates-route invariant:
+    // every staff API route carries its own gate; council review 2026-07-28).
+    const denied = await requireStaffRoute()
+    if (denied) return denied
+
     const body = await req.json()
-    const { threadId, threadIds, action, forwardTo, labelId, bulk, mailbox, color, restore, destLabelId } = body as {
+    const { threadId, threadIds, action, forwardTo, labelId, bulk, mailbox, color, restore, destLabelId, snoozeUntil } = body as {
       threadId?: string
       threadIds?: string[]
       action: EmailAction | 'mark_read'
@@ -122,6 +154,8 @@ export async function POST(req: NextRequest) {
       /** untrash: restore INTO this label instead of the Inbox (a Gmail label id).
        *  Omit for the default "back where it was + Inbox". */
       destLabelId?: string
+      /** snooze: ISO instant (with offset) when the email should return. */
+      snoozeUntil?: string
     }
 
     if (!(await checkMailboxAccess(mailbox))) {
@@ -163,6 +197,11 @@ export async function POST(req: NextRequest) {
             await gmailPost(`/threads/${tid}/modify`, { addLabelIds: ['UNREAD'] }, asUser)
           } else if (action === 'move_to_label' && labelId) {
             await gmailPost(`/threads/${tid}/modify`, { addLabelIds: [labelId] }, asUser)
+          } else {
+            // An unmatched action used to fulfil and count as "succeeded" —
+            // a bulk snooze wired only into the single-thread switch would
+            // have reported success while doing nothing (council 2026-07-28).
+            throw new Error(`Unsupported bulk action: ${action}`)
           }
         })
       )
@@ -298,6 +337,78 @@ export async function POST(req: NextRequest) {
         }
         await gmailPost(`/threads/${threadId}/modify`, { addLabelIds: [labelId] }, asUser)
         return NextResponse.json({ success: true, action: "labeled" })
+      }
+
+      case "snooze": {
+        if (!snoozeUntil || !isValidSnoozeUntil(snoozeUntil, new Date())) {
+          return NextResponse.json(
+            { error: "Snooze time must be at least a minute in the future." },
+            { status: 400 }
+          )
+        }
+        // Newest message id at snooze time — the cron uses it to CANCEL the
+        // wake if new mail arrives meanwhile (the reply already re-surfaced
+        // the thread; waking later would resurrect a handled conversation).
+        const snapshot = (await gmailGet(`/threads/${threadId}`, { format: "minimal" }, asUser)) as MinimalThread
+        const lastMessageId = snapshot.messages?.[snapshot.messages.length - 1]?.id ?? null
+
+        // DB row FIRST, Gmail second: a row without the label self-heals (the
+        // cron's wake is a no-op on an inboxed thread), while a labeled thread
+        // without a row is a client email nothing will ever bring back
+        // (council bug-hunter blocker, 2026-07-28).
+        const { error: upsertErr } = await supabaseAdmin
+          .from("email_snoozes")
+          .upsert(
+            {
+              mailbox: mailbox === "antonio" ? "antonio" : "support",
+              thread_id: threadId,
+              snooze_until: snoozeUntil,
+              snoozed_last_message_id: lastMessageId,
+            },
+            { onConflict: "mailbox,thread_id" }
+          )
+        if (upsertErr) {
+          return NextResponse.json(
+            { error: `Could not save the snooze: ${upsertErr.message}` },
+            { status: 500 }
+          )
+        }
+        try {
+          const snoozeLabelId = await getSnoozeLabelId(asUser)
+          await gmailPost(`/threads/${threadId}/modify`, {
+            addLabelIds: [snoozeLabelId],
+            removeLabelIds: ["INBOX"],
+          }, asUser)
+        } catch (err) {
+          // Roll the row back so a failed snooze isn't half-armed.
+          await supabaseAdmin
+            .from("email_snoozes")
+            .delete()
+            .eq("mailbox", mailbox === "antonio" ? "antonio" : "support")
+            .eq("thread_id", threadId)
+          const msg = err instanceof Error ? err.message : "Gmail refused the change"
+          return NextResponse.json(
+            { error: `Could not snooze this email: ${msg}` },
+            { status: 502 }
+          )
+        }
+        return NextResponse.json({ success: true, action: "snoozed", snoozeUntil })
+      }
+
+      case "unsnooze": {
+        // The Undo of a snooze: back into the Inbox now, label off, row gone.
+        // Tolerates a missing row (e.g. a manually-filed "Snoozed" thread).
+        const snoozeLabelId = await getSnoozeLabelId(asUser)
+        await gmailPost(`/threads/${threadId}/modify`, {
+          addLabelIds: ["INBOX"],
+          removeLabelIds: [snoozeLabelId],
+        }, asUser)
+        await supabaseAdmin
+          .from("email_snoozes")
+          .delete()
+          .eq("mailbox", mailbox === "antonio" ? "antonio" : "support")
+          .eq("thread_id", threadId)
+        return NextResponse.json({ success: true, action: "unsnoozed" })
       }
 
       case "set_color": {

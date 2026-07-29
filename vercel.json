@@ -171,6 +171,10 @@
     {
       "path": "/api/cron/forms-archive-sweep",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/email-unsnooze",
+      "schedule": "*/10 * * * *"
     }
   ],
   "rewrites": [

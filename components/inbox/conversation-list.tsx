@@ -2,10 +2,11 @@
 
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useMemo, useRef, useEffect, useState } from 'react'
-import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, ArchiveRestore, Palette, FolderInput, Ban } from 'lucide-react'
+import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, ArchiveRestore, Palette, FolderInput, Ban, AlarmClock } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { markByKey, COLOR_MARKS, MARK_LABEL_PREFIX } from '@/lib/inbox/color-marks'
+import { snoozePresets, SNOOZE_LABEL_NAME } from '@/lib/inbox/email-snooze'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 import {
   advanceReleases,
@@ -63,6 +64,9 @@ interface ConversationListProps {
   userLabels?: Array<{ id: string; name: string }>
   onSetColor?: (conv: InboxConversation, color: string | null) => void
   onMoveToLabel?: (conv: InboxConversation, labelId: string, labelName: string) => void
+  /** Snooze this email until the given ISO instant; `presetLabel` is the
+   *  human wording for the toast ("Tomorrow · 08:00"). */
+  onSnooze?: (conv: InboxConversation, untilIso: string, presetLabel: string) => void
 }
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
@@ -92,12 +96,12 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, onRestored, onRestoredTo, onRestoreFailed, overrides, unread, onUnreadOverride, onReconciled, onPayloadOrigin, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter, userLabels, onSetColor, onMoveToLabel }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
+export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, onRestored, onRestoredTo, onRestoreFailed, overrides, unread, onUnreadOverride, onReconciled, onPayloadOrigin, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter, userLabels, onSetColor, onMoveToLabel, onSnooze }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
   const queryClient = useQueryClient()
 
-  // Which row's quick-action popover (color palette / folder list) is open.
-  // One at a time; closed by the fixed overlay or by acting.
-  const [rowMenu, setRowMenu] = useState<{ id: string; kind: 'color' | 'label' } | null>(null)
+  // Which row's quick-action popover (color palette / folder list / snooze
+  // presets) is open. One at a time; closed by the fixed overlay or by acting.
+  const [rowMenu, setRowMenu] = useState<{ id: string; kind: 'color' | 'label' | 'snooze' } | null>(null)
 
   // Toggle a row read/unread from the list (next to the row Delete). Uses the
   // parent's optimistic unread override for instant badge/bold feedback and
@@ -432,7 +436,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                 : undefined
             }
             className={cn(
-              'group w-full text-left px-4 py-3 border-b transition-colors hover:bg-zinc-50 flex items-start gap-2',
+              'group relative w-full text-left px-4 py-3 border-b transition-colors hover:bg-zinc-50 flex items-start gap-2',
               isSelected && 'bg-blue-50 border-l-2 border-l-blue-500',
               isChecked && !isSelected && 'bg-blue-50/50',
               conv.unread > 0 && !isSelected && !isChecked && 'bg-white'
@@ -507,11 +511,60 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
               </div>
             </button>
 
-            {/* Row actions — read/unread toggle + Delete (Gmail only). Reveal on
-                hover on desktop; ALWAYS visible on mobile (touch has no hover, so
-                the row actions would be unreachable — Antonio's phone PWA). */}
+            {/* Row actions, Gmail-style (Antonio 2026-07-28: "it's a mess" —
+                the always-in-layout cluster squeezed the row text).
+                MOBILE (no pointer): ONLY the trash bin (Restore in Trash),
+                always visible, in normal flow.
+                DESKTOP: nothing until the pointer is on the row, then a white
+                overlay card floats over the right edge — the text keeps its
+                full width. `!flex` while a popover is open, else moving the
+                pointer onto the palette would close the bar under it.
+                NOTE: no transform for centering — a transformed ancestor turns
+                the popovers' `fixed inset-0` close-overlays into ancestor-
+                relative boxes. */}
             {conv.channel === 'gmail' && (
-              <div className="shrink-0 self-center flex items-center gap-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+              <div className="sm:hidden shrink-0 self-center flex items-center">
+                {inTrash ? (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      restoreMutation.mutate({ conv })
+                    }}
+                    disabled={restoreMutation.isPending}
+                    className="p-1.5 rounded hover:bg-green-100 text-zinc-400 hover:text-green-600 transition-colors"
+                    title="Restore to Inbox"
+                  >
+                    <ArchiveRestore className="h-4 w-4" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      deleteMutation.mutate(conv)
+                    }}
+                    disabled={deleteMutation.isPending}
+                    className="p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
+                    title="Delete"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            )}
+            {conv.channel === 'gmail' && (
+              <div
+                className={cn(
+                  // NO z-index and NO transform here: either would make this bar
+                  // a stacking context, confining the child menus' z-50 below
+                  // the root-level z-40 close-backdrop — every menu click would
+                  // just close the menu (council SE review, 2026-07-28). A
+                  // positioned element later in the row's DOM already paints
+                  // above the in-flow row content.
+                  'absolute inset-y-0 right-2 hidden items-center',
+                  rowMenu?.id === conv.id ? '!flex' : 'sm:group-hover:flex'
+                )}
+              >
+                <div className="flex items-center gap-0.5 bg-white border border-zinc-200 rounded-lg shadow-md px-1 py-0.5">
                 {onSetColor && (
                   <div className="relative">
                     <button
@@ -586,8 +639,11 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                           {/* Marked/* are the color-mark system's own labels — filing
                               into one by hand would break its one-color-per-thread
                               invariant (set_color swaps marks; move_to_label only
-                              adds). The palette next door is the way to color. */}
-                          {userLabels!.filter(l => !l.name.startsWith(MARK_LABEL_PREFIX)).map(label => (
+                              adds). The palette next door is the way to color.
+                              Same for "Snoozed": hand-filing there creates a
+                              snoozed-forever thread with no wake row — the alarm
+                              button next door is the way to snooze. */}
+                          {userLabels!.filter(l => !l.name.startsWith(MARK_LABEL_PREFIX) && l.name !== SNOOZE_LABEL_NAME).map(label => (
                             <button
                               key={label.id}
                               onClick={(e) => {
@@ -616,6 +672,42 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                 >
                   {conv.unread > 0 ? <Mail className="h-4 w-4" /> : <MailOpen className="h-4 w-4" />}
                 </button>
+                {onSnooze && !inTrash && (
+                  <div className="relative">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setRowMenu(rowMenu?.id === conv.id && rowMenu.kind === 'snooze' ? null : { id: conv.id, kind: 'snooze' })
+                      }}
+                      className="p-1.5 rounded hover:bg-amber-100 text-zinc-400 hover:text-amber-600 transition-colors"
+                      title="Snooze"
+                    >
+                      <AlarmClock className="h-4 w-4" />
+                    </button>
+                    {rowMenu?.id === conv.id && rowMenu.kind === 'snooze' && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setRowMenu(null) }} />
+                        <div className="absolute right-0 top-full mt-1 z-50 bg-white border rounded-md shadow-xl min-w-[190px] py-1">
+                          {/* Presets computed at open time; ones already in the
+                              past are dropped (no instant re-wake). */}
+                          {snoozePresets(new Date()).map(p => (
+                            <button
+                              key={p.key}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setRowMenu(null)
+                                onSnooze(conv, p.until.toISOString(), p.label)
+                              }}
+                              className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-50 transition-colors"
+                            >
+                              {p.label}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 {inTrash ? (
                   /* In Trash, Delete was a lie: it fired `trash` on an already-
                      trashed thread — a no-op that still toasted "Email deleted".
@@ -644,6 +736,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                     <Trash2 className="h-4 w-4" />
                   </button>
                 )}
+                </div>
               </div>
             )}
           </div>

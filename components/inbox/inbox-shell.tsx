@@ -23,6 +23,7 @@ import {
   type UnreadOverride,
   makeHiddenOverride,
   makeMoveOverrides,
+  makePinnedOverride,
   makeUnreadOverride,
   overrideKey,
 } from '@/lib/inbox/conversation-reconcile'
@@ -378,6 +379,24 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     })
   }, [trashViewKey])
 
+  // Undo of a SNOOZE. NOT handleEmailRestored: that one is Trash geometry
+  // (hide in Trash + pin at origin) — a snoozed row was never in Trash, and
+  // routing its Undo through there plants a hide no payload can witness
+  // (council SE + bug-hunter, 2026-07-28). Here the row simply returns to the
+  // list it was snoozed from: drop every claim, pin at the hide's origin.
+  const handleEmailUnsnoozed = useCallback((id: string) => {
+    setOverrides(prev => {
+      const hide = findHide(prev, id)
+      if (!hide) return prev
+      const next = dropClaimsFor(prev, id)
+      if (hide.originView) {
+        next.set(overrideKey(id, hide.originView), makePinnedOverride(Date.now(), id, hide.originView, hide.snapshot))
+      }
+      return next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Restore FROM Trash — the button Antonio asked for. A MOVE: the row leaves
   // Trash and appears at its destination, both optimistically, so neither waits
   // on Gmail's 30-60s index. No destination = the Inbox (what `untrash` does
@@ -583,15 +602,20 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     // `mutationFn` on resume. Reading it live meant: open A → Delete → (drop
     // signal / click row B) → the resumed request trashes **B**, a live client
     // email, with no Undo, while A survives (council, 2026-07-16).
-    mutationFn: async ({ action, forwardTo, color, labelId, conv }: { action: string; forwardTo?: string; color?: string | null; labelId?: string; labelName?: string; originView?: string; conv?: InboxConversation | null }) => {
+    mutationFn: async ({ action, forwardTo, color, labelId, snoozeUntil, conv }: { action: string; forwardTo?: string; color?: string | null; labelId?: string; labelName?: string; snoozeUntil?: string; snoozeLabel?: string; originView?: string; conv?: InboxConversation | null }) => {
       if (!conv) return
       const threadId = conv.id.replace('gmail:', '')
       const res = await fetch('/api/inbox/email-actions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ threadId, action, forwardTo, color, labelId, mailbox: activeMailbox }),
+        body: JSON.stringify({ threadId, action, forwardTo, color, labelId, snoozeUntil, mailbox: activeMailbox }),
       })
-      if (!res.ok) throw new Error('Action failed')
+      if (!res.ok) {
+        // R099 — the server's reason ("Snooze time must be in the future"),
+        // never a blanket failure.
+        const d = await res.json().catch(() => ({}))
+        throw new Error((d as { error?: string }).error || 'Action failed')
+      }
       return res.json()
     },
     onSuccess: (data, variables) => {
@@ -618,6 +642,41 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         // Gmail semantics: filing ADDS the folder label, the thread stays where
         // it is — nothing to hide or refetch in the current view.
         toast.success(variables.labelName ? `Filed to ${variables.labelName}` : 'Filed to folder')
+        return
+      }
+      if (variables.action === 'snooze') {
+        // Hide with the 'snooze' action — each view decides for itself
+        // (leaves the Inbox, stays in folders), same machinery as delete.
+        if (acted) handleEmailDeleted('snooze', acted, variables.originView ?? ORIGIN_UNKNOWN)
+        const snoozedId = acted?.id
+        toast('Email snoozed', {
+          description: variables.snoozeLabel,
+          action: {
+            label: 'Undo',
+            onClick: async () => {
+              if (!snoozedId) return
+              try {
+                const res = await fetch('/api/inbox/email-actions', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    threadId: snoozedId.replace('gmail:', ''),
+                    action: 'unsnooze',
+                    mailbox: activeMailbox,
+                  }),
+                })
+                if (!res.ok) {
+                  const d = await res.json().catch(() => ({}))
+                  throw new Error((d as { error?: string }).error || 'Could not undo the snooze.')
+                }
+                handleEmailUnsnoozed(snoozedId)
+                toast.success('Snooze undone')
+              } catch (err) {
+                toast.error(err instanceof Error && err.message ? err.message : 'Could not undo the snooze.')
+              }
+            },
+          },
+        })
         return
       }
       if (variables.action === 'archive' || variables.action === 'trash') {
@@ -1263,6 +1322,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             userLabels={userLabels}
             onSetColor={(conv, color) => emailActionMutation.mutate({ action: 'set_color', color, conv })}
             onMoveToLabel={(conv, labelId, labelName) => emailActionMutation.mutate({ action: 'move_to_label', labelId, labelName, conv })}
+            onSnooze={(conv, untilIso, presetLabel) => emailActionMutation.mutate({ action: 'snooze', snoozeUntil: untilIso, snoozeLabel: presetLabel, conv, originView: originViewKey })}
           />
         </div>
 

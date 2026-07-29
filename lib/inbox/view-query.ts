@@ -29,7 +29,7 @@ export type InboxView =
  * lead the next session to conclude `untrash` doesn't belong here and to model it
  * somewhere else, which is how a second, drifting copy of these rules gets born.
  */
-export type RowAction = "trash" | "archive" | "untrash"
+export type RowAction = "trash" | "archive" | "untrash" | "snooze" | "unsnooze"
 
 /**
  * Normalise the raw UI state into a view. `label` beats `search` — the route's
@@ -163,6 +163,11 @@ export function removesFromView(action: RowAction, view: InboxView): boolean {
         // Untrash REMOVES the TRASH label → the row leaves this list. This is
         // the one action that empties a row out of Trash.
         untrash: true,
+        // Snoozing strips INBOX only; TRASH (if any) survives → stays. (The UI
+        // doesn't offer snooze in Trash, but the semantics must still be true.)
+        snooze: false,
+        // Unsnooze ADDs INBOX — never removes from Trash.
+        unsnooze: false,
       }[action]
     case "inbox":
       // `labelIds: INBOX`.
@@ -172,6 +177,8 @@ export function removesFromView(action: RowAction, view: InboxView): boolean {
         // Untrash ADDS the row back to the Inbox — the opposite of a removal.
         // A pin, not a hide, is what makes it appear (see the reconcile).
         untrash: false,
+        snooze: true, // strips INBOX → leaves (this is the snooze mechanism)
+        unsnooze: false, // ADDs INBOX — an appearance (pin), never a removal
       }[action]
     case "label":
       // `labelIds = <this label> + q = -in:trash`.
@@ -184,6 +191,16 @@ export function removesFromView(action: RowAction, view: InboxView): boolean {
         // Untrash re-admits it to `-in:trash` — it APPEARS here if it carries
         // this label (folders survive trashing). Never a removal.
         untrash: false,
+        // Snooze strips only INBOX; a folder label survives → the row STAYS
+        // (same shape as archive). In the SNOOZED folder itself the row gains
+        // the label — an appearance, not a removal.
+        snooze: false,
+        // Unsnooze removes the row ONLY from the Snoozed folder — but this
+        // static branch can't tell that label apart from any other, and a
+        // wrong `true` here is the unconfirmable-hide bug (2026-07-15).
+        // Accepted: in the Snoozed view the woken row lingers until the next
+        // refetch — the safe direction (council SE + bug-hunter, 2026-07-28).
+        unsnooze: false,
       }[action]
     case "search":
       // `q = <query> -in:trash -in:spam` over ALL mail.
@@ -196,6 +213,8 @@ export function removesFromView(action: RowAction, view: InboxView): boolean {
         // safe direction: a missing hide, never a wrongly-hidden email.)
         archive: false,
         untrash: false, // re-admitted to the search, not removed
+        snooze: false, // all-mail search doesn't require INBOX → stays
+        unsnooze: false,
       }[action]
   }
 }
