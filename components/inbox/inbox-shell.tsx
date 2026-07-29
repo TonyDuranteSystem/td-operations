@@ -237,6 +237,16 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       try {
         const res = await fetch(`/api/inbox/messages/${encodeURIComponent(thread)}?mailbox=${mailbox}`)
         const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          // Copy-link makes cross-person sharing routine: a link to the
+          // antonio@ mailbox opened by someone without access must say so,
+          // not render a blank stub thread (R099).
+          toast.error(
+            (data as { error?: string }).error ||
+              "You don't have access to this mailbox, so this email can't be opened.",
+          )
+          return
+        }
         setSelected({
           id: thread,
           channel: 'gmail',
@@ -247,7 +257,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
           subject: data?.subject || '',
         })
       } catch {
-        // Fall back to a bare stub so the thread still opens by id.
+        // Network-level failure: fall back to a bare stub so the thread still opens by id.
         setSelected({ id: thread, channel: 'gmail', name: '', preview: '', unread: 0, lastMessageAt: '' })
       }
     })()

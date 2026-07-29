@@ -26,8 +26,40 @@ import { X, Loader2, Check, Lock, Share2, Users, RotateCcw, MessageSquare, Trash
 import { useRouter } from 'next/navigation'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
-import { safeOriginPath, describeOrigin } from '@/lib/notes/note-origin'
+import { safeOriginPath, describeOrigin, splitLinkSegments } from '@/lib/notes/note-origin'
 import { isArchivedFor, sortReplies, type NoteReplyRow } from '@/lib/notes/staff-notes'
+
+/**
+ * Note/reply text with pasted URLs rendered as real links (Antonio, 2026-07-29:
+ * a copied message link pasted into a note must be clickable for the reader).
+ * Pure text-splitting into React nodes — no HTML injection possible; http(s)
+ * only. Anchors stop propagation (the surrounding card/editor blocks have their
+ * own click handlers) and carry data-no-drag for the floating card.
+ */
+function LinkifiedText({ text }: { text: string }) {
+  const segments = splitLinkSegments(text)
+  if (segments.length === 1 && segments[0].type === 'text') return <>{text}</>
+  return (
+    <>
+      {segments.map((s, i) =>
+        s.type === 'link' ? (
+          <a
+            key={i}
+            href={s.value}
+            data-no-drag
+            onClick={(e) => e.stopPropagation()}
+            rel="noopener noreferrer"
+            className="break-all text-blue-700 underline hover:text-blue-900"
+          >
+            {s.value}
+          </a>
+        ) : (
+          <span key={i}>{s.value}</span>
+        ),
+      )}
+    </>
+  )
+}
 
 const API = '/api/crm/staff-notes'
 
@@ -335,7 +367,7 @@ export function NoteEditor({
           />
         ) : (
           <div className="mb-3 max-h-40 w-full overflow-y-auto whitespace-pre-wrap break-words rounded border border-amber-300 bg-amber-100/60 p-2 text-sm text-amber-950">
-            {body}
+            <LinkifiedText text={body} />
           </div>
         )}
 
@@ -352,7 +384,7 @@ export function NoteEditor({
                   <p className="mb-0.5 text-[11px] font-semibold opacity-80">
                     {r.author_name || 'Teammate'} · {new Date(r.created_at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                   </p>
-                  <p className="whitespace-pre-wrap break-words">{r.body}</p>
+                  <p className="whitespace-pre-wrap break-words"><LinkifiedText text={r.body} /></p>
                 </div>
               )
             })}

@@ -12,6 +12,7 @@ import { printEmailThread } from '@/lib/inbox/print-email'
 import { resolveAttachmentType, shouldOpenInTab } from '@/lib/inbox/attachment-open'
 import { EmailHtmlFrame } from './email-html-frame'
 import { NoteQuickCreate } from '@/components/dashboard/note-quick-create'
+import { Link2 } from 'lucide-react'
 
 type ThreadAttachment = NonNullable<InboxMessage['attachments']>[number]
 
@@ -420,7 +421,33 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
           accountId={conversation.accountId}
           contactId={conversation.contactId}
           prefill={data?.subject || conversation.subject || conversation.name}
+          // RELATIVE deep link so the note's From: button opens THIS email (the
+          // page URL carries no thread — selection is React state — so without
+          // this the note would point at the bare Inbox front page).
+          originUrl={
+            conversation.id.startsWith('gmail:')
+              ? `/inbox?thread=${encodeURIComponent(conversation.id)}${mailbox ? `&mailbox=${mailbox}` : ''}`
+              : undefined
+          }
         />
+        {/* Copy a link that opens this exact email (right mailbox) — gmail threads
+            only; other channels have no deep-link consumer. Synchronous write keeps
+            the iOS PWA user gesture; honest then/catch, never a false "Copied". */}
+        {conversation.id.startsWith('gmail:') && (
+          <button
+            type="button"
+            onClick={() => {
+              const rel = `/inbox?thread=${encodeURIComponent(conversation.id)}${mailbox ? `&mailbox=${mailbox}` : ''}`
+              navigator.clipboard.writeText(`${window.location.origin}${rel}`)
+                .then(() => toast.success('Link copied.'))
+                .catch(() => toast.error('Could not copy the link on this device.'))
+            }}
+            title="Copy link to this email"
+            className="flex shrink-0 items-center gap-1 rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50"
+          >
+            <Link2 className="h-3.5 w-3.5" />Copy link
+          </button>
+        )}
         {isEmailThread && messages.length > 1 && (
           <button
             type="button"
