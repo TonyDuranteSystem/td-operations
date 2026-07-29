@@ -73,10 +73,17 @@ export function registerDocumentGenerationTools(server: McpServer) {
         .array(z.string())
         .optional()
         .describe('Short reference lines under the title, e.g. ["Re: DF Commerce LLC", "EIN: 12-3456789"].'),
+      // `.nullable()` as well as `.optional()`: an assistant asked for "no letterhead"
+      // will reach for null at least as readily as for "", and a bare `.string()
+      // .optional()` REJECTS null — so the honest attempt failed validation and the
+      // header survived. Both spellings now mean bare; omitting the key means default.
       letterhead: z
         .string()
+        .nullable()
         .optional()
-        .describe('Sender line at the very top. Defaults to "Tony Durante LLC". Pass "" for a bare document.'),
+        .describe(
+          'Sender line at the very top. Defaults to "Tony Durante LLC". Pass "" or null for a bare document with no header.',
+        ),
     },
     async ({ body, title, date_line, reference, letterhead }) => {
       try {
@@ -85,7 +92,11 @@ export function registerDocumentGenerationTools(server: McpServer) {
           title: title ?? null,
           dateLine: date_line ?? null,
           reference: reference ?? null,
-          letterhead: letterhead ?? null,
+          // Passed through UNCHANGED on purpose. `?? null` here would turn "caller
+          // said nothing" into "caller asked for no letterhead" and strip the firm's
+          // header off every document — the renderer distinguishes absent (default)
+          // from an explicit ''/null (bare).
+          letterhead,
         })
 
         // Same path shape the panel uploads use, so the bucket's existing rules and

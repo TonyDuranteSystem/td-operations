@@ -21,8 +21,24 @@
  *   - anything else → unsupported (caller emits a short "couldn't read" note)
  */
 
-/** Per-file extracted-text cap (chars). ~5k tokens — enough to read/summarize. */
-export const SLACK_FILE_TEXT_CHAR_CAP = 20_000
+/**
+ * Per-file extracted-text cap (chars) PER READ — a window size, not a wall.
+ *
+ * CONFIG, not a constant to edit: `WORKER_FILE_READ_CAP` on Vercel overrides it
+ * (floor 1,000 so a typo like "20" can't blind every read; absent/invalid ⇒ 20k
+ * ≈ 5k tokens). Raising it is a config change, not a deploy.
+ *
+ * The cap stopped being a hard limit on 2026-07-29: reads are windowed
+ * (`windowText`), and the truncation marker tells the model the exact offset to
+ * continue from, so a long document is read to the END across calls instead of
+ * being silently answered from its first pages. The live failure that forced
+ * this: Smit's amended 2024 Form 1065 for Dynamiq SR LLC ran 125k chars and the
+ * assistant could reach only ~the first 4 pages, on real client tax work.
+ */
+export const SLACK_FILE_TEXT_CHAR_CAP = (() => {
+  const n = Number(process.env.WORKER_FILE_READ_CAP)
+  return Number.isFinite(n) && n >= 1_000 ? Math.floor(n) : 20_000
+})()
 
 /** Text-like file extensions found INSIDE a zip that we decode (others listed by name). */
 const ZIP_TEXT_EXTENSIONS = new Set([
@@ -108,15 +124,37 @@ export function classifySlackFile(mimetype: string | undefined, name: string | u
  * closed for long scanned PDFs; this closes it for extracted text.
  */
 export function capText(text: string, cap: number = SLACK_FILE_TEXT_CHAR_CAP): string {
-  if (text.length <= cap) return text
+  return windowText(text, 0, cap)
+}
+
+/**
+ * One WINDOW of a long text, with a marker that makes continuing possible.
+ *
+ * The head marker keeps the exact `"complete": false` shape the absence guard
+ * scans for (head-only, 600 chars — a tail-only note is invisible to it). What
+ * changed on 2026-07-29: the marker now carries the NEXT OFFSET, so a truncated
+ * read is a page turn, not a dead end. Before this, "the file is long" was the
+ * end of the road and a 125k-char amended tax return was answered from its first
+ * ~4 pages.
+ */
+export function windowText(text: string, offset: number, cap: number = SLACK_FILE_TEXT_CHAR_CAP): string {
+  const start = Math.min(Math.max(0, Math.floor(offset) || 0), text.length)
+  const end = Math.min(start + Math.max(1, cap), text.length)
+  if (start === 0 && end === text.length) return text
+  const slice = text.slice(start, end)
+  const more = end < text.length
   return [
     `INCOMPLETE READ — "complete": false`,
-    `Showing the first ${cap} of ${text.length} characters. The rest was NOT read.`,
-    `Do not total, count, or state that something is absent from this file on the strength of this excerpt.`,
+    `Showing characters ${start}–${end} of ${text.length}. The rest was NOT read.`,
+    more
+      ? `To keep reading, call this tool again with offset: ${end}. Do not total, count, or state that something is absent from this file until you have read to the end.`
+      : `This is the FINAL section — the file ends here.`,
     '',
-    text.slice(0, cap),
+    slice,
     '',
-    `…[truncated — file is ${text.length} chars, showing first ${cap}]`,
+    more
+      ? `…[truncated — file is ${text.length} chars; continue with offset: ${end}]`
+      : `[end of file — ${text.length} chars total]`,
   ].join('\n')
 }
 

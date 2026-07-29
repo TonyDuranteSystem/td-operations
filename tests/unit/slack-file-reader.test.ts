@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
   classifySlackFile,
   capText,
+  windowText,
   extractTextFromBuffer,
   SLACK_FILE_TEXT_CHAR_CAP,
 } from "@/lib/ai-agent/slack-file-reader"
@@ -83,6 +84,70 @@ describe("capText", () => {
   it("defaults to SLACK_FILE_TEXT_CHAR_CAP", () => {
     expect(capText("short")).toBe("short")
     expect(SLACK_FILE_TEXT_CHAR_CAP).toBeGreaterThan(1000)
+  })
+})
+
+describe("windowText — long files are read in sections, to the END", () => {
+  // The live failure this closes: a 125k-char amended tax return was answered
+  // from its first ~4 pages because a truncated read was a dead end. Now the
+  // marker names the next offset, so length is a page turn, not a wall.
+
+  it("returns the whole text untouched when it fits", () => {
+    expect(windowText("hello", 0, 100)).toBe("hello")
+  })
+
+  it("a truncated first read names the EXACT offset to continue from", () => {
+    const out = windowText("x".repeat(50), 0, 10)
+    expect(out).toContain("offset: 10")
+    expect(looksLikeIncompleteRead(out)).toBe(true)
+  })
+
+  it("a middle window shows its range and still points onward", () => {
+    const text = "a".repeat(30)
+    const out = windowText(text, 10, 10)
+    expect(out).toContain("10–20 of 30")
+    expect(out).toContain("offset: 20")
+  })
+
+  it("the FINAL window says the file ends — no phantom continuation", () => {
+    const text = "b".repeat(30)
+    const out = windowText(text, 20, 10)
+    expect(out).toContain("FINAL section")
+    expect(out).toContain("end of file")
+    expect(out).not.toContain("offset: 30")
+  })
+
+  it("an offset at or past the end yields an empty final window, not a crash", () => {
+    const out = windowText("c".repeat(10), 99, 5)
+    expect(out).toContain("FINAL section")
+  })
+
+  it("chaining windows by the offsets it gives you recovers the ENTIRE text", () => {
+    const text = Array.from({ length: 100 }, (_, i) => `row${i}`).join("\n")
+    let offset = 0
+    let assembled = ""
+    for (let guard = 0; guard < 50; guard++) {
+      const out = windowText(text, offset, 100)
+      if (out === text) {
+        assembled = text
+        break
+      }
+      // Between the 4-line head marker (3 lines + blank) and the 2-line tail
+      // marker (blank + note) sits the slice.
+      const lines = out.split("\n")
+      assembled += lines.slice(4, -2).join("\n")
+      const m = out.match(/continue with offset: (\d+)/)
+      if (!m) break
+      offset = Number(m[1])
+      assembled += "" // windows are contiguous character ranges
+    }
+    // Character-exact reassembly: nothing lost, nothing duplicated.
+    expect(assembled.replace(/\n/g, "")).toBe(text.replace(/\n/g, ""))
+  })
+
+  it("keeps the guard-visible incomplete marker in the head of every partial window", () => {
+    const out = windowText("z".repeat(1000), 500, 100)
+    expect(out.slice(0, 600)).toMatch(/"complete"\s*:\s*false/i)
   })
 })
 

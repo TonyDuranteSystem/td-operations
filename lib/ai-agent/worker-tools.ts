@@ -920,11 +920,16 @@ export const READ_PORTAL_ATTACHMENT_TOOL: ToolDef = {
     "Pass the URL exactly as shown in the portal_chat_read output (the URL after the 📎 filename).",
     "Works for PDFs (text layer), DOCX, XLSX, CSV, and plain text files hosted on our Supabase storage.",
     "Use this whenever portal_chat_read shows 📎 attachments and you need to know what's inside them.",
+    "LONG FILES: a long document comes back one section at a time. If the result says INCOMPLETE READ, call this tool AGAIN with the `offset` it gives you, and repeat until the end — never answer about totals, counts, or something being absent until you have read the whole file.",
   ].join("\n"),
   parameters: {
     type: "object",
     properties: {
       url: { type: "string", description: "Full URL of the portal chat attachment from portal_chat_read output." },
+      offset: {
+        type: "number",
+        description: "Character position to continue reading from — use the exact offset given by a previous INCOMPLETE READ result. Omit to start from the beginning.",
+      },
     },
     required: ["url"],
   },
@@ -937,11 +942,16 @@ export const READ_EMAIL_ATTACHMENT_TOOL: ToolDef = {
     "Pass the `ref` exactly as listed under ATTACHMENTS ON THIS EMAIL in the message above — nothing else is readable.",
     "Images attached to the email are already shown to you directly; you do NOT need this tool for them.",
     "Use this when you need to know what a document actually says before answering or drafting.",
+    "LONG FILES: a long document comes back one section at a time. If the result says INCOMPLETE READ, call this tool AGAIN with the `offset` it gives you, and repeat until the end — never answer about totals, counts, or something being absent until you have read the whole file.",
   ].join("\n"),
   parameters: {
     type: "object",
     properties: {
       ref: { type: "string", description: "The attachment ref from the ATTACHMENTS ON THIS EMAIL list (e.g. 'att1')." },
+      offset: {
+        type: "number",
+        description: "Character position to continue reading from — use the exact offset given by a previous INCOMPLETE READ result. Omit to start from the beginning.",
+      },
     },
     required: ["ref"],
   },
@@ -968,12 +978,14 @@ export async function readEmailAttachmentForWorker(
     const available = pinned.map((a) => `${a.ref} (${a.name})`).join(", ")
     return `❌ "${ref}" is not an attachment on this email. Available: ${available}.`
   }
+  // Continue-reading position (long files come back one window at a time).
+  const offset = typeof params.offset === "number" && Number.isFinite(params.offset) ? Math.max(0, Math.floor(params.offset)) : 0
 
   try {
     const { getGmailAttachment } = await import("@/lib/gmail")
     const { data } = await getGmailAttachment(match.messageId, match.attachmentId, match.mailbox)
     const { readAttachmentBuffer, fenceUntrustedContent } = await import("@/lib/ai-agent/attachment-reader")
-    const read = await readAttachmentBuffer(data, { id: match.ref, name: match.name, mimetype: match.mimetype }, false)
+    const read = await readAttachmentBuffer(data, { id: match.ref, name: match.name, mimetype: match.mimetype }, false, offset)
     switch (read.kind) {
       case "text":
         // Anyone can email us a PDF. Its text is data, never an instruction.
@@ -1003,6 +1015,8 @@ const TRUSTED_STORAGE_HOSTS = new Set([
 export async function readPortalAttachmentForWorker(params: Record<string, unknown>): Promise<string> {
   const url = typeof params.url === "string" ? params.url.trim() : ""
   if (!url) return "url is required."
+  // Continue-reading position (long files come back one window at a time).
+  const offset = typeof params.offset === "number" && Number.isFinite(params.offset) ? Math.max(0, Math.floor(params.offset)) : 0
 
   let parsed: URL
   try {
@@ -1019,7 +1033,7 @@ export async function readPortalAttachmentForWorker(params: Record<string, unkno
     if (!res.ok) return `❌ Couldn't download attachment (HTTP ${res.status}).`
     const buffer = Buffer.from(await res.arrayBuffer())
 
-    const { classifySlackFile, extractTextFromBuffer, capText, SLACK_FILE_TEXT_CHAR_CAP } = await import(
+    const { classifySlackFile, extractTextFromBuffer, windowText, SLACK_FILE_TEXT_CHAR_CAP } = await import(
       "@/lib/ai-agent/slack-file-reader"
     )
     const ext = parsed.pathname.split(".").pop()?.toLowerCase() ?? ""
@@ -1046,12 +1060,12 @@ export async function readPortalAttachmentForWorker(params: Record<string, unkno
       } catch {
         // fall through — treat as scanned
       }
-      if (pdfText.trim().length >= 80) return capText(pdfText, SLACK_FILE_TEXT_CHAR_CAP)
+      if (pdfText.trim().length >= 80) return windowText(pdfText, offset, SLACK_FILE_TEXT_CHAR_CAP)
       return "(Scanned PDF — no text layer found. This file contains images/scans only and cannot be read as text.)"
     }
 
     const text = await extractTextFromBuffer(buffer, kind)
-    return capText(text, SLACK_FILE_TEXT_CHAR_CAP) || "(empty file)"
+    return windowText(text, offset, SLACK_FILE_TEXT_CHAR_CAP) || "(empty file)"
   } catch (err) {
     return `❌ Couldn't read attachment: ${err instanceof Error ? err.message : String(err)}`
   }
