@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isAdmin } from '@/lib/auth'
 import { NextResponse } from 'next/server'
-import { OWNER_ACCOUNT_ID } from '@/lib/owner-finance'
+import { TD_ENTITY_ID } from '@/lib/owner-finance'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,7 +36,7 @@ export async function POST(req: Request) {
   }
 
   const records = rows.map(r => ({
-    account_id: OWNER_ACCOUNT_ID,
+    entity_id: TD_ENTITY_ID,
     tax_year: r.tax_year,
     transaction_date: r.transaction_date,
     description: r.description,
@@ -53,9 +53,9 @@ export async function POST(req: Request) {
   }))
 
   const { data, error } = await supabaseAdmin
-    .from('bank_transactions')
+    .from('td_books_transactions')
     .upsert(records, {
-      onConflict: 'account_id,transaction_ref',
+      onConflict: 'entity_id,transaction_ref',
       ignoreDuplicates: true,
     })
     .select('id')

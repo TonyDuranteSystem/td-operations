@@ -1,6 +1,17 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
-export const OWNER_ACCOUNT_ID = '00000000-0000-0000-0000-000000000001'
+/**
+ * The entity whose books these are — Tony Durante LLC. `td_books_transactions` carries an
+ * `entity_id` from day one so a second company's books are an INSERT away, but today this
+ * is the only entity. THE one definition: the projection and every owner API import it
+ * from here (two independent copies of this constant were a named migration hazard).
+ */
+export const TD_ENTITY_ID = '00000000-0000-0000-0000-000000000001'
+
+/** @deprecated Books moved OUT of the multi-tenant `bank_transactions` table (Phase 1a,
+ * 2026-07-29) into `td_books_transactions`. This name survives for the historical import
+ * scripts; new code uses TD_ENTITY_ID. Same value — the entity id IS the old sentinel. */
+export const OWNER_ACCOUNT_ID = TD_ENTITY_ID
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -13,6 +24,8 @@ export type OwnerCategory =
   | 'fee'
   | 'conversion'
   | 'refund'
+  /** Owner money INTO the company — equity, never income (the S-corp roll-forward needs it). */
+  | 'contribution'
   | 'uncategorized'
 
 export interface OwnerTransaction {
@@ -76,9 +89,9 @@ export async function getOwnerTransactions(
   category?: OwnerCategory
 ): Promise<OwnerTransaction[]> {
   let q = supabaseAdmin
-    .from('bank_transactions')
+    .from('td_books_transactions')
     .select('*')
-    .eq('account_id', OWNER_ACCOUNT_ID)
+    .eq('entity_id', TD_ENTITY_ID)
     .eq('tax_year', year)
     .order('transaction_date', { ascending: false })
 
@@ -102,9 +115,9 @@ export async function getOwnerTransactionsPaginated(
   const { category, search, bank, limit = 50, offset = 0 } = options
 
   let q = supabaseAdmin
-    .from('bank_transactions')
+    .from('td_books_transactions')
     .select('*', { count: 'exact' })
-    .eq('account_id', OWNER_ACCOUNT_ID)
+    .eq('entity_id', TD_ENTITY_ID)
     .eq('tax_year', year)
     .order('transaction_date', { ascending: false })
     .range(offset, offset + limit - 1)
@@ -194,9 +207,9 @@ export async function getMonthlyBreakdown(year: number): Promise<MonthlyBreakdow
 
 export async function getCashPosition(): Promise<CashPosition> {
   const { data, error } = await supabaseAdmin
-    .from('bank_transactions')
+    .from('td_books_transactions')
     .select('bank_name, balance_after, transaction_date')
-    .eq('account_id', OWNER_ACCOUNT_ID)
+    .eq('entity_id', TD_ENTITY_ID)
     .not('balance_after', 'is', null)
     .not('bank_name', 'is', null)
     .order('transaction_date', { ascending: false })
@@ -223,9 +236,9 @@ export async function getCashPosition(): Promise<CashPosition> {
 
 export async function getUncategorizedCount(year: number): Promise<number> {
   const { count, error } = await supabaseAdmin
-    .from('bank_transactions')
+    .from('td_books_transactions')
     .select('id', { count: 'exact', head: true })
-    .eq('account_id', OWNER_ACCOUNT_ID)
+    .eq('entity_id', TD_ENTITY_ID)
     .eq('tax_year', year)
     .eq('category', 'uncategorized')
 

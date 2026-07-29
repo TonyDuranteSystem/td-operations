@@ -3,19 +3,19 @@
  * client invoice payment) into My Finances so Antonio can categorize it and do the
  * company's accounting. Finance stays what it is meant to be: client invoice payments only.
  *
- * THE SAFETY RULE (non-negotiable, and the reason this file exists as one writer):
- * `bank_transactions` is MULTI-TENANT — it holds every client's tax data alongside the
- * owner's books, separated only by `account_id`. This writer therefore HARD-PINS
- * `account_id` to the owner constant and NEVER derives it from the feed. A projected row
- * can never land in a client's tax return. `buildOwnerLedgerRow` is pure so this is
- * unit-testable, and `projectFeedsToOwnerLedger` asserts the invariant again before writing.
+ * Since Phase 1a (2026-07-29) the books live in their OWN table, `td_books_transactions` —
+ * no longer a slice of the multi-tenant client tax table. The writer still HARD-PINS the
+ * entity to the TD constant and NEVER derives it from the feed, and the boundary re-assert
+ * before writing stays: cheap, and it keeps the invariant explicit for the next writer.
  *
- * Other invariants (each one a Council finding, 2026-07-27):
+ * Invariants (Council findings, 2026-07-27 + Phase 1a review):
  *  - SIGNED amount. Feeds store an absolute amount with direction in `status` ('outgoing'),
  *    but the owner P&L branches on sign — copying the raw magnitude books an expense as income.
  *  - NON-BLANK deterministic ref (`feed:<id>`). The column is NOT NULL + non-blank CHECK and
  *    supabase-js RETURNS errors rather than throwing, so a blank ref silently drops the row.
- *  - Dedup targets the REAL unique key (account_id, transaction_ref, transaction_date, amount).
+ *  - INSERT-ONCE. Identity is (entity, transaction_ref) alone; date/amount are payload. A
+ *    books row is stateful the moment Antonio categorizes it — the writer must never rewrite
+ *    an existing row (ignoreDuplicates, not update-on-conflict).
  *  - `tax_year` from the transaction date; per-row `currency` preserved (no FX guessing here).
  *  - Category always starts 'uncategorized' — nothing is auto-booked as income or expense.
  *    Antonio categorizes; the books are never silently invented.
@@ -30,8 +30,12 @@ import {
 import { isMatchableInvoice } from "@/lib/finance/invoice-matchability"
 import { updateFeeds } from "@/lib/finance/feed-write"
 
-/** The owner's books. Every projected row carries THIS and only this. */
-export const OWNER_ACCOUNT_ID = "00000000-0000-0000-0000-000000000001"
+import { TD_ENTITY_ID } from "@/lib/owner-finance"
+
+/** The owner's books entity. ONE definition (lib/owner-finance) — two independent copies
+ *  of this constant were a named migration hazard. Re-exported under the old name for
+ *  existing imports; same value. */
+export const OWNER_ACCOUNT_ID = TD_ENTITY_ID
 
 /** Feed row fields the projection reads. */
 export interface ProjectableFeed extends FeedSignalSource {
@@ -44,9 +48,10 @@ export interface ProjectableFeed extends FeedSignalSource {
   matched_payment_id?: string | null
 }
 
-/** A row as My Finances stores it. */
+/** A row as My Finances stores it (td_books_transactions — the books' OWN table since
+ *  Phase 1a, no longer a slice of the multi-tenant client tax table). */
 export interface OwnerLedgerRow {
-  account_id: string
+  entity_id: string
   tax_year: number
   transaction_date: string
   description: string
@@ -164,7 +169,7 @@ export function buildOwnerLedgerRow(feed: ProjectableFeed): OwnerLedgerRow | nul
   const description = (feed.memo || feed.sender_name || "Bank transaction").trim()
 
   return {
-    account_id: OWNER_ACCOUNT_ID, // HARD-PINNED — never derived from the feed.
+    entity_id: TD_ENTITY_ID, // HARD-PINNED — never derived from the feed.
     tax_year: Number(date.slice(0, 4)),
     transaction_date: date,
     description,
@@ -214,8 +219,8 @@ export async function sendFeedToOwnerLedger(
 
   // COPY FIRST — the row must exist in My Finances before it leaves the Bank Feed.
   const { error: insErr } = await supabaseAdmin
-    .from("bank_transactions")
-    .upsert([row], { onConflict: "account_id,transaction_ref,transaction_date,amount" })
+    .from("td_books_transactions")
+    .upsert([row], { onConflict: "entity_id,transaction_ref", ignoreDuplicates: true })
   if (insErr) return { ok: false, error: `Could not copy it into My Finances: ${insErr.message}` }
 
   // MARK AFTER — and drop any stale candidate pin with it.
@@ -241,9 +246,9 @@ export async function sendOwnerLedgerRowToFinance(
   feedId: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const { error: delErr } = await supabaseAdmin
-    .from("bank_transactions")
+    .from("td_books_transactions")
     .delete()
-    .eq("account_id", OWNER_ACCOUNT_ID) // never touch a client's rows
+    .eq("entity_id", TD_ENTITY_ID)
     .eq("transaction_ref", `feed:${feedId}`)
 
   if (delErr) return { ok: false, error: `Could not remove it from My Finances: ${delErr.message}` }
@@ -338,7 +343,7 @@ export async function projectFeedsToOwnerLedger(
   }
 
   // Belt-and-braces: the invariant is asserted again at the boundary, not just assumed.
-  const stray = rows.find((r) => r.account_id !== OWNER_ACCOUNT_ID)
+  const stray = rows.find((r) => r.entity_id !== TD_ENTITY_ID)
   if (stray) {
     return {
       ok: false,
@@ -353,9 +358,13 @@ export async function projectFeedsToOwnerLedger(
     return { ok: true, considered: feeds.length, projected: 0, skipped: feeds.length }
   }
 
+  // INSERT-ONCE, never update (architect blocker, Phase 1a): a books row is STATEFUL the
+  // moment Antonio categorizes it — an upsert that rewrites the payload would reset his
+  // category/notes on every sweep cycle. Identity is (entity, ref) alone; date/amount are
+  // payload, so an upstream feed correction conflicts instead of duplicating.
   const { error } = await supabaseAdmin
-    .from("bank_transactions")
-    .upsert(rows, { onConflict: "account_id,transaction_ref,transaction_date,amount" })
+    .from("td_books_transactions")
+    .upsert(rows, { onConflict: "entity_id,transaction_ref", ignoreDuplicates: true })
 
   if (error) {
     return { ok: false, considered: feeds.length, projected: 0, skipped: feeds.length, error: error.message }
