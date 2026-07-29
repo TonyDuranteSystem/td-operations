@@ -169,6 +169,16 @@ export function useEmailAttachments() {
   /** Files that failed. Sending must not silently drop them. */
   const failed = useCallback(() => filesRef.current.filter((f) => f.error), [])
 
+  /**
+   * Files still mid-upload (no path yet, no error). THE send guard — the
+   * `uploading` boolean races across overlapping add() batches (batch 1
+   * finishing sets it false while batch 2 is still in flight; council major
+   * 2026-07-29), which would silently drop the in-flight file from the sent
+   * email. A file-level predicate cannot race: a file is pending until ITS
+   * upload resolves. Reads the ref for the same reason uploaded() does.
+   */
+  const pending = useCallback(() => filesRef.current.filter((f) => !f.path && !f.error), [])
+
   /** Paste handler: pull file blobs (a screenshot, a copied PDF) off the clipboard. */
   const onPaste = useCallback(
     (e: React.ClipboardEvent) => {
@@ -180,7 +190,7 @@ export function useEmailAttachments() {
     [add],
   )
 
-  return { files, uploading, limitNotice, add, remove, clear, uploaded, failed, onPaste }
+  return { files, uploading, limitNotice, add, remove, clear, uploaded, failed, pending, onPaste }
 }
 
 /** The shape the composers hand down to the chips row. */

@@ -57,6 +57,18 @@ export function sanitizeAttachmentFilename(name: string): string {
   return `=?utf-8?B?${Buffer.from(fallback, "utf-8").toString("base64")}?=`
 }
 
+/**
+ * The declared content type is interpolated into `Content-Type: ${ct}; name=…`
+ * by both MIME builders — the same header-injection surface as the filename.
+ * Anything that isn't a plain type/subtype token pair falls back to
+ * octet-stream rather than reaching a header.
+ */
+const MIME_TYPE_SHAPE = /^[\w.+-]+\/[\w.+-]+$/
+export function sanitizeAttachmentMimeType(mime: unknown): string | undefined {
+  if (typeof mime !== "string" || !mime) return undefined
+  return MIME_TYPE_SHAPE.test(mime) ? mime.toLowerCase() : "application/octet-stream"
+}
+
 /** Parse + bound the raw `attachments` field of a compose/reply request body.
  * Returns null when the field is absent/empty; throws on a malformed entry. */
 export function parseStagedAttachmentInputs(raw: unknown): StagedEmailAttachmentInput[] | null {
@@ -74,7 +86,7 @@ export function parseStagedAttachmentInputs(raw: unknown): StagedEmailAttachment
     return {
       path,
       name: sanitizeAttachmentFilename(name),
-      mime_type: typeof e?.mime_type === "string" ? e.mime_type : undefined,
+      mime_type: sanitizeAttachmentMimeType(e?.mime_type),
     }
   })
 }
@@ -110,7 +122,7 @@ export async function loadStagedEmailAttachments(
     out.push({
       filename: sanitizeAttachmentFilename(input.name),
       content: buffer.toString("base64"),
-      content_type: input.mime_type || "application/octet-stream",
+      content_type: sanitizeAttachmentMimeType(input.mime_type) || "application/octet-stream",
     })
   }
   return out

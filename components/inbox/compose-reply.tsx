@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Send, Sparkles, Loader2, Paperclip } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -21,10 +21,38 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
   const [aiLoading, setAiLoading] = useState(false)
   const [attachNotice, setAttachNotice] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // Synchronous double-click guard — isPending is render-state and two clicks
+  // can land inside one render window, firing two POSTs (the route has no
+  // idempotency key).
+  const sendingRef = useRef(false)
   const queryClient = useQueryClient()
   const attachments = useEmailAttachments()
 
   const isEmail = conversation.channel === 'gmail'
+
+  // Belt-and-braces to the key={conversation.id} at both mount sites: staged
+  // attachments must NEVER survive a thread switch (council blocker
+  // 2026-07-29 — a passport staged on thread A must not ride a reply to B).
+  const clearAttachments = attachments.clear
+  useEffect(() => {
+    clearAttachments()
+    setAttachNotice(null)
+  }, [conversation.id, clearAttachments])
+
+  // While the email composer is on screen, a drop that MISSES the drop zone
+  // must not make the browser navigate to the file and destroy the draft.
+  useEffect(() => {
+    if (!isEmail) return
+    const swallow = (e: DragEvent) => {
+      if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) e.preventDefault()
+    }
+    window.addEventListener('dragover', swallow)
+    window.addEventListener('drop', swallow)
+    return () => {
+      window.removeEventListener('dragover', swallow)
+      window.removeEventListener('drop', swallow)
+    }
+  }, [isEmail])
 
   const sendMutation = useMutation({
     mutationFn: async (text: string) => {
@@ -67,10 +95,11 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
 
   const handleSend = () => {
     const text = message.trim()
-    if (!text || sendMutation.isPending) return
+    if (!text || sendMutation.isPending || sendingRef.current) return
     // Never send while a file is mid-upload or silently drop one that failed —
-    // the staff member attached it because the recipient needs it.
-    if (attachments.uploading) {
+    // the staff member attached it because the recipient needs it. Per-file
+    // pending check, NOT the uploading boolean (which races across batches).
+    if (attachments.pending().length > 0) {
       setAttachNotice('Wait for the upload to finish, then send.')
       return
     }
@@ -79,7 +108,8 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
       return
     }
     setAttachNotice(null)
-    sendMutation.mutate(text)
+    sendingRef.current = true
+    sendMutation.mutate(text, { onSettled: () => { sendingRef.current = false } })
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -203,7 +233,11 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
 
         <button
           onClick={handleSend}
-          disabled={!message.trim() || sendMutation.isPending || attachments.uploading}
+          disabled={
+            !message.trim() ||
+            sendMutation.isPending ||
+            attachments.files.some((f) => !f.path && !f.error)
+          }
           className="shrink-0 p-2.5 rounded-xl bg-blue-500 text-white hover:bg-blue-600
             disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >

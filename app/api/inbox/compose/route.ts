@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { sendEmail, renderEmailTemplate, type SendEmailAttachment } from "@/lib/operations/email"
 import {
   parseStagedAttachmentInputs,
@@ -53,6 +54,12 @@ function plainToHtml(text: string): string {
 
 export async function POST(req: NextRequest) {
   try {
+    // Staff gate — middleware only guarantees "is logged in" for /api routes,
+    // and a portal CLIENT has a login. Sends branded mail as support@; the
+    // 2026-07-21 invariant applies (council 2026-07-29).
+    const denied = await requireStaffRoute()
+    if (denied) return denied
+
     const payload = (await req.json()) as ComposeRequest
 
     if (!payload.to) {

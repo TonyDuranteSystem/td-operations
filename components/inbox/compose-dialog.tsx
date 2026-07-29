@@ -61,8 +61,39 @@ export function ComposeDialog({
   const [linkLabel, setLinkLabel] = useState(prefillLinkLabel)
   const [attachNotice, setAttachNotice] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // Synchronous double-click guard — isPending is render-state and two clicks
+  // can land inside one render window, firing two POSTs.
+  const sendingRef = useRef(false)
   const attachments = useEmailAttachments()
   const queryClient = useQueryClient()
+
+  // Closing without sending must drop the staged files — the dialog stays
+  // mounted with `open` toggled, so without this a file staged for client A
+  // silently rides the next email to client B (council 2026-07-29). The
+  // uploaded objects become bucket orphans (accepted; TTL sweep is a
+  // follow-up card).
+  const clearAttachments = attachments.clear
+  useEffect(() => {
+    if (!open) {
+      clearAttachments()
+      setAttachNotice(null)
+    }
+  }, [open, clearAttachments])
+
+  // While the dialog is open, a drop that MISSES the drop zone must not make
+  // the browser navigate to the file and destroy the draft.
+  useEffect(() => {
+    if (!open) return
+    const swallow = (e: DragEvent) => {
+      if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) e.preventDefault()
+    }
+    window.addEventListener('dragover', swallow)
+    window.addEventListener('drop', swallow)
+    return () => {
+      window.removeEventListener('dragover', swallow)
+      window.removeEventListener('drop', swallow)
+    }
+  }, [open])
 
   useEffect(() => { setTo(prefillTo) }, [prefillTo])
   useEffect(() => { setSubject(prefillSubject) }, [prefillSubject])
@@ -159,9 +190,11 @@ export function ComposeDialog({
   })
 
   const handleSend = () => {
+    if (sendMutation.isPending || sendingRef.current) return
     // Never send while a file is mid-upload or silently drop one that failed —
-    // the staff member attached it because the recipient needs it.
-    if (attachments.uploading) {
+    // the staff member attached it because the recipient needs it. Per-file
+    // pending check, NOT the uploading boolean (which races across batches).
+    if (attachments.pending().length > 0) {
       setAttachNotice('Wait for the upload to finish, then send.')
       return
     }
@@ -170,7 +203,8 @@ export function ComposeDialog({
       return
     }
     setAttachNotice(null)
-    sendMutation.mutate()
+    sendingRef.current = true
+    sendMutation.mutate(undefined, { onSettled: () => { sendingRef.current = false } })
   }
 
   const handleAiCompose = async () => {
@@ -208,15 +242,16 @@ export function ComposeDialog({
   const hasCrmLink = accountId || contactId || leadId
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      {/* The whole dialog is the drop target — a file dropped outside a
-          registered target makes the browser navigate away from the page. */}
-      <WorkerDropZone
-        onFiles={(f) => void attachments.add(f)}
-        label="Drop files to attach"
-        className="w-full max-w-2xl mx-4"
-      >
-      <div className="bg-white rounded-xl shadow-2xl w-full flex flex-col max-h-[85vh]">
+    // The ENTIRE overlay (backdrop included) is the drop target — a drop that
+    // misses the card by 40px must attach, not navigate the browser to the
+    // file (council major 2026-07-29). The window-level dragover/drop
+    // preventDefault above is the second net for drops outside the overlay.
+    <WorkerDropZone
+      onFiles={(f) => void attachments.add(f)}
+      label="Drop files to attach"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+    >
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 flex flex-col max-h-[85vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b">
           <h2 className="text-sm font-semibold text-zinc-900">New Email</h2>
@@ -445,7 +480,13 @@ export function ComposeDialog({
           </div>
           <button
             onClick={handleSend}
-            disabled={!to.trim() || !subject.trim() || !body.trim() || sendMutation.isPending || attachments.uploading}
+            disabled={
+              !to.trim() ||
+              !subject.trim() ||
+              !body.trim() ||
+              sendMutation.isPending ||
+              attachments.files.some((f) => !f.path && !f.error)
+            }
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-500 text-white text-sm font-medium
               hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
@@ -458,7 +499,6 @@ export function ComposeDialog({
           </button>
         </div>
       </div>
-      </WorkerDropZone>
-    </div>
+    </WorkerDropZone>
   )
 }

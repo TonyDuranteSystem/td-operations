@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { gmailGet, gmailPost, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
 import { buildReplyMime, type ReplyMimeAttachment } from "@/lib/inbox/reply-mime"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
@@ -12,6 +13,12 @@ export const dynamic = "force-dynamic"
 
 export async function POST(req: NextRequest) {
   try {
+    // Staff gate — middleware only guarantees "is logged in" for /api routes,
+    // and a portal CLIENT has a login. Sends real mail through our mailboxes;
+    // the 2026-07-21 invariant applies (council 2026-07-29).
+    const denied = await requireStaffRoute()
+    if (denied) return denied
+
     const body = await req.json()
     const { conversationId, message, channel, mailbox } = body as {
       conversationId: string

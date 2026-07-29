@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   isValidInboxEmailStagingPath,
   sanitizeAttachmentFilename,
+  sanitizeAttachmentMimeType,
   parseStagedAttachmentInputs,
   MAX_EMAIL_ATTACHMENT_FILES,
 } from '@/lib/inbox/email-attachment-staging'
@@ -50,6 +51,29 @@ describe('sanitizeAttachmentFilename', () => {
     expect(sanitizeAttachmentFilename('   ')).toBe('attachment')
     expect(sanitizeAttachmentFilename('"\r\n"')).toBe('attachment')
     expect(sanitizeAttachmentFilename('x'.repeat(500)).length).toBeLessThanOrEqual(180)
+  })
+})
+
+describe('sanitizeAttachmentMimeType', () => {
+  it('passes plain type/subtype tokens through, lowercased', () => {
+    expect(sanitizeAttachmentMimeType('application/pdf')).toBe('application/pdf')
+    expect(sanitizeAttachmentMimeType('IMAGE/JPEG')).toBe('image/jpeg')
+    expect(sanitizeAttachmentMimeType('application/vnd.openxmlformats-officedocument.wordprocessingml.document')).toBe(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    )
+  })
+
+  it('collapses header-injection attempts to octet-stream', () => {
+    expect(sanitizeAttachmentMimeType('application/pdf"; x="y')).toBe('application/octet-stream')
+    expect(sanitizeAttachmentMimeType('application/pdf\r\nX-Injected: 1')).toBe('application/octet-stream')
+    expect(sanitizeAttachmentMimeType('text/plain; charset=utf-8')).toBe('application/octet-stream')
+    expect(sanitizeAttachmentMimeType('nosubtype')).toBe('application/octet-stream')
+  })
+
+  it('returns undefined for absent/non-string input', () => {
+    expect(sanitizeAttachmentMimeType(undefined)).toBeUndefined()
+    expect(sanitizeAttachmentMimeType('')).toBeUndefined()
+    expect(sanitizeAttachmentMimeType(42)).toBeUndefined()
   })
 })
 
