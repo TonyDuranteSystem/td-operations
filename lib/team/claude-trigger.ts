@@ -210,40 +210,18 @@ export async function processClaudeReply(params: {
         ? { enableSlackSend: true, pinnedPortalRecipient: { contact_id: thread.contact_id } }
         : {}
 
-  // EMAIL: allowed only when the linked client has addresses on file, pinned to exactly
-  // those. Note the empty-array case is NOT the same as "no rail" — `[]` is a real pin
-  // meaning "refuse every address", so a linked client with no address on file still gets
-  // the rail and every send is refused, rather than falling through to unpinned.
-  let emailSendRail: { enableEmailSend?: true; pinnedEmailRecipients?: string[] } = {}
-  if (thread?.account_id || thread?.contact_id) {
-    // Contacts link to accounts through `account_contacts` — `contacts` has NO
-    // `account_id` column. This filtered on one anyway; PostgREST errored, the error was
-    // discarded with the row set, and an empty address list means "refuse every address",
-    // so email from here was silently dead for every account-scoped thread. Same defect,
-    // same day, as the CRM sidebar. Verified against production 2026-07-20.
-    let contactRows: Array<{ email: string | null }> = []
-    if (thread.account_id) {
-      const { data: links } = await supabaseAdmin
-        .from('account_contacts')
-        .select('contact_id')
-        .eq('account_id', thread.account_id)
-      const contactIds = (links ?? []).map((l: { contact_id: string }) => l.contact_id).filter(Boolean)
-      if (contactIds.length) {
-        const { data: rows } = await supabaseAdmin.from('contacts').select('email').in('id', contactIds)
-        contactRows = rows ?? []
-      }
-    } else {
-      const { data: rows } = await supabaseAdmin
-        .from('contacts')
-        .select('email')
-        .eq('id', thread.contact_id as string)
-      contactRows = rows ?? []
-    }
-    const addresses = contactRows
-      .map((c) => c.email)
-      .filter((e): e is string => Boolean(e && e.includes('@')))
-    emailSendRail = { enableEmailSend: true, pinnedEmailRecipients: Array.from(new Set(addresses)) }
-  }
+  // EMAIL: UNPINNED on client threads — staff decide the recipient (Antonio,
+  // 2026-07-29, dev job f55ea3bb, verbatim: "You just have to unlock it because
+  // he has to do what we decide"). The July-19 client-address pin blocked the
+  // everyday case of emailing our own accountant firm about the client (the
+  // MFCompany/Smit refusal). This surface is staff-driven — the @claude prompt
+  // is authored by staff, the draft→explicit-"send it" discipline remains the
+  // control, and every send is audit-attributed via sendActor. Same unpinned
+  // model as Slack. TRADE-OFF (named to Antonio, accepted by him): with no pin,
+  // a poisoned document trying to redirect a send is caught only by the staff
+  // member reviewing the draft before saying "send it".
+  const emailSendRail: { enableEmailSend?: true } =
+    thread?.account_id || thread?.contact_id ? { enableEmailSend: true } : {}
 
   // Recent conversation (exclude the placeholder itself) for context.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
