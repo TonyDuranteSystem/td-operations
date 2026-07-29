@@ -64,8 +64,9 @@ export interface OwnerLedgerRow {
   notes: string | null
 }
 
-/** Feed source → the bank label My Finances groups cash by. */
-const BANK_LABELS: Record<string, string> = {
+/** Feed source → the bank label My Finances groups cash by. Exported: the statement
+ * backfill (Phase 2) must label banks IDENTICALLY or the tie-out splits one bank in two. */
+export const BANK_LABELS: Record<string, string> = {
   relay: "Relay",
   mercury: "Mercury",
   mercury_api: "Mercury",
@@ -298,10 +299,15 @@ async function fetchOpenInvoices(): Promise<OpenInvoiceRef[]> {
 export async function sweepFeedsToOwnerLedger(): Promise<ProjectionResult> {
   const openInvoices = await fetchOpenInvoices()
 
+  // 'matched' and 'duplicate' can NEVER project (a matched feed carries client-payment
+  // evidence; a duplicate is the same money as another row) — fetching them only burns
+  // the window. Left in, they eventually crowd out backfilled history entirely: matched
+  // rows never leave 'matched', so once they exceed the limit, older rows would never
+  // be seen by any sweep again (bug-hunter, Phase 2 review).
   const { data, error } = await supabaseAdmin
     .from("td_bank_feeds")
     .select("id, transaction_date, amount, currency, source, sender_name, memo, sender_reference, raw_data, status, external_id, matched_payment_id")
-    .not("status", "in", '("owner_ledger")')
+    .not("status", "in", '("owner_ledger","matched","duplicate")')
     .order("transaction_date", { ascending: false })
     .limit(2000)
 

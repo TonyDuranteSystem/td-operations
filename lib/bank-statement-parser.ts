@@ -748,6 +748,11 @@ async function parseZipArchive(zipBuffer: Buffer, zipName: string, opts?: ParseO
     if (r.bank_name && r.bank_name !== "unknown") merged.bank_name = r.bank_name
     if (r.errors.length) merged.errors.push(...r.errors.map(e => `${innerName}: ${e}`))
     if (r.reconciliation) innerReconciliations.push(r.reconciliation.reconciled)
+    // An inner file that QUARANTINED contributed zero rows and zero errors — without
+    // this line the merged report reads as complete while a whole month is missing.
+    if (r.quarantine) {
+      merged.errors.push(`${innerName}: format quarantined — needs a one-time confirmation before its rows can ingest (${r.quarantine.ambiguities.join("; ") || "ambiguous layout"})`)
+    }
   }
 
   if (merged.transactions.length === 0 && merged.errors.length === 0) {

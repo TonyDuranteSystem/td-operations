@@ -75,6 +75,7 @@ const SUBCATEGORIES: Record<string, { value: string; label: string }[]> = {
   transfer: [
     { value: 'stripe_payout', label: 'Stripe Payout (clearing)' },
     { value: 'own_account', label: 'Between Own Bank Accounts' },
+    { value: 'client_payment', label: 'Client Payment (already counted as invoice income)' },
   ],
   fee: [
     { value: 'bank_fee', label: 'Bank Fee' },
@@ -95,6 +96,12 @@ const SUBCATEGORIES: Record<string, { value: string; label: string }[]> = {
 /** Row amounts render in the ROW's currency — a €500 line must never display as $500. */
 const fmtRow = (n: number, currency: string | null) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: currency || 'USD', maximumFractionDigits: 0 }).format(Math.abs(n))
+
+/** A row that arrived from a BANK record — live feed OR imported statement. The income
+ * double-count guards must cover BOTH: a client's invoice payment can reach the books
+ * either way, and its income is already counted from the payments ledger. */
+const isBankDeposit = (tx: OwnerTransaction): boolean =>
+  tx.amount > 0 && (tx.transaction_ref?.startsWith('feed:') === true || tx.transaction_ref?.startsWith('stmt:') === true)
 
 interface TransactionsTabProps {
   year: number
@@ -136,7 +143,37 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
   const [bulkCategory, setBulkCategory] = useState<OwnerCategory>('expense')
   const [bulkSubcategory, setBulkSubcategory] = useState('')
   const [rules, setRules] = useState<VendorRule[]>([])
+  const [uploading, setUploading] = useState(false)
+  const [importReport, setImportReport] = useState<{
+    file: string; banks: string[]; parsed: number; imported: number
+    skipped_already_imported: number; skipped_feed_covered: number
+    flagged_possible_client_payment: number; banks_without_feed: string[]
+    parse_errors: string[]; quarantined: boolean
+  } | null>(null)
   const LIMIT = 50
+
+  async function uploadStatement(file: File) {
+    setUploading(true)
+    setImportReport(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/owner/transactions/upload-statement', { method: 'POST', body: fd })
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Import failed — please try again.') }
+      const { report } = await res.json()
+      setImportReport(report)
+      if (report.quarantined || (report.parse_errors.length > 0 && report.imported === 0)) {
+        toast.error(report.quarantined ? 'File format needs confirmation — nothing imported' : 'Import problem — see the report')
+      } else {
+        toast.success(report.imported > 0 ? `Imported ${report.imported} transactions` : 'Nothing new to import')
+      }
+      load(0)
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'Import failed — please try again.')
+    } finally {
+      setUploading(false)
+    }
+  }
 
   const loadRules = useCallback(() => {
     fetch('/api/owner/vendor-rules')
@@ -160,7 +197,7 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
     if (!s) return
     // The double-count guard must cover EVERY apply surface, not just the modal: a bank
     // deposit chip-accepted as Income would silently double-count invoice money.
-    if (s.category === 'income' && tx.amount > 0 && tx.transaction_ref?.startsWith('feed:')) {
+    if (s.category === 'income' && isBankDeposit(tx)) {
       const ok = window.confirm(
         'This is a bank deposit. If it is a client paying an invoice, do NOT mark it Income — use "This is for a client →" instead, or the money will be counted twice. Mark as Income anyway (rewards/bonuses only)?'
       )
@@ -291,6 +328,28 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
     }
   }
 
+  /** Statement-imported client payment: mark "already counted" — category transfer
+   * (non-P&L; the income is in the invoice ledger) with an explicit subcategory so
+   * reports can separate it from real own-account transfers. */
+  async function markStmtClientPayment(tx: OwnerTransaction) {
+    if (!tx.transaction_ref) return
+    setSendingRef(tx.transaction_ref)
+    try {
+      const res = await fetch('/api/owner/transactions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: tx.id, category: 'transfer', subcategory: 'client_payment', notes: 'Client invoice payment (statement import) — income counted in the invoice ledger, excluded from P&L' }),
+      })
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Could not mark it.') }
+      toast.success('Marked as client payment — excluded from profit, kept in the cash tie-out')
+      load(offset)
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'Could not mark it.')
+    } finally {
+      setSendingRef(null)
+    }
+  }
+
   async function bulkCategorize() {
     if (selected.size === 0) return
     try {
@@ -388,7 +447,7 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                   ledger — a bank deposit for a client invoice marked "income" here would
                   count the same money twice. */}
               {modal.category === 'income' && (
-                (modal.tx.amount > 0 && modal.tx.transaction_ref?.startsWith('feed:')) ||
+                isBankDeposit(modal.tx) ||
                 (modal.applyToAll && modal.similar?.has_positive_feed_rows)
               ) && (
                 <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
@@ -467,7 +526,41 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
             {uncategorizedCount} need review
           </span>
         )}
+        <label className={`ml-auto cursor-pointer rounded-md border border-zinc-200 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 ${uploading ? 'pointer-events-none opacity-50' : ''}`}>
+          {uploading ? 'Importing…' : 'Import statement'}
+          <input
+            type="file"
+            accept=".csv,.pdf,.zip"
+            className="hidden"
+            disabled={uploading}
+            onChange={e => { const f = e.target.files?.[0]; if (f) uploadStatement(f); e.target.value = '' }}
+          />
+        </label>
       </div>
+
+      {/* Statement import report — what landed, what was skipped and WHY */}
+      {importReport && (
+        <div className="space-y-1 rounded-lg border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-700">
+          <div className="flex items-center justify-between">
+            <span className="font-medium">{importReport.file} — {importReport.banks.join(', ')}</span>
+            <button onClick={() => setImportReport(null)} className="text-xs text-zinc-400 hover:text-zinc-600">dismiss</button>
+          </div>
+          <p>
+            {importReport.imported} imported of {importReport.parsed} parsed
+            {importReport.skipped_feed_covered > 0 && <> · {importReport.skipped_feed_covered} skipped (already captured — bank feed or an earlier import)</>}
+            {importReport.skipped_already_imported > 0 && <> · {importReport.skipped_already_imported} skipped (identical rows already imported)</>}
+          </p>
+          {importReport.banks_without_feed.length > 0 && (
+            <p className="text-zinc-500">ℹ {importReport.banks_without_feed.join(', ')}: no live bank feed exists — every parsed row was treated as new.</p>
+          )}
+          {importReport.flagged_possible_client_payment > 0 && (
+            <p className="text-amber-700">⚠ {importReport.flagged_possible_client_payment} deposit{importReport.flagged_possible_client_payment !== 1 ? 's' : ''} match a paid invoice amount — flagged in their notes; do not categorize those as income without checking.</p>
+          )}
+          {importReport.parse_errors.length > 0 && (
+            <p className="text-red-700">{importReport.parse_errors.join(' · ')}</p>
+          )}
+        </div>
+      )}
 
       {/* Bulk action bar */}
       {selected.size > 0 && (
@@ -494,7 +587,7 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
             Apply to {selected.size}
           </button>
           <button onClick={() => setSelected(new Set())} className="text-xs text-blue-600 hover:underline">Clear</button>
-          {bulkCategory === 'income' && rows.some(r => selected.has(r.id) && r.amount > 0 && r.transaction_ref?.startsWith('feed:')) && (
+          {bulkCategory === 'income' && rows.some(r => selected.has(r.id) && isBankDeposit(r)) && (
             <span className="text-xs text-red-700">
               ⚠ Client invoice payments must NOT be marked Income (already counted from invoices) — use &quot;This is for a client →&quot; for those.
             </span>
@@ -589,6 +682,20 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                         className="rounded border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50"
                       >
                         {sendingRef === tx.transaction_ref ? 'Moving…' : 'This is for a client →'}
+                      </button>
+                    )}
+                    {/* A STATEMENT-imported deposit has no feed row to return to — the right
+                        answer for a client payment here is "already counted" (its income
+                        lives in the invoice ledger): out of the P&L, still real cash for
+                        the tie-out. */}
+                    {tx.transaction_ref?.startsWith('stmt:') && tx.amount > 0 && tx.category === 'uncategorized' && (
+                      <button
+                        onClick={() => markStmtClientPayment(tx)}
+                        disabled={sendingRef === tx.transaction_ref}
+                        title="This is a client paying an invoice — mark it already-counted (never income, stays in the cash tie-out)"
+                        className="rounded border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50"
+                      >
+                        {sendingRef === tx.transaction_ref ? 'Marking…' : 'Client payment ✓'}
                       </button>
                     )}
                   </div>

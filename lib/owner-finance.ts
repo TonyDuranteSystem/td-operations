@@ -158,8 +158,13 @@ export interface CashAccountBalance {
 
 /** Per-currency cash totals — NEVER a single cross-currency number (council rule). */
 export interface CashPosition {
+  /** Per-currency totals over FRESH balances only (see stale). */
   totals: Record<string, number>
   accounts: CashAccountBalance[]
+  /** Balances whose newest data is older than the freshness window — shown, dated,
+   * but NEVER summed into totals: an imported December statement must not present
+   * last year's balance as today's cash. */
+  stale: CashAccountBalance[]
 }
 
 export interface VendorRule {
@@ -458,24 +463,32 @@ export async function getCashPosition(): Promise<CashPosition> {
   // and the totals stay per-currency (never a $-labeled EUR+USD sum).
   const seen = new Set<string>()
   const accounts: CashAccountBalance[] = []
+  const stale: CashAccountBalance[] = []
+
+  // Statement backfill writes HISTORICAL balances; without a freshness cut, importing
+  // last year's statements would present a December balance as today's cash.
+  const STALE_DAYS = 45
+  const cutoff = new Date(Date.now() - STALE_DAYS * 86400000).toISOString().slice(0, 10)
 
   for (const row of data ?? []) {
     const currency = row.currency || 'USD'
     const key = `${row.bank_name}|${currency}`
     if (!seen.has(key)) {
       seen.add(key)
-      accounts.push({
+      const entry = {
         bank_name: row.bank_name,
         currency,
         balance: Number(row.balance_after),
         as_of: row.transaction_date,
-      })
+      }
+      if (row.transaction_date >= cutoff) accounts.push(entry)
+      else stale.push(entry)
     }
   }
 
   const totals: Record<string, number> = {}
   for (const a of accounts) totals[a.currency] = (totals[a.currency] ?? 0) + a.balance
-  return { totals, accounts }
+  return { totals, accounts, stale }
 }
 
 export async function getUncategorizedCount(year: number): Promise<number> {

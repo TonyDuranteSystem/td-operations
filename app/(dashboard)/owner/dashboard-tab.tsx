@@ -87,7 +87,7 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
       )}
 
       {/* Cash accounts breakdown — each balance in its own currency */}
-      {cash.accounts.length > 0 && (
+      {(cash.accounts.length > 0 || cash.stale.length > 0) && (
         <div className="rounded-lg border border-zinc-200 bg-white p-4">
           <h3 className="mb-3 text-sm font-medium text-zinc-700">Cash by Account</h3>
           <div className="space-y-2">
@@ -95,6 +95,12 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
               <div key={`${a.bank_name}|${a.currency}`} className="flex items-center justify-between text-sm">
                 <span className="text-zinc-600">{a.bank_name}{a.currency !== 'USD' ? ` (${a.currency})` : ''}</span>
                 <span className="font-medium tabular-nums">{fmtIn(a.currency)(a.balance)}</span>
+              </div>
+            ))}
+            {cash.stale.map(a => (
+              <div key={`stale|${a.bank_name}|${a.currency}`} className="flex items-center justify-between text-sm text-zinc-400">
+                <span>{a.bank_name}{a.currency !== 'USD' ? ` (${a.currency})` : ''} — as of {a.as_of}, not in totals</span>
+                <span className="tabular-nums">{fmtIn(a.currency)(a.balance)}</span>
               </div>
             ))}
           </div>

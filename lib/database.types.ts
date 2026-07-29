@@ -11773,6 +11773,45 @@ export type Database = {
         }
         Relationships: []
       }
+      td_books_bank_balances: {
+        Row: {
+          bank_key: string
+          closing_balance: number | null
+          created_at: string
+          currency: string
+          entity_id: string
+          id: string
+          notes: string | null
+          opening_balance: number | null
+          tax_year: number
+          updated_at: string
+        }
+        Insert: {
+          bank_key: string
+          closing_balance?: number | null
+          created_at?: string
+          currency?: string
+          entity_id?: string
+          id?: string
+          notes?: string | null
+          opening_balance?: number | null
+          tax_year: number
+          updated_at?: string
+        }
+        Update: {
+          bank_key?: string
+          closing_balance?: number | null
+          created_at?: string
+          currency?: string
+          entity_id?: string
+          id?: string
+          notes?: string | null
+          opening_balance?: number | null
+          tax_year?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
       td_books_transactions: {
         Row: {
           account_type: string | null
