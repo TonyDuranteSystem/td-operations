@@ -177,6 +177,7 @@ const handler = createMcpHandler(
 // Priority: check static key first (fast), then OAuth token (DB lookup)
 
 import { validateAccessToken } from "@/lib/oauth"
+import { runWithMcpAuthContext } from "@/lib/mcp/auth-context"
 
 function withAuth(
   mcpHandler: (req: Request) => Promise<Response>
@@ -208,13 +209,32 @@ function withAuth(
 
     // Method 1: Static API key (Claude Code)
     if (token === apiKey) {
-      return mcpHandler(req)
+      // The auth-method context lets identity-sensitive tools (team_chat_send's
+      // "on behalf of" stamp) distinguish the shared Claude Code key from an
+      // identified OAuth session — see lib/mcp/auth-context.ts.
+      return runWithMcpAuthContext({ method: "static" }, () => mcpHandler(req))
     }
 
     // Method 2: OAuth access token (Claude.ai)
     const oauthResult = await validateAccessToken(token)
     if (oauthResult.valid) {
-      return mcpHandler(req)
+      // Resolve the token's user email (best-effort) so an identified session
+      // is attributed to ITS user, never to the static-key default operator.
+      let email: string | null = null
+      if (oauthResult.userId) {
+        try {
+          const { supabaseAdmin } = await import("@/lib/supabase-admin")
+          const { data } = await supabaseAdmin
+            .from("oauth_users")
+            .select("email")
+            .eq("id", oauthResult.userId)
+            .maybeSingle()
+          email = (data?.email as string | undefined) ?? null
+        } catch {
+          email = null
+        }
+      }
+      return runWithMcpAuthContext({ method: "oauth", email }, () => mcpHandler(req))
     }
 
     return new Response(

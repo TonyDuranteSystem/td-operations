@@ -211,6 +211,10 @@ export function RealtimeNotifications() {
 
       // Don't notify for own messages.
       if (row?.sender_id && row.sender_id === currentUserIdRef.current) return
+      // Nor for a Claude message the user DICTATED themselves (sender is the
+      // Claude sentinel, but on_behalf_of_user_id names the human behind it —
+      // stamped by lib/team/post-message.ts). Their own words are not news.
+      if (row?.on_behalf_of_user_id && row.on_behalf_of_user_id === currentUserIdRef.current) return
       // A soft-deleted / retracted message must never surface its body.
       if (row?.deleted_at) return
 

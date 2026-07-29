@@ -35,7 +35,13 @@ ANSWERING A SPECIFIC BUG — add root_id: the answer lands INSIDE that bug's own
     },
     async ({ channel, thread_id, dm_user_id, root_id, message }) => {
       try {
-        const result = await postTeamMessage({ channel, thread_id, dm_user_id, root_id, message })
+        // Who is dictating this send: the static Claude Code key maps to the
+        // configured operator (Antonio); an OAuth connector session maps to its
+        // own user; unknown maps to null = everyone notified (council rule —
+        // see lib/mcp/auth-context.ts). The stamp silences ONLY that person's
+        // push/toast/unread for their own dictated message.
+        const { actingEmailForTeamChat } = await import("@/lib/mcp/auth-context")
+        const result = await postTeamMessage({ channel, thread_id, dm_user_id, root_id, message, on_behalf_of: actingEmailForTeamChat() })
         const who = result.mentioned_user_ids.length
           ? ` (pushed ${result.mentioned_user_ids.length} mentioned teammate${result.mentioned_user_ids.length > 1 ? "s" : ""})`
           : ""

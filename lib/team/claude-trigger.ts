@@ -377,6 +377,12 @@ export async function processClaudeReply(params: {
       // WHO asked for this. Without it every send from this surface was written to the
       // audit trail as the generic worker, so "who told it to send that" had no answer.
       sendActor: `team-chat:${prompt.sender_name ?? prompt.sender_id}`,
+      // EXPLICIT identity for team_chat_send's "on behalf of" stamp — the
+      // @claude prompt's sender IS the auth user driving this turn. Passed as
+      // the raw uuid (never the display-name actor label above, which cannot
+      // resolve). Silences only that person's own-dictated-message
+      // notifications; validated against the staff directory downstream.
+      onBehalfOf: prompt.sender_id ?? null,
       clientKey,
       clientName,
     })

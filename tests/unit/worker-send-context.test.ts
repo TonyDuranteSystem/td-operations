@@ -48,6 +48,20 @@ describe("buildWorkerSendContext — the controls survive the handoff", () => {
     expect(ctx!.pinnedEmailRecipients).toEqual(["someone@example.com"])
   })
 
+  it("forwards onBehalfOf (team-chat self-notification silencer) and builds a context for it alone", () => {
+    // A dropped field here would silently revive Antonio's self-notifications —
+    // the exact class of wiring bug this file exists for.
+    const ctx = buildWorkerSendContext({ onBehalfOf: A })
+    expect(ctx).toBeDefined()
+    expect(ctx!.onBehalfOf).toBe(A)
+  })
+
+  it("onBehalfOf stays null when the surface does not know who is driving", () => {
+    const ctx = buildWorkerSendContext({ sendActor: "team-chat:Antonio Durante" })
+    // The audit label is NOT an identity — it must never populate onBehalfOf.
+    expect(ctx!.onBehalfOf).toBeNull()
+  })
+
   it("keeps an EMPTY email allow-list as a real pin — [] must never become undefined", () => {
     // [] means "refuse every address". Collapsing it to undefined means "unpinned",
     // which is the fail-OPEN direction on an Inbox turn whose thread could not be read.

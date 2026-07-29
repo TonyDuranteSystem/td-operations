@@ -77,13 +77,21 @@ export async function GET(
   // (narrow projection, not the loaded window) so counts are accurate even when
   // the window is capped.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: replyRows } = await (supabaseAdmin as any)
+  const replyQuery = (cols: string) => (supabaseAdmin as any)
     .from('internal_messages')
-    .select('root_id, created_at, sender_id, sender_name')
+    .select(cols)
     .eq('thread_id', threadId)
     .not('root_id', 'is', null)
     .is('deleted_at', null)
     .order('created_at', { ascending: true })
+  const firstTry = await replyQuery('root_id, created_at, sender_id, sender_name, on_behalf_of_user_id')
+  let replyRows = firstTry.data
+  if (firstTry.error) {
+    // Deploy-before-DDL window: on_behalf_of_user_id may not exist yet (prod
+    // migration is run by hand in the SQL editor). Degrade to the old
+    // projection rather than breaking the thread read. Migration 20260729-1900.
+    ;({ data: replyRows } = await replyQuery('root_id, created_at, sender_id, sender_name'))
+  }
   const rootIds = Array.from(new Set(((replyRows ?? []) as { root_id: string }[]).map(r => r.root_id)))
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let rootReads: any[] = []

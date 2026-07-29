@@ -26,12 +26,13 @@ import {
   CLAUDE_SENDER_UUID,
   CLAUDE_SENDER_NAME,
 } from '@/lib/team/workspace'
-import { resolveMentions } from '@/lib/team/directory'
+import { resolveMentions, listTeamMembers } from '@/lib/team/directory'
 import { findOrCreateDm } from '@/lib/team/dm'
 import { sendPushToAdminUsers } from '@/lib/portal/web-push'
 import { sendPushToStaffExcept } from '@/lib/team/notify'
 import { channelNotifiesStaff } from '@/lib/team/channel-notify'
 import { validateTeamPostTarget, validateTeamPostMessage } from '@/lib/team/post-message-validate'
+import { resolveActingUser } from '@/lib/team/acting-user'
 
 export { validateTeamPostTarget, validateTeamPostMessage, TEAM_MESSAGE_MAX } from '@/lib/team/post-message-validate'
 
@@ -52,6 +53,15 @@ export interface PostTeamMessageInput {
   message: string
   /** Optional rich card (validated via validateTeamCard). */
   card?: unknown
+  /**
+   * The STAFF user (auth uuid or email) who dictated this message, when the
+   * calling surface knows it for certain. Stamped on the row so that person is
+   * excluded from push/toast and their unread counters — as if they had typed
+   * it themselves. COUNCIL RULE (2026-07-29): on any ambiguity pass nothing —
+   * an unknown actor stamps null and EVERYONE is notified (today's behavior).
+   * Never guess: a wrong id silences the wrong person's notifications.
+   */
+  on_behalf_of?: string | null
 }
 
 export interface PostTeamMessageResult {
@@ -106,6 +116,18 @@ async function resolveTargetThread(
 }
 
 /**
+ * Unknown-column insert error (PostgREST schema-cache miss PGRST204, or raw
+ * Postgres 42703). Scoped tightly so the deploy-before-DDL retry below can
+ * never swallow a real insert failure.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function isUnknownColumnError(error: any): boolean {
+  const code = String(error?.code ?? '')
+  if (code === 'PGRST204' || code === '42703') return true
+  return /on_behalf_of_user_id.*(column|schema cache)/i.test(String(error?.message ?? ''))
+}
+
+/**
  * Post a message into Team Chat as Claude. Throws on a resolvable-but-invalid
  * request (bad target / not found / empty message) so callers can surface a
  * clear error; DB errors also throw.
@@ -151,27 +173,67 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
     rootId = (root.root_id ?? root.id) as string
   }
 
+  // ── Acting user ("on behalf of") ──────────────────────────────────────────
+  // Resolve the dictating staff member against the directory. Best-effort and
+  // fail-to-null: an unresolvable/foreign id must degrade to "notify everyone"
+  // (today's behavior), never block the send and never guess (council rule).
+  let actingUserId: string | null = null
+  if (input.on_behalf_of) {
+    try {
+      actingUserId = resolveActingUser(await listTeamMembers(), input.on_behalf_of)
+    } catch {
+      actingUserId = null
+    }
+  }
+
   const message = input.message.trim()
-  const mentions = await resolveMentions(message, CLAUDE_SENDER_UUID)
+  // Excluding the ACTING user from mention resolution gives typed-message
+  // parity: resolveMentions never includes the sender, and for a dictated
+  // message the sender-in-spirit is the acting user. A self-mention therefore
+  // neither stores nor pushes — and an emptied mention list falls through to
+  // the channel broadcast below, so Luca is never silenced by Antonio
+  // @mentioning himself (senior-engineer finding, 2026-07-29).
+  const mentions = await resolveMentions(message, actingUserId ?? CLAUDE_SENDER_UUID)
   const now = new Date().toISOString()
 
-  const { data: msg, error } = await admin
+  const baseRow = {
+    thread_id: target.thread_id,
+    sender_id: CLAUDE_SENDER_UUID,
+    sender_name: CLAUDE_SENDER_NAME,
+    message,
+    root_id: rootId,
+    reply_to_id: rootId,
+    card: input.card ?? null,
+    mentions: mentions.matchedHandles.length ? mentions.matchedHandles : [],
+    mentioned_user_ids: mentions.userIds,
+    read_at: now,
+  }
+  let insertRes = await admin
     .from('internal_messages')
-    .insert({
-      thread_id: target.thread_id,
-      sender_id: CLAUDE_SENDER_UUID,
-      sender_name: CLAUDE_SENDER_NAME,
-      message,
-      root_id: rootId,
-      reply_to_id: rootId,
-      card: input.card ?? null,
-      mentions: mentions.matchedHandles.length ? mentions.matchedHandles : [],
-      mentioned_user_ids: mentions.userIds,
-      read_at: now,
-    })
+    .insert(actingUserId ? { ...baseRow, on_behalf_of_user_id: actingUserId } : baseRow)
     .select()
     .single()
+  if (insertRes.error && actingUserId && isUnknownColumnError(insertRes.error)) {
+    // Deploy-before-DDL window: prod code can land before Antonio runs the
+    // migration in the SQL editor. The message must still send — only the
+    // stamping degrades (push exclusion below still works in-memory).
+    console.warn('[post-message] on_behalf_of_user_id column missing — retrying insert without it. Run migration 20260729-1900.')
+    insertRes = await admin.from('internal_messages').insert(baseRow).select().single()
+  }
+  const { data: msg, error } = insertRes
   if (error) throw new Error(error.message)
+
+  // Auto-follow for the acting user: replying into a thread follows it, same
+  // as the human route — otherwise a dictated reply into the one SILENT
+  // channel (td-worker-bug) would leave them off the followers push list and
+  // the menu dot for that thread's future replies. Never touches read state.
+  if (rootId && actingUserId) {
+    try {
+      await admin
+        .from('internal_root_follows')
+        .upsert({ root_message_id: rootId, user_id: actingUserId }, { onConflict: 'root_message_id,user_id', ignoreDuplicates: true })
+    } catch { /* best-effort */ }
+  }
 
   // An answer into an ARCHIVED thread brings it back — same rule as the human
   // send route. Without it the message is accepted and pushed, yet the thread
@@ -193,12 +255,14 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
 
   // Push (best-effort) — to STAFF, resolved by name. Never the old "everyone
   // with a registered device" broadcast (see lib/team/notify.ts). Claude is not
-  // a real user, so nobody is actually excluded.
+  // a real user; the ACTING user (who dictated this message) is excluded from
+  // every branch exactly as if they had typed it themselves.
   try {
     const preview = message.slice(0, 120) || (input.card ? '📇 Shared a card' : 'New message')
     const url = `/team-chat?thread=${target.thread_id}${rootId ? `&root=${rootId}` : ''}`
     // Per-thread tag so two bugs don't replace each other on the lock screen.
     const tag = rootId ? `team-thread-${rootId}` : `team-thread-${target.thread_id}`
+    // mentions already exclude the acting user (resolveMentions sender param).
     if (mentions.userIds.length > 0) {
       await sendPushToAdminUsers(mentions.userIds, {
         title: `${CLAUDE_SENDER_NAME} mentioned you`,
@@ -208,9 +272,10 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
       })
     } else if (target.thread_type === 'dm') {
       // A DM goes to the ONE other participant. It used to broadcast, so a note
-      // Claude sent privately to Luca previewed on every staff device.
+      // Claude sent privately to Luca previewed on every staff device. A DM the
+      // acting user dictated TO THEMSELF pushes nobody.
       const otherId = (target.dm_key ?? '').split(':').find(id => id && id !== CLAUDE_SENDER_UUID)
-      if (otherId) {
+      if (otherId && otherId !== actingUserId) {
         await sendPushToAdminUsers([otherId], { title: CLAUDE_SENDER_NAME, body: preview, url, tag })
       }
     } else if (target.thread_type === 'channel' || target.thread_type === 'general') {
@@ -219,7 +284,7 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
       // Claude to prefer root_id when answering a bug, and worker bug reports
       // end with "@claude — investigate", so this path is genuinely reachable.
       if (channelNotifiesStaff(target.channel_slug ?? target.channel_name ?? null)) {
-        await sendPushToStaffExcept(CLAUDE_SENDER_UUID, { title: CLAUDE_SENDER_NAME, body: preview, url, tag })
+        await sendPushToStaffExcept(CLAUDE_SENDER_UUID, { title: CLAUDE_SENDER_NAME, body: preview, url, tag }, actingUserId ? [actingUserId] : undefined)
       }
     } else {
       // A client discussion: participants only, never every staff device.
@@ -229,7 +294,7 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
         .eq('thread_id', target.thread_id)
       const ids = ((participants ?? []) as { user_id: string }[])
         .map(p => p.user_id)
-        .filter(uid => uid && uid !== CLAUDE_SENDER_UUID)
+        .filter(uid => uid && uid !== CLAUDE_SENDER_UUID && uid !== actingUserId)
       if (ids.length > 0) {
         await sendPushToAdminUsers(ids, { title: CLAUDE_SENDER_NAME, body: preview, url, tag })
       }
