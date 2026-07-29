@@ -90,9 +90,15 @@ export function mergeRecipientSuggestions(
 }
 
 /** Escape a user-typed term for a PostgREST .or(...) ilike pattern: commas and
- * parens are the .or() syntax itself; % and _ are LIKE wildcards. */
+ * parens are the .or() syntax itself; % and _ are LIKE wildcards; * is
+ * PostgREST's own wildcard alias; a raw backslash must be doubled FIRST or a
+ * trailing one eats the closing wildcard. */
 export function escapeIlikeTerm(q: string): string {
-  return q.replace(/[,()]/g, " ").replace(/[%_]/g, "\\$&").trim()
+  return q
+    .replace(/\\/g, "\\\\")
+    .replace(/[,()*]/g, " ")
+    .replace(/[%_]/g, "\\$&")
+    .trim()
 }
 
 /**
@@ -100,8 +106,19 @@ export function escapeIlikeTerm(q: string): string {
  * caller must have passed the staff gate. Query is expected pre-trimmed, ≥2
  * chars. Every per-source failure degrades to an empty list — autocomplete
  * must never 500 the composer.
+ *
+ * `includePersonalMailbox` MUST reflect the caller's admin-ness: email_index
+ * rows for antonio@ are ADMIN-ONLY (RLS in the 2026-07-09 migration; the
+ * service-role client bypasses it, so this filter is the boundary). A
+ * non-admin search is scoped to the shared support mailbox — otherwise
+ * antonio@'s personal correspondents would be name-enumerable by any staff
+ * login (council blocker 2026-07-29).
  */
-export async function searchRecipients(q: string): Promise<RecipientSuggestion[]> {
+export async function searchRecipients(
+  q: string,
+  opts: { includePersonalMailbox?: boolean } = {}
+): Promise<RecipientSuggestion[]> {
+  const includePersonal = opts.includePersonalMailbox === true
   const { supabaseAdmin } = await import("@/lib/supabase-admin")
   // email_index is not in the generated DB types — same cast pattern as
   // email_snoozes (a types resync is a known prod-build hazard).
@@ -160,22 +177,27 @@ export async function searchRecipients(q: string): Promise<RecipientSuggestion[]
         .limit(PER_SOURCE)
     ),
     safe<any>(
-      untypedDb
-        .from("email_index")
-        .select("from_email, from_name")
-        .or(`from_email.ilike.${pattern},from_name.ilike.${pattern}`)
-        .order("internal_date", { ascending: false })
-        .limit(30)
+      (() => {
+        let sendersQuery = untypedDb
+          .from("email_index")
+          .select("from_email, from_name")
+          .or(`from_email.ilike.${pattern},from_name.ilike.${pattern}`)
+        if (!includePersonal) sendersQuery = sendersQuery.eq("mailbox", "support")
+        return sendersQuery.order("internal_date", { ascending: false }).limit(60)
+      })()
     ),
     // Array columns have no partial match in PostgREST — exact membership
     // only, so this source fires only for a fully-typed address.
     isEmailLike(q)
       ? safe<any>(
-          untypedDb
-            .from("email_index")
-            .select("to_emails")
-            .contains("to_emails", [q.trim().toLowerCase()])
-            .limit(1)
+          (() => {
+            let sentToQuery = untypedDb
+              .from("email_index")
+              .select("to_emails")
+              .contains("to_emails", [q.trim().toLowerCase()])
+            if (!includePersonal) sentToQuery = sentToQuery.eq("mailbox", "support")
+            return sentToQuery.limit(1)
+          })()
         )
       : Promise.resolve([] as any[]),
   ])
@@ -214,13 +236,17 @@ export async function searchRecipients(q: string): Promise<RecipientSuggestion[]
     })
   )
 
-  const inboxRows: RecipientSuggestion[] = senders.map(
-    (s: { from_email?: string; from_name?: string }) => ({
-      email: s.from_email ?? "",
-      name: s.from_name ?? "",
-      source: "inbox" as const,
-    })
-  )
+  // Dedupe senders before merging — a chatty correspondent's messages would
+  // otherwise occupy the whole row budget and starve other matching senders
+  // (hence the 60-row fetch: distinct-on isn't available through PostgREST).
+  const seenSenders = new Set<string>()
+  const inboxRows: RecipientSuggestion[] = []
+  for (const s of senders as Array<{ from_email?: string; from_name?: string }>) {
+    const key = (s.from_email ?? "").toLowerCase()
+    if (!key || seenSenders.has(key)) continue
+    seenSenders.add(key)
+    inboxRows.push({ email: s.from_email ?? "", name: s.from_name ?? "", source: "inbox" })
+  }
   if (sentTo.length > 0 && isEmailLike(q)) {
     inboxRows.push({ email: q.trim(), name: "", source: "inbox" })
   }

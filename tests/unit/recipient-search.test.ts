@@ -37,6 +37,12 @@ describe('escapeIlikeTerm', () => {
   it('escapes LIKE wildcards', () => {
     expect(escapeIlikeTerm('100%_x')).toBe('100\\%\\_x')
   })
+  it('doubles backslashes so a trailing one cannot eat the closing wildcard', () => {
+    expect(escapeIlikeTerm('foo\\')).toBe('foo\\\\')
+  })
+  it("strips PostgREST's * wildcard alias", () => {
+    expect(escapeIlikeTerm('a*b')).toBe('a b')
+  })
 })
 
 describe('mergeRecipientSuggestions', () => {

@@ -49,6 +49,14 @@ export function RecipientAutocomplete({
   // A just-picked suggestion re-triggers the value effect; this stops the
   // dropdown from instantly reopening over the filled field.
   const suppressRef = useRef(false)
+  // Only searches typed by the user open the dropdown — a prefilled To
+  // (reply-to-lead flows) must not pop suggestions over the dialog unasked.
+  const hasTypedRef = useRef(false)
+  // Monotonic token: only the LATEST request may touch state. Out-of-order
+  // responses ("lu" landing after "luca") and responses landing after a pick
+  // would otherwise show stale rows an Enter could then mis-send (council
+  // major 2026-07-29).
+  const requestSeqRef = useRef(0)
 
   useEffect(() => {
     clearTimeout(debounceRef.current)
@@ -56,17 +64,21 @@ export function RecipientAutocomplete({
       suppressRef.current = false
       return
     }
+    if (!hasTypedRef.current) return
     const q = value.trim()
     if (q.length < 2) {
       setSuggestions([])
       setOpen(false)
       return
     }
+    const seq = ++requestSeqRef.current
     debounceRef.current = setTimeout(async () => {
       try {
         const res = await fetch(`/api/inbox/recipients-search?q=${encodeURIComponent(q)}`)
+        if (seq !== requestSeqRef.current) return // superseded or picked
         if (!res.ok) return
         const data = await res.json()
+        if (seq !== requestSeqRef.current) return
         const list: RecipientSuggestion[] = Array.isArray(data.suggestions) ? data.suggestions : []
         // Don't re-suggest the exact address already fully typed/picked.
         const filtered = list.filter((s) => s.email.toLowerCase() !== q.toLowerCase())
@@ -91,6 +103,7 @@ export function RecipientAutocomplete({
 
   const pick = (s: RecipientSuggestion) => {
     suppressRef.current = true
+    requestSeqRef.current++ // invalidate any in-flight response
     onChange(s.email)
     setOpen(false)
     setSuggestions([])
@@ -117,7 +130,10 @@ export function RecipientAutocomplete({
       <input
         type="email"
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          hasTypedRef.current = true
+          onChange(e.target.value)
+        }}
         onKeyDown={handleKeyDown}
         onFocus={() => setOpen(suggestions.length > 0)}
         placeholder={placeholder}

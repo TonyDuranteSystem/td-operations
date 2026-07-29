@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { createClient } from "@/lib/supabase/server"
+import { isAdmin } from "@/lib/auth"
 import { searchRecipients } from "@/lib/inbox/recipient-search"
 
 export const dynamic = "force-dynamic"
@@ -26,7 +28,19 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const suggestions = await searchRecipients(q)
+    // antonio@'s correspondents are admin-only (same boundary as every other
+    // mailbox-aware inbox route); non-admin staff search the shared support
+    // mailbox only. Fail CLOSED: any error resolving admin-ness → not admin.
+    let includePersonalMailbox = false
+    try {
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      includePersonalMailbox = isAdmin(user)
+    } catch {
+      includePersonalMailbox = false
+    }
+
+    const suggestions = await searchRecipients(q, { includePersonalMailbox })
     return NextResponse.json({ suggestions })
   } catch (error) {
     console.error("[recipients-search] failed:", error)
