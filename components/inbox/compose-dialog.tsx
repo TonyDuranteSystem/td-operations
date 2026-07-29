@@ -7,6 +7,7 @@ import { X, Send, Loader2, Sparkles, Paperclip, Link2, Eye, EyeOff, Settings } f
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { useEmailAttachments } from './use-email-attachments'
 import { EmailAttachmentChips } from './email-attachment-chips'
+import { RecipientAutocomplete } from './recipient-autocomplete'
 
 interface EmailTemplate {
   id: string
@@ -350,16 +351,13 @@ export function ComposeDialog({
             </Link>
           </div>
 
-          {/* To */}
+          {/* To — autocompletes from all CRM emails + Inbox history */}
           <div className="flex items-center border-b px-5 py-2">
             <label className="text-sm text-zinc-400 w-20 shrink-0">To</label>
-            <input
-              type="email"
+            <RecipientAutocomplete
               value={to}
-              onChange={(e) => setTo(e.target.value)}
-              placeholder="recipient@example.com"
-              className="flex-1 text-sm outline-none bg-transparent"
-              required
+              onChange={setTo}
+              placeholder="recipient@example.com — type a name to search"
             />
             {!showCc && (
               <button
