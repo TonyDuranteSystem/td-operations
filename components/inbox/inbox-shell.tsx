@@ -1631,7 +1631,11 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                       mailbox={activeMailbox}
                       registerPrint={(fn) => { printRef.current = fn }}
                     />
-                    <ComposeReply conversation={selected} mailbox={activeMailbox} />
+                    {/* Keyed for the same reason as MessageThread — staged
+                        attachments and draft text must NEVER survive a thread
+                        switch (a passport staged on thread A must not ride a
+                        reply to thread B — council blocker 2026-07-29). */}
+                    <ComposeReply key={selected.id} conversation={selected} mailbox={activeMailbox} />
                   </div>
                   {workerOpen && (
                     <WorkerChatPanel
