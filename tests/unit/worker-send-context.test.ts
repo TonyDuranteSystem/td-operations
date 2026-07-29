@@ -41,11 +41,11 @@ describe("buildWorkerSendContext — the controls survive the handoff", () => {
     const ctx = buildWorkerSendContext({
       sendActor: "crm-portal:luca@tonydurante.us",
       pinnedPortalRecipient: { account_id: A },
-      pinnedEmailRecipients: ["someone@example.com"],
+      emailConfirmExempt: ["someone@example.com"],
     })
     expect(ctx!.actor).toBe("crm-portal:luca@tonydurante.us")
     expect(ctx!.pinnedPortalRecipient).toEqual({ account_id: A })
-    expect(ctx!.pinnedEmailRecipients).toEqual(["someone@example.com"])
+    expect(ctx!.emailConfirmExempt).toEqual(["someone@example.com"])
   })
 
   it("forwards onBehalfOf (team-chat self-notification silencer) and builds a context for it alone", () => {
@@ -62,13 +62,13 @@ describe("buildWorkerSendContext — the controls survive the handoff", () => {
     expect(ctx!.onBehalfOf).toBeNull()
   })
 
-  it("keeps an EMPTY email allow-list as a real pin — [] must never become undefined", () => {
+  it("keeps an EMPTY confirm-exempt list as meaningful — [] (confirm every recipient) must never become undefined", () => {
     // [] means "refuse every address". Collapsing it to undefined means "unpinned",
     // which is the fail-OPEN direction on an Inbox turn whose thread could not be read.
-    const ctx = buildWorkerSendContext({ pinnedEmailRecipients: [] })
+    const ctx = buildWorkerSendContext({ emailConfirmExempt: [] })
     expect(ctx).toBeDefined()
-    expect(ctx!.pinnedEmailRecipients).toEqual([])
-    expect(ctx!.pinnedEmailRecipients).not.toBeUndefined()
+    expect(ctx!.emailConfirmExempt).toEqual([])
+    expect(ctx!.emailConfirmExempt).not.toBeUndefined()
   })
 
   it("returns undefined only when there is genuinely nothing to enforce", () => {

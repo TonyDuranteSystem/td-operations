@@ -18,6 +18,7 @@
  */
 import 'server-only'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { TD_MAILBOXES } from '@/lib/inbox/email-recipients'
 import { getInternalBaseUrl } from '@/lib/mcp/tools/agent-messages'
 import { CLAUDE_SENDER_UUID, CLAUDE_SENDER_NAME, mentionsClaude } from '@/lib/team/workspace'
 import { channelNotifiesStaff } from '@/lib/team/channel-notify'
@@ -220,8 +221,48 @@ export async function processClaudeReply(params: {
   // model as Slack. TRADE-OFF (named to Antonio, accepted by him): with no pin,
   // a poisoned document trying to redirect a send is caught only by the staff
   // member reviewing the draft before saying "send it".
-  const emailSendRail: { enableEmailSend?: true } =
-    thread?.account_id || thread?.contact_id ? { enableEmailSend: true } : {}
+  let emailSendRail: {
+    enableEmailSend?: true
+    emailConfirmExempt?: string[]
+    forceMailbox?: 'support' | 'antonio'
+  } = {}
+  if (thread?.account_id || thread?.contact_id) {
+    // The linked client's own addresses are CONFIRM-EXEMPT; any other address the
+    // staff member names is still reachable but freezes for a one-click confirm
+    // (Antonio, 2026-07-29 — "see the recipient and press Confirm once"). A lookup
+    // failure leaves the list empty, so every recipient is confirmed: it degrades
+    // toward the human, never toward a silent send. Contacts link to accounts via
+    // account_contacts — `contacts` has NO account_id column.
+    let rows: Array<{ email: string | null }> = []
+    try {
+      if (thread.account_id) {
+        const { data: links } = await supabaseAdmin
+          .from('account_contacts')
+          .select('contact_id')
+          .eq('account_id', thread.account_id)
+        const ids = ((links ?? []) as Array<{ contact_id: string }>).map(l => l.contact_id).filter(Boolean)
+        if (ids.length) {
+          const { data } = await supabaseAdmin.from('contacts').select('email').in('id', ids)
+          rows = (data ?? []) as Array<{ email: string | null }>
+        }
+      } else {
+        const { data } = await supabaseAdmin
+          .from('contacts')
+          .select('email')
+          .eq('id', thread.contact_id as string)
+        rows = (data ?? []) as Array<{ email: string | null }>
+      }
+    } catch (err) {
+      console.warn('[claude-trigger] client address lookup failed (every recipient will be confirmed):', err)
+    }
+    const addresses = rows.map(r => r.email).filter((e): e is string => Boolean(e && e.includes('@')))
+    emailSendRail = {
+      enableEmailSend: true,
+      emailConfirmExempt: Array.from(new Set([...addresses, ...TD_MAILBOXES])),
+      // No mailbox-authorisation check on this surface — never send as antonio@.
+      forceMailbox: 'support',
+    }
+  }
 
   // Recent conversation (exclude the placeholder itself) for context.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

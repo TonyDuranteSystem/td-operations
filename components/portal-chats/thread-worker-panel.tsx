@@ -58,6 +58,10 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
   const attachments = useWorkerAttachments()
   const [preparedSend, setPreparedSend] = useState<PreparedSend | null>(null)
   const [confirming, setConfirming] = useState(false)
+  // Held in a ref so the client-switch effect can drop staged files without
+  // taking the whole (re-created every render) attachments object as a dep.
+  const clearAttachmentsRef = useRef(attachments.clear)
+  clearAttachmentsRef.current = attachments.clear
   // 🧠 per-reply save state, keyed by the reply's row id.
   const [remembered, setRemembered] = useState<Record<string, 'saving' | 'saved'>>({})
 
@@ -144,6 +148,13 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
   useEffect(() => {
     setMessages([])
     sentContextRef.current = false
+    // A frozen email belongs to the client it was drafted for. Leaving the card
+    // (or a staged file) up across a client switch means "Confirm & send" would
+    // dispatch the PREVIOUS client's email while the panel header shows the new
+    // one — the worst kind of wrong-recipient mistake, and invisible.
+    setPreparedSend(null)
+    setConfirming(false)
+    clearAttachmentsRef.current()
     if (!clientKey) return
     let alive = true
     fetch(`/api/inbox/worker-chat?clientKey=${encodeURIComponent(clientKey)}`)

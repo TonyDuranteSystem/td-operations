@@ -45,12 +45,14 @@ describe('buildWorkerSurfacePrompt', () => {
     expect(prompt).not.toMatch(/only lets you email addresses already on this thread/i)
   })
 
-  it('portal-chats surface authorizes a portal-message send, open client as DEFAULT', () => {
+  it('portal-chats surface authorizes a portal-message send to the FIXED open client', () => {
     const prompt = buildWorkerSurfacePrompt('portal-chats')
     expect(prompt).toContain('SENDING A PORTAL MESSAGE')
     expect(prompt).toContain('send_portal_message')
-    expect(prompt).toMatch(/DEFAULT recipient/i)
-    expect(prompt).toMatch(/different client/i)
+    expect(prompt).toMatch(/fixed server-side/i)
+    // And it must tell the truth about what to do instead, rather than implying it
+    // can retarget the message (the portal unlock was reverted on council findings).
+    expect(prompt).toMatch(/open that client's chat/i)
     expect(prompt).not.toContain('You cannot send messages from here')
   })
 

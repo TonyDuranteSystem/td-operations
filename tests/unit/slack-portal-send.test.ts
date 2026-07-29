@@ -198,22 +198,24 @@ describe("CRM Portal Chats panel — send attribution + recipient pin", () => {
     expect(lastInsertedRow).toMatchObject({ account_id: "acc-PIN", contact_id: "cnt-DEFAULT" })
   })
 
-  it("HONOURS a staff-directed recipient over the panel's default (the unlock)", async () => {
-    // Antonio 2026-07-29: "the worker in the Portal chat must have the same
-    // capabilities it has everywhere" — it may message another client when the
-    // staff member asks. This previously OVERRODE the supplied id.
-    responses.accountContacts = []
+  it("HARD-PINS the recipient: a model-supplied contact_id is overridden by the panel's client", async () => {
+    // Briefly relaxed to a "staff-directed default" on 2026-07-29 and REVERTED the
+    // same day on council findings: the sidebar and Team Chat carry this pin but no
+    // client-scope validator, so a model-produced id would be delivered unchecked —
+    // and on Portal Chats the client's OWN chat text is in context, so a line inside
+    // it could retarget a client-visible message. Cross-client portal messaging needs
+    // its own confirm-the-recipient step before it can be opened (email has one).
+    responses.accountContacts = [{ contact_id: "cnt-PINNED" }]
     const r = await executeWorkerTool(
       "send_portal_message",
-      { contact_id: "cnt-OTHER-CLIENT", message: "as staff directed" },
+      { contact_id: "cnt-ATTACKER", message: "pinned" },
       undefined,
       undefined,
       undefined,
       { actor: "crm-portal:luca@tonydurante.us", pinnedPortalRecipient: { account_id: "acc-PIN" } },
     )
     expect(r).toContain("✅ Portal message sent")
-    expect(lastInsertedRow).toMatchObject({ contact_id: "cnt-OTHER-CLIENT" })
-    // The panel's own client is NOT forced in when staff named someone else.
-    expect(lastInsertedRow).not.toMatchObject({ account_id: "acc-PIN" })
+    expect(lastInsertedRow).toMatchObject({ account_id: "acc-PIN", contact_id: "cnt-PINNED" })
+    expect(lastInsertedRow).not.toMatchObject({ contact_id: "cnt-ATTACKER" })
   })
 })
