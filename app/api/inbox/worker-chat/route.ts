@@ -17,6 +17,7 @@ import {
 import { gmailGet, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
 import { harvestEmailAttachments } from "@/lib/inbox/email-attachments"
 import { collectThreadRecipients, TD_MAILBOXES } from "@/lib/inbox/email-recipients"
+import { snapshotPendingPreparedIds, findPreparedFrozenThisTurn } from "@/lib/inbox/worker-email-send"
 import { buildClientScope } from "@/lib/ai-agent/client-scope"
 import { fullReachEnabledFor } from "@/lib/ai-agent/full-reach"
 import { workerActionsEnabled } from "@/lib/ai-agent/worker-actions-switch"
@@ -479,11 +480,17 @@ export async function POST(req: NextRequest) {
   // address exempt for the turn, skipping the very Confirm card this design relies
   // on — and it was the server half of the deleted re-run-the-model button.
 
+  // WHO this turn acts as. Hoisted out of the rails literal because the confirm-card
+  // picker below must scope by the SAME string the freeze is attributed to — these
+  // conversations are shared between staff, so the actor is what tells two
+  // overlapping turns' drafts apart.
+  const sendActor = surface === "inbox" ? `crm-inbox:${actorEmail}` : `crm-portal:${actorEmail}`
+
   const sendRails =
     surface === "inbox"
       ? {
           enableEmailSend: true,
-          sendActor: `crm-inbox:${actorEmail}`,
+          sendActor,
           // Staff decide the recipient — no address is refused. But this surface
           // reads mail written by STRANGERS, so an address that is not already on
           // the thread (or one of our own mailboxes) is CONFIRMED ONCE by the staff
@@ -518,7 +525,7 @@ export async function POST(req: NextRequest) {
           // said "email is off, don't offer it". Now both channels are available
           // and staff choose per message. Unpinned, like every other surface.
           enableEmailSend: true,
-          sendActor: `crm-portal:${actorEmail}`,
+          sendActor,
           // A new recipient is CONFIRMED ONCE here too: this panel carries the
           // CLIENT'S OWN chat text, so a line inside it must not be able to aim a
           // send at an address no human read. The client's own addresses and our
@@ -553,24 +560,19 @@ export async function POST(req: NextRequest) {
             : { contact_id: clientKey!.slice("contact-".length) },
         }
 
-  // Prepared-sends that ALREADY existed before this turn (an earlier "attach" the
-  // staff never confirmed/cancelled). Never resurface one of these as a Confirm
-  // box for a message the staff didn't just ask about — only a row created DURING
-  // this turn counts. ID-based, so no clock skew.
-  const priorPendingIds = new Set<string>()
-  {
-    // UNCONDITIONAL. This used to be gated on an upload existing, while the card
-    // itself is surfaced on every turn — so on a turn with no upload the set was
-    // empty and a PRIOR unconfirmed draft was rendered as if this turn had created
-    // it. One click would then send an email from another context (and these
-    // conversations are keyed per client, so it could be a teammate's draft).
-    const { data: existing } = await db
-      .from("worker_prepared_sends")
-      .select("id")
-      .eq("thread_uuid", threadId)
-      .eq("status", "pending")
-    for (const r of existing ?? []) priorPendingIds.add(r.id)
-  }
+  // Prepared-sends that ALREADY existed for THIS staff member before this turn (an
+  // earlier "attach" they never confirmed/cancelled). Never resurface one of these
+  // as a Confirm box for a message they didn't just ask about — only a row created
+  // DURING this turn counts. ID-based, so no clock skew.
+  //
+  // UNCONDITIONAL. This used to be gated on an upload existing, while the card
+  // itself is surfaced on every turn — so on a turn with no upload the set was
+  // empty and a PRIOR unconfirmed draft was rendered as if this turn had created it.
+  // ACTOR-SCOPED. These conversations are keyed per client / per email thread, NOT
+  // per staff member, so two people can be on the same one at once; without the
+  // actor the picker could hand one of them the other's frozen draft while their
+  // own never got a card.
+  const priorPending = await snapshotPendingPreparedIds(threadId, sendActor)
 
   // Load approved-template grounding for the staff member's ask (best-effort;
   // "" on no match, so the prompt is unchanged when nothing fits). Same helper
@@ -720,17 +722,11 @@ export async function POST(req: NextRequest) {
     // email to someone off the thread fell back to the re-run path and the staff
     // member confirmed an address rather than a message.
     // BOTH surfaces — the client-chat panel renders the same Confirm card.
-    {
-      const { data: prep } = await db
-        .from("worker_prepared_sends")
-        .select("id, to_address, subject, body, attachments")
-        .eq("thread_uuid", threadId)
-        .eq("status", "pending")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle()
-      // Only surface a row this turn actually created — never a stale prior one.
-      if (prep && !priorPendingIds.has(prep.id)) {
+    try {
+      // Only a row THIS staff member's turn actually created — never a stale prior
+      // one, and never a colleague's draft on the same shared conversation.
+      const prep = await findPreparedFrozenThisTurn(threadId, sendActor, priorPending)
+      if (prep) {
         preparedSend = {
           id: prep.id,
           to: prep.to_address,
@@ -739,9 +735,13 @@ export async function POST(req: NextRequest) {
           // Confirming a recipient without seeing the message is how someone
           // approves one draft and a different one goes out.
           body: prep.body ?? "",
-          attachments: (prep.attachments ?? []).map((a: { name: string; size?: number }) => ({ name: a.name, size: a.size })),
+          attachments: prep.attachments,
         }
       }
+    } catch (err) {
+      // A missing card must never fail the answer — the email simply stays frozen
+      // and expires unconfirmed, which is the safe direction.
+      console.warn("[worker-chat] prepared-send lookup failed:", err)
     }
     // messageId lets the panel offer 🧠 on the reply it just received (same id the
     // GET history returns), without a refetch.

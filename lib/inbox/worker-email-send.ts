@@ -378,3 +378,119 @@ ${plainTextToParagraphs(claimed.body)}
     return { ok: false, reason: err instanceof Error ? err.message : "send failed" }
   }
 }
+
+/* ------------------------------------------------------------------------- *
+ * WHICH FROZEN ROW BELONGS TO THIS TURN
+ *
+ * A conversation is SHARED. In Team Chat `thread_uuid` is the whole channel; on
+ * the Inbox and client-chat panels it is the email thread / the client, and two
+ * staff can have that same screen open. So "the newest pending row on this
+ * conversation" is not this turn's row — under two overlapping turns it pairs one
+ * person's answer with the OTHER person's frozen email, and the second draft never
+ * gets a card at all (it dies at its TTL, silently).
+ *
+ * The row records WHO froze it, and every surface attributes its actor per staff
+ * member. So the pairing rule is: this actor's pending rows, minus the ones that
+ * were already pending when the turn began. That is exactly the set this turn
+ * created, and it is the same scope prepareWorkerEmailSend supersedes on — so the
+ * two can never disagree about whose draft is whose.
+ *
+ * Two turns by the SAME person overlapping is already handled upstream: the second
+ * freeze supersedes the first, so only one row of theirs is ever pending.
+ * ------------------------------------------------------------------------- */
+
+/** A frozen draft, as the surfaces render it on the card. */
+export interface FrozenDraft {
+  id: string
+  to_address: string
+  subject: string
+  body: string | null
+  attachments: Array<{ name: string; size?: number }>
+}
+
+/**
+ * Ids of THIS actor's drafts that were already pending before the turn ran.
+ *
+ * `known: false` means the lookup failed and this turn's draft cannot be told
+ * apart from an older one. Callers must then suppress the card rather than risk
+ * showing a stale (or someone else's) draft — no card is the safe direction.
+ */
+export async function snapshotPendingPreparedIds(
+  threadUuid: string,
+  actor: string,
+): Promise<{ ids: Set<string>; known: boolean }> {
+  const ids = new Set<string>()
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabaseAdmin as any)
+      .from("worker_prepared_sends")
+      .select("id")
+      .eq("thread_uuid", threadUuid)
+      .eq("actor", actor)
+      .eq("status", "pending")
+    if (error) return { ids, known: false }
+    for (const r of (data ?? []) as Array<{ id: string }>) ids.add(r.id)
+    return { ids, known: true }
+  } catch {
+    return { ids, known: false }
+  }
+}
+
+/**
+ * The draft THIS turn froze, or null. Oldest-first among the actor's own new rows:
+ * a turn can only freeze one (the executor's per-turn latch), so this is that one.
+ */
+export async function findPreparedFrozenThisTurn(
+  threadUuid: string,
+  actor: string,
+  prior: { ids: Set<string>; known: boolean },
+): Promise<FrozenDraft | null> {
+  if (!prior.known) return null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabaseAdmin as any)
+    .from("worker_prepared_sends")
+    .select("id, to_address, subject, body, attachments")
+    .eq("thread_uuid", threadUuid)
+    .eq("actor", actor)
+    .eq("status", "pending")
+    .order("created_at", { ascending: true })
+  if (error) throw new Error(error.message)
+  const row = ((data ?? []) as FrozenDraft[]).find((r) => !prior.ids.has(r.id))
+  if (!row) return null
+  return { ...row, attachments: (row.attachments ?? []).map((a) => ({ name: a.name, size: a.size })) }
+}
+
+/**
+ * Cancel whatever this turn froze — for the failure paths, where the draft would
+ * otherwise sit pending with no card ever rendered for it.
+ *
+ * Actor-scoped for the same reason as the pairing: an unscoped cancel would kill a
+ * teammate's live, un-confirmed draft because their row happens to share the
+ * conversation and postdate this turn's snapshot.
+ */
+export async function cancelPreparedFrozenThisTurn(
+  threadUuid: string,
+  actor: string,
+  prior: { ids: Set<string>; known: boolean },
+): Promise<void> {
+  if (!prior.known) return
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = supabaseAdmin as any
+    const { data } = await db
+      .from("worker_prepared_sends")
+      .select("id")
+      .eq("thread_uuid", threadUuid)
+      .eq("actor", actor)
+      .eq("status", "pending")
+    const mine = ((data ?? []) as Array<{ id: string }>).map((r) => r.id).filter((id) => !prior.ids.has(id))
+    if (!mine.length) return
+    await db
+      .from("worker_prepared_sends")
+      .update({ status: "cancelled" })
+      .in("id", mine)
+      .eq("status", "pending")
+  } catch {
+    // Best-effort — this runs on an error path already.
+  }
+}

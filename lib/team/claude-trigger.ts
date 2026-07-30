@@ -26,6 +26,11 @@ import type { WorkerImageBlock, WorkerDocumentBlock } from '@/lib/ai-agent/worke
 import { fullReachEnabledFor } from '@/lib/ai-agent/full-reach'
 import { surfaceApiKeyOverride } from '@/lib/ai-agent/surface-api-key'
 import { reportSystemError } from '@/lib/system-errors'
+import {
+  snapshotPendingPreparedIds,
+  findPreparedFrozenThisTurn,
+  cancelPreparedFrozenThisTurn,
+} from '@/lib/inbox/worker-email-send'
 
 const THINKING_PLACEHOLDER = '…'
 
@@ -50,15 +55,6 @@ const WORKING_PLACEHOLDER = '⋯'
 /** Either state means "no answer has been written yet". */
 const PENDING_PLACEHOLDERS = [THINKING_PLACEHOLDER, WORKING_PLACEHOLDER]
 
-/**
- * Cancel any prepared-send row this turn froze.
- *
- * A frozen email must never outlive the turn that created it: if the worker throws
- * after freezing one — a later tool call, or the 300s ceiling — no card is ever
- * rendered for it, and it would sit `pending` (and confirmable by a rescue re-run's
- * card, or nothing at all) until its TTL. Scoped by the pre-turn id snapshot so it
- * can only ever touch rows THIS turn created.
- */
 /**
  * Append an honest line to Claude's reply when a Confirm card could NOT be attached.
  *
@@ -86,32 +82,6 @@ async function appendCardFailureNote(placeholderId: string): Promise<void> {
       .eq('id', placeholderId)
   } catch {
     // Best-effort.
-  }
-}
-
-async function cancelDraftsFrozenThisTurn(
-  threadUuid: string,
-  priorIds: Set<string>,
-  priorKnown: boolean,
-): Promise<void> {
-  if (!priorKnown) return
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await (supabaseAdmin as any)
-      .from('worker_prepared_sends')
-      .select('id')
-      .eq('thread_uuid', threadUuid)
-      .eq('status', 'pending')
-    const mine = ((data ?? []) as Array<{ id: string }>).map(r => r.id).filter(id => !priorIds.has(id))
-    if (!mine.length) return
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabaseAdmin as any)
-      .from('worker_prepared_sends')
-      .update({ status: 'cancelled' })
-      .in('id', mine)
-      .eq('status', 'pending')
-  } catch {
-    // Best-effort — this runs on an error path already.
   }
 }
 
@@ -441,25 +411,14 @@ export async function processClaudeReply(params: {
     }
   }
 
-  // Prepared-send rows that ALREADY existed on this thread before this turn — so a
-  // Confirm card is only posted for a draft THIS turn froze, never a stale one. Id
-  // snapshot (not a clock comparison): the database's now() and this process's clock
-  // are different clocks, and skew would either drop this turn's card or resurface an
-  // old one. A failed lookup suppresses the card rather than risking a stale confirm.
-  const priorPreparedIds = new Set<string>()
-  let priorPreparedKnown = true
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: existing, error } = await (supabaseAdmin as any)
-      .from('worker_prepared_sends')
-      .select('id')
-      .eq('thread_uuid', threadId)
-      .eq('status', 'pending')
-    if (error) priorPreparedKnown = false
-    for (const r of (existing ?? []) as Array<{ id: string }>) priorPreparedIds.add(r.id)
-  } catch {
-    priorPreparedKnown = false
-  }
+  // Prepared-send rows that ALREADY existed for THIS staff member on this thread
+  // before this turn — so a Confirm card is only posted for a draft THIS turn froze,
+  // never a stale one and never a colleague's. Id snapshot (not a clock comparison):
+  // the database's now() and this process's clock are different clocks, and skew
+  // would either drop this turn's card or resurface an old one. A failed lookup
+  // suppresses the card rather than risking a stale confirm.
+  const sendActor = `team-chat:${prompt.sender_name ?? prompt.sender_id}`
+  const priorPrepared = await snapshotPendingPreparedIds(threadId, sendActor)
 
   let reply: string
   try {
@@ -533,7 +492,7 @@ export async function processClaudeReply(params: {
       enableCodeTasks: false,
       // WHO asked for this. Without it every send from this surface was written to the
       // audit trail as the generic worker, so "who told it to send that" had no answer.
-      sendActor: `team-chat:${prompt.sender_name ?? prompt.sender_id}`,
+      sendActor,
       // EXPLICIT identity for team_chat_send's "on behalf of" stamp — the
       // @claude prompt's sender IS the auth user driving this turn. Passed as
       // the raw uuid (never the display-name actor label above, which cannot
@@ -562,7 +521,7 @@ export async function processClaudeReply(params: {
     // AFTER freezing one (a later tool call, or the 300s ceiling), nothing would
     // ever render its card and it would sit pending until the TTL — a real
     // outbound email prepared and then invisible. Cancel anything this turn froze.
-    await cancelDraftsFrozenThisTurn(threadId, priorPreparedIds, priorPreparedKnown)
+    await cancelPreparedFrozenThisTurn(threadId, sendActor, priorPrepared)
     return await failPlaceholder(
       placeholderId,
       msg.includes('ANTHROPIC_API_KEY')
@@ -586,25 +545,14 @@ export async function processClaudeReply(params: {
   // The card carries the frozen row's id; its buttons call the same confirm-send
   // endpoint the Inbox and client-chat panels use, so one payload, one code path,
   // and what leaves is exactly what was read.
-  if (priorPreparedKnown) {
+  if (priorPrepared.known) {
     try {
-      // Rows THIS turn froze — every pending row minus the pre-turn snapshot. Taking
-      // "the newest pending row on the thread" was wrong: thread_uuid is the whole
-      // CHANNEL, and two people can have overlapping @claude turns in it, so turn A
-      // could pick up turn B's draft — A's answer would carry B's recipient while
-      // A's own email became invisible. Sorted oldest-first so the one we show is
-      // this turn's own; a second freeze in one turn is already refused upstream.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: mineRows, error: mineErr } = await (supabaseAdmin as any)
-        .from('worker_prepared_sends')
-        .select('id, to_address, subject, body, attachments')
-        .eq('thread_uuid', threadId)
-        .eq('status', 'pending')
-        .order('created_at', { ascending: true })
-      if (mineErr) throw new Error(mineErr.message)
-      const prep = ((mineRows ?? []) as Array<{ id: string }>).find(r => !priorPreparedIds.has(r.id)) as
-        | { id: string; to_address: string; subject: string; body: string | null; attachments: unknown }
-        | undefined
+      // The row THIS turn froze — this staff member's pending rows minus the pre-turn
+      // snapshot. Scoping to the actor is what makes it correct here: thread_uuid is
+      // the whole CHANNEL, and two people can have overlapping @claude turns in it,
+      // so an unscoped "newest pending row" let turn A pick up turn B's draft — A's
+      // answer would carry B's recipient while A's own email became invisible.
+      const prep = await findPreparedFrozenThisTurn(threadId, sendActor, priorPrepared)
       if (prep) {
         const files = ((prep.attachments ?? []) as Array<{ name?: string }>)
           .map(a => a.name)
@@ -638,7 +586,7 @@ export async function processClaudeReply(params: {
       // Cancel what this turn froze and say so, rather than promising a control
       // that isn't there.
       console.warn('[team-claude] confirm-card attach failed:', err)
-      await cancelDraftsFrozenThisTurn(threadId, priorPreparedIds, priorPreparedKnown)
+      await cancelPreparedFrozenThisTurn(threadId, sendActor, priorPrepared)
       await appendCardFailureNote(placeholderId)
       await reportSystemError({
         source: 'server',
