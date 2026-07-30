@@ -353,6 +353,15 @@ export async function onFirstInstallmentPaid(
     ).toString("base64url")
     await gmailPost("/messages/send", { raw })
     steps.push({ step: "email", status: "ok" })
+    // Record the send so a later reverse-and-rematch cycle does not repeat it.
+    await supabaseAdmin.from("action_log").insert({
+      actor: "installment-handler",
+      action_type: "installment_2_email",
+      table_name: "accounts",
+      record_id: String(year),
+      account_id: account.id,
+      summary: `2nd-installment hand-off email sent for ${year} (${account.company_name})`,
+    })
   } catch (e) {
     steps.push({ step: "email", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
@@ -611,26 +620,65 @@ export async function onSecondInstallmentPaid(
   }
 
   // ─── 3. Email team ───
+  //
+  // ⛔ SEND IT ONCE PER CLIENT-YEAR (2026-07-29). This had no idempotency check, unlike the
+  // accountant TASK below. It became a real duplicate the moment un-matching started reversing
+  // payments properly: a mis-matched payment is now reversed and re-matched to the right
+  // invoice, and every pass through here fired the same "[PAID] … ready for accountant" email
+  // again. An email cannot be unsent, so the guard belongs on the send.
+  //
+  // A failed CHECK does not suppress the email: a possible duplicate is visible and annoying,
+  // a hand-off nobody is told about is not.
+  let alreadyEmailed = false
   try {
-    const { gmailPost } = await import("@/lib/gmail")
-    const installment2Subject = `[PAID] 2nd Installment ${year} -- ${account.company_name} -- Tax ready for accountant`
-    const encodedSubject2 = `=?utf-8?B?${Buffer.from(installment2Subject).toString("base64")}?=`
-    const raw = Buffer.from(
-      `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
-      `To: support@tonydurante.us\r\n` +
-      `Subject: ${encodedSubject2}\r\n` +
-      `MIME-Version: 1.0\r\n` +
-      `Content-Type: text/html; charset=utf-8\r\n\r\n` +
-      `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6">` +
-      `<h2>[PAID] 2nd Installment ${year} -- ${account.company_name}</h2>` +
-      `<p>2nd installment confirmed. Tax return gate lifted.</p>` +
-      `<p>If data is received and reviewed, this client's tax return can now be sent to the accountant.</p>` +
-      `</div>`
-    ).toString("base64url")
-    await gmailPost("/messages/send", { raw })
-    steps.push({ step: "email", status: "ok" })
+    const { data: priorSend } = await supabaseAdmin
+      .from("action_log")
+      .select("id")
+      .eq("action_type", "installment_2_email")
+      .eq("account_id", account.id)
+      .eq("record_id", String(year))
+      .limit(1)
+      .maybeSingle()
+    alreadyEmailed = !!priorSend
   } catch (e) {
-    steps.push({ step: "email", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    console.warn(
+      `[installment-handler] could not check whether the ${year} 2nd-installment email was already sent: ${e instanceof Error ? e.message : String(e)}`,
+    )
+  }
+
+  if (alreadyEmailed) {
+    steps.push({ step: "email", status: "ok", detail: `Already sent for ${year} — not sending again` })
+  } else {
+    try {
+      const { gmailPost } = await import("@/lib/gmail")
+      const installment2Subject = `[PAID] 2nd Installment ${year} -- ${account.company_name} -- Tax ready for accountant`
+      const encodedSubject2 = `=?utf-8?B?${Buffer.from(installment2Subject).toString("base64")}?=`
+      const raw = Buffer.from(
+        `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
+        `To: support@tonydurante.us\r\n` +
+        `Subject: ${encodedSubject2}\r\n` +
+        `MIME-Version: 1.0\r\n` +
+        `Content-Type: text/html; charset=utf-8\r\n\r\n` +
+        `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6">` +
+        `<h2>[PAID] 2nd Installment ${year} -- ${account.company_name}</h2>` +
+        `<p>2nd installment confirmed. Tax return gate lifted.</p>` +
+        `<p>If data is received and reviewed, this client's tax return can now be sent to the accountant.</p>` +
+        `</div>`
+      ).toString("base64url")
+      await gmailPost("/messages/send", { raw })
+      steps.push({ step: "email", status: "ok" })
+      // Record the send so a later reverse-and-rematch cycle does not repeat it.
+      await supabaseAdmin.from("action_log").insert({
+        actor: "installment-handler",
+        action_type: "installment_2_email",
+        table_name: "accounts",
+        record_id: String(year),
+        account_id: account.id,
+        summary: `2nd-installment hand-off email sent for ${year} (${account.company_name})`,
+      })
+    } catch (e) {
+      steps.push({ step: "email", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    }
   }
 
   // ─── 4. Create task if tax data ready ───

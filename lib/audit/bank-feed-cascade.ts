@@ -17,6 +17,8 @@
  * Pure function — no DB calls, no side effects. Tested in tests/unit/bank-feed-cascade.test.ts.
  */
 
+import { evaluateNameEvidence } from "@/lib/finance/feed-signals"
+
 export type CascadeTier = 1 | 2 | 3 | 4
 export type CascadeConfidence = 'high' | 'medium'
 export type CascadeRuleKey =
@@ -64,22 +66,20 @@ export interface OrphanFeedMatch {
   match_evidence: string
 }
 
-const STOP_WORDS = new Set([
-  // Legal suffixes
-  'llc', 'inc', 'ltd', 'corp', 'co', 'plc', 'gmbh', 'srl',
-  // Generic business words that cause cross-company false matches
-  'consulting', 'commerce', 'international', 'services', 'holdings',
-  'management', 'solutions', 'ventures', 'capital', 'partners',
-  'trading', 'digital', 'global', 'group', 'media', 'investments',
-  'properties', 'enterprises', 'advisors', 'associates', 'agency',
-  'solution', 'strategies', 'accelerator',
-  // Common filler words
-  'the', 'and', 'for', 'via', 'from', 'tax', 'return', 'annual',
-  'service', 'fee', 'payment', 'invoice', 'contractor', 'vendor',
-  'company', 'first',
-  // Payment processor names
-  'wise',
-])
+/*
+ * ⛔ THE PRIVATE STOP-WORD LIST AND THE ANY-ONE-TOKEN NAME TEST ARE GONE (2026-07-29).
+ *
+ * This module had its OWN copy of the list — and, like the matcher's, it was missing
+ * "marketing". That mattered far more here than it looks: this file powers the "unmatched bank
+ * deposits that look like they belong to this client" suggestions on the account audit panel,
+ * and one click there CREATES A PAID INVOICE from the suggested transaction. So the exact
+ * incident of 2026-07-22 was reachable through this screen even after the matcher was fixed —
+ * and the resulting invoice is WORSE than the original, because it is created already Paid with
+ * no money record behind it, which means the un-match path finds nothing to reverse.
+ *
+ * Name evidence now comes from the one shared implementation in `lib/finance/feed-signals.ts`,
+ * which requires the matched words to COVER a minimum share of the name.
+ */
 
 const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi
 
@@ -145,26 +145,25 @@ function invoiceRefHit(feedTxt: string, invoiceNumbers: string[]): string | null
   return null
 }
 
-function nameTokens(name: string): string[] {
-  return name
-    .toLowerCase()
-    .split(/[\s,./&\-]+/)
-    .map(t => t.trim())
-    .filter(t => t.length >= 4 && !STOP_WORDS.has(t))
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')
-}
-
+/**
+ * Does this payment's text name this client — and HOW STRONGLY?
+ *
+ * Uses the one shared name rule (`lib/finance/feed-signals.ts`), but unlike the matcher this
+ * screen is a SUGGESTION list, so a partial hit is still worth showing: a surname on its own
+ * ("BIANCHI WIRE" for Maria Bianchi) is a perfectly good hint for a human scanning deposits,
+ * even though it is NOT enough for a machine to move money on.
+ *
+ * So nothing is hidden — but a partial hit SAYS it is partial. The evidence string is what the
+ * audit panel puts in front of staff, and "partial name" vs a covered name is exactly the
+ * difference between "worth a look" and "this is them". That distinction is the point: one click
+ * on this screen creates a PAID invoice, so the strength of the evidence must not be rounded up.
+ */
 function nameFuzzyHit(feedTxt: string, name: string | null): string | null {
   if (!name) return null
-  const tokens = nameTokens(name)
-  for (const tok of tokens) {
-    const re = new RegExp(`\\b${escapeRegex(tok)}\\b`, 'i')
-    if (re.test(feedTxt)) return tok
-  }
-  return null
+  const evidence = evaluateNameEvidence(name, [feedTxt])
+  if (evidence.matchedWords.length === 0) return null
+  const matched = evidence.matchedWords.join(' + ')
+  return evidence.sufficient ? matched : `partial name: ${matched}`
 }
 
 function classifyFeed(

@@ -173,7 +173,11 @@ describe('findFeedsForAccount — Tier 4 contact name fuzzy (MEDIUM)', () => {
     const f = feed({ sender_name: 'Bianchi wire' })
     const out = findFeedsForAccount(ACCOUNT, CONTACTS, INVOICES, [f])
     expect(out[0].tier).toBe(4)
-    expect(out[0].match_evidence).toBe('bianchi')
+    // A surname on its own is a HINT, not identification: half of "Maria Bianchi" appears, so
+    // the evidence says so. It is still surfaced — this screen is a suggestion list — but the
+    // label must not round a partial hit up to a confident one, because one click here creates
+    // a PAID invoice. (2026-07-29: this screen now shares the matcher's name rule.)
+    expect(out[0].match_evidence).toBe('partial name: bianchi')
   })
 
   it('returns no match when neither sender nor metadata contains contact tokens', () => {
