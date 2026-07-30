@@ -796,7 +796,7 @@ export async function GET(req: NextRequest) {
     // annual report; formation-year absence is normal only until the intake
     // fills land, so a null here is a real signal either way.
     const todayIso = new Date().toISOString().split("T")[0]
-    const stateNorm = (account.state_of_formation || "").toUpperCase().replace("NEW MEXICO", "NM")
+    const stateNorm = (account.state_of_formation || "").toUpperCase().trim().replace("NEW MEXICO", "NM")
 
     if (account.status === "Active") {
       if (!account.ra_renewal_date) {

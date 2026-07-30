@@ -139,13 +139,21 @@ export async function applyRenewalDateFills(
     for (const m of mirrors) {
       if (!m.due) continue
       const year = new Date(m.due).getFullYear()
-      const { data: existing } = await supabaseAdmin
+      // Match the current OPEN row for this obligation: same year OR the
+      // year-NULL legacy import rows (the majority of the table — file-renewal
+      // carries the same fallback). Completed rows are history — never updated;
+      // a completed prior cycle correctly gets a NEW row for the new cycle.
+      // limit(1) tolerates duplicate rows instead of erroring into an insert.
+      const { data: existingRows } = await supabaseAdmin
         .from("deadlines")
         .select("id, due_date")
         .eq("account_id", accountId)
         .eq("deadline_type", m.type)
-        .eq("year", year)
-        .maybeSingle()
+        .neq("status", "Completed")
+        .or(`year.eq.${year},year.is.null`)
+        .order("due_date", { ascending: false })
+        .limit(1)
+      const existing = existingRows?.[0] ?? null
       if (existing) {
         if (existing.due_date !== m.due) {
           await supabaseAdmin
