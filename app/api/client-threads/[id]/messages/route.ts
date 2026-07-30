@@ -6,9 +6,15 @@ import { fetchSlackThreadMessages } from "@/lib/ai-agent/slack-claude"
 
 /**
  * GET /api/client-threads/[id]/messages
- * Returns the messages of a client_thread's conversation, pulled LIVE from Slack
- * (conversations.replies) when expanded in the CRM panel. Staff-only. No stored
- * copy — always current; empty if the Slack thread was deleted.
+ * Returns the messages of a client_thread's conversation. Staff-only.
+ *
+ * OUR OWN COPY FIRST (2026-07-30, Antonio: "we have to use team chat, not Slack").
+ * This used to read LIVE from Slack on every open, with a stored copy kept only for
+ * closed conversations — so an open one existed nowhere but Slack, and switching the
+ * Slack app off would have emptied 116 of them. The rescue job archives them here;
+ * this route now prefers that archive whatever the status, and only falls back to
+ * Slack for a row that has not been archived yet. Once the archive is complete the
+ * Slack call is dead weight and goes with the rest of the Slack surface.
  */
 export async function GET(
   req: NextRequest,
@@ -32,9 +38,15 @@ export async function GET(
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 })
 
-  // Closed conversation → serve the frozen snapshot (permanent, independent of Slack).
-  if (row.status === "closed" && Array.isArray(row.transcript)) {
-    return NextResponse.json({ messages: row.transcript, closed: true })
+  // ARCHIVED → serve our own copy, open or closed. Independent of Slack, and the
+  // same shape the panel already renders.
+  if (Array.isArray(row.transcript) && row.transcript.length > 0) {
+    return NextResponse.json({ messages: row.transcript, closed: row.status === "closed", archived: true })
+  }
+  // A closed row with no archive has nothing else to offer — it must not fall through
+  // to a live Slack read, which is what closing was meant to make it independent of.
+  if (row.status === "closed") {
+    return NextResponse.json({ messages: [], closed: true, note: "No stored copy of this conversation." })
   }
 
   // Backfilled CRM-log rows: source_ref is a conversations row id — return its
