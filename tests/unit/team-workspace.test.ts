@@ -171,6 +171,22 @@ describe('validateTeamCard', () => {
   it('accepts a good color', () => {
     expect(validateTeamCard({ kind: 'invoice', title: 'INV-000123', color: '#10b981' })).toBeNull()
   })
+  it("accepts the 'email_confirm' card — the confirm step Team Chat renders", () => {
+    // Antonio 2026-07-29: "I want the confirm step everywhere." If the validator
+    // ever stops accepting this kind, the @claude trigger's card write is rejected
+    // and a frozen email sits with NO way to confirm it — an email that can never
+    // be sent, with the worker having said it was ready.
+    expect(
+      validateTeamCard({
+        kind: 'email_confirm',
+        title: 'Confirm email to accountant@example.com',
+        subtitle: 'Tax docs — 📎 form1120.pdf',
+        entity_type: 'worker_prepared_send',
+        entity_id: '3f1b1a4e-0000-4000-8000-000000000000',
+        body: 'Hi, please find the documents attached.',
+      }),
+    ).toBeNull()
+  })
 })
 
 describe('isStaffAuthRole — who counts as TD staff', () => {

@@ -18,6 +18,7 @@
  */
 import 'server-only'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { TD_MAILBOXES } from '@/lib/inbox/email-recipients'
 import { getInternalBaseUrl } from '@/lib/mcp/tools/agent-messages'
 import { CLAUDE_SENDER_UUID, CLAUDE_SENDER_NAME, mentionsClaude } from '@/lib/team/workspace'
 import { channelNotifiesStaff } from '@/lib/team/channel-notify'
@@ -224,6 +225,13 @@ export async function processClaudeReply(params: {
     enableEmailSend?: true
     emailConfirmExempt?: string[]
     forceMailbox?: 'support' | 'antonio'
+    emailSendPrep?: {
+      threadUuid: string
+      gmailThreadId: string | null
+      mailbox: string
+      defaultReplyToMessageId: string | null
+      sendable: Array<{ ref: string; path: string; name: string; contentType?: string; size?: number }>
+    }
   } = {}
   {
     // EVERY team thread, not only client-linked ones. Gating this on a client link
@@ -232,7 +240,15 @@ export async function processClaudeReply(params: {
     // all, while the shared prompt still told it to call send_email: a false
     // capability on the very channel the work happens in.
     //
-    // NO CONFIRM STEP HERE, DELIBERATELY — and this is the case the whole change was
+    // CONFIRM-ONCE APPLIES HERE TOO (Antonio, 2026-07-29: "I want the confirm step
+    // everywhere, that must be present"). An address already known for this thread
+    // — the linked client's own, or one of our mailboxes — sends on the staff
+    // member's go-ahead. Any OTHER address freezes and a Confirm card is posted
+    // into this very thread (see the card block after the worker call). This was
+    // briefly left out because Team Chat had no control to render a card into; the
+    // card is now built, so the step is real rather than a refusal.
+    //
+    // OLD COMMENT (kept for the reasoning, no longer the behaviour) — and this is the case the whole change was
     // reported for (MFCompany: "email our accountant Smit about this client").
     //
     // Team Chat is STAFF-AUTHORED text: a teammate typing "@claude email X" is the
@@ -247,7 +263,50 @@ export async function processClaudeReply(params: {
     //
     // forceMailbox still applies — there is no mailbox-authorisation check here, so
     // `from: 'antonio'` must never be honoured.
-    emailSendRail = { enableEmailSend: true, forceMailbox: 'support' }
+    // The linked client's own addresses (if this thread has a client) plus our own
+    // mailboxes are confirm-exempt. A lookup failure leaves the list at just our
+    // mailboxes, so an unknown address still gets a card — it degrades toward the
+    // human, never toward a silent send.
+    const exempt: string[] = [...TD_MAILBOXES]
+    if (thread?.account_id || thread?.contact_id) {
+      try {
+        let rows: Array<{ email: string | null }> = []
+        if (thread.account_id) {
+          const { data: links } = await supabaseAdmin
+            .from('account_contacts')
+            .select('contact_id')
+            .eq('account_id', thread.account_id)
+          const ids = ((links ?? []) as Array<{ contact_id: string }>).map(l => l.contact_id).filter(Boolean)
+          if (ids.length) {
+            const { data } = await supabaseAdmin.from('contacts').select('email').in('id', ids)
+            rows = (data ?? []) as Array<{ email: string | null }>
+          }
+        } else {
+          const { data } = await supabaseAdmin
+            .from('contacts')
+            .select('email')
+            .eq('id', thread.contact_id as string)
+          rows = (data ?? []) as Array<{ email: string | null }>
+        }
+        for (const r of rows) if (r.email && r.email.includes('@')) exempt.push(r.email)
+      } catch (err) {
+        console.warn('[team-claude] client address lookup failed (every new address will be confirmed):', err)
+      }
+    }
+    emailSendRail = {
+      enableEmailSend: true,
+      forceMailbox: 'support',
+      emailConfirmExempt: Array.from(new Set(exempt)),
+      // Freezing needs a prep context. threadId is the TEAM thread's uuid, which is
+      // what the Confirm card is looked up by after the turn.
+      emailSendPrep: {
+        threadUuid: threadId,
+        gmailThreadId: null,
+        mailbox: TD_MAILBOXES[0],
+        defaultReplyToMessageId: null,
+        sendable: [],
+      },
+    }
   }
 
   // Recent conversation (exclude the placeholder itself) for context.
@@ -307,6 +366,26 @@ export async function processClaudeReply(params: {
       // Never block the reply on attachment reading.
       console.warn('[team-claude] attachment read failed (answering without files):', err)
     }
+  }
+
+  // Prepared-send rows that ALREADY existed on this thread before this turn — so a
+  // Confirm card is only posted for a draft THIS turn froze, never a stale one. Id
+  // snapshot (not a clock comparison): the database's now() and this process's clock
+  // are different clocks, and skew would either drop this turn's card or resurface an
+  // old one. A failed lookup suppresses the card rather than risking a stale confirm.
+  const priorPreparedIds = new Set<string>()
+  let priorPreparedKnown = true
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: existing, error } = await (supabaseAdmin as any)
+      .from('worker_prepared_sends')
+      .select('id')
+      .eq('thread_uuid', threadId)
+      .eq('status', 'pending')
+    if (error) priorPreparedKnown = false
+    for (const r of (existing ?? []) as Array<{ id: string }>) priorPreparedIds.add(r.id)
+  } catch {
+    priorPreparedKnown = false
   }
 
   let reply: string
@@ -424,6 +503,46 @@ export async function processClaudeReply(params: {
     // '…' — this turn set the claim on entry, so matching the old value here would
     // never fire and the reply would be silently dropped.
     .eq('message', WORKING_PLACEHOLDER)
+
+  // CONFIRM CARD — a new email recipient waits for a human here, in this thread.
+  // The card carries the frozen row's id; its buttons call the same confirm-send
+  // endpoint the Inbox and client-chat panels use, so one payload, one code path,
+  // and what leaves is exactly what was read.
+  if (priorPreparedKnown) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: prep } = await (supabaseAdmin as any)
+        .from('worker_prepared_sends')
+        .select('id, to_address, subject, body, attachments')
+        .eq('thread_uuid', threadId)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (prep && !priorPreparedIds.has(prep.id)) {
+        const files = ((prep.attachments ?? []) as Array<{ name?: string }>)
+          .map(a => a.name)
+          .filter(Boolean)
+          .join(', ')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabaseAdmin as any).from('internal_messages').update({
+          card: {
+            kind: 'email_confirm',
+            title: `Confirm email to ${prep.to_address}`,
+            subtitle: [prep.subject, files ? `📎 ${files}` : ''].filter(Boolean).join(' — ') || undefined,
+            entity_type: 'worker_prepared_send',
+            entity_id: prep.id,
+            // The exact body that will be sent, so Confirm approves a MESSAGE and
+            // not just an address (the panels render it for the same reason).
+            body: typeof prep.body === 'string' ? prep.body : '',
+          },
+        }).eq('id', placeholderId)
+      }
+    } catch (err) {
+      // A missing card must never break the answer itself.
+      console.warn('[team-claude] confirm-card attach failed:', err)
+    }
+  }
 
   await bumpThreadActivity(threadId)
 

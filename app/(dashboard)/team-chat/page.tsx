@@ -2310,7 +2310,82 @@ function MessageRow({ m, isMe, isClaude, canDelete, currentUserId, onReply, onEd
   )
 }
 
+/**
+ * A frozen outbound email waiting for a human — the SAME confirm step the Inbox,
+ * client-chat and sidebar panels show, rendered here so it exists on every surface
+ * (Antonio, 2026-07-29: "I want the confirm step everywhere"). The buttons call the
+ * shared confirm-send endpoint with the frozen row's id: what leaves is exactly the
+ * payload shown, and the row is single-use, so a second click cannot send twice.
+ */
+function EmailConfirmCard({ card }: { card: NonNullable<TeamMsg['card']> }) {
+  const [busy, setBusy] = useState(false)
+  const [done, setDone] = useState<'sent' | 'cancelled' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const preparedId = card.entity_id
+
+  const resolve = async (action: 'confirm' | 'cancel') => {
+    if (!preparedId || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/inbox/worker-chat/confirm-send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prepared_id: preparedId, action }),
+      })
+      const data = await res.json().catch(() => ({}))
+      // Surface the server's real reason (R099) — "already sent", "not authorized
+      // for this mailbox" and "expired" are all things staff need to see verbatim.
+      if (!res.ok) throw new Error(data.error || 'Could not complete — please try again.')
+      setDone(action === 'confirm' ? 'sent' : 'cancelled')
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Could not complete.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-1.5 rounded-lg border border-amber-200 bg-amber-50 overflow-hidden max-w-[420px]">
+      <div className="px-3 py-2">
+        <p className="text-[10px] uppercase tracking-wide text-amber-700 font-semibold">Confirm before sending</p>
+        <p className="text-sm font-medium text-zinc-900 break-all">{card.title}</p>
+        {card.subtitle && <p className="text-xs text-zinc-600 mt-0.5 break-words">{card.subtitle}</p>}
+        {card.body ? (
+          <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-amber-200 bg-white px-2.5 py-2">
+            <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{card.body}</p>
+          </div>
+        ) : null}
+        {done ? (
+          <p className={cn('mt-2 text-xs font-medium', done === 'sent' ? 'text-emerald-700' : 'text-zinc-500')}>
+            {done === 'sent' ? '✅ Sent.' : 'Cancelled — nothing was sent.'}
+          </p>
+        ) : (
+          <div className="mt-2.5 flex items-center gap-2">
+            <button
+              onClick={() => void resolve('confirm')}
+              disabled={busy || !preparedId}
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 min-h-[36px]"
+            >
+              {busy ? 'Sending…' : 'Confirm & send'}
+            </button>
+            <button
+              onClick={() => void resolve('cancel')}
+              disabled={busy || !preparedId}
+              className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100 disabled:opacity-50 min-h-[36px]"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+        {error && <p className="mt-1.5 text-xs text-red-600">{error}</p>}
+      </div>
+    </div>
+  )
+}
+
 function CardView({ card }: { card: NonNullable<TeamMsg['card']> }) {
+  if (card.kind === 'email_confirm') return <EmailConfirmCard card={card} />
   const inner = (
     <div className="mt-1.5 rounded-lg border border-zinc-200 bg-white overflow-hidden max-w-[280px]" style={card.color ? { borderLeftColor: card.color, borderLeftWidth: 3 } : undefined}>
       <div className="px-3 py-2">
