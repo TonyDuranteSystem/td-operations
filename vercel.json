@@ -137,10 +137,6 @@
       "schedule": "30 10 * * *"
     },
     {
-      "path": "/api/cron/slack-claude-worker",
-      "schedule": "*/2 * * * *"
-    },
-    {
       "path": "/api/team/claude/process",
       "schedule": "*/2 * * * *"
     },

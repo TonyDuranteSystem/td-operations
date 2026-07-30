@@ -36,7 +36,7 @@ docs/systems/team-workspace.md|lib/team/,app/api/team/,app/(dashboard)/team-chat
 docs/systems/dev-tracker.md|lib/dev-tracker/,components/dev-board/,app/(dashboard)/dev-board/,app/api/dev-board/,lib/mcp/tools/dev-tasks.ts
 docs/systems/ai-agent.md|lib/ai-agent/,app/api/ai-agent/
 docs/systems/agent-bridge.md|lib/mcp/tools/agent-messages.ts,lib/ai-agent/worker-tools.ts,app/api/cron/hermes-bridge/,lib/ai-agent/thread-summaries.ts,lib/ai-agent/thread-routing.ts,lib/ai-agent/thread-context.ts,lib/ai-agent/thread-recall.ts,lib/mcp/tools/agent-threads.ts,lib/ai-agent/approval-env.ts,lib/ai-agent/approval-executor.ts,lib/mcp/tools/agent-approvals.ts,lib/ai-agent/telegram-notify.ts
-docs/systems/slack-claude-worker.md|lib/ai-agent/slack-claude.ts,lib/ai-agent/slack-file-reader.ts,app/api/webhooks/slack-claude/,app/api/cron/slack-claude-worker/,app/(dashboard)/code-tasks/,app/api/code-tasks/,lib/code-tasks/,scripts/mac-mini/
+docs/systems/slack-claude-worker.md|lib/ai-agent/slack-claude.ts,lib/ai-agent/slack-file-reader.ts,app/(dashboard)/code-tasks/,app/api/code-tasks/,lib/code-tasks/,scripts/mac-mini/
 docs/systems/fax.md|app/api/tools/fax/,app/(dashboard)/tools/fax/,components/flows/fax-irs.tsx
 docs/systems/pnl-engine.md|lib/pnl-generator.ts
 docs/systems/client-threads.md|scripts/migrations/20260621-1500-create-client-threads.sql,scripts/migrations/20260621-1510-backfill-client-threads-from-conversations.sql,app/(dashboard)/conversations/,components/conversations/

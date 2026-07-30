@@ -1,6 +1,6 @@
 /**
  * Team Chat in-thread approval completion — the Team equivalent of
- * lib/ai-agent/slack-approval.ts (read it for the full rationale).
+ * The approval rail itself is dormant (WORKER_ACTIONS_ENABLED, default off).
  *
  * The worker can only PROPOSE writes (propose_action mints a pending
  * approval_queue row with a 6-digit confirmation_code). In Slack, typing the
@@ -22,9 +22,15 @@ import 'server-only'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { currentApprovalEnv } from '@/lib/ai-agent/approval-env'
 import { executeApproval, isApprovalRailEnabled } from '@/lib/ai-agent/approval-executor'
-import { isSixDigitCode } from '@/lib/ai-agent/slack-approval'
 
-export { isSixDigitCode }
+/**
+ * A message that is EXACTLY a 6-digit code and nothing else. Moved here when the
+ * Slack surface was removed (2026-07-29) — it was the only thing Team Chat still
+ * borrowed from that module.
+ */
+export function isSixDigitCode(body: string | null | undefined): boolean {
+  return /^\s*\d{6}\s*$/.test(body ?? '')
+}
 
 export interface TeamApprovalResult {
   /** True once the code message was consumed here — caller must NOT run @claude on it. */

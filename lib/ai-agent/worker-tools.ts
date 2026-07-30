@@ -122,7 +122,6 @@ export const WORKER_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   // signer name, so the document itself is the only source (dev job a6c3d75b).
   "read_scanned_document",
   // Read a Slack permalink — web browsing cannot (workspace auth). dev job a6c3d75b
-  "read_slack_link",
   "portal_chat_inbox",
   "portal_chat_read",
   "get_dashboard_stats",

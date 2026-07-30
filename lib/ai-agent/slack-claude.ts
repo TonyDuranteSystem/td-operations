@@ -19,7 +19,6 @@ import { fullReachEnabledFor } from "@/lib/ai-agent/full-reach"
 import { surfaceApiKeyOverride } from "@/lib/ai-agent/surface-api-key"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { callWorker, type CallWorkerOptions, type WorkerImageBlock, type WorkerDocumentBlock } from "@/lib/ai-agent/worker-tools"
-import { workerActionsEnabled } from "@/lib/ai-agent/worker-actions-switch"
 import {
   classifySlackFile,
   extractTextFromBuffer,
@@ -27,11 +26,6 @@ import {
   SLACK_FILE_TEXT_CHAR_CAP,
   type SlackFileKind,
 } from "@/lib/ai-agent/slack-file-reader"
-import {
-  isSixDigitCode,
-  isAuthorizedApprover,
-  handleSlackApprovalCode,
-} from "@/lib/ai-agent/slack-approval"
 import { createThreadSummary } from "@/lib/ai-agent/thread-summaries"
 import { loadRelevantTemplates, formatTemplatesForPrompt } from "@/lib/ai-agent/templates"
 import { captureLessonFromTurn } from "@/lib/ai-agent/lesson-capture"
@@ -1923,42 +1917,8 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     : null
 
   // ── In-channel approval completion (loop fix) ──────────────────────────────
-  // A message that is EXACTLY a 6-digit code from the authorized approver
-  // (Antonio) is an approval, not a chat turn. Resolve it deterministically and
-  // NEVER call the LLM — the model only ever proposes, so consuming the code here
-  // (not in the model) is what makes the propose→retype→re-propose loop impossible.
-  const slackUserId = ctx.slack_user_id as string | undefined
-  // OFF (2026-07-10, Antonio): worker no longer queues actions → nothing to
-  // approve by code. Gated on the same reversible rail switch as team chat.
-  if (workerActionsEnabled() && isSixDigitCode(row.body) && isAuthorizedApprover(slackUserId)) {
-    const outcome = await handleSlackApprovalCode({
-      code: row.body,
-      channelId,
-      // Raw slack_thread_ts (not replyThreadTs) so the scope key matches exactly
-      // what the webhook stored on agent_messages.context_json.slack_scope_key.
-      threadTs: ctx.slack_thread_ts as string | null | undefined,
-      slackUserId,
-    })
-    if (outcome.handled) {
-      if (ackTs) {
-        await updateSlackMessage(channelId, ackTs, outcome.message, [])
-      } else {
-        await postSlackMessage(channelId, outcome.message, replyThreadTs)
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabaseAdmin as any)
-        .from("agent_messages")
-        .update({
-          status: "done",
-          reply: outcome.message,
-          replied_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", row.id)
-      return outcome.message
-    }
-  }
-
+  // The 6-digit approval interception is GONE with the Slack surface (2026-07-29).
+  // The action rail it served has been off since 2026-07-10 anyway.
   // Download any attached screenshots → base64 image blocks (best-effort).
   let imageRefs = (Array.isArray(ctx.slack_images) ? ctx.slack_images : []) as SlackImageRef[]
 

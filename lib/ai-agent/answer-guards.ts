@@ -41,7 +41,6 @@ export const ABSENCE_EVIDENCE_TOOLS = new Set([
   // files
   "drive_search", "drive_list_folder", "read_drive_file", "docai_ocr_file",
   "read_scanned_document",
-  "read_slack_link",
   "read_portal_attachment", "read_email_attachment",
   // correspondence + history
   "gmail_search", "gmail_read", "gmail_read_thread",
