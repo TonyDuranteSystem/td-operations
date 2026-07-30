@@ -105,12 +105,18 @@ export async function prepareWorkerEmailSend(input: PrepareInput): Promise<Prepa
   // rows here means the newest frozen payload is the only one that can leave, on
   // every surface. A card for a cancelled row now clicks through to an honest
   // "already cancelled" instead of a second real email.
+  // SCOPED TO THE SAME ACTOR. In Team Chat the conversation id is the whole
+  // CHANNEL, so a blanket cancel would kill a teammate's un-confirmed card the
+  // moment anyone else drafted — their card would then 409, or worse, the
+  // card-picker would pair their answer with someone else's email. Redrafting is
+  // per-person, so scoping by actor cancels exactly the drafts being superseded.
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (supabaseAdmin as any)
       .from("worker_prepared_sends")
       .update({ status: "cancelled" })
       .eq("thread_uuid", input.threadUuid)
+      .eq("actor", input.actor)
       .eq("status", "pending")
   } catch {
     // Best-effort: failing to supersede must never block preparing the new draft.

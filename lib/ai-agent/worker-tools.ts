@@ -2373,14 +2373,29 @@ export async function executeWorkerTool(
         if (sendContext.emailSendPrep && freezable) {
           const prep = sendContext.emailSendPrep
           const { prepareWorkerEmailSend } = await import("@/lib/inbox/worker-email-send")
+          // THREADING. When the recipient is already on the open email thread, this
+          // is a REPLY and must stay in that conversation — In-Reply-To/References
+          // and the Gmail thread id all come from the prep context. When they are
+          // NOT on it, the email is a genuinely NEW one and must not be grafted
+          // into a thread they were never part of.
+          //
+          // This became load-bearing the moment EVERY email started freezing: the
+          // freeze path used to run only for off-thread recipients, so hardcoding
+          // null was right then and silently broke every ordinary Inbox reply once
+          // the exemption was removed. `emailConfirmExempt` survives for exactly
+          // this — it is the thread's own participants (plus our mailboxes), used
+          // here as a THREADING signal, never as a permission gate.
+          const onThisThread = (sendContext.emailConfirmExempt ?? [])
+            .some((a) => a.toLowerCase() === parsedTo[0].toLowerCase())
           const proposed = await prepareWorkerEmailSend({
             threadUuid: prep.threadUuid,
-            // Deliberately NOT the open thread: this person is not on it, so the
-            // email is a NEW one. It also keeps confirm-time thread re-validation
-            // (which would reject an off-thread address) correctly out of the way.
-            gmailThreadId: null,
+            gmailThreadId: onThisThread ? (prep.gmailThreadId ?? null) : null,
             mailbox: prep.mailbox,
-            replyToMessageId: null,
+            replyToMessageId: onThisThread
+              ? (typeof params.reply_to_message_id === "string"
+                  ? params.reply_to_message_id
+                  : (prep.defaultReplyToMessageId ?? null))
+              : null,
             to: parsedTo[0],
             subject: typeof params.subject === "string" ? params.subject : "",
             body: typeof params.body === "string" ? params.body : "",

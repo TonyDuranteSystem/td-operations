@@ -217,6 +217,8 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
       // stale frozen email stays on screen under a new conversation and one click
       // sends it.
       setPreparedSend(data.preparedSend ?? null)
+      // Fresh card → fresh choice; a sticky pick must not leak onto the next email.
+      if (data.preparedSend) setSendAs('support')
     } catch (err) {
       setMessages(prev => [
         ...prev,

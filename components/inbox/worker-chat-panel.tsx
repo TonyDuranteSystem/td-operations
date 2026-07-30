@@ -57,7 +57,12 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
   const [confirming, setConfirming] = useState(false)
   // WHICH OF OUR ADDRESSES IT GOES OUT FROM — the staff member chooses on the card
   // (Antonio, 2026-07-29). The server re-checks that they may send as it.
-  const [sendAs, setSendAs] = useState<'support' | 'antonio'>('support')
+  //
+  // DEFAULTS TO THE MAILBOX THIS THREAD LIVES IN. Defaulting to support@ meant a
+  // reply on an antonio@ conversation silently went out from support@ with the
+  // team sign-off unless the dropdown was touched every time — a changed sending
+  // identity mid-conversation, which the counterparty sees and staff would not.
+  const [sendAs, setSendAs] = useState<'support' | 'antonio'>(mailbox === 'antonio' ? 'antonio' : 'support')
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentContextRef = useRef(false)
   const attachments = useWorkerAttachments()
@@ -178,6 +183,8 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
       // ?? null so a turn that prepares NOTHING clears a previous card — otherwise a
       // stale frozen email stays on screen under a new conversation and Confirm sends it.
       setPreparedSend(data.preparedSend ?? null)
+      // Fresh card → fresh choice, back to this thread's own mailbox.
+      if (data.preparedSend) setSendAs(mailbox === 'antonio' ? 'antonio' : 'support')
     } catch (err) {
       setMessages(prev => [
         ...prev,
