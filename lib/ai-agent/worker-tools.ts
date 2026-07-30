@@ -2292,25 +2292,29 @@ export async function executeWorkerTool(
     // sentence inside that text must never be able to aim an irreversible send at
     // an address no human ever looked at.
     //
-    // `emailConfirmExempt === undefined` = no confirm step at all (Slack: no send
-    // context is built there). An EMPTY array is meaningful: nothing is exempt, so
-    // every address is confirmed — which is what the Inbox uses when it could not
-    // read the thread's participants.
-    if (sendContext?.emailConfirmExempt !== undefined) {
+    // EVERY EMAIL IS CONFIRMED BY A HUMAN — no exceptions, no exempt list (Antonio,
+    // 2026-07-29: "every email must have the card"). A call with no way to FREEZE
+    // one therefore must not send at all: silently sending because this surface
+    // happens to lack a confirm path is precisely the hole the rule closes.
+    if (!sendContext?.emailSendPrep) {
+      return [
+        `❌ I can't send email from here: this screen has no confirmation step, and every email has to be confirmed by you before it goes out.`,
+        `Show the staff member the full draft (to / subject / body) so they can send it themselves, or ask them to use the Inbox, a client chat, the sidebar or Team Chat — those have the confirm card.`,
+        `Do NOT claim anything was sent.`,
+      ].join(" ")
+    }
+    {
       const { extractEmailAddresses } = await import("@/lib/inbox/email-recipients")
       const to = typeof params.to === "string" ? params.to : ""
       // ONE parser for the whole decision. `checkRecipientsAllowed` refuses a quoted
-      // display name outright, so using it to decide "is this already known?" made a
-      // quoted form of an ON-THREAD address fail with "this screen has no confirmation
-      // step" — on a screen that has one. Parse first, judge the parsed addresses.
+      // display name outright, so a quoted form of an ordinary address would fail
+      // with a nonsense reason. Parse first, judge the parsed addresses.
       const parsedTo = extractEmailAddresses(to)
-      const exemptLower = new Set(sendContext.emailConfirmExempt.map((a) => a.toLowerCase()))
-      const newRecipients = parsedTo.filter((a) => !exemptLower.has(a.toLowerCase()))
+      const newRecipients = parsedTo
       // Unparseable `to` never proceeds: it would be frozen or sent verbatim, and a
       // CRLF/quoted-local-part payload could smuggle a second recipient.
-      const needsConfirm = parsedTo.length === 0 || newRecipients.length > 0
-      if (needsConfirm) {
-        const allowed = sendContext.emailConfirmExempt
+      {
+        const allowed: string[] = []
         // The legacy "confirm this ADDRESS then re-run the model" capture is
         // DELIBERATELY not populated any more. It produced a second button beside
         // the frozen card, and pressing it re-drafted the email — so what left was
@@ -2419,86 +2423,13 @@ export async function executeWorkerTool(
         ].filter(Boolean).join(" ")
       }
     }
-    // Hard sanitizer (with the DRAFTS prompt rule): strip markdown/asterisks from the
-    // client-facing body + subject so no "AI-looking" formatting reaches the recipient.
-    const cleaned: Record<string, unknown> = { ...params }
-    if (typeof cleaned.body === "string") cleaned.body = stripDraftMarkdown(cleaned.body)
-    if (typeof cleaned.subject === "string") cleaned.subject = stripDraftMarkdown(cleaned.subject)
-
-    // ATTACHMENT PATH: if the model asked to attach files, the worker does NOT
-    // send. It freezes a "prepared send" and the staff confirms with a Confirm
-    // button in the panel — the human is the second gate before a file leaves.
-    // Attachable files are ONLY the staff's uploads THIS turn (emailSendPrep.sendable),
-    // never a Drive id, never an inbound-email attachment. Refuse if attach is asked
-    // for on a surface that didn't set up the prep context.
-    const attach = Array.isArray(params.attach) ? params.attach.filter((r): r is string => typeof r === "string") : []
-    if (attach.length > 0) {
-      const prep = sendContext?.emailSendPrep
-      if (!prep || !prep.sendable.length) {
-        // Two cases: a surface with no prep context at all, or one where the staff
-        // didn't attach a file to THIS message (uploads are per-message; the
-        // composer clears them on send). Tell the staff to re-drop it here.
-        return prep
-          ? `❌ There's no file on this message to attach. Ask the staff member to drop the file into the panel on the same message where they say to send it, then I can attach it.`
-          : `❌ Attaching a file to an email isn't available on this screen — the Inbox and the client-chat worker panels can do it. Say so plainly; never claim a file is attached.`
-      }
-      const { prepareWorkerEmailSend } = await import("@/lib/inbox/worker-email-send")
-      const result = await prepareWorkerEmailSend({
-        threadUuid: prep.threadUuid,
-        gmailThreadId: prep.gmailThreadId,
-        mailbox: prep.mailbox,
-        replyToMessageId: typeof cleaned.reply_to_message_id === "string" ? cleaned.reply_to_message_id : prep.defaultReplyToMessageId,
-        to: typeof cleaned.to === "string" ? cleaned.to : "",
-        subject: typeof cleaned.subject === "string" ? cleaned.subject : "",
-        body: typeof cleaned.body === "string" ? cleaned.body : "",
-        attachRefs: attach,
-        sendable: prep.sendable,
-        // NO ADDRESS LIST. This path always ends in a human pressing Confirm on a
-        // frozen payload, so the recipient check IS that confirmation. Passing an
-        // (always-empty) allow-list here is what silently killed every attachment
-        // send when the per-surface address pins were removed: an empty list
-        // rejects every address, so the feature failed with a message about a
-        // thread rule that no longer exists. Do not reintroduce it.
-        allowedRecipients: [],
-        proposedRecipient: true,
-        actor: sendContext?.actor ?? "unknown",
-      })
-      return result.message
-    }
-
-    // ⛔ CROSS-RUN IDEMPOTENCY — email had NONE. The marker table was created with
-    // `kind` documented as 'portal_message' | 'email', but only the portal branch
-    // ever claimed one, so email was the unprotected half of a protection that was
-    // designed for both. A turn that times out and is retried — or a Confirm click
-    // whose response is lost — sent the same email twice, to a real recipient.
-    // Same shape as the portal claim: keyed on the originating turn + recipient +
-    // exact body, best-effort (a missing table or any non-duplicate error lets the
-    // send through, so this can never block a legitimate first send).
-    const emailTarget = typeof cleaned.to === "string" ? cleaned.to : ""
-    const emailBody = typeof cleaned.body === "string" ? cleaned.body : ""
-    const okToSendEmail = await claimWorkerSend(
-      sendContext?.sourceMessageId,
-      "email",
-      emailTarget,
-      emailBody,
-    )
-    if (!okToSendEmail) {
-      return "✅ Already sent (this turn was re-run) — no duplicate email sent."
-    }
-
-    const emailResult = await executeTool("send_email", cleaned)
-    // Attribution audit (fire-and-forget): record WHICH staff member triggered a
-    // CRM-panel email send. Only on a real success (the shared tool returns
-    // {"success":true,...}); a sandbox-blocked / failed send is not logged as sent.
-    if (sendContext?.actor && emailResult.includes('"success":true')) {
-      logAction({
-        actor: sendContext.actor,
-        action_type: "send",
-        table_name: "gmail",
-        summary: `Email sent via CRM worker to ${typeof cleaned.to === "string" ? cleaned.to : "?"}: "${String(cleaned.subject ?? "").slice(0, 80)}"`,
-      })
-    }
-    return emailResult
+    // NOTE: the direct-send path that used to live here is GONE (2026-07-29).
+    // Every email is frozen for a human Confirm — the block above always returns —
+    // so the actual Gmail dispatch, its idempotency claim and its audit now happen
+    // at CONFIRM time in confirmWorkerEmailSend. Attachments ride the same freeze
+    // (their refs are validated by prepareWorkerEmailSend), which is why the old
+    // attach-only branch went with it. If a direct path is ever reintroduced it
+    // would silently bypass the confirm card — don't.
   }
   if (name === "send_portal_message") {
     // Slack-only direct send (gated at the tool-list level via enableSlackSend).

@@ -55,6 +55,9 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
   const [elapsed, setElapsed] = useState(0)
   const [preparedSend, setPreparedSend] = useState<PreparedSend | null>(null)
   const [confirming, setConfirming] = useState(false)
+  // WHICH OF OUR ADDRESSES IT GOES OUT FROM — the staff member chooses on the card
+  // (Antonio, 2026-07-29). The server re-checks that they may send as it.
+  const [sendAs, setSendAs] = useState<'support' | 'antonio'>('support')
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentContextRef = useRef(false)
   const attachments = useWorkerAttachments()
@@ -66,7 +69,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
       const res = await fetch('/api/inbox/worker-chat/confirm-send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prepared_id: preparedSend.id, action }),
+        body: JSON.stringify({ prepared_id: preparedSend.id, action, mailbox: sendAs }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Could not complete — please try again.')
@@ -260,6 +263,18 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
                 {typeof a.size === 'number' && <span className="text-zinc-400">{(a.size / 1024 / 1024).toFixed(1)} MB</span>}
               </div>
             ))}
+          </div>
+          <div className="mt-2 flex items-center gap-2 text-xs">
+            <span className="text-zinc-500">From:</span>
+            <select
+              value={sendAs}
+              onChange={e => setSendAs(e.target.value as 'support' | 'antonio')}
+              disabled={confirming}
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
+            >
+              <option value="support">support@tonydurante.us</option>
+              <option value="antonio">antonio.durante@tonydurante.us</option>
+            </select>
           </div>
           <div className="mt-2.5 flex items-center gap-2">
             <button

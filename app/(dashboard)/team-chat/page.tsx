@@ -2320,6 +2320,8 @@ function MessageRow({ m, isMe, isClaude, canDelete, currentUserId, onReply, onEd
 function EmailConfirmCard({ card }: { card: NonNullable<TeamMsg['card']> }) {
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<'sent' | 'cancelled' | null>(null)
+  // WHICH OF OUR ADDRESSES IT GOES OUT FROM — chosen here, re-checked by the server.
+  const [sendAs, setSendAs] = useState<'support' | 'antonio'>('support')
   const [error, setError] = useState<string | null>(null)
   const preparedId = card.entity_id
 
@@ -2331,7 +2333,7 @@ function EmailConfirmCard({ card }: { card: NonNullable<TeamMsg['card']> }) {
       const res = await fetch('/api/inbox/worker-chat/confirm-send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prepared_id: preparedId, action }),
+        body: JSON.stringify({ prepared_id: preparedId, action, mailbox: sendAs }),
       })
       const data = await res.json().catch(() => ({}))
       // Surface the server's real reason (R099) — "already sent", "not authorized
@@ -2361,6 +2363,19 @@ function EmailConfirmCard({ card }: { card: NonNullable<TeamMsg['card']> }) {
             {done === 'sent' ? '✅ Sent.' : 'Cancelled — nothing was sent.'}
           </p>
         ) : (
+          <>
+          <div className="mt-2 flex items-center gap-2 text-xs">
+            <span className="text-zinc-500">From:</span>
+            <select
+              value={sendAs}
+              onChange={e => setSendAs(e.target.value as 'support' | 'antonio')}
+              disabled={busy}
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
+            >
+              <option value="support">support@tonydurante.us</option>
+              <option value="antonio">antonio.durante@tonydurante.us</option>
+            </select>
+          </div>
           <div className="mt-2.5 flex items-center gap-2">
             <button
               onClick={() => void resolve('confirm')}
@@ -2377,6 +2392,7 @@ function EmailConfirmCard({ card }: { card: NonNullable<TeamMsg['card']> }) {
               Cancel
             </button>
           </div>
+          </>
         )}
         {error && <p className="mt-1.5 text-xs text-red-600">{error}</p>}
       </div>

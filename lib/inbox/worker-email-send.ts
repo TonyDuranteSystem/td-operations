@@ -15,8 +15,8 @@
  * recipient pin. This path exists only for the file case.
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { TD_MAILBOXES, checkRecipientsAllowed } from "@/lib/inbox/email-recipients"
 import { buildRawEmail } from "@/lib/email/raw-mime"
-import { checkRecipientsAllowed } from "@/lib/inbox/email-recipients"
 import { isValidWorkerUploadPath, WORKER_UPLOAD_BUCKET } from "@/lib/ai-agent/attachment-reader"
 
 /**
@@ -196,14 +196,31 @@ export type ConfirmResult =
  * everything and sends the FROZEN payload. Idempotent: a second confirm on an
  * already-sent row is refused (double-send guard).
  */
-export async function confirmWorkerEmailSend(preparedId: string, actorEmail: string): Promise<ConfirmResult> {
+export async function confirmWorkerEmailSend(
+  preparedId: string,
+  actorEmail: string,
+  /**
+   * The mailbox the staff member chose on the Confirm card ("support" | "antonio").
+   * Antonio, 2026-07-29: the card must also ask which of our addresses it goes out
+   * from. Applied HERE, at confirm time, so the human's choice is what ships — and
+   * the CALLER must have already checked that this staff member may send as it
+   * (the route does, with the same mailbox gate used to read that inbox).
+   */
+  mailboxOverride?: "support" | "antonio",
+): Promise<ConfirmResult> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
 
   // Claim the row: pending → sent in one guarded update (TOCTOU + double-send).
   const { data: claimed } = await db
     .from("worker_prepared_sends")
-    .update({ status: "sent", resolved_at: new Date().toISOString() })
+    .update({
+      status: "sent",
+      resolved_at: new Date().toISOString(),
+      ...(mailboxOverride
+        ? { mailbox: mailboxOverride === "antonio" ? TD_MAILBOXES[1] : TD_MAILBOXES[0] }
+        : {}),
+    })
     .eq("id", preparedId)
     .eq("status", "pending")
     .select("*")
