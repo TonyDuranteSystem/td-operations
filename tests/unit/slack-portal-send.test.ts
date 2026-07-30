@@ -181,9 +181,31 @@ describe("CRM Portal Chats panel — send attribution + recipient pin", () => {
     expect(arg.summary).toContain("Slack worker")
   })
 
+  it("DEFAULTS to the panel's client when the model names no recipient", async () => {
+    responses.accountContacts = [{ contact_id: "cnt-DEFAULT" }]
+    // The panel's prompt says "pass only the message" — the surface's own client
+    // fills in. This is what keeps the everyday flow working now that the
+    // recipient is a DEFAULT rather than a lock (Antonio, 2026-07-29).
+    const r = await executeWorkerTool(
+      "send_portal_message",
+      { message: "no recipient supplied" },
+      undefined,
+      undefined,
+      undefined,
+      { actor: "crm-portal:luca@tonydurante.us", pinnedPortalRecipient: { account_id: "acc-PIN" } },
+    )
+    expect(r).toContain("✅ Portal message sent")
+    expect(lastInsertedRow).toMatchObject({ account_id: "acc-PIN", contact_id: "cnt-DEFAULT" })
+  })
+
   it("HARD-PINS the recipient: a model-supplied contact_id is overridden by the panel's client", async () => {
+    // Briefly relaxed to a "staff-directed default" on 2026-07-29 and REVERTED the
+    // same day on council findings: the sidebar and Team Chat carry this pin but no
+    // client-scope validator, so a model-produced id would be delivered unchecked —
+    // and on Portal Chats the client's OWN chat text is in context, so a line inside
+    // it could retarget a client-visible message. Cross-client portal messaging needs
+    // its own confirm-the-recipient step before it can be opened (email has one).
     responses.accountContacts = [{ contact_id: "cnt-PINNED" }]
-    // Model tries to message a DIFFERENT client; the pin forces the open account.
     const r = await executeWorkerTool(
       "send_portal_message",
       { contact_id: "cnt-ATTACKER", message: "pinned" },
@@ -194,7 +216,6 @@ describe("CRM Portal Chats panel — send attribution + recipient pin", () => {
     )
     expect(r).toContain("✅ Portal message sent")
     expect(lastInsertedRow).toMatchObject({ account_id: "acc-PIN", contact_id: "cnt-PINNED" })
-    // the attacker-supplied contact id never reached the insert
     expect(lastInsertedRow).not.toMatchObject({ contact_id: "cnt-ATTACKER" })
   })
 })

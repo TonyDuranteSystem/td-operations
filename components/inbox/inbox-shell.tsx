@@ -1647,8 +1647,13 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                         reply to thread B — council blocker 2026-07-29). */}
                     <ComposeReply key={selected.id} conversation={selected} mailbox={activeMailbox} />
                   </div>
+                  {/* WorkerChatPanel is KEYED PER CONVERSATION, like ComposeReply above.
+                      Without the key it keeps the previous email's state across a thread
+                      switch — including a FROZEN outbound email's Confirm card, which
+                      would then send thread A's email under thread B's header. */}
                   {workerOpen && (
                     <WorkerChatPanel
+                      key={selected.id}
                       conversation={selected}
                       mailbox={activeMailbox}
                       onClose={() => setWorkerOpen(false)}

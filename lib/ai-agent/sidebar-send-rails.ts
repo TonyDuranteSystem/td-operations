@@ -9,6 +9,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { TD_MAILBOXES } from '@/lib/inbox/email-recipients'
 
 /**
  * Build this turn's send rails from the page's client — re-resolved server-side.
@@ -23,7 +24,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
  */
 export async function buildSidebarSendRails(clientKey: string | null): Promise<{
   portal: { enableSlackSend?: true; pinnedPortalRecipient?: { account_id?: string; contact_id?: string } }
-  email: { enableEmailSend?: true; pinnedEmailRecipients?: string[] }
+  email: { enableEmailSend?: true; emailConfirmExempt?: string[]; forceMailbox?: 'support' | 'antonio' }
+
   clientScope: import('@/lib/ai-agent/client-scope').ClientScope | null
   clientName: string | null
 }> {
@@ -116,7 +118,17 @@ export async function buildSidebarSendRails(clientKey: string | null): Promise<{
       enableSlackSend: true,
       pinnedPortalRecipient: kind === 'account' ? { account_id: id } : { contact_id: id },
     },
-    email: { enableEmailSend: true, pinnedEmailRecipients: addresses },
+    // NO recipient restriction — staff decide who gets the email (Antonio,
+    // 2026-07-29). The client's own addresses are passed as the CONFIRM-EXEMPT
+    // set: they send straight out, while any other address the staff member names
+    // is still reachable but freezes for them to confirm once, having read it.
+    // `forceMailbox` is load-bearing: this surface has NO mailbox-authorisation
+    // check, so a model-chosen `from: 'antonio'` must never be honoured here.
+    email: {
+      enableEmailSend: true,
+      emailConfirmExempt: Array.from(new Set([...addresses, ...TD_MAILBOXES])),
+      forceMailbox: 'support' as const,
+    },
     clientScope: buildClientScope(clientKey, relatedIds),
     clientName,
   }

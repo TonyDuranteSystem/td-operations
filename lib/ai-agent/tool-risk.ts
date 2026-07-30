@@ -100,6 +100,13 @@ export const HARD_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
  * cannot be added without either protecting it or consciously excluding it.
  */
 export const NO_APPROVAL_SEND_TOOLS: ReadonlySet<string> = new Set([
+  // EVERY email is confirmed on a card (Antonio, 2026-07-29), and that gate lives
+  // in the worker's send path. The approval executor dispatches by tool name
+  // straight to the raw implementation, so an approved `send_email` would leave
+  // with no frozen payload, no card and no recipient check — the one hole in
+  // "every email has a card". Dormant today (the action rail is off) but listed
+  // here so switching the rail on can never silently open it.
+  "send_email",
   // per-call recipient pin lives only on the worker's send path
   "gmail_send",
   "portal_chat_send",

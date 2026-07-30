@@ -10,12 +10,20 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 const inserted = vi.hoisted(() => ({ id: "prep-1" }))
 const insertSpy = vi.hoisted(() => vi.fn())
 
+const updateSpy = vi.hoisted(() => vi.fn())
+const eqSpy = vi.hoisted(() => vi.fn())
+
 vi.mock("@/lib/supabase-admin", () => {
   const b: Record<string, unknown> = {}
   b.from = () => b
   b.insert = (row: unknown) => { insertSpy(row); return b }
   b.select = () => b
+  b.update = (patch: unknown) => { updateSpy(patch); return b }
+  b.eq = (col: unknown, val: unknown) => { eqSpy(col, val); return b }
   b.single = async () => ({ data: inserted, error: null })
+  // The supersede runs as a bare awaited chain (update→eq→eq), so the builder
+  // must be thenable for it to resolve.
+  b.then = (resolve: (v: unknown) => void) => Promise.resolve({ error: null }).then(resolve)
   return { supabaseAdmin: b }
 })
 
@@ -37,7 +45,26 @@ const base = {
 }
 const sendable = [{ ref: "up1", path: goodPath, name: "affidavit.pdf", contentType: "application/pdf", size: 400_000 }]
 
-beforeEach(() => insertSpy.mockClear())
+beforeEach(() => { insertSpy.mockClear(); updateSpy.mockClear(); eqSpy.mockClear() })
+
+describe("prepareWorkerEmailSend — supersede", () => {
+  it("CANCELS any earlier pending draft on the same conversation before freezing a new one", async () => {
+    // Drafting is iterative ("no, say we need his numbers first"). Each pass freezes
+    // a row. In Team Chat the older card is a PERMANENT chat message that stays
+    // clickable, so without this the superseded email could be dispatched half an
+    // hour later, contradicting the one actually sent. Found by the 4th council pass.
+    await prepareWorkerEmailSend({ ...base, attachRefs: [], sendable })
+    expect(updateSpy).toHaveBeenCalledWith({ status: "cancelled" })
+    expect(eqSpy).toHaveBeenCalledWith("thread_uuid", "t-1")
+    expect(eqSpy).toHaveBeenCalledWith("status", "pending")
+  })
+
+  it("still freezes the new draft after superseding", async () => {
+    const r = await prepareWorkerEmailSend({ ...base, attachRefs: [], sendable })
+    expect(r.ok).toBe(true)
+    expect(insertSpy).toHaveBeenCalledOnce()
+  })
+})
 
 describe("prepareWorkerEmailSend", () => {
   it("prepares (freezes) a send and returns a confirmation naming file + recipient", async () => {

@@ -26,6 +26,11 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}))
   const preparedId: string | null = typeof body.prepared_id === "string" ? body.prepared_id : null
   const action: string = body.action === "cancel" ? "cancel" : "confirm"
+  // WHICH OF OUR ADDRESSES IT GOES OUT FROM — chosen by the staff member on the
+  // card (Antonio, 2026-07-29). Only the two real mailboxes are accepted; anything
+  // else is ignored and the frozen row's own mailbox stands.
+  const mailboxChoice: "support" | "antonio" | undefined =
+    body.mailbox === "antonio" ? "antonio" : body.mailbox === "support" ? "support" : undefined
   if (!preparedId) return NextResponse.json({ error: "prepared_id required" }, { status: 400 })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -42,7 +47,10 @@ export async function POST(req: NextRequest) {
 
   // The confirming staff must have access to the mailbox this sends AS — an
   // antonio@ send needs antonio-mailbox access, same gate as reading it.
-  const mailboxKey = row.mailbox?.startsWith("antonio") ? "antonio" : "support"
+  // Check access to what will ACTUALLY be used: the staff member's choice if they
+  // made one, else the row's own mailbox. Choosing "antonio" without antonio-mailbox
+  // access is refused here — the card may offer both, the server decides.
+  const mailboxKey = mailboxChoice ?? (row.mailbox?.startsWith("antonio") ? "antonio" : "support")
   if (!(await checkMailboxAccess(mailboxKey))) {
     return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
   }
@@ -56,7 +64,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, cancelled: true })
   }
 
-  const result = await confirmWorkerEmailSend(preparedId, user.email ?? "unknown")
+  const result = await confirmWorkerEmailSend(preparedId, user.email ?? "unknown", mailboxChoice)
   if (result.ok === false) {
     return NextResponse.json({ error: result.reason }, { status: 400 })
   }

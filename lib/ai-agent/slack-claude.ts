@@ -179,12 +179,13 @@ call send_portal_message (account_id for an LLC, or contact_id for a person, plu
 posts in the client's portal — NOT an email. Show the draft first, send once on his OK. Never use an
 email for a portal chat reply.
 
-EMAIL: To send an actual email, call send_email — from:'support' (support@tonydurante.us, default) or
-from:'antonio' (antonio.durante@tonydurante.us). MANDATORY: FIRST show Antonio the full draft — *from* mailbox,
-*to*, *subject*, *body*, and whether it's a reply in an existing thread — then send ONLY after his explicit
-"send it" / "go" / "send". When replying to an email that came in, set reply_to_message_id (from gmail_search /
-gmail_read) AND set \`from\` to the SAME mailbox that email is in, so the reply stays in the original thread.
-Never send on the first turn that proposes the email, and never without his explicit OK.
+EMAIL: send_email PREPARES an email — you never dispatch one. FIRST show the full draft (*to*, *subject*,
+*body*, and whether it replies to an existing thread), then call it ONLY on their explicit "send it"/"go". It
+FREEZES that exact draft onto a "Confirm & send" card where they check the recipient and pick the sending
+address; NOTHING leaves until they click. Say it is READY FOR THEIR CONFIRMATION — never that it was sent, never
+offer to "just send it". Replying to an incoming email: set reply_to_message_id (from gmail_search/gmail_read) so
+it stays threaded. Never on the first turn, never without their OK. No card on a screen = no email from it: say
+so and hand over the draft.
 
 DRAFTS (the message you write FOR a client — email bodies + portal messages): write like a real person, warm and direct, the way Antonio or Luca would write it by hand. NO asterisks, NO markdown bold/italics, NO "#" headers, NO bullet-point dumps — a client reads this, and asterisks/markdown render as broken junk and scream "an AI wrote this". Just natural sentences and normal paragraphs. (This applies ONLY to the client-facing draft itself — your Slack replies to the team can still use *bold* etc.)
 LANGUAGE OF EVERY CLIENT DRAFT (MANDATORY): write it in the CLIENT'S CRM language (contacts.language / the client card) — an Italian client gets an Italian draft, AUTOMATICALLY, even though the staff member is talking to you in English. Look the language up BEFORE drafting; never ask, never default to English. A server-side check refuses a clearly-English portal message to an Italian-language client.
@@ -2061,7 +2062,11 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     enableWebSearch: true,
     // Direct email send (support@/antonio@, same-thread replies) — only after
     // Antonio's explicit "send it" in the thread (enforced by the prompt).
-    enableEmailSend: true,
+    // EMAIL RAIL OFF HERE (2026-07-29). Every email must be confirmed on a card
+      // (Antonio), and this surface has none to render — carrying the rail would
+      // mean drafting, promising, and then refusing at the final step. The Slack
+      // SURFACE is being removed anyway (see the remove-slack change).
+      enableEmailSend: false as const,
     // Read Circleback calls in full (transcript/notes/action items) — Slack-only.
     enableCallReads: true,
     // Append notes to accounts/contacts/deals/leads/services/tasks — notes-only,
@@ -2208,7 +2213,11 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           enableDbRead: true,
           enableThreadRecall: true,
           enableWebSearch: true,
-          enableEmailSend: true,
+          // EMAIL RAIL OFF HERE (2026-07-29). Every email must be confirmed on a card
+      // (Antonio), and this surface has none to render — carrying the rail would
+      // mean drafting, promising, and then refusing at the final step. The Slack
+      // SURFACE is being removed anyway (see the remove-slack change).
+      enableEmailSend: false as const,
           enableCallReads: true,
           enableCrmNotes: true,
           enableDocReads: true,

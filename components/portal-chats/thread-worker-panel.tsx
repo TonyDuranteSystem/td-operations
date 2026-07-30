@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Bot, Loader2 } from 'lucide-react'
+import { Bot, Loader2, Paperclip } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { WorkerMarkdown } from '@/components/chat/worker-markdown'
@@ -25,6 +25,21 @@ interface ChatMsg {
   text: string
   /** agent_messages row id — present on worker replies, enables the 🧠 button. */
   id?: string
+}
+
+/**
+ * A frozen outbound email awaiting the staff member's Confirm — the second human
+ * gate before a file leaves. Mirrors the Inbox panel's card (Antonio 2026-07-29:
+ * the worker here has the same capabilities it has everywhere, attachments too).
+ */
+interface PreparedSend {
+  id: string
+  to: string
+  subject: string
+  /** The exact text that will be sent — confirming an address without seeing the
+   *  body is how someone approves one draft while a different one goes out. */
+  body: string
+  attachments: Array<{ name: string; size?: number }>
 }
 
 interface ThreadWorkerPanelProps {
@@ -41,8 +56,51 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentContextRef = useRef(false)
   const attachments = useWorkerAttachments()
+  const [preparedSend, setPreparedSend] = useState<PreparedSend | null>(null)
+  const [confirming, setConfirming] = useState(false)
+  // WHICH OF OUR ADDRESSES IT GOES OUT FROM — the staff member chooses on the card
+  // (Antonio, 2026-07-29). The server re-checks that they may send as it.
+  const [sendAs, setSendAs] = useState<'support' | 'antonio'>('support')
+  // Held in a ref so the client-switch effect can drop staged files without
+  // taking the whole (re-created every render) attachments object as a dep.
+  const clearAttachmentsRef = useRef(attachments.clear)
+  clearAttachmentsRef.current = attachments.clear
   // 🧠 per-reply save state, keyed by the reply's row id.
   const [remembered, setRemembered] = useState<Record<string, 'saving' | 'saved'>>({})
+
+  /** Confirm or cancel a frozen email. Same endpoint the Inbox panel uses. */
+  const resolvePreparedSend = async (action: 'confirm' | 'cancel') => {
+    if (!preparedSend || confirming) return
+    setConfirming(true)
+    try {
+      const res = await fetch('/api/inbox/worker-chat/confirm-send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prepared_id: preparedSend.id, action, mailbox: sendAs }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not complete — please try again.')
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'worker',
+          text: action === 'confirm'
+            ? (preparedSend.attachments.length
+                ? `✅ Sent to ${preparedSend.to} with ${preparedSend.attachments.map(a => a.name).join(', ')} attached.`
+                : `✅ Sent to ${preparedSend.to}.`)
+            : 'Cancelled — nothing was sent.',
+        },
+      ])
+      setPreparedSend(null)
+    } catch (err) {
+      setMessages(prev => [
+        ...prev,
+        { role: 'worker', text: `⚠️ ${err instanceof Error && err.message ? err.message : 'Could not complete.'}` },
+      ])
+    } finally {
+      setConfirming(false)
+    }
+  }
 
   /**
    * 🧠 — turn THIS worker reply into a rule for everyone. Sends only the id; the
@@ -93,6 +151,13 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
   useEffect(() => {
     setMessages([])
     sentContextRef.current = false
+    // A frozen email belongs to the client it was drafted for. Leaving the card
+    // (or a staged file) up across a client switch means "Confirm & send" would
+    // dispatch the PREVIOUS client's email while the panel header shows the new
+    // one — the worst kind of wrong-recipient mistake, and invisible.
+    setPreparedSend(null)
+    setConfirming(false)
+    clearAttachmentsRef.current()
     if (!clientKey) return
     let alive = true
     fetch(`/api/inbox/worker-chat?clientKey=${encodeURIComponent(clientKey)}`)
@@ -135,7 +200,7 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
         }),
       })
       const raw = await res.text()
-      let data: { reply?: string; error?: string; messageId?: string } = {}
+      let data: { reply?: string; error?: string; messageId?: string; preparedSend?: PreparedSend | null } = {}
       try { data = JSON.parse(raw) } catch { /* non-JSON = gateway error */ }
       if (!res.ok) {
         throw new Error(
@@ -147,6 +212,13 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
       }
       sentContextRef.current = true
       setMessages(prev => [...prev, { role: 'worker', text: data.reply || '(empty reply)', id: data.messageId }])
+      // A frozen email waiting on a human — render the Confirm card. `?? null` is
+      // load-bearing: a turn that prepares nothing must CLEAR a previous card, or a
+      // stale frozen email stays on screen under a new conversation and one click
+      // sends it.
+      setPreparedSend(data.preparedSend ?? null)
+      // Fresh card → fresh choice; a sticky pick must not leak onto the next email.
+      if (data.preparedSend) setSendAs('support')
     } catch (err) {
       setMessages(prev => [
         ...prev,
@@ -241,6 +313,63 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
           </div>
         )}
       </div>
+
+      {/* Frozen email awaiting a human. The worker never sends an attachment on
+          its own — the staff member sees the exact recipient, subject, body and
+          files here and presses Confirm. Mirrors the Inbox panel's card. */}
+      {preparedSend && (
+        <div className="border-t border-amber-200 bg-amber-50 px-4 py-3 shrink-0">
+          <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide mb-1">Confirm before sending</p>
+          <p className="text-sm text-zinc-800">
+            Email <span className="font-mono font-medium break-all">{preparedSend.to}</span>
+          </p>
+          {preparedSend.subject ? (
+            <p className="text-xs text-zinc-600 mt-0.5">Subject: {preparedSend.subject}</p>
+          ) : null}
+          {preparedSend.body ? (
+            <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-amber-200 bg-white px-2.5 py-2">
+              <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
+            </div>
+          ) : null}
+          <div className="mt-1.5 space-y-1">
+            {preparedSend.attachments.map((a, i) => (
+              <div key={i} className="flex items-center gap-1.5 text-xs text-zinc-600">
+                <Paperclip className="h-3 w-3 shrink-0" />
+                <span className="font-medium truncate">{a.name}</span>
+                {typeof a.size === 'number' && <span className="text-zinc-400">{(a.size / 1024 / 1024).toFixed(1)} MB</span>}
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 flex items-center gap-2 text-xs">
+            <span className="text-zinc-500">From:</span>
+            <select
+              value={sendAs}
+              onChange={e => setSendAs(e.target.value as 'support' | 'antonio')}
+              disabled={confirming}
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
+            >
+              <option value="support">support@tonydurante.us</option>
+              <option value="antonio">antonio.durante@tonydurante.us</option>
+            </select>
+          </div>
+          <div className="mt-2.5 flex items-center gap-2">
+            <button
+              onClick={() => resolvePreparedSend('confirm')}
+              disabled={confirming}
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 min-h-[36px]"
+            >
+              {confirming ? 'Sending…' : 'Confirm & send'}
+            </button>
+            <button
+              onClick={() => resolvePreparedSend('cancel')}
+              disabled={confirming}
+              className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100 disabled:opacity-50 min-h-[36px]"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       <WorkerComposer
         placeholder={`Ask the worker about ${clientName}…`}

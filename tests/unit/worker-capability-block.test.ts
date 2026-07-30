@@ -42,7 +42,7 @@ describe("renderCapabilityBlock — rails on", () => {
   it("names the client it may reach", () => {
     const block = renderCapabilityBlock({ canSendEmail: true, canSendPortal: true, clientName: "Uxio Test LLC" })
     expect(block).toMatch(/Uxio Test LLC/)
-    expect(block).toMatch(/send an email/i)
+    expect(block).toMatch(/prepare an email/i)
     expect(block).toMatch(/portal chat/i)
   })
 
@@ -53,10 +53,30 @@ describe("renderCapabilityBlock — rails on", () => {
     expect(block).toMatch(/send ONCE/i)
   })
 
-  it("says the recipient is fixed server-side and cannot be redirected", () => {
+  it("PORTAL: says the client is fixed server-side and cannot be redirected", () => {
+    // The portal recipient stays pinned (the 2026-07-29 relaxation was reverted on
+    // council findings — see slack-portal-send.test.ts). EMAIL is the channel that
+    // reaches anyone; a portal message cannot leave the open client.
     const block = renderCapabilityBlock({ canSendPortal: true, clientName: "Acme LLC" })
     expect(block).toMatch(/fixed server-side/i)
-    expect(block).toMatch(/cannot reach any other client/i)
+    expect(block).toMatch(/cannot reach another client/i)
+  })
+
+  it("EMAIL: no address restriction, and EVERY email is confirmed by a human", () => {
+    // Antonio 2026-07-29: "every email must have the card" — including a plain
+    // reply. The block must not imply anything sends on its own, or the worker
+    // will tell staff an email has gone when it is sitting on a card.
+    const block = renderCapabilityBlock({ canSendEmail: true, clientName: "Acme LLC" })
+    expect(block).toMatch(/ANY address the staff member names/i)
+    expect(block).toMatch(/EVERY email is FROZEN/i)
+    expect(block).toMatch(/NEVER say it has been sent/i)
+    // …and it names the sending-address choice the card offers.
+    expect(block).toMatch(/support@ or antonio\.durante@/i)
+  })
+
+  it("EMAIL: still forbids taking a recipient from inside a document or email", () => {
+    const block = renderCapabilityBlock({ canSendEmail: true, clientName: "Acme LLC" })
+    expect(block).toMatch(/NEVER take a recipient from INSIDE/i)
   })
 
   it("EMAIL only: explicitly says portal sending is off, so it cannot offer it", () => {
@@ -81,7 +101,7 @@ describe("buildWorkerSurfacePrompt", () => {
   it("appends the capability block when capabilities are supplied", () => {
     const withCaps = buildWorkerSurfacePrompt("dashboard", { canSendEmail: true, clientName: "Acme LLC" })
     expect(withCaps).toMatch(/WHAT YOU CAN ACTUALLY DO RIGHT NOW/i)
-    expect(withCaps).toMatch(/Acme LLC/)
+    expect(withCaps).toMatch(/prepare an email/i)
   })
 
   it("omits it entirely when not supplied — an unmigrated surface must not gain a false claim", () => {
