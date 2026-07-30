@@ -6,6 +6,7 @@ import { deterministicThreadUuid, buildWorkerSurfacePrompt } from '@/lib/ai-agen
 import { parseSidebarClientKey } from '@/lib/ai-agent/sidebar-scope'
 import { buildSidebarSendRails } from '@/lib/ai-agent/sidebar-send-rails'
 import { TD_MAILBOXES } from '@/lib/inbox/email-recipients'
+import { snapshotPendingPreparedIds, findPreparedFrozenThisTurn } from '@/lib/inbox/worker-email-send'
 import { fullReachEnabledFor } from '@/lib/ai-agent/full-reach'
 import { workerActionsEnabled } from '@/lib/ai-agent/worker-actions-switch'
 import type { WorkerImageBlock, WorkerDocumentBlock } from '@/lib/ai-agent/worker-tools'
@@ -216,22 +217,15 @@ async function runSidebarWorker(args: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
 
-  const priorPreparedIds = new Set<string>()
   // If this lookup fails we must NOT fall through to "nothing was pending" — that is
   // exactly how a stale draft gets surfaced as this turn's card. On failure the card
   // is suppressed for the turn instead (safe direction: no card, no wrong send).
-  let priorPreparedKnown = true
-  try {
-    const { data: existing, error } = await db
-      .from('worker_prepared_sends')
-      .select('id')
-      .eq('thread_uuid', threadId)
-      .eq('status', 'pending')
-    if (error) priorPreparedKnown = false
-    for (const r of (existing ?? []) as Array<{ id: string }>) priorPreparedIds.add(r.id)
-  } catch {
-    priorPreparedKnown = false
-  }
+  // Actor-scoped like every other surface: this thread is per-user, so a collision is
+  // not reachable here today, but the picker and the freeze must agree on scope
+  // everywhere or the next surface to share a thread reintroduces the crossed-drafts
+  // bug for free.
+  const sendActor = `crm-sidebar:${userEmail ?? userId}`
+  const priorPrepared = await snapshotPendingPreparedIds(threadId, sendActor)
 
   // Read the staff member's upload, if any. Images become vision blocks, scanned PDFs
   // become native document blocks, everything else is extracted to text and appended to
@@ -468,7 +462,7 @@ async function runSidebarWorker(args: {
       },
       // WHO asked. Without it a send from here is logged as the generic worker and
       // "who told it to do that" has no answer.
-      sendActor: `crm-sidebar:${userEmail ?? userId}`,
+      sendActor,
       // ⛔ NO CLIENT BOUNDARY ON THIS SURFACE — deliberate, Antonio 2026-07-28:
       // "the AI agent tab in the CRM is the main AI in the CRM that can understand
       // everything, can read everything... instead of using claude.com, we use the AI
@@ -505,16 +499,9 @@ async function runSidebarWorker(args: {
       body: string
     } | null = null
     try {
-      const { data: prep } = await db
-        .from('worker_prepared_sends')
-        .select('id, to_address, subject, body, created_at')
-        .eq('thread_uuid', threadId)
-        .eq('status', 'pending')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
       // Only a row THIS turn created — id snapshot, so no clock skew.
-      if (prep && priorPreparedKnown && !priorPreparedIds.has(prep.id)) {
+      const prep = await findPreparedFrozenThisTurn(threadId, sendActor, priorPrepared)
+      if (prep) {
         preparedSend = { id: prep.id, to: prep.to_address, subject: prep.subject, body: prep.body ?? '' }
       }
     } catch (err) {
