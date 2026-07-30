@@ -435,7 +435,25 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
       .eq('matched_payment_id', paymentId)
     if (feedReadErr) throw new Error(`Failed to read bank feeds: ${feedReadErr.message}`)
 
-    const { resetIds, clearIds } = partitionFeedsForUnlink(linkedFeeds ?? [])
+    // ⛔ A TRANSACTION WHOSE MONEY IS STILL RECORDED HERE MUST NOT BE SET FREE (2026-07-29,
+    // Bug-Hunter on the finished code).
+    //
+    // Voiding deliberately KEEPS `amount_paid` — it is real cash, and reactivating restores it
+    // (see resolveReactivateTarget). But the old code also returned every matched transaction
+    // to `unmatched`, so the same wire went back to the matcher at its full amount while its
+    // money was still recorded against the cancelled invoice. Settle anything else with it and
+    // one $1,000 wire is booked as $2,000 — and the per-invoice invariant still holds on both
+    // rows, so nothing detects it.
+    //
+    // So: a transaction that has a CONFIRMED application to this invoice keeps its link and its
+    // `matched` status. The money stays attributed to where it actually went, the matcher never
+    // sees it again, and a reactivate finds everything exactly as it was. To genuinely release
+    // it, un-match the invoice first — the deliberate act that reverses the money.
+    const { listConfirmedApplications } = await import('@/lib/finance/apply-payment')
+    const fundedFeedIds = new Set((await listConfirmedApplications(paymentId)).map((a) => a.feed_id))
+    const releasable = (linkedFeeds ?? []).filter((f) => !fundedFeedIds.has(f.id))
+
+    const { resetIds, clearIds } = partitionFeedsForUnlink(releasable)
 
     if (resetIds.length > 0) {
       const { error } = await supabaseAdmin.from('td_bank_feeds').update({
@@ -1168,7 +1186,9 @@ export async function syncBankFeeds(): Promise<ActionResult> {
  *     is permanent — so the invoice could never announce a genuine payment afterwards. That was
  *     Luca's original bug report.
  */
-export async function unlinkPayment(paymentId: string): Promise<ActionResult> {
+export async function unlinkPayment(
+  paymentId: string,
+): Promise<ActionResult<{ warning?: string }>> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
     const { listConfirmedApplications, reverseFeedApplication } = await import('@/lib/finance/apply-payment')
@@ -1266,7 +1286,11 @@ export async function unlinkPayment(paymentId: string): Promise<ActionResult> {
     revalidatePath('/finance')
     revalidatePath('/accounts')
 
-    if (problems.length > 0) throw new Error(problems.join(' '))
+    // The work COMPLETED; `problems` holds a partial-success warning (the money came off but a
+    // record could not be unlocked). Throwing here made safeAction report failure on a finished
+    // operation, so the UI showed a red error for work that had actually been done — and the
+    // real warning was indistinguishable from "nothing happened". Return it instead.
+    return { warning: problems.length > 0 ? problems.join(' ') : undefined }
   }, {
     action_type: 'update',
     table_name: 'payments',

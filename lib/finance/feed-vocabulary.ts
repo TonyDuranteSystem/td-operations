@@ -172,13 +172,46 @@ export interface ContestedMetadata {
   reason: "tied_candidates"
   at: string
   candidates: ContestedCandidate[]
+  /** How many tied in total — `candidates` may be a capped sample of this. */
+  total: number
 }
+
+/**
+ * How many tied candidates are recorded and shown.
+ *
+ * ⛔ WHY THERE IS A CAP (found 2026-07-29 by running the E2E harness against a full dataset,
+ * not by reasoning). On a real book of invoices an amount-only tie is not a pair — a $1,000
+ * wire with no name evidence and no invoice number ties with EVERY open $1,000 invoice, which
+ * was dozens of rows. Unbounded, that writes a huge blob into the transaction and renders a
+ * wall of invoices in the review banner: unreadable on a laptop, useless on a phone, and
+ * exactly the kind of screen people learn to skip. The count is kept in full so the message
+ * can say how many there really are — the honest summary, not a silent truncation.
+ */
+export const CONTESTED_SAMPLE_LIMIT = 6
 
 export function contestedMetadata(
   candidates: ContestedCandidate[],
   at: string,
 ): { contested: ContestedMetadata } {
-  return { contested: { reason: "tied_candidates", at, candidates } }
+  return {
+    contested: {
+      reason: "tied_candidates",
+      at,
+      candidates: candidates.slice(0, CONTESTED_SAMPLE_LIMIT),
+      total: candidates.length,
+    },
+  }
+}
+
+/** The true number of tied candidates, even when only a sample was recorded. */
+export function readContestedTotal(reviewMetadata: unknown): number {
+  if (!reviewMetadata || typeof reviewMetadata !== "object" || Array.isArray(reviewMetadata)) return 0
+  const contested = (reviewMetadata as Record<string, unknown>).contested
+  if (!contested || typeof contested !== "object" || Array.isArray(contested)) return 0
+  const total = (contested as Record<string, unknown>).total
+  if (typeof total === "number" && Number.isFinite(total)) return total
+  // Older rows written before the count existed: fall back to what was stored.
+  return readContestedCandidates(reviewMetadata).length
 }
 
 /** Read the contested set back off a feed row. Returns [] when the row is not contested. */

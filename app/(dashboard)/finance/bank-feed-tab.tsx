@@ -5,7 +5,8 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { usePlaidLink } from 'react-plaid-link'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
-import { readContestedCandidates, type ContestedCandidate } from '@/lib/finance/feed-vocabulary'
+import { readContestedCandidates, readContestedTotal, type ContestedCandidate } from '@/lib/finance/feed-vocabulary'
+import { evaluateNameEvidence } from '@/lib/finance/feed-signals'
 import { toast } from 'sonner'
 import {
   Landmark, RefreshCw, Plus, Link2, Ban, X,
@@ -517,6 +518,8 @@ function UnmatchedRow({
   const amount = Number(feed.amount)
   // Several invoices fitted this payment equally well — see the block below the row.
   const contested = contestedCandidates(feed)
+  // On a real book an amount-only tie can be dozens of invoices; only a sample is recorded.
+  const contestedTotal = readContestedTotal(feed.review_metadata)
 
   async function callAdminEndpoint(path: string, body: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
     try {
@@ -781,16 +784,24 @@ function UnmatchedRow({
     .map(inv => {
       const invAmount = inv.invoice_status === 'Partial' ? Number(inv.amount_due ?? inv.total ?? 0) : Number(inv.total ?? inv.amount ?? 0)
       const diff = Math.abs(invAmount - amount)
-      const companyName = (getCompanyName(inv.accounts) || '').toLowerCase()
-      // Check if company name appears in sender/memo
-      const companyWords = companyName.split(/\s+/).filter(w => w.length > 3 && !['llc','inc','ltd','consulting','services','international'].includes(w))
-      const nameMatch = companyWords.length > 0 && companyWords.some(w => feedTextLower.includes(w))
+      const companyName = (getCompanyName(inv.accounts) || '')
+      // ⛔ THE SAME NAME RULE THE SERVER USES (2026-07-29). This had its own THIRD copy of the
+      // logic — a shorter stop-word list and a SUBSTRING test — so on the very transaction the
+      // server had just refused to settle, this screen would badge BOTH companies with a green
+      // "name" match, ranked by a rule the server had stopped trusting. Sending a human to a
+      // screen that repeats the machine's mistake is not a fix.
+      const nameEvidence = evaluateNameEvidence(companyName, [feedTextLower])
+      const nameMatch = nameEvidence.sufficient
+      const namePartial = nameEvidence.weak
       // Check if invoice number appears in memo
       const invNum = (inv.invoice_number || '').toLowerCase()
       const invRefMatch = invNum && feedTextLower.includes(invNum)
       // Score: inv ref > name match > amount-only
-      const score = (invRefMatch ? 200 : 0) + (nameMatch ? 100 : 0) + (diff < 1 ? 50 : 0) + (1000 / (diff + 1))
-      return { ...inv, score, nameMatch, invRefMatch }
+      // A partial name hit is real but weak evidence — it ranks above amount-only and well
+      // below a covered name, instead of being scored identically to it.
+      const score =
+        (invRefMatch ? 200 : 0) + (nameMatch ? 100 : namePartial ? 25 : 0) + (diff < 1 ? 50 : 0) + (1000 / (diff + 1))
+      return { ...inv, score, nameMatch, namePartial, invRefMatch }
     })
     .sort((a, b) => b.score - a.score)
     .slice(0, 10)
@@ -860,9 +871,14 @@ function UnmatchedRow({
             <div className="flex items-start gap-2 text-xs text-orange-900">
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
               <p>
-                <span className="font-bold">MORE THAN ONE INVOICE FITS THIS PAYMENT.</span>{' '}
+                <span className="font-bold">
+                  {contestedTotal > contested.length
+                    ? `${contestedTotal} INVOICES FIT THIS PAYMENT EQUALLY WELL.`
+                    : 'MORE THAN ONE INVOICE FITS THIS PAYMENT.'}
+                </span>{' '}
                 Nothing has been applied. The evidence on this transaction cannot say which of
                 these it settles — choose deliberately, or leave it if you are not sure.
+                {contestedTotal > contested.length && ` Showing ${contested.length} of ${contestedTotal}.`}
               </p>
             </div>
             <ul className="space-y-1">
@@ -1040,6 +1056,11 @@ function UnmatchedRow({
                       <span className="text-emerald-600 font-medium">INV ref</span>
                     ) : inv.nameMatch ? (
                       <span className="text-emerald-600">name</span>
+                    ) : inv.namePartial ? (
+                      // Amber, and it says PARTIAL: half a company name is a hint, not proof of
+                      // who paid. A green "name" badge here is what made the wrong company look
+                      // confirmed on the screen the server had just refused to settle.
+                      <span className="text-amber-600">partial name</span>
                     ) : diff < 1 ? (
                       <span className="text-emerald-600">exact</span>
                     ) : (

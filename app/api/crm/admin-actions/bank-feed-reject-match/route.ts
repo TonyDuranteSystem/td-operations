@@ -55,6 +55,7 @@ export async function POST(req: NextRequest) {
 
   const rejectedPaymentId = existing.matched_payment_id as string | null
   const now = new Date().toISOString()
+  let reversalWarning: string | undefined
 
   // If this candidate had actually been settled, take the money back off it first. Money
   // before pointers, always: clearing the pointer while the money stays applied is how an
@@ -71,6 +72,14 @@ export async function POST(req: NextRequest) {
         { error: reversal.detail ?? "The applied payment could not be reversed." },
         { status: 409 },
       )
+    }
+    // ⛔ A PARTIAL SUCCESS IS NOT A SUCCESS (2026-07-29, Bug-Hunter on the finished code).
+    // `warning` is set when the money came off the invoice but the record could not be
+    // unlocked — which permanently blocks that transaction from ever being matched to that
+    // invoice again. Swallowing it told the operator "rejected" while leaving a dead end, and
+    // it is precisely the swallowed-error class this whole change exists to end.
+    if (reversal.warning) {
+      reversalWarning = reversal.warning
     }
   }
 
@@ -100,5 +109,9 @@ export async function POST(req: NextRequest) {
   if (!res.ok) {
     return NextResponse.json({ error: res.error }, { status: 500 })
   }
-  return NextResponse.json({ ok: true, rejected_payment_id: rejectedPaymentId })
+  return NextResponse.json({
+    ok: true,
+    rejected_payment_id: rejectedPaymentId,
+    ...(reversalWarning ? { warning: reversalWarning } : {}),
+  })
 }

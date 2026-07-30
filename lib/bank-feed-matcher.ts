@@ -604,8 +604,25 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     // ── Retroactive pass: check already-Paid invoices (audit trail only) ──
     // Run retroactive when: no candidates at all, OR only medium-confidence matches
     // (medium = amount-only, unreliable — retroactive with name/ref match is better)
-    const bestOpenMatch = candidates.sort((a, b) => b.score - a.score)[0]
-    const shouldTryRetroactive = candidates.length === 0 || (bestOpenMatch && bestOpenMatch.confidence === "medium")
+    // ⛔ A PAIR A HUMAN ALREADY REJECTED IS NOT A CANDIDATE (2026-07-29).
+    // Un-matching returns this transaction to the unmatched pool and the bank sync re-runs
+    // every 15 minutes. Without this, the matcher re-proposes — and can re-apply — the exact
+    // pair someone just undid, so a corrected mis-match silently un-corrects itself within the
+    // quarter hour. A human may still match a rejected pair BY HAND; only the machine is bound.
+    //
+    // ⚠️ THIS IS COMPUTED HERE, ABOVE THE RETROACTIVE PASS, ON PURPOSE. It first lived at the
+    // auto-settle decision below — i.e. AFTER the retroactive block returns — so a rejected
+    // pair could still be AUDIT-LINKED: the transaction was marked matched, left the review
+    // queue, and permanently consumed that invoice's slot in the 1-invoice-many-feeds guard, so
+    // the transaction that really belonged there could never be linked. Found by the Bug-Hunter
+    // on the finished code, 2026-07-29. Both passes must honour it.
+    const rejected = readRejectedPairs(feed?.review_metadata)
+    const isRejected = (paymentId: string) =>
+      rejected.length > 0 && rejected.some((r) => r.payment_id === paymentId)
+    const allowedCandidates = rejected.length === 0 ? candidates : candidates.filter((c) => !isRejected(c.id))
+
+    const bestOpenMatch = allowedCandidates.sort((a, b) => b.score - a.score)[0]
+    const shouldTryRetroactive = allowedCandidates.length === 0 || (bestOpenMatch && bestOpenMatch.confidence === "medium")
     if (shouldTryRetroactive) {
       // Already-PAID invoices only (never Cancelled/Voided — audit-linking money to a
       // cancelled invoice would be a lie). Read BOTH columns: 48 production invoices are
@@ -665,6 +682,8 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
         for (const inv of paidFiltered) {
           // Skip if this invoice is already retroactively matched to another feed
           if (retroMatchedIds.has(inv.id)) continue
+          // A pair a human rejected must not be audit-linked either (see the note above).
+          if (isRejected(inv.id)) continue
 
           const invAmount = Number(inv.total ?? inv.amount ?? 0)
           const amountDiff = Math.abs(feedAmount - invAmount)
@@ -776,23 +795,12 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       }
 
       // If we had no candidates at all (not even medium), return unmatched
-      if (candidates.length === 0) {
+      if (allowedCandidates.length === 0) {
         return { matched: false }
       }
       // Otherwise fall through to process the medium candidates below
     }
 
-
-    // ⛔ A PAIR A HUMAN ALREADY REJECTED IS NOT A CANDIDATE (2026-07-29).
-    // Un-matching returns this transaction to the unmatched pool and the bank sync re-runs
-    // every 15 minutes. Without this, the matcher re-proposes — and can re-apply — the exact
-    // pair someone just undid, so a corrected mis-match silently un-corrects itself within the
-    // quarter hour. A human may still match a rejected pair BY HAND; only the machine is bound.
-    const rejected = readRejectedPairs(feed?.review_metadata)
-    const allowedCandidates =
-      rejected.length === 0
-        ? candidates
-        : candidates.filter((c) => !rejected.some((r) => r.payment_id === c.id))
 
     if (allowedCandidates.length === 0) {
       // Everything that fit was already rejected by a person. Leave the transaction where a
@@ -845,10 +853,17 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
     if (needsReview) {
       // Store as potential match but don't auto-reconcile.
+      //
+      // `contested: null` is REQUIRED, not tidiness. review_metadata now MERGES, so a
+      // `contested` set written by an earlier pass would survive here — and once one of the
+      // tied candidates is rejected and only a single candidate remains, the UI would keep
+      // showing "more than one invoice fits" (listing the rejected one) AND keep hiding the
+      // Confirm/Reject banner, permanently. Found by the Bug-Hunter, 2026-07-29.
       await updateFeed(feedId, {
         matched_payment_id: best.id,
         match_confidence: best.confidence,
         status: "needs_review",
+        review_metadata: { contested: null },
       }, "matcher:below-auto-threshold")
 
       return { matched: false, paymentId: best.id, invoiceNumber: best.invoiceNumber ?? undefined, confidence: best.confidence }
@@ -1302,7 +1317,13 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
       matched_by: "staff",
       status: "matched",
       ...(moneyIsApplied
-        ? {}
+        ? {
+            // Money moved this time. A stale audit-link record from an earlier attempt would
+            // otherwise keep telling staff "linked · no money applied" on a row that just
+            // settled an invoice — an invitation to book it a second time by hand. The keys
+            // survive on their own now that review_metadata merges.
+            review_metadata: { audit_link: null, link_kind: null, money_applied: null, note: null, contested: null },
+          }
         : {
             review_metadata: auditLinkMetadata(
               "manual",

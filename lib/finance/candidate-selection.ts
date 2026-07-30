@@ -25,12 +25,24 @@
  * tier is for. This is the documented behaviour of the payer-identity tier already; it was
  * simply absent from the fuzzy path.
  *
- * THE ONE EXEMPTION — duplicate rows for ONE obligation. Production contains cases where a
- * single obligation exists as two `payments` rows (one real invoice plus an orphan row left by
- * an older webhook path). Those tie forever, and no human answer is "correct", so the guard
- * would deadlock the client's payment. When every tied row belongs to the SAME client and
- * exactly one of them carries an invoice number, that row wins — the same rule the Stripe
- * payment-intent tier already uses to break its own ambiguity.
+ * NO EXEMPTIONS — and one was REMOVED on 2026-07-29, before shipping.
+ *
+ * The first version let a tie auto-settle when every tied row belonged to the same client and
+ * exactly one carried an invoice number, on the theory that this is the duplicate-row case
+ * (one obligation existing as a real invoice plus an orphan from an older webhook path).
+ *
+ * The Bug-Hunter broke it on the finished code: an un-numbered row is NOT reliably an orphan.
+ * Production holds real, matchable obligations with no invoice number and no `invoice_status` —
+ * `invoice-matchability.ts` cites one by id: a $1,250 "First Installment 2026", Overdue, no
+ * number. Pair that with the same client's numbered $1,250 second installment and the exemption
+ * auto-settles the wire onto the WRONG installment, fires the installment handler for the wrong
+ * one, advances the wrong stage, and leaves the invoice the client actually paid open and being
+ * chased. Nothing distinguishes that row from an orphan by inspection.
+ *
+ * So a tie is a tie. The cost of removing the exemption is that a genuine duplicate pair never
+ * auto-settles — the transaction waits for one human click, visibly, in the review queue. The
+ * cost of keeping it was crediting the wrong obligation, silently. The deterministic ordering
+ * below still PINS the numbered row as the suggestion a reviewer starts from.
  */
 
 export interface ScoredCandidate {
@@ -47,7 +59,9 @@ export interface ScoredCandidate {
 }
 
 export interface CandidateSelection {
-  /** The winner, or null when there were no candidates at all. */
+  /** The winner, or null when there were no candidates at all. When `contested` is true this is
+   *  only the deterministic first of the tied set — the suggestion a reviewer starts from, NOT
+   *  a decision, and specifically NOT evidence about that invoice. */
   best: ScoredCandidate | null
   /** True ⇒ do NOT auto-settle. Park for review and record `tied`. */
   contested: boolean
@@ -84,15 +98,11 @@ export function selectBestCandidate(candidates: ScoredCandidate[]): CandidateSel
 
   if (topGroup.length === 1) return { best, contested: false, tied: [] }
 
-  // Duplicate rows for one obligation: same client, exactly one numbered row → that row wins.
   const clients = new Set(topGroup.map(clientKey))
-  if (clients.size === 1) {
-    const numbered = topGroup.filter((c) => !!c.invoiceNumber)
-    if (numbered.length === 1) {
-      return { best: numbered[0], contested: false, tied: [] }
-    }
-    return { best, contested: true, tied: topGroup, reason: "tied_same_client" }
+  return {
+    best,
+    contested: true,
+    tied: topGroup,
+    reason: clients.size === 1 ? "tied_same_client" : "tied_across_clients",
   }
-
-  return { best, contested: true, tied: topGroup, reason: "tied_across_clients" }
 }

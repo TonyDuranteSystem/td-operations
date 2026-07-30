@@ -21,6 +21,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { isAccountReminderPaused } from "@/lib/billing/reminder-snooze"
 import { enqueueJobs } from "@/lib/jobs/queue"
+import { readContestedCandidates } from "@/lib/finance/feed-vocabulary"
 
 /** Default per-pass enqueue bound (gentle backlog rollout; UI-configurable). */
 export const DUNNING_RUN_CAP = 40
@@ -63,10 +64,20 @@ export interface DunningSummary {
  */
 export function suppressWhilePaymentAwaitsReview(
   invoiceIds: string[],
-  pinnedForReview: Array<{ matched_payment_id: string | null }>,
+  pinnedForReview: Array<{ matched_payment_id: string | null; review_metadata?: unknown }>,
 ): { keep: string[]; suppressed: string[] } {
   const pinned = new Set(
-    pinnedForReview.map((f) => f.matched_payment_id).filter((id): id is string => !!id),
+    pinnedForReview
+      // ⛔ A CONTESTED PIN IS NOT EVIDENCE ABOUT THAT INVOICE (2026-07-29, Bug-Hunter).
+      // When several invoices tie, the matcher pins the deterministic FIRST of the tied set
+      // purely so a reviewer has somewhere to start — in the incident that was the WRONG
+      // company. Treating that as "this client has paid" would silently drop a genuinely
+      // overdue invoice out of every chase run, always the same victim (the ordering is
+      // deterministic), until a human resolved an unrelated deposit. Only an UNCONTESTED pin —
+      // one specific invoice this money is actually believed to settle — pauses chasing.
+      .filter((f) => readContestedCandidates(f.review_metadata).length <= 1)
+      .map((f) => f.matched_payment_id)
+      .filter((id): id is string => !!id),
   )
   const keep: string[] = []
   const suppressed: string[] = []
@@ -293,12 +304,12 @@ async function enqueueDueReminders(cap: number, errors: string[]): Promise<{ que
   // Never chase a client whose money is already in the bank waiting for a human to confirm it.
   const { data: pinnedFeeds } = await supabaseAdmin
     .from("td_bank_feeds")
-    .select("matched_payment_id")
+    .select("matched_payment_id, review_metadata")
     .eq("status", "needs_review")
     .not("matched_payment_id", "is", null)
   const { suppressed } = suppressWhilePaymentAwaitsReview(
     eligible.map((e) => e.id),
-    (pinnedFeeds ?? []) as Array<{ matched_payment_id: string | null }>,
+    (pinnedFeeds ?? []) as Array<{ matched_payment_id: string | null; review_metadata?: unknown }>,
   )
   if (suppressed.length > 0) {
     const held = new Set(suppressed)

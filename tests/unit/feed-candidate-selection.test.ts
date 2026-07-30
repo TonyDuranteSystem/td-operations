@@ -64,15 +64,22 @@ describe("selectBestCandidate — ties inside one client", () => {
     expect(sel.reason).toBe("tied_same_client")
   })
 
-  it("does NOT deadlock on duplicate rows for one obligation — the numbered row wins", () => {
-    // Production contains one obligation existing as two payment rows (a real invoice plus
-    // an orphan left by an older webhook). Those tie forever and no human answer is right,
-    // so blocking them would strand that client's payment.
+  it("REFUSES even the duplicate-row case, and pins the numbered row as the suggestion", () => {
+    // This test asserted the opposite until 2026-07-29. The exemption (same client + exactly
+    // one numbered row ⇒ settle the numbered one) was removed after the Bug-Hunter showed an
+    // un-numbered row is NOT reliably an orphan: production holds real matchable obligations
+    // with no invoice number and no invoice_status (invoice-matchability.ts cites a $1,250
+    // "First Installment 2026", Overdue, unnumbered). Paired with the same client's numbered
+    // second installment, the exemption settled the wire onto the WRONG installment, fired the
+    // installment handler for the wrong one, and left the invoice the client actually paid open
+    // and being chased. A tie is a tie; the numbered row is only the starting suggestion.
     const real = c({ id: "real", score: 95, accountId: "acct-x", invoiceNumber: "INV-002200" })
     const orphan = c({ id: "orphan", score: 95, accountId: "acct-x", invoiceNumber: null })
     const sel = selectBestCandidate([orphan, real])
-    expect(sel.contested).toBe(false)
-    expect(sel.best?.id).toBe("real")
+    expect(sel.contested).toBe(true)
+    expect(sel.reason).toBe("tied_same_client")
+    expect(sel.best?.id).toBe("real") // pinned first for the reviewer, NOT settled
+    expect(sel.tied.map((t) => t.id).sort()).toEqual(["orphan", "real"])
   })
 
   it("still refuses when BOTH duplicate rows carry invoice numbers", () => {

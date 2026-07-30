@@ -11,6 +11,8 @@ import { describe, it, expect } from "vitest"
 import {
   contestedMetadata,
   readContestedCandidates,
+  readContestedTotal,
+  CONTESTED_SAMPLE_LIMIT,
   appendRejectedPair,
   readRejectedPairs,
   isRejectedPair,
@@ -93,5 +95,48 @@ describe("rejected-pair memory", () => {
     expect(readRejectedPairs({ rejected_pairs: "nope" })).toEqual([])
     expect(readRejectedPairs({ rejected_pairs: [null, 1, { payment_id: 5 }] })).toEqual([])
     expect(isRejectedPair(undefined, "a")).toBe(false)
+  })
+})
+
+describe("contested sample cap", () => {
+  // FOUND BY THE E2E HARNESS, not by reasoning: against a real book of invoices an amount-only
+  // tie is not a pair. A $1,000 wire with no name evidence ties with EVERY open $1,000 invoice
+  // — dozens of rows. Unbounded that is an unreadable wall in the review banner (and a phone is
+  // hopeless), so the sample is capped and the TRUE count is kept alongside it.
+  function candidate(n: number) {
+    return {
+      payment_id: `p${n}`,
+      invoice_number: `INV-${n}`,
+      client_name: `Client ${n}`,
+      score: 50,
+      confidence: "medium",
+    }
+  }
+
+  it("records at most the sample limit but reports the real total", () => {
+    const many = Array.from({ length: 25 }, (_, i) => candidate(i))
+    const meta = contestedMetadata(many, AT)
+    expect(meta.contested.candidates).toHaveLength(CONTESTED_SAMPLE_LIMIT)
+    expect(meta.contested.total).toBe(25)
+    expect(readContestedCandidates(meta)).toHaveLength(CONTESTED_SAMPLE_LIMIT)
+    expect(readContestedTotal(meta)).toBe(25)
+  })
+
+  it("does not truncate when the tie is small", () => {
+    const meta = contestedMetadata([candidate(1), candidate(2)], AT)
+    expect(meta.contested.candidates).toHaveLength(2)
+    expect(readContestedTotal(meta)).toBe(2)
+  })
+
+  it("falls back to the stored sample for rows written before the count existed", () => {
+    // A row parked by the previous deploy carries no `total`. Reporting 0 would make the UI
+    // claim a contested row has nothing contesting it.
+    const legacy = { contested: { reason: "tied_candidates", at: AT, candidates: [candidate(1), candidate(2)] } }
+    expect(readContestedTotal(legacy)).toBe(2)
+  })
+
+  it("reports nothing for a row that is not contested", () => {
+    expect(readContestedTotal(null)).toBe(0)
+    expect(readContestedTotal({})).toBe(0)
   })
 })
