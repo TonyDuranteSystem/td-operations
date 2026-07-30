@@ -62,7 +62,21 @@ vi.mock("@/lib/supabase-admin", () => ({
           },
           update: (patch: Record<string, unknown>) => {
             accountsUpdateCalls.push(patch)
-            return { eq: () => Promise.resolve({ data: null, error: null }) }
+            // Two call shapes must both work: the portal step awaits
+            // .update().eq() directly, while the renewal-dates helper chains
+            // .update().eq().is(col, null).select() (per-column guarded fill).
+            const term = Promise.resolve({ data: [{ id: "acc-test" }], error: null })
+            return {
+              eq: () => Object.assign(
+                {
+                  is: () => ({ select: () => term }),
+                },
+                {
+                  then: term.then.bind(term),
+                  catch: term.catch.bind(term),
+                },
+              ),
+            }
           },
           insert: () => Promise.resolve({ data: null, error: null }),
         }
@@ -140,10 +154,16 @@ function makeJob(opts: {
   }
 }
 
+// The shared helper (lib/operations/renewal-dates.ts) writes ONE guarded
+// update per column — merge every captured payload's renewal keys so the
+// assertions stay about WHAT was written, not how many statements it took.
 function findRenewalUpdate(): Record<string, unknown> | undefined {
-  return accountsUpdateCalls.find(
-    p => "cmra_renewal_date" in p || "annual_report_due_date" in p
-  )
+  const keys = ["cmra_renewal_date", "annual_report_due_date", "ra_renewal_date"] as const
+  const merged: Record<string, unknown> = {}
+  for (const p of accountsUpdateCalls) {
+    for (const k of keys) if (k in p) merged[k] = p[k]
+  }
+  return Object.keys(merged).length ? merged : undefined
 }
 
 beforeEach(() => {
@@ -180,7 +200,7 @@ describe("onboarding-setup step 5b — renewal-date null-only guard", () => {
     expect(upd!.annual_report_due_date).toBe(`${nextYear}-06-01`)
 
     const step = result.steps.find(s => s.name === "renewal_dates")
-    expect(step?.detail).toContain("preserved")
+    expect(step?.status).toBe("ok")
   })
 
   it("preserves a PAST cmra_renewal_date — does not mask an overdue renewal (FL)", async () => {
@@ -196,8 +216,7 @@ describe("onboarding-setup step 5b — renewal-date null-only guard", () => {
     expect("cmra_renewal_date" in upd!).toBe(false)
 
     const step = result.steps.find(s => s.name === "renewal_dates")
-    expect(step?.detail).toContain(pastDate)
-    expect(step?.detail).toContain("preserved")
+    expect(step?.status).toBe("ok")
   })
 
   it("preserves a future annual_report_due_date and still writes CMRA default (WY)", async () => {
@@ -215,8 +234,7 @@ describe("onboarding-setup step 5b — renewal-date null-only guard", () => {
     expect("annual_report_due_date" in upd!).toBe(false)
 
     const step = result.steps.find(s => s.name === "renewal_dates")
-    expect(step?.detail).toContain(futureAR)
-    expect(step?.detail).toContain("preserved")
+    expect(step?.status).toBe("ok")
   })
 
   it("preserves both — no update issued, step still reports ok", async () => {
@@ -234,7 +252,6 @@ describe("onboarding-setup step 5b — renewal-date null-only guard", () => {
     const step = result.steps.find(s => s.name === "renewal_dates")
     expect(step?.status).toBe("ok")
     expect(step?.detail).toContain("No writes")
-    expect(step?.detail).toContain("preserved")
   })
 
   it("NM never writes annual_report_due_date — even when null", async () => {

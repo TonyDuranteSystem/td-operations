@@ -40,23 +40,26 @@ export async function GET(req: NextRequest) {
       .gte("ra_renewal_date", today.toISOString().split("T")[0])
 
     if (qErr) throw qErr
-    if (!accounts?.length) {
-      return NextResponse.json({ ok: true, message: "No RA renewals due", checked: 0, created: 0 })
-    }
+    // No early return on an empty window — the renewal-date watchdog below
+    // must run daily regardless of whether any renewal is currently due.
+    const dueAccounts = accounts || []
 
     let created = 0
     let skipped = 0
     let blocked = 0
     const results: { company: string; action: string }[] = []
 
-    for (const account of accounts) {
-      // Check if SD already exists for this account this year
+    for (const account of dueAccounts) {
+      // Check if SD already exists for this account this year. Includes
+      // 'blocked' — the cron itself inserts blocked SDs (payment overdue), and
+      // deduping on 'active' alone created a NEW blocked SD every day the date
+      // sat in the window (mirrors annual-report-check's dedup).
       const { data: existingSD } = await supabaseAdmin
         .from("service_deliveries")
         .select("id")
         .eq("account_id", account.id)
         .eq("service_type", "State RA Renewal")
-        .eq("status", "active")
+        .in("status", ["active", "blocked"])
         .limit(1)
 
       if (existingSD?.length) {
@@ -182,15 +185,66 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // ── Renewal-date watchdog (plan c2d97552 B3) ──────────────────────────
+    // The calendar + this cron only see dates in-window; a NULL or past date
+    // makes an account silently invisible (the 17-company incident class).
+    // Report-only: offenders land in the daily staff email + cron log. Excludes
+    // test accounts and deliberate discontinuations (service_deactivate clears
+    // the date AND cancels the SD — those NULLs are intentional).
+    const watchdog: { company: string; problem: string }[] = []
+    try {
+      const todayStr = today.toISOString().split("T")[0]
+      const { data: candidates } = await supabaseAdmin
+        .from("accounts")
+        .select("id, company_name, state_of_formation, ra_renewal_date, annual_report_due_date, is_test")
+        .eq("status", "Active")
+        .eq("account_type", "Client")
+        .or("is_test.is.null,is_test.eq.false")
+        .or(`ra_renewal_date.is.null,ra_renewal_date.lt.${todayStr},annual_report_due_date.is.null,annual_report_due_date.lt.${todayStr}`)
+
+      if (candidates?.length) {
+        const ids = candidates.map(c => c.id)
+        const { data: cancelledSDs } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("account_id, service_type")
+          .in("account_id", ids)
+          .in("service_type", ["State RA Renewal", "State Annual Report"])
+          .eq("status", "cancelled")
+        const cancelledRA = new Set((cancelledSDs || []).filter(s => s.service_type === "State RA Renewal").map(s => s.account_id))
+        const cancelledAR = new Set((cancelledSDs || []).filter(s => s.service_type === "State Annual Report").map(s => s.account_id))
+
+        for (const c of candidates) {
+          const problems: string[] = []
+          const noNMReport = (c.state_of_formation || "").toUpperCase().trim().replace("NEW MEXICO", "NM") === "NM"
+          if (c.ra_renewal_date == null) {
+            if (!cancelledRA.has(c.id)) problems.push("RA renewal date missing")
+          } else if (c.ra_renewal_date < todayStr) {
+            problems.push(`RA renewal date in the past (${c.ra_renewal_date})`)
+          }
+          if (!noNMReport) {
+            if (c.annual_report_due_date == null) {
+              if (!cancelledAR.has(c.id)) problems.push("Annual report date missing")
+            } else if (c.annual_report_due_date < todayStr) {
+              problems.push(`Annual report date in the past (${c.annual_report_due_date})`)
+            }
+          }
+          if (problems.length) watchdog.push({ company: c.company_name, problem: problems.join("; ") })
+        }
+      }
+    } catch (wdErr) {
+      console.error("Renewal-date watchdog failed:", wdErr)
+    }
+
     logCron({
       endpoint: "/api/cron/ra-renewal-check",
       status: "success",
       duration_ms: Date.now() - startTime,
-      details: { checked: accounts.length, created, skipped, blocked, results },
+      details: { checked: dueAccounts.length, created, skipped, blocked, watchdog_flagged: watchdog.length, watchdog, results },
     })
 
-    // Send email report if there are new renewals or blocked accounts
-    if (created > 0 || blocked > 0) {
+    // Send email report if there are new renewals, blocked accounts, or
+    // watchdog offenders (accounts invisible to the calendar/cron).
+    if (created > 0 || blocked > 0 || watchdog.length > 0) {
       try {
         const { gmailPost } = await import("@/lib/gmail")
 
@@ -211,7 +265,7 @@ export async function GET(req: NextRequest) {
 
         const html = `
           <h2>🔄 RA Renewal Report — ${today.toISOString().split("T")[0]}</h2>
-          <p><strong>${created}</strong> new renewals | <strong>${blocked}</strong> blocked | <strong>${skipped}</strong> skipped | <strong>${accounts.length}</strong> checked</p>
+          <p><strong>${created}</strong> new renewals | <strong>${blocked}</strong> blocked | <strong>${skipped}</strong> skipped | <strong>${dueAccounts.length}</strong> checked</p>
           ${renewalRows ? `<h3>✅ New renewals to do (Luca)</h3>
           <table style="border-collapse:collapse;width:100%">
             <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Company</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Action</th></tr>
@@ -222,6 +276,11 @@ export async function GET(req: NextRequest) {
             <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Company</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Status</th></tr>
             ${blockedRows}
           </table>` : ""}
+          ${watchdog.length ? `<h3 style="margin-top:16px;color:#b45309">⚠️ Invisible to calendar/reminders — dates missing or in the past</h3>
+          <table style="border-collapse:collapse;width:100%">
+            <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Company</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Problem</th></tr>
+            ${watchdog.map(w => `<tr><td style="padding:6px 12px;border:1px solid #ddd;color:#b45309">${w.company}</td><td style="padding:6px 12px;border:1px solid #ddd;color:#b45309">${w.problem}</td></tr>`).join("")}
+          </table>` : ""}
           ${skippedRows ? `<h3 style="margin-top:16px;color:#888">⏭️ Skipped</h3>
           <table style="border-collapse:collapse;width:100%">
             <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Company</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Reason</th></tr>
@@ -230,10 +289,20 @@ export async function GET(req: NextRequest) {
           <p style="margin-top:16px;color:#888;font-size:12px">Auto-generated by /api/cron/ra-renewal-check</p>
         `
 
+        // Gmail's send API takes a base64url MIME message ({ raw }) — the old
+        // { to, subject, htmlBody } shape was rejected with a 400 and swallowed,
+        // so this report never actually sent (bug-hunter find, plan c2d97552).
+        // Subject is RFC 2047 base64-encoded (R041).
+        const subject = `RA Renewal: ${created} new${blocked ? ` + ${blocked} blocked` : ""}${watchdog.length ? ` + ${watchdog.length} invisible` : ""}`
+        const mime = [
+          `To: support@tonydurante.us`,
+          `Subject: =?utf-8?B?${Buffer.from(`🔄 ${subject}`).toString("base64")}?=`,
+          `Content-Type: text/html; charset=utf-8`,
+          ``,
+          html,
+        ].join("\r\n")
         await gmailPost("/messages/send", {
-          to: "support@tonydurante.us",
-          subject: `🔄 RA Renewal: ${created} new${blocked ? ` + ${blocked} blocked` : ""}`,
-          htmlBody: html,
+          raw: Buffer.from(mime).toString("base64url"),
         })
       } catch (emailErr) {
         // Email failure is non-blocking — log but don't fail the cron
@@ -241,7 +310,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true, checked: accounts.length, created, skipped, blocked, results })
+    return NextResponse.json({ ok: true, checked: dueAccounts.length, created, skipped, blocked, watchdog_flagged: watchdog.length, results })
 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)

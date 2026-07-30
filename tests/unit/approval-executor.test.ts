@@ -246,8 +246,21 @@ describe("executeApproval — happy path", () => {
     expect(cb.context_json).toEqual({ approval_id: row.id, tool_name: "create_task", outcome_status: "executed" })
   })
 
-  it("marks 'failed' (not executed) when executeTool returns an error-shaped result", async () => {
+  it("REFUSES send_email from an approval — every email must go through the confirm card", async () => {
+    // The executor dispatches by tool name straight to the raw implementation,
+    // bypassing the worker's freeze/card gate entirely. Dormant while the action
+    // rail is off, listed so switching the rail on cannot silently open it.
     const row = seedApproval({ tool_name: "send_email", params: { to: "a@b.c", subject: "S", body: "B" } })
+    const res = await executeApproval(row.id)
+    expect(res.status).not.toBe("executed")
+    expect(String(h.store.approval_queue[0].error_text ?? "")).toMatch(/cannot be executed from an approval/i)
+  })
+
+  it("marks 'failed' (not executed) when executeTool returns an error-shaped result", async () => {
+    // NOT send_email: that tool is now refused from an approval outright (every
+    // email must go through the worker's confirm card), so it can no longer stand
+    // in for "a tool whose implementation errors".
+    const row = seedApproval({ tool_name: "create_task", params: { title: "T" } })
     h.tool.impl = async () => JSON.stringify({ error: "SMTP refused" })
 
     const res = await executeApproval(row.id)
@@ -617,7 +630,7 @@ describe("executeClaimedRow (WP3)", () => {
   })
 
   it("marks 'failed' on an error-shaped executeTool result", async () => {
-    const row = seedApproval({ status: "executing", claimed_by: "hermes-mac-mini", tool_name: "send_email", params: { to: "a@b.c", subject: "S", body: "B" } })
+    const row = seedApproval({ status: "executing", claimed_by: "hermes-mac-mini", tool_name: "create_task", params: { title: "T" } })
     h.tool.impl = async () => JSON.stringify({ error: "SMTP refused" })
     const res = await executeClaimedRow(row.id)
     expect(res.status).toBe("failed")

@@ -150,3 +150,122 @@ export interface AuditLinkMetadata {
 export function auditLinkMetadata(kind: AuditLinkKind, note: string): AuditLinkMetadata {
   return { audit_link: true, link_kind: kind, money_applied: false, note }
 }
+
+// ────────────────────────────────────────────────────────────────────────────────────────
+// review_metadata keys, and the pure readers/writers for the two the MATCHER OBEYS.
+//
+// These are namespaced top-level keys so `updateFeed`'s shallow merge keeps them independent
+// of each other (and of the multi-match allocation record, and of the refund flag).
+// ────────────────────────────────────────────────────────────────────────────────────────
+
+/** One candidate in a contested park — enough for a human to choose without a lookup. */
+export interface ContestedCandidate {
+  payment_id: string
+  invoice_number: string | null
+  client_name: string | null
+  score: number
+  confidence: string
+}
+
+export interface ContestedMetadata {
+  /** Why this row is parked: several candidates were equally good. */
+  reason: "tied_candidates"
+  at: string
+  candidates: ContestedCandidate[]
+  /** How many tied in total — `candidates` may be a capped sample of this. */
+  total: number
+}
+
+/**
+ * How many tied candidates are recorded and shown.
+ *
+ * ⛔ WHY THERE IS A CAP (found 2026-07-29 by running the E2E harness against a full dataset,
+ * not by reasoning). On a real book of invoices an amount-only tie is not a pair — a $1,000
+ * wire with no name evidence and no invoice number ties with EVERY open $1,000 invoice, which
+ * was dozens of rows. Unbounded, that writes a huge blob into the transaction and renders a
+ * wall of invoices in the review banner: unreadable on a laptop, useless on a phone, and
+ * exactly the kind of screen people learn to skip. The count is kept in full so the message
+ * can say how many there really are — the honest summary, not a silent truncation.
+ */
+export const CONTESTED_SAMPLE_LIMIT = 6
+
+export function contestedMetadata(
+  candidates: ContestedCandidate[],
+  at: string,
+): { contested: ContestedMetadata } {
+  return {
+    contested: {
+      reason: "tied_candidates",
+      at,
+      candidates: candidates.slice(0, CONTESTED_SAMPLE_LIMIT),
+      total: candidates.length,
+    },
+  }
+}
+
+/** The true number of tied candidates, even when only a sample was recorded. */
+export function readContestedTotal(reviewMetadata: unknown): number {
+  if (!reviewMetadata || typeof reviewMetadata !== "object" || Array.isArray(reviewMetadata)) return 0
+  const contested = (reviewMetadata as Record<string, unknown>).contested
+  if (!contested || typeof contested !== "object" || Array.isArray(contested)) return 0
+  const total = (contested as Record<string, unknown>).total
+  if (typeof total === "number" && Number.isFinite(total)) return total
+  // Older rows written before the count existed: fall back to what was stored.
+  return readContestedCandidates(reviewMetadata).length
+}
+
+/** Read the contested set back off a feed row. Returns [] when the row is not contested. */
+export function readContestedCandidates(reviewMetadata: unknown): ContestedCandidate[] {
+  if (!reviewMetadata || typeof reviewMetadata !== "object" || Array.isArray(reviewMetadata)) return []
+  const contested = (reviewMetadata as Record<string, unknown>).contested
+  if (!contested || typeof contested !== "object" || Array.isArray(contested)) return []
+  const list = (contested as Record<string, unknown>).candidates
+  if (!Array.isArray(list)) return []
+  return list.filter(
+    (c): c is ContestedCandidate =>
+      !!c && typeof c === "object" && typeof (c as ContestedCandidate).payment_id === "string",
+  )
+}
+
+/**
+ * A (transaction → invoice) pair a HUMAN has explicitly rejected.
+ *
+ * ⛔ THE AUTO-MATCHER MUST OBEY THIS. Load-bearing, not audit decoration:
+ * un-matching returns the transaction to `unmatched`, and the sync re-runs every 15 minutes,
+ * so without this memory the matcher re-proposes — and can re-apply — the exact pair a human
+ * just undid. That is the wrong-client re-credit, on a timer.
+ *
+ * A human may still match a rejected pair BY HAND (that is them changing their mind, with the
+ * evidence in front of them). Only the automatic path is bound.
+ */
+export interface RejectedPair {
+  payment_id: string
+  at: string
+  by: string | null
+}
+
+/** Append a rejection, replacing any earlier entry for the same invoice. Pure. */
+export function appendRejectedPair(
+  reviewMetadata: unknown,
+  pair: RejectedPair,
+): { rejected_pairs: RejectedPair[] } {
+  const existing = readRejectedPairs(reviewMetadata).filter(
+    (p) => p.payment_id !== pair.payment_id,
+  )
+  return { rejected_pairs: [...existing, pair] }
+}
+
+export function readRejectedPairs(reviewMetadata: unknown): RejectedPair[] {
+  if (!reviewMetadata || typeof reviewMetadata !== "object" || Array.isArray(reviewMetadata)) return []
+  const list = (reviewMetadata as Record<string, unknown>).rejected_pairs
+  if (!Array.isArray(list)) return []
+  return list.filter(
+    (p): p is RejectedPair =>
+      !!p && typeof p === "object" && typeof (p as RejectedPair).payment_id === "string",
+  )
+}
+
+/** Is this (transaction, invoice) pair one a human already rejected? */
+export function isRejectedPair(reviewMetadata: unknown, paymentId: string): boolean {
+  return readRejectedPairs(reviewMetadata).some((p) => p.payment_id === paymentId)
+}

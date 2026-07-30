@@ -18,6 +18,7 @@
  */
 import 'server-only'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { TD_MAILBOXES } from '@/lib/inbox/email-recipients'
 import { getInternalBaseUrl } from '@/lib/mcp/tools/agent-messages'
 import { CLAUDE_SENDER_UUID, CLAUDE_SENDER_NAME, mentionsClaude } from '@/lib/team/workspace'
 import { channelNotifiesStaff } from '@/lib/team/channel-notify'
@@ -48,6 +49,71 @@ const WORKING_PLACEHOLDER = '⋯'
 
 /** Either state means "no answer has been written yet". */
 const PENDING_PLACEHOLDERS = [THINKING_PLACEHOLDER, WORKING_PLACEHOLDER]
+
+/**
+ * Cancel any prepared-send row this turn froze.
+ *
+ * A frozen email must never outlive the turn that created it: if the worker throws
+ * after freezing one — a later tool call, or the 300s ceiling — no card is ever
+ * rendered for it, and it would sit `pending` (and confirmable by a rescue re-run's
+ * card, or nothing at all) until its TTL. Scoped by the pre-turn id snapshot so it
+ * can only ever touch rows THIS turn created.
+ */
+/**
+ * Append an honest line to Claude's reply when a Confirm card could NOT be attached.
+ *
+ * The worker's own text ends with "frozen for the staff member to confirm" — if no
+ * card renders, that sentence names a control the screen does not have, which is the
+ * false-capability failure this codebase keeps re-learning. Server-authored, so the
+ * model cannot omit or reword it.
+ */
+async function appendCardFailureNote(placeholderId: string): Promise<void> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: row } = await (supabaseAdmin as any)
+      .from('internal_messages')
+      .select('message')
+      .eq('id', placeholderId)
+      .maybeSingle()
+    const body = typeof row?.message === 'string' ? row.message : ''
+    if (!body || PENDING_PLACEHOLDERS.includes(body.trim())) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabaseAdmin as any)
+      .from('internal_messages')
+      .update({
+        message: `${body}\n\n⚠️ The email could NOT be prepared for confirmation, so nothing is pending and nothing will be sent. Please send it yourself, or ask again.`,
+      })
+      .eq('id', placeholderId)
+  } catch {
+    // Best-effort.
+  }
+}
+
+async function cancelDraftsFrozenThisTurn(
+  threadUuid: string,
+  priorIds: Set<string>,
+  priorKnown: boolean,
+): Promise<void> {
+  if (!priorKnown) return
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabaseAdmin as any)
+      .from('worker_prepared_sends')
+      .select('id')
+      .eq('thread_uuid', threadUuid)
+      .eq('status', 'pending')
+    const mine = ((data ?? []) as Array<{ id: string }>).map(r => r.id).filter(id => !priorIds.has(id))
+    if (!mine.length) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabaseAdmin as any)
+      .from('worker_prepared_sends')
+      .update({ status: 'cancelled' })
+      .in('id', mine)
+      .eq('status', 'pending')
+  } catch {
+    // Best-effort — this runs on an error path already.
+  }
+}
 
 /**
  * Insert the Claude placeholder message and fire the async processor.
@@ -210,39 +276,110 @@ export async function processClaudeReply(params: {
         ? { enableSlackSend: true, pinnedPortalRecipient: { contact_id: thread.contact_id } }
         : {}
 
-  // EMAIL: allowed only when the linked client has addresses on file, pinned to exactly
-  // those. Note the empty-array case is NOT the same as "no rail" — `[]` is a real pin
-  // meaning "refuse every address", so a linked client with no address on file still gets
-  // the rail and every send is refused, rather than falling through to unpinned.
-  let emailSendRail: { enableEmailSend?: true; pinnedEmailRecipients?: string[] } = {}
-  if (thread?.account_id || thread?.contact_id) {
-    // Contacts link to accounts through `account_contacts` — `contacts` has NO
-    // `account_id` column. This filtered on one anyway; PostgREST errored, the error was
-    // discarded with the row set, and an empty address list means "refuse every address",
-    // so email from here was silently dead for every account-scoped thread. Same defect,
-    // same day, as the CRM sidebar. Verified against production 2026-07-20.
-    let contactRows: Array<{ email: string | null }> = []
-    if (thread.account_id) {
-      const { data: links } = await supabaseAdmin
-        .from('account_contacts')
-        .select('contact_id')
-        .eq('account_id', thread.account_id)
-      const contactIds = (links ?? []).map((l: { contact_id: string }) => l.contact_id).filter(Boolean)
-      if (contactIds.length) {
-        const { data: rows } = await supabaseAdmin.from('contacts').select('email').in('id', contactIds)
-        contactRows = rows ?? []
-      }
-    } else {
-      const { data: rows } = await supabaseAdmin
-        .from('contacts')
-        .select('email')
-        .eq('id', thread.contact_id as string)
-      contactRows = rows ?? []
+  // EMAIL: UNPINNED on client threads — staff decide the recipient (Antonio,
+  // 2026-07-29, dev job f55ea3bb, verbatim: "You just have to unlock it because
+  // he has to do what we decide"). The July-19 client-address pin blocked the
+  // everyday case of emailing our own accountant firm about the client (the
+  // MFCompany/Smit refusal). This surface is staff-driven — the @claude prompt
+  // is authored by staff, the draft→explicit-"send it" discipline remains the
+  // control, and every send is audit-attributed via sendActor. Same unpinned
+  // model as Slack. TRADE-OFF (named to Antonio, accepted by him): with no pin,
+  // a poisoned document trying to redirect a send is caught only by the staff
+  // member reviewing the draft before saying "send it".
+  let emailSendRail: {
+    enableEmailSend?: true
+    emailConfirmExempt?: string[]
+    forceMailbox?: 'support' | 'antonio'
+    emailSendPrep?: {
+      threadUuid: string
+      gmailThreadId: string | null
+      mailbox: string
+      defaultReplyToMessageId: string | null
+      sendable: Array<{ ref: string; path: string; name: string; contentType?: string; size?: number }>
     }
-    const addresses = contactRows
-      .map((c) => c.email)
-      .filter((e): e is string => Boolean(e && e.includes('@')))
-    emailSendRail = { enableEmailSend: true, pinnedEmailRecipients: Array.from(new Set(addresses)) }
+  } = {}
+  {
+    // EVERY team thread, not only client-linked ones. Gating this on a client link
+    // meant "@claude email our accountant about MFCompany" inside #td-taxreturn —
+    // a channel thread, which carries NULL client ids — got no send_email tool at
+    // all, while the shared prompt still told it to call send_email: a false
+    // capability on the very channel the work happens in.
+    //
+    // CONFIRM-ONCE APPLIES HERE TOO (Antonio, 2026-07-29: "I want the confirm step
+    // everywhere, that must be present"). An address already known for this thread
+    // — the linked client's own, or one of our mailboxes — sends on the staff
+    // member's go-ahead. Any OTHER address freezes and a Confirm card is posted
+    // into this very thread (see the card block after the worker call). This was
+    // briefly left out because Team Chat had no control to render a card into; the
+    // card is now built, so the step is real rather than a refusal.
+    //
+    // OLD COMMENT (kept for the reasoning, no longer the behaviour) — and this is the case the whole change was
+    // reported for (MFCompany: "email our accountant Smit about this client").
+    //
+    // Team Chat is STAFF-AUTHORED text: a teammate typing "@claude email X" is the
+    // decision itself, which is exactly why Antonio's rule ("the worker sends what
+    // we decide") applies cleanly here. The confirm-a-new-recipient step exists for
+    // the two surfaces that put ATTACKER-authored text in front of the model (an
+    // inbound email, a client's own chat message) — and, critically, those are the
+    // only surfaces with a Confirm card to render. Setting an exempt list here
+    // WITHOUT a card would freeze nothing and simply refuse every third-party
+    // address: the original bug, re-created by its own fix. Verified: this surface
+    // has no prepared-send UI.
+    //
+    // forceMailbox still applies — there is no mailbox-authorisation check here, so
+    // `from: 'antonio'` must never be honoured.
+    // The linked client's own addresses (if this thread has a client) plus our own
+    // mailboxes are confirm-exempt. A lookup failure leaves the list at just our
+    // mailboxes, so an unknown address still gets a card — it degrades toward the
+    // human, never toward a silent send.
+    const exempt: string[] = [...TD_MAILBOXES]
+    if (thread?.account_id || thread?.contact_id) {
+      try {
+        let rows: Array<{ email: string | null }> = []
+        if (thread.account_id) {
+          const { data: links } = await supabaseAdmin
+            .from('account_contacts')
+            .select('contact_id')
+            .eq('account_id', thread.account_id)
+          const ids = ((links ?? []) as Array<{ contact_id: string }>).map(l => l.contact_id).filter(Boolean)
+          if (ids.length) {
+            const { data } = await supabaseAdmin.from('contacts').select('email').in('id', ids)
+            rows = (data ?? []) as Array<{ email: string | null }>
+          }
+        } else {
+          const { data } = await supabaseAdmin
+            .from('contacts')
+            .select('email')
+            .eq('id', thread.contact_id as string)
+          rows = (data ?? []) as Array<{ email: string | null }>
+        }
+        for (const r of rows) if (r.email && r.email.includes('@')) exempt.push(r.email)
+      } catch (err) {
+        console.warn('[team-claude] client address lookup failed (every new address will be confirmed):', err)
+      }
+    }
+    emailSendRail = {
+      enableEmailSend: true,
+      forceMailbox: 'support',
+      emailConfirmExempt: Array.from(new Set(exempt)),
+      // Freezing needs a prep context. threadId is the TEAM thread's uuid, which is
+      // what the Confirm card is looked up by after the turn.
+      //
+      // `sendable` is EMPTY and that is honest: files posted in a team thread are
+      // READ by the worker but are not staged as outbound email attachments here
+      // (that staging exists only on the panels, which upload to the private
+      // worker-attachments bucket). The surface prompt below says so plainly —
+      // without that, the executor's "drop the file into the panel on the same
+      // message" advice names a control this screen does not have, which is the
+      // false-capability class Luca has reported twice.
+      emailSendPrep: {
+        threadUuid: threadId,
+        gmailThreadId: null,
+        mailbox: TD_MAILBOXES[0],
+        defaultReplyToMessageId: null,
+        sendable: [],
+      },
+    }
   }
 
   // Recent conversation (exclude the placeholder itself) for context.
@@ -304,6 +441,26 @@ export async function processClaudeReply(params: {
     }
   }
 
+  // Prepared-send rows that ALREADY existed on this thread before this turn — so a
+  // Confirm card is only posted for a draft THIS turn froze, never a stale one. Id
+  // snapshot (not a clock comparison): the database's now() and this process's clock
+  // are different clocks, and skew would either drop this turn's card or resurface an
+  // old one. A failed lookup suppresses the card rather than risking a stale confirm.
+  const priorPreparedIds = new Set<string>()
+  let priorPreparedKnown = true
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: existing, error } = await (supabaseAdmin as any)
+      .from('worker_prepared_sends')
+      .select('id')
+      .eq('thread_uuid', threadId)
+      .eq('status', 'pending')
+    if (error) priorPreparedKnown = false
+    for (const r of (existing ?? []) as Array<{ id: string }>) priorPreparedIds.add(r.id)
+  } catch {
+    priorPreparedKnown = false
+  }
+
   let reply: string
   try {
     const { callWorkerWithAttachments } = await import('@/lib/ai-agent/attachment-reader')
@@ -320,7 +477,7 @@ export async function processClaudeReply(params: {
     const { SLACK_WORKER_SYSTEM_PROMPT } = await import('@/lib/ai-agent/slack-claude')
     const { loadRelevantTemplates, formatTemplatesForPrompt } = await import('@/lib/ai-agent/templates')
 
-    let systemPrompt = `${SLACK_WORKER_SYSTEM_PROMPT}\n\nCONTEXT CORRECTION: you are in the CRM TEAM CHAT (crm.tonydurante.us → Team Chat), not Slack. Same team, same rules, same tools — replies render as chat messages in this internal thread (never client-visible).`
+    let systemPrompt = `${SLACK_WORKER_SYSTEM_PROMPT}\n\nCONTEXT CORRECTION: you are in the CRM TEAM CHAT (crm.tonydurante.us → Team Chat), not Slack. Same team, same rules, same tools — replies render as chat messages in this internal thread (never client-visible).\n\nEMAIL FROM HERE: you may email ANY address the staff member names. EVERY email is FROZEN for their confirmation — no exceptions. A "Confirm & send" card appears under your reply in this thread with the recipient, subject, body, and a choice of which of our addresses it goes out from (support@ or antonio.durante@). Nothing leaves until they click, so say it is READY FOR THEIR CONFIRMATION, show the exact address, and NEVER say it has been sent.\n\nFILES IN THIS THREAD CANNOT BE EMAILED. You can READ what people post here, but there is no way to attach those files to an outbound email from Team Chat — the attach flow exists only in the Inbox and client-chat panels. If someone asks you to forward a file from this thread, say that plainly and offer to draft the email for them to send with the file themselves. NEVER tell them to "drop the file into the panel" — there is no panel on this screen — and never claim a file is attached.`
     try {
       const templates = await loadRelevantTemplates(prompt.message)
       const block = formatTemplatesForPrompt(templates)
@@ -401,6 +558,11 @@ export async function processClaudeReply(params: {
       message: `@claude worker call failed: ${msg}`,
       context: { thread_id: threadId, sender: prompt.sender_name ?? prompt.sender_id ?? null },
     })
+    // A frozen email must never outlive the turn that made it. If the worker threw
+    // AFTER freezing one (a later tool call, or the 300s ceiling), nothing would
+    // ever render its card and it would sit pending until the TTL — a real
+    // outbound email prepared and then invisible. Cancel anything this turn froze.
+    await cancelDraftsFrozenThisTurn(threadId, priorPreparedIds, priorPreparedKnown)
     return await failPlaceholder(
       placeholderId,
       msg.includes('ANTHROPIC_API_KEY')
@@ -419,6 +581,78 @@ export async function processClaudeReply(params: {
     // '…' — this turn set the claim on entry, so matching the old value here would
     // never fire and the reply would be silently dropped.
     .eq('message', WORKING_PLACEHOLDER)
+
+  // CONFIRM CARD — a new email recipient waits for a human here, in this thread.
+  // The card carries the frozen row's id; its buttons call the same confirm-send
+  // endpoint the Inbox and client-chat panels use, so one payload, one code path,
+  // and what leaves is exactly what was read.
+  if (priorPreparedKnown) {
+    try {
+      // Rows THIS turn froze — every pending row minus the pre-turn snapshot. Taking
+      // "the newest pending row on the thread" was wrong: thread_uuid is the whole
+      // CHANNEL, and two people can have overlapping @claude turns in it, so turn A
+      // could pick up turn B's draft — A's answer would carry B's recipient while
+      // A's own email became invisible. Sorted oldest-first so the one we show is
+      // this turn's own; a second freeze in one turn is already refused upstream.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: mineRows, error: mineErr } = await (supabaseAdmin as any)
+        .from('worker_prepared_sends')
+        .select('id, to_address, subject, body, attachments')
+        .eq('thread_uuid', threadId)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: true })
+      if (mineErr) throw new Error(mineErr.message)
+      const prep = ((mineRows ?? []) as Array<{ id: string }>).find(r => !priorPreparedIds.has(r.id)) as
+        | { id: string; to_address: string; subject: string; body: string | null; attachments: unknown }
+        | undefined
+      if (prep) {
+        const files = ((prep.attachments ?? []) as Array<{ name?: string }>)
+          .map(a => a.name)
+          .filter(Boolean)
+          .join(', ')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabaseAdmin as any).from('internal_messages').update({
+          // NOT-A-PLACEHOLDER guard, twin to the answer write above: a card must
+          // never land on a row that never received this turn's answer (it would
+          // render a Confirm button under a thinking spinner). The costs is one
+          // line; the invariant otherwise rests on the function ceiling staying
+          // below the abandon window forever.
+          card: {
+            kind: 'email_confirm',
+            title: `Confirm email to ${prep.to_address}`,
+            subtitle: [prep.subject, files ? `📎 ${files}` : ''].filter(Boolean).join(' — ') || undefined,
+            entity_type: 'worker_prepared_send',
+            entity_id: prep.id,
+            // The exact body that will be sent, so Confirm approves a MESSAGE and
+            // not just an address (the panels render it for the same reason).
+            body: typeof prep.body === 'string' ? prep.body : '',
+          },
+        })
+          .eq('id', placeholderId)
+          .not('message', 'in', `("${THINKING_PLACEHOLDER}","${WORKING_PLACEHOLDER}")`)
+      }
+    } catch (err) {
+      // A missing card must never break the answer — but it must not be SILENT
+      // either: the worker's reply says "frozen for the staff member to confirm",
+      // and with no card there is nothing to confirm and the email dies at its TTL.
+      // Cancel what this turn froze and say so, rather than promising a control
+      // that isn't there.
+      console.warn('[team-claude] confirm-card attach failed:', err)
+      await cancelDraftsFrozenThisTurn(threadId, priorPreparedIds, priorPreparedKnown)
+      await appendCardFailureNote(placeholderId)
+      await reportSystemError({
+        source: 'server',
+        route: 'team-chat/claude-trigger',
+        message: `Confirm card could not be attached; the prepared email was cancelled: ${err instanceof Error ? err.message : String(err)}`,
+        context: { thread_id: threadId },
+      })
+    }
+  } else {
+    // The pre-turn snapshot failed, so we cannot tell this turn's draft from an
+    // older one. Cancel nothing (we'd risk cancelling someone else's) but never
+    // show a card we can't attribute — and don't leave the reply claiming one.
+    await appendCardFailureNote(placeholderId)
+  }
 
   await bumpThreadActivity(threadId)
 

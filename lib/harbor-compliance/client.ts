@@ -41,6 +41,19 @@ function getConfig() {
   return { clientId, clientSecret, username, password, baseUrl }
 }
 
+/**
+ * Harbor upgraded the Partner API v1 → v3. In v3 a company's registrations
+ * (which carry expiration_date + next_annual_report_due_date) are nested under
+ * the account/company, whereas the flat v1 /licenses endpoint returns nothing.
+ * Derive the v3 base from the configured base so the switch is a single env var.
+ */
+export function getV3BaseUrl(): string {
+  const { baseUrl } = getConfig()
+  const explicit = process.env.HC_API_V3_BASE_URL
+  if (explicit) return explicit
+  return baseUrl.replace(/\/v1(\/)?$/, "/v3$1")
+}
+
 // ─── Token Management ─────────────────────────────────────────
 
 const TOKEN_ROW_ID = 'harbor-compliance'
@@ -154,6 +167,7 @@ interface RequestOptions {
   params?: Record<string, string | number | boolean | undefined>
   body?: unknown
   rawResponse?: boolean  // return raw Response (for binary downloads)
+  baseUrl?: string  // override the configured base (e.g. v3 nested endpoints)
 }
 
 async function hcFetch<_T>(
@@ -171,7 +185,8 @@ async function hcFetch<T>(
   path: string,
   options: RequestOptions = {}
 ): Promise<T | Response> {
-  const { baseUrl } = getConfig()
+  const { baseUrl: defaultBaseUrl } = getConfig()
+  const baseUrl = options.baseUrl || defaultBaseUrl
   const token = await getAccessToken()
 
   // Build URL with query params
@@ -375,6 +390,27 @@ export const harborCompliance = {
   async getLicense(id: string, include?: HCLicenseInclude[]): Promise<HCSingleResponse<HCCompanyRegistration>> {
     return hcFetch('GET', `/licenses/${id}`, {
       params: include?.length ? { include: include.join(',') } : undefined,
+    })
+  },
+
+  // ── v3 nested registrations (renewal dates live here) ─────
+  // The v1 flat /licenses returns empty; in v3 registrations are nested under
+  // the account + company and carry expiration_date + next_annual_report_due_date.
+
+  /** v3: list HC accounts (to resolve the account UUID the nested path needs) */
+  async listAccountsV3(pagination?: HCPaginationParams): Promise<HCPaginatedResponse<HCAccount>> {
+    return hcFetch('GET', '/accounts', { baseUrl: getV3BaseUrl(), params: buildParams(pagination) })
+  },
+
+  /** v3: list a company's registrations (with expiration + next annual report dates) */
+  async listCompanyRegistrationsV3(
+    accountId: string,
+    companyId: string,
+    pagination?: HCPaginationParams,
+  ): Promise<HCPaginatedResponse<HCCompanyRegistration>> {
+    return hcFetch('GET', `/accounts/${accountId}/companies/${companyId}/licenses`, {
+      baseUrl: getV3BaseUrl(),
+      params: buildParams(pagination),
     })
   },
 

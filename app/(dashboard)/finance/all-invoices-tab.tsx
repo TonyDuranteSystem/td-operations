@@ -848,14 +848,27 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
         {status === 'Paid' && (
           <ActionButton
             onClick={() => {
-              if (!window.confirm(`Unlink payment from ${invoiceNumber}? The invoice will revert to Draft and the bank feed entry will be reset to pending.`)) return
+              // The copy said "revert to Draft" — it no longer does, and that mattered: an
+              // invoice that goes back to Sent/Overdue is immediately back in the automatic
+              // overdue-chaser population, which "Draft" told staff it was not. (2026-07-29)
+              if (!window.confirm(
+                `Un-match the bank payment from ${invoiceNumber}?\n\n` +
+                `The money that transaction applied comes off this invoice (any other payment on it stays), ` +
+                `the invoice returns to the state it was really in — Sent or Overdue, not Draft — and the ` +
+                `transaction goes back to the review queue. Chasing emails are paused while it waits there.`,
+              )) return
               startTransition(async () => {
                 const result = await unlinkPayment(invoiceId)
-                if (result.success) { toast.success(`${invoiceNumber} unlinked — reverted to Draft`); router.refresh() }
-                else toast.error(result.error ?? 'Failed to unlink')
+                if (result.success) {
+                  // A completed-with-warning reversal must not read as a clean success: the
+                  // money came off but the transaction could not be unlocked.
+                  if (result.data?.warning) toast.warning(result.data.warning)
+                  else toast.success(`${invoiceNumber} un-matched — money reversed`)
+                  router.refresh()
+                } else toast.error(result.error ?? 'Failed to un-match')
               })
             }}
-            label="Unlink Payment — detach the payment from this invoice and revert to Draft"
+            label="Un-match Payment — reverse the bank payment applied to this invoice"
             icon={Unlink}
             color="text-orange-600"
             hoverBg="hover:bg-orange-100"

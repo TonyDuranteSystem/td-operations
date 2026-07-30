@@ -212,7 +212,28 @@ describe("send latch + guard wiring in executeWorkerTool", () => {
     expect(sendContext.portalSendLatched).toBeUndefined()
   })
 
-  it("Slack path (no pin) is untouched by the guard — English draft still sends", async () => {
+  it("REGRESSION (2026-07-29): the guard survives the recipient unlock — a STAFF-DIRECTED recipient with no pin is still checked", async () => {
+    // The guard used to be gated on `pinnedPortalRecipient` existing. Making the
+    // recipient staff-directable (Antonio: same capabilities everywhere) would have
+    // silently disabled it for exactly the new case: a recipient the model supplies.
+    // It now keys off the RESOLVED recipient instead. Without this, an Italian
+    // client reached from a panel by name would get an English message.
+    const sendContext: { actor: string; portalSendLatched?: boolean } = {
+      actor: "crm-portal:luca@tonydurante.us",
+    }
+    const result = await executeWorkerTool(
+      "send_portal_message",
+      { contact_id: "c-1", message: INCIDENT_ENGLISH_DRAFT },
+      undefined,
+      null,
+      null,
+      sendContext,
+    )
+    expect(result).not.toContain("✅")
+    expect(sendContext.portalSendLatched).toBe(true)
+  })
+
+  it("Slack path (no send context at all) is untouched by the guard — English draft still sends", async () => {
     const result = await executeWorkerTool(
       "send_portal_message",
       { contact_id: "c-1", message: INCIDENT_ENGLISH_DRAFT },

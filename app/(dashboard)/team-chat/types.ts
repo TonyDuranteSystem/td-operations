@@ -1,13 +1,17 @@
 import type { ChatAttachment } from '@/lib/types'
 
 export interface TeamCardData {
-  kind: 'account' | 'invoice' | 'document' | 'task' | 'client_message' | 'link'
+  kind: 'account' | 'invoice' | 'document' | 'task' | 'client_message' | 'link' | 'email_confirm'
   title: string
   subtitle?: string
   url?: string
   color?: string
   entity_type?: string
+  /** For 'email_confirm': the frozen prepared-send row id the buttons act on. */
   entity_id?: string
+  /** For 'email_confirm': the exact text that will be sent, so Confirm approves a
+   *  MESSAGE and not just an address. */
+  body?: string
 }
 
 export interface Reaction {

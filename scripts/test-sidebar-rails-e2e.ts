@@ -34,18 +34,27 @@ async function main() {
   // ── The account case — the one that was completely broken ──
   const rails = await buildSidebarSendRails(`account:${link.account_id}`)
   check("email sending is ENABLED for this client", rails.email.enableEmailSend === true)
+  // The client's own addresses are the CONFIRM-EXEMPT set (2026-07-29): they send
+  // straight out; any OTHER address is still reachable but freezes for a one-click
+  // staff confirmation. So this asserts the client's addresses are all present —
+  // NOT that they are the only reachable ones.
   check(
-    "the assistant now has the client's real addresses",
-    (rails.email.pinnedEmailRecipients?.length ?? 0) === expectedEmails.length && expectedEmails.length > 0,
-    `got ${rails.email.pinnedEmailRecipients?.length ?? 0}, expected ${expectedEmails.length}`,
+    "the client's real addresses are confirm-exempt",
+    expectedEmails.every((e: string) => (rails.email.emailConfirmExempt ?? []).includes(e)) && expectedEmails.length > 0,
+    `exempt=${(rails.email.emailConfirmExempt ?? []).length}, client addresses=${expectedEmails.length}`,
   )
   check(
-    "every address belongs to THIS client",
-    (rails.email.pinnedEmailRecipients ?? []).every((a: string) => expectedEmails.includes(a)),
+    "our own mailboxes are exempt too, so 'forward this to Antonio' needs no confirm",
+    (rails.email.emailConfirmExempt ?? []).some((a: string) => a.endsWith("@tonydurante.us")),
   )
-  // This is the derivation the worker's capability sentence is generated from.
-  const canSendEmail = rails.email.enableEmailSend === true && (rails.email.pinnedEmailRecipients?.length ?? 0) > 0
-  check("so the worker will be TOLD it can email — the actual user-visible bug", canSendEmail)
+  check(
+    "the sending mailbox is forced to support@ (this surface cannot authorise antonio@)",
+    rails.email.forceMailbox === "support",
+  )
+  // Email is ON whenever the rail is on — it no longer depends on the client
+  // having an address on file, because staff can name any recipient.
+  const canSendEmail = rails.email.enableEmailSend === true
+  check("so the worker will be TOLD it can email", canSendEmail)
 
   check("the client boundary now includes the account's own people", 
     expectedIds.every((id: string) => rails.clientScope?.allowedIds.includes(id)),

@@ -313,7 +313,10 @@ export function validateTeamCard(card: unknown): string | null {
   if (card == null) return null
   if (typeof card !== 'object') return 'Card must be an object.'
   const c = card as Record<string, unknown>
-  const kinds = ['account', 'invoice', 'document', 'task', 'client_message', 'link']
+  // 'email_confirm' carries a FROZEN outbound email awaiting a human's Confirm —
+  // its entity_id is the prepared-send row id and its buttons call the shared
+  // confirm-send endpoint. Server-authored only (the @claude trigger stamps it).
+  const kinds = ['account', 'invoice', 'document', 'task', 'client_message', 'link', 'email_confirm']
   if (typeof c.kind !== 'string' || !kinds.includes(c.kind)) {
     return 'Card kind is invalid.'
   }

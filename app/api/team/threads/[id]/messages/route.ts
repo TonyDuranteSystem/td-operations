@@ -46,6 +46,17 @@ export async function POST(
   // Card validation.
   const cardErr = validateTeamCard(card)
   if (cardErr) return NextResponse.json({ error: cardErr }, { status: 400 })
+  // An 'email_confirm' card carries the id of a FROZEN outbound email and its
+  // buttons dispatch that row. Its whole guarantee is "what you read is what is
+  // sent" — which only holds if the SERVER wrote it. A hand-posted card could show
+  // a harmless body next to a real id and get a teammate to dispatch something
+  // else, so it is refused here; only the @claude trigger stamps this kind.
+  if (card && typeof card === 'object' && (card as { kind?: unknown }).kind === 'email_confirm') {
+    return NextResponse.json(
+      { error: 'email_confirm cards are written by the assistant, not posted.' },
+      { status: 400 },
+    )
+  }
 
   // Attachment URL guard (mirror portal chat): every attachment must live on our
   // Storage host — never an arbitrary off-site URL.

@@ -71,6 +71,8 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
    *  Confirm sends EXACTLY these bytes — it does not re-ask the assistant. */
   const [preparedSend, setPreparedSend] = useState<{ id: string; to: string; subject: string; body: string } | null>(null)
   const [confirming, setConfirming] = useState(false)
+  // WHICH OF OUR ADDRESSES IT GOES OUT FROM — chosen here, re-checked by the server.
+  const [sendAs, setSendAs] = useState<'support' | 'antonio'>('support')
   // Live route → per-page client scope for the worker's brain. Read at SEND time
   // (below), never cached, so navigating between clients can't mis-scope.
   const pathname = usePathname()
@@ -320,6 +322,10 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
       // Tag BOTH sides of the exchange with the stored turn id, so the message can
       // be edited or rewound immediately — not only after a reload.
       setPreparedSend(data.preparedSend ?? null)
+      // Each card starts from the default sender. Carrying a previous card's
+      // "antonio" pick into the next draft is how an email goes out from the
+      // wrong address without anyone deciding it should.
+      if (data.preparedSend) setSendAs('support')
       const turnId = typeof data.messageId === 'string' ? data.messageId : undefined
       setMessages(prev => {
         const next = [...prev]
@@ -386,7 +392,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
       const res = await fetch('/api/inbox/worker-chat/confirm-send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prepared_id: preparedSend.id, action }),
+        body: JSON.stringify({ prepared_id: preparedSend.id, action, mailbox: sendAs }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
@@ -404,7 +410,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     } finally {
       setConfirming(false)
     }
-  }, [preparedSend])
+  }, [sendAs, preparedSend])
 
   const readyFiles = att.files.filter((f) => f.path && !f.error)
   const stillUploading = att.files.some((f) => !f.path && !f.error)
@@ -737,6 +743,18 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
                 <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
               </div>
             ) : null}
+            <div className="mt-2 flex items-center gap-2 text-xs">
+              <span className="text-zinc-500">From:</span>
+              <select
+                value={sendAs}
+                onChange={e => setSendAs(e.target.value as 'support' | 'antonio')}
+                disabled={confirming}
+                className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
+              >
+                <option value="support">support@tonydurante.us</option>
+                <option value="antonio">antonio.durante@tonydurante.us</option>
+              </select>
+            </div>
             <div className="mt-2.5 flex items-center gap-2">
               <button
                 onClick={() => void resolvePreparedSend('confirm')}

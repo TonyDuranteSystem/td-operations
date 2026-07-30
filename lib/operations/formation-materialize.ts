@@ -501,6 +501,24 @@ export async function materializeFormationCompany(
     const accountId = newAccount.id
     steps.push({ step: "account_create", status: "ok", detail: `Account ${accountId} created (${chosenName}, ${entityType}, ${stateName})` })
 
+    // Initial renewal dates (plan c2d97552 B2a). This intake path historically
+    // set none — companies materialized from Articles were invisible to the
+    // compliance calendar and the RA/AR reminder crons (the LUMA-cohort bug).
+    // Company-creation moment, so fill-if-null is safe by construction.
+    try {
+      const { deriveRenewalDates, applyRenewalDateFills } = await import("@/lib/operations/renewal-dates")
+      const fills = deriveRenewalDates({
+        intake: "formation",
+        formation_date: formationDate,
+        state_of_formation: stateName,
+        existing: { ra_renewal_date: null, annual_report_due_date: null, cmra_renewal_date: null },
+      })
+      const applied = await applyRenewalDateFills(accountId, fills, { state: stateName, actor: "materialize-formation" })
+      if (applied.length) steps.push({ step: "renewal_dates", status: "ok", detail: applied.join(", ") })
+    } catch (rdErr) {
+      steps.push({ step: "renewal_dates", status: "error", detail: rdErr instanceof Error ? rdErr.message : String(rdErr) })
+    }
+
     // Record the lead→account conversion (this path previously logged neither
     // converted_to_account_id nor a re-anchor) and move any Team Chat
     // conversations opened on the lead onto the new account (dev_task be582c5e Phase 2).

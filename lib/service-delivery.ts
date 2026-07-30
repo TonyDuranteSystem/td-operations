@@ -757,43 +757,33 @@ export async function advanceServiceDelivery(
     delivery.account_id
   ) {
     try {
+      // Single source of truth for the initial fills (plan c2d97552 B1/B2):
+      // lib/operations/renewal-dates.ts. Adds ra_renewal_date (formation
+      // anniversary +1yr) which this site historically never set — the root
+      // cause of formations invisible to the compliance calendar.
       const { data: acctDates } = await supabaseAdmin
         .from("accounts")
-        .select("cmra_renewal_date, annual_report_due_date, state_of_formation, formation_date")
+        .select("ra_renewal_date, cmra_renewal_date, annual_report_due_date, state_of_formation, formation_date")
         .eq("id", delivery.account_id)
         .single()
 
       if (acctDates) {
-        const renewals: Record<string, unknown> = {}
-        const currentYear = new Date().getFullYear()
-
-        if (!acctDates.cmra_renewal_date) {
-          renewals.cmra_renewal_date = `${currentYear}-12-31`
-        }
-        if (!acctDates.annual_report_due_date) {
-          const st = (acctDates.state_of_formation || "").toUpperCase()
-            .replace("NEW MEXICO", "NM").replace("WYOMING", "WY")
-            .replace("FLORIDA", "FL").replace("DELAWARE", "DE")
-
-          if (st === "FL") renewals.annual_report_due_date = `${currentYear + 1}-05-01`
-          else if (st === "DE") renewals.annual_report_due_date = `${currentYear + 1}-06-01`
-          else if (st === "WY" && acctDates.formation_date) {
-            const month = String(acctDates.formation_date).slice(5, 7)
-            renewals.annual_report_due_date = `${currentYear + 1}-${month}-01`
-          }
-        }
-        if (Object.keys(renewals).length > 0) {
-          renewals.updated_at = new Date().toISOString()
-          await dbWriteSafe(
-            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-            supabaseAdmin.from("accounts").update(renewals).eq("id", delivery.account_id),
-            "accounts.update"
-          )
-          const datesList = Object.entries(renewals)
-            .filter(([k]) => k !== "updated_at")
-            .map(([k, v]) => `${k}=${v}`).join(", ")
-          autoTriggers.push(`Renewal dates set: ${datesList}`)
-        }
+        const { deriveRenewalDates, applyRenewalDateFills } = await import("@/lib/operations/renewal-dates")
+        const fills = deriveRenewalDates({
+          intake: "formation",
+          formation_date: acctDates.formation_date,
+          state_of_formation: acctDates.state_of_formation,
+          existing: {
+            ra_renewal_date: acctDates.ra_renewal_date,
+            annual_report_due_date: acctDates.annual_report_due_date,
+            cmra_renewal_date: acctDates.cmra_renewal_date,
+          },
+        })
+        const applied = await applyRenewalDateFills(delivery.account_id, fills, {
+          state: acctDates.state_of_formation,
+          actor: "articles-received",
+        })
+        if (applied.length) autoTriggers.push(`Renewal dates set: ${applied.join(", ")}`)
       }
     } catch (rdErr) {
       autoTriggers.push(`Renewal dates failed: ${rdErr instanceof Error ? rdErr.message : String(rdErr)}`)

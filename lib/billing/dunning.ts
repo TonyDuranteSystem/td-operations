@@ -21,6 +21,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { isAccountReminderPaused } from "@/lib/billing/reminder-snooze"
 import { enqueueJobs } from "@/lib/jobs/queue"
+import { readContestedCandidates } from "@/lib/finance/feed-vocabulary"
 
 /** Default per-pass enqueue bound (gentle backlog rollout; UI-configurable). */
 export const DUNNING_RUN_CAP = 40
@@ -44,6 +45,44 @@ export interface DunningSummary {
   considered: number
   auto_send: boolean
   errors: string[]
+}
+
+/**
+ * Invoices with an incoming bank payment WAITING FOR A HUMAN TO CONFIRM IT — pure filter.
+ *
+ * ⛔ WHY CHASING THESE IS WRONG (2026-07-29, Antonio's decision when this fix was approved).
+ * The ambiguity guard deliberately parks a transaction for review when the system cannot tell
+ * which client's invoice it settles. And un-matching now restores an invoice to its true state
+ * (Sent / Overdue) instead of hiding it as a Draft, which is honest but re-arms this pass. Put
+ * together, an invoice can be genuinely PAID — the money sitting in the bank, pinned to that
+ * invoice, waiting for a click — while this pass emails the client "Payment Overdue". The old
+ * behaviour concealed it by accident; suppressing it is deliberate.
+ *
+ * It is a PAUSE, not a cancellation: `reminder_count` is untouched, so once the review is
+ * resolved (confirmed, or rejected as not-for-this-invoice) chasing resumes exactly where it
+ * left off.
+ */
+export function suppressWhilePaymentAwaitsReview(
+  invoiceIds: string[],
+  pinnedForReview: Array<{ matched_payment_id: string | null; review_metadata?: unknown }>,
+): { keep: string[]; suppressed: string[] } {
+  const pinned = new Set(
+    pinnedForReview
+      // ⛔ A CONTESTED PIN IS NOT EVIDENCE ABOUT THAT INVOICE (2026-07-29, Bug-Hunter).
+      // When several invoices tie, the matcher pins the deterministic FIRST of the tied set
+      // purely so a reviewer has somewhere to start — in the incident that was the WRONG
+      // company. Treating that as "this client has paid" would silently drop a genuinely
+      // overdue invoice out of every chase run, always the same victim (the ordering is
+      // deterministic), until a human resolved an unrelated deposit. Only an UNCONTESTED pin —
+      // one specific invoice this money is actually believed to settle — pauses chasing.
+      .filter((f) => readContestedCandidates(f.review_metadata).length <= 1)
+      .map((f) => f.matched_payment_id)
+      .filter((id): id is string => !!id),
+  )
+  const keep: string[] = []
+  const suppressed: string[] = []
+  for (const id of invoiceIds) (pinned.has(id) ? suppressed : keep).push(id)
+  return { keep, suppressed }
 }
 
 /**
@@ -261,6 +300,27 @@ async function enqueueDueReminders(cap: number, errors: string[]): Promise<{ que
   }
 
   if (eligible.length === 0) return { queued: 0, skipped: 0, considered, capped }
+
+  // Never chase a client whose money is already in the bank waiting for a human to confirm it.
+  const { data: pinnedFeeds } = await supabaseAdmin
+    .from("td_bank_feeds")
+    .select("matched_payment_id, review_metadata")
+    .eq("status", "needs_review")
+    .not("matched_payment_id", "is", null)
+  const { suppressed } = suppressWhilePaymentAwaitsReview(
+    eligible.map((e) => e.id),
+    (pinnedFeeds ?? []) as Array<{ matched_payment_id: string | null; review_metadata?: unknown }>,
+  )
+  if (suppressed.length > 0) {
+    const held = new Set(suppressed)
+    for (let i = eligible.length - 1; i >= 0; i--) {
+      if (held.has(eligible[i].id)) eligible.splice(i, 1)
+    }
+    console.warn(
+      `[dunning] Holding ${suppressed.length} reminder(s): an incoming bank payment is pinned to these invoices and awaiting review.`,
+    )
+    if (eligible.length === 0) return { queued: 0, skipped: 0, considered, capped }
+  }
 
   // 2) Dedup in ONE query — drop invoices that already have a pending/processing
   //    reminder job (a re-run or overlapping cron shouldn't double-queue).

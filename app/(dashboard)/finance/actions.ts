@@ -142,9 +142,15 @@ export async function markInvoicePaid(
     }).eq('id', paymentId)
     if (markPaidErr) throw new Error(`Failed to mark payment as paid: ${markPaidErr.message}`)
 
-    // Sync to client_expenses (portal mirror)
+    // Sync to client_expenses (portal mirror). BOTH calls, status first: syncTDInvoiceStatus
+    // maps only the STATUS (and is the sole emitter of the staff "Client paid" note), which is
+    // how a mirror ended up reading Paid while still recording the full amount as unpaid —
+    // exactly what happened to the Aces invoice on 2026-07-22. syncTDInvoiceMirror is the
+    // authoritative projection of the balances.
     const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
     await syncTDInvoiceStatus(paymentId, 'Paid', today, Number(payment.total))
+    const { syncTDInvoiceMirror } = await import('@/lib/portal/td-invoice-mirror')
+    await syncTDInvoiceMirror(paymentId)
 
     // QB sync (non-blocking)
     try {
@@ -244,6 +250,20 @@ export async function deletePayment(paymentId: string): Promise<ActionResult> {
     if (!payment) throw new Error('Payment not found')
     if (payment.status === 'Paid' || payment.invoice_status === 'Paid') {
       throw new Error('Paid payments cannot be deleted — void the invoice instead.')
+    }
+
+    // ⛔ A PART-PAID INVOICE STILL HOLDS REAL BANK MONEY. The Paid check above misses it, and
+    // `payment_applications.payment_id` cascades ON DELETE — so deleting the row would destroy
+    // the record of which transaction paid what, while the freed transaction returns to the
+    // matcher at its full amount and can be credited somewhere else. Refuse and make the
+    // operator un-match first, which is the deliberate act that goes through the money path.
+    const { listConfirmedApplications } = await import('@/lib/finance/apply-payment')
+    const applied = await listConfirmedApplications(paymentId)
+    if (applied.length > 0) {
+      const total = applied.reduce((sum, a) => sum + Number(a.amount ?? 0), 0)
+      throw new Error(
+        `This invoice has ${total} of bank payments applied to it, so deleting it would lose the record of that money. Un-match the transaction${applied.length > 1 ? 's' : ''} first.`,
+      )
     }
 
     // Unlink any matched bank feeds
@@ -415,7 +435,25 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
       .eq('matched_payment_id', paymentId)
     if (feedReadErr) throw new Error(`Failed to read bank feeds: ${feedReadErr.message}`)
 
-    const { resetIds, clearIds } = partitionFeedsForUnlink(linkedFeeds ?? [])
+    // ⛔ A TRANSACTION WHOSE MONEY IS STILL RECORDED HERE MUST NOT BE SET FREE (2026-07-29,
+    // Bug-Hunter on the finished code).
+    //
+    // Voiding deliberately KEEPS `amount_paid` — it is real cash, and reactivating restores it
+    // (see resolveReactivateTarget). But the old code also returned every matched transaction
+    // to `unmatched`, so the same wire went back to the matcher at its full amount while its
+    // money was still recorded against the cancelled invoice. Settle anything else with it and
+    // one $1,000 wire is booked as $2,000 — and the per-invoice invariant still holds on both
+    // rows, so nothing detects it.
+    //
+    // So: a transaction that has a CONFIRMED application to this invoice keeps its link and its
+    // `matched` status. The money stays attributed to where it actually went, the matcher never
+    // sees it again, and a reactivate finds everything exactly as it was. To genuinely release
+    // it, un-match the invoice first — the deliberate act that reverses the money.
+    const { listConfirmedApplications } = await import('@/lib/finance/apply-payment')
+    const fundedFeedIds = new Set((await listConfirmedApplications(paymentId)).map((a) => a.feed_id))
+    const releasable = (linkedFeeds ?? []).filter((f) => !fundedFeedIds.has(f.id))
+
+    const { resetIds, clearIds } = partitionFeedsForUnlink(releasable)
 
     if (resetIds.length > 0) {
       const { error } = await supabaseAdmin.from('td_bank_feeds').update({
@@ -1122,59 +1160,141 @@ export async function syncBankFeeds(): Promise<ActionResult> {
 
 // ── Relink payment ──
 
-export async function unlinkPayment(paymentId: string): Promise<ActionResult> {
+/**
+ * Un-match an invoice from the bank transaction(s) that paid it, and put the invoice back to
+ * the state it is HONESTLY in.
+ *
+ * ⛔ WHAT THIS USED TO DO, AND WHY EACH PART WAS WRONG (rewritten 2026-07-29 after the
+ * LC Marketing → Aces mis-match).
+ *
+ *  1. **It left the money ledger untouched.** The `payment_applications` row saying "this
+ *     transaction paid this invoice" survived, so the books recorded one $1,000 wire as having
+ *     settled $2,000 across two companies — and any later attempt to match that transaction to
+ *     that invoice would report SUCCESS while moving nothing, because the leftover row looks
+ *     like proof the money is already there.
+ *  2. **It wrote `amount_paid = 0`.** Un-matching ONE transaction erased every other genuine
+ *     part-payment on the invoice — money that arrived by card or by another wire.
+ *  3. **It forced `Draft`.** The invoice had been sent to the client and chased; calling it a
+ *     draft removed a real receivable from the outstanding total and lied about the record.
+ *  4. **It reset EVERY linked transaction to `unmatched`**, resurrecting rows an operator had
+ *     deliberately ignored, and outgoing transfers that were never invoice payments — the bug
+ *     the void path had already fixed with `partitionFeedsForUnlink`.
+ *  5. **It found transactions by `matched_payment_id`.** A wire split across several invoices
+ *     stamps only the FIRST one, so invoices 2..N of a waterfall were invisible: their money
+ *     stayed credited with nothing behind it. The LEDGER is the only complete record.
+ *  6. **It left the "invoice paid" note standing** in the staff feed, and that note's dedup key
+ *     is permanent — so the invoice could never announce a genuine payment afterwards. That was
+ *     Luca's original bug report.
+ */
+export async function unlinkPayment(
+  paymentId: string,
+): Promise<ActionResult<{ warning?: string }>> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    const { listConfirmedApplications, reverseFeedApplication } = await import('@/lib/finance/apply-payment')
+    const { updateFeed } = await import('@/lib/finance/feed-write')
+    const { appendRejectedPair } = await import('@/lib/finance/feed-vocabulary')
+    const { partitionFeedsForUnlink } = await import('@/lib/billing/invoice-reactivate')
     const now = new Date().toISOString()
+    const today = now.slice(0, 10)
 
-    // Fetch current total so we can restore amount_due
     const { data: payment } = await supabaseAdmin
       .from('payments')
-      .select('total')
+      .select('id, invoice_number')
       .eq('id', paymentId)
-      .single()
+      .maybeSingle()
     if (!payment) throw new Error('Invoice not found')
 
-    // Clear bank feed match if one exists
-    // eslint-disable-next-line no-restricted-syntax -- unlink requires raw update on td_bank_feeds
-    const { error: feedUnlinkErr } = await supabaseAdmin
+    const actor = 'dashboard:unlink'
+
+    // 1. Reverse the money, one (transaction → invoice) pair at a time, each with its OWN
+    //    recorded amount. Found via the ledger, never via the feed pointer.
+    const applications = await listConfirmedApplications(paymentId)
+    const reversedFeedIds: string[] = []
+    const problems: string[] = []
+
+    for (const app of applications) {
+      const result = await reverseFeedApplication({
+        feedId: app.feed_id,
+        paymentId,
+        actor,
+        today,
+      })
+      if (result.reversed) {
+        reversedFeedIds.push(app.feed_id)
+        if (result.warning) problems.push(result.warning)
+      } else if (result.reason !== 'no_application') {
+        // A reversal that could not complete must STOP the operation. Carrying on would clear
+        // the transaction's pointer while its money is still sitting on the invoice — the
+        // orphaned state this whole rewrite exists to remove.
+        throw new Error(result.detail ?? 'The payment could not be reversed.')
+      }
+    }
+
+    // 2. Feed pointers. A CONFIRMED `matched` row returns to the queue; anything else
+    //    (ignored / outgoing / duplicate) only loses its stale pointer and KEEPS its status.
+    const { data: linkedFeeds, error: feedReadErr } = await supabaseAdmin
       .from('td_bank_feeds')
-      .update({
+      .select('id, status')
+      .eq('matched_payment_id', paymentId)
+    if (feedReadErr) throw new Error(`Failed to read bank feeds: ${feedReadErr.message}`)
+
+    const { resetIds, clearIds } = partitionFeedsForUnlink(linkedFeeds ?? [])
+
+    for (const feedId of resetIds) {
+      // Record the human's "no" on the transaction so the automatic matcher never re-proposes
+      // this pair. Without it the 15-minute sync re-credits the invoice a person just cleared.
+      const { data: existing } = await supabaseAdmin
+        .from('td_bank_feeds')
+        .select('review_metadata')
+        .eq('id', feedId)
+        .maybeSingle()
+
+      const res = await updateFeed(feedId, {
         matched_payment_id: null,
         match_confidence: null,
         matched_at: null,
         matched_by: null,
         status: 'unmatched',
-        updated_at: now,
-      })
-      .eq('matched_payment_id', paymentId)
-    if (feedUnlinkErr) throw new Error(`Failed to unlink bank feeds: ${feedUnlinkErr.message}`)
+        review_metadata: appendRejectedPair(existing?.review_metadata, {
+          payment_id: paymentId,
+          at: now,
+          by: actor,
+        }),
+      }, 'unlink-payment:reset')
+      if (!res.ok) throw new Error(`Failed to unlink bank transaction: ${res.error}`)
+    }
 
-    // Revert invoice to Draft
-    // eslint-disable-next-line no-restricted-syntax -- revert invoice status after unlink
-    const { error } = await supabaseAdmin
-      .from('payments')
-      .update({
-        invoice_status: 'Draft',
-        status: 'Pending',
-        paid_date: null,
-        amount_paid: 0,
-        amount_due: payment.total,
-        updated_at: now,
-      })
-      .eq('id', paymentId)
-    if (error) throw new Error(`Failed to revert invoice: ${error.message}`)
+    for (const feedId of clearIds) {
+      const res = await updateFeed(feedId, {
+        matched_payment_id: null,
+        match_confidence: null,
+      }, 'unlink-payment:clear-suggestion')
+      if (!res.ok) throw new Error(`Failed to clear the bank transaction's pointer: ${res.error}`)
+    }
 
-    // Sync client_expenses mirror
-    const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
-    await syncTDInvoiceStatus(paymentId, 'Draft')
+    // 3. Retire the "invoice paid" note. Soft-delete, not hard: the row is the audit trail, and
+    //    the note emitter skips deleted rows when it dedups — so retiring this one also
+    //    unblocks a correct note if the invoice is genuinely paid later.
+    if (reversedFeedIds.length > 0) {
+      const { retirePaymentReceivedNote } = await import('@/lib/portal/chat-events')
+      // No uuid here: this runs as a server action for the signed-in staff user, and
+      // `deleted_by` is a uuid column — the actor LABEL would be rejected by the database.
+      await retirePaymentReceivedNote({ paymentId })
+    }
 
     revalidatePath('/finance')
     revalidatePath('/accounts')
+
+    // The work COMPLETED; `problems` holds a partial-success warning (the money came off but a
+    // record could not be unlocked). Throwing here made safeAction report failure on a finished
+    // operation, so the UI showed a red error for work that had actually been done — and the
+    // real warning was indistinguishable from "nothing happened". Return it instead.
+    return { warning: problems.length > 0 ? problems.join(' ') : undefined }
   }, {
     action_type: 'update',
     table_name: 'payments',
     record_id: paymentId,
-    summary: `Invoice unlinked from bank payment — reverted to Draft`,
+    summary: 'Invoice un-matched from its bank transaction — money reversed, state restored',
   })
 }

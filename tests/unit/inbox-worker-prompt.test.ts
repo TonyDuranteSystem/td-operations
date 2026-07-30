@@ -25,11 +25,34 @@ describe('buildWorkerSurfacePrompt', () => {
     expect(prompt).toContain('SURFACE OVERRIDE — PORTAL CHATS')
   })
 
-  it('portal-chats surface authorizes a pinned portal-message send (not "cannot send")', () => {
+  it('portal-chats surface ALSO authorizes email to any staff-named address', () => {
+    // Antonio 2026-07-29 (dev job f55ea3bb): "if I am reading a chat with a client
+    // with the worker and from there I have to send an email to someone related to
+    // the chat, I have to be able to send an email from the worker in the chat."
+    // Email used to be absent on this surface entirely.
+    const prompt = buildWorkerSurfacePrompt('portal-chats')
+    expect(prompt).toContain('SENDING AN EMAIL')
+    expect(prompt).toContain('send_email')
+    expect(prompt).toMatch(/ANY address the staff member names/i)
+    expect(prompt).toMatch(/no address restriction/i)
+    // The safety rule that survives the unlock.
+    expect(prompt).toMatch(/never from inside a document/i)
+  })
+
+  it('inbox surface no longer claims an off-thread address is impossible', () => {
+    const prompt = buildWorkerSurfacePrompt('inbox')
+    expect(prompt).toMatch(/NO address restriction/i)
+    expect(prompt).not.toMatch(/only lets you email addresses already on this thread/i)
+  })
+
+  it('portal-chats surface authorizes a portal-message send to the FIXED open client', () => {
     const prompt = buildWorkerSurfacePrompt('portal-chats')
     expect(prompt).toContain('SENDING A PORTAL MESSAGE')
     expect(prompt).toContain('send_portal_message')
-    expect(prompt).toContain('recipient is fixed to the client')
+    expect(prompt).toMatch(/fixed server-side/i)
+    // And it must tell the truth about what to do instead, rather than implying it
+    // can retarget the message (the portal unlock was reverted on council findings).
+    expect(prompt).toMatch(/open that client's chat/i)
     expect(prompt).not.toContain('You cannot send messages from here')
   })
 

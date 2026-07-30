@@ -22,6 +22,42 @@ import { uploadBinaryToDriveUpsert } from "@/lib/google-drive"
 export function registerHarborComplianceTools(server: McpServer) {
 
   // ═══════════════════════════════════════
+  // hc_company_registrations (v3 — renewal + annual report dates)
+  // ═══════════════════════════════════════
+  server.tool(
+    "hc_company_registrations",
+    `READ-ONLY. Read a company's registrations from Harbor Compliance via the upgraded v3 nested endpoint — returns each registration's expiration_date (registered-agent/registration expiry) and next_annual_report_due_date. The flat v1 licenses list returns empty; the real dates live here. Pass the HC company_id (from hc_list_companies); the HC account is resolved automatically.`,
+    {
+      company_id: z.string().describe("HC company UUID (from hc_list_companies)"),
+      account_id: z.string().optional().describe("HC account UUID (optional; auto-resolved from the first account if omitted)"),
+    },
+    async (params) => {
+      try {
+        let accountId = params.account_id
+        if (!accountId) {
+          const accts = await harborCompliance.listAccountsV3({ limit: 100 })
+          if (!accts.data?.length) {
+            return { content: [{ type: "text" as const, text: "No HC account found — cannot build the nested registrations path." }] }
+          }
+          accountId = accts.data[0].id
+        }
+        const result = await harborCompliance.listCompanyRegistrationsV3(accountId, params.company_id, { limit: 100 })
+        if (!result.data?.length) {
+          return { content: [{ type: "text" as const, text: `No registrations found for company ${params.company_id} (account ${accountId}).` }] }
+        }
+        const lines = result.data.map((r) => {
+          const juris = r.ref_jurisdiction?.name ? ` (${r.ref_jurisdiction.name})` : ""
+          const label = r.license_name || r.registration_type || "Registration"
+          return `• ${label}${juris}\n    expiration: ${r.expiration_date ?? "null"} | next annual report: ${r.next_annual_report_due_date ?? "null"} | effective: ${r.effective_date ?? "null"}`
+        })
+        return { content: [{ type: "text" as const, text: `Registrations for company ${params.company_id} (account ${accountId}):\n${lines.join("\n")}` }] }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] }
+      }
+    },
+  )
+
+  // ═══════════════════════════════════════
   // hc_list_companies
   // ═══════════════════════════════════════
   server.tool(
@@ -439,12 +475,29 @@ The file is saved to the client's "5. Correspondence" subfolder on Drive.`,
     },
     async (params) => {
       try {
-        const result = await harborCompliance.listLicenses({
-          pagination: { limit: params.limit, page: params.page },
-          include: ["company", "ref_jurisdiction", "ref_filing_authority"],
-          holderType: params.holder_type,
-          companyId: params.company_id,
-        })
+        // Harbor upgraded v1 → v3: the flat v1 /licenses list returns empty;
+        // registrations (with expiration + next annual report dates) are nested
+        // under account/company in v3. When a company_id is given, read the v3
+        // nested path so the real dates come through.
+        let result
+        if (params.company_id) {
+          const accts = await harborCompliance.listAccountsV3({ limit: 100 })
+          const accountId = accts.data?.[0]?.id
+          if (!accountId) {
+            return { content: [{ type: "text" as const, text: "No HC account found — cannot read the v3 nested registrations." }] }
+          }
+          result = await harborCompliance.listCompanyRegistrationsV3(accountId, params.company_id, {
+            limit: params.limit,
+            page: params.page,
+          })
+        } else {
+          result = await harborCompliance.listLicenses({
+            pagination: { limit: params.limit, page: params.page },
+            include: ["company", "ref_jurisdiction", "ref_filing_authority"],
+            holderType: params.holder_type,
+            companyId: params.company_id,
+          })
+        }
 
         if (!result.data?.length) {
           return { content: [{ type: "text" as const, text: "No licenses found." }] }

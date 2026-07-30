@@ -35,14 +35,14 @@ async function main() {
   const rails = await buildSidebarSendRails(clientKey)
   const clientCardSuffix = await buildClientCardSuffix(clientKey)
   console.log(`Client: ${rails.clientName}`)
-  console.log(`Addresses the assistant can reach: ${rails.email.pinnedEmailRecipients?.length ?? 0}\n`)
+  console.log(`Addresses the assistant can reach: ${rails.email.emailConfirmExempt?.length ?? 0}\n`)
 
   for (let i = 0; i < PROMPTS.length; i++) {
     const prompt = PROMPTS[i]
     console.log(`${"─".repeat(70)}\n[${i + 1}] STAFF: ${prompt}\n`)
     const res = await callWorker(prompt, {
       systemPromptOverride: buildWorkerSurfacePrompt("dashboard", {
-        canSendEmail: rails.email.enableEmailSend === true && (rails.email.pinnedEmailRecipients?.length ?? 0) > 0,
+        canSendEmail: rails.email.enableEmailSend === true && (rails.email.emailConfirmExempt?.length ?? 0) > 0,
         canSendPortal: (rails.portal as any)?.enableSlackSend === true,
         clientName: rails.clientName,
         canQueueApprovals: workerActionsEnabled(),

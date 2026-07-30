@@ -477,7 +477,10 @@ describe("processSlackEvent", () => {
       enableDbRead: true,
       enableThreadRecall: true,
       enableWebSearch: true,
-      enableEmailSend: true,
+      // EMAIL RAIL OFF on this surface (2026-07-29): every email must be
+      // confirmed on a card and Slack has none to render, so carrying the rail
+      // would mean drafting, promising, then refusing at the final step.
+      enableEmailSend: false,
       enableCallReads: true,
       enableCrmNotes: true,
       enableDocReads: true,

@@ -1178,73 +1178,40 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   // (app/api/cron/{ra-renewal-check,annual-report-check}/route.ts).
   if (account_id) {
     try {
+      // Single source of truth for the initial fills (plan c2d97552 B1/B2c):
+      // lib/operations/renewal-dates.ts. Same null-only semantics as before,
+      // now also deriving ra_renewal_date from the RA-change anniversary
+      // (ra_switch_date || client_since, matching billing's start-date chain) —
+      // this path historically never set it, leaving onboarded clients
+      // invisible to the compliance calendar.
       // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-      const { data: currentDates, error: readErr } = await supabaseAdmin
+      const { data: acct, error: readErr } = await supabaseAdmin
         .from("accounts")
-        .select("cmra_renewal_date, annual_report_due_date")
+        .select("ra_renewal_date, cmra_renewal_date, annual_report_due_date, ra_switch_date, client_since, formation_date, state_of_formation")
         .eq("id", account_id)
         .single()
 
       if (readErr) {
         result.steps.push(step("renewal_dates", "error", readErr.message))
       } else {
-        const renewalUpdates: Record<string, unknown> = {}
-        const skipped: string[] = []
-        const currentYear = new Date().getFullYear()
-
-        // CMRA renewal = Dec 31 current year (lease expiry)
-        if (currentDates?.cmra_renewal_date == null) {
-          renewalUpdates.cmra_renewal_date = `${currentYear}-12-31`
-        } else {
-          skipped.push(`cmra_renewal_date=${currentDates.cmra_renewal_date} preserved`)
-        }
-
-        // Annual Report due date — based on state
-        const stateUpper = (state_of_formation || "").toUpperCase().replace("NEW MEXICO", "NM").replace("WYOMING", "WY").replace("FLORIDA", "FL").replace("DELAWARE", "DE")
-        const formationDate = String(submitted.formation_date || "")
-        const arAlreadySet = currentDates?.annual_report_due_date != null
-
-        if (stateUpper === "NM") {
-          // New Mexico: NO annual report — never set
-        } else if (arAlreadySet) {
-          skipped.push(`annual_report_due_date=${currentDates.annual_report_due_date} preserved`)
-        } else if (stateUpper === "FL") {
-          // Florida: May 1 every year
-          renewalUpdates.annual_report_due_date = `${currentYear + 1}-05-01`
-        } else if (stateUpper === "DE") {
-          // Delaware: June 1 for LLCs, March 1 for Corps
-          renewalUpdates.annual_report_due_date = `${currentYear + 1}-06-01`
-        } else if (stateUpper === "WY" && formationDate) {
-          // Wyoming: 1st day of anniversary month
-          const month = formationDate.slice(5, 7) // MM from YYYY-MM-DD
-          renewalUpdates.annual_report_due_date = `${currentYear + 1}-${month}-01`
-        }
-
-        const writes = Object.entries(renewalUpdates)
-          .map(([k, v]) => `${k}=${v}`)
-          .join(", ")
-
-        if (Object.keys(renewalUpdates).length > 0) {
-          renewalUpdates.updated_at = new Date().toISOString()
-
-          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-          const { error: updErr } = await supabaseAdmin
-            .from("accounts")
-            .update(renewalUpdates)
-            .eq("id", account_id)
-
-          if (updErr) {
-            result.steps.push(step("renewal_dates", "error", updErr.message))
-          } else {
-            const detail = [writes, skipped.join(", ")].filter(Boolean).join(" | ") || "Set (NM has no AR)"
-            result.steps.push(step("renewal_dates", "ok", detail))
-          }
-        } else {
-          const detail = skipped.length > 0
-            ? `No writes — ${skipped.join(", ")}`
-            : "No writes (NM has no AR)"
-          result.steps.push(step("renewal_dates", "ok", detail))
-        }
+        const { deriveRenewalDates, applyRenewalDateFills } = await import("@/lib/operations/renewal-dates")
+        const fills = deriveRenewalDates({
+          intake: "onboarding",
+          formation_date: String(submitted.formation_date || "") || acct?.formation_date || null,
+          ra_switch_date: acct?.ra_switch_date ?? null,
+          client_since: acct?.client_since ?? null,
+          state_of_formation: state_of_formation || acct?.state_of_formation || null,
+          existing: {
+            ra_renewal_date: acct?.ra_renewal_date ?? null,
+            annual_report_due_date: acct?.annual_report_due_date ?? null,
+            cmra_renewal_date: acct?.cmra_renewal_date ?? null,
+          },
+        })
+        const applied = await applyRenewalDateFills(account_id, fills, {
+          state: state_of_formation || acct?.state_of_formation,
+          actor: "onboarding-setup",
+        })
+        result.steps.push(step("renewal_dates", "ok", applied.length ? applied.join(", ") : "No writes (dates already set, or NM has no AR)"))
       }
     } catch (e) {
       result.steps.push(step("renewal_dates", "error", e instanceof Error ? e.message : String(e)))

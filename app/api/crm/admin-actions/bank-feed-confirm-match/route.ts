@@ -9,6 +9,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { manualMatch } from "@/lib/bank-feed-matcher"
+import { supabaseAdmin } from "@/lib/supabase-admin"
+import { readContestedCandidates } from "@/lib/finance/feed-vocabulary"
 
 export async function POST(req: NextRequest) {
   const supabase = createClient()
@@ -18,9 +20,39 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => ({}))
-  const { feed_id, payment_id } = body as { feed_id?: string; payment_id?: string }
+  const { feed_id, payment_id, acknowledge_contested } = body as {
+    feed_id?: string
+    payment_id?: string
+    acknowledge_contested?: boolean
+  }
   if (!feed_id || !payment_id) {
     return NextResponse.json({ error: "Missing feed_id or payment_id" }, { status: 400 })
+  }
+
+  // ⛔ RE-CHECK CONTESTED ON THE SERVER (2026-07-29).
+  // When several invoices fitted a payment equally well, the matcher parks the transaction and
+  // pins the top-scoring one — which in the incident that produced this guard was the WRONG
+  // company. This endpoint takes a payment_id straight from the browser and applies the full
+  // amount, so a stale page, a mis-tap on a phone, or a caller that never rendered the
+  // contested block would settle the pinned candidate in one request. Refuse unless the caller
+  // states explicitly that it knows the row is contested.
+  const { data: feed } = await supabaseAdmin
+    .from("td_bank_feeds")
+    .select("review_metadata")
+    .eq("id", feed_id)
+    .maybeSingle()
+
+  const contested = readContestedCandidates(feed?.review_metadata)
+  if (contested.length > 1 && !acknowledge_contested) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          "More than one invoice fits this payment, so it cannot be confirmed with one click. Open the transaction and choose the right invoice deliberately.",
+        contested,
+      },
+      { status: 409 },
+    )
   }
 
   try {

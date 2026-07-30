@@ -81,6 +81,13 @@ export interface EmitResult {
   error?: string
 }
 
+/**
+ * `portal_messages.sender_id` and `deleted_by` are NOT NULL / uuid columns, so a system
+ * author needs a deterministic uuid rather than a label. The portal-chats UI renders
+ * `sender_type='system'` distinctly regardless of the id.
+ */
+const SYSTEM_ACTOR_ID = "00000000-0000-0000-0000-000000000000"
+
 const MARKER_PREFIX = "<!-- chat-event:"
 const MARKER_SUFFIX = " -->"
 
@@ -120,11 +127,6 @@ export async function emitClientChatEvent(
     return { emitted: false, reason: "already_emitted", message_id: existing.id as string }
   }
 
-  // System sender_id placeholder — portal_messages.sender_id is NOT NULL so
-  // we use a deterministic UUID for the system author. The portal-chats UI
-  // renders sender_type='system' with a distinct style regardless of sender_id.
-  const SYSTEM_SENDER_ID = "00000000-0000-0000-0000-000000000000"
-
   const messageBody = `${params.message}\n\n${marker}`
 
   const { data: inserted, error: insertErr } = await supabaseAdmin
@@ -133,7 +135,7 @@ export async function emitClientChatEvent(
       contact_id: params.contact_id ?? null,
       account_id: params.account_id ?? null,
       sender_type: "system",
-      sender_id: SYSTEM_SENDER_ID,
+      sender_id: SYSTEM_ACTOR_ID,
       message: messageBody,
       // topic intentionally null: the What's New panel derives the category
       // label from the event_key encoded in the marker (kind=... / workflow_slug),
@@ -203,6 +205,62 @@ export async function emitPaymentReceivedEvent(params: {
       err instanceof Error ? err.message : String(err),
     )
     return { emitted: false, reason: "insert_failed", error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * Retire the "Client paid …" note for an invoice whose payment has been reversed.
+ *
+ * ⛔ THIS IS LUCA'S ORIGINAL BUG REPORT (2026-07-22). A $1,000 wire was auto-credited to the
+ * wrong company; he corrected it by hand, and the staff What's New feed went on saying that
+ * company's invoice had been paid. Nothing in the codebase un-emitted a chat-event note.
+ *
+ * SOFT-delete, deliberately, for two reasons:
+ *  1. The row is the audit trail — what was announced, and when.
+ *  2. The dedup pre-check in `emitClientChatEvent` filters `deleted_at IS NULL`, so retiring
+ *     this note also UNBLOCKS a correct one later. The marker
+ *     (`kind=payment_received src=payments:<id>`) is permanent otherwise, which is why the
+ *     genuine payment that arrived hours later produced no note at all.
+ *
+ * Non-fatal: a reversal must never fail because a note could not be tidied up.
+ */
+export async function retirePaymentReceivedNote(params: {
+  paymentId: string
+  /**
+   * The staff user's uuid, when one is known. ⚠️ `deleted_by` is a UUID COLUMN — passing an
+   * actor label like "dashboard:unlink" makes Postgres reject the whole update, and since
+   * supabase-js RETURNS errors rather than throwing, the note would silently stay visible.
+   * Absent ⇒ recorded as the system actor.
+   */
+  deletedBy?: string | null
+}): Promise<{ retired: number }> {
+  const marker = buildMarker({ table: "payments", id: params.paymentId }, "payment_received")
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("portal_messages")
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: params.deletedBy ?? SYSTEM_ACTOR_ID,
+      })
+      .eq("sender_type", "system")
+      .like("message", `%${marker}%`)
+      .is("deleted_at", null)
+      .select("id")
+
+    if (error) {
+      console.error(
+        `[retirePaymentReceivedNote] could not retire the paid note for ${params.paymentId}:`,
+        error.message,
+      )
+      return { retired: 0 }
+    }
+    return { retired: (data ?? []).length }
+  } catch (err) {
+    console.error(
+      `[retirePaymentReceivedNote] non-fatal for ${params.paymentId}:`,
+      err instanceof Error ? err.message : String(err),
+    )
+    return { retired: 0 }
   }
 }
 
