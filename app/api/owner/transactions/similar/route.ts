@@ -3,7 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isAdmin } from '@/lib/auth'
 import { NextResponse } from 'next/server'
 import { TD_ENTITY_ID } from '@/lib/owner-finance'
-import { isSimilarVendor, normalizeVendorKey } from '@/lib/owner-vendor-match'
+import { isSimilarVendor, normalizeVendorKey, vendorIdentity } from '@/lib/owner-vendor-match'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,7 +35,10 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })
   }
 
-  const targetKey = target.counterparty ?? target.description
+  // Vendor IDENTITY, not raw counterparty: Mercury puts the SENDER (our own company)
+  // in the counterparty of outgoing payments — raw matching grouped a $2,500 vendor
+  // payment with the own-account transfers (Antonio's live catch).
+  const targetKey = vendorIdentity(target.counterparty, target.description)
 
   const CANDIDATE_LIMIT = 2000
   const { data: candidates, error } = await supabaseAdmin
@@ -51,14 +54,14 @@ export async function GET(req: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   const similar = (candidates ?? []).filter(c =>
-    isSimilarVendor(targetKey, c.counterparty ?? c.description)
+    isSimilarVendor(targetKey, vendorIdentity(c.counterparty, c.description))
   )
 
   // The "Always do this" rule pattern must cover the WHOLE matched set, not just the
   // wording of whichever row the modal happened to open on. Similarity is (whole-token)
   // containment, so the SHORTEST normalized key in the set is the most general member —
   // a contains-rule saved with it matches every current member and future arrivals alike.
-  const keys = [targetKey, ...similar.map(s => s.counterparty ?? s.description)]
+  const keys = [targetKey, ...similar.map(s => vendorIdentity(s.counterparty, s.description))]
     .map(k => normalizeVendorKey(k))
     .filter(Boolean)
   const suggestedPattern = keys.sort((a, b) => a.length - b.length)[0] ?? ''

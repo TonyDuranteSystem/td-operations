@@ -139,10 +139,12 @@ describe('normalizeVendorKey / isSimilarVendor', () => {
     expect(isSimilarVendor('CAFFÈ', 'CAFFO DISTILLERIA')).toBe(false)
   })
 
-  it('contains-rules match across bank wordings after normalization', () => {
-    const tx = makeTx({ counterparty: 'STRIPE; TRANSFER; TONY DURANTE LLC; Merchant name: STRIPE' })
-    const rule = makeRule({ counterparty_pattern: 'stripe transfer', match_type: 'contains', category: 'transfer', subcategory: 'stripe_payout' })
-    expect(applyVendorRules([tx], [rule])[0].category).toBe('transfer')
+  it('contains-rules match across bank wordings — the merchant marker IS the identity, so a "stripe" rule covers both wordings', () => {
+    const mercury = makeTx({ counterparty: 'STRIPE; TRANSFER; TONY DURANTE LLC; Merchant name: STRIPE' })
+    const relay = makeTx({ counterparty: 'STRIPE - TRANSFER' })
+    const rule = makeRule({ counterparty_pattern: 'stripe', match_type: 'contains', category: 'transfer', subcategory: 'stripe_payout' })
+    expect(applyVendorRules([mercury], [rule])[0].category).toBe('transfer')
+    expect(applyVendorRules([relay], [rule])[0].category).toBe('transfer')
   })
 
   it('contains-rules respect token boundaries — a "chase" rule never chips "purchase" rows', () => {
@@ -164,6 +166,34 @@ describe('normalizeVendorKey / isSimilarVendor', () => {
     const tx = makeTx({ counterparty: 'Anything At All' })
     const rule = makeRule({ counterparty_pattern: '&&', match_type: 'contains', category: 'expense', subcategory: 'other_expense' })
     expect(applyVendorRules([tx], [rule])[0].category).toBe('uncategorized')
+  })
+})
+
+describe('vendorIdentity (sender-noise / merchant-marker handling)', () => {
+  it("Mercury outgoing payment: counterparty is the SENDER (own company) — identity must be the merchant, not us (Antonio's live catch: $2,500 IT Infonity grouped with own transfers)", async () => {
+    const { vendorIdentity } = await import('@/lib/owner-vendor-match')
+    expect(vendorIdentity('Tony Durante LLC', 'From Tony Durante LLC; Merchant name: IT Infonity')).toBe('it infonity')
+  })
+
+  it('genuine self-transfers keep the own name and still group with each other', async () => {
+    const { vendorIdentity, isSimilarVendor } = await import('@/lib/owner-vendor-match')
+    const a = vendorIdentity('Tony Durante LLC', 'Tony Durante LLC — From Tony Durante LLC')
+    const b = vendorIdentity('Tony Durante LLC — From Tony Durante LLC', null)
+    expect(isSimilarVendor(a, b)).toBe(true)
+    expect(a).toBe('tony durante llc')
+  })
+
+  it('the IT Infonity payment must NOT match the own-transfer group', async () => {
+    const { vendorIdentity, isSimilarVendor } = await import('@/lib/owner-vendor-match')
+    const transfer = vendorIdentity('Tony Durante LLC', 'Tony Durante LLC — From Tony Durante LLC')
+    const vendorPayment = vendorIdentity('Tony Durante LLC', 'From Tony Durante LLC; Merchant name: IT Infonity')
+    expect(isSimilarVendor(transfer, vendorPayment)).toBe(false)
+  })
+
+  it('strips the own-entity sender suffix (incl. the Durant misspelling) so the recipient is the identity', async () => {
+    const { vendorIdentity } = await import('@/lib/owner-vendor-match')
+    expect(vendorIdentity('Olufunke Adeyemo — From Tony Durante LLC', null)).toBe('olufunke adeyemo')
+    expect(vendorIdentity('SLASH - PRIME CI; PAYMENT; TONY DURANT LLC; Merchant name: SLASH - PRIME CI', null)).toBe('slash prime ci')
   })
 })
 

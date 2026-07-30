@@ -42,6 +42,50 @@ export function isSimilarVendor(a: string | null | undefined, b: string | null |
   return shorter.length >= 4 && containsAsTokens(longer, shorter)
 }
 
+/** The owner entity's own name in bank wordings — SENDER noise, not vendor identity.
+ * Mercury puts the SENDER in the counterparty field for outgoing payments and hides the
+ * real recipient in "Merchant name: X" — by counterparty alone, a $2,500 payment to a
+ * vendor looked IDENTICAL to an own-account transfer (Antonio's live catch, 2026-07-29).
+ * Includes the 'Durant' misspelling that appears in real Mercury data. Multi-entity
+ * later: derive from the entity record instead of a constant. */
+const OWN_ENTITY_KEYS = ["tony durante llc", "tony durant llc"]
+
+/**
+ * The string that IDENTIFIES the vendor for matching/grouping:
+ * 1. a "Merchant name: X" marker in the description wins — it is the bank's structured
+ *    merchant field, flattened into text at projection time;
+ * 2. else the counterparty (fallback description) with the own-entity name stripped —
+ *    "Acme — From Tony Durante LLC" must group by "acme", never by the sender;
+ * 3. a string that consists ONLY of the own name (a genuine self-transfer) keeps it,
+ *    so own-account transfers still group with each other.
+ */
+export function vendorIdentity(counterparty: string | null | undefined, description: string | null | undefined): string {
+  // The marker can sit in EITHER field — Mercury flattens it into whichever the
+  // projection kept.
+  const merchant = ((description ?? "").match(/merchant name:\s*([^;|]+)/i) ?? (counterparty ?? "").match(/merchant name:\s*([^;|]+)/i))?.[1]?.trim()
+  const base = counterparty || description || ""
+  let key = normalizeVendorKey(merchant || base)
+  if (merchant && OWN_ENTITY_KEYS.includes(key)) {
+    // The "merchant" is the own name too (self-transfer worded with a marker) — keep it.
+    return key
+  }
+  if (!merchant) {
+    // Strip EVERY occurrence of the own name (self-transfer wordings repeat it), the
+    // Mercury transport boilerplate, and dangling "from" sender markers — all wiring,
+    // none of it vendor identity.
+    for (const own of OWN_ENTITY_KEYS) {
+      while (key !== own && ` ${key} `.includes(` ${own} `)) {
+        key = ` ${key} `.replace(` ${own} `, " ").trim().replace(/\s+/g, " ")
+      }
+    }
+    key = ` ${key} `.replace(" via mercury com send money transaction initiated on mercury ", " ").trim().replace(/\s+/g, " ")
+    key = key.replace(/\bfrom$/, "").replace(/^from\b/, "").trim()
+    // Stripped to nothing = the string was ONLY own-name + wiring: a self-transfer.
+    if (!key) key = OWN_ENTITY_KEYS[0]
+  }
+  return key
+}
+
 export interface VendorRule {
   id: string
   counterparty_pattern: string
@@ -72,6 +116,9 @@ export function applyVendorRulesTo<T extends {
     if (tx.category !== 'uncategorized') return tx
 
     const counterparty = (tx.counterparty ?? tx.description ?? '').toLowerCase()
+    // Rules match against the vendor IDENTITY (merchant marker wins, own-entity sender
+    // noise stripped) — a "tony durante" rule must never chip every outgoing payment.
+    const identity = vendorIdentity(tx.counterparty, tx.description)
     const matched = ordered.find(rule => {
       const pattern = rule.counterparty_pattern.toLowerCase()
       if (rule.match_type === 'exact') return counterparty === pattern
@@ -81,7 +128,7 @@ export function applyVendorRulesTo<T extends {
       // normalized pattern would match everything — treat it as matching nothing.
       if (rule.match_type === 'contains') {
         const np = normalizeVendorKey(pattern)
-        return np !== '' && containsAsTokens(normalizeVendorKey(counterparty), np)
+        return np !== '' && containsAsTokens(identity, np)
       }
       if (rule.match_type === 'regex') {
         try { return new RegExp(pattern, 'i').test(counterparty) } catch { return false }
