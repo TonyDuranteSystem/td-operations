@@ -171,6 +171,10 @@ describe('validateTeamCard', () => {
   it('accepts a good color', () => {
     expect(validateTeamCard({ kind: 'invoice', title: 'INV-000123', color: '#10b981' })).toBeNull()
   })
+  it("NOTE: validateTeamCard accepting this kind is NOT authorization — the message POST refuses a client-posted email_confirm card (see the route). The card's guarantee is 'what you read is what is sent', which only holds if the server wrote it.", () => {
+    expect(true).toBe(true)
+  })
+
   it("accepts the 'email_confirm' card — the confirm step Team Chat renders", () => {
     // Antonio 2026-07-29: "I want the confirm step everywhere." If the validator
     // ever stops accepting this kind, the @claude trigger's card write is rejected

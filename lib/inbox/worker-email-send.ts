@@ -95,6 +95,27 @@ function mb(bytes: number): string {
  * worker relays; the actual payload is in the DB row for the confirm endpoint.
  */
 export async function prepareWorkerEmailSend(input: PrepareInput): Promise<PrepareResult> {
+  // SUPERSEDE ANY EARLIER PENDING DRAFT ON THIS CONVERSATION.
+  //
+  // Drafting is iterative: "email Smit we'll file by Friday" … "no, say we need
+  // his numbers first". Each pass freezes a row. On the panels the old card is
+  // ephemeral, but in Team Chat it is a permanent chat message that stays amber
+  // and clickable — so the superseded email could be dispatched half an hour
+  // later, contradicting the one that was actually sent. Cancelling the older
+  // rows here means the newest frozen payload is the only one that can leave, on
+  // every surface. A card for a cancelled row now clicks through to an honest
+  // "already cancelled" instead of a second real email.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabaseAdmin as any)
+      .from("worker_prepared_sends")
+      .update({ status: "cancelled" })
+      .eq("thread_uuid", input.threadUuid)
+      .eq("status", "pending")
+  } catch {
+    // Best-effort: failing to supersede must never block preparing the new draft.
+  }
+
   // Recipient must be on the thread (defence in depth — the executor also checks).
   const verdict = input.proposedRecipient
     ? ({ ok: true } as const)
