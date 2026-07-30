@@ -359,28 +359,59 @@ export async function filterFeedsCoveredByStatements(
   const dates = feeds.map(f => f.transaction_date).filter(Boolean).sort()
   if (dates.length === 0) return { kept: feeds, statementCovered: 0 }
 
-  const counts = new Map<string, number>()
+  // Coverage origins per (bank | date | signed amount | currency): 'stmt' for
+  // statement-imported rows, the FEED SOURCE for swept feed rows. Origin matters:
+  // Mercury runs through TWO channels (native API + Plaid), and the SAME transaction
+  // arrives once per channel — the second channel's copy must be skipped (Antonio's
+  // books held 6 such duplicate pairs). But two genuine same-day same-amount twins
+  // from the SAME channel are distinct transactions and must both book — so a feed is
+  // covered only by a books twin whose origin DIFFERS from its own source.
+  const origins = new Map<string, string[]>()
   const PAGE = 1000
+  type BooksSlim = { bank_name: string | null; transaction_date: string; amount: number | string; currency: string | null; transaction_ref: string }
+  const booksRows: BooksSlim[] = []
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabaseAdmin
       .from("td_books_transactions")
-      .select("bank_name, transaction_date, amount, currency")
+      .select("bank_name, transaction_date, amount, currency, transaction_ref")
       .eq("entity_id", TD_ENTITY_ID)
-      .like("transaction_ref", "stmt:%")
       .gte("transaction_date", dates[0])
       .lte("transaction_date", dates[dates.length - 1])
       .order("id", { ascending: true })
       .range(from, from + PAGE - 1)
     // Fail OPEN here would double-book; fail CLOSED (skip everything) would silently
     // starve the books — so surface the error to the caller instead.
-    if (error) throw new Error(`statement-coverage check: ${error.message}`)
-    for (const b of data ?? []) {
-      const key = `${b.bank_name}|${b.transaction_date}|${Number(b.amount).toFixed(2)}|${(b.currency ?? "USD").toUpperCase()}`
-      counts.set(key, (counts.get(key) ?? 0) + 1)
-    }
+    if (error) throw new Error(`books-coverage check: ${error.message}`)
+    booksRows.push(...((data ?? []) as BooksSlim[]))
     if ((data ?? []).length < PAGE) break
   }
-  if (counts.size === 0) return { kept: feeds, statementCovered: 0 }
+  if (booksRows.length === 0) return { kept: feeds, statementCovered: 0 }
+
+  // Resolve the origin SOURCE of feed-projected books rows (their ref carries the id).
+  const feedIds = booksRows
+    .map(b => b.transaction_ref.startsWith("feed:") ? b.transaction_ref.slice(5) : null)
+    .filter((v): v is string => v !== null)
+  const sourceById = new Map<string, string>()
+  for (let i = 0; i < feedIds.length; i += 200) {
+    const { data, error } = await supabaseAdmin
+      .from("td_bank_feeds")
+      .select("id, source")
+      .in("id", feedIds.slice(i, i + 200))
+    if (error) throw new Error(`books-coverage source lookup: ${error.message}`)
+    for (const f of data ?? []) sourceById.set(String(f.id), f.source ?? "unknown")
+  }
+
+  for (const b of booksRows) {
+    const origin = b.transaction_ref.startsWith("stmt:")
+      ? "stmt"
+      : b.transaction_ref.startsWith("feed:")
+        ? (sourceById.get(b.transaction_ref.slice(5)) ?? "unknown")
+        : "manual"
+    const key = `${b.bank_name}|${b.transaction_date}|${Number(b.amount).toFixed(2)}|${(b.currency ?? "USD").toUpperCase()}`
+    const list = origins.get(key) ?? []
+    list.push(origin)
+    origins.set(key, list)
+  }
 
   const kept: ProjectableFeed[] = []
   let statementCovered = 0
@@ -389,14 +420,21 @@ export async function filterFeedsCoveredByStatements(
     const abs = Math.abs(Number(feed.amount))
     const currency = (feed.currency ?? "USD").toUpperCase()
     const signs = feed.status === "ignored" ? [abs, -abs] : [feed.status === "outgoing" ? -abs : abs]
-    const hit = signs.map(s => `${bank}|${feed.transaction_date}|${s.toFixed(2)}|${currency}`)
-      .find(k => (counts.get(k) ?? 0) > 0)
-    if (hit) {
-      counts.set(hit, (counts.get(hit) ?? 0) - 1)
-      statementCovered++
-    } else {
-      kept.push(feed)
+    let consumed = false
+    for (const s of signs) {
+      const key = `${bank}|${feed.transaction_date}|${s.toFixed(2)}|${currency}`
+      const list = origins.get(key)
+      if (!list || list.length === 0) continue
+      // Covered only by a DIFFERENT-origin twin (statement, manual, or another channel).
+      const idx = list.findIndex(o => o !== (feed.source ?? "unknown"))
+      if (idx >= 0) {
+        list.splice(idx, 1)
+        consumed = true
+        break
+      }
     }
+    if (consumed) statementCovered++
+    else kept.push(feed)
   }
   return { kept, statementCovered }
 }
@@ -414,10 +452,20 @@ export async function projectFeedsToOwnerLedger(
 
   const rows: OwnerLedgerRow[] = []
   const markable: string[] = []
+  // IN-BATCH cross-channel dedup: the books check above only sees rows ALREADY in the
+  // books — two channels' copies of the same transaction arriving in ONE batch would
+  // both pass it. Same key from a DIFFERENT source in this batch = the same money;
+  // same source = genuine twins, both book.
+  const batchSeen = new Map<string, string[]>()
   for (const feed of projectable) {
     if (!isOwnerLedgerFeed(feed, opts.openInvoices ?? [])) continue
     const row = buildOwnerLedgerRow(feed)
     if (!row) continue
+    const batchKey = `${row.bank_name}|${row.transaction_date}|${Number(row.amount).toFixed(2)}|${row.currency}`
+    const seenSources = batchSeen.get(batchKey) ?? []
+    if (seenSources.some(s => s !== (feed.source ?? "unknown"))) continue
+    seenSources.push(feed.source ?? "unknown")
+    batchSeen.set(batchKey, seenSources)
     rows.push(row)
     // Never re-label a settled feed: `matched` carries the link to the invoice it paid, and
     // the 1-invoice-many-feeds guard keys on it. Copy it to the owner's books, but leave the
