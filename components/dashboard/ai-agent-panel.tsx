@@ -322,6 +322,10 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
       // Tag BOTH sides of the exchange with the stored turn id, so the message can
       // be edited or rewound immediately — not only after a reload.
       setPreparedSend(data.preparedSend ?? null)
+      // Each card starts from the default sender. Carrying a previous card's
+      // "antonio" pick into the next draft is how an email goes out from the
+      // wrong address without anyone deciding it should.
+      if (data.preparedSend) setSendAs('support')
       const turnId = typeof data.messageId === 'string' ? data.messageId : undefined
       setMessages(prev => {
         const next = [...prev]
