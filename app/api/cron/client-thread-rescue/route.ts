@@ -8,7 +8,7 @@
  * GET  → DRY RUN. Reads Slack, writes nothing, reports what would be archived.
  * POST → writes the archives.
  *
- * Auth: CRON_SECRET Bearer, same as the other /api/cron routes.
+ * Auth: the deployment's cron secret, OR a signed-in admin.
  */
 
 export const dynamic = "force-dynamic"
@@ -16,17 +16,34 @@ export const dynamic = "force-dynamic"
 export const maxDuration = 300
 
 import { NextRequest, NextResponse } from "next/server"
+import { createClient } from "@/lib/supabase/server"
+import { isAdmin } from "@/lib/auth"
 import { rescueClientThreads } from "@/lib/ai-agent/client-thread-rescue"
 
-function isAuthorized(req: NextRequest): boolean {
-  const authHeader = req.headers.get("authorization")
+/**
+ * Either the deployment's own cron secret, or a signed-in ADMIN.
+ *
+ * The admin path exists because this is a one-shot a person runs and watches, not a
+ * schedule: the alternative is copying a production secret onto a laptop to curl it,
+ * which is a worse thing to do than letting the one person who may already read every
+ * client conversation press the button from a browser. Admin, not any staff member —
+ * it writes. /api/cron is a public prefix in middleware, so the session cookie reaches
+ * this handler and the check happens here rather than at the edge.
+ */
+async function isAuthorized(req: NextRequest): Promise<boolean> {
   const cronSecret = process.env.CRON_SECRET
-  if (!cronSecret) return false
-  return authHeader === `Bearer ${cronSecret}`
+  if (cronSecret && req.headers.get("authorization") === `Bearer ${cronSecret}`) return true
+  try {
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    return isAdmin(user)
+  } catch {
+    return false
+  }
 }
 
 async function run(req: NextRequest, dryRun: boolean): Promise<NextResponse> {
-  if (!isAuthorized(req)) {
+  if (!(await isAuthorized(req))) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 })
   }
   const limitParam = req.nextUrl.searchParams.get("limit")
