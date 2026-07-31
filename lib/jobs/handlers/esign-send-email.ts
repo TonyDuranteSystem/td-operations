@@ -63,8 +63,14 @@ export async function handleEsignSendEmail(job: Job): Promise<JobResult> {
 
   const now = ts()
   if (job.payload.reminder === true) {
-    // Reminder: keep status, just record the nudge.
-    await db.from("esign_events").insert({ envelope_id: signer.envelope_id, signer_id: signer.id, event_type: "reminder_sent" })
+    // Reminder: keep status and sent_at untouched (sent_at is the clock the
+    // quiet period is measured from — rewriting it would restart the timer on
+    // every nudge). The `reminder_sent` audit event is NOT written here: it is
+    // written by deliverReminder at the moment the reminder is decided, so it
+    // carries the source (auto vs manual) and so a retrying job can never
+    // inflate the count. The trade is deliberate — a permanently failing send
+    // is recorded as a reminder that did not arrive, which under-nudges rather
+    // than re-nudging the same client on every worker retry.
     steps.push({ name: "reminder_sent", status: "ok", timestamp: ts() })
     return { steps, summary: `Reminder sent to ${signer.email}` }
   }

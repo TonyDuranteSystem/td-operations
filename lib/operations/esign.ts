@@ -18,6 +18,7 @@ import { logAction } from "@/lib/mcp/action-log"
 import { isValidNormalizedRect } from "@/lib/esign/coordinates"
 import { flattenEsignPdf, type FlattenField, type EsignFieldType } from "@/lib/esign/flatten"
 import { appendCertificatePage, type CertificateSigner } from "@/lib/esign/certificate"
+import { DEFAULT_EXPIRY_DAYS } from "@/lib/esign/expiry"
 
 const SOURCE_BUCKET = "signature-requests"
 const SIGNED_BUCKET = "signed-documents"
@@ -76,7 +77,7 @@ export interface CreateEsignEnvelopeParams {
    *  API route passes the request origin on preview/sandbox so QA links stay on
    *  the same deployment instead of pointing at production. */
   baseUrl?: string | null
-  /** Envelope expiry window in days (default 14). */
+  /** Envelope expiry window in days (default DEFAULT_EXPIRY_DAYS = 30). */
   expires_in_days?: number
 }
 
@@ -111,7 +112,7 @@ export async function createEsignEnvelope(
     created_by_contact_id = null,
     service_delivery_id = null,
     baseUrl = null,
-    expires_in_days = 14,
+    expires_in_days = DEFAULT_EXPIRY_DAYS,
   } = params
   const linkBase = baseUrl || APP_BASE_URL
 
@@ -155,7 +156,7 @@ export async function createEsignEnvelope(
       routing_order,
       status: "draft",
       total_signers: signers.length,
-      expires_at: new Date(Date.now() + (expires_in_days ?? 14) * 86400000).toISOString(),
+      expires_at: new Date(Date.now() + (expires_in_days ?? DEFAULT_EXPIRY_DAYS) * 86400000).toISOString(),
     } as never)
     .select("id, token, access_code")
     .single()

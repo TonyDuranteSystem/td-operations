@@ -3,8 +3,12 @@ import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { describeExpiry } from "@/lib/esign/expiry"
 
 export const dynamic = "force-dynamic"
+
+/** Only an in-flight document has a deadline worth showing. */
+const ACTIVE_STATUSES = ["sent", "in_progress"]
 
 const STATUS_STYLE: Record<string, string> = {
   draft: "bg-zinc-100 text-zinc-600",
@@ -25,7 +29,7 @@ export default async function EsignLandingPage() {
   const db = supabaseAdmin as any
   const { data: envelopes } = await db
     .from("esign_envelopes")
-    .select("id, document_name, status, total_signers, signed_count, created_at")
+    .select("id, document_name, status, total_signers, signed_count, created_at, expires_at")
     .eq("origin", "staff")
     .order("created_at", { ascending: false })
     .limit(50)
@@ -57,6 +61,7 @@ export default async function EsignLandingPage() {
                 <th className="px-4 py-2.5">Document</th>
                 <th className="px-4 py-2.5">Status</th>
                 <th className="px-4 py-2.5">Progress</th>
+                <th className="px-4 py-2.5">Deadline</th>
                 <th className="px-4 py-2.5">Created</th>
               </tr>
             </thead>
@@ -74,6 +79,27 @@ export default async function EsignLandingPage() {
                     </span>
                   </td>
                   <td className="px-4 py-2.5 text-zinc-600">{e.signed_count}/{e.total_signers} signed</td>
+                  <td className="px-4 py-2.5">
+                    {ACTIVE_STATUSES.includes(e.status) ? (
+                      (() => {
+                        const x = describeExpiry(e.expires_at)
+                        if (x.tone === "none") return <span className="text-zinc-400">—</span>
+                        return (
+                          <span
+                            className={
+                              x.tone === "warning" || x.tone === "past"
+                                ? "font-medium text-amber-600"
+                                : "text-zinc-500"
+                            }
+                          >
+                            {x.short}
+                          </span>
+                        )
+                      })()
+                    ) : (
+                      <span className="text-zinc-400">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-2.5 text-zinc-500">{e.created_at ? new Date(e.created_at).toLocaleDateString() : ""}</td>
                 </tr>
               ))}

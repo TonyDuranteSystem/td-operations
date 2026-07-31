@@ -8,6 +8,9 @@ import { chooseLinkBase, originFromHeaders } from "@/lib/esign/link-base"
 import { CopyField } from "@/components/esign/copy-field"
 import { SendButton } from "@/components/esign/send-button"
 import { VoidButton } from "@/components/esign/void-button"
+import { RemindButton } from "@/components/esign/remind-button"
+import { ReopenButton } from "@/components/esign/reopen-button"
+import { describeExpiry } from "@/lib/esign/expiry"
 
 export const dynamic = "force-dynamic"
 
@@ -45,6 +48,13 @@ export default async function EsignEnvelopeDetailPage({ params }: { params: Prom
   const signerRows: any[] = signers ?? []
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const eventRows: any[] = events ?? []
+  const expiry = describeExpiry(env.expires_at)
+  // Remind is for a document already out with someone; Send is for a signer who
+  // has never been dispatched. They are mutually exclusive per signer, so both
+  // can legitimately show on a partly-dispatched envelope.
+  const isActive = ["sent", "in_progress"].includes(env.status)
+  const hasPending = signerRows.some(s => s.status === "pending")
+  const hasOutstanding = signerRows.some(s => s.status === "sent" || s.status === "viewed")
 
   return (
     <div className="space-y-6 p-6 lg:p-8">
@@ -58,6 +68,9 @@ export default async function EsignEnvelopeDetailPage({ params }: { params: Prom
             </span>
             <span>{env.signed_count}/{env.total_signers} signed</span>
             <span>created {fmt(env.created_at)}</span>
+            {expiry.tone !== "none" && (
+              <span className={expiry.tone === "warning" ? "font-medium text-amber-600" : ""}>{expiry.full}</span>
+            )}
           </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2">
@@ -73,10 +86,12 @@ export default async function EsignEnvelopeDetailPage({ params }: { params: Prom
           </div>
           {["draft", "sent", "in_progress"].includes(env.status) && (
             <div className="flex flex-col items-end gap-2">
-              {signerRows.some(s => s.status === "pending") && <SendButton envelopeId={id} />}
+              {hasPending && <SendButton envelopeId={id} />}
+              {isActive && hasOutstanding && <RemindButton envelopeId={id} />}
               <VoidButton envelopeId={id} />
             </div>
           )}
+          {env.status === "expired" && <ReopenButton envelopeId={id} />}
         </div>
       </div>
 
