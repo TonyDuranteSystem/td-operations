@@ -21,6 +21,7 @@ import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { validatePdfUpload, scanForMalware } from "@/lib/esign/upload-guard"
 import { createEsignEnvelope, type EsignFieldInput, type EsignSignerInput } from "@/lib/operations/esign"
+import { normalizeExpiryDays } from "@/lib/esign/expiry"
 
 export async function POST(req: NextRequest) {
   const supabase = createClient()
@@ -107,6 +108,10 @@ export async function POST(req: NextRequest) {
       routing_order: payload.routing_order === "parallel" ? "parallel" : "sequential",
       created_by: user?.email || "staff",
       service_delivery_id: typeof payload.service_delivery_id === "string" ? payload.service_delivery_id : null,
+      // Staff pick 7 / 14 / 30 days on the create screen. Anything else falls
+      // back to the default rather than erroring — a bad value must never stop
+      // a document being created.
+      expires_in_days: normalizeExpiryDays(payload.expires_in_days),
     })
     return NextResponse.json({ ok: true, ...result })
   } catch (err) {

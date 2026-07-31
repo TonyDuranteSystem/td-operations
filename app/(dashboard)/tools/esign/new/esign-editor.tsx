@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { PdfViewer, type PdfPageInfo } from "@/components/esign/pdf-viewer"
 import { normalizedToDomBox, clampNormalizedRect, type NormalizedRect } from "@/lib/esign/coordinates"
+import { EXPIRY_DAY_CHOICES, DEFAULT_EXPIRY_DAYS, type ExpiryDays } from "@/lib/esign/expiry"
 
 type FieldType = "signature" | "initials" | "date" | "text" | "checkbox"
 
@@ -335,6 +336,7 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
   const [tool, setTool] = useState<FieldType>("signature")
   const [fields, setFields] = useState<PlacedField[]>([])
   const [routingOrder, setRoutingOrder] = useState<"sequential" | "parallel">("sequential")
+  const [expiryDays, setExpiryDays] = useState<ExpiryDays>(DEFAULT_EXPIRY_DAYS)
   const [templates, setTemplates] = useState<Array<{ id: string; name: string }>>([])
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
   const [templateName, setTemplateName] = useState("")
@@ -526,6 +528,7 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
         document_name: documentName.trim(),
         owner_account_id: account?.id ?? null,
         routing_order: signers.length > 1 ? routingOrder : "sequential",
+        expires_in_days: expiryDays,
         signers: signers.map(s => ({ name: s.name.trim(), email: s.email.trim() || null, contact_id: s.contact_id })),
         fields: fields.map(f => ({
           field_type: f.field_type,
@@ -561,7 +564,7 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
     } finally {
       setCreating(false)
     }
-  }, [file, documentName, signers, fields, account, routingOrder])
+  }, [file, documentName, signers, fields, account, routingOrder, expiryDays])
 
   if (result) {
     const sent = result.sentResult
@@ -717,6 +720,20 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
               </div>
             </div>
           )}
+          <div className="mt-2">
+            <label className="text-[11px] text-zinc-500">Time to sign</label>
+            <div className="mt-1 inline-flex rounded-md border p-0.5">
+              {EXPIRY_DAY_CHOICES.map(d => (
+                <button
+                  key={d}
+                  onClick={() => setExpiryDays(d)}
+                  className={`rounded px-2.5 py-1 text-xs font-medium ${expiryDays === d ? "bg-blue-600 text-white" : "text-zinc-600 hover:bg-zinc-50"}`}
+                >
+                  {d} days
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         <div>
