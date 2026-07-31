@@ -84,14 +84,22 @@ export default async function EsignEnvelopeDetailPage({ params }: { params: Prom
               </a>
             )}
           </div>
-          {["draft", "sent", "in_progress"].includes(env.status) && (
+          {/* An expired document is still actionable: reopen it, or void it to
+              close it for good. Void is deliberately offered here too — expiry
+              is the one terminal state nobody chose, so staff must be able to
+              retire a lapsed document instead of leaving it in the list looking
+              like it still needs chasing. Send reminder is NOT offered on an
+              expired document: its signing link is refused while it is expired,
+              so the nudge would point the client at a door that won't open —
+              Reopen is the action, and it notifies them itself. */}
+          {["draft", "sent", "in_progress", "expired"].includes(env.status) && (
             <div className="flex flex-col items-end gap-2">
               {hasPending && <SendButton envelopeId={id} />}
               {isActive && hasOutstanding && <RemindButton envelopeId={id} />}
+              {env.status === "expired" && <ReopenButton envelopeId={id} />}
               <VoidButton envelopeId={id} />
             </div>
           )}
-          {env.status === "expired" && <ReopenButton envelopeId={id} />}
         </div>
       </div>
 

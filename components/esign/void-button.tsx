@@ -43,7 +43,9 @@ export function VoidButton({ envelopeId }: { envelopeId: string }) {
 
   return (
     <div className="flex w-72 flex-col items-end gap-1.5 rounded-md border border-red-200 bg-red-50 p-2">
-      <p className="self-start text-xs text-red-700">Void this document? Signers can no longer sign it. This cannot be undone.</p>
+      <p className="self-start text-xs text-red-700">
+        Void this document? Signers can no longer sign it, and it can no longer be reopened. This cannot be undone.
+      </p>
       <input
         value={reason}
         onChange={e => setReason(e.target.value)}
