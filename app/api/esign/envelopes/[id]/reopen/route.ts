@@ -38,7 +38,7 @@ import { insertEsignEvent, REMINDER_SOURCE_MANUAL } from "@/lib/esign/events"
 import { deliverReminder } from "@/lib/esign/deliver-reminder"
 import { decideReopen, type ReopenDecision } from "@/lib/esign/reopen-eligibility"
 import { selectReminderTargets } from "@/lib/esign/reminder-targeting"
-import { DEFAULT_EXPIRY_DAYS } from "@/lib/esign/expiry"
+import { normalizeExpiryDays } from "@/lib/esign/expiry"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -50,11 +50,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const { id } = await params
   const body = await req.json().catch(() => ({}))
-  const requestedDays = Number(body?.days)
-  const days =
-    Number.isFinite(requestedDays) && requestedDays >= 1 && requestedDays <= 365
-      ? Math.floor(requestedDays)
-      : DEFAULT_EXPIRY_DAYS
+  // Same three windows the create screen offers (7 / 14 / 30). Anything else
+  // falls back to the default rather than erroring.
+  const days = normalizeExpiryDays(body?.days)
 
   const { data: env } = await db
     .from("esign_envelopes")

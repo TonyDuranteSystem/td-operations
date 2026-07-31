@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
-import { DEFAULT_EXPIRY_DAYS } from "@/lib/esign/expiry"
+import { DEFAULT_EXPIRY_DAYS, EXPIRY_DAY_CHOICES, type ExpiryDays } from "@/lib/esign/expiry"
 
 /**
  * Staff button: put an expired document back in flight with a fresh deadline,
@@ -12,7 +12,7 @@ import { DEFAULT_EXPIRY_DAYS } from "@/lib/esign/expiry"
 export function ReopenButton({ envelopeId }: { envelopeId: string }) {
   const router = useRouter()
   const [confirming, setConfirming] = useState(false)
-  const [days, setDays] = useState(String(DEFAULT_EXPIRY_DAYS))
+  const [days, setDays] = useState<ExpiryDays>(DEFAULT_EXPIRY_DAYS)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null)
 
@@ -23,7 +23,7 @@ export function ReopenButton({ envelopeId }: { envelopeId: string }) {
       const res = await fetch(`/api/esign/envelopes/${envelopeId}/reopen`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ days: Number(days) || DEFAULT_EXPIRY_DAYS }),
+        body: JSON.stringify({ days }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || "Could not reopen this document.")
@@ -67,17 +67,20 @@ export function ReopenButton({ envelopeId }: { envelopeId: string }) {
         Give this document a new deadline and put it back in front of the signer. Anything already signed is kept, and
         the original signing link keeps working. The signer is notified.
       </p>
-      <label className="flex w-full items-center gap-2 text-xs text-zinc-600">
-        Days
-        <input
-          type="number"
-          min={1}
-          max={365}
-          value={days}
-          onChange={e => setDays(e.target.value)}
-          className="h-8 w-20 rounded border px-2 text-sm"
-        />
-      </label>
+      <div className="w-full">
+        <label className="text-[11px] text-zinc-500">Time to sign</label>
+        <div className="mt-1 inline-flex rounded-md border bg-white p-0.5">
+          {EXPIRY_DAY_CHOICES.map(d => (
+            <button
+              key={d}
+              onClick={() => setDays(d)}
+              className={`rounded px-2.5 py-1 text-xs font-medium ${days === d ? "bg-blue-600 text-white" : "text-zinc-600 hover:bg-zinc-50"}`}
+            >
+              {d} days
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="flex gap-2">
         <button
           onClick={() => { setConfirming(false); setMsg(null) }}
