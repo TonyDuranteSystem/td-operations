@@ -2,22 +2,39 @@
  * E-Sign reminders + expiry — the core run by the cron. Pure of HTTP so it's
  * unit/live-testable with an injected `now` (time-travel).
  *
- * 1. Expire non-terminal envelopes past their expires_at.
- * 2. Nudge invited-but-unsigned signers after a quiet period, capped (sequential
- *    → current signer only; parallel → all pending). Reminders go through the
- *    durable queue (no-op send in sandbox).
+ * 1. Reconcile stuck completions.
+ * 2. Expire non-terminal envelopes past their expires_at.
+ * 3. Nudge invited-but-unsigned signers after a quiet period, capped (sequential
+ *    → current signer only; parallel → all outstanding). Email signers go
+ *    through the durable queue (no-op send in sandbox); PORTAL signers get a
+ *    fresh portal notification.
+ *
+ * PORTAL SIGNERS USED TO BE SKIPPED ENTIRELY (2026-07-31 fix). The filter was
+ * `.neq("delivery_channel", "portal")`, added because a portal signer must not
+ * be emailed a direct signing link. Correct instinct, wrong remedy: most TD
+ * clients sign inside the portal, so the effect was that automatic reminders
+ * almost never fired for a real client — 3 people ever nudged in the tool's
+ * whole history. They are now reminded THROUGH the portal instead of skipped.
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { enqueueJob } from "@/lib/jobs/queue"
 import { APP_BASE_URL } from "@/lib/config"
 import { flattenEnvelopeToSignedPdf, finalizeEsignCompletion } from "@/lib/operations/esign"
+import { insertEsignEvent, REMINDER_SOURCE_AUTO } from "@/lib/esign/events"
+import { deliverReminder, loadReminderTimes, lastReopenedAt } from "@/lib/esign/deliver-reminder"
+import {
+  selectReminderTargets,
+  shouldSendAutoReminder,
+  remindersInCurrentCycle,
+  REMINDER_AFTER_HOURS,
+  MAX_REMINDERS,
+} from "@/lib/esign/reminder-targeting"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
 
-export const REMINDER_AFTER_HOURS = 48
-export const MAX_REMINDERS = 2
+// Re-exported for the existing callers/tests that import them from here.
+export { REMINDER_AFTER_HOURS, MAX_REMINDERS }
 
 export async function runEsignReminders(now: Date = new Date()): Promise<{ expired: number; reminded: number; reconciled: number }> {
   // 0. Reconcile STUCK completions FIRST (before expiry, so a fully-signed-but-
@@ -50,7 +67,7 @@ export async function runEsignReminders(now: Date = new Date()): Promise<{ expir
       .select("id")
       .maybeSingle()
     if (!claimed) continue
-    await db.from("esign_events").insert({ envelope_id: env.id, event_type: "completed", metadata: { signed_pdf_path: signedPath, via: "reconcile" } })
+    await insertEsignEvent({ envelope_id: env.id, event_type: "completed", metadata: { signed_pdf_path: signedPath, via: "reconcile" } })
     await finalizeEsignCompletion(env.id)
     reconciled++
   }
@@ -64,46 +81,49 @@ export async function runEsignReminders(now: Date = new Date()): Promise<{ expir
     .lt("expires_at", now.toISOString())
     .select("id")
   for (const e of (expired ?? []) as Array<{ id: string }>) {
-    await db.from("esign_events").insert({ envelope_id: e.id, event_type: "expired", metadata: { reason: "expired" } })
+    // insertEsignEvent, not a bare insert: this exact event was being rejected
+    // by the CHECK constraint and silently discarded for over a month.
+    await insertEsignEvent({ envelope_id: e.id, event_type: "expired", metadata: { reason: "expired" } })
   }
 
-  // 2. Reminders.
-  const cutoff = new Date(now.getTime() - REMINDER_AFTER_HOURS * 3600 * 1000)
+  // 3. Reminders — email AND portal signers.
   const { data: envs } = await db
     .from("esign_envelopes")
-    .select("id, routing_order")
+    .select("id, routing_order, document_name, owner_account_id")
     .in("status", ["sent", "in_progress"])
   let reminded = 0
-  for (const env of (envs ?? []) as Array<{ id: string; routing_order: string }>) {
+  for (const env of (envs ?? []) as Array<{
+    id: string
+    routing_order: string
+    document_name: string | null
+    owner_account_id: string | null
+  }>) {
     const { data: signers } = await db
       .from("esign_signers")
-      .select("id, email, sent_at, signing_order")
+      .select("id, name, email, contact_id, delivery_channel, sent_at, status, signing_order")
       .eq("envelope_id", env.id)
-      .in("status", ["sent", "viewed"])
-      .neq("delivery_channel", "portal")
       .order("signing_order", { ascending: true })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const list: any[] = signers ?? []
-    const candidates = env.routing_order === "sequential" ? list.slice(0, 1) : list
+    const candidates = selectReminderTargets(list, env.routing_order)
+    if (!candidates.length) continue
+
+    // A reopened envelope starts a fresh reminder cycle — otherwise the two
+    // nudges it already spent keep it silent for its whole new window.
+    const reopenedAt = await lastReopenedAt(env.id)
+    const times = await loadReminderTimes(candidates.map(s => s.id))
+
     for (const s of candidates) {
-      if (!s.email || !s.sent_at) continue
-      const { data: rems } = await db
-        .from("esign_events")
-        .select("created_at")
-        .eq("signer_id", s.id)
-        .eq("event_type", "reminder_sent")
-        .order("created_at", { ascending: false })
-      const remList = (rems ?? []) as Array<{ created_at: string }>
-      if (remList.length >= MAX_REMINDERS) continue
-      const lastTouch = remList.length ? new Date(remList[0].created_at) : new Date(s.sent_at)
-      if (lastTouch > cutoff) continue
-      await enqueueJob({
-        job_type: "esign_send_email",
-        payload: { signer_id: s.id, base_url: APP_BASE_URL, reminder: true },
-        related_entity_type: "esign_envelope",
-        related_entity_id: env.id,
+      const cycle = remindersInCurrentCycle(times.get(s.id) ?? [], reopenedAt)
+      if (!shouldSendAutoReminder({ sentAt: s.sent_at, reminderTimes: cycle, now })) continue
+      const outcome = await deliverReminder({
+        signer: s,
+        envelope: { id: env.id, document_name: env.document_name, owner_account_id: env.owner_account_id },
+        baseUrl: APP_BASE_URL,
+        source: REMINDER_SOURCE_AUTO,
+        createdBy: "cron",
       })
-      reminded++
+      if (outcome !== "undeliverable") reminded++
     }
   }
 

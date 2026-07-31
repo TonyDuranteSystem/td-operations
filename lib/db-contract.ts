@@ -37,6 +37,7 @@ import { TEAM_WORK_STATUSES } from "@/lib/team/workspace"
 import { OA_AGREEMENT_SIGNATURE_METHODS, OA_SIGNATURE_METHODS } from "@/lib/oa/signature-vocabulary"
 import { OWNER_CATEGORIES } from "@/lib/owner-finance"
 import { STAFF_NOTE_VISIBILITIES } from "@/lib/notes/staff-notes"
+import { EVENT_TYPES as ESIGN_EVENT_TYPES } from "@/lib/esign/events"
 
 /** name → `pg_get_constraintdef()` text, exactly as Postgres prints it. */
 export type ConstraintDefs = Record<string, string>
@@ -96,6 +97,13 @@ export const CONSTRAINT_CONTRACTS = [
   // A MONEY column: a category the database rejects is a books row that silently never
   // gets categorized — and 'transfer' is what keeps Stripe payouts out of the P&L.
   { table: "td_books_transactions", column: "category", constraint: "td_books_transactions_category_check", values: OWNER_CATEGORIES },
+  // Registered 2026-07-31, moved off the unaudited baseline because it had already failed in
+  // exactly the way this gate exists to catch: the code wrote event_type='expired' on every
+  // envelope expiry from 2026-06-26, the CHECK never allowed it, and supabase-js returns the
+  // rejection rather than throwing — so every call site discarded it. Production had 6 expired
+  // envelopes and 0 expiry audit rows. This is a LEGAL audit trail for signatures; a value the
+  // database rejects is an event that never happened as far as the record is concerned.
+  { table: "esign_events", column: "event_type", constraint: "esign_events_type_check", values: ESIGN_EVENT_TYPES },
 ] as const
 
 /**
@@ -211,7 +219,7 @@ export const UNAUDITED_BASELINE = new Set([
   "esign_envelopes_origin_check",
   "esign_envelopes_routing_check",
   "esign_envelopes_status_check",
-  "esign_events_type_check",
+  // esign_events_type_check left the baseline on 2026-07-31 — it is now a real contract above.
   "esign_fields_type_check",
   "esign_signers_delivery_channel_check",
   "esign_signers_status_check",
