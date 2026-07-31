@@ -29,7 +29,7 @@
   "generated_from": "production (Supabase ref ydzipybqeebtpcvsbtvs)",
   "generated_at": "2026-07-31",
   "constraint_count": 203,
-  "checksum_md5": "9b7d52e2e9c3f24ab52b77cddefb1398",
+  "checksum_md5": "5b323c54f53e74ab68d572bd81cf20e6",
   "constraints": {
     "account_bank_balances_source_check": "CHECK ((source = ANY (ARRAY['client'::text, 'staff'::text])))",
     "account_location_policies_choice_check": "CHECK ((choice = ANY (ARRAY['business'::text, 'personal'::text])))",
@@ -128,7 +128,7 @@
     "esign_envelopes_origin_check": "CHECK ((origin = ANY (ARRAY['staff'::text, 'client'::text])))",
     "esign_envelopes_routing_check": "CHECK ((routing_order = ANY (ARRAY['parallel'::text, 'sequential'::text])))",
     "esign_envelopes_status_check": "CHECK ((status = ANY (ARRAY['draft'::text, 'sent'::text, 'in_progress'::text, 'completed'::text, 'declined'::text, 'voided'::text, 'expired'::text])))",
-    "esign_events_type_check": "CHECK ((event_type = ANY (ARRAY['created'::text, 'sent'::text, 'viewed'::text, 'signed'::text, 'declined'::text, 'completed'::text, 'voided'::text, 'reminder_sent'::text, 'consent_accepted'::text, 'expired'::text, 'reopened'::text])))",
+    "esign_events_type_check": "CHECK ((event_type = ANY (ARRAY['created'::text, 'sent'::text, 'viewed'::text, 'signed'::text, 'declined'::text, 'completed'::text, 'voided'::text, 'reminder_sent'::text, 'consent_accepted'::text, 'expired'::text, 'reopened'::text, 'deadline_changed'::text])))",
     "esign_fields_type_check": "CHECK ((field_type = ANY (ARRAY['signature'::text, 'initials'::text, 'date'::text, 'text'::text, 'checkbox'::text])))",
     "esign_signers_delivery_channel_check": "CHECK ((delivery_channel = ANY (ARRAY['email'::text, 'portal'::text, 'none'::text])))",
     "esign_signers_status_check": "CHECK ((status = ANY (ARRAY['pending'::text, 'sent'::text, 'viewed'::text, 'signed'::text, 'declined'::text])))",

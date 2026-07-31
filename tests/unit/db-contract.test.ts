@@ -157,6 +157,11 @@ describe("checksumDefs", () => {
     // 3f58eb3fcf707e5cc3751583ee212ac6 over 200 (2026-07-28, 'revolut' source),
     // before that 9c43924c747b933a5336c5bcd57e780a over 200, 4d0d3a38… over 194,
     // and 665364ba9d4e7746d9f3fd558dc6ff55 over 190.
+    // Re-pinned again 2026-07-31 (later) after the second e-sign audit migration
+    // (20260731-2130) added 'deadline_changed' — staff can now change the deadline of a
+    // document already out with a client, and that change is recorded rather than silent.
+    // Count unchanged at 203 (a constraint REPLACED, not added). Previous pin
+    // 9b7d52e2e9c3f24ab52b77cddefb1398 over 203.
     // Re-pinned 2026-07-31 after Antonio applied the e-sign audit-event migration
     // (20260731-1830) to production by hand: esign_events_type_check gained 'expired'
     // + 'reopened'. Refreshing also picked up ONE unrelated constraint that had been
@@ -168,7 +173,7 @@ describe("checksumDefs", () => {
     // (2026-07-29, S-corp books), before that 3f58eb3fcf707e5cc3751583ee212ac6 over
     // 200 (2026-07-28, 'revolut' source), 9c43924c747b933a5336c5bcd57e780a over 200,
     // 4d0d3a38… over 194, and 665364ba9d4e7746d9f3fd558dc6ff55 over 190.
-    expect(checksumDefs(prodConstraints())).toBe("9b7d52e2e9c3f24ab52b77cddefb1398")
+    expect(checksumDefs(prodConstraints())).toBe("5b323c54f53e74ab68d572bd81cf20e6")
   })
 })
 

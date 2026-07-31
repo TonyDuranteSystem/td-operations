@@ -10,6 +10,7 @@ import { SendButton } from "@/components/esign/send-button"
 import { VoidButton } from "@/components/esign/void-button"
 import { RemindButton } from "@/components/esign/remind-button"
 import { ReopenButton } from "@/components/esign/reopen-button"
+import { DeadlineButton } from "@/components/esign/deadline-button"
 import { describeExpiry } from "@/lib/esign/expiry"
 
 export const dynamic = "force-dynamic"
@@ -96,7 +97,9 @@ export default async function EsignEnvelopeDetailPage({ params }: { params: Prom
             <div className="flex flex-col items-end gap-2">
               {hasPending && <SendButton envelopeId={id} />}
               {isActive && hasOutstanding && <RemindButton envelopeId={id} />}
-              {env.status === "expired" && <ReopenButton envelopeId={id} />}
+              {env.status === "expired"
+                ? <ReopenButton envelopeId={id} />
+                : <DeadlineButton envelopeId={id} />}
               <VoidButton envelopeId={id} />
             </div>
           )}
