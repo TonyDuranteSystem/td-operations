@@ -6,7 +6,8 @@
  * triggered by hand, is idempotent, and reports exactly what it did.
  *
  * GET  → DRY RUN. Reads Slack, writes nothing, reports what would be archived.
- * POST → writes the archives.
+ * GET ?confirm=archive-now → performs the archive.
+ * POST → performs the archive.
  *
  * Auth: the deployment's cron secret, OR a signed-in admin.
  */
@@ -53,7 +54,15 @@ async function run(req: NextRequest, dryRun: boolean): Promise<NextResponse> {
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
-  return run(req, true)
+  // A GET that writes is normally a smell — a prefetcher or a crawler can fire it.
+  // Here it is deliberate and narrow: the job runs only where the Slack key lives
+  // (the deployment), the alternative was copying a production secret onto a laptop,
+  // and the person who needs to run it works from a phone, where a link is the only
+  // control available. Guarded three ways: admin-only, an explicit confirm word that
+  // nothing types by accident, and the job itself is idempotent and never writes on a
+  // failed read. Without the word this stays a dry run.
+  const confirmed = req.nextUrl.searchParams.get("confirm") === "archive-now"
+  return run(req, !confirmed)
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
