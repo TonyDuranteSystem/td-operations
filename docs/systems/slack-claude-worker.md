@@ -1,3 +1,25 @@
+# Slack Claude Worker — RETIRED (surface removed 2026-07-29)
+
+> ⛔ **SLACK IS GONE. Team Workspace replaced it.** Antonio, 2026-07-29: *"we don't use
+> Slack anymore… we built team workspace to replace Slack."* The Slack SURFACE was
+> deleted in that change: the bot's event webhook, its slash commands, its interactive
+> (button) endpoint, the queue cron and its schedule, the Slack mirror + its API routes
+> and the Team-Chat "Slack" section, the dormant 6-digit approval rail, the permalink
+> reader tool (`read_slack_link`) and the thread-follow helpers.
+>
+> **What this doc is still good for:** the WORKER ENGINE described below is alive and
+> shared by all four surfaces (Team Chat, Inbox, Portal Chats, dashboard sidebar) — the
+> system prompt, the tool loop, the answer guards, the file reader, the send rails. It is
+> merely still NAMED after Slack (`SLACK_WORKER_SYSTEM_PROMPT`, `slack-claude.ts`,
+> `slack-file-reader.ts`, `enableSlackSend`). Renaming is a pending follow-up; deleting
+> anything by the keyword "slack" would break every surface at once.
+>
+> **Still Slack-coupled and NOT yet removed** (needs Antonio's decision — the CRM
+> Conversations page reads these): the Client-Threads routes and crons, which fetch and
+> close threads that live IN Slack.
+>
+> Current behaviour lives in `team-workspace.md`, `inbox.md` and `ai-agent.md`.
+
 # Slack Claude Worker
 
 _2026-07-29 — Claude (**EMAIL RAIL OFF on this surface + the shared prompt now describes the CONFIRM CARD.** Antonio: "every email must have the card." This surface has no card to render, so carrying `enableEmailSend` meant drafting, promising, then refusing at the final step — the false-capability class. Both call sites now pass `enableEmailSend: false`. The SHARED `SLACK_WORKER_SYSTEM_PROMPT` (used by Team Chat, Inbox, Portal Chats and the sidebar as well) had an EMAIL paragraph promising a direct send; it now says send_email PREPARES an email onto a "Confirm & send" card where staff check the recipient and pick the sending address, that nothing leaves until they click, to say READY FOR THEIR CONFIRMATION and never "sent", and that a screen with no card cannot email at all. Tightened to stay under the 12,200-char ceiling rather than raising it (documented precedent). NOTE this file is already RETIRED — the Slack surface was deleted on the remove-slack branch; this entry covers the shared engine that still lives in `slack-claude.ts`.)_

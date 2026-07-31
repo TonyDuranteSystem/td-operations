@@ -184,7 +184,12 @@ export async function rescueClientThreads(opts: {
     .from("client_threads")
     .select("id, source_ref, transcript")
     .eq("source", "slack")
-    .eq("status", "open")
+    // NOT filtered to open. Closing a conversation used to evict it from this job for
+    // ever: a staff member clicks Close on the Conversations page (one click, no
+    // confirmation), the row leaves this query, and once Slack is switched off its
+    // content is gone with no way to ask for it again. Status is a workflow state,
+    // not a statement about whether we hold a copy — rows that already have one are
+    // skipped below either way.
     .order("created_at", { ascending: true })
     .limit(opts.limit ?? 500)
   if (error) {

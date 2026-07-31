@@ -182,24 +182,4 @@ export interface TeamMember {
   handles: string[]
 }
 
-export interface SlackChannel {
-  id: string
-  name: string | null
-  is_private: boolean
-  is_archived: boolean
-  topic: string | null
-  num_members: number | null
-  last_message_at: string | null
-}
 
-export interface SlackMsg {
-  ts: string
-  thread_ts: string | null
-  slack_user_id: string | null
-  author_name: string | null
-  display_author: string
-  text: string
-  edited: boolean
-  posted_at: string | null
-  deep_link: string
-}

@@ -128,7 +128,11 @@ describe("approval-tier tools — no inventing a queue that is switched off", ()
   it("forbids pointing at another surface — it is off everywhere, so that just wastes a trip", () => {
     const block = renderCapabilityBlock({ canQueueApprovals: false })
     expect(block).toMatch(/switched off EVERYWHERE/i)
-    expect(block).toMatch(/Slack bot/i) // names the suggestion it actually made
+    // The named example used to be "the Slack bot" — the surface it actually suggested
+    // at the time. Slack is gone, so the refusal names surfaces generically now; what
+    // must survive is that it forbids redirecting AT ALL, on any named surface.
+    expect(block).toMatch(/another chat/i)
+    expect(block).not.toMatch(/Slack/i)
     expect(block).toMatch(/do NOT suggest another screen/i)
   })
 

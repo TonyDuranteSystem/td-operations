@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
-import { closeClientThread, reopenClientThread } from "@/lib/ai-agent/slack-claude"
+import { closeClientThread, reopenClientThread } from "@/lib/ai-agent/client-thread-actions"
 
 /**
  * POST /api/client-threads/[id]/close        → close (snapshot + status='closed')

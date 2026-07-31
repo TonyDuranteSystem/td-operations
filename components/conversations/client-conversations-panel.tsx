@@ -1,7 +1,8 @@
 "use client"
 
 import { useEffect, useState, useCallback } from "react"
-import { ChevronRight, ChevronDown, ExternalLink, MessageSquare, Loader2 } from "lucide-react"
+import { ChevronRight, ChevronDown, MessageSquare, Loader2 } from "lucide-react"
+import { toast } from "sonner"
 
 interface ThreadRow {
   id: string
@@ -97,7 +98,13 @@ export function ClientConversationsPanel({
         const r = await fetch(`/api/client-threads/${id}/close${reopen ? "?reopen=1" : ""}`, {
           method: "POST",
         })
-        if (!r.ok) return
+        // R099 — SHOW the server's reason. A silent return left the row looking
+        // untouched, so the staff member clicks again and assumes the button is
+        // broken; the same class of bug as the 2026-06-23 close-button incident.
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}))
+          throw new Error(d.error || "Could not update this conversation — please try again.")
+        }
         setStatus(id, reopen ? "open" : "closed")
         // Drop cached messages so the next expand reflects frozen (close) or live (reopen).
         setMessages((m) => {
@@ -105,8 +112,8 @@ export function ClientConversationsPanel({
           delete c[id]
           return c
         })
-      } catch {
-        /* best-effort */
+      } catch (err) {
+        toast.error(err instanceof Error && err.message ? err.message : "Could not update this conversation — please try again.")
       }
     },
     [setStatus],
@@ -178,17 +185,6 @@ export function ClientConversationsPanel({
                   Close
                 </span>
               )}
-              {t.slackLink && (
-                <a
-                  href={t.slackLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  className="inline-flex items-center gap-1 text-blue-600 hover:underline text-sm shrink-0"
-                >
-                  Slack <ExternalLink className="h-3 w-3" />
-                </a>
-              )}
             </button>
             {open && (
               <div className="px-5 pb-4 bg-zinc-50/50">
@@ -202,7 +198,7 @@ export function ClientConversationsPanel({
                 )}
                 {Array.isArray(msgs) && msgs.length === 0 && (
                   <div className="text-sm text-muted-foreground py-3">
-                    No messages (the Slack thread may have been deleted).
+                    No stored copy of this conversation.
                   </div>
                 )}
                 {Array.isArray(msgs) && msgs.length > 0 && (

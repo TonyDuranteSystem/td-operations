@@ -19,7 +19,6 @@ import { fullReachEnabledFor } from "@/lib/ai-agent/full-reach"
 import { surfaceApiKeyOverride } from "@/lib/ai-agent/surface-api-key"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { callWorker, type CallWorkerOptions, type WorkerImageBlock, type WorkerDocumentBlock } from "@/lib/ai-agent/worker-tools"
-import { workerActionsEnabled } from "@/lib/ai-agent/worker-actions-switch"
 import {
   classifySlackFile,
   extractTextFromBuffer,
@@ -27,11 +26,6 @@ import {
   SLACK_FILE_TEXT_CHAR_CAP,
   type SlackFileKind,
 } from "@/lib/ai-agent/slack-file-reader"
-import {
-  isSixDigitCode,
-  isAuthorizedApprover,
-  handleSlackApprovalCode,
-} from "@/lib/ai-agent/slack-approval"
 import { createThreadSummary } from "@/lib/ai-agent/thread-summaries"
 import { loadRelevantTemplates, formatTemplatesForPrompt } from "@/lib/ai-agent/templates"
 import { captureLessonFromTurn } from "@/lib/ai-agent/lesson-capture"
@@ -97,16 +91,16 @@ export const STOP_THINKING_ACTION_ID = "stop_thinking"
 // System prompt — conversational, discuss-first, Slack-native
 // ---------------------------------------------------------------------------
 
-export const SLACK_WORKER_SYSTEM_PROMPT = `You are Claude, a member of the Tony Durante LLC operations team, present in Slack.
+export const SLACK_WORKER_SYSTEM_PROMPT = `You are Claude, a member of the Tony Durante LLC operations team.
 
 RESPONSE STYLE (MANDATORY):
 - DEFAULT MODE: Always respond in plain, simple English. No code snippets, no file paths, no technical jargon, no developer terminology. Explain things the way you would to a business owner — focus on WHAT something means for the business, not HOW it works technically.
 - TECHNICAL MODE: Only switch to technical language when the user explicitly asks for it (e.g., "give me the technical details", "show me the code", "technical report"). In technical mode, include code, file paths, and developer details.
 - Always default back to plain English after a technical answer unless told otherwise.
 
-TONE: Short, conversational, human. This is Slack — not a research report.
+TONE: Short, conversational, human — a chat message, not a research report.
 Typical response: 2–5 lines. Never walls of text.
-Slack markdown: *bold*, \`code\`, _italic_. Bullet points only for ≥3 items.
+Formatting: *bold*, \`code\`, _italic_. Bullet points only for ≥3 items.
 
 BEHAVIOR:
 1. Task given ("check this email", "look at this client"): match your depth to the ask
@@ -160,9 +154,9 @@ TWO GEARS — match effort to the question:
   - Hand-off format (so Antonio can take it straight to Claude Code): findings in plain English, then a short "Confirmed:" list naming the records/IDs you actually checked, and an "Unconfirmed / needs Claude Code:" list. Separate facts from guesses — label anything you could not verify.
   - It is fine to take longer and write more here. Depth beats brevity when digging.
 
-SENSITIVE DATA: run_sql_query is read-only and cannot touch logins, passwords, or tokens. Never paste raw secrets, full bank/card numbers, or password data into Slack even if a lookup returns them — summarize instead.
+SENSITIVE DATA: run_sql_query is read-only and cannot touch logins, passwords, or tokens. Never paste raw secrets, full bank/card numbers, or password data into a chat even if a lookup returns them — summarize instead.
 
-CALLS (Circleback): you can read recorded calls (sales/intake/client calls). Use search_calls (by keyword) or list_calls (filter by account_id / lead_id / date) to find a call, then get_call with its id to read it IN FULL — notes, action items, attendees, and the complete word-for-word transcript (every speaking turn, not a preview). Reach for this when Antonio asks what was said/promised/decided on a call, or to ground a client answer in the actual conversation. To find a client's calls, resolve the client to an account_id or lead_id first with the CRM search tools, then list_calls. Read-only; summarize for Slack and quote the key lines rather than pasting an entire transcript.
+CALLS (Circleback): you can read recorded calls (sales/intake/client calls). Use search_calls (by keyword) or list_calls (filter by account_id / lead_id / date) to find a call, then get_call with its id to read it IN FULL — notes, action items, attendees, and the complete word-for-word transcript (every speaking turn, not a preview). Reach for this when Antonio asks what was said/promised/decided on a call, or to ground a client answer in the actual conversation. To find a client's calls, resolve the client to an account_id or lead_id first with the CRM search tools, then list_calls. Read-only; summarize and quote the key lines rather than pasting an entire transcript.
 
 MEMORY: Use memory_recall to see how a similar situation was handled before. ASK BEFORE YOU SAVE:
 when you learn something durable and reusable — a correction the staff member made, a decision, a
@@ -187,7 +181,7 @@ offer to "just send it". Replying to an incoming email: set reply_to_message_id 
 it stays threaded. Never on the first turn, never without their OK. No card on a screen = no email from it: say
 so and hand over the draft.
 
-DRAFTS (the message you write FOR a client — email bodies + portal messages): write like a real person, warm and direct, the way Antonio or Luca would write it by hand. NO asterisks, NO markdown bold/italics, NO "#" headers, NO bullet-point dumps — a client reads this, and asterisks/markdown render as broken junk and scream "an AI wrote this". Just natural sentences and normal paragraphs. (This applies ONLY to the client-facing draft itself — your Slack replies to the team can still use *bold* etc.)
+DRAFTS (the message you write FOR a client — email bodies + portal messages): write like a real person, warm and direct, the way Antonio or Luca would write it by hand. NO asterisks, NO markdown bold/italics, NO "#" headers, NO bullet-point dumps — a client reads this, and asterisks/markdown render as broken junk and scream "an AI wrote this". Just natural sentences and normal paragraphs. (This applies ONLY to the client-facing draft itself — your replies to the team can still use *bold* etc.)
 LANGUAGE OF EVERY CLIENT DRAFT (MANDATORY): write it in the CLIENT'S CRM language (contacts.language / the client card) — an Italian client gets an Italian draft, AUTOMATICALLY, even though the staff member is talking to you in English. Look the language up BEFORE drafting; never ask, never default to English. A server-side check refuses a clearly-English portal message to an Italian-language client.
 METADATA VS DOCUMENT: a database field is metadata about a record, NOT the document itself. When you report one, name the source ("the record's language field says X") — NEVER claim or imply you read a document you did not open, and if no file exists yet, say exactly that.
 
@@ -196,7 +190,7 @@ build, fix, or deploy something, investigate it with the read tools and report b
 diagnosis, root cause with file:line, and the suggested change — so Antonio can do the coding himself.
 Never say you're building, queuing, or shipping anything; you can't. Hand off a clear write-up instead.
 
-CONTEXT: You are in a shared Slack workspace with Antonio (CEO) and the team — e.g. Luca
+CONTEXT: You are in a shared team workspace with Antonio (CEO) and the team — e.g. Luca
 (support@tonydurante.us). Antonio is the decision-maker; you answer, discuss, and propose —
 he approves and directs.
 
@@ -588,103 +582,9 @@ export async function fetchSlackThreadMessages(
 }
 
 /**
- * Close a client conversation: snapshot the full thread into client_threads.transcript
- * (frozen, permanent), set status='closed' + closed_at. Idempotent. Returns ok=false
- * only on a genuine lookup error.
+ * Close/reopen live in lib/ai-agent/client-thread-actions.ts — Slack-free, because the
+ * Conversations page must keep working after the Slack surface is gone.
  */
-export async function closeClientThread(
-  id: string,
-  closedBy?: string | null,
-): Promise<{ ok: boolean; error?: string }> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const db = supabaseAdmin as any
-  const { data: row, error } = await db
-    .from("client_threads")
-    .select("source, source_ref, status, account_id, contact_id, lead_id, topic_slug")
-    .eq("id", id)
-    .maybeSingle()
-  if (error) return { ok: false, error: error.message }
-  if (!row) return { ok: false, error: "not found" }
-  if (row.status === "closed") return { ok: true }
-
-  let transcript: Array<{ author: string; text: string; ts: string }> = []
-  if (row.source === "slack" && typeof row.source_ref === "string" && row.source_ref.includes(":")) {
-    const [ch, ts] = row.source_ref.split(":")
-    transcript = await fetchSlackThreadMessages(ch, ts)
-  }
-  await db
-    .from("client_threads")
-    .update({
-      status: "closed",
-      closed_at: new Date().toISOString(),
-      closed_by: closedBy ?? null,
-      transcript,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", id)
-    .neq("status", "closed")
-
-  // Phase 3 feed: a CLOSED conversation is a human-confirmed record → save it as a
-  // client-scoped memory so the worker recalls it next time (no auto-poisoning: only
-  // closed/confirmed conversations feed the brain). Best-effort; never fails the close.
-  try {
-    if (transcript.length > 0) {
-      const entityId = row.account_id ?? row.contact_id ?? row.lead_id
-      const kind = row.account_id ? "account" : row.contact_id ? "contact" : row.lead_id ? "lead" : null
-      if (entityId && kind) {
-        const clientKey = `${kind}:${entityId}`
-        const topic = row.topic_slug ?? "general"
-        const body = transcript.map((m) => `${m.author}: ${m.text}`).join("\n").slice(0, 2000)
-        const { saveDecisionMemory } = await import("./decision-memory")
-        await saveDecisionMemory({
-          situation: `Client conversation about ${topic}`,
-          decision: body,
-          domain: topic,
-          sourceType: "client_thread_close",
-          sourceRef: row.source_ref ?? undefined,
-          clientKey,
-          confidence: 0.6,
-          tags: ["client_thread", topic],
-        })
-      }
-    }
-  } catch (err) {
-    console.warn("[slack-claude] closeClientThread memory feed failed (non-fatal):", err)
-  }
-
-  // A closed conversation must drop out of every follower's "📌 Following" DM list
-  // and the shared followed-conversations Canvas. Best-effort; dynamic import avoids
-  // a load-time cycle with client-thread-follows.
-  try {
-    const { refreshFollowersDigests, refreshOpenConversationsCanvas } = await import("./client-thread-follows")
-    await refreshFollowersDigests(id)
-    await refreshOpenConversationsCanvas()
-  } catch (err) {
-    console.warn("[slack-claude] closeClientThread follower/canvas refresh failed (non-fatal):", err)
-  }
-  return { ok: true }
-}
-
-/** Reopen a closed conversation: back to live (status='open', clear the frozen snapshot). */
-export async function reopenClientThread(id: string): Promise<{ ok: boolean; error?: string }> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const db = supabaseAdmin as any
-  const { error } = await db
-    .from("client_threads")
-    .update({ status: "open", closed_at: null, transcript: null, updated_at: new Date().toISOString() })
-    .eq("id", id)
-  if (error) return { ok: false, error: error.message }
-
-  // Reopened → reappears in followers' "📌 Following" DM lists and the Canvas. Best-effort.
-  try {
-    const { refreshFollowersDigests, refreshOpenConversationsCanvas } = await import("./client-thread-follows")
-    await refreshFollowersDigests(id)
-    await refreshOpenConversationsCanvas()
-  } catch (err) {
-    console.warn("[slack-claude] reopenClientThread follower/canvas refresh failed (non-fatal):", err)
-  }
-  return { ok: true }
-}
 
 /** Open a Block Kit modal (views.open) with a trigger_id from a button click. */
 export async function openSlackModal(
@@ -1923,42 +1823,8 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     : null
 
   // ── In-channel approval completion (loop fix) ──────────────────────────────
-  // A message that is EXACTLY a 6-digit code from the authorized approver
-  // (Antonio) is an approval, not a chat turn. Resolve it deterministically and
-  // NEVER call the LLM — the model only ever proposes, so consuming the code here
-  // (not in the model) is what makes the propose→retype→re-propose loop impossible.
-  const slackUserId = ctx.slack_user_id as string | undefined
-  // OFF (2026-07-10, Antonio): worker no longer queues actions → nothing to
-  // approve by code. Gated on the same reversible rail switch as team chat.
-  if (workerActionsEnabled() && isSixDigitCode(row.body) && isAuthorizedApprover(slackUserId)) {
-    const outcome = await handleSlackApprovalCode({
-      code: row.body,
-      channelId,
-      // Raw slack_thread_ts (not replyThreadTs) so the scope key matches exactly
-      // what the webhook stored on agent_messages.context_json.slack_scope_key.
-      threadTs: ctx.slack_thread_ts as string | null | undefined,
-      slackUserId,
-    })
-    if (outcome.handled) {
-      if (ackTs) {
-        await updateSlackMessage(channelId, ackTs, outcome.message, [])
-      } else {
-        await postSlackMessage(channelId, outcome.message, replyThreadTs)
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabaseAdmin as any)
-        .from("agent_messages")
-        .update({
-          status: "done",
-          reply: outcome.message,
-          replied_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", row.id)
-      return outcome.message
-    }
-  }
-
+  // The 6-digit approval interception is GONE with the Slack surface (2026-07-29).
+  // The action rail it served has been off since 2026-07-10 anyway.
   // Download any attached screenshots → base64 image blocks (best-effort).
   let imageRefs = (Array.isArray(ctx.slack_images) ? ctx.slack_images : []) as SlackImageRef[]
 

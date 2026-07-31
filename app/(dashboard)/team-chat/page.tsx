@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import {
   Send, Loader2, Users, Hash, Paperclip, Smile, Mic, MicOff, FileText, X,
   CornerUpLeft, Trash2, Plus, Search, Pin, PinOff, Pencil, Check,
-  MessageSquare, Bot, Building2, Slack, ExternalLink,
+  MessageSquare, Bot, Building2,
   LayoutGrid, List as ListIcon, MoreHorizontal, Clock, ChevronRight, ChevronDown, ChevronLeft,
   Bell, BellOff, Archive, ArchiveRestore, Mail, Link2,
 } from 'lucide-react'
@@ -25,7 +25,7 @@ import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import { sortPanelThreads, filterStreamRoots } from '@/lib/team/thread-meta'
 import { TEAM_COLORS, CLAUDE_SENDER_UUID, channelSlug, TEAM_WORK_STATUSES, TEAM_WORK_STATUS_LABELS, TEAM_STATUS_COLORS, type TeamWorkStatus } from '@/lib/team/workspace'
 import type { ChatAttachment } from '@/lib/types'
-import type { TeamMsg, TeamThread, TeamMember, Reaction, SlackChannel, SlackMsg, ThreadMeta, ThreadListItem, BoardThread, LaterThread } from './types'
+import type { TeamMsg, TeamThread, TeamMember, Reaction, ThreadMeta, ThreadListItem, BoardThread, LaterThread } from './types'
 
 const AVATAR_COLORS = ['bg-blue-500', 'bg-emerald-500', 'bg-violet-500', 'bg-orange-500', 'bg-rose-500', 'bg-cyan-500', 'bg-amber-500', 'bg-indigo-500']
 const QUICK_EMOJIS = ['👍', '✅', '🙏', '🔥', '👀', '❤️', '😂', '🎉']
@@ -80,11 +80,6 @@ export default function TeamWorkspacePage() {
   const [showNewChannel, setShowNewChannel] = useState(false)
   const [showNewDm, setShowNewDm] = useState(false)
   const [showNewConversation, setShowNewConversation] = useState(false)
-  const [slackEnabled, setSlackEnabled] = useState(false)
-  const [slackChannels, setSlackChannels] = useState<SlackChannel[]>([])
-  const [selectedSlackId, setSelectedSlackId] = useState<string | null>(null)
-  const [slackMessages, setSlackMessages] = useState<SlackMsg[]>([])
-  const [loadingSlack, setLoadingSlack] = useState(false)
   const [view, setView] = useState<'list' | 'board'>('list')
   const [expandedChannels, setExpandedChannels] = useState<Set<string>>(new Set())
   const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set())
@@ -237,31 +232,6 @@ export default function TeamWorkspacePage() {
 
   // Initial load
   useEffect(() => { loadThreads(true) }, [loadThreads])
-
-  // Slack mirror (only shows when the kill-switch is on)
-  const loadSlackChannels = useCallback(async () => {
-    try {
-      const r = await fetch('/api/team/slack/channels')
-      const d = await r.json()
-      setSlackEnabled(!!d.enabled)
-      setSlackChannels(d.channels ?? [])
-    } catch { /* mirror off / unreachable — leave hidden */ }
-  }, [])
-  useEffect(() => { loadSlackChannels() }, [loadSlackChannels])
-
-  const selectSlack = useCallback(async (channelId: string) => {
-    setSelectedSlackId(channelId)
-    setSelectedId(null)
-    setLoadingSlack(true)
-    try {
-      const r = await fetch(`/api/team/slack/channels/${channelId}/messages`)
-      const d = await r.json()
-      setSlackMessages(d.messages ?? [])
-    } catch { setSlackMessages([]) } finally { setLoadingSlack(false) }
-  }, [])
-
-  // Selecting a native thread leaves the Slack view.
-  useEffect(() => { if (selectedId) setSelectedSlackId(null) }, [selectedId])
 
   // Deep link: /team-chat?thread=<id> selects that thread once loaded (used by
   // push notifications and the "New conversation" channel card).
@@ -956,12 +926,10 @@ export default function TeamWorkspacePage() {
     {
       thread: selectedId,
       root: openRootId,
-      slack: selectedSlackId,
       view: view === 'board' ? 'board' : null,
     },
     (v) => {
       setView(v.view === 'board' ? 'board' : 'list')
-      if (v.slack) { selectSlack(v.slack); return }
       if (!v.thread) {
         pendingOpenRef.current = null
         setSelectedId(null); setOpenRootId(null); setReplyTo(null)
@@ -1174,7 +1142,7 @@ export default function TeamWorkspacePage() {
   return (
     <div className="flex h-full lg:h-[calc(100%_-_3.5rem)] overflow-hidden">
       {/* Sidebar — full-screen pane on mobile until a conversation is open */}
-      <div className={`${(selectedId || selectedSlackId) ? 'hidden md:flex' : 'flex'} w-full md:w-64 md:shrink-0 border-r border-zinc-200 bg-zinc-50 flex-col`}>
+      <div className={`${selectedId ? 'hidden md:flex' : 'flex'} w-full md:w-64 md:shrink-0 border-r border-zinc-200 bg-zinc-50 flex-col`}>
         <div className="px-4 py-3 border-b border-zinc-200">
           <div className="flex items-center justify-between">
             <h1 className="text-sm font-semibold text-zinc-900 flex items-center gap-2"><Users className="h-4 w-4" /> Team Workspace</h1>
@@ -1395,43 +1363,26 @@ export default function TeamWorkspacePage() {
                 )
               }) })()}
 
-              {slackEnabled && (
-                <>
-                  <div className="flex items-center gap-1 px-2 mt-4 mb-1">
-                    <Slack className="h-3 w-3 text-zinc-400" />
-                    <p className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wide">Slack</p>
-                  </div>
-                  {slackChannels.length === 0 && <p className="px-2 text-[11px] text-zinc-400">No channels synced yet.</p>}
-                  {slackChannels.map(c => (
-                    <button key={c.id} onClick={() => selectSlack(c.id)} className={cn('w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left', selectedSlackId === c.id ? 'bg-zinc-200' : 'hover:bg-zinc-100')}>
-                      <Hash className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
-                      <span className="flex-1 truncate text-sm text-zinc-600">{c.name ?? c.id}</span>
-                    </button>
-                  ))}
-                </>
-              )}
             </>
           )}
         </div>
       </div>
 
       {/* Main pane — hidden on mobile until a conversation is open */}
-      <div className={`${(selectedId || selectedSlackId) ? 'flex' : 'hidden md:flex'} flex-1 flex-col min-w-0`}>
-        {(selectedId || selectedSlackId) && (
+      <div className={`${selectedId ? 'flex' : 'hidden md:flex'} flex-1 flex-col min-w-0`}>
+        {selectedId && (
           <button
-            onClick={() => { setSelectedId(null); setSelectedSlackId(null) }}
+            onClick={() => setSelectedId(null)}
             className="md:hidden flex items-center gap-1.5 px-4 py-2 text-sm text-zinc-600 border-b border-zinc-200 bg-white shrink-0"
           >
             <ChevronLeft className="h-4 w-4" />
             All conversations
           </button>
         )}
-        {selectedSlackId ? (
-          <SlackFeedView channel={slackChannels.find(c => c.id === selectedSlackId) ?? null} channelId={selectedSlackId} messages={slackMessages} loading={loadingSlack} />
-        ) : !selected ? (
+        {!selected ? (
           <div className="flex-1 flex flex-col items-center justify-center text-zinc-400 gap-2">
             <MessageSquare className="h-10 w-10" />
-            <p className="text-sm">Select a channel or conversation</p>
+            <p className="text-sm">Select a conversation</p>
           </div>
         ) : (
           <>
@@ -2434,58 +2385,6 @@ function NewChannelModal({ onClose, onCreate }: { onClose: () => void; onCreate:
         </div>
       </div>
     </div>
-  )
-}
-
-function SlackFeedView({ channel, channelId, messages, loading }: {
-  channel: SlackChannel | null; channelId: string; messages: SlackMsg[]; loading: boolean
-}) {
-  const channelLink = messages[0]?.deep_link
-  return (
-    <>
-      <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-200 bg-white shrink-0">
-        <h2 className="text-sm font-semibold text-zinc-900 flex items-center gap-2 truncate">
-          <Slack className="h-4 w-4 text-[#4A154B]" /> #{channel?.name ?? channelId}
-          <span className="text-[10px] font-normal text-zinc-400 border border-zinc-200 rounded px-1.5 py-0.5">Slack · read-only</span>
-        </h2>
-        {channelLink && (
-          <a href={channelLink} target="_blank" rel="noopener noreferrer" className="text-xs text-zinc-600 hover:text-zinc-900 flex items-center gap-1">
-            Open in Slack <ExternalLink className="h-3 w-3" />
-          </a>
-        )}
-      </div>
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2">
-        {loading ? (
-          <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-zinc-400" /></div>
-        ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-zinc-400 gap-2">
-            <Slack className="h-9 w-9" /><p className="text-sm">No messages mirrored yet.</p>
-            <p className="text-[11px]">Run a sync, or wait for new Slack activity.</p>
-          </div>
-        ) : (
-          messages.map(m => (
-            <div key={m.ts} className="group flex gap-2 items-start">
-              <span className="w-7 h-7 rounded-md bg-zinc-200 flex items-center justify-center text-[10px] font-bold text-zinc-600 shrink-0 mt-0.5">
-                {initials(m.display_author)}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-semibold text-zinc-600">{m.display_author}</span>
-                  {m.posted_at && <span className="text-[10px] text-zinc-400">{msgTime(m.posted_at)}</span>}
-                  {m.edited && <span className="text-[10px] text-zinc-400">(edited)</span>}
-                  <a href={m.deep_link} target="_blank" rel="noopener noreferrer" title="Open in Slack"
-                    className="opacity-0 group-hover:opacity-100 transition-opacity text-zinc-400 hover:text-zinc-700"><ExternalLink className="h-3 w-3" /></a>
-                </div>
-                <p className="text-sm text-zinc-800 whitespace-pre-wrap" style={{ wordBreak: 'break-word' }}>{m.text || <span className="text-zinc-400 italic">(no text)</span>}</p>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-      <div className="shrink-0 px-5 py-3 border-t border-zinc-200 bg-zinc-50 text-center">
-        <p className="text-xs text-zinc-500">This is a read-only mirror of Slack. {channelLink ? <a href={channelLink} target="_blank" rel="noopener noreferrer" className="text-zinc-700 underline">Reply in Slack ↗</a> : 'Reply in Slack.'}</p>
-      </div>
-    </>
   )
 }
 
