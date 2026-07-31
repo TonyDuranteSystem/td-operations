@@ -1746,9 +1746,25 @@ export async function tagClientThreadFromWorker(input: {
 }
 
 /**
- * find_client_threads — Slack-only READ over `client_threads`. Pulls up tagged
- * conversations by client and/or topic (e.g. "what's open for this client",
- * "show banking threads"). Requires at least one filter.
+ * find_client_threads — "what conversations do we have with this client?"
+ *
+ * READS BOTH LISTS, because there are two and they mean different things:
+ *
+ *   1. TEAM CHAT (`internal_threads` type 'discussion') — where the work happens now.
+ *      Starting a conversation under a client in Team Chat writes here. This is the
+ *      LIVE list and the only one that still receives anything.
+ *   2. The older `client_threads` tracking list — 116 conversations from Slack plus
+ *      683 backfilled CRM-log entries. Its two writers were the Slack modal (deleted)
+ *      and `tag_client_thread`, which is only ever switched on inside the Slack
+ *      support channel — so after the removal it is a frozen ARCHIVE.
+ *
+ * Reading only the old list (what this did before) meant the answer went stale the
+ * moment Slack was removed: every conversation started in Team Chat from that day on
+ * would be invisible, and the worker would confidently report an out-of-date picture
+ * of a client. Reading only Team Chat would throw away 799 real conversations. So:
+ * both, merged, newest first, each labelled with where it lives.
+ *
+ * Requires at least one filter.
  */
 export async function findClientThreadsForWorker(input: {
   account_id?: unknown
@@ -1771,19 +1787,61 @@ export async function findClientThreadsForWorker(input: {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
-  let q = db
+
+  // ---- 1. TEAM CHAT — the live list ----
+  let tq = db
+    .from("internal_threads")
+    .select("id, title, topic_slug, account_id, contact_id, lead_id, resolved_at, created_at, last_activity_at")
+    .eq("thread_type", "discussion")
+    .is("archived_at", null)
+    .order("last_activity_at", { ascending: false })
+    .limit(limit)
+  if (accountId) tq = tq.eq("account_id", accountId)
+  if (contactId) tq = tq.eq("contact_id", contactId)
+  if (leadId) tq = tq.eq("lead_id", leadId)
+  if (topic) tq = tq.eq("topic_slug", topic)
+
+  // ---- 2. The older tracking list — the frozen archive ----
+  let cq = db
     .from("client_threads")
     .select("id, account_id, contact_id, lead_id, topic_slug, source, source_ref, status, created_at, transcript")
     .order("created_at", { ascending: false })
     .limit(limit)
-  if (accountId) q = q.eq("account_id", accountId)
-  if (contactId) q = q.eq("contact_id", contactId)
-  if (leadId) q = q.eq("lead_id", leadId)
-  if (topic) q = q.eq("topic_slug", topic)
+  if (accountId) cq = cq.eq("account_id", accountId)
+  if (contactId) cq = cq.eq("contact_id", contactId)
+  if (leadId) cq = cq.eq("lead_id", leadId)
+  if (topic) cq = cq.eq("topic_slug", topic)
 
-  const { data, error } = await q
-  if (error) return `❌ find_client_threads failed: ${error.message}`
-  if (!data || data.length === 0) return "No tagged conversations match that filter yet."
+  const [teamRes, archiveRes] = await Promise.all([tq, cq])
+  // A failure on EITHER side is reported, never silently dropped: answering "no
+  // conversations" because half the lookup broke is worse than saying it broke.
+  if (teamRes.error) return `❌ find_client_threads failed reading Team Chat: ${teamRes.error.message}`
+  if (archiveRes.error) return `❌ find_client_threads failed: ${archiveRes.error.message}`
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const teamRows = (teamRes.data ?? []) as any[]
+  const data = (archiveRes.data ?? []) as any[]
+
+  // The last few messages of each Team Chat conversation, in ONE query rather than
+  // one per thread — a per-thread fetch is 50 round trips on a busy client.
+  const messagesByThread = new Map<string, Array<{ author: string; text: string; ts: string }>>()
+  if (teamRows.length > 0) {
+    const { data: msgs } = await db
+      .from("internal_messages")
+      .select("thread_id, sender_name, message, created_at")
+      .in("thread_id", teamRows.map((t) => t.id))
+      .is("deleted_at", null)
+      .order("created_at", { ascending: true })
+    for (const m of (msgs ?? []) as Array<{ thread_id: string; sender_name: string; message: string; created_at: string }>) {
+      const list = messagesByThread.get(m.thread_id) ?? []
+      list.push({ author: m.sender_name, text: m.message, ts: m.created_at })
+      messagesByThread.set(m.thread_id, list)
+    }
+  }
+
+  if (teamRows.length === 0 && data.length === 0) {
+    return "No conversations match that filter yet — not in Team Chat, and nothing in the archive."
+  }
 
   // THE CONVERSATION, NOT A LINK TO IT.
   //
@@ -1799,24 +1857,49 @@ export async function findClientThreadsForWorker(input: {
   // turn. The excerpt is explicitly marked so nothing reads as the full record.
   const EXCERPT_MESSAGES = 6
   const EXCERPT_CHARS = 600
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const lines = (data as any[]).map((r) => {
-    const when = typeof r.created_at === "string" ? r.created_at.slice(0, 10) : ""
-    const head = `• [${r.topic_slug ?? "untagged"}] ${r.status} (${when})`
-    const messages = Array.isArray(r.transcript) ? r.transcript : []
-    if (messages.length === 0) {
-      return `${head}\n    (no stored copy of this conversation — the CRM conversation log may still have it)`
-    }
+
+  const excerpt = (messages: Array<{ author?: string; text?: string }>): string => {
     const shown = messages.slice(-EXCERPT_MESSAGES)
     const body = shown
-      .map((m: { author?: string; text?: string }) =>
-        `    ${m.author ?? "Team"}: ${String(m.text ?? "").replace(/\s+/g, " ").slice(0, EXCERPT_CHARS)}`,
-      )
+      .map((m) => `    ${m.author ?? "Team"}: ${String(m.text ?? "").replace(/\s+/g, " ").slice(0, EXCERPT_CHARS)}`)
       .join("\n")
     const more = messages.length > shown.length ? `\n    (${messages.length - shown.length} earlier message(s) not shown)` : ""
-    return `${head}\n${body}${more}`
-  })
-  return `Found ${data.length} tagged conversation(s):\n${lines.join("\n")}`
+    return `${body}${more}`
+  }
+
+  // One list for the model, newest activity first, each entry saying WHERE it lives —
+  // so "continue this one" goes to Team Chat and nobody is sent looking for an
+  // archive entry in a place it was never in.
+  type Entry = { at: string; line: string }
+  const entries: Entry[] = []
+
+  for (const t of teamRows) {
+    const at = (typeof t.last_activity_at === "string" && t.last_activity_at) || t.created_at || ""
+    const status = t.resolved_at ? "resolved" : "open"
+    const head = `• [${t.topic_slug ?? "untagged"}] ${status} (${String(at).slice(0, 10)}) — in Team Chat: ${t.title ?? "untitled"}`
+    const messages = messagesByThread.get(t.id) ?? []
+    entries.push({
+      at: String(at),
+      line: messages.length === 0 ? `${head}\n    (no messages yet)` : `${head}\n${excerpt(messages)}`,
+    })
+  }
+
+  for (const r of data) {
+    const at = typeof r.created_at === "string" ? r.created_at : ""
+    const head = `• [${r.topic_slug ?? "untagged"}] ${r.status} (${at.slice(0, 10)}) — earlier record, not in Team Chat`
+    const messages = Array.isArray(r.transcript) ? r.transcript : []
+    entries.push({
+      at,
+      line: messages.length === 0
+        ? `${head}\n    (no stored copy of this conversation — the CRM conversation log may still have it)`
+        : `${head}\n${excerpt(messages)}`,
+    })
+  }
+
+  entries.sort((a, b) => b.at.localeCompare(a.at))
+  const capped = entries.slice(0, limit)
+  const dropped = entries.length > capped.length ? `\n(${entries.length - capped.length} older one(s) not shown)` : ""
+  return `Found ${entries.length} conversation(s):\n${capped.map((e) => e.line).join("\n")}${dropped}`
 }
 
 /**
