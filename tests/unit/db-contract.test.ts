@@ -157,7 +157,18 @@ describe("checksumDefs", () => {
     // 3f58eb3fcf707e5cc3751583ee212ac6 over 200 (2026-07-28, 'revolut' source),
     // before that 9c43924c747b933a5336c5bcd57e780a over 200, 4d0d3a38… over 194,
     // and 665364ba9d4e7746d9f3fd558dc6ff55 over 190.
-    expect(checksumDefs(prodConstraints())).toBe("9c3dfb6d1288e2c73de950a38dd2ba93")
+    // Re-pinned 2026-07-31 after Antonio applied the e-sign audit-event migration
+    // (20260731-1830) to production by hand: esign_events_type_check gained 'expired'
+    // + 'reopened'. Refreshing also picked up ONE unrelated constraint that had been
+    // on production since 2026-07-29 and was missing from the file —
+    // staff_note_replies_body_check — so 202 -> 203. The value below is the digest
+    // PRODUCTION computed over its own constraints (verified: the local recomputation
+    // over this file returned the identical string), not one recomputed to make a red
+    // test pass — the previous pin was 9c3dfb6d1288e2c73de950a38dd2ba93 over 202
+    // (2026-07-29, S-corp books), before that 3f58eb3fcf707e5cc3751583ee212ac6 over
+    // 200 (2026-07-28, 'revolut' source), 9c43924c747b933a5336c5bcd57e780a over 200,
+    // 4d0d3a38… over 194, and 665364ba9d4e7746d9f3fd558dc6ff55 over 190.
+    expect(checksumDefs(prodConstraints())).toBe("9b7d52e2e9c3f24ab52b77cddefb1398")
   })
 })
 
@@ -172,8 +183,12 @@ describe("the committed production snapshot", () => {
     // surfaced three unregistered constrained columns that had been invisible since 07-21.
     // 07-29: +2 from the S-corp books table. Re-pinned in the same change that regenerated
     // the file.
-    expect(prodSnapshotMeta().count).toBe(202)
-    expect(Object.keys(prodConstraints())).toHaveLength(202)
+    // 07-31: 202 -> 203. The e-sign migration REPLACED a constraint rather than adding
+    // one, so the count should not have moved at all — it did, which is how the refresh
+    // surfaced staff_note_replies_body_check sitting on production unrecorded since
+    // 07-29. Exactly the rot this file's own readme warns about, caught by refreshing.
+    expect(prodSnapshotMeta().count).toBe(203)
+    expect(Object.keys(prodConstraints())).toHaveLength(203)
   })
 
   it("PRODUCTION accepts every value the code can write", () => {
