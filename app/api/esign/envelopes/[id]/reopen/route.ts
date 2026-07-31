@@ -124,6 +124,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       baseUrl: base,
       source: REMINDER_SOURCE_MANUAL,
       createdBy: user?.email || "staff",
+      // The chat message says "we've reopened it", not "still waiting" — the
+      // client's last signal was that the document had lapsed.
+      nudgeKind: "reopened",
     })
     if (outcome === "email") emailed++
     else if (outcome === "portal") portal++

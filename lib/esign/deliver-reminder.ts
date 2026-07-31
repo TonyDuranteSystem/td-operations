@@ -25,6 +25,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { enqueueJob } from "@/lib/jobs/queue"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { insertEsignEvent, type ReminderSource } from "@/lib/esign/events"
+import { postSignatureChatNudge, type ChatNudgeKind } from "@/lib/esign/chat-nudge"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -51,8 +52,22 @@ export async function deliverReminder(opts: {
   baseUrl: string
   source: ReminderSource
   createdBy?: string
+  /** What the client is being told, for the portal-chat wording. */
+  nudgeKind?: ChatNudgeKind
 }): Promise<ReminderOutcome> {
   const { signer, envelope, baseUrl, source } = opts
+
+  // The nudge also lands in the client's portal chat thread, in their language
+  // (Antonio, 2026-07-31). It raises NO notification of its own — the channel
+  // branches below each already raise exactly one. Best-effort: a chat write
+  // must never stop the reminder itself.
+  const postChatNudge = () =>
+    postSignatureChatNudge({
+      contactId: signer.contact_id,
+      accountId: envelope.owner_account_id,
+      documentName: envelope.document_name,
+      kind: opts.nudgeKind ?? "reminder",
+    })
 
   // PORTAL — re-notify in place. No sent_at rewrite, no 'sent' event.
   if (signer.delivery_channel === "portal") {
@@ -69,6 +84,7 @@ export async function deliverReminder(opts: {
     } catch {
       return "undeliverable"
     }
+    await postChatNudge()
     await insertEsignEvent({
       envelope_id: envelope.id,
       signer_id: signer.id,
@@ -89,6 +105,9 @@ export async function deliverReminder(opts: {
     related_entity_id: envelope.id,
     created_by: opts.createdBy || "system",
   })
+  // An email signer who is also a CRM client sees the same nudge in their chat
+  // thread. A third party with no contact has no portal, so this no-ops.
+  await postChatNudge()
   await insertEsignEvent({
     envelope_id: envelope.id,
     signer_id: signer.id,
