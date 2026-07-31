@@ -38,6 +38,7 @@ export const EVENT_TYPES = [
   "consent_accepted",
   "expired",
   "reopened",
+  "deadline_changed",
 ] as const
 
 export type EsignEventType = (typeof EVENT_TYPES)[number]
