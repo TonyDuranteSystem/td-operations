@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { fetchSlackThreadMessages } from "@/lib/ai-agent/slack-claude"
 
 /**
  * GET /api/client-threads/[id]/messages
@@ -43,11 +42,6 @@ export async function GET(
   if (Array.isArray(row.transcript) && row.transcript.length > 0) {
     return NextResponse.json({ messages: row.transcript, closed: row.status === "closed", archived: true })
   }
-  // A closed row with no archive has nothing else to offer — it must not fall through
-  // to a live Slack read, which is what closing was meant to make it independent of.
-  if (row.status === "closed") {
-    return NextResponse.json({ messages: [], closed: true, note: "No stored copy of this conversation." })
-  }
 
   // Backfilled CRM-log rows: source_ref is a conversations row id — return its
   // stored message/response so the historical entry is readable here too.
@@ -63,11 +57,21 @@ export async function GET(
     return NextResponse.json({ messages, channel: conv?.channel ?? null })
   }
 
-  if (row.source !== "slack" || typeof row.source_ref !== "string" || !row.source_ref.includes(":")) {
-    return NextResponse.json({ messages: [], note: "No content for this conversation." })
+  // Closed with no archive of its own. This check sits AFTER the CRM-log branch on
+  // purpose: those rows keep their content in the conversation log, not in a
+  // snapshot, so closing one must not hide text that is still there and still shown
+  // on the account's Activity tab. Two screens disagreeing about whether a
+  // conversation exists is worse than either answer.
+  if (row.status === "closed") {
+    return NextResponse.json({ messages: [], closed: true, note: "No stored copy of this conversation." })
   }
 
-  const [channelId, threadTs] = row.source_ref.split(":")
-  const messages = await fetchSlackThreadMessages(channelId, threadTs)
-  return NextResponse.json({ messages })
+  // NO LIVE SLACK READ. It used to fall through to Slack here for an open
+  // conversation; with the Slack surface removed that call can only fail, and a
+  // silent [] would read as "this conversation was empty" rather than "we never
+  // copied it". Say which it is.
+  return NextResponse.json({
+    messages: [],
+    note: "No stored copy of this conversation.",
+  })
 }

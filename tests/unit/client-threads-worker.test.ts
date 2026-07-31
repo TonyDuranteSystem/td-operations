@@ -153,7 +153,10 @@ describe("findClientThreadsForWorker", () => {
     expect(r).toContain("No tagged conversations")
   })
 
-  it("formats matching threads with topic, status, and a Slack link", async () => {
+  it("REGRESSION: answers with what was SAID, never a slack.com link", async () => {
+    // This used to return a slack.com permalink per conversation. With the workspace
+    // gone that is a dead end handed to staff on all four panels — while the stored
+    // copy of the very conversation being asked about sat unread in the same row.
     findResult = {
       data: [
         {
@@ -163,6 +166,10 @@ describe("findClientThreadsForWorker", () => {
           source: "slack",
           source_ref: "C0BA802S9LH:1781886351.552489",
           created_at: "2026-06-21T10:00:00Z",
+          transcript: [
+            { author: "Marco Rossi", text: "the bank asked for the EIN letter", ts: "1781886351.552489" },
+            { author: "Luca", text: "sent it this morning", ts: "1781886400.000000" },
+          ],
         },
       ],
       error: null,
@@ -170,7 +177,39 @@ describe("findClientThreadsForWorker", () => {
     const r = await findClientThreadsForWorker({ account_id: "acc-1" })
     expect(r).toContain("Found 1 tagged conversation")
     expect(r).toContain("banking")
-    expect(r).toContain("https://slack.com/archives/C0BA802S9LH/p1781886351552489")
+    expect(r).toContain("the bank asked for the EIN letter")
+    expect(r).toContain("Luca: sent it this morning")
+    expect(r).not.toContain("slack.com")
+  })
+
+  it("says plainly when there is no stored copy, rather than implying the conversation was empty", async () => {
+    findResult = {
+      data: [
+        { id: "ct-2", topic_slug: "tax", status: "open", source: "slack", source_ref: "C1:1.1", created_at: "2026-06-21T10:00:00Z", transcript: null },
+      ],
+      error: null,
+    }
+    const r = await findClientThreadsForWorker({ account_id: "acc-1" })
+    expect(r).toMatch(/no stored copy/i)
+    expect(r).not.toContain("slack.com")
+  })
+
+  it("caps a long conversation and says how much was left out", async () => {
+    // The caller is a model with a context budget; an unbounded dump would crowd out
+    // the rest of the turn, and silent truncation would read as the whole record.
+    findResult = {
+      data: [
+        {
+          id: "ct-3", topic_slug: "tax", status: "open", source: "slack", source_ref: "C1:1.1",
+          created_at: "2026-06-21T10:00:00Z",
+          transcript: Array.from({ length: 20 }, (_, i) => ({ author: "Luca", text: `line ${i}`, ts: `${i}` })),
+        },
+      ],
+      error: null,
+    }
+    const r = await findClientThreadsForWorker({ account_id: "acc-1" })
+    expect(r).toContain("line 19")
+    expect(r).toMatch(/earlier message\(s\) not shown/)
   })
 })
 

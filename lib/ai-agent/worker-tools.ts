@@ -121,7 +121,6 @@ export const WORKER_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   // Read a SIGNED/scanned document — the CRM stores a drawn signature and no
   // signer name, so the document itself is the only source (dev job a6c3d75b).
   "read_scanned_document",
-  // Read a Slack permalink — web browsing cannot (workspace auth). dev job a6c3d75b
   "portal_chat_inbox",
   "portal_chat_read",
   "get_dashboard_stats",
@@ -510,7 +509,7 @@ export const TAG_CLIENT_THREAD_TOOL: ToolDef = {
 export const FIND_CLIENT_THREADS_TOOL: ToolDef = {
   name: "find_client_threads",
   description: [
-    "Look up tagged support conversations ('client threads') by client and/or topic — e.g. 'what's open for this client', 'show banking threads'.",
+    "Look up tagged support conversations ('client threads') by client and/or topic — e.g. 'what's open for this client', 'show banking threads'. Returns an excerpt of what was actually said, where a copy is stored.",
     "Provide any of account_id / contact_id / lead_id (resolve the client first with CRM search) and/or topic (a topic slug). Returns the matching threads with their topic, status, source, and a link back.",
   ].join("\n"),
   parameters: {
@@ -1774,7 +1773,7 @@ export async function findClientThreadsForWorker(input: {
   const db = supabaseAdmin as any
   let q = db
     .from("client_threads")
-    .select("id, account_id, contact_id, lead_id, topic_slug, source, source_ref, status, created_at")
+    .select("id, account_id, contact_id, lead_id, topic_slug, source, source_ref, status, created_at, transcript")
     .order("created_at", { ascending: false })
     .limit(limit)
   if (accountId) q = q.eq("account_id", accountId)
@@ -1786,15 +1785,36 @@ export async function findClientThreadsForWorker(input: {
   if (error) return `❌ find_client_threads failed: ${error.message}`
   if (!data || data.length === 0) return "No tagged conversations match that filter yet."
 
+  // THE CONVERSATION, NOT A LINK TO IT.
+  //
+  // This used to answer with a slack.com permalink per row. With the Slack workspace
+  // gone that is a dead end handed to a staff member on all four panels — and worse,
+  // the stored copy of the very conversation being asked about was sitting unread in
+  // the same row. Answering "what's open for this client" with a URL nobody can open,
+  // while holding the text, is the false-capability failure this codebase keeps
+  // re-learning. So: return an excerpt of what was actually said.
+  //
+  // Capped per conversation and overall — the caller is a model with a context
+  // budget, and an unbounded dump of a long thread would crowd out the rest of the
+  // turn. The excerpt is explicitly marked so nothing reads as the full record.
+  const EXCERPT_MESSAGES = 6
+  const EXCERPT_CHARS = 600
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lines = (data as any[]).map((r) => {
     const when = typeof r.created_at === "string" ? r.created_at.slice(0, 10) : ""
-    let link = ""
-    if (r.source === "slack" && typeof r.source_ref === "string" && r.source_ref.includes(":")) {
-      const [ch, ts] = r.source_ref.split(":")
-      if (ch && ts) link = ` — https://slack.com/archives/${ch}/p${ts.replace(".", "")}`
+    const head = `• [${r.topic_slug ?? "untagged"}] ${r.status} (${when})`
+    const messages = Array.isArray(r.transcript) ? r.transcript : []
+    if (messages.length === 0) {
+      return `${head}\n    (no stored copy of this conversation — the CRM conversation log may still have it)`
     }
-    return `• [${r.topic_slug ?? "untagged"}] ${r.status} (${when})${link}`
+    const shown = messages.slice(-EXCERPT_MESSAGES)
+    const body = shown
+      .map((m: { author?: string; text?: string }) =>
+        `    ${m.author ?? "Team"}: ${String(m.text ?? "").replace(/\s+/g, " ").slice(0, EXCERPT_CHARS)}`,
+      )
+      .join("\n")
+    const more = messages.length > shown.length ? `\n    (${messages.length - shown.length} earlier message(s) not shown)` : ""
+    return `${head}\n${body}${more}`
   })
   return `Found ${data.length} tagged conversation(s):\n${lines.join("\n")}`
 }
