@@ -153,6 +153,15 @@ export async function POST(req: NextRequest) {
   }
 
   let scope: string
+  /**
+   * The client's display name, resolved SERVER-SIDE on the portal-chats surface.
+   *
+   * The panel sends `clientName` only on the staff member's first message, so
+   * anything reading `body.clientName` directly is null from turn 2 on — which is
+   * why the capability block started calling them "the client whose page is open"
+   * halfway through a conversation.
+   */
+  let resolvedClientName: string | null = null
   let userBody: string
   let surface: "inbox" | "portal-chats"
 
@@ -236,16 +245,40 @@ export async function POST(req: NextRequest) {
       // so replying to someone who dropped off the recent window still works.
       allowedEmailRecipients = collectThreadRecipients(thread.messages ?? [])
       const msgs = (thread.messages ?? []).slice(-5) // last 5 messages
-      if (context) {
-        const transcript = msgs
-          .map((m) => {
-            const from = getHeader(m.payload?.headers, "From")
-            const date = getHeader(m.payload?.headers, "Date")
-            const text = extractBody(m.payload).slice(0, 3000)
-            return `--- ${from} (${date}) ---\n${text}`
-          })
-          .join("\n\n")
-        context = { ...context, transcript, gmailThreadId, mailboxAddress }
+      // THE OPEN EMAIL IS REBUILT ON EVERY TURN, NOT JUST THE FIRST.
+      //
+      // Antonio, 2026-08-01: "If I tell it 'read the email' and we are talking about
+      // that email, it must remember what we are talking about and not forget."
+      //
+      // It used to be gated on `context`, which the panel sends only on the staff
+      // member's FIRST message. From turn 2 the thread was still fetched here and the
+      // transcript thrown away, so the worker's turn had the attachment list and the
+      // recipients block but NO EMAIL. That is exactly what happened on the Scaledge
+      // thread: asked about "this email", the worker truthfully answered that it could
+      // only see two PDFs, and had to be told "read the email sent to smit" before it
+      // would go and fetch what we had already taken away from it.
+      //
+      // Rebuilding costs prompt tokens only — the Gmail round-trip above was already
+      // being paid on every turn and its result discarded.
+      //
+      // Rebuilt rather than replayed on purpose: a reply that lands mid-conversation
+      // now appears. The old shape pinned the worker to the thread as it was on turn 1.
+      const transcript = msgs
+        .map((m) => {
+          const from = getHeader(m.payload?.headers, "From")
+          const date = getHeader(m.payload?.headers, "Date")
+          const text = extractBody(m.payload).slice(0, 3000)
+          return `--- ${from} (${date}) ---\n${text}`
+        })
+        .join("\n\n")
+      context = {
+        ...(context ?? {}),
+        subject: context?.subject ?? getHeader(msgs[msgs.length - 1]?.payload?.headers, "Subject") ?? undefined,
+        sender: context?.sender ?? getHeader(msgs[msgs.length - 1]?.payload?.headers, "From") ?? undefined,
+        mailbox: context?.mailbox ?? (mailboxAddress.startsWith("antonio") ? "antonio" : "support"),
+        transcript,
+        gmailThreadId,
+        mailboxAddress,
       }
       // Default reply target = the newest message in the thread, so a "reply with
       // this attached" keeps threading even if the model doesn't name an id.
@@ -259,7 +292,9 @@ export async function POST(req: NextRequest) {
         : ""
     } catch (err) {
       console.warn("[worker-chat] thread fetch failed (using snippet, no attachments):", err)
-      if (context) context = { ...context, gmailThreadId, mailboxAddress }
+      // Keep the thread id even when the fetch failed, on EVERY turn — it is the only
+      // handle the worker has to go and read the thread itself.
+      context = { ...(context ?? {}), gmailThreadId, mailboxAddress }
     }
 
     // STAFF DECIDE THE RECIPIENT (Antonio, 2026-07-29, dev job f55ea3bb): the
@@ -282,7 +317,35 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid clientKey" }, { status: 400 })
     }
     scope = `chat-${clientKey}`
-    userBody = buildClientWorkerUserBody(message, { name: body.clientName })
+    // THE CLIENT'S CONVERSATION, REBUILT EVERY TURN — the twin of the Inbox change
+    // above. The panel only sends `clientName` on the staff member's first message,
+    // so this must not depend on it: resolve the name server-side and hand over the
+    // chat itself, every turn, for the whole conversation.
+    const portalAccountId = clientKey!.startsWith("acct-") ? clientKey!.slice("acct-".length) : null
+    const portalContactId = clientKey!.startsWith("contact-") ? clientKey!.slice("contact-".length) : null
+    let portalTranscript = ""
+    resolvedClientName = body.clientName ?? null
+    try {
+      const { buildPortalChatTranscript } = await import("@/lib/portal/chat-attachment-harvest")
+      portalTranscript = await buildPortalChatTranscript({
+        accountId: portalAccountId ?? body.accountId ?? null,
+        contactId: portalContactId ?? body.contactId ?? null,
+      })
+      if (!resolvedClientName) {
+        const { supabaseAdmin: admin } = await import("@/lib/supabase-admin")
+        if (portalAccountId) {
+          const { data } = await admin.from("accounts").select("company_name").eq("id", portalAccountId).maybeSingle()
+          resolvedClientName = data?.company_name ?? null
+        } else if (portalContactId) {
+          const { data } = await admin.from("contacts").select("full_name").eq("id", portalContactId).maybeSingle()
+          resolvedClientName = data?.full_name ?? null
+        }
+      }
+    } catch (err) {
+      // Never fail the answer over context — the worker still has its tools.
+      console.warn("[worker-chat] portal transcript build failed:", err)
+    }
+    userBody = buildClientWorkerUserBody(message, { name: resolvedClientName, transcript: portalTranscript })
     surface = "portal-chats"
 
     // THIS CLIENT'S OWN ADDRESSES — the ones that need no confirm step when the
@@ -645,7 +708,7 @@ export async function POST(req: NextRequest) {
         // one — a different sentence, because the recipient is not fixed here and
         // telling the worker it is would have it assert a delivery that never happened.
         canProposePortal: surface === "inbox",
-        clientName: body.clientName ?? null,
+        clientName: resolvedClientName ?? body.clientName ?? null,
         // The real state of the action rail — so it never offers a queue that is off.
         canQueueApprovals: workerActionsEnabled(),
       })}${clientCardSuffix}${templatesSuffix}`,

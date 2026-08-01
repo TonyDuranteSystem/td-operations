@@ -134,3 +134,88 @@ export async function harvestPortalChatAttachments(opts: HarvestOpts): Promise<P
   const note = lines.length ? `\n\n--- FILES IN THIS CLIENT CHAT ---\n${lines.join("\n")}` : ""
   return { imageBlocks: read.imageBlocks, note }
 }
+
+/* ------------------------------------------------------------------------- *
+ * THE CONVERSATION ITSELF — what the client and we have actually said.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * How many recent portal messages the worker is handed on EVERY turn.
+ *
+ * Antonio, 2026-08-01: the worker must not forget what is on the screen in front
+ * of the staff member. It is NOT meant to hold the client's whole history — "if I
+ * need the worker to go back and read a specific conversation, I can tell him".
+ * So this is the visible conversation, not an archive; anything older is reachable
+ * with `portal_chat_read` when the staff member asks for it.
+ */
+export const CHAT_TRANSCRIPT_MESSAGE_LIMIT = 30
+
+/** Per-message cap, so one pasted wall of text cannot crowd out the rest. */
+export const CHAT_TRANSCRIPT_PER_MESSAGE_CHARS = 1500
+
+/**
+ * The client's portal conversation as plain text, oldest→newest.
+ *
+ * WHY THIS EXISTS: until 2026-08-01 the Portal Chats worker was handed the client's
+ * NAME and nothing else — never a single message, on any turn. It was sitting on a
+ * conversation it could not see, and could only reach it by choosing to call a tool.
+ * That is the same coin-flip that failed on the Inbox email thread, where the worker
+ * told the staff member it could not see an email that had simply been taken away
+ * from it after the first turn.
+ *
+ * Uses the SAME scope union as the attachment harvest above — portal messages live
+ * under BOTH account_id and contact_id, and a narrower filter silently misses the
+ * client's person-tagged messages.
+ *
+ * Best-effort: never throws. An empty string means the worker answers from tools
+ * alone, exactly as it did before.
+ */
+export async function buildPortalChatTranscript(opts: {
+  accountId?: string | null
+  contactId?: string | null
+}): Promise<string> {
+  const { accountId, contactId } = opts
+  if (!accountId && !contactId) return ""
+
+  try {
+    let q = supabaseAdmin
+      .from("portal_messages")
+      .select("sender_type, sender_name, message, created_at")
+      .is("deleted_at", null)
+      .order("created_at", { ascending: false })
+      .limit(CHAT_TRANSCRIPT_MESSAGE_LIMIT)
+
+    if (accountId && contactId) {
+      q = q.or(`account_id.eq.${accountId},and(contact_id.eq.${contactId},account_id.is.null)`)
+    } else if (accountId) {
+      q = q.eq("account_id", accountId)
+    } else if (contactId) {
+      q = q.eq("contact_id", contactId).is("account_id", null)
+    }
+
+    const { data } = await q
+    const rows = (data ?? []) as Array<{
+      sender_type: string
+      sender_name: string | null
+      message: string | null
+      created_at: string
+    }>
+    if (!rows.length) return ""
+
+    // Query is newest-first (so the LIMIT keeps the most recent); render oldest-first
+    // so the worker reads it the way a person would.
+    return rows
+      .slice()
+      .reverse()
+      .map((r) => {
+        const who = r.sender_type === "admin" ? `Us (${r.sender_name || "Tony Durante Team"})` : "Client"
+        const when = new Date(r.created_at).toISOString().slice(0, 16).replace("T", " ")
+        const text = (r.message ?? "").trim().slice(0, CHAT_TRANSCRIPT_PER_MESSAGE_CHARS)
+        return `--- ${who} (${when}) ---\n${text || "(no text — attachment only)"}`
+      })
+      .join("\n\n")
+  } catch (err) {
+    console.warn("[chat-transcript] query failed:", err)
+    return ""
+  }
+}
