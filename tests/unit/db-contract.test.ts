@@ -157,6 +157,11 @@ describe("checksumDefs", () => {
     // 3f58eb3fcf707e5cc3751583ee212ac6 over 200 (2026-07-28, 'revolut' source),
     // before that 9c43924c747b933a5336c5bcd57e780a over 200, 4d0d3a38… over 194,
     // and 665364ba9d4e7746d9f3fd558dc6ff55 over 190.
+    // Re-pinned again 2026-07-31 (later) after the second e-sign audit migration
+    // (20260731-2130) added 'deadline_changed' — staff can now change the deadline of a
+    // document already out with a client, and that change is recorded rather than silent.
+    // Count unchanged at 203 (a constraint REPLACED, not added). Previous pin
+    // 9b7d52e2e9c3f24ab52b77cddefb1398 over 203.
     // Re-pinned 2026-07-31 after Antonio applied the e-sign audit-event migration
     // (20260731-1830) to production by hand: esign_events_type_check gained 'expired'
     // + 'reopened'. Refreshing also picked up ONE unrelated constraint that had been
@@ -175,15 +180,16 @@ describe("checksumDefs", () => {
     // THE VALUE BELOW IS PRODUCTION'S OWN DIGEST, obtained by making PRODUCTION compute
     // it (md5 over `name|def` newline-joined, name-ordered — the same payload
     // checksumDefs builds), NOT by recomputing over this file until the test went green.
-    // The two are now identical, which is the point: they were NOT identical at first.
+    // The two were NOT identical at first, which is the whole point of pinning it.
     //
-    // Refreshing surfaced UNRELATED DRIFT, exactly as the file's readme warns: production's
-    // esign_events_type_check also allows 'deadline_changed', which the committed snapshot
-    // did not record and which NO code in this repo writes (EVENT_TYPES in lib/esign/events.ts
-    // stops at 'reopened'; a repo-wide search for the literal returns nothing). Someone added
-    // it to production by hand after the morning's snapshot. Recorded here rather than
-    // silently absorbed — the gate will now report it as a value the database allows and the
-    // code never writes, which is the honest state until someone decides which side is wrong.
+    // A NOTE THAT WAS WRONG, CORRECTED AT MERGE TIME: when this pin was first written the
+    // 'deadline_changed' e-sign value looked like drift — production allowed it and no code
+    // in THIS branch wrote it. It was not drift. It arrived with the e-sign deadline feature
+    // on main (migration 20260731-2130), and main's EVENT_TYPES writes it. Two sessions
+    // refreshed this snapshot hours apart from opposite sides of the same day: main's 203
+    // was correct before the portal-send constraints existed, this 206 is correct after.
+    // Kept as a reminder that "the database allows a value the code never writes" can simply
+    // mean you are reading a branch that has not caught up yet — check the other side first.
     expect(checksumDefs(prodConstraints())).toBe("1f184a85846080111ddb61ed31bf89a0")
   })
 })

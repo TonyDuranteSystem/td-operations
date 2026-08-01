@@ -10,6 +10,27 @@
  */
 export const DEFAULT_EXPIRY_DAYS = 30
 
+/**
+ * The windows staff can pick from, on creation and on reopen (Antonio,
+ * 2026-07-31). A fixed short list rather than a free number: the deadline drives
+ * client-facing chasing, and three predictable options are easier to reason
+ * about than an arbitrary integer someone typed once.
+ */
+export const EXPIRY_DAY_CHOICES = [7, 14, 30] as const
+export type ExpiryDays = (typeof EXPIRY_DAY_CHOICES)[number]
+
+/**
+ * Coerce anything (a form field, a JSON body, a stale client) to a permitted
+ * window. Anything unrecognized falls back to the default rather than erroring —
+ * a bad number must never block a document from being created.
+ */
+export function normalizeExpiryDays(value: unknown): ExpiryDays {
+  const n = typeof value === "string" ? Number(value) : value
+  return (EXPIRY_DAY_CHOICES as readonly number[]).includes(n as number)
+    ? (n as ExpiryDays)
+    : DEFAULT_EXPIRY_DAYS
+}
+
 /** Warn this far out, so there is time to chase before the document lapses. */
 export const EXPIRY_WARNING_DAYS = 3
 

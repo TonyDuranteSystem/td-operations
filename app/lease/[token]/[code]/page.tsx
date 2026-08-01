@@ -626,12 +626,18 @@ export default function LeasePageWithCode() {
                 try {
                   let blob = pdfBlobRef.current
                   if (!blob && lease.signed_at) {
-                    // Fetch from Supabase Storage
-                    const { data } = await supabasePublic.storage.from('signed-leases').list(token)
-                    const pdfFile = data?.sort((a, b) => b.name.localeCompare(a.name))[0]
-                    if (pdfFile) {
-                      const { data: downloaded } = await supabasePublic.storage.from('signed-leases').download(`${token}/${pdfFile.name}`)
-                      if (downloaded) blob = downloaded
+                    // Server doorway: verifies the lease access code, signs the EXACT
+                    // recorded lease path, returns a one-minute link. Replaces the old
+                    // anon list()+download(newest) so signed-leases needs no anon read.
+                    const qs = new URLSearchParams({ code })
+                    if (searchParams.get('preview') === 'td') qs.set('preview', 'td')
+                    const res = await fetch(`/api/lease/${encodeURIComponent(token)}/signed-pdf?${qs.toString()}`)
+                    if (res.ok) {
+                      const { url: signedUrl } = await res.json().catch(() => ({ url: null }))
+                      if (signedUrl) {
+                        const dl = await fetch(signedUrl)
+                        if (dl.ok) blob = await dl.blob()
+                      }
                     }
                   }
                   if (!blob) { alert('PDF not available. Please contact support.'); return }

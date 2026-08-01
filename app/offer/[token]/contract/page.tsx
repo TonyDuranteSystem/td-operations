@@ -760,11 +760,16 @@ export default function ContractPage() {
           try {
             let blob = pdfBlobRef.current
             if (!blob) {
-              const { data } = await supabasePublic.storage.from('signed-contracts').list(offer.token)
-              const pdfFile = data?.sort((a, b) => b.name.localeCompare(a.name))[0]
-              if (pdfFile) {
-                const { data: downloaded } = await supabasePublic.storage.from('signed-contracts').download(`${offer.token}/${pdfFile.name}`)
-                if (downloaded) blob = downloaded
+              // Server doorway: verifies the offer's access code, signs the EXACT
+              // recorded contract path, returns a one-minute link. Replaces the old
+              // anon list()+download(newest) so signed-contracts needs no anon read.
+              const res = await fetch(`/api/offer/${encodeURIComponent(offer.token)}/contract-pdf?code=${encodeURIComponent(offer.access_code || '')}`)
+              if (res.ok) {
+                const { url: signedUrl } = await res.json().catch(() => ({ url: null }))
+                if (signedUrl) {
+                  const dl = await fetch(signedUrl)
+                  if (dl.ok) blob = await dl.blob()
+                }
               }
             }
             if (!blob) { alert('PDF not available. Please contact support.'); return }
