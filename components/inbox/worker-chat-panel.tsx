@@ -181,6 +181,24 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
     return () => { alive = false; clearTimeout(t) }
   }, [clientQuery])
 
+  /**
+   * The staff member picked a DIFFERENT client than the one the message was written
+   * for. Blocks Confirm: the wording may name the wrong person, and the only honest
+   * repair is a rewrite (never a silent substitution — the card's promise is that what
+   * you read is what is sent).
+   *
+   * Only meaningful when the worker actually proposed someone. No proposal = nothing to
+   * compare, so this stays quiet; the prompt rule against naming a client in the message
+   * is what covers that case.
+   */
+  const recipientMismatch = Boolean(
+    preparedSend?.kind === 'portal' &&
+      portalTarget &&
+      (preparedSend.proposedAccountId || preparedSend.proposedContactId) &&
+      portalTarget.id !== preparedSend.proposedAccountId &&
+      portalTarget.id !== preparedSend.proposedContactId,
+  )
+
   const gmailThreadId = conversation.id.replace('gmail:', '')
 
   // Restore the recorded conversation on open — like opening a Slack thread.
@@ -440,6 +458,29 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
             <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
           </div>
 
+          {/* MISMATCH BACKSTOP. The message is written BEFORE the client is chosen, so
+              a name inside it is a guess the card cannot correct — and correcting it
+              server-side would edit text after a human approved it, which is the one
+              thing this card exists to prevent. On 2026-07-31 a message opening
+              "Hi Uxio" was delivered to a different client because the recipient was
+              changed here and the words could not follow.
+              The real fix is the prompt rule telling the worker not to put a client
+              name in the message at all; this catches what that misses. It fires only
+              when the worker actually proposed someone — a name invented inside the
+              text with no proposal is invisible here, which is why the prompt rule,
+              not this, is the primary control. */}
+          {recipientMismatch ? (
+            <div className="mt-2 rounded-lg border border-red-300 bg-red-50 px-2.5 py-2">
+              <p className="text-xs font-semibold text-red-800">
+                This message was written for {preparedSend.proposedName}, not {portalTarget?.name}.
+              </p>
+              <p className="mt-0.5 text-[11px] text-red-700">
+                It may name the wrong client. Press Reformulate so the assistant rewrites it for{' '}
+                {portalTarget?.name}, then send.
+              </p>
+            </div>
+          ) : null}
+
           {/* REFORMULATE. Goes back through the worker as a normal turn, which freezes
               a NEW draft and cancels this one — so the wording that was rejected can
               never be the wording that ships. Disabled while a send is in flight:
@@ -456,7 +497,16 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
                     const t = reformulateText.trim()
                     setReformulating(false)
                     setReformulateText('')
-                    send(`Rewrite the portal message for the client: ${t}. Then prepare it again.`, [])
+                    send(
+                      // Names the CHOSEN client when one is picked, so a rewrite
+                      // triggered by the mismatch warning actually lands on the right
+                      // person. Without it the worker rewrites blind and can repeat
+                      // the wrong name.
+                      portalTarget
+                        ? `Rewrite the portal message that is going to ${portalTarget.name}: ${t}. Then prepare it again.`
+                        : `Rewrite the portal message for the client: ${t}. Then prepare it again.`,
+                      [],
+                    )
                   }
                 }}
               />
@@ -467,7 +517,16 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
                     if (!t) return
                     setReformulating(false)
                     setReformulateText('')
-                    send(`Rewrite the portal message for the client: ${t}. Then prepare it again.`, [])
+                    send(
+                      // Names the CHOSEN client when one is picked, so a rewrite
+                      // triggered by the mismatch warning actually lands on the right
+                      // person. Without it the worker rewrites blind and can repeat
+                      // the wrong name.
+                      portalTarget
+                        ? `Rewrite the portal message that is going to ${portalTarget.name}: ${t}. Then prepare it again.`
+                        : `Rewrite the portal message for the client: ${t}. Then prepare it again.`,
+                      [],
+                    )
                   }}
                   disabled={!reformulateText.trim() || pending}
                   className="px-3 py-1.5 rounded-lg bg-zinc-800 text-white text-sm font-medium hover:bg-zinc-900 disabled:opacity-50"
@@ -486,8 +545,14 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
             <div className="mt-2.5 flex flex-wrap items-center gap-2">
               <button
                 onClick={() => resolvePreparedSend('confirm')}
-                disabled={confirming || !portalTarget}
-                title={!portalTarget ? 'Choose which client this goes to first' : undefined}
+                disabled={confirming || !portalTarget || recipientMismatch}
+                title={
+                  !portalTarget
+                    ? 'Choose which client this goes to first'
+                    : recipientMismatch
+                      ? 'This message was written for a different client — rewrite it first'
+                      : undefined
+                }
                 className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
               >
                 {confirming ? 'Sending…' : 'Confirm & send'}

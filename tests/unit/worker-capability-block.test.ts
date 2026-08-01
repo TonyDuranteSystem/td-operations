@@ -153,3 +153,52 @@ describe("approval-tier tools — no inventing a queue that is switched off", ()
       .toMatch(/no approval queue/i)
   })
 })
+
+describe("the Inbox 'propose a portal message' mode", () => {
+  it("tells the worker it PROPOSES onto a card — never that it sent", () => {
+    // Getting this sentence wrong is not cosmetic. The Inbox has no client fixed to
+    // the screen; telling the worker the recipient is "fixed server-side" (the wording
+    // the pinned surfaces get) had it assert deliveries that had not happened.
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
+    expect(block).toMatch(/staff member picks WHICH client/i)
+    expect(block).toMatch(/ready for them to confirm/i)
+    expect(block).toMatch(/NEVER say "sent"/i)
+    expect(block).not.toMatch(/PORTAL CHAT RECIPIENT is fixed server-side/i)
+  })
+
+  it("REGRESSION (2026-07-31): forbids putting a client's name in the message", () => {
+    // A message opening "Hi Uxio" was delivered to a different client entirely: the
+    // worker writes the text BEFORE the staff member chooses the recipient, the
+    // recipient was changed on the card, and the words could not follow. Substituting
+    // the name server-side is not an option — it would edit text after a human
+    // approved it, which is the one promise the card makes.
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
+    expect(block).toMatch(/DO NOT OPEN WITH A CLIENT'S NAME/i)
+    expect(block).toMatch(/before the staff member has chosen who receives it/i)
+  })
+
+  it("forbids taking the client from the email's sender", () => {
+    // On these threads the sender is routinely a bank or an accountant writing ABOUT
+    // a client — the client is who the email concerns, never who wrote it.
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
+    expect(block).toMatch(/NEVER take the client from the email's SENDER/i)
+  })
+
+  it("tells it the dropdown decides the language, not the conversation", () => {
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
+    expect(block).toMatch(/language dropdown decides the language/i)
+  })
+
+  it("does not claim portal sending is off when the propose mode is on", () => {
+    // The 'portal sending is OFF — do not offer it' line keys off canSendPortal, which
+    // is false on the Inbox by design. Left unguarded it would contradict the mode in
+    // the same block and the worker would refuse the thing it can now do.
+    const block = renderCapabilityBlock({ canSendEmail: true, canProposePortal: true })
+    expect(block).not.toMatch(/Portal-chat sending is OFF/i)
+  })
+
+  it("still says portal sending is off on a surface with neither mode", () => {
+    const block = renderCapabilityBlock({ canSendEmail: true })
+    expect(block).toMatch(/Portal-chat sending is OFF/i)
+  })
+})
