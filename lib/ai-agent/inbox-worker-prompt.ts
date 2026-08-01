@@ -111,6 +111,16 @@ export interface WorkerCapabilities {
    * to the staff member that a message went somewhere it did not.
    */
   canProposePortal?: boolean
+  /**
+   * WHAT THE CARD'S LANGUAGE DROPDOWN IS SET TO RIGHT NOW ("en" | "it").
+   *
+   * Telling the worker "the dropdown decides the language" without telling it the
+   * VALUE is an instruction it cannot follow. Observed 2026-08-01 in sandbox: the
+   * dropdown was set to Italian, the rewrite came back in English, and the frozen row
+   * recorded locale "it" against English text — the setting reached the database and
+   * never reached the model.
+   */
+  portalLocale?: "en" | "it"
   /** Display name of the client this call is pinned to, when there is one. */
   clientName?: string | null
   /**
@@ -193,7 +203,7 @@ ${caps.canProposePortal ? `- PORTAL CHAT from this screen works like the email c
   - The staff member picks the client on that card, and picks the language. Name the client you believe it is if you can — it is offered to them as a suggestion — but you are not choosing it. Say it is ready for them to confirm. NEVER say "sent", and never "sent to <client>".
   - NEVER take the client from the email's SENDER. That is the specific mistake this design exists to prevent.
   - DO NOT OPEN WITH A CLIENT'S NAME, and do not put any client or company name inside the message. Write "Hi," or just start with the point. You are writing the message BEFORE the staff member has chosen who receives it, so any name you put in the text is a guess that the card cannot correct — on 2026-07-31 a message opening "Hi Uxio" was delivered to a different client entirely, because the recipient was changed on the card and the words could not follow. The client is already inside their own portal chat; they know who they are.
-  - The card's language dropdown decides the language of the message, not the language the two of you were speaking. Set to Italian means write Italian even if the whole conversation was English, and the other way round.
+  - ⚠️ THE CARD'S LANGUAGE DROPDOWN IS CURRENTLY SET TO: **${caps.portalLocale === "it" ? "ITALIAN" : "ENGLISH"}**. WRITE THE MESSAGE IN ${caps.portalLocale === "it" ? "ITALIAN" : "ENGLISH"}, whatever language you and the staff member have been speaking. If they have been writing to you in ${caps.portalLocale === "it" ? "English" : "Italian"}, the message still goes out in ${caps.portalLocale === "it" ? "Italian" : "English"} — the dropdown decides, not the conversation, and not the client's record.
   - Once it is frozen, do NOT repeat the message text in your reply. The card already shows the exact words that will be sent; a second copy invites them to approve the version they read instead of the one that ships.
   - NEVER claim a card exists unless you called the tool on THIS turn and it told you the message was prepared. Saying "confirm on the card" when you only typed the draft into the chat points them at a control that is not there, and nothing is waiting to send.
 ` : ''}- Never send speculatively, and never on anything short of an explicit go-ahead.${approvals}${files}${caps.canSendEmail && !caps.canSendPortal && !caps.canProposePortal ? "\n- Portal-chat sending is OFF for this conversation — do not offer it." : ""}${(caps.canSendPortal || caps.canProposePortal) && !caps.canSendEmail ? "\n- Email sending is OFF for this conversation — do not offer it." : ""}`

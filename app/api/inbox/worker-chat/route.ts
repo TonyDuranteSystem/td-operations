@@ -708,6 +708,11 @@ export async function POST(req: NextRequest) {
         // one — a different sentence, because the recipient is not fixed here and
         // telling the worker it is would have it assert a delivery that never happened.
         canProposePortal: surface === "inbox",
+        // The dropdown's CURRENT value, so the worker can actually obey it. Without
+        // this it is told "the dropdown decides the language" and never told what the
+        // dropdown says — which is how a rewrite requested with Italian selected came
+        // back in English, with the row recording "it" against English text.
+        portalLocale,
         clientName: resolvedClientName ?? body.clientName ?? null,
         // The real state of the action rail — so it never offers a queue that is off.
         canQueueApprovals: workerActionsEnabled(),

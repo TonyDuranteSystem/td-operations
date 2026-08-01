@@ -186,7 +186,10 @@ describe("the Inbox 'propose a portal message' mode", () => {
 
   it("tells it the dropdown decides the language, not the conversation", () => {
     const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
-    expect(block).toMatch(/language dropdown decides the language/i)
+    // Wording strengthened 2026-08-01: it now names the CURRENT setting, because
+    // "the dropdown decides" without the value is an instruction nobody can follow.
+    expect(block).toMatch(/CURRENTLY SET TO/i)
+    expect(block).toMatch(/the dropdown decides, not the conversation/i)
   })
 
   it("does not claim portal sending is off when the propose mode is on", () => {
@@ -227,5 +230,34 @@ describe("REGRESSION 2026-08-01: the card must not be replaced by chat text", ()
     const block = renderCapabilityBlock({ canSendEmail: true })
     expect(block).toMatch(/show the full draft first/i)
     expect(block).not.toMatch(/do NOT type the draft into the chat and wait/i)
+  })
+})
+
+describe("REGRESSION 2026-08-01: the worker must be TOLD what the language dropdown says", () => {
+  it("states the current setting explicitly when it is Italian", () => {
+    // Observed in sandbox: dropdown on Italian, rewrite came back in ENGLISH, and the
+    // frozen row recorded locale "it" against English text. The setting reached the
+    // database and never reached the model — it was told "the dropdown decides" and
+    // never told what the dropdown was set to, which is an instruction it cannot obey.
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true, portalLocale: "it" })
+    expect(block).toMatch(/CURRENTLY SET TO: \*\*ITALIAN\*\*/i)
+    expect(block).toMatch(/WRITE THE MESSAGE IN ITALIAN/i)
+  })
+
+  it("states it explicitly when it is English", () => {
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true, portalLocale: "en" })
+    expect(block).toMatch(/CURRENTLY SET TO: \*\*ENGLISH\*\*/i)
+    expect(block).toMatch(/WRITE THE MESSAGE IN ENGLISH/i)
+  })
+
+  it("defaults to English when nothing was passed, rather than going silent", () => {
+    // A missing value must not produce "set to: undefined" or drop the line entirely.
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
+    expect(block).toMatch(/CURRENTLY SET TO: \*\*ENGLISH\*\*/i)
+  })
+
+  it("says the conversation's language does not decide it", () => {
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true, portalLocale: "it" })
+    expect(block).toMatch(/the dropdown decides, not the conversation/i)
   })
 })
