@@ -115,6 +115,11 @@ const PUBLIC_PREFIXES = [
   '/api/signature-request',
   '/api/signature-request-signed',
   '/api/offers',
+  // Public OFFER contract-PDF route. Token-gated, NOT session-gated: it verifies the
+  // offer token itself and returns a short-lived signed URL to the client's own signed
+  // contract (app/api/offer/[token]/contract-pdf), the way the lease/OA fetch routes do.
+  // The public contract page calls it instead of reading signed-contracts with the anon key.
+  '/api/offer/',
   // OAuth and well-known
   '/.well-known',
   '/oauth',

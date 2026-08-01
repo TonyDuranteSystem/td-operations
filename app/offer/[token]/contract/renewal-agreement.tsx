@@ -366,6 +366,7 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
           token={token}
           pdfBlob={pdfBlobRef.current}
           offerToken={offer.token}
+          accessCode={offer.access_code || ''}
         />
       )}
     </>
@@ -381,6 +382,7 @@ function RenewalPaymentPanel({
   token,
   pdfBlob,
   offerToken,
+  accessCode,
 }: {
   invoiceNumber: string
   bankDetails: BankDetails
@@ -389,6 +391,7 @@ function RenewalPaymentPanel({
   token: string
   pdfBlob: Blob | null
   offerToken: string
+  accessCode: string
 }) {
   const [showBank, setShowBank] = useState(false)
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
@@ -421,11 +424,16 @@ function RenewalPaymentPanel({
     try {
       let blob = pdfBlob
       if (!blob) {
-        const { data } = await supabasePublic.storage.from('signed-contracts').list(token)
-        const pdfFile = data?.sort((a, b) => b.name.localeCompare(a.name))[0]
-        if (pdfFile) {
-          const { data: downloaded } = await supabasePublic.storage.from('signed-contracts').download(`${token}/${pdfFile.name}`)
-          if (downloaded) blob = downloaded
+        // Server doorway: verifies the offer's access code, signs the EXACT
+        // recorded contract path, returns a one-minute link. Replaces the old
+        // anon list()+download(newest) so signed-contracts needs no anon read.
+        const res = await fetch(`/api/offer/${encodeURIComponent(offerToken)}/contract-pdf?code=${encodeURIComponent(accessCode)}`)
+        if (res.ok) {
+          const { url: signedUrl } = await res.json().catch(() => ({ url: null }))
+          if (signedUrl) {
+            const dl = await fetch(signedUrl)
+            if (dl.ok) blob = await dl.blob()
+          }
         }
       }
       if (!blob) { alert('PDF not available. Please contact support.'); return }

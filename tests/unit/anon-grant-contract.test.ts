@@ -82,13 +82,17 @@ const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
  * locking a table while its bucket stays open is half a fix — the signed PDFs
  * and uploads live here.
  */
+// signed-contracts / signed-leases were REMOVED 2026-08-01 (dev_task 97177e49): the
+// client download now goes through a token-checked server route that signs the exact
+// recorded path (/api/offer/[token]/contract-pdf, /api/lease/[token]/signed-pdf), so
+// the browser no longer reaches those buckets with the anon storage client. The
+// signed-PDF UPLOADS still POST to object/<bucket> via raw fetch (INSERT), which this
+// detector intentionally does not count (it only tracks `.storage.from(...)`).
 const ANON_REACHABLE_BUCKETS = [
   "banking-uploads",
   "closure-uploads",
   "formation-uploads",
   "onboarding-uploads",
-  "signed-contracts",
-  "signed-leases",
   "signed-oa",
   "tax-form-uploads",
 ]
