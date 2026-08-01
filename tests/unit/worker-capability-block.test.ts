@@ -202,3 +202,30 @@ describe("the Inbox 'propose a portal message' mode", () => {
     expect(block).toMatch(/Portal-chat sending is OFF/i)
   })
 })
+
+describe("REGRESSION 2026-08-01: the card must not be replaced by chat text", () => {
+  it("tells the worker that preparing IS the draft — do not type it and wait", () => {
+    // Live sandbox failure: asked to message the client, the worker typed the draft into
+    // the chat, said "please confirm on the card", and never called the tool. No card
+    // appeared, nothing was frozen, nothing would ever send — verified against the DB.
+    // Worse than the original refusal, because it looks like it worked.
+    // Cause: the generic "show the draft, wait for a go, THEN send" flow. On this screen
+    // freezing IS how the draft is shown, so following that rule literally means the
+    // review happens twice and the card step is never reached.
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
+    expect(block).toMatch(/do NOT type the draft into the chat and wait/i)
+    expect(block).toMatch(/Preparing it IS how the draft is shown/i)
+  })
+
+  it("forbids claiming a card exists when the tool was not called", () => {
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
+    expect(block).toMatch(/NEVER claim a card exists/i)
+  })
+
+  it("leaves the ordinary draft-then-go flow intact for email", () => {
+    // The exception is portal-only. Email must keep its show-draft-first discipline.
+    const block = renderCapabilityBlock({ canSendEmail: true })
+    expect(block).toMatch(/show the full draft first/i)
+    expect(block).not.toMatch(/do NOT type the draft into the chat and wait/i)
+  })
+})
