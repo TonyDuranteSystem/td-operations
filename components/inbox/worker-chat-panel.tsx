@@ -435,22 +435,40 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
             </div>
           )}
 
-          {/* LANGUAGE. A setting, not an action — it never rewrites what is on screen.
-              Antonio: "it's just a drop-down that Luca will choose if everything will
-              be in Italian or in English." Changing it takes effect on the next draft,
-              which is what Reformulate is for. */}
+          {/* LANGUAGE. Switching it REWRITES the message on the card straight away.
+              Antonio, 2026-08-01: "it's better if when we switch language in the dropdown
+              we have it in the selected language instead of asking to reformulate."
+              (This supersedes his earlier "it's just a drop-down" — as a plain setting it
+              only affected the NEXT draft, which meant switching to Italian and then
+              having to ask for a rewrite as a second step.)
+              Costs a round trip per switch, so it is disabled while a send is in flight
+              or a turn is already running — otherwise a toggle mid-confirm races the send
+              and could deliver the version the staff member just switched away from. */}
           <div className="mt-2 flex items-center gap-2 text-xs">
             <span className="text-zinc-500">Language:</span>
             <select
               value={portalLocale}
-              onChange={e => setPortalLocale(e.target.value as 'en' | 'it')}
-              disabled={confirming}
+              onChange={e => {
+                const next = e.target.value as 'en' | 'it'
+                if (next === portalLocale) return
+                setPortalLocale(next)
+                // Rewrite in the chosen language. Goes through the worker as a normal
+                // turn, so it freezes a NEW draft and supersedes this one — the version
+                // in the old language can never be the one that ships.
+                send(
+                  `Rewrite the portal message in ${next === 'it' ? 'Italian' : 'English'}. Keep the same meaning and length. Then prepare it again.`,
+                  [],
+                )
+              }}
+              disabled={confirming || pending}
               className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
             >
               <option value="en">English</option>
               <option value="it">Italian</option>
             </select>
-            <span className="text-zinc-400">the assistant writes in this language</span>
+            <span className="text-zinc-400">
+              {pending ? 'rewriting…' : 'switching rewrites the message'}
+            </span>
           </div>
 
           {/* THE MESSAGE — exactly what will be sent. */}
