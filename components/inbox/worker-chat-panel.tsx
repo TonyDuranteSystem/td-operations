@@ -34,12 +34,31 @@ interface ChatMsg {
 
 interface PreparedSend {
   id: string
-  to: string
-  subject: string
+  /**
+   * "email" | "portal". The two cards are NOT interchangeable: a portal draft has no
+   * recipient address and no subject, and its recipient is chosen here rather than
+   * frozen. Rendering one as the other produces "Email —" with a mailbox picker and a
+   * Confirm that cannot work.
+   */
+  kind: string
+  to: string | null
+  subject: string | null
   /** The exact text that will be sent — rendered so Confirm approves a MESSAGE,
    *  not just an address. */
   body: string
   attachments: Array<{ name: string; size?: number }>
+  /** Portal only — the client the worker suggested. A chip to click, never pre-selected. */
+  proposedAccountId?: string | null
+  proposedContactId?: string | null
+  proposedName?: string | null
+}
+
+/** One row of the all-roles client search, as the picker renders it. */
+interface ClientTarget {
+  type: 'account' | 'contact' | 'lead' | 'partner'
+  id: string
+  name: string
+  detail?: string
 }
 
 interface WorkerChatPanelProps {
@@ -63,6 +82,25 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
   // team sign-off unless the dropdown was touched every time — a changed sending
   // identity mid-conversation, which the counterparty sees and staff would not.
   const [sendAs, setSendAs] = useState<'support' | 'antonio'>(mailbox === 'antonio' ? 'antonio' : 'support')
+
+  /* ── PORTAL CARD STATE ────────────────────────────────────────────────────
+   * Antonio, 2026-07-31: the card asks WHO it goes to and in WHICH language, the
+   * worker writes the message, and Reformulate sends it back for a rewrite.
+   */
+  /** WHO. Starts EMPTY — always. The worker's suggestion is rendered as a chip the
+   *  staff member must click. A pre-selected picker turns Confirm into a one-click
+   *  send to a client nobody chose, on a screen full of mail written by strangers. */
+  const [portalTarget, setPortalTarget] = useState<ClientTarget | null>(null)
+  const [clientQuery, setClientQuery] = useState('')
+  const [clientResults, setClientResults] = useState<ClientTarget[]>([])
+  const [searching, setSearching] = useState(false)
+  /** WHICH LANGUAGE the worker must WRITE in. A setting, not an action: changing it
+   *  never rewrites the text on screen — the staff member uses Reformulate for that.
+   *  Sent with every turn so the next draft comes back in the chosen language. */
+  const [portalLocale, setPortalLocale] = useState<'en' | 'it'>('en')
+  const [reformulating, setReformulating] = useState(false)
+  const [reformulateText, setReformulateText] = useState('')
+
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentContextRef = useRef(false)
   const attachments = useWorkerAttachments()
@@ -71,10 +109,23 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
     if (!preparedSend || confirming) return
     setConfirming(true)
     try {
+      const isPortal = preparedSend.kind === 'portal'
+      // The chosen client travels with the click, not with the freeze — this is the
+      // one card where the recipient is decided at the last moment, so the server
+      // re-validates it before anything is written.
       const res = await fetch('/api/inbox/worker-chat/confirm-send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prepared_id: preparedSend.id, action, mailbox: sendAs }),
+        body: JSON.stringify({
+          prepared_id: preparedSend.id,
+          action,
+          mailbox: sendAs,
+          ...(isPortal && portalTarget
+            ? portalTarget.type === 'account'
+              ? { account_id: portalTarget.id }
+              : { contact_id: portalTarget.id }
+            : {}),
+        }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Could not complete — please try again.')
@@ -82,14 +133,26 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
         ...prev,
         {
           role: 'worker',
-          text: action === 'confirm'
-            ? (preparedSend.attachments.length
-                ? `✅ Sent to ${preparedSend.to} with ${preparedSend.attachments.map(a => a.name).join(', ')} attached.`
-                : `✅ Sent to ${preparedSend.to}.`)
-            : 'Cancelled — nothing was sent.',
+          text: action === 'cancel'
+            ? 'Cancelled — nothing was sent.'
+            : isPortal
+              // Says whether the client was actually EMAILED about it. The portal's
+              // "you have a new message" email is throttled to one per conversation
+              // every two hours, so a bare "Sent" would be untrue half the time.
+              ? `✅ Posted to ${data.recipientName ?? 'the client'}'s portal chat.${
+                  data.notified === 'emailed'
+                    ? ' They were emailed about it.'
+                    : " No email went out — they were notified about this chat recently, so it's in the portal only."
+                }`
+              : (preparedSend.attachments.length
+                  ? `✅ Sent to ${preparedSend.to} with ${preparedSend.attachments.map(a => a.name).join(', ')} attached.`
+                  : `✅ Sent to ${preparedSend.to}.`),
         },
       ])
       setPreparedSend(null)
+      setPortalTarget(null)
+      setClientQuery('')
+      setClientResults([])
     } catch (err) {
       setMessages(prev => [
         ...prev,
@@ -99,6 +162,24 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
       setConfirming(false)
     }
   }
+
+  // CLIENT SEARCH for the portal card. Reuses the SAME all-roles endpoint the Inbox's
+  // "Link to client" dialog uses (companies, contacts, leads, partners) — Antonio:
+  // "That field must check for everything from contact, company, lead, everything."
+  useEffect(() => {
+    const q = clientQuery.trim()
+    if (q.length < 2) { setClientResults([]); return }
+    let alive = true
+    setSearching(true)
+    const t = setTimeout(() => {
+      fetch(`/api/inbox/link-targets?q=${encodeURIComponent(q)}`)
+        .then(r => r.json())
+        .then((d: { targets?: ClientTarget[] }) => { if (alive) setClientResults(d.targets ?? []) })
+        .catch(() => { if (alive) setClientResults([]) })
+        .finally(() => { if (alive) setSearching(false) })
+    }, 200)
+    return () => { alive = false; clearTimeout(t) }
+  }, [clientQuery])
 
   const gmailThreadId = conversation.id.replace('gmail:', '')
 
@@ -150,6 +231,10 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
           gmailThreadId,
           mailbox,
           ...(attachments.length ? { attachments } : {}),
+          // The language the card is set to. Sent on EVERY turn, so a portal message
+          // the worker prepares is written in the language the staff member picked —
+          // not the language the two of them happen to be speaking.
+          portalLocale,
           // Email context only on the panel's first message — the worker's
           // persistent thread memory carries it afterwards.
           context: sentContextRef.current
@@ -185,6 +270,16 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
       setPreparedSend(data.preparedSend ?? null)
       // Fresh card → fresh choice, back to this thread's own mailbox.
       if (data.preparedSend) setSendAs(mailbox === 'antonio' ? 'antonio' : 'support')
+      // A NEW portal draft means a new decision. Clearing the picked client forces the
+      // staff member to choose again rather than inheriting a selection made against
+      // wording that has since been rewritten — the "I approved a different message"
+      // failure, one level up.
+      if (data.preparedSend?.kind === 'portal') {
+        setPortalTarget(null)
+        setClientQuery('')
+        setClientResults([])
+        setReformulateText('')
+      }
     } catch (err) {
       setMessages(prev => [
         ...prev,
@@ -244,7 +339,182 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
         )}
       </div>
 
-      {preparedSend && (
+      {/* PORTAL CARD — the client and the language are chosen HERE, then confirmed.
+          Separate from the email card below because almost nothing is shared: no
+          address, no subject, no mailbox, and a recipient that does not exist until
+          the staff member picks one. */}
+      {preparedSend && preparedSend.kind === 'portal' && (
+        <div className="border-t border-amber-200 bg-amber-50 px-4 py-3 shrink-0">
+          <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide mb-2">
+            Send to the client&apos;s portal chat — confirm before sending
+          </p>
+
+          {/* WHO. The most important control on the card: this screen does not fix the
+              client, so this choice IS the safety. */}
+          {portalTarget ? (
+            <div className="flex items-center gap-2 rounded-lg border border-emerald-300 bg-white px-2.5 py-2">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-zinc-900 truncate">{portalTarget.name}</p>
+                <p className="text-[11px] text-zinc-500">
+                  {portalTarget.type === 'account'
+                    ? 'Company — every member of this company will see this message'
+                    : "Person — goes to this person's own portal chat"}
+                  {portalTarget.detail ? ` · ${portalTarget.detail}` : ''}
+                </p>
+              </div>
+              <button
+                onClick={() => { setPortalTarget(null); setClientQuery('') }}
+                disabled={confirming}
+                className="ml-auto shrink-0 text-xs text-zinc-500 underline hover:text-zinc-800 disabled:opacity-50"
+              >
+                Change
+              </button>
+            </div>
+          ) : (
+            <div>
+              <input
+                value={clientQuery}
+                onChange={e => setClientQuery(e.target.value)}
+                disabled={confirming}
+                placeholder="Type the client's name — company, person or lead…"
+                className="w-full rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-800 placeholder:text-zinc-400 disabled:opacity-50"
+              />
+              {/* The worker's guess, offered rather than applied. */}
+              {preparedSend.proposedName && !clientQuery ? (
+                <button
+                  onClick={() =>
+                    setPortalTarget({
+                      type: preparedSend.proposedAccountId ? 'account' : 'contact',
+                      id: (preparedSend.proposedAccountId || preparedSend.proposedContactId) as string,
+                      name: preparedSend.proposedName as string,
+                    })
+                  }
+                  className="mt-1.5 text-xs text-blue-700 underline hover:text-blue-900"
+                >
+                  Suggested: {preparedSend.proposedName} — click to use
+                </button>
+              ) : null}
+              {searching ? <p className="mt-1.5 text-xs text-zinc-500">Searching…</p> : null}
+              {clientResults.length ? (
+                <div className="mt-1.5 max-h-36 overflow-y-auto rounded-lg border border-zinc-200 bg-white">
+                  {clientResults.map(t => (
+                    <button
+                      key={`${t.type}-${t.id}`}
+                      onClick={() => { setPortalTarget(t); setClientResults([]) }}
+                      className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-zinc-50"
+                    >
+                      <span className="text-sm text-zinc-800 truncate">{t.name}</span>
+                      <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-zinc-400">
+                        {t.type === 'account' ? 'Company' : t.type}
+                      </span>
+                      {/* Two clients with near-identical names are one click apart, so
+                          show whatever distinguishes them. */}
+                      {t.detail ? <span className="shrink-0 text-[11px] text-zinc-500">{t.detail}</span> : null}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          {/* LANGUAGE. A setting, not an action — it never rewrites what is on screen.
+              Antonio: "it's just a drop-down that Luca will choose if everything will
+              be in Italian or in English." Changing it takes effect on the next draft,
+              which is what Reformulate is for. */}
+          <div className="mt-2 flex items-center gap-2 text-xs">
+            <span className="text-zinc-500">Language:</span>
+            <select
+              value={portalLocale}
+              onChange={e => setPortalLocale(e.target.value as 'en' | 'it')}
+              disabled={confirming}
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
+            >
+              <option value="en">English</option>
+              <option value="it">Italian</option>
+            </select>
+            <span className="text-zinc-400">the assistant writes in this language</span>
+          </div>
+
+          {/* THE MESSAGE — exactly what will be sent. */}
+          <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-amber-200 bg-white px-2.5 py-2">
+            <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
+          </div>
+
+          {/* REFORMULATE. Goes back through the worker as a normal turn, which freezes
+              a NEW draft and cancels this one — so the wording that was rejected can
+              never be the wording that ships. Disabled while a send is in flight:
+              otherwise a slow Confirm plus an impatient rewrite delivers both. */}
+          {reformulating ? (
+            <div className="mt-2">
+              <input
+                value={reformulateText}
+                onChange={e => setReformulateText(e.target.value)}
+                placeholder="What should change? e.g. shorter, warmer, don't mention the rejection"
+                className="w-full rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-800 placeholder:text-zinc-400"
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && reformulateText.trim()) {
+                    const t = reformulateText.trim()
+                    setReformulating(false)
+                    setReformulateText('')
+                    send(`Rewrite the portal message for the client: ${t}. Then prepare it again.`, [])
+                  }
+                }}
+              />
+              <div className="mt-1.5 flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const t = reformulateText.trim()
+                    if (!t) return
+                    setReformulating(false)
+                    setReformulateText('')
+                    send(`Rewrite the portal message for the client: ${t}. Then prepare it again.`, [])
+                  }}
+                  disabled={!reformulateText.trim() || pending}
+                  className="px-3 py-1.5 rounded-lg bg-zinc-800 text-white text-sm font-medium hover:bg-zinc-900 disabled:opacity-50"
+                >
+                  Rewrite
+                </button>
+                <button
+                  onClick={() => { setReformulating(false); setReformulateText('') }}
+                  className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100"
+                >
+                  Back
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => resolvePreparedSend('confirm')}
+                disabled={confirming || !portalTarget}
+                title={!portalTarget ? 'Choose which client this goes to first' : undefined}
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {confirming ? 'Sending…' : 'Confirm & send'}
+              </button>
+              <button
+                onClick={() => setReformulating(true)}
+                disabled={confirming || pending}
+                className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100 disabled:opacity-50"
+              >
+                Reformulate
+              </button>
+              <button
+                onClick={() => resolvePreparedSend('cancel')}
+                disabled={confirming}
+                className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              {!portalTarget ? (
+                <span className="text-xs text-amber-800">Choose the client to enable sending.</span>
+              ) : null}
+            </div>
+          )}
+        </div>
+      )}
+
+      {preparedSend && preparedSend.kind !== 'portal' && (
         <div className="border-t border-amber-200 bg-amber-50 px-4 py-3 shrink-0">
           <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide mb-1">Confirm before sending</p>
           <p className="text-sm text-zinc-800">

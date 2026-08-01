@@ -1475,6 +1475,23 @@ export async function sendPortalMessageFromWorker(input: {
   account_id?: unknown
   contact_id?: unknown
   message?: unknown
+  /**
+   * EXACT RECIPIENT — do not narrow a company down to one member.
+   *
+   * Antonio, 2026-07-31 (verbatim): "If Luca will choose company, the message will go
+   * to the company! Stop! If Luca will choose the member of a company, it will go to
+   * the member."
+   *
+   * Set by the Confirm-card path, where a HUMAN picked the target and narrowing it
+   * would deliver somewhere they did not choose. It also fixes a real defect on that
+   * path: the notifier checks for a named person BEFORE it checks for a company, so
+   * narrowing means only ONE member is emailed about a company message. Passing the
+   * account alone reaches the all-members branch — every contact on the account plus
+   * chat-capable teammates.
+   *
+   * Left OFF for the pinned direct-send surfaces, whose behaviour must not change.
+   */
+  exact_recipient?: boolean
 }, actor?: string, sourceMessageId?: string | null): Promise<string> {
   const accountId =
     typeof input.account_id === "string" && input.account_id.length > 0 ? input.account_id : null
@@ -1501,7 +1518,7 @@ export async function sendPortalMessageFromWorker(input: {
   // fix, 2026-07-17 council WS0: a random member was getting a co-owner's
   // message + notification).
   let resolvedContactId = contactId
-  if (!resolvedContactId && accountId) {
+  if (!resolvedContactId && accountId && input.exact_recipient !== true) {
     const { data: links } = await db
       .from("account_contacts")
       .select("contact_id, role, ownership_pct, is_primary")
@@ -2566,6 +2583,49 @@ export async function executeWorkerTool(
     // confirm-the-recipient step (the email channel already has one, and it covers
     // the "email someone related to this chat" need this work was really about).
     const pin = sendContext?.pinnedPortalRecipient
+
+    // ── FREEZE-FOR-CONFIRM SURFACES (the Inbox) ────────────────────────────────
+    //
+    // A surface with a portal Confirm card NEVER sends from here. It freezes, and a
+    // human's click at /confirm-send is what delivers. This branch returns in every
+    // path, so nothing below it can run for such a surface.
+    //
+    // FAIL CLOSED, and this ordering is the whole safety story: the check is the
+    // FIRST thing in the branch, before the pin fallback below. The Inbox reads mail
+    // written by strangers, so if this surface ever gained the tool WITHOUT a freeze
+    // context, falling through to the direct send would let a line inside an inbound
+    // email aim a real, client-visible, auto-emailing message. Both reviewers called
+    // that the top blocker of this whole job. Refuse instead — loudly, in words the
+    // staff member can act on.
+    const portalPrep = sendContext?.portalSendPrep
+    if (portalPrep) {
+      if (sendContext?.portalFrozenThisTurn) {
+        return "❌ There's already a message waiting on the Confirm card. Send or cancel that one first, then I'll prepare the next."
+      }
+      const rawMessage = typeof (params as { message?: unknown }).message === "string"
+        ? stripDraftMarkdown(((params as { message?: string }).message ?? "").trim())
+        : ""
+      const { preparePortalSend } = await import("@/lib/inbox/worker-portal-freeze")
+      const result = await preparePortalSend({
+        threadUuid: portalPrep.threadUuid,
+        message: rawMessage,
+        // A SUGGESTION, never an authorisation. Stored in its own columns; the card
+        // shows it as something to click, and the confirm endpoint reads only what
+        // the human actually chose.
+        proposedAccountId: (params as { account_id?: string }).account_id ?? null,
+        proposedContactId: (params as { contact_id?: string }).contact_id ?? null,
+        locale: portalPrep.locale,
+        actor: sendContext?.actor ?? "unknown",
+      })
+      if (result.ok) {
+        if (sendContext) sendContext.portalFrozenThisTurn = true
+        return result.message
+      }
+      return result.message
+    }
+
+    // ── PINNED DIRECT-SEND SURFACES (Portal Chats panel, sidebar, Team Chat) ────
+    // Unchanged. These have no card, and the screen fixes the recipient.
     const portalParams =
       pin && (pin.account_id || pin.contact_id)
         ? { ...params, account_id: pin.account_id ?? undefined, contact_id: pin.contact_id ?? undefined }
@@ -3233,6 +3293,31 @@ export interface WorkerSendContext {
    * reviewed. The turn must instead end with a NEW draft for approval.
    */
   portalSendLatched?: boolean
+  /**
+   * PORTAL FREEZE CONTEXT — set only by a surface that has a Confirm card able to
+   * render a portal message (today: the Inbox worker panel).
+   *
+   * Its presence is what turns `send_portal_message` from "send now" into "freeze
+   * for a human". The Inbox has NO pinned client — it is an email thread, often
+   * written by a stranger — so the recipient is chosen by the staff member ON the
+   * card and re-validated server-side at Confirm. The worker may only PROPOSE one.
+   *
+   * Antonio, 2026-07-31: "the worker must send the message with the card that we
+   * already built in Inbox … we want the same thing."
+   */
+  portalSendPrep?: {
+    threadUuid: string
+    /** "en" | "it" — the language the card's dropdown is currently set to. */
+    locale: string
+  }
+  /**
+   * MUTABLE latch, twin of `frozenThisTurn` but for the portal channel.
+   *
+   * DELIBERATELY SEPARATE from the email latch, not shared. Antonio's flagship flow
+   * is doing BOTH on one email thread — reply to the bank AND message the client —
+   * and a single shared latch makes the second one impossible in the same turn.
+   */
+  portalFrozenThisTurn?: boolean
   /**
    * Canonical per-client memory namespace ("account:<id>" | "contact:<id>") for
    * memory_save on client-scoped surfaces, injected server-side so lessons the

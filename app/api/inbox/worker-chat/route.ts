@@ -122,6 +122,14 @@ export async function POST(req: NextRequest) {
     accountId?: string | null
     contactId?: string | null
     /**
+     * Inbox mode — the language the Confirm card's dropdown is currently set to
+     * ("en" | "it"). Sent on every turn so a portal message the worker prepares is
+     * WRITTEN in the language the staff member picked, whatever language the two of
+     * them were speaking (Antonio, 2026-07-31). Validated server-side; anything
+     * unrecognised falls back to English.
+     */
+    portalLocale?: string
+    /**
      * Files the staff member pasted/dropped into the panel this turn. Already
      * uploaded to the PRIVATE worker-attachments bucket via /upload-url — we get
      * the object path, never the bytes (a base64 body would 413 at the edge).
@@ -147,6 +155,21 @@ export async function POST(req: NextRequest) {
   let scope: string
   let userBody: string
   let surface: "inbox" | "portal-chats"
+
+  /**
+   * WHICH LANGUAGE a portal message prepared on this turn must be WRITTEN in.
+   *
+   * Antonio, 2026-07-31 (verbatim): "Luca will choose the language in the dropdown:
+   * Italian or English. When Luca chooses English, Luca can also speak in Italian for
+   * the message, but the system will always go out in English."
+   *
+   * So it comes from the card, not from the client's record and not from detecting
+   * the conversation's language. It is an INSTRUCTION to the worker. English is the
+   * dropdown's initial position; once the staff member changes it the panel sends the
+   * chosen value back on every subsequent turn. Anything unrecognised falls back to
+   * English rather than being trusted — this value reaches a client-facing message.
+   */
+  const portalLocale: "en" | "it" = body.portalLocale === "it" ? "it" : "en"
   // Per-call system-prompt suffix carrying the verified client card (portal-chats
   // surface only). Appended to systemPromptOverride — never stored in the thread.
   let clientCardSuffix = ""
@@ -513,6 +536,26 @@ export async function POST(req: NextRequest) {
                 },
               }
             : {}),
+          // PORTAL CHAT FROM THE INBOX (Antonio, 2026-07-31 — Luca's request of
+          // 2026-07-30: "It would be really useful if the Worker could send Portal
+          // Chat messages directly from the Inbox after reading an email.")
+          //
+          // The tool is loaded here, but `portalSendPrep` is what decides what it
+          // DOES: with a freeze context present the executor freezes and returns; it
+          // can never reach the direct send. There is deliberately NO
+          // pinnedPortalRecipient on this surface — the Inbox has no client, and
+          // guessing one from the sender would aim at the bank or the accountant who
+          // wrote the email rather than the client it is about. The human picks on
+          // the card and the confirm endpoint re-validates.
+          enableSlackSend: true as const,
+          portalSendPrep: {
+            threadUuid: threadId,
+            // The card's dropdown is the authority on language (Antonio: "Luca will
+            // choose the language in the dropdown"). This is the value it currently
+            // shows; the worker writes in it. English until the staff member changes
+            // it — the card sends the chosen one back on the next turn.
+            locale: portalLocale,
+          },
         }
       : {
           enableSlackSend: true,
@@ -598,6 +641,10 @@ export async function POST(req: NextRequest) {
       systemPromptOverride: `${buildWorkerSurfacePrompt(surface, {
         canSendEmail: true,
         canSendPortal: surface === "portal-chats",
+        // The Inbox PROPOSES a portal message onto a Confirm card instead of sending
+        // one — a different sentence, because the recipient is not fixed here and
+        // telling the worker it is would have it assert a delivery that never happened.
+        canProposePortal: surface === "inbox",
         clientName: body.clientName ?? null,
         // The real state of the action rail — so it never offers a queue that is off.
         canQueueApprovals: workerActionsEnabled(),
@@ -712,10 +759,16 @@ export async function POST(req: NextRequest) {
     // turn — never a stale prior pending one.
     let preparedSend: {
       id: string
-      to: string
-      subject: string
+      /** "email" | "portal" — the panel renders a different card for each. */
+      kind: string
+      to: string | null
+      subject: string | null
       body: string
       attachments: Array<{ name: string; size?: number }>
+      /** Portal only — the client the WORKER suggested, offered as a chip to click. */
+      proposedAccountId?: string | null
+      proposedContactId?: string | null
+      proposedName?: string | null
     } | null = null
     // NOT gated on `sendableUploads.length` any more. That gate meant only a send
     // WITH an attachment could ever produce a confirm card — which is why a plain
@@ -727,8 +780,35 @@ export async function POST(req: NextRequest) {
       // one, and never a colleague's draft on the same shared conversation.
       const prep = await findPreparedFrozenThisTurn(threadId, sendActor, priorPending)
       if (prep) {
+        // The worker's SUGGESTED client, resolved to a name so the card can offer it
+        // as something to click. Deliberately NOT pre-selected: a pre-filled picker
+        // makes Confirm a one-click send to a name nobody chose, which on a screen
+        // full of mail written by strangers is the exact risk the card exists for.
+        let proposedName: string | null = null
+        if (prep.kind === "portal" && (prep.proposed_account_id || prep.proposed_contact_id)) {
+          try {
+            if (prep.proposed_account_id) {
+              const { data } = await supabaseAdmin
+                .from("accounts")
+                .select("company_name")
+                .eq("id", prep.proposed_account_id)
+                .maybeSingle()
+              proposedName = data?.company_name ?? null
+            } else if (prep.proposed_contact_id) {
+              const { data } = await supabaseAdmin
+                .from("contacts")
+                .select("full_name")
+                .eq("id", prep.proposed_contact_id)
+                .maybeSingle()
+              proposedName = data?.full_name ?? null
+            }
+          } catch {
+            // A missing suggestion is fine — the staff member searches instead.
+          }
+        }
         preparedSend = {
           id: prep.id,
+          kind: prep.kind,
           to: prep.to_address,
           subject: prep.subject,
           // The BODY is returned so the panel can show what will actually be sent.
@@ -736,6 +816,9 @@ export async function POST(req: NextRequest) {
           // approves one draft and a different one goes out.
           body: prep.body ?? "",
           attachments: prep.attachments,
+          proposedAccountId: prep.proposed_account_id ?? null,
+          proposedContactId: prep.proposed_contact_id ?? null,
+          proposedName,
         }
       }
     } catch (err) {

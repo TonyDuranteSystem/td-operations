@@ -553,7 +553,15 @@ export async function processClaudeReply(params: {
       // so an unscoped "newest pending row" let turn A pick up turn B's draft — A's
       // answer would carry B's recipient while A's own email became invisible.
       const prep = await findPreparedFrozenThisTurn(threadId, sendActor, priorPrepared)
-      if (prep) {
+      // EMAIL ONLY. A frozen PORTAL draft carries no to_address/subject (the database
+      // refuses to store them on a portal row), so without this guard the card below
+      // would be written into a permanent, channel-visible chat message reading
+      // "Confirm email to null" — and unlike the ephemeral panel cards, that one stays
+      // there for anyone to click. Team Chat has no client picker and no language
+      // dropdown, so it cannot host a portal card at all; suppress it here.
+      // Explicit on purpose: tsconfig has `strict: false`, so the nullable type alone
+      // would not have caught this at build time.
+      if (prep && prep.kind === 'email') {
         const files = ((prep.attachments ?? []) as Array<{ name?: string }>)
           .map(a => a.name)
           .filter(Boolean)

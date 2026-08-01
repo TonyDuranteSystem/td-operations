@@ -168,7 +168,23 @@ describe("checksumDefs", () => {
     // (2026-07-29, S-corp books), before that 3f58eb3fcf707e5cc3751583ee212ac6 over
     // 200 (2026-07-28, 'revolut' source), 9c43924c747b933a5336c5bcd57e780a over 200,
     // 4d0d3a38… over 194, and 665364ba9d4e7746d9f3fd558dc6ff55 over 190.
-    expect(checksumDefs(prodConstraints())).toBe("9b7d52e2e9c3f24ab52b77cddefb1398")
+    // Re-pinned 2026-07-31 (later the same day) with the portal-send migration: Antonio
+    // applied it to production by hand, adding worker_prepared_sends_kind_check,
+    // _draft_locale_check and _kind_shape — 203 -> 206.
+    //
+    // THE VALUE BELOW IS PRODUCTION'S OWN DIGEST, obtained by making PRODUCTION compute
+    // it (md5 over `name|def` newline-joined, name-ordered — the same payload
+    // checksumDefs builds), NOT by recomputing over this file until the test went green.
+    // The two are now identical, which is the point: they were NOT identical at first.
+    //
+    // Refreshing surfaced UNRELATED DRIFT, exactly as the file's readme warns: production's
+    // esign_events_type_check also allows 'deadline_changed', which the committed snapshot
+    // did not record and which NO code in this repo writes (EVENT_TYPES in lib/esign/events.ts
+    // stops at 'reopened'; a repo-wide search for the literal returns nothing). Someone added
+    // it to production by hand after the morning's snapshot. Recorded here rather than
+    // silently absorbed — the gate will now report it as a value the database allows and the
+    // code never writes, which is the honest state until someone decides which side is wrong.
+    expect(checksumDefs(prodConstraints())).toBe("1f184a85846080111ddb61ed31bf89a0")
   })
 })
 
@@ -187,8 +203,13 @@ describe("the committed production snapshot", () => {
     // one, so the count should not have moved at all — it did, which is how the refresh
     // surfaced staff_note_replies_body_check sitting on production unrecorded since
     // 07-29. Exactly the rot this file's own readme warns about, caught by refreshing.
-    expect(prodSnapshotMeta().count).toBe(203)
-    expect(Object.keys(prodConstraints())).toHaveLength(203)
+    // 07-31 (later): 203 -> 206, the three worker_prepared_sends constraints Antonio applied
+    // to production for the portal-send card. The count moved by exactly the three added, so
+    // nothing else appeared this time — but the DEFINITIONS had drifted anyway
+    // (esign_events_type_check gained 'deadline_changed' on production by hand), which a count
+    // check alone cannot see. That is why the digest above is pinned to production's own value.
+    expect(prodSnapshotMeta().count).toBe(206)
+    expect(Object.keys(prodConstraints())).toHaveLength(206)
   })
 
   it("PRODUCTION accepts every value the code can write", () => {
