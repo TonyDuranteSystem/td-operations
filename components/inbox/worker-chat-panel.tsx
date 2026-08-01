@@ -94,9 +94,9 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
   const [clientQuery, setClientQuery] = useState('')
   const [clientResults, setClientResults] = useState<ClientTarget[]>([])
   const [searching, setSearching] = useState(false)
-  /** WHICH LANGUAGE the worker must WRITE in. A setting, not an action: changing it
-   *  never rewrites the text on screen — the staff member uses Reformulate for that.
-   *  Sent with every turn so the next draft comes back in the chosen language. */
+  /** WHICH LANGUAGE the worker must WRITE in. Switching it REWRITES the message on the
+   *  card immediately (Antonio, 2026-08-01) — see the dropdown below. Sent with every
+   *  turn so the worker always knows which language it is writing for. */
   const [portalLocale, setPortalLocale] = useState<'en' | 'it'>('en')
   const [reformulating, setReformulating] = useState(false)
   const [reformulateText, setReformulateText] = useState('')
@@ -233,7 +233,15 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
     return () => clearInterval(t)
   }, [pending])
 
-  const send = async (text: string, attachments: UploadedAttachment[]) => {
+  /**
+   * `localeOverride` exists because React state is not readable in the same tick it
+   * is set. The language dropdown calls setPortalLocale(next) and then send(...) in
+   * one handler, so `portalLocale` in this closure is still the PREVIOUS value —
+   * which recorded a frozen Italian message as English on its very first live run.
+   * The chosen language reaches a client-facing message, so it is passed explicitly
+   * rather than read back from state.
+   */
+  const send = async (text: string, attachments: UploadedAttachment[], localeOverride?: 'en' | 'it') => {
     if (!text || pending) return
     const shown = attachments.length
       ? `${text}\n\n📎 ${attachments.map(a => a.name).join(', ')}`
@@ -252,7 +260,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
           // The language the card is set to. Sent on EVERY turn, so a portal message
           // the worker prepares is written in the language the staff member picked —
           // not the language the two of them happen to be speaking.
-          portalLocale,
+          portalLocale: localeOverride ?? portalLocale,
           // Email context only on the panel's first message — the worker's
           // persistent thread memory carries it afterwards.
           context: sentContextRef.current
@@ -458,6 +466,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
                 send(
                   `Rewrite the portal message in ${next === 'it' ? 'Italian' : 'English'}. Keep the same meaning and length. Then prepare it again.`,
                   [],
+                  next,
                 )
               }}
               disabled={confirming || pending}
