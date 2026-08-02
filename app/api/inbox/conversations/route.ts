@@ -5,6 +5,14 @@ import { MARK_LABEL_PREFIX, markFromLabelNames } from "@/lib/inbox/color-marks"
 import { decodeHtmlEntities, displayNameFromHeader } from "@/lib/inbox/email-html"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import { buildGmailQueryParams, toInboxView } from "@/lib/inbox/view-query"
+import { allSettledBounded } from "@/lib/inbox/bounded-settled"
+
+/**
+ * Max simultaneous Gmail thread-metadata fetches for one inbox page.
+ * Gmail: 250 quota units/user/sec; `threads.get` = 10 → ~25 calls/sec ceiling.
+ * 12 keeps the page comfortably inside that with headroom for other callers.
+ */
+const GMAIL_THREAD_FETCH_CONCURRENCY = 12
 import {
   isInstantSearchQuery,
   isBackfillDone,
@@ -213,10 +221,19 @@ export async function GET(req: NextRequest) {
         const emailLookup = await emailLookupPromise
 
         if (allThreadIds.length > 0) {
-          // Fetch metadata for each thread — limit to 300 to balance completeness vs speed
+          // Fetch metadata for each thread — limit to 300 to balance completeness vs speed.
+          // BOUNDED CONCURRENCY (incident 2026-08-02): this used a bare
+          // Promise.allSettled over all 300, firing 300 simultaneous Gmail calls.
+          // `threads.get` costs 10 quota units against a 250 units/user/sec limit
+          // (~25 calls/sec), so the burst rate-limited ITSELF — most threads came
+          // back rejected and rendered as "Couldn't load — retrying" stubs, and any
+          // other Gmail activity made it dramatically worse. Capping in-flight
+          // requests keeps the whole page inside the quota, so rows actually load.
           const threadsToFetch = allThreadIds.slice(0, 300)
-          const threadDetails = await Promise.allSettled(
-            threadsToFetch.map((t) =>
+          const threadDetails = await allSettledBounded(
+            threadsToFetch,
+            GMAIL_THREAD_FETCH_CONCURRENCY,
+            (t) =>
               gmailGet(`/threads/${t.id}`, {
                 format: "metadata",
                 metadataHeaders: ["From", "To", "Subject", "Date"],
@@ -224,7 +241,6 @@ export async function GET(req: NextRequest) {
                 id: string
                 messages: GmailAPIMessage[]
               }>
-            )
           )
 
           // Our own mailbox addresses — used to find external party
