@@ -37,12 +37,37 @@ export async function POST(req: NextRequest) {
   const db = supabaseAdmin as any
   const { data: row } = await db
     .from("worker_prepared_sends")
-    .select("id, mailbox, status")
+    .select("id, kind, mailbox, status, actor")
     .eq("id", preparedId)
     .maybeSingle()
   if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 })
   if (row.status !== "pending") {
-    return NextResponse.json({ error: `This email was already ${row.status}.` }, { status: 409 })
+    // Says "message", not "email" — a superseded PORTAL draft resolves here too, and
+    // the Reformulate button makes that an everyday event rather than an edge case.
+    return NextResponse.json({ error: `This message was already ${row.status}.` }, { status: 409 })
+  }
+
+  // ── PORTAL BRANCH ──────────────────────────────────────────────────────────
+  // Read the kind FROM THE ROW and branch BEFORE anything touches `mailbox`. All
+  // four card surfaces post a mailbox unconditionally, and the email claim writes it
+  // back — which on a portal row violates the shape constraint, fails the claim, and
+  // (because supabase-js returns errors rather than throwing) reports "already sent"
+  // while nothing was sent and the row is still pending. Branching first is what
+  // stops that; the constraint is the floor underneath it, not the mechanism.
+  if (row.kind === "portal") {
+    const { confirmPortalSend } = await import("@/lib/inbox/worker-portal-freeze")
+    const result = await confirmPortalSend({
+      preparedId,
+      actorEmail: user.email ?? "unknown",
+      rowActor: row.actor ?? "",
+      accountId: typeof body.account_id === "string" ? body.account_id : null,
+      contactId: typeof body.contact_id === "string" ? body.contact_id : null,
+      action: action as "confirm" | "cancel",
+    })
+    if (result.ok === false) {
+      return NextResponse.json({ error: result.reason }, { status: result.status ?? 400 })
+    }
+    return NextResponse.json({ ok: true, ...result })
   }
 
   // The confirming staff must have access to the mailbox this sends AS — an

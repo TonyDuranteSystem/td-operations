@@ -26,6 +26,7 @@ import type { WorkerImageBlock, WorkerDocumentBlock } from '@/lib/ai-agent/worke
 import { fullReachEnabledFor } from '@/lib/ai-agent/full-reach'
 import { surfaceApiKeyOverride } from '@/lib/ai-agent/surface-api-key'
 import { reportSystemError } from '@/lib/system-errors'
+import { teamChatCardForFrozenDraft } from '@/lib/team/confirm-card'
 import {
   snapshotPendingPreparedIds,
   findPreparedFrozenThisTurn,
@@ -553,11 +554,8 @@ export async function processClaudeReply(params: {
       // so an unscoped "newest pending row" let turn A pick up turn B's draft — A's
       // answer would carry B's recipient while A's own email became invisible.
       const prep = await findPreparedFrozenThisTurn(threadId, sendActor, priorPrepared)
-      if (prep) {
-        const files = ((prep.attachments ?? []) as Array<{ name?: string }>)
-          .map(a => a.name)
-          .filter(Boolean)
-          .join(', ')
+      const card = teamChatCardForFrozenDraft(prep)
+      if (card) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await (supabaseAdmin as any).from('internal_messages').update({
           // NOT-A-PLACEHOLDER guard, twin to the answer write above: a card must
@@ -565,16 +563,7 @@ export async function processClaudeReply(params: {
           // render a Confirm button under a thinking spinner). The costs is one
           // line; the invariant otherwise rests on the function ceiling staying
           // below the abandon window forever.
-          card: {
-            kind: 'email_confirm',
-            title: `Confirm email to ${prep.to_address}`,
-            subtitle: [prep.subject, files ? `📎 ${files}` : ''].filter(Boolean).join(' — ') || undefined,
-            entity_type: 'worker_prepared_send',
-            entity_id: prep.id,
-            // The exact body that will be sent, so Confirm approves a MESSAGE and
-            // not just an address (the panels render it for the same reason).
-            body: typeof prep.body === 'string' ? prep.body : '',
-          },
+          card,
         })
           .eq('id', placeholderId)
           .not('message', 'in', `("${THINKING_PLACEHOLDER}","${WORKING_PLACEHOLDER}")`)

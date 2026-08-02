@@ -38,6 +38,7 @@ import { OA_AGREEMENT_SIGNATURE_METHODS, OA_SIGNATURE_METHODS } from "@/lib/oa/s
 import { OWNER_CATEGORIES } from "@/lib/owner-finance"
 import { STAFF_NOTE_VISIBILITIES } from "@/lib/notes/staff-notes"
 import { EVENT_TYPES as ESIGN_EVENT_TYPES } from "@/lib/esign/events"
+import { PREPARED_SEND_KINDS, PREPARED_SEND_LOCALES } from "@/lib/inbox/prepared-send-vocabulary"
 
 /** name → `pg_get_constraintdef()` text, exactly as Postgres prints it. */
 export type ConstraintDefs = Record<string, string>
@@ -104,6 +105,16 @@ export const CONSTRAINT_CONTRACTS = [
   // envelopes and 0 expiry audit rows. This is a LEGAL audit trail for signatures; a value the
   // database rejects is an event that never happened as far as the record is concerned.
   { table: "esign_events", column: "event_type", constraint: "esign_events_type_check", values: ESIGN_EVENT_TYPES },
+  // Registered 2026-07-31 with the migration that created them (dev job d2024649 — the Inbox
+  // worker can freeze a PORTAL CHAT message for Confirm, not just an email).
+  // `kind` is the discriminator the confirm endpoint branches on: a value the database rejects
+  // means the freeze never lands and the staff member is told to try again forever; a value the
+  // CODE fails to recognise would send a portal message down the Gmail dispatcher. It is NOT NULL
+  // with no default precisely so a forgetful insert raises instead of defaulting to "email".
+  { table: "worker_prepared_sends", column: "kind", constraint: "worker_prepared_sends_kind_check", values: PREPARED_SEND_KINDS },
+  // `draft_locale` is the language the staff member PICKED on the card, carried as an instruction
+  // to the worker (Antonio, 2026-07-31) — never a detector verdict, hence no "unknown".
+  { table: "worker_prepared_sends", column: "draft_locale", constraint: "worker_prepared_sends_draft_locale_check", values: PREPARED_SEND_LOCALES },
 ] as const
 
 /**
@@ -116,6 +127,10 @@ export const NOT_A_VOCABULARY = new Set([
   "payments_bank_preference_check", // regex + enum hybrid
   "client_invoices_recurring_frequency_check",
   "td_books_transactions_transaction_ref_check", // shape rule: non-blank ref, not a value list
+  // Shape rule, not a vocabulary: an email row must carry mailbox/to_address/subject, a PORTAL
+  // row must carry none of them. This is what makes "a portal message dispatched down the Gmail
+  // path" impossible at the storage layer instead of at a branch someone can reorder.
+  "worker_prepared_sends_kind_shape",
 ])
 
 /**

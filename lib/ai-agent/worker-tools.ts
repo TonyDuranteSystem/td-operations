@@ -1475,6 +1475,23 @@ export async function sendPortalMessageFromWorker(input: {
   account_id?: unknown
   contact_id?: unknown
   message?: unknown
+  /**
+   * EXACT RECIPIENT — do not narrow a company down to one member.
+   *
+   * Antonio, 2026-07-31 (verbatim): "If Luca will choose company, the message will go
+   * to the company! Stop! If Luca will choose the member of a company, it will go to
+   * the member."
+   *
+   * Set by the Confirm-card path, where a HUMAN picked the target and narrowing it
+   * would deliver somewhere they did not choose. It also fixes a real defect on that
+   * path: the notifier checks for a named person BEFORE it checks for a company, so
+   * narrowing means only ONE member is emailed about a company message. Passing the
+   * account alone reaches the all-members branch — every contact on the account plus
+   * chat-capable teammates.
+   *
+   * Left OFF for the pinned direct-send surfaces, whose behaviour must not change.
+   */
+  exact_recipient?: boolean
 }, actor?: string, sourceMessageId?: string | null): Promise<string> {
   const accountId =
     typeof input.account_id === "string" && input.account_id.length > 0 ? input.account_id : null
@@ -1501,7 +1518,7 @@ export async function sendPortalMessageFromWorker(input: {
   // fix, 2026-07-17 council WS0: a random member was getting a co-owner's
   // message + notification).
   let resolvedContactId = contactId
-  if (!resolvedContactId && accountId) {
+  if (!resolvedContactId && accountId && input.exact_recipient !== true) {
     const { data: links } = await db
       .from("account_contacts")
       .select("contact_id, role, ownership_pct, is_primary")
@@ -2566,6 +2583,49 @@ export async function executeWorkerTool(
     // confirm-the-recipient step (the email channel already has one, and it covers
     // the "email someone related to this chat" need this work was really about).
     const pin = sendContext?.pinnedPortalRecipient
+
+    // ── FREEZE-FOR-CONFIRM SURFACES (the Inbox) ────────────────────────────────
+    //
+    // A surface with a portal Confirm card NEVER sends from here. It freezes, and a
+    // human's click at /confirm-send is what delivers. This branch returns in every
+    // path, so nothing below it can run for such a surface.
+    //
+    // FAIL CLOSED, and this ordering is the whole safety story: the check is the
+    // FIRST thing in the branch, before the pin fallback below. The Inbox reads mail
+    // written by strangers, so if this surface ever gained the tool WITHOUT a freeze
+    // context, falling through to the direct send would let a line inside an inbound
+    // email aim a real, client-visible, auto-emailing message. Both reviewers called
+    // that the top blocker of this whole job. Refuse instead — loudly, in words the
+    // staff member can act on.
+    const portalPrep = sendContext?.portalSendPrep
+    if (portalPrep) {
+      if (sendContext?.portalFrozenThisTurn) {
+        return "❌ There's already a message waiting on the Confirm card. Send or cancel that one first, then I'll prepare the next."
+      }
+      const rawMessage = typeof (params as { message?: unknown }).message === "string"
+        ? stripDraftMarkdown(((params as { message?: string }).message ?? "").trim())
+        : ""
+      const { preparePortalSend } = await import("@/lib/inbox/worker-portal-freeze")
+      const result = await preparePortalSend({
+        threadUuid: portalPrep.threadUuid,
+        message: rawMessage,
+        // A SUGGESTION, never an authorisation. Stored in its own columns; the card
+        // shows it as something to click, and the confirm endpoint reads only what
+        // the human actually chose.
+        proposedAccountId: (params as { account_id?: string }).account_id ?? null,
+        proposedContactId: (params as { contact_id?: string }).contact_id ?? null,
+        locale: portalPrep.locale,
+        actor: sendContext?.actor ?? "unknown",
+      })
+      if (result.ok) {
+        if (sendContext) sendContext.portalFrozenThisTurn = true
+        return result.message
+      }
+      return result.message
+    }
+
+    // ── PINNED DIRECT-SEND SURFACES (Portal Chats panel, sidebar, Team Chat) ────
+    // Unchanged. These have no card, and the screen fixes the recipient.
     const portalParams =
       pin && (pin.account_id || pin.contact_id)
         ? { ...params, account_id: pin.account_id ?? undefined, contact_id: pin.contact_id ?? undefined }
@@ -2606,6 +2666,28 @@ export async function executeWorkerTool(
         return PORTAL_LANGUAGE_REFUSAL
       }
     }
+    // ── FAIL CLOSED — LAST GATE BEFORE A CLIENT-FACING SEND ────────────────────
+    // Deliberately placed AFTER the language guard, not before it: that guard latches
+    // the turn on refusal, and short-circuiting it here would quietly disable a
+    // control that exists because an English draft twice reached an Italian client.
+    // Both refuse; running the language guard first keeps its latch intact.
+    //
+    // A surface that built a send context but has NEITHER a recipient pin NOR a
+    // Confirm card has nothing deciding who this reaches — the model's own
+    // account_id would be delivered, client-visible, with a client email behind it.
+    //
+    // NOT hypothetical. On the first live sandbox run the Inbox had exactly this
+    // shape (the freeze context was being dropped one layer up), and a real portal
+    // message reached a real client with no card and no confirmation while the worker
+    // reported "Message sent". The wiring bug is fixed; this makes the worst case of
+    // that whole class a visible refusal rather than a silent send.
+    //
+    // Slack builds NO send context at all, so it is untouched and stays
+    // prompt-rule-only. Every CRM surface sets a pin or a card.
+    if (sendContext && !(pin && (pin.account_id || pin.contact_id))) {
+      return "❌ I can't send a portal message from this screen — no client is fixed here and there's no confirmation card, so I have no safe way to know who it would reach. Tell me what to say and I'll draft it for you to send."
+    }
+
     return sendPortalMessageFromWorker(portalParams, sendContext?.actor ?? undefined, sourceMessageId ?? null)
   }
   if (name === "team_chat_send") {
@@ -3160,6 +3242,16 @@ export interface CallWorkerOptions {
     defaultReplyToMessageId?: string | null
     sendable: Array<{ ref: string; path: string; name: string; contentType?: string; size?: number }>
   }
+  /**
+   * Inbox worker only: context to FREEZE a portal-chat message for the Confirm card.
+   * Declared on the caller options as well as on the send context because the two are
+   * separate objects and a field present on one but not the other is silently dropped
+   * — which is how the first live run sent a real client message with no card at all.
+   */
+  portalSendPrep?: {
+    threadUuid: string
+    locale: string
+  }
 }
 
 /** One email attachment the worker may open, resolved server-side. */
@@ -3234,6 +3326,31 @@ export interface WorkerSendContext {
    */
   portalSendLatched?: boolean
   /**
+   * PORTAL FREEZE CONTEXT — set only by a surface that has a Confirm card able to
+   * render a portal message (today: the Inbox worker panel).
+   *
+   * Its presence is what turns `send_portal_message` from "send now" into "freeze
+   * for a human". The Inbox has NO pinned client — it is an email thread, often
+   * written by a stranger — so the recipient is chosen by the staff member ON the
+   * card and re-validated server-side at Confirm. The worker may only PROPOSE one.
+   *
+   * Antonio, 2026-07-31: "the worker must send the message with the card that we
+   * already built in Inbox … we want the same thing."
+   */
+  portalSendPrep?: {
+    threadUuid: string
+    /** "en" | "it" — the language the card's dropdown is currently set to. */
+    locale: string
+  }
+  /**
+   * MUTABLE latch, twin of `frozenThisTurn` but for the portal channel.
+   *
+   * DELIBERATELY SEPARATE from the email latch, not shared. Antonio's flagship flow
+   * is doing BOTH on one email thread — reply to the bank AND message the client —
+   * and a single shared latch makes the second one impossible in the same turn.
+   */
+  portalFrozenThisTurn?: boolean
+  /**
    * Canonical per-client memory namespace ("account:<id>" | "contact:<id>") for
    * memory_save on client-scoped surfaces, injected server-side so lessons the
    * worker saves are recallable for THIS client later. The model never supplies
@@ -3303,6 +3420,7 @@ export function buildWorkerSendContext(
     emailConfirmExempt?: string[]
     forceMailbox?: "support" | "antonio"
     emailSendPrep?: WorkerSendContext["emailSendPrep"]
+    portalSendPrep?: WorkerSendContext["portalSendPrep"]
     clientScope?: import("./client-scope").ClientScope | null
     clientKey?: string | null
     /** Originating agent_messages row — the email send's idempotency key. */
@@ -3318,6 +3436,7 @@ export function buildWorkerSendContext(
     opts.emailConfirmExempt !== undefined ||
     opts.forceMailbox ||
     opts.emailSendPrep ||
+    opts.portalSendPrep ||
     // A client-scoped call MUST build a context even with no send pin at all —
     // otherwise the boundary is off on any read-only client-pinned surface.
     opts.clientScope ||
@@ -3339,6 +3458,14 @@ export function buildWorkerSendContext(
       : {}),
     ...(opts.forceMailbox ? { forceMailbox: opts.forceMailbox } : {}),
     ...(opts.emailSendPrep ? { emailSendPrep: opts.emailSendPrep } : {}),
+    // PORTAL FREEZE CONTEXT. Its ABSENCE is what let the executor fall through to the
+    // direct send — so omitting it here does not disable a nicety, it silently turns a
+    // human-confirmed send back into an automatic one. That is the exact failure this
+    // function's doc comment describes, and it happened again here: the field was added
+    // to the type and to the Inbox rails, both typechecked, and the send still went out
+    // with no card because this literal never copied it across. Caught only by a live
+    // sandbox run, where a real portal message reached a real (test) client.
+    ...(opts.portalSendPrep ? { portalSendPrep: opts.portalSendPrep } : {}),
   }
 }
 

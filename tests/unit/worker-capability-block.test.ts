@@ -153,3 +153,111 @@ describe("approval-tier tools — no inventing a queue that is switched off", ()
       .toMatch(/no approval queue/i)
   })
 })
+
+describe("the Inbox 'propose a portal message' mode", () => {
+  it("tells the worker it PROPOSES onto a card — never that it sent", () => {
+    // Getting this sentence wrong is not cosmetic. The Inbox has no client fixed to
+    // the screen; telling the worker the recipient is "fixed server-side" (the wording
+    // the pinned surfaces get) had it assert deliveries that had not happened.
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
+    expect(block).toMatch(/staff member picks WHICH client/i)
+    expect(block).toMatch(/ready for them to confirm/i)
+    expect(block).toMatch(/NEVER say "sent"/i)
+    expect(block).not.toMatch(/PORTAL CHAT RECIPIENT is fixed server-side/i)
+  })
+
+  it("REGRESSION (2026-07-31): forbids putting a client's name in the message", () => {
+    // A message opening "Hi Uxio" was delivered to a different client entirely: the
+    // worker writes the text BEFORE the staff member chooses the recipient, the
+    // recipient was changed on the card, and the words could not follow. Substituting
+    // the name server-side is not an option — it would edit text after a human
+    // approved it, which is the one promise the card makes.
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
+    expect(block).toMatch(/DO NOT OPEN WITH A CLIENT'S NAME/i)
+    expect(block).toMatch(/before the staff member has chosen who receives it/i)
+  })
+
+  it("forbids taking the client from the email's sender", () => {
+    // On these threads the sender is routinely a bank or an accountant writing ABOUT
+    // a client — the client is who the email concerns, never who wrote it.
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
+    expect(block).toMatch(/NEVER take the client from the email's SENDER/i)
+  })
+
+  it("tells it the dropdown decides the language, not the conversation", () => {
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
+    // Wording strengthened 2026-08-01: it now names the CURRENT setting, because
+    // "the dropdown decides" without the value is an instruction nobody can follow.
+    expect(block).toMatch(/CURRENTLY SET TO/i)
+    expect(block).toMatch(/the dropdown decides, not the conversation/i)
+  })
+
+  it("does not claim portal sending is off when the propose mode is on", () => {
+    // The 'portal sending is OFF — do not offer it' line keys off canSendPortal, which
+    // is false on the Inbox by design. Left unguarded it would contradict the mode in
+    // the same block and the worker would refuse the thing it can now do.
+    const block = renderCapabilityBlock({ canSendEmail: true, canProposePortal: true })
+    expect(block).not.toMatch(/Portal-chat sending is OFF/i)
+  })
+
+  it("still says portal sending is off on a surface with neither mode", () => {
+    const block = renderCapabilityBlock({ canSendEmail: true })
+    expect(block).toMatch(/Portal-chat sending is OFF/i)
+  })
+})
+
+describe("REGRESSION 2026-08-01: the card must not be replaced by chat text", () => {
+  it("tells the worker that preparing IS the draft — do not type it and wait", () => {
+    // Live sandbox failure: asked to message the client, the worker typed the draft into
+    // the chat, said "please confirm on the card", and never called the tool. No card
+    // appeared, nothing was frozen, nothing would ever send — verified against the DB.
+    // Worse than the original refusal, because it looks like it worked.
+    // Cause: the generic "show the draft, wait for a go, THEN send" flow. On this screen
+    // freezing IS how the draft is shown, so following that rule literally means the
+    // review happens twice and the card step is never reached.
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
+    expect(block).toMatch(/do NOT type the draft into the chat and wait/i)
+    expect(block).toMatch(/Preparing it IS how the draft is shown/i)
+  })
+
+  it("forbids claiming a card exists when the tool was not called", () => {
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
+    expect(block).toMatch(/NEVER claim a card exists/i)
+  })
+
+  it("leaves the ordinary draft-then-go flow intact for email", () => {
+    // The exception is portal-only. Email must keep its show-draft-first discipline.
+    const block = renderCapabilityBlock({ canSendEmail: true })
+    expect(block).toMatch(/show the full draft first/i)
+    expect(block).not.toMatch(/do NOT type the draft into the chat and wait/i)
+  })
+})
+
+describe("REGRESSION 2026-08-01: the worker must be TOLD what the language dropdown says", () => {
+  it("states the current setting explicitly when it is Italian", () => {
+    // Observed in sandbox: dropdown on Italian, rewrite came back in ENGLISH, and the
+    // frozen row recorded locale "it" against English text. The setting reached the
+    // database and never reached the model — it was told "the dropdown decides" and
+    // never told what the dropdown was set to, which is an instruction it cannot obey.
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true, portalLocale: "it" })
+    expect(block).toMatch(/CURRENTLY SET TO: \*\*ITALIAN\*\*/i)
+    expect(block).toMatch(/WRITE THE MESSAGE IN ITALIAN/i)
+  })
+
+  it("states it explicitly when it is English", () => {
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true, portalLocale: "en" })
+    expect(block).toMatch(/CURRENTLY SET TO: \*\*ENGLISH\*\*/i)
+    expect(block).toMatch(/WRITE THE MESSAGE IN ENGLISH/i)
+  })
+
+  it("defaults to English when nothing was passed, rather than going silent", () => {
+    // A missing value must not produce "set to: undefined" or drop the line entirely.
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true })
+    expect(block).toMatch(/CURRENTLY SET TO: \*\*ENGLISH\*\*/i)
+  })
+
+  it("says the conversation's language does not decide it", () => {
+    const block = renderCapabilityBlock({ canProposePortal: true, canSendEmail: true, portalLocale: "it" })
+    expect(block).toMatch(/the dropdown decides, not the conversation/i)
+  })
+})
