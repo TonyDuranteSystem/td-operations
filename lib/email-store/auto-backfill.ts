@@ -133,5 +133,5 @@ export const backfillTickIO: TickIO = {
     if (!data?.internal_date) return null
     return Math.floor(new Date(data.internal_date).getTime() / 1000)
   },
-  reconcile: (mailbox, afterSec, beforeSec) => reconcileWindow({ mailbox, afterSec, beforeSec, concurrency: 8 }),
+  reconcile: (mailbox, afterSec, beforeSec) => reconcileWindow({ mailbox, afterSec, beforeSec, concurrency: 2 }),
 }
