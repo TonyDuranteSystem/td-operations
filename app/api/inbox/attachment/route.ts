@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server"
 import { getGmailAttachment } from "@/lib/gmail"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { supabaseAdmin } from "@/lib/supabase-admin"
+import { storedAttachmentPath } from "@/lib/email-store/read"
+import { EMAIL_CONTENT_BUCKET } from "@/lib/email-store/capture"
 
 export const dynamic = "force-dynamic"
 
@@ -36,6 +39,34 @@ export async function GET(req: NextRequest) {
     const asUser = mailbox === "antonio"
       ? "antonio.durante@tonydurante.us"
       : "support@tonydurante.us"
+
+    // LOCAL-FIRST: serve from our own store when we already hold the bytes —
+    // no Gmail call, no quota spend (the 2026-08-02 incident was quota
+    // exhaustion). Anything we don't hold falls through to Gmail unchanged.
+    try {
+      const stored = await storedAttachmentPath(
+        mailbox === "antonio" ? "antonio" : "support",
+        messageId,
+        attachmentId,
+      )
+      if (stored?.storage_path) {
+        const dl = await supabaseAdmin.storage
+          .from(EMAIL_CONTENT_BUCKET)
+          .download(stored.storage_path)
+        if (!dl.error && dl.data) {
+          const buf = Buffer.from(await dl.data.arrayBuffer())
+          return new NextResponse(new Uint8Array(buf), {
+            headers: {
+              "Content-Type": stored.mime_type || mimeType,
+              "Content-Disposition": `inline; filename="${encodeURIComponent(filename)}"`,
+              "Content-Length": buf.length.toString(),
+            },
+          })
+        }
+      }
+    } catch (err) {
+      console.warn("[inbox] local attachment read failed, falling back to Gmail:", err)
+    }
 
     const { data } = await getGmailAttachment(messageId, attachmentId, asUser)
 
