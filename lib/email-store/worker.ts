@@ -179,10 +179,10 @@ export async function captureBatch(
 }
 
 /** Production entry: capture a batch for a mailbox using real IO. */
-export function captureBatchLive(mailbox: Mailbox, limit: number): Promise<BatchTally> {
+export function captureBatchLive(mailbox: Mailbox, limit: number, concurrency = 1): Promise<BatchTally> {
   const deps = buildCaptureDeps(mailbox)
   return captureBatch(
-    { mailbox, limit },
+    { mailbox, limit, concurrency },
     {
       findUncaptured: findUncapturedMessageIds,
       capture: (args) => captureMessageContent(args, deps),
