@@ -190,7 +190,20 @@ describe("checksumDefs", () => {
     // was correct before the portal-send constraints existed, this 206 is correct after.
     // Kept as a reminder that "the database allows a value the code never writes" can simply
     // mean you are reading a branch that has not caught up yet — check the other side first.
-    expect(checksumDefs(prodConstraints())).toBe("1f184a85846080111ddb61ed31bf89a0")
+    //
+    // Re-pinned 2026-08-02: 206 -> 207, email_message_content_capture_status_check, which
+    // arrived with the Own-Inbox content store and had been failing the gate unregistered.
+    // The pin was obtained the SAME disciplined way as its predecessors — PRODUCTION was made
+    // to compute its own digest, and the rewritten file was accepted only BECAUSE it matched:
+    //   SELECT md5(string_agg(conname || '|' || pg_get_constraintdef(oid), E'\n' ORDER BY conname))
+    //   ... WHERE nspname='public' AND contype='c';   -> 29e281e876d0dfeb7239173d0bd1811f
+    // Not recomputed over this file until green. Worth stating because this refresh did NOT
+    // go through scripts/snapshot-db-constraints.ts (it refuses without .env.prod.local, which
+    // a sandbox session lacks): production's set was read via the production MCP connection and
+    // the one missing entry added. The checksum equality is what makes that byte-equivalent to
+    // a real regeneration — and is the only reason it is acceptable. A larger gap than a single
+    // constraint should go through the real script, not this route.
+    expect(checksumDefs(prodConstraints())).toBe("29e281e876d0dfeb7239173d0bd1811f")
   })
 })
 
@@ -214,8 +227,12 @@ describe("the committed production snapshot", () => {
     // nothing else appeared this time — but the DEFINITIONS had drifted anyway
     // (esign_events_type_check gained 'deadline_changed' on production by hand), which a count
     // check alone cannot see. That is why the digest above is pinned to production's own value.
-    expect(prodSnapshotMeta().count).toBe(206)
-    expect(Object.keys(prodConstraints())).toHaveLength(206)
+    // 08-02: 206 -> 207, email_message_content_capture_status_check. The count moved by
+    // exactly the one added, so nothing else had accumulated unrecorded in the two days
+    // since the previous refresh — and that fact is WHY this one could be done as a
+    // single-entry addition verified by checksum instead of a full regeneration.
+    expect(prodSnapshotMeta().count).toBe(207)
+    expect(Object.keys(prodConstraints())).toHaveLength(207)
   })
 
   it("PRODUCTION accepts every value the code can write", () => {
