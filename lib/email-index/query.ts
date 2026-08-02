@@ -232,6 +232,64 @@ export async function searchIndexThreadIds(
 }
 
 /**
+ * ONE PAGE of conversations — real page numbers (Antonio 2026-08-02: "in Gmail I
+ * have the numbers of the pages 1,2,3,4,5 according to how many emails I have").
+ *
+ * Paging happens in the DB (`inbox_thread_page`), which collapses the index's
+ * one-row-per-MESSAGE into one row per THREAD before applying LIMIT/OFFSET. A
+ * plain offset over rows would split a conversation across two pages; this
+ * cannot. `folder` is a Gmail label id (INBOX, SENT, a user folder).
+ */
+export async function pageIndexThreadIds(
+  mailbox: "support" | "antonio",
+  folder: string,
+  pageSize: number,
+  offset: number,
+): Promise<string[]> {
+  const { data, error } = await db.rpc("inbox_thread_page", {
+    p_mailbox: mailbox, p_label: folder,
+    p_limit: Math.max(1, pageSize), p_offset: Math.max(0, offset),
+  })
+  if (error) throw new Error(`inbox_thread_page failed: ${error.message}`)
+  return ((data ?? []) as Array<{ thread_id: string }>).map((r) => r.thread_id)
+}
+
+/** Total conversations in a folder — the N in "page 1 of N". */
+export async function countIndexThreads(
+  mailbox: "support" | "antonio",
+  folder: string,
+): Promise<number> {
+  const { data, error } = await db.rpc("inbox_thread_count", { p_mailbox: mailbox, p_label: folder })
+  if (error) throw new Error(`inbox_thread_count failed: ${error.message}`)
+  return Number(data ?? 0)
+}
+
+/** ONE PAGE of SEARCH results as conversations (same thread-level paging). */
+export async function pageSearchThreadIds(
+  mailbox: "support" | "antonio",
+  query: string,
+  pageSize: number,
+  offset: number,
+): Promise<string[]> {
+  const { data, error } = await db.rpc("inbox_search_thread_page", {
+    p_mailbox: mailbox, p_query: query,
+    p_limit: Math.max(1, pageSize), p_offset: Math.max(0, offset),
+  })
+  if (error) throw new Error(`inbox_search_thread_page failed: ${error.message}`)
+  return ((data ?? []) as Array<{ thread_id: string }>).map((r) => r.thread_id)
+}
+
+/** Total conversations matching a search — the N in "page 1 of N". */
+export async function countSearchThreads(
+  mailbox: "support" | "antonio",
+  query: string,
+): Promise<number> {
+  const { data, error } = await db.rpc("inbox_search_thread_count", { p_mailbox: mailbox, p_query: query })
+  if (error) throw new Error(`inbox_search_thread_count failed: ${error.message}`)
+  return Number(data ?? 0)
+}
+
+/**
  * BROWSE from our own index: newest thread ids carrying `labelId` (e.g. INBOX,
  * SENT, or a user folder), newest first.
  *
