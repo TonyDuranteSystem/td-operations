@@ -29,7 +29,13 @@ export async function GET(request: NextRequest) {
   // low in-window concurrency (see backfillTickIO) leave the live inbox ample
   // headroom. It finishes in more, smaller ticks instead of few greedy ones.
 
-  // ~60s budget per mailbox: a short, gentle slice of each 15-min tick.
+  // ── PAUSED 2026-08-02 (incident) — see email-content-capture for the full
+  // reasoning: the inbox itself needs ~3,000 Gmail quota units per page load,
+  // so ANY concurrent history pull starves it. The backfill stays OFF until the
+  // inbox reads from our local store. Re-enable by deleting this block.
+  return NextResponse.json({ skipped: "paused-until-read-repoint" })
+
+  // eslint-disable-next-line no-unreachable
   const results: Record<string, unknown> = {}
   for (const mailbox of ["support", "antonio"] as const) {
     try {

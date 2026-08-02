@@ -19,13 +19,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  // Runs ANY time (including weekends — the inbox is used 7 days a week, so a
-  // clock-based pause is the wrong lever). Instead this is deliberately GENTLE:
-  // INCIDENT 2026-08-02 — capturing 50 msgs at concurrency 5 alongside the live
-  // inbox exhausted the per-user Gmail quota and the whole inbox rendered
-  // "Couldn't load — retrying". Fix: SEQUENTIAL (concurrency 1) and a small
-  // batch, so capture uses a thin slice of the 250 units/user/sec and the
-  // interactive inbox always has headroom. New mail still lands within minutes.
+  // ── PAUSED 2026-08-02 (incident) ──────────────────────────────────────────
+  // The CRM inbox renders a page by fetching metadata for up to 300 threads
+  // LIVE from Gmail (app/api/inbox/conversations/route.ts) — ~3,000 quota units
+  // per page load, i.e. it already needs most of the 250 units/user/sec burst.
+  // Any concurrent capture (even sequential) tips it over and the whole inbox
+  // renders "Couldn't load — retrying". Throttling was not enough.
+  //
+  // Capture stays OFF until the inbox READS from our local store instead of
+  // live Gmail (the read-repoint leg). At that point the inbox stops competing
+  // for quota and capture can resume safely. Re-enable by deleting this block.
+  return NextResponse.json({ skipped: "paused-until-read-repoint" })
+
+  // eslint-disable-next-line no-unreachable
   const results: Record<string, unknown> = {}
   for (const mailbox of ["support", "antonio"] as const) {
     try {

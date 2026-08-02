@@ -13,7 +13,6 @@
  */
 
 import { gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
-import { withGmailRetry } from "@/lib/email-store/capture"
 import { decodeHtmlEntities, displayNameFromHeader } from "@/lib/inbox/email-html"
 import { extractEmailAddress } from "@/lib/inbox/email-unread"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -139,16 +138,17 @@ export async function indexThread(
   threadId: string,
   dir: CrmDirectory
 ): Promise<number> {
-  // Retry on 429/5xx: at backfill throughput a transient rate-limit must NOT
-  // drop a thread (which would leave a permanent, undetectable gap in the index
-  // that the content capture then can't even see). Non-retryable errors (404 for
-  // a deleted thread) still throw — the caller records that as a failure.
-  const thread = (await withGmailRetry(() =>
-    gmailGet(
-      `/threads/${threadId}`,
-      METADATA_PARAMS as unknown as Record<string, string | string[]>,
-      MAILBOX_ADDRESSES[mailbox]
-    )
+  // NO retry here — deliberately (INCIDENT 2026-08-02). A retry-on-429 was added
+  // to avoid index gaps, but this runs in the reconcile that fires every 10 min
+  // over many threads: on a rate-limit each thread then re-hammered Gmail 4x with
+  // backoff, holding the per-user quota the INTERACTIVE inbox shares and leaving
+  // it unable to load (every row rendered "Couldn't load — retrying"). Failing
+  // fast frees the quota immediately; gaps are healed by the date-window
+  // reconciler (lib/email-store/reconcile.ts), which is the right tool for that.
+  const thread = (await gmailGet(
+    `/threads/${threadId}`,
+    METADATA_PARAMS as unknown as Record<string, string | string[]>,
+    MAILBOX_ADDRESSES[mailbox]
   )) as { messages?: GmailAPIMessage[] }
 
   const rows = (thread.messages ?? []).map((m) => buildIndexRow(mailbox, m, dir))
