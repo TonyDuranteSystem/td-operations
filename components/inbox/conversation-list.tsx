@@ -103,6 +103,20 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   // presets) is open. One at a time; closed by the fixed overlay or by acting.
   const [rowMenu, setRowMenu] = useState<{ id: string; kind: 'color' | 'label' | 'snooze' } | null>(null)
 
+  // How many conversations to ask the server for. The list was pinned at the
+  // newest 100 with no way further back, so the inbox simply STOPPED at a date
+  // (Antonio 2026-08-02: "why do I have email only from July 28?"). "Load older"
+  // grows this; the server walks proportionally more Gmail pages.
+  const PAGE_STEP = 100
+  const MAX_PAGE_SIZE = 500 // server-side ceiling
+  const [pageSize, setPageSize] = useState(PAGE_STEP)
+
+  // Switching mailbox / folder / search starts a NEW list — back to one page so
+  // a deep scroll in one view doesn't make every other view a huge request.
+  useEffect(() => {
+    setPageSize(PAGE_STEP)
+  }, [activeChannel, labelFilter, searchQuery, mailbox])
+
   // Toggle a row read/unread from the list (next to the row Delete). Uses the
   // parent's optimistic unread override for instant badge/bold feedback and
   // only invalidates stats/labels — NEVER the conversations list itself, whose
@@ -250,8 +264,8 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
 
   const isWhatsApp = activeChannel === 'whatsapp'
 
-  const { data, isLoading, dataUpdatedAt } = useQuery<ConversationsPayload & { total?: number; origin?: PayloadOrigin }>({
-    queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery, mailbox],
+  const { data, isLoading, isFetching, dataUpdatedAt } = useQuery<ConversationsPayload & { total?: number; origin?: PayloadOrigin }>({
+    queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery, mailbox, pageSize],
     queryFn: async () => {
       // Throw on non-2xx (R099): a failed refetch must NOT replace the list
       // with emptiness — react-query keeps the previous data on error, so a
@@ -265,7 +279,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
             if (labelFilter) params.set('label', labelFilter)
             if (searchQuery) params.set('q', searchQuery)
             if (mailbox) params.set('mailbox', mailbox)
-            params.set('limit', '100')
+            params.set('limit', String(pageSize))
             return `/api/inbox/conversations?${params}`
           })()
       const res = await fetch(url)
@@ -742,6 +756,22 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
           </div>
         )
       })}
+
+      {/* Reach FURTHER BACK than the newest page. Without this the list simply
+          stopped at a date. Live Gmail list only — instant search answers from
+          the local index. Hidden once the server returns fewer rows than asked
+          for (that IS the end of the mailbox) or at the server ceiling. */}
+      {!isWhatsApp && conversations.length > 0 && (data?.conversations?.length ?? 0) >= pageSize && pageSize < MAX_PAGE_SIZE && (
+        <div className="p-3 flex justify-center border-t">
+          <button
+            onClick={() => setPageSize((n) => Math.min(n + PAGE_STEP, MAX_PAGE_SIZE))}
+            disabled={isFetching}
+            className="text-sm px-4 py-2 rounded-md border hover:bg-zinc-50 disabled:opacity-60"
+          >
+            {isFetching ? 'Loading older emails...' : 'Load older emails'}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -658,3 +658,16 @@ Fixes shipped:
 - **Own-Inbox content crons PAUSED** (`/api/cron/email-content-capture`, `/api/cron/email-content-backfill`) until the inbox READS from the local store. Throttling them was not sufficient — while the inbox itself needs ~3,000 quota units per page load, any concurrent capture tips it over.
 
 **Rule going forward:** never issue unbounded parallel Gmail calls. Anything fanning out over threads/messages must use `allSettledBounded` (or an equivalent pool) and stay well under 25 calls/sec per mailbox. The durable fix is the read-repoint — once the inbox reads bodies/metadata from our own store, it stops competing for Gmail quota at all, and capture can resume.
+
+### "Load older emails" — the list is no longer pinned to the newest page (2026-08-02)
+
+Symptom (Antonio): *"why do I have email only from July 28?"* — and the same shape as Luca's original report that search only reached back a few months.
+
+Cause: the list requested a fixed `limit=100` and the route walked a fixed 2 Gmail pages (`targetGmailThreads = 200`), then sliced to the limit. Nothing in the UI ever sent `pageToken` or raised the limit (grep across `components/inbox/**` + `app/(dashboard)/inbox/**` for pageToken/loadMore/fetchNextPage/IntersectionObserver/onScroll → zero hits), so the newest ~100 conversations were a hard wall with no way past it.
+
+Fix:
+- Route: `targetGmailThreads = min(max(limit * 2, 200), 1000)` and the page loop runs `ceil(target/100)` pages (was a hard `2`); the enrich slice uses `targetGmailThreads` (was a hard `300`). `limit=100` behaves exactly as before.
+- List: `pageSize` state (starts 100, `+100` per click, ceiling 500 = the route's `limit` cap) is in the queryKey and sent as `limit`. A **Load older emails** button renders under the rows while the server returned a full page; it resets to one page whenever mailbox/folder/search changes so an unrelated view never inherits a huge request.
+- Deliberately NOT converted to `useInfiniteQuery`: the list's reconcile/override pipeline (optimistic hide/pin, payload-origin stamping) is incident-hardened around a single full payload, and re-shaping it into pages is a separate, riskier change. Growing one request keeps that logic untouched.
+
+Still open: instant SEARCH remains capped (`searchIndexThreadIds`: 400-row pre-scan, 50 threads, and the instant path is gated `!pageToken`) — searching deep history needs its own paging pass.

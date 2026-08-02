@@ -138,10 +138,14 @@ export async function GET(req: NextRequest) {
     // ─── Gmail threads ──────────────────────────────────
     if ((!channel || channel === "gmail") && !servedFromIndex) {
       try {
-        // Gmail threads API returns max ~100 per page. Fetch up to 2 pages (200 threads).
-        // With INBOX as default, this is more than enough (Gmail inbox has ~20-50 threads).
-        // For other labels or search queries, 200 threads covers most use cases.
-        const targetGmailThreads = 200
+        // Gmail threads API returns max ~100 per page. How many pages we walk is
+        // driven by the caller's `limit`, so the list can reach FURTHER BACK than
+        // the newest ~100 conversations. With no "load older" the inbox stopped
+        // dead at a date (Antonio 2026-08-02: "why do I have email only from
+        // July 28?"). Default (limit 100) behaves exactly as before — 200 threads.
+        // Hard ceiling keeps a runaway request off Gmail's quota.
+        const targetGmailThreads = Math.min(Math.max(limit * 2, 200), 1000)
+        const maxThreadPages = Math.ceil(targetGmailThreads / 100)
 
         // Build Gmail query params
         const gmailParams: Record<string, string> = {
@@ -173,7 +177,7 @@ export async function GET(req: NextRequest) {
         const allThreadIds: Array<{ id: string; snippet: string }> = []
         let currentPageToken = pageToken || undefined
 
-        for (let page = 0; page < 2 && allThreadIds.length < targetGmailThreads; page++) {
+        for (let page = 0; page < maxThreadPages && allThreadIds.length < targetGmailThreads; page++) {
           const pageParams = { ...gmailParams }
           if (currentPageToken) pageParams.pageToken = currentPageToken
 
@@ -229,7 +233,7 @@ export async function GET(req: NextRequest) {
           // back rejected and rendered as "Couldn't load — retrying" stubs, and any
           // other Gmail activity made it dramatically worse. Capping in-flight
           // requests keeps the whole page inside the quota, so rows actually load.
-          const threadsToFetch = allThreadIds.slice(0, 300)
+          const threadsToFetch = allThreadIds.slice(0, targetGmailThreads)
           const threadDetails = await allSettledBounded(
             threadsToFetch,
             GMAIL_THREAD_FETCH_CONCURRENCY,
