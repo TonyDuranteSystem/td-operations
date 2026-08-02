@@ -1,5 +1,5 @@
 # TD Operations — System Atlas
-_Generated 2026-05-29 from the live code (deterministic extraction — counts and inventories are exact, not estimated). Per-system "how it works" detail lives in the deep docs under `docs/systems/`; this is the master map that points to them._
+_The master map of the whole system. The **narrative** sections below are curated by hand; the **appendices** are REGENERATED FROM LIVE CODE by `node scripts/generate-system-atlas.mjs` and are checked on every push, so their counts cannot silently rot the way they did between 2026-05-29 and 2026-08-02 (41 vs 49 tool groups, 18 vs 26 hooks, rules stopping at R106 while CLAUDE.md had reached R113). Anything inside a GENERATED block is machine-written — do not hand-edit it, rerun the generator._
 
 This is the single map of the whole system: every feature, where it lives, the rules that govern it, and whether a deep doc exists yet. Status legend: ✅ DONE = full deep doc written · draft card = grounded summary captured, needs finishing · pending = inventory known, deep doc not yet written.
 
@@ -79,59 +79,36 @@ This is the single map of the whole system: every feature, where it lives, the r
   - Lives in: `lib/ai-agent`
   - Rules: _(none specific)_ · Deep doc: ✅ DONE → [ai-agent.md](ai-agent.md)
 
-## Appendix A — MCP tools (41 active groups, ~217 tools)
-_Source of truth: uncommented `register*Tools` in `app/api/[transport]/route.ts`._
+## Appendix A — MCP tools
+<!-- GENERATED:mcp-tools -->
+_Regenerated 2026-08-02. Source of truth: uncommented `register*Tools(server)` in `app/api/[transport]/route.ts` (never a grep across tool files — an unregistered file is not active)._
 
-`Checkpoint` · `Crm` · `Drive` · `Gmail` · `Docai` · `Classify` · `Calendly` · `Doc` · `Storage` · `Sql` · `Messaging` · `Offer` · `Sysdoc` · `Knowledge` · `Circleback` · `Lead` · `Tax` · `Deadline` · `Operations` · `Whop` · `Formation` · `Onboarding` · `Lease` · `Oa` · `BankingForm` · `WelcomePackage` · `Job` · `Portal` · `ITINForm` · `Closure` · `TaxQuote` · `BankStatement` · `Signature` · `Testing` · `HarborCompliance` · `DevTask` · `Calendar` · `Referral` · `Lock` · `MemberInfo` · `Catalog`
+**49 active tool groups**, **219 distinct tool names defined** in `lib/mcp/tools/` (a definition count, NOT a registration count — an unregistered file would inflate it; the group list below is the authoritative active set).
 
-## Appendix B — Hooks & guardrails (18 hooks)
-_In `.claude/hooks/`, wired in `.claude/settings.json`; plus `.husky/pre-push` gates._
+`AgentApproval` · `AgentMessage` · `AgentThread` · `BankStatement` · `BankingForm` · `Calendar` · `Calendly` · `Catalog` · `Checkpoint` · `Circleback` · `Classify` · `Closure` · `CodebaseRead` · `Crm` · `Deadline` · `DevTask` · `Doc` · `Docai` · `DocumentGeneration` · `Drive` · `Formation` · `Gmail` · `HarborCompliance` · `HermesRead` · `ITINForm` · `Job` · `Knowledge` · `Lead` · `Lease` · `Lock` · `MemberInfo` · `Messaging` · `Oa` · `Offer` · `Onboarding` · `Operations` · `Portal` · `Referral` · `Signature` · `Sql` · `Ss4` · `Storage` · `Sysdoc` · `Tax` · `TaxQuote` · `TeamChat` · `Testing` · `WelcomePackage` · `Whop`
+<!-- /GENERATED:mcp-tools -->
 
-`assumption-check.sh` · `bash-production-guard.sh` · `checkpoint-counter.sh` · `post-push-qa.sh` · `pre-commit-audit.sh` · `pre-compact-save.sh` · `production-write-guard.sh` · `r093-verifier.sh` · `r095-gate.sh` · `send-guard.sh` · `session-git-pull.sh` · `stop-check.sh` · `stop-enforcement.sh` · `test-production-write-guard.sh` · `test-r095-gate.sh` · `test-send-guard.sh` · `user-prompt-contract.sh` · `verify-before-edit.sh`
+## Appendix B — Hooks & guardrails
+<!-- GENERATED:hooks -->
+_Regenerated 2026-08-02. Files in `.claude/hooks/` (test harnesses excluded); "registered" = referenced by a command in `.claude/settings.json`._
 
-**Guardrail rules (35) in CLAUDE.md:**
-- **R005** — `td-operations.vercel.app` is INTERNAL: NEVER send this domain to clients
-- **R012** — All client-facing URLs MUST use `APP_BASE_URL` from  — never hardcode domains; the `.husky/pre-push` hook blocks hardcod
-- **R015** — NEVER remove any domain from Vercel — old links must always work.
-- **R016** — All URLs, tokens, and slugs must be in English.
-- **R018** — NEVER use  for CRM writes — always use .
-- **R027** — `client_invoices` is for client sales invoices ONLY — TD systems NEVER write here
-- **R035** — NEVER send a form to a client without testing it first via `?preview=td`.
-- **R037** — All MCP send tools MUST use `safeSend()` from : idempotency check → send FIRST → status update AFTER → multi-step tracki
-- **R041** — Email Subject headers MUST be RFC 2047 base64 encoded — applies to ALL email senders (API routes, cron jobs, MCP tools, 
-- **R051** — Subagents must write results to Supabase BEFORE returning
-- **R053** — Before INSERT on , SELECT first to check if a task on the same topic already exists
-- **R060** — Master Rules KB (`370347b6`) is the CANONICAL source for business rules — wins on conflict
-- **R067** — When you modify an existing file, fix any ESLint warnings in that file (lint-staged blocks the commit otherwise).
-- **R070** — Run `git pull origin main` BEFORE any work, every session (enforced by SessionStart hook `session-git-pull.sh`).
-- **R071** — NEVER use `git add -A` or `git add .` — stage specific files by name only
-- **R076** — NEVER run `git push --force` — branch protection blocks it and it would destroy other machines' work.
-- **R079** — Every UI feature MUST be tested in the browser (screenshot + interaction) before declaring it done.
-- **R086** — Write unit tests for every new function in `lib/`
-- **R089** — Never use Make, Zapier, n8n — all automation via Supabase Edge Functions.
-- **R090** — Never commit `.env.local` or credentials.
-- **R091** — Never create README.md or documentation files unless asked.
-- **R092** — Client invoice emails MUST direct clients to the portal to pay (`portal.tonydurante.us` → Fatture/Invoices → Expenses)
-- **R093** — NO ASSUMPTIONS
-- **R094** — `leads.status='Converted'` means PAYMENT CONFIRMED (activation chain triggered), NOT offer signed
-- **R096** — MCP TOOL ROUTING — TWO CONNECTIONS, CLAUDE CHOOSES (2026-05-01)
-- **R097** — QB MCP tools REMOVED (2026-04-24, commit `8f9f18a`); **QuickBooks is decommissioned/DEAD** (kill-switch OFF 2026-05-23) — `qb-sync` calls are inert no-ops, do not build on it
-- **R098** — Invoice-number generator is race-safe via DB unique constraint, NOT a retry loop in code
-- **R099** — Surface server errors on client-side `fetch` (2026-04-21, commit `b80ecef`)
-- **R100** — Client-visible content deletion MUST use soft-delete (2026-04-21, commit `49d64df`)
-- **R101** — DEVIL'S ADVOCATE MANDATORY (2026-04-21)
-- **R103** — When an admin sends a portal chat message (via dashboard or `portal_chat_send` MCP tool), the client automatically recei
-- **R104** — SANDBOX IS THE ONLY DEVELOPMENT ENVIRONMENT (2026-05-01, structural enforcement)
-- **R105** — ALL DDL MUST GO THROUGH MIGRATION FILES (2026-04-30, structural enforcement)
-- **R106** — Service/SD vocabulary lives in the catalog framework
-- **R102** — Portal tier has exactly 4 values: `lead`, `formation`, `onboarding`, `active`
+**26 hook scripts**, of which **24 are registered** in settings.
 
-## Appendix C — Surface area (exact counts)
-- CRM dashboard pages (41): `accounts` `addresses` `audit` `bank-feeds` `calendar` `cases` `catalog` `client-health` `clients` `config` `contacts` `dev-tools` `email-templates` `exceptions` `finance` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `service-catalog` `services` `shared` `system-health` `tasks` `tax-returns` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
-- Client portal pages (28): `activity` `apply` `auth` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `forgot-password` `form` `guide` `invoices` `itin-documents` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `wizard`
-- API route groups: 62 (`app/api/*`)
-- Code modules (33): `ai-agent` `audit` `billing` `calendly` `case-view` `catalog` `chat` `email` `errors` `exceptions` `finance` `forms` `harbor-compliance` `hooks` `jobs` `leads` `mcp` `notifications` `offers` `operations` `partners` `pdf` `per-record-activity` `portal` `portal-chats` `schemas` `services` `supabase` `system-health` `tasks` `tax` `types` `utils`
-- Database tables: 164 (ground truth: `lib/database.types.ts`)
+**assumption-check.sh** · **bash-production-guard.sh** · **checkpoint-counter.sh** · **council-advisor.sh** · **council-roster.sh** · **counselor-readonly-guard.sh** · **dev-board-index.sh** · **main-repo-change-detector.sh** · **post-push-qa.sh** · pre-commit-audit.sh · **pre-compact-save.sh** · **production-write-guard.sh** · **r093-verifier.sh** · **r093_verifier.py** · **r095-gate.sh** · **r095_gate.py** · **reviewer-health.sh** · **send-guard.sh** · **session-git-pull.sh** · **stop-check.sh** · stop-enforcement.sh · **system-docs-index.sh** · **user-prompt-contract.sh** · **verify-before-edit.sh** · **worktree-write-guard.sh** · **worktree_write_guard.py**
+
+_(bold = registered and firing; plain = present but not wired, e.g. a manual utility)_
+<!-- /GENERATED:hooks -->
+
+## Appendix C — Surface area
+<!-- GENERATED:surface -->
+_Regenerated 2026-08-02 by directory scan._
+
+- CRM dashboard pages (46): `accounts` `addresses` `audit` `bank-feeds` `calendar` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `notes` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `service-catalog` `services` `system-health` `tasks` `tax-returns` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
+- Client portal pages (32): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `itin-documents` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `wizard`
+- API route groups (77)
+- Code modules (63): `ai-agent` `audit` `auth` `billing` `calendly` `case-view` `catalog` `chat` `code-tasks` `cron` `decisions` `dev-tracker` `diagnostics` `documents` `email` `email-index` `email-store` `errors` `esign` `exceptions` `fax` `finance` `flows` `forms` `harbor-compliance` `hooks` `inbox` `itin` `jobs` `leads` `lease` `mcp` `members` `messaging` `nav` `notes` `notifications` `oa` `offers` `operations` `partners` `payments` `pdf` `per-record-activity` `portal` `portal-chats` `public-forms` `push` `schemas` `security` `services` `ss4` `storage` `supabase` `system-health` `tasks` `tax` `td-communication` `team` `todo-board` `types` `ui` `utils`
+- Database tables: 172 _(ground truth: `lib/database.types.ts`)_
+<!-- /GENERATED:surface -->
 
 ## Seed priority — write these deep docs first
 Ordered by money + client risk + change frequency:
@@ -148,3 +125,93 @@ Ordered by money + client risk + change frequency:
 Every system listed above now has a deep doc under `docs/systems/`, each written by reading the live code (not the automated sweep — those drafts were superseded). The `leads` deep doc is the one remaining one-liner-only entry (covered by a grounded draft card); write it from code when leads is next touched.
 - Business rules that live only in Antonio's head (e.g. some Circleback specifics) still need capturing into the knowledge base — flag them as you hit them.
 - "Last verified against code" dates on each doc are the trust anchor: re-verify before acting on anything older than your change.
+
+## Appendix D — Guardrail rules
+<!-- GENERATED:rules -->
+_Regenerated 2026-08-02 from the R-rule list in CLAUDE.md — **42 rules**, highest is R113._
+
+- **R005** — td-operations.vercel.app is INTERNAL: NEVER send this domain to clients. {file:lib/config.ts}
+- **R012** — All client-facing URLs MUST use APP_BASE_URL from {file:lib/config.ts} — never hardcode domains; the .husky/pre-push hook blocks hardcoded domains.
+- **R015** — NEVER remove any domain from Vercel — old links must always work.
+- **R016** — All URLs, tokens, and slugs must be in English.
+- **R018** — NEVER use {tool:execute_sql} for CRM writes — always use {tool:crm_update_record}.
+- **R027** — client_invoices is for client sales invoices ONLY — TD systems NEVER write here. {table:client_invoices} {file:lib/portal/unified-invoice.ts}
+- **R035** — NEVER send a form to a client without testing it first via ?preview=td.
+- **R037** — All MCP send tools MUST use safeSend() from {file:lib/mcp/safe-send.ts}: idempotency check → send FIRST → status update AFTER → multi-step tracking. NEVER mark a record "sent" before the actual send operation.
+- **R041** — Email Subject headers MUST be RFC 2047 base64 encoded — applies to ALL email senders (API routes, cron jobs, MCP tools, server actions, no exceptions).
+- **R051** — Subagents must write results to Supabase BEFORE returning. Chat gets a compact summary.
+- **R053** — Before INSERT on {table:dev_tasks}, SELECT first to check if a task on the same topic already exists. If it does → UPDATE. Never duplicate.
+- **R060** — Master Rules KB (370347b6) is the CANONICAL source for business rules — wins on conflict. {table:knowledge_articles}
+- **R067** — When you modify an existing file, fix any ESLint warnings in that file (lint-staged blocks the commit otherwise).
+- **R070** — Run git pull origin main BEFORE any work, every session (enforced by SessionStart hook session-git-pull.sh).
+- **R071** — NEVER use git add -A or git add . — stage specific files by name only. Never commit files you didn't intentionally modify.
+- **R076** — NEVER run git push --force — branch protection blocks it and it would destroy other machines' work.
+- **R079** — Every UI feature MUST be tested in the browser (screenshot + interaction) before declaring it done.
+- **R086** — Write unit tests for every new function in lib/. Push without unit tests is blocked by the pre-push hook.
+- **R089** — Never use Make, Zapier, n8n — all automation via Supabase Edge Functions.
+- **R090** — Never commit .env.local or credentials.
+- **R091** — Never create README.md or documentation files unless asked.
+- **R092** — Client invoice emails MUST direct clients to the portal to pay (portal.tonydurante.us → Fatture/Invoices → Expenses). NEVER embed Stripe checkout links, wire transfer details, or any payment credentials directly in the email body. …_(truncated — read the full rule in CLAUDE.md)_
+- **R093** — NO ASSUMPTIONS. EVER. Every column name, table schema, enum value, file path, function signature, API behavior, workflow semantic, client state, or past action must be verified by a FRESH tool call in the CURRENT session before use. …_(truncated — read the full rule in CLAUDE.md)_
+- **R094** — leads.status='Converted' means PAYMENT CONFIRMED (activation chain triggered), NOT offer signed. …_(truncated — read the full rule in CLAUDE.md)_
+- **R096** — MCP TOOL ROUTING — TWO CONNECTIONS, CLAUDE CHOOSES (2026-05-01). Claude Code has two MCP connections: mcp__td-ops-sandbox__* (sandbox Supabase, generated by dev-setup.sh into .mcp.json) and mcp__af7d85f2-* (DXT plugin, production Supabase). …_(truncated — read the full rule in CLAUDE.md)_
+- **R097** — QB MCP tools REMOVED (2026-04-24, commit 8f9f18a). qb.ts and qb-expenses.ts (17 tools) moved to lib/mcp/tools/deprecated/ and unregistered from the MCP server (the orphaned active copies were deleted 2026-06-03). …_(truncated — read the full rule in CLAUDE.md)_
+- **R098** — Invoice-number generator is race-safe via DB unique constraint, NOT a retry loop in code. lib/portal/invoice-number.ts::generateInvoiceNumber is intentionally simple (max+1) with strict LIKE 'INV-______' filter; …_(truncated — read the full rule in CLAUDE.md)_
+- **R099** — Surface server errors on client-side fetch (2026-04-21, commit b80ecef). Any client-side fetch to our own APIs must parse the server's JSON body on non-2xx and surface data.error to the user, with a sensible fallback. …_(truncated — read the full rule in CLAUDE.md)_
+- **R100** — Client-visible content deletion MUST use soft-delete (2026-04-21, commit 49d64df). …_(truncated — read the full rule in CLAUDE.md)_
+- **R101** — DEVIL'S ADVOCATE MANDATORY (2026-04-21). Before any plan, proposal, decision, or recommendation, you MUST internally answer five questions: (1) what am I assuming, (2) what did I consider and reject, (3) how is my chosen approach weak, (4)  …_(truncated — read the full rule in CLAUDE.md)_
+- **R102** — Portal tier has exactly 4 values: lead, formation, onboarding, active. The value full is removed and must never be used. …_(truncated — read the full rule in CLAUDE.md)_
+- **R103** — When an admin sends a portal chat message (via dashboard or portal_chat_send MCP tool), the client automatically receives an email notification. Implemented in lib/portal/notifications.ts::notifyClientOfAdminMessage. …_(truncated — read the full rule in CLAUDE.md)_
+- **R104** — SANDBOX IS THE ONLY DEVELOPMENT ENVIRONMENT (2026-05-01, structural enforcement). Three layers prevent production access during development: (1) .vercel/project.json is committed to git with sandbox values — git pull resets it on every mach …_(truncated — read the full rule in CLAUDE.md)_
+- **R105** — ALL DDL MUST GO THROUGH MIGRATION FILES (2026-04-30, structural enforcement). CREATE TABLE, ALTER TABLE, CREATE FUNCTION/TRIGGER/VIEW/SEQUENCE/TYPE/EXTENSION, and CREATE INDEX are blocked by execute_sql unless reason starts with migration:< …_(truncated — read the full rule in CLAUDE.md)_
+- **R106** — Service/SD vocabulary lives in the catalog framework. The source of truth for service types is catalog_entries (catalog_id='services'). Code MUST import from lib/services/index.ts — never hardcode service type strings. …_(truncated — read the full rule in CLAUDE.md)_
+- **R107** — SYSTEM REFERENCE LIBRARY (2026-05-29, structural enforcement). docs/systems/ holds one living doc per subsystem (how it works, how it's built, the rules, how to verify). …_(truncated — read the full rule in CLAUDE.md)_
+- **R108** — Hermes ↔ Claude BRIDGE (Phase 1, 2026-06-03, dev_task 1a0d1354). One table (agent_messages) + three MCP tools (agent_msg_send, agent_inbox_list, agent_inbox_reply) + one cron worker (/api/cron/hermes-bridge, schedule */5 * * * *) implement  …_(truncated — read the full rule in CLAUDE.md)_
+- **R109** — SELF-SERVE BEFORE ASKING (2026-06-21). Never ask the user for a fact the system can give you — a client's language (contacts.language), email, invoice/payment status, which service they have, any record state. …_(truncated — read the full rule in CLAUDE.md)_
+- **R110** — OFFER WORKTREE TEARDOWN WHEN A JOB SHIPS (2026-06-27). Each Claude Code worktree may run its own isolated local Supabase stack (auto-provisioned by scripts/worktree-auto-isolate.sh, ~8 GB RAM each). …_(truncated — read the full rule in CLAUDE.md)_
+- **R111** — WORKER NEVER LAUNCHES OR SHIPS CODE (**AMENDED 2026-07-10, Antonio** — supersedes the 2026-06-30 Antonio-only gate). …_(truncated — read the full rule in CLAUDE.md)_
+- **R112** — DEV-TRACKER BOARD DISCIPLINE (2026-07-11). Every Claude Code session that does dev work (feature/bug/refactor/etc.) MUST be tied to exactly ONE dev job in dev_tasks — the durable, compaction-proof record shown on the /dev-board board (per-c …_(truncated — read the full rule in CLAUDE.md)_
+- **R113** — ASK THE SYSTEM COUNSELOR FIRST, ON EVERY INVESTIGATION (2026-08-02). Before forming a theory about any investigation — bug, "how does X work", audit, or a feature touching an existing flow — consult the system-counselor subagent FIRST, in c …_(truncated — read the full rule in CLAUDE.md)_
+<!-- /GENERATED:rules -->
+
+## Appendix E — Subsystem deep docs
+<!-- GENERATED:deep-docs -->
+_Regenerated 2026-08-02. Every subsystem doc under `docs/systems/` (36 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
+
+- [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-07-29)_
+- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-07-30)_
+- [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-08-01)_
+- [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-07-29)_
+- [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-07-29)_
+- [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-06-22)_
+- [client-threads.md](client-threads.md) — Client Threads _(verified 2026-07-31)_
+- [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-07-30)_
+- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-07-17)_
+- [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
+- [documents.md](documents.md) — Documents & Storage _(verified 2026-07-24)_
+- [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-07-11)_
+- [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-07-31)_
+- [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-07-09)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-07-28)_
+- [formation.md](formation.md) — Company Formation _(verified 2026-07-28)_
+- [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-08-02)_
+- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-08-02)_
+- [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-07-26)_
+- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-07-29)_
+- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-07-29)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-08-01)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-07-30)_
+- [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-07-08)_
+- [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-07-02)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-07-28)_
+- [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-07-21)_
+- [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-07-27)_
+- [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-07-29)_
+- [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-07-29)_
+- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-07-29)_
+- [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-07-29)_
+- [td-communication.md](td-communication.md) — TD Communication _(verified 2026-08-01)_
+- [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-07-30)_
+- [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-07-21)_
+- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-07-22)_
+<!-- /GENERATED:deep-docs -->
