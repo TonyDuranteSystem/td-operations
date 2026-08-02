@@ -38,6 +38,15 @@ export async function GET(req: NextRequest) {
   // admin's View-as never counts as the client logging in (which would hide the
   // "Resend Welcome" button + misreport "Last login"). Null = never logged in.
   const priorLastSignIn = clientUser.last_sign_in_at ?? null
+  // Same reason, second stamp: generateLink below ALSO writes recovery_sent_at
+  // (proven causally in sandbox 2026-08-02 — NULL before a magiclink mint,
+  // = mint timestamp immediately after). That column is where anyone looks to
+  // ask "did we send this client a password-reset email?", so View-as was
+  // filling it with false positives: on production, 96 of the 100 stamped users
+  // fell within 120s of a portal_view_as_enter row. Capture and put it back —
+  // viewing a client must leave no trace on the client at all.
+  const priorRecoverySentAt =
+    (clientUser as { recovery_sent_at?: string | null }).recovery_sent_at ?? null
 
   // Mint a one-time magiclink token for the client (does NOT send email).
   const { data: link, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
@@ -78,14 +87,19 @@ export async function GET(req: NextRequest) {
     // types regen.
     const restore = supabaseAdmin.rpc as unknown as (
       fn: string,
-      args: { p_user_id: string; p_ts: string | null },
+      args: {
+        p_user_id: string
+        p_last_sign_in: string | null
+        p_recovery_sent: string | null
+      },
     ) => Promise<{ error: { message: string } | null }>
-    await restore('viewas_restore_last_sign_in', {
+    await restore('viewas_restore_auth_stamps', {
       p_user_id: clientUser.id,
-      p_ts: priorLastSignIn,
+      p_last_sign_in: priorLastSignIn,
+      p_recovery_sent: priorRecoverySentAt,
     })
   } catch (e) {
-    console.error('[view-as] failed to restore last_sign_in_at:', e)
+    console.error('[view-as] failed to restore auth stamps:', e)
   }
 
   // Drop the read-only marker cookie (signed, httpOnly, portal domain).
