@@ -13,6 +13,7 @@
  */
 
 import { gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
+import { withGmailRetry } from "@/lib/email-store/capture"
 import { decodeHtmlEntities, displayNameFromHeader } from "@/lib/inbox/email-html"
 import { extractEmailAddress } from "@/lib/inbox/email-unread"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -138,10 +139,16 @@ export async function indexThread(
   threadId: string,
   dir: CrmDirectory
 ): Promise<number> {
-  const thread = (await gmailGet(
-    `/threads/${threadId}`,
-    METADATA_PARAMS as unknown as Record<string, string | string[]>,
-    MAILBOX_ADDRESSES[mailbox]
+  // Retry on 429/5xx: at backfill throughput a transient rate-limit must NOT
+  // drop a thread (which would leave a permanent, undetectable gap in the index
+  // that the content capture then can't even see). Non-retryable errors (404 for
+  // a deleted thread) still throw — the caller records that as a failure.
+  const thread = (await withGmailRetry(() =>
+    gmailGet(
+      `/threads/${threadId}`,
+      METADATA_PARAMS as unknown as Record<string, string | string[]>,
+      MAILBOX_ADDRESSES[mailbox]
+    )
   )) as { messages?: GmailAPIMessage[] }
 
   const rows = (thread.messages ?? []).map((m) => buildIndexRow(mailbox, m, dir))
