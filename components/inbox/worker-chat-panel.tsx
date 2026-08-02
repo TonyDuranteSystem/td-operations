@@ -48,6 +48,8 @@ interface PreparedSend {
   body: string
   attachments: Array<{ name: string; size?: number }>
   /** Portal only — the client the worker suggested. A chip to click, never pre-selected. */
+  /** Set when the frozen text is confidently NOT the language the card claims. */
+  languageMismatch?: 'en' | 'it' | null
   proposedAccountId?: string | null
   proposedContactId?: string | null
   proposedName?: string | null
@@ -97,7 +99,18 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
   /** WHICH LANGUAGE the worker must WRITE in. Switching it REWRITES the message on the
    *  card immediately (Antonio, 2026-08-01) — see the dropdown below. Sent with every
    *  turn so the worker always knows which language it is writing for. */
-  const [portalLocale, setPortalLocale] = useState<'en' | 'it'>('en')
+  /**
+   * REMEMBERED PER EMAIL THREAD. Reloading the panel used to snap this back to English
+   * while the conversation carried on in Italian — so the card said English, the
+   * message was Italian, and even a perfectly obedient worker had been handed a
+   * contradiction. The conversation survives a reload; the language setting has to as
+   * well. Scoped to this thread so a different email starts fresh.
+   */
+  const localeKey = `td-portal-locale:${conversation.id}`
+  const [portalLocale, setPortalLocale] = useState<'en' | 'it'>(() => {
+    if (typeof window === 'undefined') return 'en'
+    return window.localStorage.getItem(localeKey) === 'it' ? 'it' : 'en'
+  })
   /** Language to restore if a switch-triggered rewrite fails — see the dropdown. */
   const [, setLocaleRollback] = useState<'en' | 'it' | null>(null)
   /**
@@ -403,7 +416,13 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
       // The card still holds the PREVIOUS language's text, so the dropdown must go back
       // to match it. Otherwise the control says Italian, the message is English, Confirm
       // is live, and English goes to the client.
-      setLocaleRollback(prev => { if (prev) setPortalLocale(prev); return null })
+      setLocaleRollback(prev => {
+        if (prev) {
+          setPortalLocale(prev)
+          try { window.localStorage.setItem(localeKey, prev) } catch { /* private mode */ }
+        }
+        return null
+      })
       setMessages(prev => [
         ...prev,
         { role: 'worker', text: `⚠️ ${err instanceof Error && err.message ? err.message : 'Worker failed — please try again.'}` },
@@ -604,6 +623,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
                 if (next === portalLocale) return
                 const previous = portalLocale
                 setPortalLocale(next)
+                try { window.localStorage.setItem(localeKey, next) } catch { /* private mode */ }
                 // If the rewrite never lands (timeout, the per-thread in-flight 409 when a
                 // colleague has the same email open, a worker error), the card still shows
                 // the OLD language while the dropdown claims the new one — and Confirm
@@ -634,6 +654,24 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
           <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-amber-200 bg-white px-2.5 py-2">
             <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
           </div>
+
+          {/* THE LABEL MUST NOT BE ABLE TO LIE. Observed 2026-08-02: dropdown on
+              English, message in Italian, because the worker copied earlier turns
+              instead of following the setting it was told. Detected server-side with
+              the existing EN/IT detector, which stays silent on short or mixed text —
+              so this fires only when the text is confidently the wrong language. */}
+          {preparedSend.languageMismatch ? (
+            <div className="mt-2 rounded-lg border border-red-300 bg-red-50 px-2.5 py-2">
+              <p className="text-xs font-semibold text-red-800">
+                This message is in {preparedSend.languageMismatch === 'it' ? 'Italian' : 'English'}, but the
+                language is set to {portalLocale === 'it' ? 'Italian' : 'English'}.
+              </p>
+              <p className="mt-0.5 text-[11px] text-red-700">
+                Switch the dropdown to match, or press Reformulate to rewrite it in{' '}
+                {portalLocale === 'it' ? 'Italian' : 'English'}.
+              </p>
+            </div>
+          ) : null}
 
           {/* MISMATCH BACKSTOP. The message is written BEFORE the client is chosen, so
               a name inside it is a guess the card cannot correct — and correcting it
@@ -739,7 +777,9 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
                   // would get a "you have a new message" email pointing at a door they
                   // have no key to, and nobody would ever read the message.
                   reach.checking ||
-                  reach.reachable === false
+                  reach.reachable === false ||
+                  // Never send text whose language disagrees with the card's own label.
+                  !!preparedSend.languageMismatch
                 }
                 title={
                   !portalTarget

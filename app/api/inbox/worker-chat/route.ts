@@ -829,6 +829,8 @@ export async function POST(req: NextRequest) {
       id: string
       /** "email" | "portal" — the panel renders a different card for each. */
       kind: string
+      /** Set when the frozen text is confidently NOT the language the card claims. */
+      languageMismatch?: "en" | "it" | null
       to: string | null
       subject: string | null
       body: string
@@ -874,9 +876,32 @@ export async function POST(req: NextRequest) {
             // A missing suggestion is fine — the staff member searches instead.
           }
         }
+        // DOES THE FROZEN TEXT ACTUALLY MATCH THE LANGUAGE THE CARD SAYS?
+        //
+        // The dropdown is the only language authority (Antonio, 2026-07-31), and the
+        // worker is told its current value in words. It obeys most of the time — but on
+        // 2026-08-02, with the dropdown on English, it wrote Italian by copying earlier
+        // turns. Same failure family as the false card claim: an instruction the model
+        // can skip is not a control.
+        //
+        // So the SERVER checks. It uses the existing EN/IT detector, which is
+        // deliberately silent on short or mixed text, so this only ever fires when the
+        // text is confidently the WRONG language — never on "Ok, grazie".
+        let languageMismatch: "en" | "it" | null = null
+        if (prep.kind === "portal" && prep.body) {
+          try {
+            const { detectDraftLanguage } = await import("@/lib/ai-agent/draft-language")
+            const detected = detectDraftLanguage(prep.body)
+            const chosen = prep.draft_locale === "it" ? "it" : "en"
+            if (detected !== "unknown" && detected !== chosen) languageMismatch = detected
+          } catch {
+            // Never block a card over the check itself.
+          }
+        }
         preparedSend = {
           id: prep.id,
           kind: prep.kind,
+          languageMismatch,
           to: prep.to_address,
           subject: prep.subject,
           // The BODY is returned so the panel can show what will actually be sent.

@@ -122,3 +122,43 @@ describe("REGRESSION 2026-08-02: a reply must not claim a card that does not exi
     for (const r of NO_CLAIM) expect(claimsACard(r)).toBe(false)
   })
 })
+
+describe("REGRESSION 2026-08-02: the card's language label must not be able to lie", () => {
+  // Observed live: the panel was reloaded (which reset the dropdown to English), the
+  // worker was told in words "the dropdown is set to ENGLISH, write in English", and it
+  // wrote ITALIAN anyway by copying the earlier turns of the conversation. The frozen
+  // row then recorded "en" against Italian text.
+  //
+  // Same family as the false card claim: an instruction the model can skip is not a
+  // control. The server now compares the frozen text against the chosen language using
+  // the EN/IT detector, which is deliberately silent on short or mixed text — so this
+  // fires only when the text is CONFIDENTLY the wrong language, never on "Ok, grazie".
+  it("the detector is confident about a real Italian message", async () => {
+    const { detectDraftLanguage } = await import("@/lib/ai-agent/draft-language")
+    expect(detectDraftLanguage(
+      "Il tuo deposito è completo. Il documento è stato archiviato nel tuo fascicolo e non devi fare altro.",
+    )).toBe("it")
+  })
+
+  it("the detector is confident about a real English message", async () => {
+    const { detectDraftLanguage } = await import("@/lib/ai-agent/draft-language")
+    expect(detectDraftLanguage(
+      "The document from your registered agent has been filed and we have saved it to your records for you.",
+    )).toBe("en")
+  })
+
+  it("stays SILENT on a short reply — a false block would be its own bug", async () => {
+    // "Ricevuto, grazie." must never trip the guard and lock the send.
+    const { detectDraftLanguage } = await import("@/lib/ai-agent/draft-language")
+    expect(detectDraftLanguage("Ricevuto, grazie.")).toBe("unknown")
+  })
+
+  it("the mismatch rule only fires on a confident disagreement", () => {
+    // The exact rule the route applies.
+    const fires = (detected: string, chosen: string) => detected !== "unknown" && detected !== chosen
+    expect(fires("it", "en")).toBe(true)   // the observed failure
+    expect(fires("en", "it")).toBe(true)
+    expect(fires("it", "it")).toBe(false)
+    expect(fires("unknown", "it")).toBe(false) // short/mixed text never blocks
+  })
+})
