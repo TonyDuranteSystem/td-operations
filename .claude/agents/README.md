@@ -14,6 +14,12 @@ main conversation context light and compaction-resistant.
 | Client Onboarding | `client-onboarding.md` | New client setup end-to-end (account, contacts, Drive, offer, email) |
 | Communication Triage | `communication-triage.md` | Daily inbox triage (Gmail + WA + TG), match to accounts, draft responses |
 
+## Council of Reviewers — a different kind of agent (do not use the pattern below)
+
+`senior-engineer.md` · `ai-architect.md` · `project-director.md` · `bug-hunter.md` · `system-counselor.md` are the **5 permanent CORE reviewers** of the Council. They are REGISTERED read-only subagents (Read/Grep/Glob only) — they write nothing, to Supabase or anywhere else, and they return a structured findings block, not a summary. Do not apply the anti-compaction "write to DB first" pattern to them.
+
+Rules, tiers, routing and the two-phase bug flow: `.claude/skills/council/SKILL.md` + `PROTOCOL.md`. The System Counselor's living 360° map of the system and the business: `.claude/skills/council/SYSTEM-KNOWLEDGE.md`.
+
 ## How to Use
 
 1. Read the agent template file

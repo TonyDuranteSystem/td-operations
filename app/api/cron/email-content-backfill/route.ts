@@ -21,22 +21,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  // Off-hours only (13:00–23:00 UTC ≈ US business hours). INCIDENT 2026-08-02:
-  // running the pull during business hours starved the interactive inbox's
-  // per-user Gmail quota — the whole inbox showed "Couldn't load — retrying".
-  // The pull shares the SAME per-user quota as the live inbox, so it must run
-  // off-hours (same guard the metadata backfill uses). It still completes over
-  // a night or two; the inbox falls back to live Gmail meanwhile.
-  const utcHour = new Date().getUTCHours()
-  if (utcHour >= 13 && utcHour < 23) {
-    return NextResponse.json({ skipped: "business-hours" })
-  }
+  // Runs ANY time, including weekends (the inbox is used 7 days a week, so a
+  // clock-based pause is the wrong lever — Antonio 2026-08-02, Sunday).
+  // INCIDENT 2026-08-02: the pull shares the SAME per-user Gmail quota as the
+  // interactive inbox; running it hot made the whole inbox render "Couldn't
+  // load — retrying". Fix is THROTTLE, not a curfew: a short budget per tick +
+  // low in-window concurrency (see backfillTickIO) leave the live inbox ample
+  // headroom. It finishes in more, smaller ticks instead of few greedy ones.
 
-  // ~120s budget per mailbox keeps the whole run under the 300s function cap.
+  // ~60s budget per mailbox: a short, gentle slice of each 15-min tick.
   const results: Record<string, unknown> = {}
   for (const mailbox of ["support", "antonio"] as const) {
     try {
-      const tick = await runBackfillTick({ mailbox, budgetMs: 120_000 }, backfillTickIO)
+      const tick = await runBackfillTick({ mailbox, budgetMs: 60_000 }, backfillTickIO)
       const progress = await backfillProgress(mailbox)
       results[mailbox] = { tick, progress }
     } catch (err) {

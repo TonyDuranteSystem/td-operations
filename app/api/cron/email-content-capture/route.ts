@@ -19,22 +19,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  // INCIDENT 2026-08-02: running content capture during business hours starved
-  // the interactive inbox's per-user Gmail quota (all emails showed "Couldn't
-  // load — retrying"). Paused during US business hours (13:00–23:00 UTC) — the
-  // exact starvation guard the metadata backfill already uses. New mail is
-  // captured off-hours; the small ~10-min catch-up delay is worth not fighting
-  // the live inbox.
-  const utcHour = new Date().getUTCHours()
-  if (utcHour >= 13 && utcHour < 23) {
-    return NextResponse.json({ skipped: "business-hours" })
-  }
-
+  // Runs ANY time (including weekends — the inbox is used 7 days a week, so a
+  // clock-based pause is the wrong lever). Instead this is deliberately GENTLE:
+  // INCIDENT 2026-08-02 — capturing 50 msgs at concurrency 5 alongside the live
+  // inbox exhausted the per-user Gmail quota and the whole inbox rendered
+  // "Couldn't load — retrying". Fix: SEQUENTIAL (concurrency 1) and a small
+  // batch, so capture uses a thin slice of the 250 units/user/sec and the
+  // interactive inbox always has headroom. New mail still lands within minutes.
   const results: Record<string, unknown> = {}
   for (const mailbox of ["support", "antonio"] as const) {
     try {
-      // Small batch: catch up recent new mail without competing with the live inbox.
-      results[mailbox] = await captureBatchLive(mailbox, 50, 5)
+      results[mailbox] = await captureBatchLive(mailbox, 15, 1)
     } catch (err) {
       results[mailbox] = { error: err instanceof Error ? err.message : String(err) }
     }
