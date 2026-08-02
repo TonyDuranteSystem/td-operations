@@ -19,6 +19,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
+  // INCIDENT 2026-08-02: running content capture during business hours starved
+  // the interactive inbox's per-user Gmail quota (all emails showed "Couldn't
+  // load — retrying"). Paused during US business hours (13:00–23:00 UTC) — the
+  // exact starvation guard the metadata backfill already uses. New mail is
+  // captured off-hours; the small ~10-min catch-up delay is worth not fighting
+  // the live inbox.
+  const utcHour = new Date().getUTCHours()
+  if (utcHour >= 13 && utcHour < 23) {
+    return NextResponse.json({ skipped: "business-hours" })
+  }
+
   const results: Record<string, unknown> = {}
   for (const mailbox of ["support", "antonio"] as const) {
     try {
