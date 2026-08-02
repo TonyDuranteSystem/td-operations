@@ -671,3 +671,13 @@ Fix:
 - Deliberately NOT converted to `useInfiniteQuery`: the list's reconcile/override pipeline (optimistic hide/pin, payload-origin stamping) is incident-hardened around a single full payload, and re-shaping it into pages is a separate, riskier change. Growing one request keeps that logic untouched.
 
 Still open: instant SEARCH remains capped (`searchIndexThreadIds`: 400-row pre-scan, 50 threads, and the instant path is gated `!pageToken`) — searching deep history needs its own paging pass.
+
+### The list and search now read OUR index, not live Gmail (2026-08-02)
+
+Antonio: *"I want email from one year ago, and when I say Load more, load all emails. If we store all these emails, what is the problem with having all emails in our inbox?"* — correct, and the caps were protecting nothing.
+
+- **Search** already answered from `email_index`, but was throttled to 50 threads out of a 400-row pre-scan (`searchIndexThreadIds`). Those bounds were on OUR OWN database, so they simply hid stored mail. Now `maxThreads` defaults to 200, the pre-scan scales with the request (`min(max(maxThreads*8, 400), 5000)`), and the route passes the caller's `limit` straight through (was `Math.min(limit, 50)`). We hold 27,781 indexed emails — antonio since 2024-06-03, support since 2025-07-25 — so a year-old search now resolves.
+- **Browse** (Inbox / Sent / a user folder, no search) is served from the index too, via the new `listIndexThreadIds(mailbox, labelId, maxThreads)` — same shape as the search path (`fetchThreadRows` → `groupRowsToConversations`), gated on `isBackfillDone`, TRASH/SPAM excluded unless that's the view. This removes the ~300 live `threads.get` calls per page that made browsing slow, capped, and quota-fragile (the 2026-08-02 incident). Any search, explicit `pageToken`, unfinished backfill, empty index result, or error still falls through to the live-Gmail path unchanged.
+- **Ceilings:** route `limit` ceiling 500 → 2000 (search is a DB query); the live-Gmail browse fan-out is *tightened* to `min(max(limit*2,200), 600)` threads so the fallback path can never over-fetch. Client `MAX_PAGE_SIZE` 500 → 2000.
+
+Trade-off to know: the index is fed by the gmail-push webhook plus the `*/10` reconcile, so a label/read-state change made directly in Gmail can be up to ~10 minutes stale in the list. Actions taken in the CRM are instant (the optimistic override pipeline is unchanged). This is the deliberate cost of not calling Gmail 300 times per page.
