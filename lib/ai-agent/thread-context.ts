@@ -305,7 +305,12 @@ export const REPLAY_CHAR_BUDGET = 40_000
  *  were the ones that slipped through. */
 export function stripPerTurnAssertions(text: string): string {
   return (text ?? "")
-    .replace(/\[EMAIL RULE[^\]]*\]/g, "")
+    // Matches BOTH the historical "[EMAIL RULE …]" and the block actually emitted
+    // today, "[EMAIL: …]". The old pattern only matched the former, so for months this
+    // guard stripped nothing: every replayed turn carried a stale list of "addresses
+    // that send straight out" from whenever that turn ran. A dead guard reads as
+    // protection and is worse than none.
+    .replace(/\[EMAIL(?: RULE)?:?[^\]]*\]/g, "")
     .replace(/\[FILES YOU CAN ATTACH[^\]]*\]/g, "")
     .replace(/\[Not attached:[^\]]*\]/g, "")
     // Past-tense rewrite rather than deletion: the model should know a file was

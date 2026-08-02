@@ -87,7 +87,13 @@ export async function preparePortalSend(input: PreparePortalInput): Promise<Prep
 
 export type ConfirmPortalResult =
   | { ok: true; cancelled: true }
-  | { ok: true; sent: true; recipientName: string; notified: "emailed" | "not_emailed" | "unknown" }
+  // `notified` is ALWAYS "unknown" today, and the type says so on purpose. The client
+  // notification is fire-and-forget inside sendPortalMessageFromWorker, so its outcome
+  // never reaches here. An "emailed" | "not_emailed" union would advertise a branch the
+  // code cannot produce — which is exactly how the old substring check went unnoticed:
+  // the panel had an "emailed" path that was unreachable in production and nobody could
+  // see it, because the JSON crossing the wire is untyped.
+  | { ok: true; sent: true; recipientName: string; notified: "unknown" }
   | { ok: false; reason: string; status?: number }
 
 /**

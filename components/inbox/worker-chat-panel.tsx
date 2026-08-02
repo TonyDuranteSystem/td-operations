@@ -166,9 +166,10 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
               // fire-and-forget, and its result never reaches here — so any sentence
               // about it would be a guess dressed as fact. The old wording asserted
               // "no email went out" on every single send and was wrong every time.
-              ? `✅ Posted to ${data.recipientName ?? 'the client'}'s portal chat.${
-                  data.notified === 'emailed' ? ' They were emailed about it.' : ''
-                }`
+              // No claim about the client email: whether it went is decided
+              // fire-and-forget elsewhere and never comes back here. The old wording
+              // asserted "no email went out" on every send and was wrong every time.
+              ? `✅ Posted to ${data.recipientName ?? 'the client'}'s portal chat.`
               : (preparedSend.attachments.length
                   ? `✅ Sent to ${preparedSend.to} with ${preparedSend.attachments.map(a => a.name).join(', ')} attached.`
                   : `✅ Sent to ${preparedSend.to}.`),
@@ -230,9 +231,27 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
     const accId = preparedSend?.proposedAccountId
     const conId = preparedSend?.proposedContactId
     if (preparedSend?.kind !== 'portal' || (!accId && !conId)) { setScopeSiblingIds(new Set()); return }
+    // CLEARED BEFORE THE FETCH, not after. Otherwise a NEW card inherits the PREVIOUS
+    // card's member list for the length of the round trip, and picking one of those
+    // people in that window suppresses the mismatch warning — failing in the unsafe
+    // direction on the one control that stops a message reaching the wrong client.
+    setScopeSiblingIds(new Set())
     let alive = true
-    fetch(`/api/inbox/client-scope-siblings?${accId ? `account_id=${accId}` : `contact_id=${conId}`}`)
-      .then(r => r.json())
+    // ONLY the account→members direction. The reverse (contact → every company that
+    // person belongs to) was too wide: a client with two LLCs got NO mismatch warning
+    // when a message drafted for Acme was aimed at Beta, and every Beta member would
+    // have seen it. Antonio's ruling is company ↔ ITS member, not "anything this person
+    // touches". With no account proposed there is nothing to widen from, so a different
+    // id stays a mismatch — the safe direction.
+    if (!accId) { setScopeSiblingIds(new Set()); return }
+    fetch(`/api/inbox/client-scope-siblings?account_id=${accId}`)
+      .then(r => {
+        // An error BODY is not an empty result. Unchecked, a 403 reads as "no
+        // siblings", which silently turns every legitimate member pick into a
+        // mismatch warning with no explanation anywhere.
+        if (!r.ok) throw new Error(String(r.status))
+        return r.json()
+      })
       .then((d: { ids?: string[] }) => { if (alive) setScopeSiblingIds(new Set(d.ids ?? [])) })
       .catch(() => { if (alive) setScopeSiblingIds(new Set()) })
     return () => { alive = false }

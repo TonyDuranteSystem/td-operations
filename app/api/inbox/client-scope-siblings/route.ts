@@ -38,19 +38,25 @@ export async function GET(req: NextRequest) {
 
   try {
     if (accountId) {
-      const { data } = await supabaseAdmin
+      const { data, error } = await supabaseAdmin
         .from("account_contacts")
         .select("contact_id")
         .eq("account_id", accountId)
+      // supabase-js RETURNS errors rather than throwing, so destructuring `data`
+      // alone swallows a permissions/schema failure into an empty list — which here
+      // means "not the same client", locking Confirm on every legitimate member pick
+      // with no log and no clue. Third instance of this same swallow in this codebase.
+      if (error) throw new Error(error.message)
       const ids = ((data ?? []) as Array<{ contact_id: string | null }>)
         .map((r) => r.contact_id)
         .filter((v): v is string => !!v)
       return NextResponse.json({ ids })
     }
-    const { data } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from("account_contacts")
       .select("account_id")
       .eq("contact_id", contactId as string)
+    if (error) throw new Error(error.message)
     const ids = ((data ?? []) as Array<{ account_id: string | null }>)
       .map((r) => r.account_id)
       .filter((v): v is string => !!v)

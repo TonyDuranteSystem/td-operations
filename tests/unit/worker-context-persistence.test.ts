@@ -90,3 +90,35 @@ describe("portal chats worker turn — the client conversation travels with it",
     expect(body).toContain("--- Client")
   })
 })
+
+describe("REGRESSION 2026-08-02: a reply must not claim a card that does not exist", () => {
+  // Observed twice in sandbox, INTERMITTENTLY: the worker answered "The card is up —
+  // Closify Consulting LLC is pre-selected, confirm to send" without calling the tool.
+  // No frozen row, nothing pending, nothing that could ever send. The identical request
+  // a minute later worked. Two prompt rules had already been tried; both held most of
+  // the time. A rule the model can skip is not a control — so the SERVER now corrects
+  // the claim, because it knows with certainty whether a card is going back.
+  const CLAIMS = [
+    'The card is up. Message: > Hi there.',
+    'Closify Consulting LLC is pre-selected — confirm to send.',
+    'Ready for your confirmation on the card below.',
+    'Please confirm it on the card.',
+  ]
+  const NO_CLAIM = [
+    'I read the email. Smit is asking for the prior year return.',
+    'Do you want me to draft something for the client?',
+  ]
+
+  // The detector the route uses. Kept in the test as the same literal so a change to
+  // one without the other is visible here rather than in production.
+  const claimsACard = (reply: string) =>
+    /\b(the card|on the card|confirm(?:ing)? (?:it )?(?:on|below)|pre-selected|ready for (?:your|their) confirmation)\b/i.test(reply)
+
+  it("recognises every phrasing the worker actually used when it lied", () => {
+    for (const r of CLAIMS) expect(claimsACard(r)).toBe(true)
+  })
+
+  it("does NOT fire on ordinary replies — a false correction would be its own bug", () => {
+    for (const r of NO_CLAIM) expect(claimsACard(r)).toBe(false)
+  })
+})
