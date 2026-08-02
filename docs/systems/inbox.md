@@ -681,3 +681,16 @@ Antonio: *"I want email from one year ago, and when I say Load more, load all em
 - **Ceilings:** route `limit` ceiling 500 → 2000 (search is a DB query); the live-Gmail browse fan-out is *tightened* to `min(max(limit*2,200), 600)` threads so the fallback path can never over-fetch. Client `MAX_PAGE_SIZE` 500 → 2000.
 
 Trade-off to know: the index is fed by the gmail-push webhook plus the `*/10` reconcile, so a label/read-state change made directly in Gmail can be up to ~10 minutes stale in the list. Actions taken in the CRM are instant (the optimistic override pipeline is unchanged). This is the deliberate cost of not calling Gmail 300 times per page.
+
+### Real page numbers (2026-08-02) — replaces "Load older emails"
+
+Antonio: *"Why do they have a limit of 500 or 2,000? Can't it be unlimited? Why every time I refresh do I have only 50 emails again? In Gmail I have the numbers of the pages: 1, 2, 3, 4, 5, according to how many emails I have."*
+
+He was right on all three counts. The honest constraint is **the browser** — rendering thousands of rows at once is slow and can crash a phone. It was never the database. And "Load older" kept its state in memory, so a refresh dumped you back at the newest mail.
+
+Now: a fixed **50 per page** with a Gmail-style pager (`1 … 4 5 [6] 7 8 … 107`), the current page in the **URL** so refresh keeps your place, and **no depth ceiling** — support is ~107 pages, antonio ~73, covering everything indexed.
+
+- Paging happens **in the DB at THREAD level** — `inbox_thread_page` / `inbox_search_thread_page` (+ `_count` twins) in `scripts/migrations/20260802-2100-inbox-thread-pagination.sql`. `email_index` holds one row per MESSAGE, so a plain row OFFSET would split a conversation across two pages; these functions `GROUP BY thread_id ORDER BY max(internal_date) DESC` first. Verified in sandbox: pages 1–3 of support/INBOX returned 150 rows / 150 distinct threads (zero cross-page duplicates), exact page size, strictly descending.
+- Route accepts `page` (1-based) and returns `page`, `pageSize`, `totalConversations`, `totalPages`. Totals are present only on index-served views; the live-Gmail fallback can't know a true total, so the pager hides there.
+- `buildPageNumbers` (`lib/inbox/pager.ts`) is pure and unit-tested (8 cases: ellipsis placement, first/last always shown, all-pages for ≤7, clamping, no duplicates, ascending).
+- Superseded: the `PAGE_STEP`/`MAX_PAGE_SIZE` "Load older" growth and the now-unused `searchIndexThreadIds` / `listIndexThreadIds` call sites in the route.

@@ -16,8 +16,10 @@ const GMAIL_THREAD_FETCH_CONCURRENCY = 12
 import {
   isInstantSearchQuery,
   isBackfillDone,
-  searchIndexThreadIds,
-  listIndexThreadIds,
+  pageIndexThreadIds,
+  countIndexThreads,
+  pageSearchThreadIds,
+  countSearchThreads,
   fetchThreadRows,
   groupRowsToConversations,
 } from "@/lib/email-index/query"
@@ -81,6 +83,12 @@ export async function GET(req: NextRequest) {
       parseInt(req.nextUrl.searchParams.get("limit") || "50"),
       2000
     )
+    // Real page numbers (Antonio 2026-08-02). 1-based; page 1 = newest. Paging
+    // is done in the DB at THREAD level so a conversation can never straddle two
+    // pages, and there is no ceiling on how far back you can go.
+    const page = Math.max(1, parseInt(req.nextUrl.searchParams.get("page") || "1"))
+    const pageOffset = (page - 1) * limit
+    let totalConversations: number | null = null
 
     const conversations: InboxConversation[] = []
     let gmailNextPageToken: string | undefined
@@ -116,7 +124,11 @@ export async function GET(req: NextRequest) {
           // No 50-cap: this reads our own index, so the caller's limit (grown by
           // "Load older emails") is what search should honour — the cap was
           // hiding year-old mail that is stored and instantly searchable.
-          const threadIds = await searchIndexThreadIds(searchQuery, mailboxKey, limit)
+          const [threadIds, total] = await Promise.all([
+            pageSearchThreadIds(mailboxKey, searchQuery, limit, pageOffset),
+            countSearchThreads(mailboxKey, searchQuery),
+          ])
+          totalConversations = total
           const rows = await fetchThreadRows(mailboxKey, threadIds)
           const markLabelNames = new Map<string, string>()
           try {
@@ -162,7 +174,11 @@ export async function GET(req: NextRequest) {
       try {
         if (await isBackfillDone(mailboxKey)) {
           const labelId = labelFilter || "INBOX"
-          const threadIds = await listIndexThreadIds(mailboxKey, labelId, limit)
+          const [threadIds, total] = await Promise.all([
+            pageIndexThreadIds(mailboxKey, labelId, limit, pageOffset),
+            countIndexThreads(mailboxKey, labelId),
+          ])
+          totalConversations = total
           if (threadIds.length > 0) {
             const rows = await fetchThreadRows(mailboxKey, threadIds)
             const markLabelNames = new Map<string, string>()
@@ -465,6 +481,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       conversations: conversations.slice(0, limit),
       total: conversations.length,
+      // Real pagination (index-served views only): which page this is, how many
+      // conversations exist in total, and therefore how many pages. Absent on
+      // the live-Gmail fallback, where a true total isn't knowable.
+      page,
+      pageSize: limit,
+      ...(totalConversations !== null
+        ? {
+            totalConversations,
+            totalPages: Math.max(1, Math.ceil(totalConversations / Math.max(1, limit))),
+          }
+        : {}),
       ...(gmailNextPageToken ? { nextPageToken: gmailNextPageToken } : {}),
       ...(gmailDegraded ? { gmailDegraded: true } : {}),
       // Completeness signals for the client reconcile (Luca flicker fix).
