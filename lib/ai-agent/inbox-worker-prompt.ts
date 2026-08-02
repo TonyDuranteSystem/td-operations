@@ -279,7 +279,15 @@ export function buildInboxWorkerUserBody(
 ): string {
   if (!ctx) return message
   const lines = [
-    "[CRM INBOX CONTEXT — the staff member is viewing this email thread. You have ALREADY read it below — do not say you cannot see the email.]",
+    // The "you have ALREADY read it" assertion is only true when a transcript is
+    // actually attached. On a Gmail fetch failure the context still carries the thread
+    // id (so the worker can retry the read itself) but no text — and the old
+    // unconditional header then instructed it not to admit it could not see an email
+    // it had never been shown. That produces a confident answer about a thread nobody
+    // read, on the screen where staff draft client replies.
+    ctx.transcript || ctx.latestMessage
+      ? "[CRM INBOX CONTEXT — the staff member is viewing this email thread. You have ALREADY read it below — do not say you cannot see the email.]"
+      : "[CRM INBOX CONTEXT — the staff member is viewing this email thread. THE EMAIL TEXT COULD NOT BE LOADED this turn. Do NOT answer from memory or guess what it says — use gmail_read_thread on the id below to read it, and if that fails too, say plainly that you could not load the email.]",
     ctx.mailbox ? `Mailbox: ${ctx.mailbox}@` : "",
     ctx.sender ? `From: ${ctx.sender}` : "",
     ctx.subject ? `Subject: ${ctx.subject}` : "",

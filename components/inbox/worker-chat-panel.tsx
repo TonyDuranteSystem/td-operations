@@ -98,6 +98,8 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
    *  card immediately (Antonio, 2026-08-01) — see the dropdown below. Sent with every
    *  turn so the worker always knows which language it is writing for. */
   const [portalLocale, setPortalLocale] = useState<'en' | 'it'>('en')
+  /** Language to restore if a switch-triggered rewrite fails — see the dropdown. */
+  const [, setLocaleRollback] = useState<'en' | 'it' | null>(null)
   const [reformulating, setReformulating] = useState(false)
   const [reformulateText, setReformulateText] = useState('')
 
@@ -139,10 +141,13 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
               // Says whether the client was actually EMAILED about it. The portal's
               // "you have a new message" email is throttled to one per conversation
               // every two hours, so a bare "Sent" would be untrue half the time.
+              // Says ONLY what is known: the message is in the portal. Whether the
+              // client's "you have a new message" email went is decided elsewhere,
+              // fire-and-forget, and its result never reaches here — so any sentence
+              // about it would be a guess dressed as fact. The old wording asserted
+              // "no email went out" on every single send and was wrong every time.
               ? `✅ Posted to ${data.recipientName ?? 'the client'}'s portal chat.${
-                  data.notified === 'emailed'
-                    ? ' They were emailed about it.'
-                    : " No email went out — they were notified about this chat recently, so it's in the portal only."
+                  data.notified === 'emailed' ? ' They were emailed about it.' : ''
                 }`
               : (preparedSend.attachments.length
                   ? `✅ Sent to ${preparedSend.to} with ${preparedSend.attachments.map(a => a.name).join(', ')} attached.`
@@ -191,12 +196,44 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
    * compare, so this stays quiet; the prompt rule against naming a client in the message
    * is what covers that case.
    */
+  /**
+   * The staff member picked a DIFFERENT SCOPE of the same client, not a different
+   * client: the worker proposed the company and they chose one of its members, or the
+   * worker proposed a person and they chose that person's company.
+   *
+   * Resolved against the account's real member list rather than guessed, because the
+   * ids never match each other and a name comparison would break on "Mario Rossi" vs
+   * "Rossi Consulting LLC".
+   */
+  const [scopeSiblingIds, setScopeSiblingIds] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    const accId = preparedSend?.proposedAccountId
+    const conId = preparedSend?.proposedContactId
+    if (preparedSend?.kind !== 'portal' || (!accId && !conId)) { setScopeSiblingIds(new Set()); return }
+    let alive = true
+    fetch(`/api/inbox/client-scope-siblings?${accId ? `account_id=${accId}` : `contact_id=${conId}`}`)
+      .then(r => r.json())
+      .then((d: { ids?: string[] }) => { if (alive) setScopeSiblingIds(new Set(d.ids ?? [])) })
+      .catch(() => { if (alive) setScopeSiblingIds(new Set()) })
+    return () => { alive = false }
+  }, [preparedSend?.kind, preparedSend?.proposedAccountId, preparedSend?.proposedContactId])
+
+  const sameClientDifferentScope = Boolean(portalTarget && scopeSiblingIds.has(portalTarget.id))
+
   const recipientMismatch = Boolean(
     preparedSend?.kind === 'portal' &&
       portalTarget &&
       (preparedSend.proposedAccountId || preparedSend.proposedContactId) &&
       portalTarget.id !== preparedSend.proposedAccountId &&
-      portalTarget.id !== preparedSend.proposedContactId,
+      portalTarget.id !== preparedSend.proposedContactId &&
+      // NOT a mismatch when the staff member is choosing the SCOPE rather than a
+      // different client — the worker proposed the company and they picked a member of
+      // it, or the reverse. Antonio, 2026-07-31: "If Luca will choose company, the
+      // message will go to the company! If Luca will choose the member of a company, it
+      // will go to the member." Blocking that told him the message "was written for Acme
+      // LLC, not Mario Rossi" — false, and it locked Confirm on the very choice the
+      // exact-recipient rule exists to support.
+      !sameClientDifferentScope,
   )
 
   const gmailThreadId = conversation.id.replace('gmail:', '')
@@ -293,6 +330,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
       // Attachment confirm (Confirm & send box) — this feature.
       // ?? null so a turn that prepares NOTHING clears a previous card — otherwise a
       // stale frozen email stays on screen under a new conversation and Confirm sends it.
+      setLocaleRollback(null)
       setPreparedSend(data.preparedSend ?? null)
       // Fresh card → fresh choice, back to this thread's own mailbox.
       if (data.preparedSend) setSendAs(mailbox === 'antonio' ? 'antonio' : 'support')
@@ -307,6 +345,10 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
         setReformulateText('')
       }
     } catch (err) {
+      // The card still holds the PREVIOUS language's text, so the dropdown must go back
+      // to match it. Otherwise the control says Italian, the message is English, Confirm
+      // is live, and English goes to the client.
+      setLocaleRollback(prev => { if (prev) setPortalLocale(prev); return null })
       setMessages(prev => [
         ...prev,
         { role: 'worker', text: `⚠️ ${err instanceof Error && err.message ? err.message : 'Worker failed — please try again.'}` },
@@ -426,7 +468,25 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
                   {clientResults.map(t => (
                     <button
                       key={`${t.type}-${t.id}`}
-                      onClick={() => { setPortalTarget(t); setClientResults([]) }}
+                      onClick={() => {
+                        // A portal chat exists only for a COMPANY or a PERSON. The search
+                        // covers leads and partners too (Antonio: "check for everything"),
+                        // but selecting one used to enable Confirm, promise "goes to this
+                        // person's own portal chat", and then fail with "that person no
+                        // longer exists" — an error blaming deletion for something that was
+                        // never possible. Say so here instead.
+                        if (t.type === 'lead' || t.type === 'partner') {
+                          setMessages(prev => [...prev, {
+                            role: 'worker',
+                            text: `⚠️ ${t.name} is a ${t.type} — there's no portal chat to send to. A lead gets one once an offer has been sent to them; pick the company or the person instead.`,
+                          }])
+                          setClientResults([])
+                          setClientQuery('')
+                          return
+                        }
+                        setPortalTarget(t)
+                        setClientResults([])
+                      }}
                       className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-zinc-50"
                     >
                       <span className="text-sm text-zinc-800 truncate">{t.name}</span>
@@ -459,7 +519,14 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
               onChange={e => {
                 const next = e.target.value as 'en' | 'it'
                 if (next === portalLocale) return
+                const previous = portalLocale
                 setPortalLocale(next)
+                // If the rewrite never lands (timeout, the per-thread in-flight 409 when a
+                // colleague has the same email open, a worker error), the card still shows
+                // the OLD language while the dropdown claims the new one — and Confirm
+                // would ship the language the dropdown says it is not. Put the dropdown
+                // back so the card and the control cannot disagree.
+                setLocaleRollback(() => previous)
                 // Rewrite in the chosen language. Goes through the worker as a normal
                 // turn, so it freezes a NEW draft and supersedes this one — the version
                 // in the old language can never be the one that ships.
@@ -572,7 +639,14 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
             <div className="mt-2.5 flex flex-wrap items-center gap-2">
               <button
                 onClick={() => resolvePreparedSend('confirm')}
-                disabled={confirming || !portalTarget || recipientMismatch}
+                // `pending` is LOAD-BEARING, not tidiness. A rewrite (language switch or
+                // Reformulate) runs as a worker turn taking 20-60s. Without this, an
+                // impatient click during that window confirms the row that is still
+                // pending — delivering the PRE-rewrite text — and then the rewrite lands,
+                // renders a second card, and the same message goes out again in the other
+                // language. Supersede cannot save it: it only cancels rows still pending,
+                // and the first one is already sent.
+                disabled={confirming || pending || !portalTarget || recipientMismatch}
                 title={
                   !portalTarget
                     ? 'Choose which client this goes to first'

@@ -15,7 +15,10 @@ const state = vi.hoisted(() => ({
   account: null as Record<string, unknown> | null,
   contact: null as Record<string, unknown> | null,
   updates: [] as Array<Record<string, unknown>>,
-  sendResult: "✅ Sent to Acme LLC — client notified by email.",
+  // THE REAL SUCCESS STRING from sendPortalMessageFromWorker. Previously a fabricated
+  // "…— client notified by email." that production cannot produce — a test asserting on
+  // an invented return value proves nothing about the code it guards.
+  sendResult: "✅ Portal message sent to Acme LLC. id=msg-1 at 2026-08-01T00:00:00Z",
   sendArgs: null as Record<string, unknown> | null,
 }))
 
@@ -75,7 +78,7 @@ beforeEach(() => {
   state.account = { id: "acct-1", company_name: "LUMA Beauty Global LLC" }
   state.contact = { id: "contact-1", full_name: "Adam Mihaly" }
   state.updates = []
-  state.sendResult = "✅ Sent to LUMA Beauty Global LLC — client notified by email."
+  state.sendResult = "✅ Portal message sent to LUMA Beauty Global LLC. id=msg-1 at 2026-08-01T00:00:00Z"
   state.sendArgs = null
 })
 
@@ -181,14 +184,29 @@ describe("confirmPortalSend — staleness and failure", () => {
 })
 
 describe("confirmPortalSend — what the staff member is told", () => {
-  it("reports whether the client was actually EMAILED, not a bare 'sent'", async () => {
-    // The portal's new-message email is throttled to one per conversation every two
-    // hours, so a second message inside that window lands in the chat silently. "Sent"
-    // alone would be untrue in both directions.
-    state.sendResult = "✅ Sent to LUMA Beauty Global LLC — client notified by email."
+  it("says 'unknown' about the client email rather than guessing — it is not knowable here", async () => {
+    // THIS TEST USED TO ASSERT "emailed" AND WAS WORTHLESS. Its mock returned an
+    // invented string containing the word "notified"; the code matched on that word;
+    // production's real string ("✅ Portal message sent to <name>. id=… at …") does
+    // not contain it. So the check passed while the shipped behaviour reported "no
+    // email went out" on EVERY send — sending staff to chase clients by Gmail about
+    // messages the client had already been emailed about.
+    //
+    // The deeper fact: the client notification is fire-and-forget inside the send
+    // helper, so its outcome never comes back here. "Unknown" is the only honest
+    // answer, and the panel now says nothing about email rather than guessing.
     const r = await confirmPortalSend({ ...base, accountId: "acct-1" })
     expect(r.ok).toBe(true)
-    if (r.ok && "notified" in r) expect(r.notified).toBe("emailed")
+    if (r.ok && "notified" in r) expect(r.notified).toBe("unknown")
+  })
+
+  it("REGRESSION GUARD: the mock's success string is the one production returns", async () => {
+    // The bug above was invisible because the mock and the real function disagreed.
+    // If the success wording ever changes, `delivered` stops recognising a real send
+    // and every confirm rolls back — so pin the shape the code keys on.
+    expect(state.sendResult.startsWith("✅ Portal message sent to")).toBe(true)
+    const r = await confirmPortalSend({ ...base, accountId: "acct-1" })
+    expect(r.ok).toBe(true)
   })
 
   it("names the recipient it actually validated", async () => {

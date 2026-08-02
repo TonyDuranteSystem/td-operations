@@ -87,7 +87,7 @@ export async function preparePortalSend(input: PreparePortalInput): Promise<Prep
 
 export type ConfirmPortalResult =
   | { ok: true; cancelled: true }
-  | { ok: true; sent: true; recipientName: string; notified: "emailed" | "not_emailed" }
+  | { ok: true; sent: true; recipientName: string; notified: "emailed" | "not_emailed" | "unknown" }
   | { ok: false; reason: string; status?: number }
 
 /**
@@ -225,11 +225,21 @@ export async function confirmPortalSend(input: {
     }
   }
 
-  // The client's "you have a new message" email is throttled to one per conversation
-  // every two hours, and the throttle is per-server, so a second message inside that
-  // window lands in the chat with no email at all. Saying a bare "Sent" would be
-  // untrue in both directions, so report which actually happened.
-  const notified: "emailed" | "not_emailed" = outcome.includes("notified") ? "emailed" : "not_emailed"
-
-  return { ok: true, sent: true, recipientName, notified }
+  // WHETHER THE CLIENT WAS EMAILED IS NOT KNOWABLE HERE, and pretending otherwise is
+  // worse than staying quiet.
+  //
+  // This used to test `outcome.includes("notified")`. The real success string is
+  // "✅ Portal message sent to <name>. id=… at …" — the word never appears, so it
+  // reported "no email went out" on EVERY send, and staff would chase a client by
+  // Gmail about a message the client had already been emailed about.
+  //
+  // The unit test passed because its mock returned a fabricated string containing
+  // "notified" that production cannot produce. A green test proving nothing.
+  //
+  // Underneath the wording bug is a real one: notifyClientOfAdminMessage is
+  // fire-and-forget inside sendPortalMessageFromWorker, so its outcome is genuinely
+  // unavailable on this path. Wiring it back would mean changing that helper, which
+  // four other surfaces depend on. Until then the honest answer is "unknown" — and the
+  // panel says the message is in the portal without asserting anything about email.
+  return { ok: true, sent: true, recipientName, notified: "unknown" }
 }
