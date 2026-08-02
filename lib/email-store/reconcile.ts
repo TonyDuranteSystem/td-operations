@@ -48,6 +48,13 @@ export async function listMessageIdsInWindow(
   return out
 }
 
+/** A recent [afterSec, beforeSec) window: the last `days` days ending at `nowSec`.
+ *  Seconds (Gmail's after:/before: unit). Pure — nowSec injected for tests. */
+export function recentWindowSec(nowSec: number, days: number): { afterSec: number; beforeSec: number } {
+  if (!(days > 0)) throw new Error("recentWindowSec: days must be > 0")
+  return { afterSec: Math.floor(nowSec - days * 86400), beforeSec: Math.ceil(nowSec) + 1 }
+}
+
 /** Which of `ids` are already stored 'complete' (chunked IN, never a full-set load). */
 export async function completedAmong(mailbox: Mailbox, ids: string[]): Promise<Set<string>> {
   assertMailbox(mailbox)

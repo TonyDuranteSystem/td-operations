@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
   listMessageIdsInWindow,
   reconcileWindow,
+  recentWindowSec,
   type ReconcileIO,
 } from "@/lib/email-store/reconcile"
 import type { CaptureResult } from "@/lib/email-store/capture"
@@ -20,6 +21,19 @@ describe("listMessageIdsInWindow", () => {
     const refs = await listMessageIdsInWindow("support@x", 1000, 2000, get)
     expect(refs.map((r) => r.id)).toEqual(["a", "b"])
     expect(seenQueries[0]).toBe("after:1000 before:2000 -in:spam -in:trash")
+  })
+})
+
+describe("recentWindowSec", () => {
+  it("spans the last N days ending at now (seconds)", () => {
+    const now = 1_000_000
+    const { afterSec, beforeSec } = recentWindowSec(now, 7)
+    expect(afterSec).toBe(now - 7 * 86400)
+    expect(beforeSec).toBeGreaterThan(now)
+    expect(afterSec).toBeLessThan(beforeSec)
+  })
+  it("rejects non-positive days", () => {
+    expect(() => recentWindowSec(1000, 0)).toThrow()
   })
 })
 
