@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getAppSetting } from "@/lib/settings"
 import { runBackfillTick, backfillTickIO, backfillProgress } from "@/lib/email-store/auto-backfill"
 
 export const dynamic = "force-dynamic"
@@ -12,20 +11,14 @@ export const maxDuration = 300
  * store. Each run walks a few date-windows backward from a saved cursor (per
  * mailbox), captures whatever Gmail has that we don't, and exits before the
  * function's time limit; the next run resumes. Resumable + idempotent, so it
- * just keeps going overnight until every email is stored — no human step.
- *
- * OFF by default: gated on the app setting `email_content_backfill_enabled`.
- * Runs OFF-HOURS only (shares each mailbox's Gmail quota with the live inbox).
- * When a mailbox is fully walked it marks itself done and later ticks no-op.
+ * just keeps going overnight until every email is stored — no human step, always
+ * on. Runs OFF-HOURS only (shares each mailbox's Gmail quota with the live inbox);
+ * when a mailbox is fully walked it marks itself done and later ticks no-op.
  */
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get("authorization")
   if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  }
-
-  if ((await getAppSetting<boolean>("email_content_backfill_enabled", false)) !== true) {
-    return NextResponse.json({ skipped: "disabled" })
   }
 
   // Off-hours only (13:00–23:00 UTC ≈ US business hours) — same rule as the
