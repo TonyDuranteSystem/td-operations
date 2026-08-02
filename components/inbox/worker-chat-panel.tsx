@@ -100,6 +100,20 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
   const [portalLocale, setPortalLocale] = useState<'en' | 'it'>('en')
   /** Language to restore if a switch-triggered rewrite fails — see the dropdown. */
   const [, setLocaleRollback] = useState<'en' | 'it' | null>(null)
+  /**
+   * CAN THE PICKED TARGET ACTUALLY RECEIVE THIS — and have they ever signed in?
+   * Antonio, 2026-08-02: "before the send is allowed, check whether the chosen target
+   * already has access to the system and if it accessed."
+   */
+  const [reach, setReach] = useState<{
+    checking: boolean
+    reachable: boolean | null
+    reason?: string
+    resolvedName?: string | null
+    recipients?: Array<{ name: string | null; email: string | null; hasLogin: boolean; lastSignInAt: string | null }>
+    neverSignedIn?: boolean
+    target?: { accountId?: string; contactId?: string }
+  }>({ checking: false, reachable: null })
   const [reformulating, setReformulating] = useState(false)
   const [reformulateText, setReformulateText] = useState('')
 
@@ -122,10 +136,16 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
           prepared_id: preparedSend.id,
           action,
           mailbox: sendAs,
+          // The RESOLVED target, not the raw pick: choosing a lead sends to that
+          // person's contact, which is where their portal login actually lives.
           ...(isPortal && portalTarget
-            ? portalTarget.type === 'account'
-              ? { account_id: portalTarget.id }
-              : { contact_id: portalTarget.id }
+            ? reach.target?.accountId
+              ? { account_id: reach.target.accountId }
+              : reach.target?.contactId
+                ? { contact_id: reach.target.contactId }
+                : portalTarget.type === 'account'
+                  ? { account_id: portalTarget.id }
+                  : { contact_id: portalTarget.id }
             : {}),
         }),
       })
@@ -235,6 +255,22 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
       // exact-recipient rule exists to support.
       !sameClientDifferentScope,
   )
+
+  useEffect(() => {
+    if (!portalTarget) { setReach({ checking: false, reachable: null }); return }
+    let alive = true
+    setReach({ checking: true, reachable: null })
+    fetch(`/api/inbox/portal-reachability?type=${portalTarget.type}&id=${encodeURIComponent(portalTarget.id)}`)
+      .then(async r => {
+        if (!r.ok) throw new Error(String(r.status))
+        return r.json()
+      })
+      .then(d => { if (alive) setReach({ checking: false, ...d }) })
+      // A failed CHECK must not read as "unreachable" — that would block a legitimate
+      // send with no explanation. Allow, and say the check could not run.
+      .catch(() => { if (alive) setReach({ checking: false, reachable: true, reason: undefined }) })
+    return () => { alive = false }
+  }, [portalTarget])
 
   const gmailThreadId = conversation.id.replace('gmail:', '')
 
@@ -469,21 +505,12 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
                     <button
                       key={`${t.type}-${t.id}`}
                       onClick={() => {
-                        // A portal chat exists only for a COMPANY or a PERSON. The search
-                        // covers leads and partners too (Antonio: "check for everything"),
-                        // but selecting one used to enable Confirm, promise "goes to this
-                        // person's own portal chat", and then fail with "that person no
-                        // longer exists" — an error blaming deletion for something that was
-                        // never possible. Say so here instead.
-                        if (t.type === 'lead' || t.type === 'partner') {
-                          setMessages(prev => [...prev, {
-                            role: 'worker',
-                            text: `⚠️ ${t.name} is a ${t.type} — there's no portal chat to send to. A lead gets one once an offer has been sent to them; pick the company or the person instead.`,
-                          }])
-                          setClientResults([])
-                          setClientQuery('')
-                          return
-                        }
+                        // Leads are NO LONGER refused here. That refusal was wrong:
+                        // sending an offer creates a portal login for the person and
+                        // hangs it on a CONTACT, so the same human appears in this list
+                        // twice and the contact can receive messages. The reachability
+                        // check below resolves a lead to that contact, and only refuses
+                        // when there genuinely is no portal login to reach.
                         setPortalTarget(t)
                         setClientResults([])
                       }}
@@ -498,6 +525,43 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
                       {t.detail ? <span className="shrink-0 text-[11px] text-zinc-500">{t.detail}</span> : null}
                     </button>
                   ))}
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          {/* WHO ACTUALLY RECEIVES IT, AND WHETHER THEY HAVE EVER SIGNED IN.
+              Antonio, 2026-08-02. Two failures this replaces, found the same day:
+              a LEAD was refused outright ("there's no portal chat") while that same
+              person's contact — carrying their portal login, created when the offer
+              was sent — sat in the same search list; and a contact with NO portal at
+              all was fully sendable, producing a "you have a new message" email to a
+              portal they cannot open. */}
+          {portalTarget && (
+            <div className="mt-1.5 text-[11px]">
+              {reach.checking ? (
+                <span className="text-zinc-500">Checking portal access…</span>
+              ) : reach.reachable === false ? (
+                <span className="text-red-700">{reach.reason}</span>
+              ) : reach.recipients?.length ? (
+                <div className="text-zinc-600">
+                  {reach.resolvedName ? (
+                    <span className="text-blue-700">Sending to {reach.resolvedName}&apos;s portal. </span>
+                  ) : null}
+                  {reach.recipients.map((r, i) => (
+                    <span key={i}>
+                      {i > 0 ? ' · ' : ''}
+                      {r.name ?? r.email}
+                      {r.lastSignInAt
+                        ? ` (last signed in ${new Date(r.lastSignInAt).toLocaleDateString()})`
+                        : ' (has access, never signed in)'}
+                    </span>
+                  ))}
+                  {reach.neverSignedIn ? (
+                    <span className="text-amber-700">
+                      {' '}— nobody here has ever opened the portal, so they may not see this.
+                    </span>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -646,7 +710,18 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
                 // renders a second card, and the same message goes out again in the other
                 // language. Supersede cannot save it: it only cancels rows still pending,
                 // and the first one is already sent.
-                disabled={confirming || pending || !portalTarget || recipientMismatch}
+                disabled={
+                  confirming ||
+                  pending ||
+                  !portalTarget ||
+                  recipientMismatch ||
+                  // Wait for the access check rather than letting a click race it, and
+                  // never allow a send to someone who cannot open the portal — they
+                  // would get a "you have a new message" email pointing at a door they
+                  // have no key to, and nobody would ever read the message.
+                  reach.checking ||
+                  reach.reachable === false
+                }
                 title={
                   !portalTarget
                     ? 'Choose which client this goes to first'
