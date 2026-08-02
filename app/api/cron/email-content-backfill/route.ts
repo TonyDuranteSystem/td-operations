@@ -21,11 +21,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  // Runs ANY hour (Antonio 2026-08-02: start now, don't wait for tonight). The
-  // whole one-time pull is ~10 min and paces itself (concurrency-8 ≈ 80% of the
-  // per-user Gmail quota, leaving headroom for the interactive inbox), so the
-  // business-hours pause the multi-day METADATA backfill needs isn't warranted
-  // here. Once each mailbox is fully walked it marks itself done and no-ops.
+  // Off-hours only (13:00–23:00 UTC ≈ US business hours). INCIDENT 2026-08-02:
+  // running the pull during business hours starved the interactive inbox's
+  // per-user Gmail quota — the whole inbox showed "Couldn't load — retrying".
+  // The pull shares the SAME per-user quota as the live inbox, so it must run
+  // off-hours (same guard the metadata backfill uses). It still completes over
+  // a night or two; the inbox falls back to live Gmail meanwhile.
+  const utcHour = new Date().getUTCHours()
+  if (utcHour >= 13 && utcHour < 23) {
+    return NextResponse.json({ skipped: "business-hours" })
+  }
 
   // ~120s budget per mailbox keeps the whole run under the 300s function cap.
   const results: Record<string, unknown> = {}
