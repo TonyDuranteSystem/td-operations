@@ -17,6 +17,7 @@ import {
   isInstantSearchQuery,
   isBackfillDone,
   searchIndexThreadIds,
+  listIndexThreadIds,
   fetchThreadRows,
   groupRowsToConversations,
 } from "@/lib/email-index/query"
@@ -72,9 +73,13 @@ export async function GET(req: NextRequest) {
     if (!(await checkMailboxAccess(mailbox))) {
       return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
     }
+    // Ceiling is generous because instant SEARCH answers from our own index (a
+    // DB query — cheap, and capping it just hid year-old mail). The live-Gmail
+    // BROWSE path has its own, much tighter bound below: every thread there
+    // costs a Gmail call, and over-fetching it is what starved the inbox.
     const limit = Math.min(
       parseInt(req.nextUrl.searchParams.get("limit") || "50"),
-      500
+      2000
     )
 
     const conversations: InboxConversation[] = []
@@ -108,7 +113,10 @@ export async function GET(req: NextRequest) {
       const mailboxKey = mailbox === "antonio" ? "antonio" : "support"
       try {
         if (await isBackfillDone(mailboxKey)) {
-          const threadIds = await searchIndexThreadIds(searchQuery, mailboxKey, Math.min(limit, 50))
+          // No 50-cap: this reads our own index, so the caller's limit (grown by
+          // "Load older emails") is what search should honour — the cap was
+          // hiding year-old mail that is stored and instantly searchable.
+          const threadIds = await searchIndexThreadIds(searchQuery, mailboxKey, limit)
           const rows = await fetchThreadRows(mailboxKey, threadIds)
           const markLabelNames = new Map<string, string>()
           try {
@@ -135,6 +143,54 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // ─── Browse from our own index (no search) ───────────
+    // The plain folder view (Inbox / Sent / a user label) is served from the
+    // index instead of ~300 LIVE Gmail thread fetches per page. That fan-out is
+    // what made browsing slow, hard-capped, and fragile — on 2026-08-02 it
+    // exhausted the per-user Gmail quota and every row rendered "Couldn't load
+    // this email — retrying". From the index it is a DB query: instant, and
+    // "Load older emails" can keep going without touching Gmail at all.
+    // Anything unusual (a search, explicit pagination, an unfinished backfill,
+    // any error) still falls through to the live path below.
+    if (
+      (!channel || channel === "gmail") &&
+      !searchQuery &&
+      !pageToken &&
+      !servedFromIndex
+    ) {
+      const mailboxKey = mailbox === "antonio" ? "antonio" : "support"
+      try {
+        if (await isBackfillDone(mailboxKey)) {
+          const labelId = labelFilter || "INBOX"
+          const threadIds = await listIndexThreadIds(mailboxKey, labelId, limit)
+          if (threadIds.length > 0) {
+            const rows = await fetchThreadRows(mailboxKey, threadIds)
+            const markLabelNames = new Map<string, string>()
+            try {
+              const gmailUser = mailboxKey === "antonio"
+                ? "antonio.durante@tonydurante.us"
+                : "support@tonydurante.us"
+              const labelsRes = (await gmailGet("/labels", {}, gmailUser)) as {
+                labels?: Array<{ id: string; name: string }>
+              }
+              for (const l of labelsRes.labels ?? []) {
+                if (l.name.startsWith(MARK_LABEL_PREFIX)) markLabelNames.set(l.id, l.name)
+              }
+            } catch {
+              // Color marks are cosmetic — never fail the list over them
+            }
+            const emailLookup = await emailLookupPromise
+            conversations.push(
+              ...groupRowsToConversations(rows, { markLabelNames, emailLookup })
+            )
+            servedFromIndex = true
+          }
+        }
+      } catch (err) {
+        console.warn("[inbox] index browse failed, falling back to live Gmail:", err)
+      }
+    }
+
     // ─── Gmail threads ──────────────────────────────────
     if ((!channel || channel === "gmail") && !servedFromIndex) {
       try {
@@ -144,7 +200,7 @@ export async function GET(req: NextRequest) {
         // dead at a date (Antonio 2026-08-02: "why do I have email only from
         // July 28?"). Default (limit 100) behaves exactly as before — 200 threads.
         // Hard ceiling keeps a runaway request off Gmail's quota.
-        const targetGmailThreads = Math.min(Math.max(limit * 2, 200), 1000)
+        const targetGmailThreads = Math.min(Math.max(limit * 2, 200), 600)
         const maxThreadPages = Math.ceil(targetGmailThreads / 100)
 
         // Build Gmail query params

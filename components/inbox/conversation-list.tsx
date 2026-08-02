@@ -108,7 +108,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   // (Antonio 2026-08-02: "why do I have email only from July 28?"). "Load older"
   // grows this; the server walks proportionally more Gmail pages.
   const PAGE_STEP = 100
-  const MAX_PAGE_SIZE = 500 // server-side ceiling
+  const MAX_PAGE_SIZE = 2000 // server ceiling (search reads our own index; the Gmail browse path is bounded server-side)
   const [pageSize, setPageSize] = useState(PAGE_STEP)
 
   // Switching mailbox / folder / search starts a NEW list — back to one page so
