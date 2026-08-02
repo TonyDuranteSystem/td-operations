@@ -23,6 +23,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   // /api/qb/refresh removed — QuickBooks decommissioned (dev_task eca3ce5c).
   "/api/cron/gmail-watch-renew": "0 5 * * *",
   "/api/cron/email-index-sync": "*/10 * * * *",
+  "/api/cron/email-content-backfill": "*/15 23,0-12 * * *",
   "/api/cron/email-unsnooze": "*/10 * * * *",
   "/api/sync-drive": "0 */6 * * *",
   "/api/sync-airtable": "0 */6 * * *",
