@@ -18,7 +18,7 @@
     },
     {
       "path": "/api/cron/email-content-backfill",
-      "schedule": "*/15 23,0-12 * * *"
+      "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/cron/email-content-capture",

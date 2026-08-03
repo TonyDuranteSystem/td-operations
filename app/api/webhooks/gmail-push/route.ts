@@ -76,5 +76,18 @@ export async function POST(req: NextRequest) {
     console.warn("[gmail-push] incremental index sync failed (cron will heal):", err)
   }
 
+  // Content capture: grab the new message BODIES + attachments right now, so an
+  // email is in our own store seconds after it lands instead of waiting for the
+  // */10 capture cron (Antonio 2026-08-03: "make it push"). Best-effort and
+  // deliberately tiny (a push means a handful of new messages) — the cron stays
+  // as the safety net for anything a push misses, and insert-once means this
+  // never re-downloads what is already stored.
+  try {
+    const { captureBatchLive } = await import("@/lib/email-store/worker")
+    await captureBatchLive(mailbox as "support" | "antonio", 10, 1)
+  } catch (err) {
+    console.warn("[gmail-push] instant content capture failed (cron will heal):", err)
+  }
+
   return NextResponse.json({ ok: true })
 }

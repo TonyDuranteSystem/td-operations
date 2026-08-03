@@ -18,7 +18,7 @@ import {
   type CaptureDeps,
   type CaptureResult,
 } from "./capture"
-import { assertMailbox, type Mailbox } from "./paths"
+import { assertMailbox, safeContentType, type Mailbox } from "./paths"
 
 // email_message_content / email_attachment / email_index are not in the generated
 // Database types yet (regenerated from production after the prod DDL). Same escape
@@ -90,7 +90,12 @@ export function buildCaptureDeps(mailbox: Mailbox): CaptureDeps {
     gmailGet: (endpoint, params, asUser) => gmailGet(endpoint, params, asUser),
     getAttachment: (messageId, attachmentId, asUser) => getGmailAttachment(messageId, attachmentId, asUser),
     putObject: async (path, bytes, contentType) => {
-      const { error } = await bucket.upload(path, bytes, { contentType, upsert: true })
+      // Sanitise: a malformed sender MIME type made Storage reject the upload,
+      // which failed the whole message (safeContentType docs the incident).
+      const { error } = await bucket.upload(path, bytes, {
+        contentType: safeContentType(contentType),
+        upsert: true,
+      })
       if (error) throw new Error(`storage upload ${path} failed: ${error.message}`)
     },
     getStatus: async (mb, messageId) => {
