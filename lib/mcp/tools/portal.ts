@@ -15,6 +15,7 @@ import type { MailingAddressRow } from "@/lib/addresses"
 import { LLC_MANAGEMENT_BUNDLE_TYPES } from "@/lib/services"
 import { formatMcpChatSenderLabel } from "@/lib/portal/chat-sender-name"
 import { contactThreadOrFilter, multiMemberAccountIds } from "@/lib/portal/thread-scope"
+import { generateTempPassword } from "@/lib/portal/temp-password"
 
 // Document types allowed to be visible in the client portal Documents tab
 // Document types visible to clients in the portal (by type name)
@@ -730,7 +731,7 @@ BULK GUARD: requires i_understand_this_is_bulk=true on every call.`,
         const globalFlags: string[] = []
 
         if (!existingAuth) {
-          tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+          tempPassword = generateTempPassword()
           const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
             email: contact.email, password: tempPassword, email_confirm: true,
             app_metadata: {
@@ -853,7 +854,7 @@ BULK GUARD: requires i_understand_this_is_bulk=true on every call.`,
             const existingAddAuth = await findAuthUserByEmail(addContact.email)
 
             if (!existingAddAuth) {
-              const addTempPwd = `TD${Math.random().toString(36).slice(2, 10)}!`
+              const addTempPwd = generateTempPassword()
               const { data: addUser, error: addErr } = await supabaseAdmin.auth.admin.createUser({
                 email: addContact.email, password: addTempPwd, email_confirm: true,
                 app_metadata: { role: "client", contact_id: addContact.id, portal_tier: "active", account_ids: addAccountIds },
@@ -1025,7 +1026,7 @@ Use this for the 2026 legacy portal transition (159 clients). Run portal_transit
 
             let tempPassword = ""
             if (!existingAuth) {
-              tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+              tempPassword = generateTempPassword()
               const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
                 email: contact.email, password: tempPassword, email_confirm: true,
                 app_metadata: {
@@ -1193,7 +1194,7 @@ Use this for the 2026 legacy portal transition (159 clients). Run portal_transit
         const existingUser = await findAuthUserByEmail(userEmail)
         if (existingUser) return { content: [{ type: "text" as const, text: `Portal user already exists: ${userEmail}` }] }
 
-        const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+        const tempPassword = generateTempPassword()
 
         let resolvedContactId = contact_id
         if (!resolvedContactId && account_id) {

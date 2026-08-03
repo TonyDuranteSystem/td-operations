@@ -6,6 +6,7 @@ import { PORTAL_BASE_URL } from '@/lib/config'
 import { PORTAL_TIERS, type PortalTier } from '@/lib/portal/tier-config'
 import { syncTier } from '@/lib/operations/sync-tier'
 import { NextRequest, NextResponse } from 'next/server'
+import { generateTempPassword } from "@/lib/portal/temp-password"
 
 /**
  * POST /api/crm/admin-actions/contact-portal
@@ -108,7 +109,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No portal account found for this contact' }, { status: 404 })
     }
 
-    const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+    const tempPassword = generateTempPassword()
 
     // Fix incomplete auth metadata while resetting password
     const { data: links } = await supabaseAdmin
@@ -215,7 +216,7 @@ export async function POST(request: NextRequest) {
     // Check if already exists — if so, fix metadata and resend credentials instead of 409
     const existing = await findAuthUser()
     if (existing) {
-      const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+      const tempPassword = generateTempPassword()
       const { data: existingLinks } = await supabaseAdmin
         .from('account_contacts')
         .select('account_id')
@@ -324,7 +325,7 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+    const tempPassword = generateTempPassword()
 
     // Get linked accounts for app_metadata
     const { data: links } = await supabaseAdmin

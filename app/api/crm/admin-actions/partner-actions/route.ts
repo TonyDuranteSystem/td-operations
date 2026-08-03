@@ -20,6 +20,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/portal-auth'
+import { generateTempPassword } from "@/lib/portal/temp-password"
 
 export async function POST(req: NextRequest) {
   try {
@@ -185,7 +186,7 @@ export async function POST(req: NextRequest) {
         }
 
         // Create new portal user
-        const tempPassword = `TDp${Math.random().toString(36).slice(2, 8)}!`
+        const tempPassword = generateTempPassword()
         const { error: authErr } = await supabaseAdmin.auth.admin.createUser({
           email,
           password: tempPassword,

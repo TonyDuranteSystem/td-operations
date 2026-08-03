@@ -5,6 +5,7 @@ import { isAdmin } from '@/lib/auth'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import { NextRequest, NextResponse } from 'next/server'
 import { autoCreatePortalUser, sendPortalWelcomeEmail } from '@/lib/portal/auto-create'
+import { generateTempPassword } from "@/lib/portal/temp-password"
 
 /**
  * POST /api/portal/admin/create-user
@@ -100,6 +101,7 @@ export async function POST(request: NextRequest) {
 
     // Ensure portal flags are set on ALL linked accounts
     const accountIdsToUpdate = allAccountIds.length > 0 ? allAccountIds : [account_id]
+    /* eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update portal_account/portal_tier. PRE-EXISTING, untouched by the 2026-08-03 temp-password change; flagged only because that change made this file staged and the commit gate allows zero warnings. Same acknowledged exemption already carried in contact-portal/route.ts. */
     await supabaseAdmin
       .from('accounts')
       .update({
@@ -111,15 +113,17 @@ export async function POST(request: NextRequest) {
 
     // Ensure contact has portal_tier set
     if (!contactFull?.portal_tier) {
+      /* eslint-disable no-restricted-syntax -- pre-P2.4 Phase D1 raw contacts.update portal_tier. PRE-EXISTING, untouched by the 2026-08-03 temp-password change; same acknowledged exemption already carried in contact-portal/route.ts. */
       await supabaseAdmin
         .from('contacts')
         .update({ portal_tier: effectiveTier, updated_at: new Date().toISOString() })
         .eq('id', targetContactId)
+      /* eslint-enable no-restricted-syntax */
     }
 
     if (resend) {
       // Generate new temp password and resend welcome email
-      const newTempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+      const newTempPassword = generateTempPassword()
       await supabaseAdmin.auth.admin.updateUserById(existingUser.id, {
         password: newTempPassword,
         user_metadata: {

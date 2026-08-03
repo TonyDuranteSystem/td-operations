@@ -13,6 +13,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { classifyAccount } from "@/lib/account-classification"
 import { createSD } from "@/lib/operations/service-delivery"
+import { generateTempPassword } from "@/lib/portal/temp-password"
 
 // ─── Types ───
 
@@ -1060,7 +1061,7 @@ export async function POST(req: NextRequest) {
         const accountIds = (contactAccountLinks || []).map((a: { account_id: string }) => a.account_id)
         const portalTier = contactForPortal?.portal_tier || "active"
         const portalEmail = (contactForPortal?.email || params.email) as string
-        const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+        const tempPassword = generateTempPassword()
 
         // Check if user already exists (paginated — P1.9)
         const existingUser = await findAuthUserByEmail(portalEmail)

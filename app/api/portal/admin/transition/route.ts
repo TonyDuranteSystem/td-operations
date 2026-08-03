@@ -11,6 +11,7 @@ import { sendPortalWelcomeEmail } from '@/lib/portal/auto-create'
 import { defaultInstallmentAmount } from '@/lib/billing/installment-defaults'
 import type { MailingAddressRow } from '@/lib/addresses'
 import { LLC_MANAGEMENT_BUNDLE_TYPES } from '@/lib/services'
+import { generateTempPassword } from "@/lib/portal/temp-password"
 
 export const maxDuration = 60 // Vercel Pro: 60s
 
@@ -481,7 +482,7 @@ export async function POST(request: NextRequest) {
 
   let emailSent = false
   if (!existingAuth) {
-    const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+    const tempPassword = generateTempPassword()
     const { error: createError } = await supabaseAdmin.auth.admin.createUser({
       email: contact.email, password: tempPassword, email_confirm: true,
       app_metadata: { role: 'client', contact_id: contact.id, portal_tier: 'active', account_ids: accountIds },
@@ -506,7 +507,7 @@ export async function POST(request: NextRequest) {
     }
   } else {
     // Existing user — reset password and send new credentials
-    const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+    const tempPassword = generateTempPassword()
     await supabaseAdmin.auth.admin.updateUserById(existingAuth.id, {
       password: tempPassword,
       app_metadata: { ...existingAuth.app_metadata, role: 'client', contact_id: contact.id, portal_tier: 'active', account_ids: accountIds },

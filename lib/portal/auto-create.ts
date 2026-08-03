@@ -20,6 +20,7 @@ import { PORTAL_BASE_URL } from '@/lib/config'
 import { type PortalTier, maxTier } from './tier-config'
 import { getEntityTypeFromContract } from './entity-type-from-contract'
 import { syncTier, computeContactTier } from '@/lib/operations/sync-tier'
+import { generateTempPassword } from "@/lib/portal/temp-password"
 
 /**
  * Map a contract type to the portal tier a paying client should land on.
@@ -213,7 +214,7 @@ async function createFromEmail(
   }
 
   // Generate temp password
-  const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+  const tempPassword = generateTempPassword()
 
   // Find or create contact so we can set contact_id in app_metadata.
   // Case-insensitive + alias-aware lookup so we never create a duplicate contact

@@ -4,6 +4,7 @@ import { findAuthUserByEmail, listAllAuthUsers } from '@/lib/auth-admin-helpers'
 import { isAdmin } from '@/lib/auth'
 import { CRM_BASE_URL } from '@/lib/config'
 import { NextRequest, NextResponse } from 'next/server'
+import { generateTempPassword } from "@/lib/portal/temp-password"
 
 /**
  * GET /api/team-management
@@ -66,7 +67,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Generate temp password
-  const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+  const tempPassword = generateTempPassword()
 
   // Create auth user
   const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
