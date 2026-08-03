@@ -29,7 +29,9 @@ interface ConversationListProps {
   activeChannel: InboxChannel | null
   selectedId: string | null
   onSelect: (conversation: InboxConversation) => void
-  onDeleted?: (conv: InboxConversation) => void
+  /** `action` tells the parent HOW the row went away: 'trash' (recoverable)
+   *  or 'erase' (delete forever — gone from every view). Defaults to 'trash'. */
+  onDeleted?: (conv: InboxConversation, action?: 'trash' | 'erase') => void
   /** Undo of a delete — moves the row out of Trash and back to the list it was
    *  deleted from, both optimistically, so neither waits on Gmail. */
   onRestored?: (id: string) => void
@@ -236,17 +238,25 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     },
     onMutate: async (conv) => {
       await queryClient.cancelQueries({ queryKey: ['inbox-conversations'] })
-      onDeleted?.(conv)
+      // 'erase', NOT 'trash': in the Trash view — the only place this button
+      // exists — a 'trash' hide is a documented no-op, so the row sat there for
+      // ever after being "deleted permanently" (bug-hunter, 2026-08-04).
+      onDeleted?.(conv, 'erase')
     },
     onError: (err, conv) => {
       // The row is still in Trash — put it back on screen, or the user is left
       // staring at a gap where an email they were told nothing about still lives.
       onRestoreFailed?.(conv.id)
-      toast.error(err instanceof Error && err.message ? err.message : 'Could not delete this email permanently.')
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not erase this email.')
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       // No Undo offered: there is nothing left to undo.
-      toast.success('Email deleted permanently')
+      const partial = (data as { partial?: boolean } | undefined)?.partial
+      if (partial) toast.warning('Erased, but part of it could not be removed — it will be retried.')
+      else toast.success('Erased from our storage')
+      // The row is gone from the server list too (its index row is deleted), so
+      // unlike a trash this SHOULD refetch — nothing can resurrect it.
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
       queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
       queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
     },
@@ -620,13 +630,13 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
-                        if (confirm('Delete this email permanently? It will be erased from Gmail and from our own copy. This cannot be undone.')) {
+                        if (confirm('Erase this email from our storage for good?\n\nThe copy we hold — the message and any attachments — is deleted immediately and cannot be recovered. It stays in Gmail\u2019s Trash, which Gmail empties on its own after about 30 days.')) {
                           deleteForeverMutation.mutate(conv)
                         }
                       }}
                       disabled={deleteForeverMutation.isPending}
                       className="p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
-                      title="Delete forever"
+                      title="Erase from our storage"
                     >
                       <FlameKindling className="h-4 w-4" />
                     </button>
@@ -822,13 +832,13 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
-                        if (confirm('Delete this email permanently? It will be erased from Gmail and from our own copy. This cannot be undone.')) {
+                        if (confirm('Erase this email from our storage for good?\n\nThe copy we hold — the message and any attachments — is deleted immediately and cannot be recovered. It stays in Gmail\u2019s Trash, which Gmail empties on its own after about 30 days.')) {
                           deleteForeverMutation.mutate(conv)
                         }
                       }}
                       disabled={deleteForeverMutation.isPending}
                       className="p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
-                      title="Delete forever"
+                      title="Erase from our storage"
                     >
                       <FlameKindling className="h-4 w-4" />
                     </button>

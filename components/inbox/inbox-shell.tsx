@@ -1319,7 +1319,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             activeChannel={activeChannel}
             selectedId={selected?.id || null}
             onSelect={handleSelect}
-            onDeleted={(conv) => handleEmailDeleted('trash', conv, originViewKey)}
+            onDeleted={(conv, action) => handleEmailDeleted(action ?? 'trash', conv, originViewKey)}
             onRestored={handleEmailRestored}
             overrides={overrides}
             unread={unread}
