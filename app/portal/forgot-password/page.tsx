@@ -2,26 +2,18 @@
 
 import { useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { createClient } from '@supabase/supabase-js'
 import Link from 'next/link'
-import { PORTAL_BASE_URL } from '@/lib/config'
 
-// Use a plain Supabase client (implicit flow) for password reset.
-// The default @supabase/ssr client uses PKCE which stores a code_verifier
-// cookie — that cookie gets lost during the Supabase redirect chain,
-// causing "Reset link expired" errors on every browser/device.
-function getResetClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { auth: { flowType: 'implicit', persistSession: false } }
-  )
-}
+// This page no longer talks to the auth provider from the browser.
+// It POSTs to /api/portal/password-reset, which mints the link server-side and
+// sends a TD-branded, bilingual email through our own Gmail — and records the
+// attempt in action_log so staff can answer "did the client actually try?".
+// See lib/portal/password-reset.ts for the full why.
 
 export default function ForgotPasswordPage() {
   const searchParams = useSearchParams()
   const [email, setEmail] = useState('')
-  const [sent, setSent] = useState(false)
+  const [sentTo, setSentTo] = useState<string | null>(null)
   const [error, setError] = useState(
     searchParams.get('error') === 'expired'
       ? 'Reset link expired or already used. Please request a new one.'
@@ -34,18 +26,40 @@ export default function ForgotPasswordPage() {
     setError('')
     setLoading(true)
 
-    const supabase = getResetClient()
-    // Implicit flow: Supabase will redirect with #access_token=...&type=recovery
-    // in the hash fragment — no code_verifier cookie needed
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${PORTAL_BASE_URL}/portal/reset-password`,
-    })
+    const submitted = email.trim().toLowerCase()
 
-    setLoading(false)
-    if (error) {
-      setError(error.message)
-    } else {
-      setSent(true)
+    // Hard timeout: without this a request that never settles leaves the button
+    // stuck on "Sending..." forever with no message — the exact silent dead end
+    // a client reported on 2026-08-02.
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 15_000)
+
+    try {
+      const res = await fetch('/api/portal/password-reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: submitted }),
+        signal: controller.signal,
+      })
+      if (!res.ok) {
+        // R099: surface the server's own message, never a generic swallow.
+        const data = await res.json().catch(() => ({}))
+        throw new Error(
+          data.error || 'Could not send the reset email — please try again.'
+        )
+      }
+      setSentTo(submitted)
+    } catch (err) {
+      setError(
+        err instanceof Error && err.name === 'AbortError'
+          ? 'The request timed out. Please check your connection and try again.'
+          : err instanceof Error && err.message
+            ? err.message
+            : 'Could not send the reset email — please try again.'
+      )
+    } finally {
+      clearTimeout(timeout)
+      setLoading(false)
     }
   }
 
@@ -58,17 +72,31 @@ export default function ForgotPasswordPage() {
             <h1 className="text-xl font-semibold text-zinc-900">Reset Password</h1>
           </div>
 
-          {sent ? (
+          {sentTo ? (
             <div className="text-center space-y-3">
-              <p className="text-sm text-zinc-600">Check your email for a password reset link.</p>
-              <Link href="/portal/login" className="text-sm text-blue-600 hover:underline">Back to login</Link>
+              {/* Echo the exact address we used. The old page said "check your
+                  email" without ever showing WHICH address — so a client who
+                  mistyped, or who has a second login, waited forever for an
+                  email that was never going to arrive. */}
+              <p className="text-sm text-zinc-600">
+                If <strong className="text-zinc-900">{sentTo}</strong> has a portal
+                account, a reset link is on its way from Tony Durante LLC.
+              </p>
+              <p className="text-xs text-zinc-500">
+                It can take a few minutes. Check your spam folder, and make sure
+                this is the address you use to sign in.
+              </p>
+              <Link href="/portal/login" className="inline-block text-sm text-blue-600 hover:underline">Back to login</Link>
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-zinc-700 mb-1.5">Email</label>
+                <label htmlFor="reset-email" className="block text-sm font-medium text-zinc-700 mb-1.5">Email</label>
                 <input
+                  id="reset-email"
+                  name="email"
                   type="email"
+                  autoComplete="username"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   required
@@ -76,7 +104,7 @@ export default function ForgotPasswordPage() {
                   className="w-full h-11 px-3 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-              {error && <p className="text-sm text-red-600">{error}</p>}
+              {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
               <button type="submit" disabled={loading} className="w-full h-11 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
                 {loading ? 'Sending...' : 'Send Reset Link'}
               </button>

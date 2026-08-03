@@ -38,6 +38,7 @@ import { OA_AGREEMENT_SIGNATURE_METHODS, OA_SIGNATURE_METHODS } from "@/lib/oa/s
 import { OWNER_CATEGORIES } from "@/lib/owner-finance"
 import { STAFF_NOTE_VISIBILITIES } from "@/lib/notes/staff-notes"
 import { EVENT_TYPES as ESIGN_EVENT_TYPES } from "@/lib/esign/events"
+import { CAPTURE_STATUSES } from "@/lib/email-store/capture-vocabulary"
 import { PREPARED_SEND_KINDS, PREPARED_SEND_LOCALES } from "@/lib/inbox/prepared-send-vocabulary"
 
 /** name → `pg_get_constraintdef()` text, exactly as Postgres prints it. */
@@ -94,6 +95,14 @@ export const CONSTRAINT_CONTRACTS = [
   { table: "oa_agreements", column: "signature_method", constraint: "oa_agreements_signature_method_check", values: OA_AGREEMENT_SIGNATURE_METHODS },
   { table: "oa_signatures", column: "signature_method", constraint: "oa_signatures_signature_method_check", values: OA_SIGNATURE_METHODS },
   { table: "staff_notes", column: "visibility", constraint: "staff_notes_visibility", values: STAFF_NOTE_VISIBILITIES },
+  // Registered 2026-08-02. Shipped unregistered with the Own-Inbox content store, which
+  // made this gate RED on every branch that included it — the failure mode this file's
+  // own comments call worse than no gate. Not a shape rule: 'complete' is the flag
+  // local-first reads trust (written LAST, after the raw MIME and every part have
+  // landed), and 'error' is what makes the reconciler revisit a message instead of
+  // silently skipping it — so a value the database rejects here means an email whose
+  // content quietly never becomes readable.
+  { table: "email_message_content", column: "capture_status", constraint: "email_message_content_capture_status_check", values: CAPTURE_STATUSES },
   // Registered 2026-07-29 (S-corp books Phase 1b, same push that created the table on prod).
   // A MONEY column: a category the database rejects is a books row that silently never
   // gets categorized — and 'transfer' is what keeps Stripe payouts out of the P&L.

@@ -14,6 +14,9 @@ const PUBLIC_PREFIXES = [
   // Admin read-only "View as client" entry/exit — token-gated, tears down/sets
   // its own session, so must run without an existing portal session.
   '/portal/view-as',
+  // Self-serve password reset request — by definition called by a logged-OUT
+  // client. Without this prefix the route 401s before its handler ever runs.
+  '/api/portal/password-reset',
   // API: external webhooks, cron, sync, dashboard badges
   '/api/dashboard/badges',
   '/api/qb',
