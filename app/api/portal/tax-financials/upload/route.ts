@@ -56,21 +56,12 @@ export async function POST(request: NextRequest) {
     // already refused while the file is with our team, but UPLOADING one was
     // not — so a locked client could drop in a new CSV and shift the P&L
     // underneath the staff member reviewing it, with no refusal and no signal.
-    // Same lookup shape as the other write routes and the GET's banner (latest
-    // submission for the account+year, no status filter) so they cannot disagree.
+    // Same resolver as the GET's banner and every other write route.
     {
       const { supabaseAdmin } = await import('@/lib/supabase-admin')
-      const { isClientEditable } = await import('@/lib/tax/review-status')
-      const { data: lockRow } = await supabaseAdmin
-        .from('tax_return_submissions')
-        .select('review_status')
-        .eq('account_id', accountId)
-        .eq('tax_year', taxYear)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-      const lockStatus = lockRow?.review_status ?? null
-      if (lockStatus !== null && !isClientEditable(lockStatus as never)) {
+      const { resolveEditability } = await import('@/lib/tax/resolve-submission')
+      const { editable: canEdit } = await resolveEditability(supabaseAdmin, accountId, taxYear)
+      if (!canEdit) {
         return NextResponse.json(
           { error: 'Your submission is locked (under review or already confirmed) — ask us to reopen it before adding statements.' },
           { status: 409 },

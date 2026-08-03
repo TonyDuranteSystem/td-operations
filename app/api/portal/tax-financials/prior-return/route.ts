@@ -69,15 +69,11 @@ export async function POST(req: NextRequest) {
   // is not yet in database.types — untyped-client pattern (same as prior-return-case.ts).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
-  const { data: existing } = await db
-    .from('tax_return_submissions')
-    .select('id')
-    .eq('account_id', accountId)
-    .eq('tax_year', taxYear)
-    .eq('status', 'completed')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  // Same resolver as the rest of tax-financials (2026-08-03): the old
+  // `status='completed'` filter missed every `reviewed` row, so this INSERTED a
+  // duplicate placeholder submission instead of updating the client's real one.
+  const { resolveClientSubmission } = await import('@/lib/tax/resolve-submission')
+  const existing = await resolveClientSubmission<{ id: string }>(db, accountId, taxYear, 'id')
 
   if (existing) {
     await db.from('tax_return_submissions').update({ prior_return_extracted: record }).eq('id', existing.id)

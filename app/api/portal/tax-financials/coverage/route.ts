@@ -41,31 +41,18 @@ export async function POST(request: NextRequest) {
     const { isClientEditable } = await import('@/lib/tax/review-status')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = supabaseAdmin as any // financials_meta not yet in database.types.ts
-    const { data: sub } = await db
-      .from('tax_return_submissions')
-      .select('id, review_status, financials_meta')
-      .eq('account_id', accountId)
-      .eq('tax_year', taxYear)
-      .eq('status', 'completed')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    // ONE row for both the lock and the write (2026-08-03). This route used to
+    // demand `status='completed'` and 404 "No submission found for this year"
+    // otherwise — which is what EVERY account in the review loop hit, because a
+    // staff apply-changes turns the row into `reviewed`. The client's coverage
+    // answers were therefore never saved and Confirm could never unlock: Bence
+    // Koncz (Imperium) had two questions that looked unanswered for that reason.
+    const { resolveClientSubmission } = await import('@/lib/tax/resolve-submission')
+    const sub = await resolveClientSubmission<{ id: string; review_status: string | null; financials_meta: Record<string, unknown> | null }>(
+      db, accountId, taxYear, 'id, review_status, financials_meta',
+    )
     if (!sub) return NextResponse.json({ error: 'No submission found for this year.' }, { status: 404 })
-    // LOCK — evaluated on the LATEST submission for the account+year, NOT on the
-    // `completed` row above (2026-08-03, bug-hunter finding). The coverage
-    // answers still WRITE to the completed row, but the lock must be read the
-    // same way every other write route and the GET's banner read it, or an
-    // account carrying more than one row for a year gets a page that says
-    // "editable" and a refusal that says "locked" (or the reverse).
-    const { data: lockRow } = await db
-      .from('tax_return_submissions')
-      .select('review_status')
-      .eq('account_id', accountId)
-      .eq('tax_year', taxYear)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    const lockStatus = (lockRow?.review_status ?? null) as string | null
+    const lockStatus = sub.review_status
     if (lockStatus !== null && !isClientEditable(lockStatus as never)) {
       return NextResponse.json({ error: 'Your submission is locked (under review or already confirmed) — ask us to reopen it first.' }, { status: 409 })
     }

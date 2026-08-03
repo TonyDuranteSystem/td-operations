@@ -61,17 +61,9 @@ export async function POST(request: NextRequest) {
     // Same lookup shape as the other write routes and as the GET's banner
     // (latest submission for the account+year, NO status filter) so the banner
     // and this refusal can never disagree.
-    const { isClientEditable } = await import('@/lib/tax/review-status')
-    const { data: lockRow } = await supabaseAdmin
-      .from('tax_return_submissions')
-      .select('review_status')
-      .eq('account_id', accountId)
-      .eq('tax_year', taxYear)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    const lockStatus = lockRow?.review_status ?? null
-    if (lockStatus !== null && !isClientEditable(lockStatus as never)) {
+    const { resolveEditability } = await import('@/lib/tax/resolve-submission')
+    const { editable: canEdit } = await resolveEditability(supabaseAdmin, accountId, taxYear)
+    if (!canEdit) {
       return NextResponse.json(
         { error: 'Your submission is locked (under review or already confirmed) — ask us to reopen it before confirming.' },
         { status: 409 },
@@ -101,15 +93,15 @@ export async function POST(request: NextRequest) {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = supabaseAdmin as any // financials_meta not yet in database.types.ts
-    const { data: sub } = await db
-      .from('tax_return_submissions')
-      .select('id, review_history, confirmation_accepted, financials_meta')
-      .eq('account_id', accountId)
-      .eq('tax_year', taxYear)
-      .eq('status', 'completed')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    // SAME resolver as the lock above (2026-08-03) — two different reads meant
+    // the lock could be judged on one row and the attestation written to
+    // another. It also used to demand `status='completed'`, so a client whose
+    // row had become `reviewed` could never confirm at all: a permanent 404 on
+    // the last step of their tax return.
+    const { resolveClientSubmission } = await import('@/lib/tax/resolve-submission')
+    const sub = await resolveClientSubmission<{ id: string; review_history: unknown; confirmation_accepted: boolean | null; financials_meta: Record<string, unknown> | null }>(
+      db, accountId, taxYear, 'id, review_history, confirmation_accepted, financials_meta',
+    )
     if (!sub) return NextResponse.json({ error: 'No submission found for this year.' }, { status: 404 })
 
     // Coverage must be resolved too (§3.4) — gate 1 can't see what an export
