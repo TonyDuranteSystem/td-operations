@@ -7,7 +7,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { sendSignerInvite } from "@/lib/esign/send"
+import { sendSignerInvite, newInviteTrackingId, inviteTrackingPixelUrl } from "@/lib/esign/send"
 import { isTerminalEnvelopeStatus } from "@/lib/esign/envelope-status"
 import type { Job, JobResult } from "../queue"
 
@@ -38,7 +38,7 @@ export async function handleEsignSendEmail(job: Job): Promise<JobResult> {
 
   const { data: env } = await db
     .from("esign_envelopes")
-    .select("document_name, contact_id, status")
+    .select("document_name, contact_id, owner_account_id, status")
     .eq("id", signer.envelope_id)
     .maybeSingle()
   if (env && isTerminalEnvelopeStatus(env.status)) {
@@ -51,15 +51,41 @@ export async function handleEsignSendEmail(job: Job): Promise<JobResult> {
   if (contact?.language) language = contact.language
 
   const signUrl = `${baseUrl}/sign/${signer.token}/${signer.access_code}`
-  await sendSignerInvite({
+  // Open tracking, same mechanism as invoices and offers. Each send gets its OWN
+  // id — including every reminder — so the history shows which specific nudge was
+  // opened rather than collapsing them into one row.
+  const trackingId = newInviteTrackingId()
+  const trackingPixelUrl = inviteTrackingPixelUrl(baseUrl, trackingId)
+  const sent = await sendSignerInvite({
     to: signer.email,
     signerName: signer.name,
     documentName: env?.document_name || "Document",
     signUrl,
     requesterName: "Tony Durante LLC",
     language,
+    trackingPixelUrl,
   })
   steps.push({ name: "send_email", status: "ok", detail: signer.email, timestamp: ts() })
+
+  // Best-effort: the email is already gone. Losing the tracking row must never
+  // fail the job and cause the worker to retry — that would send a second copy.
+  if (trackingPixelUrl) {
+    try {
+      await db.from("email_tracking").insert({
+        tracking_id: trackingId,
+        gmail_message_id: sent.gmailMessageId,
+        gmail_thread_id: sent.gmailThreadId,
+        recipient: signer.email,
+        subject: sent.subject,
+        from_email: "support@tonydurante.us",
+        account_id: env?.owner_account_id || null,
+        contact_id: env?.contact_id || null,
+      })
+      steps.push({ name: "track_open", status: "ok", detail: trackingId, timestamp: ts() })
+    } catch {
+      steps.push({ name: "track_open", status: "skipped", detail: "tracking row not written", timestamp: ts() })
+    }
+  }
 
   const now = ts()
   if (job.payload.reminder === true) {

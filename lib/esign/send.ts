@@ -17,6 +17,18 @@ export interface SignerInviteParams {
   signUrl: string
   requesterName: string
   language?: string | null // "it..." → Italian, else English
+  /**
+   * Open-tracking pixel URL (the same mechanism invoices and offers use). When
+   * omitted the email is built exactly as before — tracking is opt-in so the
+   * pure builder stays usable without it.
+   *
+   * WHY: a signer invite is the one client email we could not answer "did it
+   * arrive / did they look at it" for. A bounce proves non-delivery; nothing
+   * proved the opposite. An open is real evidence; NO open is NOT proof of
+   * anything — most mail clients block remote images by default, and Gmail
+   * proxies and caches them. Read it as "seen for sure" vs "unknown".
+   */
+  trackingPixelUrl?: string | null
 }
 
 function rfc2047(subject: string): string {
@@ -48,6 +60,7 @@ export function buildSignerInviteEmail(p: SignerInviteParams): { to: string; sub
   <p style="margin:26px 0"><a href="${p.signUrl}" style="background:#2563eb;color:#ffffff;padding:11px 22px;border-radius:6px;text-decoration:none;font-weight:600">${cta}</a></p>
   <p style="color:#888;font-size:12px">${note}</p>
   <p style="color:#888;font-size:12px;margin-top:24px">Tony Durante LLC</p>
+${p.trackingPixelUrl ? `  <img src="${escapeHtml(p.trackingPixelUrl)}" width="1" height="1" style="display:none" alt="" />` : ""}
 </div>`
 
   const raw = [
@@ -64,8 +77,28 @@ export function buildSignerInviteEmail(p: SignerInviteParams): { to: string; sub
   return { to: p.to, subject, raw }
 }
 
-export async function sendSignerInvite(p: SignerInviteParams): Promise<void> {
-  const { raw } = buildSignerInviteEmail(p)
+/** Tracking id for one invite send. Same shape the invoice/offer senders use. */
+export function newInviteTrackingId(): string {
+  return `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+/**
+ * Build the pixel URL from the SAME base as the signing link — never
+ * `APP_BASE_URL`. A sandbox invite whose pixel points at production would file
+ * opens against the wrong deployment (and vice versa), the same class of bug the
+ * signing-link base rule exists to prevent.
+ */
+export function inviteTrackingPixelUrl(baseUrl: string, trackingId: string): string | null {
+  const base = (baseUrl || "").replace(/\/+$/, "")
+  if (!base || !trackingId) return null
+  return `${base}/api/track/open/${trackingId}`
+}
+
+export async function sendSignerInvite(
+  p: SignerInviteParams,
+): Promise<{ subject: string; gmailMessageId: string | null; gmailThreadId: string | null }> {
+  const { raw, subject } = buildSignerInviteEmail(p)
   const encoded = Buffer.from(raw).toString("base64url")
-  await gmailPost("/messages/send", { raw: encoded })
+  const res = (await gmailPost("/messages/send", { raw: encoded })) as { id?: string; threadId?: string } | undefined
+  return { subject, gmailMessageId: res?.id || null, gmailThreadId: res?.threadId || null }
 }
