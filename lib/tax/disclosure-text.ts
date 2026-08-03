@@ -68,7 +68,10 @@ export function gateSixText(pnl: PendingPnl, it: boolean): string {
   if (count === 0) return it ? "Hai deciso ogni transazione." : "You have decided every transaction."
   const net = pendingNet(pnl)
   const amount = `${net < 0 ? "−" : ""}${money(Math.abs(net))}`
+  // Pronoun has to agree too — "1 transaction is … Answer them" reads as broken
+  // English on the one screen a client is asked to trust (browser QA 2026-08-03).
+  const one = count === 1
   return it
-    ? `${suggestedPhrase(count, true)} classificate da noi e non ancora confermate da te (netto ${amount}) — sono già incluse nei totali qui sotto. Rispondi per renderle tue.`
-    : `${suggestedPhrase(count, false)} booked on our suggestion and not yet confirmed by you (net ${amount}) — already counted in the figures below. Answer them to make these numbers yours.`
+    ? `${suggestedPhrase(count, true)} classificate da noi e non ancora confermate da te (netto ${amount}) — ${one ? 'è già inclusa' : 'sono già incluse'} nei totali qui sotto. Rispondi per ${one ? 'renderla tua' : 'renderle tue'}.`
+    : `${suggestedPhrase(count, false)} booked on our suggestion and not yet confirmed by you (net ${amount}) — already counted in the figures below. Answer ${one ? 'it' : 'them'} to make these numbers yours.`
 }

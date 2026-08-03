@@ -67,6 +67,26 @@ describe('gateSixText — direction and language', () => {
     expect(t).toContain('−450.00')
   })
 
+  // Browser QA 2026-08-03: the singular rendered "1 transaction is … Answer them".
+  it('SINGULAR: verb AND pronoun both agree, EN + IT', () => {
+    const en = gateSixText(pnl({ foldedUncategorizedCount: 1, foldedUncategorizedExpense: 200 }), false)!
+    expect(en).toContain('1 transaction is')
+    expect(en).toContain('Answer it to make')
+    expect(en).not.toContain('Answer them')
+    const itA = gateSixText(pnl({ foldedUncategorizedCount: 1, foldedUncategorizedExpense: 200 }), true)!
+    expect(itA).toContain('1 transazione è')
+    expect(itA).toContain('è già inclusa')
+    expect(itA).toContain('renderla tua')
+  })
+
+  it('PLURAL keeps the plural pronoun', () => {
+    const en = gateSixText(pnl({ foldedUncategorizedCount: 394, foldedUncategorizedExpense: 200 }), false)!
+    expect(en).toContain('Answer them to make')
+    const itA = gateSixText(pnl({ foldedUncategorizedCount: 394, foldedUncategorizedExpense: 200 }), true)!
+    expect(itA).toContain('sono già incluse')
+    expect(itA).toContain('renderle tue')
+  })
+
   it('nothing pending → the honest all-clear, not a warning', () => {
     expect(gateSixText(pnl(), false)).toBe('You have decided every transaction.')
     expect(gateSixText(pnl(), true)).toBe('Hai deciso ogni transazione.')

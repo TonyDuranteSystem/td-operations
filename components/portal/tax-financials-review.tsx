@@ -2469,12 +2469,17 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               {!isStaff && (
               <div className="mt-1 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3">
                 <span className="text-xs text-zinc-500">{it ? 'Manca una categoria?' : 'Missing a category?'}</span>
+                {/* The INPUT must be gated too, not just the button beside it
+                    (browser QA 2026-08-03): Enter submits, so on a locked file
+                    the button greyed out while typing-then-Enter still created a
+                    category — under a banner saying nothing could be changed. */}
                 <input
                   value={newBucket}
+                  disabled={busyOrLocked}
                   onChange={e => setNewBucket(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') void addBucket() }}
+                  onKeyDown={e => { if (e.key === 'Enter' && !busyOrLocked) void addBucket() }}
                   placeholder={it ? 'Aggiungi categoria…' : 'Add a category…'}
-                  className="rounded-md border border-zinc-300 px-2 py-1 text-xs"
+                  className="rounded-md border border-zinc-300 px-2 py-1 text-xs disabled:opacity-50 disabled:bg-zinc-100"
                 />
                 <button
                   disabled={busyOrLocked || newBucket.trim().length < 2}
