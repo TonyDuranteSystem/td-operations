@@ -5,10 +5,21 @@ import { MARK_LABEL_PREFIX, markFromLabelNames } from "@/lib/inbox/color-marks"
 import { decodeHtmlEntities, displayNameFromHeader } from "@/lib/inbox/email-html"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import { buildGmailQueryParams, toInboxView } from "@/lib/inbox/view-query"
+import { allSettledBounded } from "@/lib/inbox/bounded-settled"
+
+/**
+ * Max simultaneous Gmail thread-metadata fetches for one inbox page.
+ * Gmail: 250 quota units/user/sec; `threads.get` = 10 → ~25 calls/sec ceiling.
+ * 12 keeps the page comfortably inside that with headroom for other callers.
+ */
+const GMAIL_THREAD_FETCH_CONCURRENCY = 12
 import {
   isInstantSearchQuery,
   isBackfillDone,
-  searchIndexThreadIds,
+  pageIndexThreadIds,
+  countIndexThreads,
+  pageSearchThreadIds,
+  countSearchThreads,
   fetchThreadRows,
   groupRowsToConversations,
 } from "@/lib/email-index/query"
@@ -64,10 +75,20 @@ export async function GET(req: NextRequest) {
     if (!(await checkMailboxAccess(mailbox))) {
       return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
     }
+    // Ceiling is generous because instant SEARCH answers from our own index (a
+    // DB query — cheap, and capping it just hid year-old mail). The live-Gmail
+    // BROWSE path has its own, much tighter bound below: every thread there
+    // costs a Gmail call, and over-fetching it is what starved the inbox.
     const limit = Math.min(
       parseInt(req.nextUrl.searchParams.get("limit") || "50"),
-      500
+      2000
     )
+    // Real page numbers (Antonio 2026-08-02). 1-based; page 1 = newest. Paging
+    // is done in the DB at THREAD level so a conversation can never straddle two
+    // pages, and there is no ceiling on how far back you can go.
+    const page = Math.max(1, parseInt(req.nextUrl.searchParams.get("page") || "1"))
+    const pageOffset = (page - 1) * limit
+    let totalConversations: number | null = null
 
     const conversations: InboxConversation[] = []
     let gmailNextPageToken: string | undefined
@@ -100,7 +121,14 @@ export async function GET(req: NextRequest) {
       const mailboxKey = mailbox === "antonio" ? "antonio" : "support"
       try {
         if (await isBackfillDone(mailboxKey)) {
-          const threadIds = await searchIndexThreadIds(searchQuery, mailboxKey, Math.min(limit, 50))
+          // No 50-cap: this reads our own index, so the caller's limit (grown by
+          // "Load older emails") is what search should honour — the cap was
+          // hiding year-old mail that is stored and instantly searchable.
+          const [threadIds, total] = await Promise.all([
+            pageSearchThreadIds(mailboxKey, searchQuery, limit, pageOffset),
+            countSearchThreads(mailboxKey, searchQuery),
+          ])
+          totalConversations = total
           const rows = await fetchThreadRows(mailboxKey, threadIds)
           const markLabelNames = new Map<string, string>()
           try {
@@ -127,13 +155,69 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // ─── Browse from our own index (no search) ───────────
+    // The plain folder view (Inbox / Sent / a user label) is served from the
+    // index instead of ~300 LIVE Gmail thread fetches per page. That fan-out is
+    // what made browsing slow, hard-capped, and fragile — on 2026-08-02 it
+    // exhausted the per-user Gmail quota and every row rendered "Couldn't load
+    // this email — retrying". From the index it is a DB query: instant, and
+    // "Load older emails" can keep going without touching Gmail at all.
+    // Anything unusual (a search, explicit pagination, an unfinished backfill,
+    // any error) still falls through to the live path below.
+    if (
+      (!channel || channel === "gmail") &&
+      !searchQuery &&
+      !pageToken &&
+      !servedFromIndex
+    ) {
+      const mailboxKey = mailbox === "antonio" ? "antonio" : "support"
+      try {
+        if (await isBackfillDone(mailboxKey)) {
+          const labelId = labelFilter || "INBOX"
+          const [threadIds, total] = await Promise.all([
+            pageIndexThreadIds(mailboxKey, labelId, limit, pageOffset),
+            countIndexThreads(mailboxKey, labelId),
+          ])
+          totalConversations = total
+          if (threadIds.length > 0) {
+            const rows = await fetchThreadRows(mailboxKey, threadIds)
+            const markLabelNames = new Map<string, string>()
+            try {
+              const gmailUser = mailboxKey === "antonio"
+                ? "antonio.durante@tonydurante.us"
+                : "support@tonydurante.us"
+              const labelsRes = (await gmailGet("/labels", {}, gmailUser)) as {
+                labels?: Array<{ id: string; name: string }>
+              }
+              for (const l of labelsRes.labels ?? []) {
+                if (l.name.startsWith(MARK_LABEL_PREFIX)) markLabelNames.set(l.id, l.name)
+              }
+            } catch {
+              // Color marks are cosmetic — never fail the list over them
+            }
+            const emailLookup = await emailLookupPromise
+            conversations.push(
+              ...groupRowsToConversations(rows, { markLabelNames, emailLookup })
+            )
+            servedFromIndex = true
+          }
+        }
+      } catch (err) {
+        console.warn("[inbox] index browse failed, falling back to live Gmail:", err)
+      }
+    }
+
     // ─── Gmail threads ──────────────────────────────────
     if ((!channel || channel === "gmail") && !servedFromIndex) {
       try {
-        // Gmail threads API returns max ~100 per page. Fetch up to 2 pages (200 threads).
-        // With INBOX as default, this is more than enough (Gmail inbox has ~20-50 threads).
-        // For other labels or search queries, 200 threads covers most use cases.
-        const targetGmailThreads = 200
+        // Gmail threads API returns max ~100 per page. How many pages we walk is
+        // driven by the caller's `limit`, so the list can reach FURTHER BACK than
+        // the newest ~100 conversations. With no "load older" the inbox stopped
+        // dead at a date (Antonio 2026-08-02: "why do I have email only from
+        // July 28?"). Default (limit 100) behaves exactly as before — 200 threads.
+        // Hard ceiling keeps a runaway request off Gmail's quota.
+        const targetGmailThreads = Math.min(Math.max(limit * 2, 200), 600)
+        const maxThreadPages = Math.ceil(targetGmailThreads / 100)
 
         // Build Gmail query params
         const gmailParams: Record<string, string> = {
@@ -165,7 +249,7 @@ export async function GET(req: NextRequest) {
         const allThreadIds: Array<{ id: string; snippet: string }> = []
         let currentPageToken = pageToken || undefined
 
-        for (let page = 0; page < 2 && allThreadIds.length < targetGmailThreads; page++) {
+        for (let page = 0; page < maxThreadPages && allThreadIds.length < targetGmailThreads; page++) {
           const pageParams = { ...gmailParams }
           if (currentPageToken) pageParams.pageToken = currentPageToken
 
@@ -213,10 +297,19 @@ export async function GET(req: NextRequest) {
         const emailLookup = await emailLookupPromise
 
         if (allThreadIds.length > 0) {
-          // Fetch metadata for each thread — limit to 300 to balance completeness vs speed
-          const threadsToFetch = allThreadIds.slice(0, 300)
-          const threadDetails = await Promise.allSettled(
-            threadsToFetch.map((t) =>
+          // Fetch metadata for each thread — limit to 300 to balance completeness vs speed.
+          // BOUNDED CONCURRENCY (incident 2026-08-02): this used a bare
+          // Promise.allSettled over all 300, firing 300 simultaneous Gmail calls.
+          // `threads.get` costs 10 quota units against a 250 units/user/sec limit
+          // (~25 calls/sec), so the burst rate-limited ITSELF — most threads came
+          // back rejected and rendered as "Couldn't load — retrying" stubs, and any
+          // other Gmail activity made it dramatically worse. Capping in-flight
+          // requests keeps the whole page inside the quota, so rows actually load.
+          const threadsToFetch = allThreadIds.slice(0, targetGmailThreads)
+          const threadDetails = await allSettledBounded(
+            threadsToFetch,
+            GMAIL_THREAD_FETCH_CONCURRENCY,
+            (t) =>
               gmailGet(`/threads/${t.id}`, {
                 format: "metadata",
                 metadataHeaders: ["From", "To", "Subject", "Date"],
@@ -224,7 +317,6 @@ export async function GET(req: NextRequest) {
                 id: string
                 messages: GmailAPIMessage[]
               }>
-            )
           )
 
           // Our own mailbox addresses — used to find external party
@@ -389,6 +481,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       conversations: conversations.slice(0, limit),
       total: conversations.length,
+      // Real pagination (index-served views only): which page this is, how many
+      // conversations exist in total, and therefore how many pages. Absent on
+      // the live-Gmail fallback, where a true total isn't knowable.
+      page,
+      pageSize: limit,
+      ...(totalConversations !== null
+        ? {
+            totalConversations,
+            totalPages: Math.max(1, Math.ceil(totalConversations / Math.max(1, limit))),
+          }
+        : {}),
       ...(gmailNextPageToken ? { nextPageToken: gmailNextPageToken } : {}),
       ...(gmailDegraded ? { gmailDegraded: true } : {}),
       // Completeness signals for the client reconcile (Luca flicker fix).

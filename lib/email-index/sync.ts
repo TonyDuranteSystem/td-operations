@@ -138,6 +138,13 @@ export async function indexThread(
   threadId: string,
   dir: CrmDirectory
 ): Promise<number> {
+  // NO retry here — deliberately (INCIDENT 2026-08-02). A retry-on-429 was added
+  // to avoid index gaps, but this runs in the reconcile that fires every 10 min
+  // over many threads: on a rate-limit each thread then re-hammered Gmail 4x with
+  // backoff, holding the per-user quota the INTERACTIVE inbox shares and leaving
+  // it unable to load (every row rendered "Couldn't load — retrying"). Failing
+  // fast frees the quota immediately; gaps are healed by the date-window
+  // reconciler (lib/email-store/reconcile.ts), which is the right tool for that.
   const thread = (await gmailGet(
     `/threads/${threadId}`,
     METADATA_PARAMS as unknown as Record<string, string | string[]>,

@@ -12,6 +12,7 @@ const insertSpy = vi.hoisted(() => vi.fn())
 
 const updateSpy = vi.hoisted(() => vi.fn())
 const eqSpy = vi.hoisted(() => vi.fn())
+const neqSpy = vi.hoisted(() => vi.fn())
 
 vi.mock("@/lib/supabase-admin", () => {
   const b: Record<string, unknown> = {}
@@ -20,6 +21,7 @@ vi.mock("@/lib/supabase-admin", () => {
   b.select = () => b
   b.update = (patch: unknown) => { updateSpy(patch); return b }
   b.eq = (col: unknown, val: unknown) => { eqSpy(col, val); return b }
+  b.neq = (col: unknown, val: unknown) => { neqSpy(col, val); return b }
   b.single = async () => ({ data: inserted, error: null })
   // The supersede runs as a bare awaited chain (update→eq→eq), so the builder
   // must be thenable for it to resolve.
@@ -45,18 +47,41 @@ const base = {
 }
 const sendable = [{ ref: "up1", path: goodPath, name: "affidavit.pdf", contentType: "application/pdf", size: 400_000 }]
 
-beforeEach(() => { insertSpy.mockClear(); updateSpy.mockClear(); eqSpy.mockClear() })
+beforeEach(() => { insertSpy.mockClear(); updateSpy.mockClear(); eqSpy.mockClear(); neqSpy.mockClear() })
 
 describe("prepareWorkerEmailSend — supersede", () => {
-  it("CANCELS any earlier pending draft on the same conversation before freezing a new one", async () => {
+  it("CANCELS this actor's earlier pending EMAIL drafts — after the new one is safely frozen", async () => {
     // Drafting is iterative ("no, say we need his numbers first"). Each pass freezes
     // a row. In Team Chat the older card is a PERMANENT chat message that stays
     // clickable, so without this the superseded email could be dispatched half an
     // hour later, contradicting the one actually sent. Found by the 4th council pass.
+    //
+    // TWO PROPERTIES CHANGED 2026-07-31 when the portal kind landed, both from review:
+    //
+    // 1. SCOPED BY KIND. Antonio's flagship flow is doing BOTH on one email thread —
+    //    reply to the bank AND message the client on the portal. An unscoped cancel
+    //    makes that impossible: the portal freeze silently kills the pending email,
+    //    no card ever refuses, and the reply to the bank is simply never sent.
+    // 2. RUNS AFTER THE INSERT, never before, and never touches the row just frozen.
+    //    Superseding first means a prepare that then fails validation has already
+    //    destroyed a draft the staff member spent several turns agreeing, leaving
+    //    nothing pending and no card to explain where it went.
     await prepareWorkerEmailSend({ ...base, attachRefs: [], sendable })
-    expect(updateSpy).toHaveBeenCalledWith({ status: "cancelled" })
+    expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ status: "cancelled" }))
     expect(eqSpy).toHaveBeenCalledWith("thread_uuid", "t-1")
     expect(eqSpy).toHaveBeenCalledWith("status", "pending")
+    expect(eqSpy).toHaveBeenCalledWith("actor", "luca@tonydurante.us")
+    expect(eqSpy).toHaveBeenCalledWith("kind", "email")
+    // Never cancels the row it just froze.
+    expect(neqSpy).toHaveBeenCalledWith("id", "prep-1")
+  })
+
+  it("writes kind='email' on the frozen row — the column has NO default on purpose", async () => {
+    // A default of 'email' would make any insert that forgets the discriminator send a
+    // real email to a real person; the column is NOT NULL with no default so a
+    // forgetful insert raises instead. That only holds if this path always writes it.
+    await prepareWorkerEmailSend({ ...base, attachRefs: [], sendable })
+    expect(insertSpy).toHaveBeenCalledWith(expect.objectContaining({ kind: "email" }))
   })
 
   it("still freezes the new draft after superseding", async () => {

@@ -501,7 +501,15 @@ async function runSidebarWorker(args: {
     try {
       // Only a row THIS turn created — id snapshot, so no clock skew.
       const prep = await findPreparedFrozenThisTurn(threadId, sendActor, priorPrepared)
-      if (prep) {
+      // EMAIL ONLY on this surface. A frozen PORTAL draft has no to_address/subject —
+      // the database refuses to store them — so rendering one here would produce a card
+      // reading "Email <nothing>" with a mailbox picker, and Confirm would try to
+      // dispatch it as mail. The sidebar has no client picker and no language control,
+      // so it cannot host a portal card; suppress rather than half-render.
+      // NOTE this guard is deliberately explicit and not left to the type system:
+      // tsconfig has `strict: false`, so `string | null` flowing into `string` compiles
+      // silently. The nullability documents the shape; only this check enforces it.
+      if (prep && prep.kind === 'email') {
         preparedSend = { id: prep.id, to: prep.to_address, subject: prep.subject, body: prep.body ?? '' }
       }
     } catch (err) {

@@ -192,26 +192,138 @@ export async function fetchThreadRows(
 
 /**
  * Instant search: tsvector match → matched threads → all rows of those
- * threads (newest threads first, capped).
+ * threads (newest threads first).
+ *
+ * This reads OUR OWN index, not Gmail — so the old caps (50 threads out of a
+ * 400-row pre-scan) protected nothing and simply hid old mail: searching for
+ * something a year back returned nothing even though the row was stored
+ * (Antonio 2026-08-02: "I want email from one year ago"). The pre-scan now
+ * scales with what the caller actually wants, so a deep search reaches the
+ * whole mailbox. Still bounded — an unbounded scan on a growing table is how
+ * you turn instant search into a slow one.
  */
 export async function searchIndexThreadIds(
   q: string,
   mailbox: "support" | "antonio",
-  maxThreads = 50
+  maxThreads = 200
 ): Promise<string[]> {
+  // Rows-to-scan: a thread usually has several messages, so scan a multiple of
+  // the threads wanted, with a floor for tiny requests and a sane hard ceiling.
+  const scanRows = Math.min(Math.max(maxThreads * 8, 400), 5000)
   const { data, error } = await db
     .from("email_index")
     .select("thread_id, internal_date, label_ids")
     .eq("mailbox", mailbox)
     .textSearch("search", q, { type: "websearch", config: "simple" })
     .order("internal_date", { ascending: false })
-    .limit(400)
+    .limit(scanRows)
   if (error) throw new Error(`email_index search failed: ${error.message}`)
 
   const seen = new Set<string>()
   const ordered: string[] = []
   for (const row of (data ?? []) as Array<{ thread_id: string; label_ids: string[] }>) {
     if (row.label_ids.includes("TRASH") || row.label_ids.includes("SPAM")) continue
+    if (seen.has(row.thread_id)) continue
+    seen.add(row.thread_id)
+    ordered.push(row.thread_id)
+    if (ordered.length >= maxThreads) break
+  }
+  return ordered
+}
+
+/**
+ * ONE PAGE of conversations — real page numbers (Antonio 2026-08-02: "in Gmail I
+ * have the numbers of the pages 1,2,3,4,5 according to how many emails I have").
+ *
+ * Paging happens in the DB (`inbox_thread_page`), which collapses the index's
+ * one-row-per-MESSAGE into one row per THREAD before applying LIMIT/OFFSET. A
+ * plain offset over rows would split a conversation across two pages; this
+ * cannot. `folder` is a Gmail label id (INBOX, SENT, a user folder).
+ */
+export async function pageIndexThreadIds(
+  mailbox: "support" | "antonio",
+  folder: string,
+  pageSize: number,
+  offset: number,
+): Promise<string[]> {
+  const { data, error } = await db.rpc("inbox_thread_page", {
+    p_mailbox: mailbox, p_label: folder,
+    p_limit: Math.max(1, pageSize), p_offset: Math.max(0, offset),
+  })
+  if (error) throw new Error(`inbox_thread_page failed: ${error.message}`)
+  return ((data ?? []) as Array<{ thread_id: string }>).map((r) => r.thread_id)
+}
+
+/** Total conversations in a folder — the N in "page 1 of N". */
+export async function countIndexThreads(
+  mailbox: "support" | "antonio",
+  folder: string,
+): Promise<number> {
+  const { data, error } = await db.rpc("inbox_thread_count", { p_mailbox: mailbox, p_label: folder })
+  if (error) throw new Error(`inbox_thread_count failed: ${error.message}`)
+  return Number(data ?? 0)
+}
+
+/** ONE PAGE of SEARCH results as conversations (same thread-level paging). */
+export async function pageSearchThreadIds(
+  mailbox: "support" | "antonio",
+  query: string,
+  pageSize: number,
+  offset: number,
+): Promise<string[]> {
+  const { data, error } = await db.rpc("inbox_search_thread_page", {
+    p_mailbox: mailbox, p_query: query,
+    p_limit: Math.max(1, pageSize), p_offset: Math.max(0, offset),
+  })
+  if (error) throw new Error(`inbox_search_thread_page failed: ${error.message}`)
+  return ((data ?? []) as Array<{ thread_id: string }>).map((r) => r.thread_id)
+}
+
+/** Total conversations matching a search — the N in "page 1 of N". */
+export async function countSearchThreads(
+  mailbox: "support" | "antonio",
+  query: string,
+): Promise<number> {
+  const { data, error } = await db.rpc("inbox_search_thread_count", { p_mailbox: mailbox, p_query: query })
+  if (error) throw new Error(`inbox_search_thread_count failed: ${error.message}`)
+  return Number(data ?? 0)
+}
+
+/**
+ * BROWSE from our own index: newest thread ids carrying `labelId` (e.g. INBOX,
+ * SENT, or a user folder), newest first.
+ *
+ * The browse list historically fetched every thread from LIVE Gmail — up to 300
+ * calls per page. That is what made the inbox slow, capped, and fragile: on
+ * 2026-08-02 it exhausted the per-user Gmail quota and every row rendered
+ * "Couldn't load this email — retrying". Serving the list from the index we
+ * already maintain removes the Gmail round-trips entirely, so browsing is a DB
+ * query: instant, unbounded by Gmail quota, and safe under concurrent load.
+ *
+ * TRASH/SPAM are excluded unless explicitly asked for, mirroring the live path.
+ */
+export async function listIndexThreadIds(
+  mailbox: "support" | "antonio",
+  labelId: string,
+  maxThreads = 100,
+): Promise<string[]> {
+  const scanRows = Math.min(Math.max(maxThreads * 8, 400), 5000)
+  const { data, error } = await db
+    .from("email_index")
+    .select("thread_id, internal_date, label_ids")
+    .eq("mailbox", mailbox)
+    .contains("label_ids", [labelId])
+    .order("internal_date", { ascending: false })
+    .limit(scanRows)
+  if (error) throw new Error(`email_index list failed: ${error.message}`)
+
+  const excludeTrash = labelId !== "TRASH"
+  const excludeSpam = labelId !== "SPAM"
+  const seen = new Set<string>()
+  const ordered: string[] = []
+  for (const row of (data ?? []) as Array<{ thread_id: string; label_ids: string[] }>) {
+    if (excludeTrash && row.label_ids.includes("TRASH")) continue
+    if (excludeSpam && row.label_ids.includes("SPAM")) continue
     if (seen.has(row.thread_id)) continue
     seen.add(row.thread_id)
     ordered.push(row.thread_id)

@@ -113,6 +113,22 @@ if [ -f scripts/check-system-docs-freshness.sh ]; then
   echo "✅ System docs in sync."
 fi
 
+# System Atlas — the master map's APPENDICES are generated from live code. They rotted
+# badly once (2026-05-29 → 2026-08-02: 41 vs 49 tool groups, 18 vs 26 hooks, rules
+# stopping at R106 while CLAUDE.md reached R113) because nothing regenerated them and
+# nothing checked them. This is that check. Fix = rerun the generator and commit.
+# Override (rare, deliberate): ALLOW_ATLAS_SKIP=1 git push ...
+if [ "${ALLOW_ATLAS_SKIP:-}" != "1" ] && [ -f scripts/generate-system-atlas.mjs ]; then
+  echo "🗺️  Checking System Atlas is current..."
+  if ! node scripts/generate-system-atlas.mjs --check; then
+    echo ""
+    echo "   The system changed but the map did not. Run:"
+    echo "     npm run atlas"
+    echo "   then commit docs/systems/SYSTEM-ATLAS.md with this push."
+    exit 1
+  fi
+fi
+
 echo "🔍 Running ESLint on changed files..."
 CHANGED_TS=$(git diff --name-only --diff-filter=d origin/main...HEAD -- '*.ts' '*.tsx' 2>/dev/null)
 if [ -n "$CHANGED_TS" ]; then

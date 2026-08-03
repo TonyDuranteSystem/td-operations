@@ -65,6 +65,30 @@ describe("buildWorkerSendContext — the controls survive the handoff", () => {
     expect(ctx!.emailSendPrep).toEqual(prep)
   })
 
+  it("REGRESSION: forwards portalSendPrep — dropping it turns a confirmed send back into an automatic one", () => {
+    // THIS EXACT BUG SHIPPED TO SANDBOX, 2026-07-31, and is the reason the rule at the
+    // top of buildWorkerSendContext exists. The field was added to the send-context
+    // type AND set on the Inbox rails; both typechecked; every pure-function test on
+    // the freeze path passed. But this literal never copied it across, so the executor
+    // saw no freeze context, fell through to the direct send, and a REAL portal message
+    // reached a real client with no card and no confirmation — while the worker
+    // reported "Message sent". A missing field here does not degrade a feature; it
+    // removes the human from a client-facing send.
+    const prep = { threadUuid: "t1", locale: "it" }
+    const ctx = buildWorkerSendContext({ portalSendPrep: prep })
+    expect(ctx).toBeDefined()
+    expect(ctx!.portalSendPrep).toEqual(prep)
+  })
+
+  it("builds a context for portalSendPrep ALONE — the Inbox has no portal pin by design", () => {
+    // The Inbox deliberately carries no pinned recipient (there is no client on an
+    // email thread), so if the prep alone did not qualify as "a context worth
+    // building", the whole card path would be unreachable on the one surface it is for.
+    const ctx = buildWorkerSendContext({ portalSendPrep: { threadUuid: "t1", locale: "en" } })
+    expect(ctx).toBeDefined()
+    expect(ctx!.pinnedPortalRecipient).toBeNull()
+  })
+
   it("forwards onBehalfOf (team-chat self-notification silencer) and builds a context for it alone", () => {
     // A dropped field here would silently revive Antonio's self-notifications —
     // the exact class of wiring bug this file exists for.

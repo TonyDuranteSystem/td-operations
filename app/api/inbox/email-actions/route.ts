@@ -14,7 +14,7 @@ import {
 
 export const dynamic = "force-dynamic"
 
-type EmailAction = "archive" | "star" | "unstar" | "trash" | "untrash" | "forward" | "mark_unread" | "move_to_label" | "set_color" | "snooze" | "unsnooze"
+type EmailAction = "archive" | "star" | "unstar" | "trash" | "untrash" | "forward" | "mark_read" | "mark_unread" | "move_to_label" | "set_color" | "snooze" | "unsnooze"
 
 
 /**
@@ -319,6 +319,19 @@ export async function POST(req: NextRequest) {
         const filed = await untrashThread(threadId, asUser, sanitizeRestorePayload(restore), destLabelId)
         // Report where it ACTUALLY landed — not where we were asked to put it.
         return NextResponse.json({ success: true, action: "untrashed", filedTo: filed.filedTo })
+      }
+
+      case "mark_read": {
+        // The single-email path never had this case, so the "Mark read" button
+        // inside an open email returned "Unknown action: mark_read" (Antonio
+        // 2026-08-02) — only the BULK branch handled it. Mirrors mark_unread.
+        const thread = (await gmailGet(`/threads/${threadId}`, { format: "minimal" }, asUser)) as { messages: Array<{ id: string }> }
+        await Promise.all(
+          thread.messages.map((m) =>
+            gmailPost(`/messages/${m.id}/modify`, { removeLabelIds: ["UNREAD"] }, asUser)
+          )
+        )
+        return NextResponse.json({ success: true, action: "marked_read" })
       }
 
       case "mark_unread": {

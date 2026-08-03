@@ -18,6 +18,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { TD_MAILBOXES, checkRecipientsAllowed } from "@/lib/inbox/email-recipients"
 import { buildRawEmail } from "@/lib/email/raw-mime"
 import { isValidWorkerUploadPath, WORKER_UPLOAD_BUCKET } from "@/lib/ai-agent/attachment-reader"
+import type { PreparedSendKind } from "@/lib/inbox/prepared-send-vocabulary"
 
 /**
  * Outbound cap on the SUM of attachment bytes (raw, pre-base64). Gmail rejects a
@@ -91,37 +92,65 @@ function mb(bytes: number): string {
 }
 
 /**
- * Resolve + validate + freeze. Does NOT send. Returns a confirmation string the
- * worker relays; the actual payload is in the DB row for the confirm endpoint.
+ * Cancel this actor's EARLIER pending drafts of the SAME KIND on this conversation,
+ * keeping the row just frozen.
+ *
+ * Drafting is iterative: "email Smit we'll file by Friday" … "no, say we need his
+ * numbers first"; and on the portal card the Reformulate button makes that a
+ * first-class loop. Each pass freezes a row. On the panels the old card is ephemeral,
+ * but in Team Chat it is a permanent chat message that stays amber and clickable — so
+ * a superseded draft could be dispatched half an hour later, contradicting the one
+ * actually sent. Cancelling the older rows means the newest frozen payload is the only
+ * one that can leave, on every surface, and a click on a dead card gets an honest
+ * "already cancelled" instead of a second real send.
+ *
+ * SCOPED TO THE ACTOR. In Team Chat the conversation id is the whole CHANNEL, so a
+ * blanket cancel would kill a teammate's un-confirmed card the moment anyone else
+ * drafted. Redrafting is per-person.
+ *
+ * SCOPED TO THE KIND — added 2026-07-31 with the portal path, and this one is load
+ * bearing. Antonio's flagship flow is BOTH at once: Luca replies to the bank by email
+ * AND tells the client on the portal, on the same email thread. Kind-agnostic
+ * superseding makes that impossible — the portal freeze silently cancels the pending
+ * email, no card ever refuses, and the reply to the bank is simply never sent. The
+ * cost of scoping is that "actually, send it as a portal message instead" leaves the
+ * email draft pending; that card, if confirmed, sends an email the staff member did
+ * write and then changed their mind about. Losing a message they DID intend to send is
+ * the worse failure, so the scope wins. (The two reviewers split on this: the
+ * Bug-Hunter called kind-agnostic supersede a blocker, the AI-Architect wanted it kept
+ * kind-agnostic. Antonio's flow decides it.)
+ *
+ * RUNS AFTER THE NEW ROW IS INSERTED, never before. Superseding first means a prepare
+ * that then fails validation — a bad attachment ref, an oversize file, an insert error
+ * — has already destroyed the draft the staff member and the worker spent five turns
+ * agreeing, with nothing pending and no card left to explain where it went.
  */
-export async function prepareWorkerEmailSend(input: PrepareInput): Promise<PrepareResult> {
-  // SUPERSEDE ANY EARLIER PENDING DRAFT ON THIS CONVERSATION.
-  //
-  // Drafting is iterative: "email Smit we'll file by Friday" … "no, say we need
-  // his numbers first". Each pass freezes a row. On the panels the old card is
-  // ephemeral, but in Team Chat it is a permanent chat message that stays amber
-  // and clickable — so the superseded email could be dispatched half an hour
-  // later, contradicting the one that was actually sent. Cancelling the older
-  // rows here means the newest frozen payload is the only one that can leave, on
-  // every surface. A card for a cancelled row now clicks through to an honest
-  // "already cancelled" instead of a second real email.
-  // SCOPED TO THE SAME ACTOR. In Team Chat the conversation id is the whole
-  // CHANNEL, so a blanket cancel would kill a teammate's un-confirmed card the
-  // moment anyone else drafted — their card would then 409, or worse, the
-  // card-picker would pair their answer with someone else's email. Redrafting is
-  // per-person, so scoping by actor cancels exactly the drafts being superseded.
+export async function supersedeEarlierDrafts(opts: {
+  threadUuid: string
+  actor: string
+  kind: PreparedSendKind
+  keepId: string
+}): Promise<void> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (supabaseAdmin as any)
       .from("worker_prepared_sends")
-      .update({ status: "cancelled" })
-      .eq("thread_uuid", input.threadUuid)
-      .eq("actor", input.actor)
+      .update({ status: "cancelled", resolved_at: new Date().toISOString() })
+      .eq("thread_uuid", opts.threadUuid)
+      .eq("actor", opts.actor)
+      .eq("kind", opts.kind)
       .eq("status", "pending")
+      .neq("id", opts.keepId)
   } catch {
-    // Best-effort: failing to supersede must never block preparing the new draft.
+    // Best-effort: failing to supersede must never fail a draft that IS frozen.
   }
+}
 
+/**
+ * Resolve + validate + freeze. Does NOT send. Returns a confirmation string the
+ * worker relays; the actual payload is in the DB row for the confirm endpoint.
+ */
+export async function prepareWorkerEmailSend(input: PrepareInput): Promise<PrepareResult> {
   // Recipient must be on the thread (defence in depth — the executor also checks).
   const verdict = input.proposedRecipient
     ? ({ ok: true } as const)
@@ -166,6 +195,7 @@ export async function prepareWorkerEmailSend(input: PrepareInput): Promise<Prepa
     .from("worker_prepared_sends")
     .insert({
       thread_uuid: input.threadUuid,
+      kind: "email",
       gmail_thread_id: input.gmailThreadId ?? null,
       mailbox: input.mailbox,
       reply_to_message_id: input.replyToMessageId ?? null,
@@ -182,6 +212,8 @@ export async function prepareWorkerEmailSend(input: PrepareInput): Promise<Prepa
     console.error("[worker-email-send] prepare insert failed:", error)
     return { ok: false, message: "❌ Couldn't prepare the email — please try again." }
   }
+
+  await supersedeEarlierDrafts({ threadUuid: input.threadUuid, actor: input.actor, kind: "email", keepId: data.id })
 
   const fileList = resolved.map((r) => `${r.name} (${mb(r.size ?? 0)})`).join(", ")
   return {
@@ -399,13 +431,28 @@ ${plainTextToParagraphs(claimed.body)}
  * freeze supersedes the first, so only one row of theirs is ever pending.
  * ------------------------------------------------------------------------- */
 
-/** A frozen draft, as the surfaces render it on the card. */
+/**
+ * A frozen draft, as the surfaces render it on the card.
+ *
+ * `to_address` / `subject` are NULLABLE and that is deliberate, not sloppiness: a
+ * PORTAL draft has neither (the database refuses to store them — see the
+ * `worker_prepared_sends_kind_shape` constraint). Typing them as `string` was a lie the
+ * moment the portal kind existed, and the lie is what lets a surface render a portal
+ * draft as "Email <nothing>" with a mailbox picker. Every consumer must branch on
+ * `kind` first; the nullability is what makes the compiler force that.
+ */
 export interface FrozenDraft {
   id: string
-  to_address: string
-  subject: string
+  kind: PreparedSendKind
+  to_address: string | null
+  subject: string | null
   body: string | null
   attachments: Array<{ name: string; size?: number }>
+  /** Portal only — the client the staff member will confirm this against, if the worker proposed one. */
+  proposed_account_id?: string | null
+  proposed_contact_id?: string | null
+  /** Portal only — the language the staff member picked on the card ("en" | "it"). */
+  draft_locale?: string | null
 }
 
 /**
@@ -449,7 +496,7 @@ export async function findPreparedFrozenThisTurn(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabaseAdmin as any)
     .from("worker_prepared_sends")
-    .select("id, to_address, subject, body, attachments")
+    .select("id, kind, to_address, subject, body, attachments, proposed_account_id, proposed_contact_id, draft_locale")
     .eq("thread_uuid", threadUuid)
     .eq("actor", actor)
     .eq("status", "pending")

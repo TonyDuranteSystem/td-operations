@@ -2,6 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useMemo, useRef, useEffect, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, ArchiveRestore, Palette, FolderInput, Ban, AlarmClock } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -19,6 +20,7 @@ import {
   type PayloadOrigin,
 } from '@/lib/inbox/conversation-reconcile'
 import { toInboxView, viewKey } from '@/lib/inbox/view-query'
+import { buildPageNumbers } from '@/lib/inbox/pager'
 
 const EMPTY_OVERRIDES: Map<string, RowOverride> = new Map()
 const EMPTY_UNREAD: Map<string, UnreadOverride> = new Map()
@@ -102,6 +104,37 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   // Which row's quick-action popover (color palette / folder list / snooze
   // presets) is open. One at a time; closed by the fixed overlay or by acting.
   const [rowMenu, setRowMenu] = useState<{ id: string; kind: 'color' | 'label' | 'snooze' } | null>(null)
+
+  // REAL PAGE NUMBERS (Antonio 2026-08-02: "in Gmail I have the numbers of the
+  // pages 1,2,3,4,5 according to how many emails I have"). A fixed small page
+  // keeps the browser fast — rendering thousands of rows at once is the only
+  // genuine limit here — while the DB pages at thread level, so there is no
+  // ceiling on how far back you can go.
+  //
+  // The page lives in the URL, so a refresh keeps your place instead of dumping
+  // you back at the newest emails (the old "Load older" state was in-memory and
+  // reset on every reload).
+  const PAGE_SIZE = 50
+  const router = useRouter()
+  const urlParams = useSearchParams()
+  const page = Math.max(1, parseInt(urlParams.get('page') || '1', 10) || 1)
+  const setPage = (n: number) => {
+    const next = new URLSearchParams(Array.from(urlParams.entries()))
+    if (n <= 1) next.delete('page')
+    else next.set('page', String(n))
+    router.replace(`?${next.toString()}`, { scroll: false })
+  }
+
+  // Switching mailbox / folder / search is a NEW list — start at page 1.
+  const viewSig = `${activeChannel ?? ''}|${labelFilter ?? ''}|${searchQuery ?? ''}|${mailbox ?? ''}`
+  const prevViewSig = useRef(viewSig)
+  useEffect(() => {
+    if (prevViewSig.current !== viewSig) {
+      prevViewSig.current = viewSig
+      if (page !== 1) setPage(1)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewSig])
 
   // Toggle a row read/unread from the list (next to the row Delete). Uses the
   // parent's optimistic unread override for instant badge/bold feedback and
@@ -250,8 +283,8 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
 
   const isWhatsApp = activeChannel === 'whatsapp'
 
-  const { data, isLoading, dataUpdatedAt } = useQuery<ConversationsPayload & { total?: number; origin?: PayloadOrigin }>({
-    queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery, mailbox],
+  const { data, isLoading, isFetching, dataUpdatedAt } = useQuery<ConversationsPayload & { total?: number; origin?: PayloadOrigin }>({
+    queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery, mailbox, page],
     queryFn: async () => {
       // Throw on non-2xx (R099): a failed refetch must NOT replace the list
       // with emptiness — react-query keeps the previous data on error, so a
@@ -265,7 +298,8 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
             if (labelFilter) params.set('label', labelFilter)
             if (searchQuery) params.set('q', searchQuery)
             if (mailbox) params.set('mailbox', mailbox)
-            params.set('limit', '100')
+            params.set('limit', String(PAGE_SIZE))
+            params.set('page', String(page))
             return `/api/inbox/conversations?${params}`
           })()
       const res = await fetch(url)
@@ -382,6 +416,14 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     }
     prevRef.current = next
   }, [visibleRows, ov])
+
+  // Pager inputs from the server (index-served views only).
+  const totalConversations = (data as { totalConversations?: number } | undefined)?.totalConversations ?? 0
+  const totalPages = (data as { totalPages?: number } | undefined)?.totalPages ?? 0
+
+  // 1 … 4 5 [6] 7 8 … 107 — first/last plus a window around current, so 107
+  // pages don't render 107 buttons. `null` renders as an ellipsis.
+  const pageNumbers = useMemo(() => buildPageNumbers(page, totalPages), [page, totalPages])
 
   const conversations = useMemo(() => visibleRows.filter(c => {
     if (!unreadFilter || unreadFilter === 'all') return true
@@ -742,6 +784,50 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
           </div>
         )
       })}
+
+      {/* REAL PAGE NUMBERS — 1 2 3 … N, like Gmail. Rendered only for
+          index-served views (the server returns a true total there); the
+          live-Gmail fallback can't know a total, so no pager is shown. */}
+      {!isWhatsApp && totalPages > 1 && (
+        <div className="flex items-center justify-center gap-1 p-3 border-t flex-wrap">
+          <button
+            onClick={() => setPage(page - 1)}
+            disabled={page <= 1 || isFetching}
+            className="px-2 py-1 text-sm rounded border disabled:opacity-40"
+            aria-label="Previous page"
+          >
+            ‹
+          </button>
+          {pageNumbers.map((n, i) =>
+            n === null ? (
+              <span key={`gap-${i}`} className="px-1 text-zinc-400">…</span>
+            ) : (
+              <button
+                key={n}
+                onClick={() => setPage(n)}
+                disabled={isFetching}
+                className={cn(
+                  'min-w-[2rem] px-2 py-1 text-sm rounded border',
+                  n === page ? 'bg-zinc-900 text-white border-zinc-900' : 'hover:bg-zinc-50',
+                )}
+              >
+                {n}
+              </button>
+            ),
+          )}
+          <button
+            onClick={() => setPage(page + 1)}
+            disabled={page >= totalPages || isFetching}
+            className="px-2 py-1 text-sm rounded border disabled:opacity-40"
+            aria-label="Next page"
+          >
+            ›
+          </button>
+          <span className="ml-2 text-xs text-zinc-500">
+            {totalConversations.toLocaleString()} conversations
+          </span>
+        </div>
+      )}
     </div>
   )
 }
