@@ -51,17 +51,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Post-confirm lock — same rule as the group-answer route.
-    const { isClientEditable } = await import('@/lib/tax/review-status')
-    const { data: sub } = await supabaseAdmin
-      .from('tax_return_submissions')
-      .select('review_status')
-      .eq('account_id', accountId)
-      .eq('tax_year', taxYear)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    const rs = sub?.review_status ?? null
-    if (rs !== null && !isClientEditable(rs as never)) {
+    // ONE resolver for which row is the client's file (see resolve-submission.ts):
+    // the newest with real data. The old "newest of ANY status" let an unfilled
+    // pending/opened form outrank the real submission and unlock it.
+    const { resolveEditability } = await import('@/lib/tax/resolve-submission')
+    const { editable: canEdit } = await resolveEditability(supabaseAdmin, accountId, taxYear)
+    if (!canEdit) {
       return NextResponse.json({ error: 'Your submission is locked (under review or already confirmed) — ask us to reopen it before changing answers.' }, { status: 409 })
     }
 

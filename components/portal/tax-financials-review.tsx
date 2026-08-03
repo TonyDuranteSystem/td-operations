@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { groupKeyRoot } from '@/lib/tax/question-groups'
 import { resolveInstitution } from '@/lib/tax/bank-identity'
+import { suggestedPhrase, gateSixText } from '@/lib/tax/disclosure-text'
 import ValidationBreakdownPanel from './validation-breakdown'
 
 /** Prominent processing card (Antonio, 2026-07-03: "hourglass or a timer and
@@ -48,7 +49,11 @@ interface View {
   coverage: { questions: CoverageQuestion[]; unanswered: number; incomplete: number }
   completeness: CompletenessSummary
   draft: {
-    pnl: { totalIncome: number; totalCogs: number; grossProfit: number; totalExpenses: number; netIncome: number; totalDistributions: number; totalContributions: number; uncategorizedCount: number; uncategorizedTotal: number }
+    // `folded*` (2026-08-03): what the CLIENT-side by-sign policy pulled INTO
+    // the totals without the client ever deciding it. `uncategorizedCount` is
+    // forced to 0 under that policy, so these are the only fields that can tell
+    // the truth on the portal — the screen used to have no way to know.
+    pnl: { totalIncome: number; totalCogs: number; grossProfit: number; totalExpenses: number; netIncome: number; totalDistributions: number; totalContributions: number; uncategorizedCount: number; uncategorizedTotal: number; foldedUncategorizedCount: number; foldedUncategorizedIncome: number; foldedUncategorizedExpense: number }
     members: Member[]
     banks?: Array<{ bank_key: string; currency: string; derived_beginning: number | null; reported_ending: number | null; net_movement: number }>
     bank_balances?: {
@@ -113,6 +118,13 @@ interface View {
   country_cards?: CountryCardView[]
   residence_country?: string | null
   residence_on_file?: boolean
+  /** Can the client change anything right now? (2026-08-03.) False while the
+   *  submission is with our team or already confirmed — every write route
+   *  refuses with 409. Sent so the page can SAY so and disable the controls
+   *  instead of letting the client tap into a wall. Absent (undefined) on the
+   *  staff workspace payload, which is never locked — treated as editable. */
+  editable?: boolean
+  reviewStatus?: string | null
 }
 
 interface CountryCardView {
@@ -210,6 +222,7 @@ const activeAnswerOf = (g: QuestionGroup): string | null => {
 }
 
 const fmt = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
 const fmtDay = (iso: string, it: boolean) =>
   new Date(`${iso}T00:00:00Z`).toLocaleDateString(it ? 'it-IT' : 'en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 
@@ -229,6 +242,17 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [view, setView] = useState<View | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // WHERE the last failure happened (2026-08-03). The page-level `error` strip
+  // renders once near the top; a client answering a question card at the bottom
+  // of a 2,500-line page never sees it — Bence Koncz reported "I tried to
+  // choose the good option, but nothing happened" while the server was in fact
+  // refusing every tap. Failures are now ALSO shown on the card that was
+  // tapped, keyed by its group key ('bulk' for the multi-select bar).
+  // Keyed by the EXACT group keys that were in the failed request — not by a
+  // 'bulk' sentinel plus "is this card ticked" (bug-hunter). With the sentinel,
+  // a client who unticked the failed cards and ticked three different ones saw
+  // the red refusal jump onto cards that were never part of the failed call.
+  const [cardError, setCardError] = useState<{ keys: string[]; message: string } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [attestChecked, setAttestChecked] = useState(false)
   const [attested, setAttested] = useState(false)
@@ -277,9 +301,19 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [catLoading, setCatLoading] = useState<string | null>(null)
   const [catError, setCatError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
+  /**
+   * `background: true` = the 20-second self-refresh that runs while statements
+   * are being processed. It must NOT touch the on-screen messages (2026-08-03).
+   * It used to clear them, so a refusal the client had just been shown vanished
+   * within 20 seconds and the button was back to "doing nothing" — the exact
+   * symptom the card-level message was added to cure, reintroduced by timing.
+   * A refusal stays TRUE after a background refresh: the save still failed.
+   * Every client action clears the messages on its own way in, so they never
+   * pile up.
+   */
+  const load = useCallback(async (background = false) => {
     setLoading(true)
-    setError(null)
+    if (!background) setError(null)
     try {
       const res = await fetch(`${API}?account_id=${accountId}&tax_year=${taxYear}`)
       if (!res.ok) {
@@ -288,6 +322,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       }
       const v: View = await res.json()
       setView(v)
+      // A reload the CLIENT caused means the screen now reflects the server, so
+      // an earlier card-level refusal is stale and must stop shouting. A
+      // BACKGROUND reload means nothing of the sort — see the note on `load`.
+      if (!background) setCardError(null)
       setAttested(v.attested) // server truth — a data change resets it
       // Balance editor mirrors the server rows; user edits survive reloads only
       // until saved (save → reload → server truth).
@@ -322,12 +360,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       ? Math.min(300_000, Math.max(30_000, (view.aiNextRetryAt ?? Date.now()) - Date.now()))
       : null
     if (!active && retryWait === null) return
-    const t = setInterval(() => { void load() }, active ? 20000 : retryWait!)
+    // background: true — this refresh must never wipe a message off the screen.
+    const t = setInterval(() => { void load(true) }, active ? 20000 : retryWait!)
     return () => clearInterval(t)
   }, [view, load])
 
   const answer = async (g: QuestionGroup, value: string) => {
     setBusy(g.group_key)
+    setCardError(null)
     try {
       const res = await fetch(`${API}/answer`, {
         method: 'POST',
@@ -340,7 +380,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       }
       await load()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const msg = e instanceof Error ? e.message : String(e)
+      // Both places: the top strip (unchanged) AND the card they tapped, so a
+      // refusal is visible without scrolling to the top of the page.
+      setError(msg)
+      setCardError({ keys: [g.group_key], message: msg })
     } finally {
       setBusy(null)
     }
@@ -352,6 +396,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [bulkSel, setBulkSel] = useState<Map<string, QuestionGroup>>(new Map())
   const [bulkConfirm, setBulkConfirm] = useState<string | null>(null) // pending answer value
   const [bulkUndo, setBulkUndo] = useState<{ ids: string[]; count: number } | null>(null)
+  // A bulk failure has to be readable WHERE IT HAPPENED (2026-08-03). The
+  // confirm dialog is a full-screen overlay, so the page-level strip and the
+  // card-level message both render underneath it: the client saw a dialog that
+  // simply refused to do anything, and pressed Confirm again. Same pattern the
+  // period/country dialogs already use for their own failures.
+  const [bulkError, setBulkError] = useState<string | null>(null)
   const bulkDir = bulkSel.size > 0 ? Array.from(bulkSel.values())[0].direction : null
   const toggleBulk = (g: QuestionGroup) => {
     setBulkSel(prev => {
@@ -366,6 +416,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     const groups = Array.from(bulkSel.values())
     const ids = groups.flatMap(g => g.transaction_ids)
     setBusy('bulk')
+    // Clear on entry like answer() and setBucket() do — without this a stale
+    // red refusal survived a LATER SUCCESS (bug-hunter). A false "that didn't
+    // work" is the same disease this card-level error was added to cure.
+    setCardError(null)
+    setBulkError(null)
     try {
       const res = await fetch(`${API}/answer`, {
         method: 'POST',
@@ -385,7 +440,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       setBulkConfirm(null)
       await load()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const msg = e instanceof Error ? e.message : String(e)
+      setError(msg)
+      // IN the dialog (it covers everything else), and pinned to the selected
+      // cards for when they close it. The dialog deliberately STAYS OPEN so the
+      // client can read what happened and retry or cancel from the same place.
+      setBulkError(msg)
+      setCardError({ keys: groups.map(g => g.group_key), message: msg })
     } finally {
       setBusy(null)
     }
@@ -497,6 +558,23 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     }
   }
 
+  // Is the file frozen right now? (2026-08-03.) The server refuses every write
+  // while the submission is with our team or already confirmed. Until now the
+  // page didn't know, so it rendered live-looking controls that always failed.
+  // `editable` is absent on the staff workspace payload (never locked) — only
+  // an explicit false means locked.
+  const locked = view?.editable === false
+  // Every mutating control on this screen is gated on this, not on `busy`
+  // alone (2026-08-03, bug-hunter blocker). The first cut disabled only three
+  // controls while the banner promised "you can't change anything here" — so
+  // Confirm, Upload and Add-category stayed live under a message saying they
+  // weren't. `locked` can only ever be true in CLIENT mode (the staff workspace
+  // payload never carries `editable`, verified), so applying it broadly cannot
+  // lock staff out of their own tool. Deliberately NOT applied to read-only
+  // affordances — reloading, expanding a category, opening a section — because
+  // the banner also promises the client can still READ everything.
+  const busyOrLocked = busy !== null || locked
+
   // One merchant-group question card (chips, bucket select, bulk checkbox).
   // COMPONENT-scope since 2026-07-06 so the country/period cards can render it
   // INLINE ("Review one-by-one" opens in the same card — Antonio).
@@ -520,7 +598,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               <input
                 type="checkbox"
                 checked={checked}
-                disabled={busy !== null || dirBlocked}
+                disabled={busyOrLocked || dirBlocked}
                 onChange={() => toggleBulk(g)}
                 title={dirBlocked ? (it ? 'Prima completa la selezione nell’altra sezione' : 'Finish your selection in the other section first') : (it ? 'Seleziona per rispondere in blocco' : 'Select to answer together')}
                 className="h-4 w-4 accent-blue-600 disabled:opacity-40"
@@ -534,7 +612,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${lean.cls}`}>{lean.txt}</span>
           <select
             value={g.ai_bucket ?? ''}
-            disabled={busy !== null}
+            disabled={busyOrLocked}
             onChange={e => void setBucket(g, e.target.value)}
             className="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600 disabled:opacity-50"
           >
@@ -555,7 +633,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             return (
               <button
                 key={a.value}
-                disabled={busy !== null || selected}
+                disabled={busyOrLocked || selected}
                 onClick={() => { if (actsOnSelection) setBulkConfirm(a.value); else void answer(g, a.value) }}
                 aria-pressed={selected}
                 className={selected
@@ -567,6 +645,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             )
           })}
         </div>
+        {/* The refusal, ON the card that was tapped (2026-08-03). Without this
+            the only feedback was a strip at the very top of the page, so a
+            client working through the queue saw the button do nothing at all. */}
+        {cardError?.keys.includes(g.group_key) && (
+          <p role="alert" className="mt-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-800">
+            {cardError.message}
+          </p>
+        )}
       </div>
     )
   }
@@ -704,6 +790,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
 
   const setBucket = async (g: QuestionGroup, bucket: string) => {
     setBusy(g.group_key)
+    setCardError(null)
     try {
       const res = await fetch(`${API}/set-bucket`, {
         method: 'POST',
@@ -716,7 +803,9 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       }
       await load()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const msg = e instanceof Error ? e.message : String(e)
+      setError(msg)
+      setCardError({ keys: [g.group_key], message: msg })
     } finally {
       setBusy(null)
     }
@@ -991,7 +1080,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               <span className="flex gap-2">
                 <button
                   type="button"
-                  disabled={busy !== null}
+                  disabled={busyOrLocked}
                   onClick={() => void resolveFormat(fp.mapping_id, fp.path, 'confirm')}
                   className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
                 >
@@ -999,7 +1088,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 </button>
                 <button
                   type="button"
-                  disabled={busy !== null}
+                  disabled={busyOrLocked}
                   onClick={() => void resolveFormat(fp.mapping_id, fp.path, 'reject')}
                   className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-red-400 hover:text-red-600 disabled:opacity-50"
                 >
@@ -1042,7 +1131,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   <span className="text-zinc-500 text-xs ml-2">{f.count} {it ? 'transazioni' : 'transactions'} · {f.from} → {f.to}</span>
                 </div>
                 <button
-                  disabled={busy !== null}
+                  disabled={busyOrLocked}
                   onClick={() => void deleteFile(f)}
                   className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
                 >
@@ -1070,7 +1159,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   <button
                     key={a.account_ref}
                     type="button"
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     onClick={() => { setUploadBank(a.bank); setUploadAccount(a.acct); setUploadNoAcct(false) }}
                     className="rounded-full border border-zinc-300 bg-white px-2.5 py-0.5 text-xs text-zinc-700 hover:border-zinc-900 disabled:opacity-50"
                   >
@@ -1085,7 +1174,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               value={uploadBank}
               onChange={e => setUploadBank(e.target.value)}
               placeholder={it ? 'Nome della banca (es. Mercury)' : 'Bank name (e.g. Mercury)'}
-              disabled={busy !== null}
+              disabled={busyOrLocked}
               className="rounded-md border border-zinc-300 px-2 py-1 text-xs disabled:opacity-50"
             />
             {uploadNeedsAccount && (
@@ -1093,14 +1182,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 value={uploadAccount}
                 onChange={e => setUploadAccount(e.target.value)}
                 placeholder={it ? 'Numero di conto (o ultime 4 cifre)' : 'Account number (or last 4 digits)'}
-                disabled={busy !== null}
+                disabled={busyOrLocked}
                 className="rounded-md border border-red-400 px-2 py-1 text-xs disabled:opacity-50"
               />
             )}
             <select
               value={uploadKind}
               onChange={e => setUploadKind(e.target.value)}
-              disabled={busy !== null}
+              disabled={busyOrLocked}
               className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-600 disabled:opacity-50"
             >
               <option value="checking">{it ? 'Conto corrente' : 'Checking'}</option>
@@ -1113,7 +1202,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 type="file"
                 accept=".csv,.pdf,.zip"
                 multiple
-                disabled={busy !== null}
+                disabled={busyOrLocked}
                 className="hidden"
                 onChange={e => {
                   const files = Array.from(e.target.files ?? [])
@@ -1136,7 +1225,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 type="checkbox"
                 checked={uploadNoAcct}
                 onChange={e => setUploadNoAcct(e.target.checked)}
-                disabled={busy !== null}
+                disabled={busyOrLocked}
               />
               {it
                 ? 'È un servizio multivaluta o crypto (senza numero di conto unico)'
@@ -1196,7 +1285,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           </div>
           <button
             type="button"
-            disabled={busy !== null || processing || view.transactionCount === 0}
+            disabled={busyOrLocked || processing || view.transactionCount === 0}
             onClick={() => void generate()}
             className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
           >
@@ -1234,7 +1323,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               )}
               <button
                 type="button"
-                disabled={busy !== null}
+                disabled={busyOrLocked}
                 onClick={() => setRerunConfirm(true)}
                 className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:border-blue-400 hover:text-blue-700 disabled:opacity-50"
               >
@@ -1266,6 +1355,24 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         <ValidationBreakdownPanel validation={view.validation} api={API} />
       )}
 
+      {/* Frozen file (2026-08-03) — say it BEFORE they tap, not after. Every
+          control below is disabled to match, so nobody spends an afternoon
+          pressing buttons that the server was always going to refuse. */}
+      {locked && (
+        <section role="status" className="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4">
+          <p className="text-sm font-semibold text-amber-900">
+            {it
+              ? 'Il tuo questionario è al momento con il nostro team — per ora non puoi modificare nulla qui.'
+              : 'Your file is with our team right now — you can\'t change anything here for the moment.'}
+          </p>
+          <p className="mt-1 text-xs text-amber-800">
+            {it
+              ? 'Puoi comunque leggere tutti i numeri qui sotto. Scrivici in chat e lo riapriamo subito.'
+              : 'You can still read every number below. Message us in the chat and we\'ll reopen it right away.'}
+          </p>
+        </section>
+      )}
+
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       )}
@@ -1280,7 +1387,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           </div>
           <button
             type="button"
-            disabled={busy !== null || view.ingestPending > 0}
+            disabled={busyOrLocked || view.ingestPending > 0}
             onClick={() => void generate()}
             className="shrink-0 inline-flex items-center rounded-md bg-amber-600 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
           >
@@ -1348,6 +1455,8 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           <button
             type="button"
             onClick={() => void load()}
+            /* Reload only — writes nothing, so it stays available while the file
+               is locked (the banner promises the client can still read). */
             disabled={busy !== null}
             className="shrink-0 inline-flex items-center rounded-md border border-amber-400 bg-white px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
           >
@@ -1443,8 +1552,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 <li key={g.id} className="flex items-start gap-3">
                   <span className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${gateColor(g)}`}>{gateIcon(g)}</span>
                   <div>
-                    <div className="text-sm font-medium text-zinc-800">{g.title}</div>
-                    <div className="text-xs text-zinc-500">{g.detail}</div>
+                    <div className="text-sm font-medium text-zinc-800">
+                      {g.id === 6 ? (it ? 'Ogni transazione decisa da te' : 'Every transaction categorized') : g.title}
+                    </div>
+                    {/* Gate 6 is rendered from the client's own numbers so it
+                        speaks their language; every other gate still shows the
+                        module's (English) detail — pre-existing, flagged. */}
+                    <div className="text-xs text-zinc-500">
+                      {g.id === 6 ? gateSixText(view.draft.pnl, it) : g.detail}
+                    </div>
                     {/* Gate 2 staff control (2026-07-06): a first-year company can
                         never produce a prior return — answer it here instead of
                         the gate nagging forever. Hidden over extracted returns
@@ -1453,7 +1569,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       <div className="mt-1.5 flex flex-wrap gap-2">
                         <button
                           type="button"
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => void setPriorReturn('first_year')}
                           className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:border-blue-400 hover:text-blue-700 disabled:opacity-50"
                         >
@@ -1461,7 +1577,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                         </button>
                         <button
                           type="button"
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => void setPriorReturn('never_filed')}
                           className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:border-blue-400 hover:text-blue-700 disabled:opacity-50"
                         >
@@ -1472,7 +1588,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     {isStaff && g.id === 2 && (view.prior_return?.case === 'first_year' || view.prior_return?.case === 'never_filed') && (
                       <button
                         type="button"
-                        disabled={busy !== null}
+                        disabled={busyOrLocked}
                         onClick={() => void setPriorReturn('clear')}
                         className="mt-1.5 rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-xs text-zinc-500 hover:border-red-300 hover:text-red-600 disabled:opacity-50"
                       >
@@ -1563,6 +1679,52 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   <div className="flex justify-between text-red-700">
                     <dt className="font-medium">⚠ Unclassified — excluded ({view.draft.pnl.uncategorizedCount})</dt>
                     <dd className="font-medium">{fmt(view.draft.pnl.uncategorizedTotal)}</dd>
+                  </div>
+                )}
+                {/* How much of the figures above is still OURS, not theirs
+                    (2026-08-03). The client draft folds every undecided row
+                    into the expense lines under the category WE suggested, so
+                    a line like "Groceries & Retail −86,712" silently mixed the
+                    client's own answers with our guesses — and the panel above
+                    used to tick "all categorized" on top of it. This names the
+                    provisional amount without moving a single number, so the
+                    totals still add up and the client can see what is at stake
+                    if they confirm now. */}
+                {view.draft.pnl.foldedUncategorizedCount > 0 && (
+                  <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2">
+                    <div className="flex justify-between text-amber-900">
+                      <dt className="font-semibold">
+                        {it
+                          ? `Di cui ancora un nostro suggerimento (${view.draft.pnl.foldedUncategorizedCount})`
+                          : `Of which still our suggestion (${view.draft.pnl.foldedUncategorizedCount})`}
+                      </dt>
+                    </div>
+                    {/* BOTH SIDES (bug-hunter blocker, 2026-08-03). The first cut
+                        printed only foldedUncategorizedExpense with a hardcoded
+                        minus and called them "expenses" — so a client whose
+                        undecided rows are INFLOWS (unidentified incoming wires /
+                        payout batches, the commonest shape here) was shown
+                        "(12) −0.00" while gate 6 on the same screen said
+                        +120,000. Income and expense are now separate lines, each
+                        rendered only when it exists, so the disclosure can never
+                        contradict the gate again. */}
+                    {view.draft.pnl.foldedUncategorizedExpense !== 0 && (
+                      <div className="flex justify-between text-amber-900">
+                        <dt>{it ? 'Uscite' : 'Money out'}</dt>
+                        <dd className="font-semibold">−{fmt(view.draft.pnl.foldedUncategorizedExpense)}</dd>
+                      </div>
+                    )}
+                    {view.draft.pnl.foldedUncategorizedIncome !== 0 && (
+                      <div className="flex justify-between text-amber-900">
+                        <dt>{it ? 'Entrate' : 'Money in'}</dt>
+                        <dd className="font-semibold">{fmt(view.draft.pnl.foldedUncategorizedIncome)}</dd>
+                      </div>
+                    )}
+                    <p className="mt-1 text-[11px] leading-snug text-amber-800">
+                      {it
+                        ? 'Questi movimenti sono già inclusi nei totali qui sopra, ma li abbiamo classificati noi al posto tuo. Rispondi alle domande più in basso per renderli tuoi.'
+                        : 'These movements are already inside the totals above, but we classified them for you. Answer the questions further down to make them yours.'}
+                    </p>
                   </div>
                 )}
                 {view.draft.pnl.totalDistributions !== 0 && <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Prelievi dei soci' : 'Owner distributions'}</dt><dd className="font-medium">−{fmt(view.draft.pnl.totalDistributions)}</dd></div>}
@@ -1672,7 +1834,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               <div className="mt-3 flex items-center gap-3">
                 <button
                   onClick={() => void saveBalances()}
-                  disabled={busy !== null || !balDirty}
+                  disabled={busyOrLocked || !balDirty}
                   className="rounded-md bg-zinc-900 px-4 py-1.5 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-50"
                 >
                   {busy === 'balances' ? (it ? 'Salvataggio…' : 'Saving…') : (it ? 'Salva saldi' : 'Save balances')}
@@ -1768,21 +1930,21 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     </div>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       <button
-                        disabled={busy !== null}
+                        disabled={busyOrLocked}
                         onClick={() => setCountryConfirm({ card: c, choice: 'business' })}
                         className="rounded-full border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
                       >
                         {it ? 'Tutto aziendale' : 'All business'}
                       </button>
                       <button
-                        disabled={busy !== null}
+                        disabled={busyOrLocked}
                         onClick={() => setCountryConfirm({ card: c, choice: 'personal' })}
                         className="rounded-full border border-amber-500 bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
                       >
                         {it ? 'Tutto personale' : 'All personal'}
                       </button>
                       <button
-                        disabled={busy !== null}
+                        disabled={busyOrLocked}
                         onClick={() => setInlineReview(k => k === `country-${c.loc_code}` ? null : `country-${c.loc_code}`)}
                         className="rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                       >
@@ -1811,21 +1973,21 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       </div>
                       <div className="mt-3 flex flex-wrap items-center gap-2">
                         <button
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => setPeriodConfirm({ period: p, choice: 'business' })}
                           className="rounded-full border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
                         >
                           {it ? 'Tutto aziendale' : 'All business'}
                         </button>
                         <button
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => setPeriodConfirm({ period: p, choice: 'personal' })}
                           className="rounded-full border border-amber-500 bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
                         >
                           {it ? 'Tutto personale' : 'All personal'}
                         </button>
                         <button
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => setInlineReview(k => k === key ? null : key)}
                           className="rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                         >
@@ -1863,7 +2025,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                           "message us" hint instead of a dead button. */}
                       {(isStaff || b.actor_role === 'client') ? (
                         <button
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => void undoPeriodAnswer(b.id)}
                           className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 font-medium text-zinc-600 hover:border-red-400 hover:text-red-600 disabled:opacity-50"
                         >
@@ -1902,7 +2064,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   </button>
                   <button
                     type="button"
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     onClick={() => { setRerunConfirm(false); void generate() }}
                     className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
                   >
@@ -1942,14 +2104,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 <div className="mt-4 flex justify-end gap-2">
                   <button
                     onClick={() => setCountryConfirm(null)}
+                    /* Never gated on the lock — see the bulk dialog's Cancel. */
                     disabled={busy !== null}
-                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900"
+                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                   >
                     {it ? 'Annulla' : 'Cancel'}
                   </button>
                   <button
                     onClick={() => void confirmCountryAnswer()}
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     className={countryConfirm.choice === 'business'
                       ? 'rounded-full border border-emerald-600 bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50'
                       : 'rounded-full border border-amber-500 bg-amber-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50'}
@@ -2000,14 +2163,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 <div className="mt-4 flex justify-end gap-2">
                   <button
                     onClick={() => setPeriodConfirm(null)}
+                    /* Never gated on the lock — see the bulk dialog's Cancel. */
                     disabled={busy !== null}
-                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900"
+                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                   >
                     {it ? 'Annulla' : 'Cancel'}
                   </button>
                   <button
                     onClick={() => void confirmPeriodAnswer()}
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     className={periodConfirm.choice === 'business'
                       ? 'rounded-full border border-emerald-600 bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50'
                       : 'rounded-full border border-amber-500 bg-amber-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50'}
@@ -2033,7 +2197,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 {ANSWERS.filter(a => bulkDir && a.directions.includes(bulkDir)).map(a => (
                   <button
                     key={a.value}
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     onClick={() => setBulkConfirm(a.value)}
                     className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-blue-600 hover:text-blue-700 disabled:opacity-50"
                   >
@@ -2042,7 +2206,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 ))}
                 <button
                   onClick={() => setBulkSel(new Map())}
-                  disabled={busy !== null}
+                  disabled={busyOrLocked}
                   className="ml-auto rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-500 hover:border-zinc-900 hover:text-zinc-900"
                 >
                   {it ? 'Annulla selezione' : 'Clear selection'} ✕
@@ -2083,17 +2247,26 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     : 'This books this year only — a bulk answer is not remembered as a permanent rule. Answer groups one by one when you want the system to remember them for future years.'}
                 </p>
                 <p className="mt-2 text-xs text-zinc-500">{it ? 'Potrai annullare subito dopo.' : 'You can undo right after.'}</p>
+                {bulkError && (
+                  <p role="alert" className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                    ⚠ {bulkError}
+                  </p>
+                )}
                 <div className="mt-4 flex justify-end gap-2">
                   <button
-                    onClick={() => setBulkConfirm(null)}
+                    onClick={() => { setBulkConfirm(null); setBulkError(null) }}
+                    /* NEVER gated on the lock: closing a dialog changes nothing,
+                       and if the file locks while this is open a disabled Cancel
+                       traps the client behind a full-screen overlay with no way
+                       out but a page reload. */
                     disabled={busy !== null}
-                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900"
+                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                   >
                     {it ? 'Annulla' : 'Cancel'}
                   </button>
                   <button
                     onClick={() => void confirmBulkAnswer()}
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     className="rounded-full border border-blue-600 bg-blue-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
                   >
                     {busy !== null ? (it ? 'Registrazione…' : 'Booking…') : (it ? 'Conferma' : 'Confirm')}
@@ -2112,14 +2285,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 </span>
                 <button
                   onClick={() => void undoBulkAnswer()}
-                  disabled={busy !== null}
+                  disabled={busyOrLocked}
                   className="rounded-full border border-emerald-600 bg-white px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
                 >
                   {busy === 'bulk-undo' ? (it ? 'Annullamento…' : 'Undoing…') : (it ? 'Annulla' : 'Undo')}
                 </button>
                 <button
                   onClick={() => setBulkUndo(null)}
-                  disabled={busy !== null}
+                  disabled={busyOrLocked}
                   className="ml-auto text-xs text-emerald-700 hover:text-emerald-900"
                 >
                   {it ? 'Chiudi' : 'Dismiss'} ✕
@@ -2327,15 +2500,20 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               {!isStaff && (
               <div className="mt-1 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3">
                 <span className="text-xs text-zinc-500">{it ? 'Manca una categoria?' : 'Missing a category?'}</span>
+                {/* The INPUT must be gated too, not just the button beside it
+                    (browser QA 2026-08-03): Enter submits, so on a locked file
+                    the button greyed out while typing-then-Enter still created a
+                    category — under a banner saying nothing could be changed. */}
                 <input
                   value={newBucket}
+                  disabled={busyOrLocked}
                   onChange={e => setNewBucket(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') void addBucket() }}
+                  onKeyDown={e => { if (e.key === 'Enter' && !busyOrLocked) void addBucket() }}
                   placeholder={it ? 'Aggiungi categoria…' : 'Add a category…'}
-                  className="rounded-md border border-zinc-300 px-2 py-1 text-xs"
+                  className="rounded-md border border-zinc-300 px-2 py-1 text-xs disabled:opacity-50 disabled:bg-zinc-100"
                 />
                 <button
-                  disabled={busy !== null || newBucket.trim().length < 2}
+                  disabled={busyOrLocked || newBucket.trim().length < 2}
                   onClick={() => void addBucket()}
                   className="rounded-md border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 disabled:opacity-50"
                 >
@@ -2370,14 +2548,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     ) : (
                       <div className="mt-2 flex flex-wrap gap-2">
                         <button
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => void answerCoverage(q, 'no_activity')}
                           className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                         >
                           {it ? 'No — nessuna attività in quei mesi' : 'No — no activity in those months'}
                         </button>
                         <button
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => void answerCoverage(q, 'had_activity')}
                           className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                         >
@@ -2468,26 +2646,51 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     </li>
                   </ul>
                 </div>
+                {/* Say the number OUT LOUD before they sign (2026-08-03,
+                    Antonio: "we just suggest but they know the truth"). They
+                    may confirm with items undecided — but never without being
+                    told how many of these figures were our guess. */}
+                {view.draft.pnl.foldedUncategorizedCount > 0 && (
+                  <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
+                    {it
+                      ? `Attenzione: ${suggestedPhrase(view.draft.pnl.foldedUncategorizedCount, true)} ancora classificate da noi, non da te. Confermando accetti anche quelle.`
+                      : `Heads up: ${suggestedPhrase(view.draft.pnl.foldedUncategorizedCount, false)} still classified by us, not by you. Confirming accepts those too.`}
+                  </p>
+                )}
                 <label className="flex items-start gap-2 text-sm text-zinc-700">
                   <input type="checkbox" checked={attestChecked} onChange={e => setAttestChecked(e.target.checked)} className="mt-0.5" />
                   <span>
                     {it
                       ? 'Confermo di aver controllato il Conto Economico e lo Stato Patrimoniale e accetto questi numeri così come sono, sulla base delle informazioni che ho fornito. Capisco che eventuali conti o redditi non comunicati sono una mia responsabilità.'
                       : 'I confirm I have checked the Profit & Loss and Balance Sheet and I accept these numbers as they are, based on the information I have provided. I understand that any accounts or income I have not reported are my responsibility.'}
+                    {view.draft.pnl.foldedUncategorizedCount > 0 && (it
+                      ? (view.draft.pnl.foldedUncategorizedCount === 1
+                        ? ' Accetto inoltre la classificazione fatta dal vostro sistema che non ho verificato.'
+                        : ` Accetto inoltre le ${view.draft.pnl.foldedUncategorizedCount} classificazioni fatte dal vostro sistema che non ho verificato.`)
+                      : (view.draft.pnl.foldedUncategorizedCount === 1
+                        ? ' I also accept the 1 classification made by your system that I have not reviewed.'
+                        : ` I also accept the ${view.draft.pnl.foldedUncategorizedCount} classifications made by your system that I have not reviewed.`))}
                   </span>
                 </label>
                 <button
-                  disabled={!attestChecked || !view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || view.ingestPending > 0 || busy !== null}
+                  disabled={!attestChecked || !view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || view.ingestPending > 0 || busyOrLocked}
                   onClick={() => void attest()}
                   className="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-40"
                 >
                   {it ? 'Accetto e confermo' : 'Accept and confirm'}
                 </button>
+                {/* Name the RIGHT blocker (2026-08-03). No gate blocks confirm
+                    any more, so what lands here is the year-coverage step — but
+                    the old wording said "the remaining questions above", which
+                    points at the categorization queue and sent clients back to
+                    a list that was never what was stopping them. */}
                 {(!view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0) && (
                   <p className="text-xs text-amber-700">
                     {view.coverage.incomplete > 0
                       ? (it ? 'Hai indicato che un export è incompleto — sostituisci il file, poi potrai confermare.' : 'You marked an export as incomplete — replace the file, then you can confirm.')
-                      : (it ? 'Rispondi prima alle domande rimaste qui sopra — poi potrai confermare.' : 'Answer the remaining questions above first — then you can confirm.')}
+                      : view.coverage.unanswered > 0
+                        ? (it ? 'Manca solo la sezione “Copertura dell’anno” qui sopra (i mesi non coperti dagli estratti conto) — rispondi lì e potrai confermare.' : 'Only the “Year coverage” section above is missing (the months your statements don\'t cover) — answer there and you can confirm.')
+                        : (it ? 'Rispondi prima alle domande rimaste qui sopra — poi potrai confermare.' : 'Answer the remaining questions above first — then you can confirm.')}
                   </p>
                 )}
               </div>

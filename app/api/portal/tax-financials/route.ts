@@ -121,15 +121,27 @@ export async function GET(request: NextRequest) {
 
     // Current attestation state — reset by any data mutation (QA finding) —
     // and the coverage answers (financials_meta, Slice 9). (`db` hoisted above.)
-    const { data: sub } = await db
-      .from('tax_return_submissions')
-      .select('confirmation_accepted, financials_meta')
-      .eq('account_id', accountId)
-      .eq('tax_year', taxYear)
-      .eq('status', 'completed')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    // Was `.eq('status','completed')` — which MISSED every `reviewed` row, so
+    // the page read back no attestation and no coverage answers for 47 of 79
+    // account-years (2026-08-03). Now the one resolver, same row the write
+    // routes use.
+    const { resolveClientSubmission } = await import('@/lib/tax/resolve-submission')
+    const sub = await resolveClientSubmission<{ confirmation_accepted: boolean | null; financials_meta: { coverage_answers?: unknown } | null }>(
+      db, accountId, taxYear, 'confirmation_accepted, financials_meta',
+    )
+
+    // Is the client allowed to change anything right now? (2026-08-03.)
+    // The page used to receive NO lock state at all, so it drew every control
+    // as live and the client only discovered the refusal by tapping — and the
+    // refusal then rendered in one strip at the top of a very long page, which
+    // Bence Koncz (Imperium) never saw at all: from the question cards at the
+    // bottom the button simply did nothing. Sending the state lets the UI say
+    // so up front and disable the controls.
+    //
+    // Same resolver as the `sub` read above and as every write route, so the
+    // banner, the payload and the actual 409 all describe ONE row.
+    const { resolveEditability } = await import('@/lib/tax/resolve-submission')
+    const { editable, reviewStatus: lockStatus } = await resolveEditability(supabaseAdmin, accountId, taxYear)
 
     // Coverage questions (§3.4): the months an export doesn't span — gate 1
     // can't see what a file left out; the client's answer closes the hole.
@@ -300,6 +312,8 @@ export async function GET(request: NextRequest) {
       ingestPending,
       ingestFailed,
       attested: sub?.confirmation_accepted === true,
+      editable,
+      reviewStatus: lockStatus,
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
       accounts: Array.from(byAccount.values()).sort((a, b) => b.count - a.count),
       aiState,

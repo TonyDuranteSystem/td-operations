@@ -41,17 +41,19 @@ export async function POST(request: NextRequest) {
     const { isClientEditable } = await import('@/lib/tax/review-status')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = supabaseAdmin as any // financials_meta not yet in database.types.ts
-    const { data: sub } = await db
-      .from('tax_return_submissions')
-      .select('id, review_status, financials_meta')
-      .eq('account_id', accountId)
-      .eq('tax_year', taxYear)
-      .eq('status', 'completed')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    // ONE row for both the lock and the write (2026-08-03). This route used to
+    // demand `status='completed'` and 404 "No submission found for this year"
+    // otherwise — which is what EVERY account in the review loop hit, because a
+    // staff apply-changes turns the row into `reviewed`. The client's coverage
+    // answers were therefore never saved and Confirm could never unlock: Bence
+    // Koncz (Imperium) had two questions that looked unanswered for that reason.
+    const { resolveClientSubmission } = await import('@/lib/tax/resolve-submission')
+    const sub = await resolveClientSubmission<{ id: string; review_status: string | null; financials_meta: Record<string, unknown> | null }>(
+      db, accountId, taxYear, 'id, review_status, financials_meta',
+    )
     if (!sub) return NextResponse.json({ error: 'No submission found for this year.' }, { status: 404 })
-    if (sub.review_status !== null && !isClientEditable(sub.review_status)) {
+    const lockStatus = sub.review_status
+    if (lockStatus !== null && !isClientEditable(lockStatus as never)) {
       return NextResponse.json({ error: 'Your submission is locked (under review or already confirmed) — ask us to reopen it first.' }, { status: 409 })
     }
 

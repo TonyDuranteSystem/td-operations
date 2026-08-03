@@ -116,3 +116,45 @@ describe('buildFinancialsWorkbook — renders from the draft', () => {
     expect(await checkRowValue(buffer)).toBeCloseTo(0, 2)  // and the sheet TIES (was off by −41861.05)
   })
 })
+
+/**
+ * The downloaded file must be as honest as the screen (2026-08-03).
+ *
+ * The pre-existing "UNCATEGORIZED ... EXCLUDED" warning is gated on
+ * `uncategorizedCount`, which the CLIENT-side by-sign policy forces to zero —
+ * so a client whose P&L was built largely from our guesses downloaded a file
+ * with no warning at all, exactly like the screen ticked "all categorized".
+ * The folded case needs its own line, and it says INCLUDED (not excluded),
+ * because those rows really are inside the totals.
+ */
+describe('financials Excel — provisional (still-our-suggestion) disclosure', () => {
+  it('names folded rows as INCLUDED and classified by us, on the P&L sheet', async () => {
+    const { buffer } = await buildFinancialsWorkbook({
+      companyName: 'Folded Co', taxYear: 2025,
+      draft: draft({
+        pnl: {
+          totalIncome: 10000, totalCogs: 0, grossProfit: 10000, totalExpenses: 3000,
+          netIncome: 7000, totalDistributions: 1000, totalContributions: 0,
+          // The policy hid it from the old field — the whole point of the bug.
+          uncategorizedCount: 0, uncategorizedTotal: 0,
+          foldedUncategorizedCount: 394, foldedUncategorizedIncome: 0, foldedUncategorizedExpense: 151353.19,
+        },
+      }),
+      transactions: [], rates: {},
+    })
+    const pl = await cellsOf(buffer, 'P&L Statement')
+    expect(hasText(pl, /394 transaction\(s\) above are classified BY US/i)).toBe(true)
+    expect(hasText(pl, /INCLUDED in the totals above/i)).toBe(true)
+    expect(hasText(pl, /151353\.19/)).toBe(true)
+    // Must NOT claim they were excluded — that would be the opposite of true.
+    expect(hasText(pl, /EXCLUDED from totals/i)).toBe(false)
+  })
+
+  it('says nothing when the client decided everything', async () => {
+    const { buffer } = await buildFinancialsWorkbook({
+      companyName: 'Clean Co', taxYear: 2025, draft: draft(), transactions: [], rates: {},
+    })
+    const pl = await cellsOf(buffer, 'P&L Statement')
+    expect(hasText(pl, /classified BY US/i)).toBe(false)
+  })
+})

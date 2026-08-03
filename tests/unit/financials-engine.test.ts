@@ -138,14 +138,58 @@ describe("we_filed non-validated statuses keep staff tie-out / mismatch wording"
 })
 
 describe("gate failure modes", () => {
-  it("gate 6 fails HARD on uncategorized; confirm blocked", () => {
+  // Rewritten 2026-08-03. Gate 6 used to be HARD and to read only
+  // `uncategorizedCount` — which the CLIENT draft forces to zero — so on the
+  // portal it could never fail: it printed "All transactions are categorized"
+  // beside a queue of 394 unanswered items whose suggested amounts were already
+  // in the client's P&L. Now it reports the real number and does NOT block
+  // (Antonio, verbatim: "someone should be able to confirm their accounts while
+  // items are still unanswered, we just suggest but they know the truth").
+  it("gate 6 reports uncategorized WITHOUT blocking confirm (folding off — staff workspace)", () => {
     const transactions = [tx({ amount: -100, category: "uncategorized" })]
     const draft = buildFinancialDraft({ taxYear: 2025, transactions, members: MEMBERS.members, priorReturn: null })
     const gates = evaluateGates({ draft, ownership: MEMBERS, priorReturn: null })
     const g6 = gates.find(g => g.id === 6)!
     expect(g6.status).toBe("fail")
-    expect(g6.blocking).toBe(true)
-    expect(canConfirm(gates)).toBe(false)
+    expect(g6.detail).toContain("1 transaction(s)")
+    expect(g6.blocking).toBe(false)
+    expect(canConfirm(gates)).toBe(true)
+  })
+
+  // THE REGRESSION THAT SHIPPED TO CLIENTS: with the by-sign policy on (every
+  // client portal draft) the row is folded into expenses and uncategorizedCount
+  // is forced to 0. Gate 6 must STILL name it — reading uncategorizedCount
+  // alone is what made the screen lie. If someone reverts gate 6 to that field,
+  // this test goes red.
+  it("gate 6 still names undecided rows when the client draft folds them in (by-sign policy)", () => {
+    const transactions = [tx({ amount: -100, category: "uncategorized" })]
+    const draft = buildFinancialDraft({
+      taxYear: 2025, transactions, members: MEMBERS.members, priorReturn: null,
+      defaultUncategorizedBySign: true,
+    })
+    // Precondition: the policy really did hide it from the old field.
+    expect(draft.pnl.uncategorizedCount).toBe(0)
+    expect(draft.pnl.foldedUncategorizedCount).toBe(1)
+    const gates = evaluateGates({ draft, ownership: MEMBERS, priorReturn: null })
+    const g6 = gates.find(g => g.id === 6)!
+    expect(g6.status).toBe("fail")
+    expect(g6.detail).toContain("1 transaction(s)")
+    expect(g6.detail).not.toContain("All transactions are categorized")
+    // ...and confirm is still available — honesty, not a barrier.
+    expect(g6.blocking).toBe(false)
+    expect(canConfirm(gates)).toBe(true)
+  })
+
+  it("gate 6 passes only when NOTHING is pending under either policy", () => {
+    const transactions = [tx({ amount: -100, category: "expense" })]
+    for (const defaultUncategorizedBySign of [false, true]) {
+      const draft = buildFinancialDraft({
+        taxYear: 2025, transactions, members: MEMBERS.members, priorReturn: null,
+        defaultUncategorizedBySign,
+      })
+      const g6 = evaluateGates({ draft, ownership: MEMBERS, priorReturn: null }).find(g => g.id === 6)!
+      expect(g6.status).toBe("pass")
+    }
   })
 
   it("gate 2 fails when prior ending cash does not match derived beginnings (missing January)", () => {
