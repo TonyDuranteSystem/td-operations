@@ -301,9 +301,19 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [catLoading, setCatLoading] = useState<string | null>(null)
   const [catError, setCatError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
+  /**
+   * `background: true` = the 20-second self-refresh that runs while statements
+   * are being processed. It must NOT touch the on-screen messages (2026-08-03).
+   * It used to clear them, so a refusal the client had just been shown vanished
+   * within 20 seconds and the button was back to "doing nothing" — the exact
+   * symptom the card-level message was added to cure, reintroduced by timing.
+   * A refusal stays TRUE after a background refresh: the save still failed.
+   * Every client action clears the messages on its own way in, so they never
+   * pile up.
+   */
+  const load = useCallback(async (background = false) => {
     setLoading(true)
-    setError(null)
+    if (!background) setError(null)
     try {
       const res = await fetch(`${API}?account_id=${accountId}&tax_year=${taxYear}`)
       if (!res.ok) {
@@ -312,10 +322,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       }
       const v: View = await res.json()
       setView(v)
-      // A successful reload means the screen now reflects the server — any
-      // card-level refusal from before it is stale and must not keep shouting
-      // (bug-hunter). The page-level `error` is already cleared above.
-      setCardError(null)
+      // A reload the CLIENT caused means the screen now reflects the server, so
+      // an earlier card-level refusal is stale and must stop shouting. A
+      // BACKGROUND reload means nothing of the sort — see the note on `load`.
+      if (!background) setCardError(null)
       setAttested(v.attested) // server truth — a data change resets it
       // Balance editor mirrors the server rows; user edits survive reloads only
       // until saved (save → reload → server truth).
@@ -350,7 +360,8 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       ? Math.min(300_000, Math.max(30_000, (view.aiNextRetryAt ?? Date.now()) - Date.now()))
       : null
     if (!active && retryWait === null) return
-    const t = setInterval(() => { void load() }, active ? 20000 : retryWait!)
+    // background: true — this refresh must never wipe a message off the screen.
+    const t = setInterval(() => { void load(true) }, active ? 20000 : retryWait!)
     return () => clearInterval(t)
   }, [view, load])
 
@@ -385,6 +396,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [bulkSel, setBulkSel] = useState<Map<string, QuestionGroup>>(new Map())
   const [bulkConfirm, setBulkConfirm] = useState<string | null>(null) // pending answer value
   const [bulkUndo, setBulkUndo] = useState<{ ids: string[]; count: number } | null>(null)
+  // A bulk failure has to be readable WHERE IT HAPPENED (2026-08-03). The
+  // confirm dialog is a full-screen overlay, so the page-level strip and the
+  // card-level message both render underneath it: the client saw a dialog that
+  // simply refused to do anything, and pressed Confirm again. Same pattern the
+  // period/country dialogs already use for their own failures.
+  const [bulkError, setBulkError] = useState<string | null>(null)
   const bulkDir = bulkSel.size > 0 ? Array.from(bulkSel.values())[0].direction : null
   const toggleBulk = (g: QuestionGroup) => {
     setBulkSel(prev => {
@@ -403,6 +420,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     // red refusal survived a LATER SUCCESS (bug-hunter). A false "that didn't
     // work" is the same disease this card-level error was added to cure.
     setCardError(null)
+    setBulkError(null)
     try {
       const res = await fetch(`${API}/answer`, {
         method: 'POST',
@@ -424,8 +442,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setError(msg)
-      // Pin it to every selected card so the refusal is visible wherever the
-      // client is looking, not only in the strip at the top of the page.
+      // IN the dialog (it covers everything else), and pinned to the selected
+      // cards for when they close it. The dialog deliberately STAYS OPEN so the
+      // client can read what happened and retry or cancel from the same place.
+      setBulkError(msg)
       setCardError({ keys: groups.map(g => g.group_key), message: msg })
     } finally {
       setBusy(null)
@@ -2084,8 +2104,9 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 <div className="mt-4 flex justify-end gap-2">
                   <button
                     onClick={() => setCountryConfirm(null)}
-                    disabled={busyOrLocked}
-                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900"
+                    /* Never gated on the lock — see the bulk dialog's Cancel. */
+                    disabled={busy !== null}
+                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                   >
                     {it ? 'Annulla' : 'Cancel'}
                   </button>
@@ -2142,8 +2163,9 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 <div className="mt-4 flex justify-end gap-2">
                   <button
                     onClick={() => setPeriodConfirm(null)}
-                    disabled={busyOrLocked}
-                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900"
+                    /* Never gated on the lock — see the bulk dialog's Cancel. */
+                    disabled={busy !== null}
+                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                   >
                     {it ? 'Annulla' : 'Cancel'}
                   </button>
@@ -2225,11 +2247,20 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     : 'This books this year only — a bulk answer is not remembered as a permanent rule. Answer groups one by one when you want the system to remember them for future years.'}
                 </p>
                 <p className="mt-2 text-xs text-zinc-500">{it ? 'Potrai annullare subito dopo.' : 'You can undo right after.'}</p>
+                {bulkError && (
+                  <p role="alert" className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                    ⚠ {bulkError}
+                  </p>
+                )}
                 <div className="mt-4 flex justify-end gap-2">
                   <button
-                    onClick={() => setBulkConfirm(null)}
-                    disabled={busyOrLocked}
-                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900"
+                    onClick={() => { setBulkConfirm(null); setBulkError(null) }}
+                    /* NEVER gated on the lock: closing a dialog changes nothing,
+                       and if the file locks while this is open a disabled Cancel
+                       traps the client behind a full-screen overlay with no way
+                       out but a page reload. */
+                    disabled={busy !== null}
+                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                   >
                     {it ? 'Annulla' : 'Cancel'}
                   </button>
