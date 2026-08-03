@@ -58,15 +58,35 @@ describe("review-status: isClientEditable (replaces sent_to_accountant lock)", (
   it("editable before submission exists", () => {
     expect(isClientEditable(null)).toBe(true)
   })
-  it("editable at submitted / revision_requested / approved / reopened (Edit states)", () => {
+  it("editable at submitted / resubmitted / revision_requested / approved / reopened (Edit states)", () => {
     expect(isClientEditable("submitted")).toBe(true)
+    expect(isClientEditable("resubmitted")).toBe(true)
     expect(isClientEditable("revision_requested")).toBe(true)
     expect(isClientEditable("approved")).toBe(true)
     expect(isClientEditable("reopened")).toBe(true) // staff reopened → client can edit again
   })
+
+  // THE FREEZE (2026-08-03). `resubmitted` was missing from the editable set
+  // since the original Slices 1-3 commit, which locked five accounts out of the
+  // whole tax-financials screen AND their wizard — every write route 409'd, so
+  // the categorization step we were chasing them to finish was impossible.
+  // Economicamente (765 items) and Imperium (2 items) both reported it as "the
+  // system does nothing". Pinned separately from the list above so a reverting
+  // edit fails with a test name that says exactly what breaks.
+  it("resubmitted is EDITABLE — the client handed data back, no staff review has started", () => {
+    expect(isClientEditable("resubmitted")).toBe(true)
+  })
+
   it("locked while staff reviewing and after confirm", () => {
     expect(isClientEditable("under_review")).toBe(false)
     expect(isClientEditable("confirmed")).toBe(false)
+  })
+
+  // The guard that actually matters must survive the fix above: the ONLY way
+  // out of resubmitted toward staff work is under_review, which is locked.
+  it("the resubmitted → under_review transition still closes the door", () => {
+    expect(isClientEditable("resubmitted")).toBe(true)
+    expect(isClientEditable("under_review")).toBe(false)
   })
 })
 

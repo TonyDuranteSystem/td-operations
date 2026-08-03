@@ -131,6 +131,30 @@ export async function GET(request: NextRequest) {
       .limit(1)
       .maybeSingle()
 
+    // Is the client allowed to change anything right now? (2026-08-03.)
+    // The page used to receive NO lock state at all, so it drew every control
+    // as live and the client only discovered the refusal by tapping — and the
+    // refusal then rendered in one strip at the top of a very long page, which
+    // Bence Koncz (Imperium) never saw at all: from the question cards at the
+    // bottom the button simply did nothing. Sending the state lets the UI say
+    // so up front and disable the controls.
+    //
+    // This MUST use the same lookup the write routes use — latest submission
+    // for the account+year, NO status filter — or the banner and the actual
+    // 409 could disagree. (The `sub` read above is deliberately different: it
+    // is scoped to status='completed' for the attestation/coverage payload.)
+    const { isClientEditable } = await import('@/lib/tax/review-status')
+    const { data: lockRow } = await supabaseAdmin
+      .from('tax_return_submissions')
+      .select('review_status')
+      .eq('account_id', accountId)
+      .eq('tax_year', taxYear)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const lockStatus = lockRow?.review_status ?? null
+    const editable = lockStatus === null || isClientEditable(lockStatus as never)
+
     // Coverage questions (§3.4): the months an export doesn't span — gate 1
     // can't see what a file left out; the client's answer closes the hole.
     const { coverageQuestions, unansweredCoverage, incompleteCoverage } = await import('@/lib/tax/coverage')
@@ -300,6 +324,8 @@ export async function GET(request: NextRequest) {
       ingestPending,
       ingestFailed,
       attested: sub?.confirmation_accepted === true,
+      editable,
+      reviewStatus: lockStatus,
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
       accounts: Array.from(byAccount.values()).sort((a, b) => b.count - a.count),
       aiState,

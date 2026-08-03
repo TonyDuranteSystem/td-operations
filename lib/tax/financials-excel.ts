@@ -102,6 +102,20 @@ export async function buildFinancialsWorkbook(input: FinancialsExcelInput): Prom
     const warn = pl.addRow({ label: `⚠ ${draft.pnl.uncategorizedCount} UNCATEGORIZED transaction(s) (net ${draft.pnl.uncategorizedTotal.toFixed(2)}) EXCLUDED from totals — review before filing` })
     warn.font = { bold: true, color: { argb: "FFCC0000" } }
   }
+  // The MIRROR case (2026-08-03): under the client-side by-sign policy the
+  // undecided rows are not excluded — they are folded INTO the expense lines
+  // under the category we suggested, which is exactly why the warning above
+  // (gated on uncategorizedCount, forced to zero by that policy) never printed
+  // in a client's downloaded file. So the client's Excel looked as finished as
+  // the screen did. Name the provisional amount here too; no total moves, and
+  // the balance sheet needs no reconciling line because these rows ARE inside
+  // netIncome.
+  if (draft.pnl.foldedUncategorizedCount > 0) {
+    const folded = pl.addRow({
+      label: `⚠ ${draft.pnl.foldedUncategorizedCount} transaction(s) above are classified BY US, not confirmed by the client (expenses ${draft.pnl.foldedUncategorizedExpense.toFixed(2)}, income ${draft.pnl.foldedUncategorizedIncome.toFixed(2)}) — INCLUDED in the totals above`,
+    })
+    folded.font = { bold: true, color: { argb: "FFB45309" } }
+  }
 
   // ── Sheet 2: Balance Sheet (M-2 capital roll-forward — matches the screen) ──
   const bs = workbook.addWorksheet("Balance Sheet")

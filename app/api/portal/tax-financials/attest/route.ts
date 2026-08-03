@@ -7,8 +7,18 @@
  * a review_history entry) — it does NOT touch review_status; the existing
  * staff-review → approve → final-confirm machine is unchanged.
  *
- * HARD GATE: refused while any blocking gate fails (gate 6 — uncategorized
- * must be zero). OWNER-ONLY — attestation is signing-like, never a teammate's.
+ * Refused while any BLOCKING gate fails. Since 2026-08-03 no gate is blocking
+ * (Antonio: the client may confirm with items still undecided — "we just
+ * suggest but they know the truth"), so this check is a kept-in-place guard for
+ * any future blocking gate rather than a live barrier. What still refuses:
+ * unanswered/incomplete coverage questions. What the client accepted is
+ * RECORDED — the number of transactions still booked on our suggestion at the
+ * moment of attestation goes into the review_history entry, so we can always
+ * show exactly how much of a confirmed P&L was ours, not theirs. (Deliberately
+ * NOT mirrored into financials_meta: that column is read-modify-written by the
+ * coverage route too, and a second whole-object write here could clobber a
+ * concurrent coverage answer.)
+ * OWNER-ONLY — attestation is signing-like, never a teammate's.
  */
 
 import { createClient } from '@/lib/supabase/server'
@@ -51,7 +61,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // The hard gate: every blocking gate must pass right now.
+    // Every blocking gate must pass right now. No gate is blocking today (see
+    // the header) — kept so a future blocking gate is enforced automatically.
     const { getFinancialsView } = await import('@/lib/tax/financials-orchestration')
     const view = await getFinancialsView(accountId, taxYear)
     if (!view.canConfirm) {
@@ -100,12 +111,26 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `You told us these exports are incomplete — please delete the file and upload the entire period: ${incomplete.map(q => q.bank_key).join(', ')}.` }, { status: 422 })
     }
 
+    // What was still OUR suggestion at the moment they confirmed (2026-08-03).
+    // The client may confirm with items undecided, so the record must say how
+    // many — otherwise a confirmed P&L looks fully client-approved forever and
+    // nobody can tell later which figures they actually chose. Exactly one of
+    // the two counters is non-zero by construction (see gate 6).
+    const suggestedNotReviewed =
+      view.draft.pnl.uncategorizedCount + view.draft.pnl.foldedUncategorizedCount
+    const suggestedNet =
+      view.draft.pnl.uncategorizedTotal
+      + view.draft.pnl.foldedUncategorizedIncome
+      - view.draft.pnl.foldedUncategorizedExpense
+
     const history = Array.isArray(sub.review_history) ? sub.review_history : []
     const entry = {
       at: new Date().toISOString(),
       actor: 'client',
       event: 'financials_attested',
-      note: `Client attested the generated P&L and Balance Sheet for ${taxYear} (gates: ${view.gates.map(g => `${g.id}=${g.status}`).join(', ')}).`,
+      note: `Client attested the generated P&L and Balance Sheet for ${taxYear} (gates: ${view.gates.map(g => `${g.id}=${g.status}`).join(', ')}; ${suggestedNotReviewed} transaction(s) net ${suggestedNet.toFixed(2)} were still booked on our suggestion, not reviewed by the client).`,
+      suggested_not_reviewed: suggestedNotReviewed,
+      suggested_not_reviewed_net: Number(suggestedNet.toFixed(2)),
     }
     const { error } = await supabaseAdmin
       .from('tax_return_submissions')

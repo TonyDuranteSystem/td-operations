@@ -3,8 +3,14 @@
  *
  * Every gate returns pass / na (with the reason) / fail (with what's wrong).
  * NEVER silent: a gate that can't run says why, a gate that fails says what
- * to fix. The client sees passed gates as checkmarks (Slice 8); confirm is
- * blocked while gate 6 (uncategorized == 0) fails — that one is HARD.
+ * to fix. The client sees passed gates as checkmarks (Slice 8).
+ *
+ * NO GATE BLOCKS CONFIRM any more (2026-08-03, Antonio). Gate 6 was the only
+ * `blocking` one and, on the client draft, could never fail — see its comment
+ * below. The client may confirm with items still undecided; the system's job is
+ * to state plainly what is a suggestion and what they decided, not to bar the
+ * door. Confirm is still gated on the coverage questions and on ingestion
+ * finishing — those live in the route/UI, not here.
  *
  * Tolerances: $1 on cash identities (plan-specified), 0.5% on ownership.
  */
@@ -134,11 +140,44 @@ export function evaluateGates(input: EvaluateGatesInput): GateResult[] {
     }
   }
 
-  // ── Gate 6: uncategorized == 0 — HARD, blocks confirm ──
+  // ── Gate 6: everything the client has actually decided ──
+  //
+  // Rewritten 2026-08-03 (Antonio). This gate used to read ONLY
+  // `uncategorizedCount`, which the client-side draft FORCES to zero (the
+  // `defaultUncategorizedBySign` policy folds every undecided row into
+  // income/expenses). So on the portal it could never fail, and it printed
+  // "All transactions are categorized" on the same screen that listed 394
+  // items still needing an answer — while those items' AI-SUGGESTED amounts
+  // were already inside the client's P&L. Bence Koncz's entire expense side
+  // was his two undecided rows, one of them flagged "looks personal".
+  //
+  // Two changes:
+  //  1. Count what is REALLY pending. Exactly one of the two figures is
+  //     non-zero by construction (folding on → folded*, folding off →
+  //     uncategorized*), so summing is safe and works for BOTH the client
+  //     draft and the staff workspace.
+  //  2. NON-BLOCKING (Antonio's decision, verbatim: "someone should be able to
+  //     confirm their accounts while items are still unanswered, we just
+  //     suggest but they know the truth"). It was the only blocking gate, so
+  //     `can_accept_as_is` stays true and confirm remains available — the
+  //     client is TOLD the number instead of being stopped by it. The honesty
+  //     now lives in the wording, the provisional P&L line, and the
+  //     attestation text.
   {
-    results.push(draft.pnl.uncategorizedCount === 0
-      ? { id: 6, title: "Every transaction categorized", status: "pass", blocking: true, detail: "All transactions are categorized." }
-      : { id: 6, title: "Every transaction categorized", status: "fail", blocking: true, detail: `${draft.pnl.uncategorizedCount} transaction(s) still need an answer (net ${draft.pnl.uncategorizedTotal.toFixed(2)}) — answer the remaining questions to continue.` })
+    const pendingCount = draft.pnl.uncategorizedCount + draft.pnl.foldedUncategorizedCount
+    const pendingNet =
+      draft.pnl.uncategorizedTotal
+      + draft.pnl.foldedUncategorizedIncome
+      - draft.pnl.foldedUncategorizedExpense
+    results.push(pendingCount === 0
+      ? { id: 6, title: "Every transaction categorized", status: "pass", blocking: false, detail: "You have decided every transaction." }
+      : {
+          id: 6,
+          title: "Every transaction categorized",
+          status: "fail",
+          blocking: false,
+          detail: `${pendingCount} transaction(s) (net ${pendingNet.toFixed(2)}) are booked on OUR suggestion and not yet confirmed by you — they are already counted in the figures below. Answer them to make these numbers yours.`,
+        })
   }
 
   return results
