@@ -95,6 +95,24 @@ export function normalizedToDomBox(r: NormalizedRect, layerWidthPx: number, laye
 }
 
 /**
+ * True when a rect is entirely outside the viewport — i.e. a scroll that was
+ * supposed to bring it into view did nothing.
+ *
+ * WHY THIS EXISTS: `scrollIntoView({ behavior: "smooth" })` is a silent NO-OP in
+ * some engines (proven in QA on 2026-08-03: the same call with `behavior` omitted
+ * scrolled correctly, with it the page did not move at all). A "take me to the
+ * field" button that quietly does nothing is worse than no button, because the
+ * client concludes the document itself is broken — the exact complaint this whole
+ * change exists to answer. The caller uses this to detect the no-op and re-issue
+ * the scroll instantly.
+ */
+export function isRectOutOfView(rect: { top: number; bottom: number }, viewportHeightPx: number): boolean {
+  if (!Number.isFinite(rect?.top) || !Number.isFinite(rect?.bottom)) return false
+  if (!Number.isFinite(viewportHeightPx) || viewportHeightPx <= 0) return false
+  return rect.bottom < 0 || rect.top > viewportHeightPx
+}
+
+/**
  * Grow a rendered field box to a minimum on-screen size, around its own centre.
  *
  * WHY: staff draw signature boxes onto the PDF at whatever height the form's
@@ -124,6 +142,12 @@ export function expandDomBoxToMinimum(
 
   const width = Math.min(Math.max(safe(box.width), safe(minWidthPx)), layerW || safe(box.width))
   const height = Math.min(Math.max(safe(box.height), safe(minHeightPx)), layerH || safe(box.height))
+
+  // Nothing to grow → hand the box back untouched. Without this, the clamp below
+  // would SLIDE a box that hangs off the page edge (a rect stored with
+  // pos_x + width > 1) sideways on screen, away from where the flatten will
+  // stamp it — showing the signer a box in one place and signing in another.
+  if (width === safe(box.width) && height === safe(box.height)) return { ...box }
 
   const centreX = safe(box.left) + safe(box.width) / 2
   const centreY = safe(box.top) + safe(box.height) / 2

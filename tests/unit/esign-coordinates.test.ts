@@ -6,6 +6,7 @@ import {
   domBoxToNormalized,
   normalizedToDomBox,
   expandDomBoxToMinimum,
+  isRectOutOfView,
   normalizedToPdfRect,
   type NormalizedRect,
 } from '@/lib/esign/coordinates'
@@ -141,19 +142,42 @@ describe('expandDomBoxToMinimum — the unhittable signature strip', () => {
     const raw = normalizedToDomBox({ pos_x: 0.1397, pos_y: 0.8694, width: 0.1898, height: 0.0164 }, LAYER_W, LAYER_H)
     expect(raw.height).toBeLessThan(20) // the bug: unhittable as stored
 
+    const rawCopy = { ...raw }
     const grown = expandDomBoxToMinimum(raw, 80, 36, LAYER_W, LAYER_H)
+    expect(raw).toEqual(rawCopy) // the input must be untouched
     expect(grown.height).toBe(36)
     // Already wider than the minimum — width must be left alone so it cannot run
     // into the date field on the same signature line.
-    expect(grown.width).toBeCloseTo(raw.width, 6)
+    expect(grown.width).toBeCloseTo(rawCopy.width, 6)
     // Same centre: the client is pointed at the form's own signature line.
-    expect(grown.top + grown.height / 2).toBeCloseTo(raw.top + raw.height / 2, 6)
-    expect(grown.left + grown.width / 2).toBeCloseTo(raw.left + raw.width / 2, 6)
+    expect(grown.top + grown.height / 2).toBeCloseTo(rawCopy.top + rawCopy.height / 2, 6)
+    expect(grown.left + grown.width / 2).toBeCloseTo(rawCopy.left + rawCopy.width / 2, 6)
   })
 
-  it('never shrinks a box that is already big enough', () => {
+  it('never shrinks a box that is already big enough, and returns a COPY', () => {
     const big = { left: 100, top: 100, width: 300, height: 90 }
-    expect(expandDomBoxToMinimum(big, 80, 36, LAYER_W, LAYER_H)).toEqual(big)
+    const out = expandDomBoxToMinimum(big, 80, 36, LAYER_W, LAYER_H)
+    expect(out).toEqual({ left: 100, top: 100, width: 300, height: 90 })
+    // toEqual against `big` itself would pass for a mutating `return box`.
+    expect(out).not.toBe(big)
+  })
+
+  it('NEVER mutates the box it is given — the display-only invariant', () => {
+    // If this helper wrote back into the rect, the flatten would stamp the
+    // signature at the enlarged size instead of on the form's own line.
+    const box = { left: 111.76, top: 899.83, width: 151.84, height: 16.98 }
+    const snapshot = JSON.parse(JSON.stringify(box))
+    const out = expandDomBoxToMinimum(box, 80, 36, LAYER_W, LAYER_H)
+    expect(box).toEqual(snapshot)
+    expect(out).not.toBe(box)
+    expect(out.height).toBe(36)
+  })
+
+  it('leaves an off-page box exactly where it is when no growth is needed', () => {
+    // A rect stored with pos_x + width > 1: clamping would SLIDE it on screen,
+    // away from where the flatten stamps it. Untouched is the only safe answer.
+    const hanging = { left: 700, top: 400, width: 300, height: 90 }
+    expect(expandDomBoxToMinimum(hanging, 80, 36, LAYER_W, LAYER_H)).toEqual(hanging)
   })
 
   it('slides back inside the page instead of overflowing at the edges', () => {
@@ -182,5 +206,26 @@ describe('expandDomBoxToMinimum — the unhittable signature strip', () => {
     expect(Number.isFinite(g.top)).toBe(true)
     expect(Number.isFinite(g.width)).toBe(true)
     expect(Number.isFinite(g.height)).toBe(true)
+  })
+})
+
+describe('isRectOutOfView — the silent no-op scroll guard', () => {
+  // Caught in browser QA 2026-08-03: scrollIntoView({behavior:'smooth'}) did not
+  // move the page at all, while the same call without `behavior` scrolled fine.
+  // The signature sat 6960px above the viewport and the jump button looked dead.
+  it('detects a field far ABOVE the viewport (the real failure)', () => {
+    expect(isRectOutOfView({ top: -6960, bottom: -6924 }, 900)).toBe(true)
+  })
+  it('detects a field below the viewport', () => {
+    expect(isRectOutOfView({ top: 1400, bottom: 1436 }, 900)).toBe(true)
+  })
+  it('reports a visible or partly visible field as in view — never re-scrolls needlessly', () => {
+    expect(isRectOutOfView({ top: 400, bottom: 436 }, 900)).toBe(false)
+    expect(isRectOutOfView({ top: -10, bottom: 26 }, 900)).toBe(false) // straddling the top edge
+    expect(isRectOutOfView({ top: 880, bottom: 916 }, 900)).toBe(false) // straddling the bottom
+  })
+  it('fails safe (no forced scroll) on a nonsense rect or viewport', () => {
+    expect(isRectOutOfView({ top: NaN, bottom: 10 }, 900)).toBe(false)
+    expect(isRectOutOfView({ top: -5000, bottom: -4000 }, 0)).toBe(false)
   })
 })
