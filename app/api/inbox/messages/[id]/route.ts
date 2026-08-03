@@ -10,6 +10,7 @@ import {
 } from "@/lib/gmail"
 import { rewriteCidSources, safeEmailDate } from "@/lib/inbox/email-html"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
+import { loadStoredThread } from "@/lib/email-store/read"
 import type { InboxMessage } from "@/lib/types"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 
@@ -48,6 +49,29 @@ export async function GET(
     // source of truth; our compose/reply paths set proper headers.
     if (id.startsWith("gmail:")) {
       const threadId = id.replace("gmail:", "")
+
+      // LOCAL-FIRST: if every message of this thread is fully captured in our
+      // own store, render it from there — no Gmail call at all. Opening a thread
+      // was the last read path still spending Gmail quota (the 2026-08-02
+      // incident). loadStoredThread returns null unless the WHOLE thread is
+      // complete, so a half-captured thread always falls through to live Gmail.
+      try {
+        const stored = await loadStoredThread(
+          mailbox === "antonio" ? "antonio" : "support",
+          threadId,
+        )
+        if (stored) {
+          return NextResponse.json({
+            conversationId: id,
+            channel: "gmail",
+            subject: stored.subject,
+            messages: stored.messages,
+            servedFrom: "local",
+          })
+        }
+      } catch (err) {
+        console.warn("[inbox] local thread read failed, falling back to Gmail:", err)
+      }
 
       const thread = (await gmailGet(`/threads/${threadId}`, {
         format: "full",

@@ -694,3 +694,15 @@ Now: a fixed **50 per page** with a Gmail-style pager (`1 … 4 5 [6] 7 8 … 10
 - Route accepts `page` (1-based) and returns `page`, `pageSize`, `totalConversations`, `totalPages`. Totals are present only on index-served views; the live-Gmail fallback can't know a true total, so the pager hides there.
 - `buildPageNumbers` (`lib/inbox/pager.ts`) is pure and unit-tested (8 cases: ellipsis placement, first/last always shown, all-pages for ≤7, clamping, no duplicates, ascending).
 - Superseded: the `PAGE_STEP`/`MAX_PAGE_SIZE` "Load older" growth and the now-unused `searchIndexThreadIds` / `listIndexThreadIds` call sites in the route.
+
+### Opening an email reads from our store too (2026-08-02) + "Mark read" bug
+
+**Mark read was broken inside an open email.** Clicking it returned `Unknown action: mark_read`: the single-email switch in `app/api/inbox/email-actions/route.ts` never had a `mark_read` case (only the BULK branch handled it, and `EmailAction` didn't list it). Added, mirroring `mark_unread` (removes the UNREAD label from every message of the thread).
+
+**Local-first thread open.** Opening a thread fetched it `format=full` from LIVE Gmail every time — the last read path still spending per-user quota (the cause of the 2026-08-02 incident) and the slowest. Now:
+- `loadStoredThread` (`lib/email-store/read.ts`) rebuilds the thread from `email_index` (headers/dates/labels) + `email_message_content` (body from the private bucket) + `email_attachment`, re-writing inline `cid:` images to the attachment endpoint exactly as the live path does.
+- **Per-message guarantee:** it returns null unless EVERY message of the thread is `capture_status='complete'` (the flag written last, after body + all attachments land). Mid-backfill, an error row, an unseen thread, or an unreadable body all fall through to live Gmail. A half-captured thread can never render as if it were whole.
+- The attachment endpoint (`app/api/inbox/attachment`) serves bytes from the private bucket when we hold them, else Gmail. Same staff + mailbox gate as before.
+- Response carries `servedFrom: "local"` when the local path was used.
+
+Note: this only takes effect as the capture fills in — it resumed on 2026-08-02, so most threads still come from Gmail via the fallback until the backfill catches up.
