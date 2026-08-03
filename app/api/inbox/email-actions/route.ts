@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { gmailGet, gmailPost, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
+import { gmailGet, gmailPost, gmailDelete, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
 import { COLOR_MARKS, MARK_LABEL_PREFIX } from "@/lib/inbox/color-marks"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
@@ -14,7 +14,7 @@ import {
 
 export const dynamic = "force-dynamic"
 
-type EmailAction = "archive" | "star" | "unstar" | "trash" | "untrash" | "forward" | "mark_read" | "mark_unread" | "move_to_label" | "set_color" | "snooze" | "unsnooze"
+type EmailAction = "archive" | "star" | "unstar" | "trash" | "untrash" | "delete_forever" | "forward" | "mark_read" | "mark_unread" | "move_to_label" | "set_color" | "snooze" | "unsnooze"
 
 
 /**
@@ -56,6 +56,37 @@ async function snapshotBeforeTrash(threadId: string, asUser: string): Promise<Re
     return captureRestorableLabels(thread.messages)
   } catch {
     return []
+  }
+}
+
+/**
+ * Our own stored copy's side of a delete/restore (dev_task 01800da8).
+ *
+ * Deleting only moved the email to Gmail's Trash; our copy of the body and
+ * attachments is separate and would otherwise sit there forever. Stamping it
+ * starts the 180-day bin clock — the copy is KEPT and readable the whole time
+ * (Gmail drops its own Trash at ~30 days, so past that ours is the only copy),
+ * then the daily purge sweep removes it for real.
+ *
+ * Best-effort by design: the Gmail action is what the user sees, so a failure
+ * here must never fail their delete. The worst case of a missed stamp is that
+ * we keep a copy longer than intended, which the next reconcile can re-stamp —
+ * never a lost email.
+ */
+async function binOurCopy(
+  mailbox: string,
+  threadIds: string[],
+  mode: "delete" | "restore" | "purge",
+) {
+  try {
+    const box = mailbox === "antonio" ? "antonio" : "support"
+    const { markDeleted, markRestored, markPurgeNow } = await import("@/lib/email-store/deletion")
+    const sel = { threadIds }
+    if (mode === "delete") await markDeleted(box, sel)
+    else if (mode === "restore") await markRestored(box, sel)
+    else await markPurgeNow(box, sel)
+  } catch (err) {
+    console.warn(`[inbox] could not ${mode} our stored copy of ${threadIds.length} thread(s):`, err)
   }
 }
 
@@ -181,8 +212,10 @@ export async function POST(req: NextRequest) {
               addLabelIds: ["TRASH"],
               removeLabelIds: ["INBOX", "UNREAD", "STARRED", "IMPORTANT"]
             }, asUser)
+            await binOurCopy(mailbox, [tid], "delete")
           } else if (action === 'untrash') {
             await untrashThread(tid, asUser, sanitizeRestorePayload(bulkRestoreIn[tid]))
+            await binOurCopy(mailbox, [tid], "restore")
           } else if (action === 'archive') {
             await gmailPost(`/threads/${tid}/modify`, { removeLabelIds: ['INBOX'] }, asUser)
           } else if (action === 'mark_read') {
@@ -272,6 +305,9 @@ export async function POST(req: NextRequest) {
           removeLabelIds: ["INBOX", "UNREAD", "STARRED", "IMPORTANT"]
         }, asUser) as { id?: string }
 
+        // Our copy joins the bin (Gmail side is done; ours is a separate store).
+        await binOurCopy(mailbox, [threadId], "delete")
+
         // Step 2: Verify by fetching the thread and checking labels
         let verified = false
         try {
@@ -317,8 +353,30 @@ export async function POST(req: NextRequest) {
           }
         }
         const filed = await untrashThread(threadId, asUser, sanitizeRestorePayload(restore), destLabelId)
+        await binOurCopy(mailbox, [threadId], "restore")
         // Report where it ACTUALLY landed — not where we were asked to put it.
         return NextResponse.json({ success: true, action: "untrashed", filedTo: filed.filedTo })
+      }
+
+      case "delete_forever": {
+        // PERMANENT: gone from Gmail AND from our own store. The ordinary
+        // "trash" action is recoverable (Gmail Trash + our 180-day bin); this is
+        // the deliberate "wipe it now" for junk/advertising that Antonio does not
+        // want us holding (2026-08-02). Irreversible by design — the UI must
+        // confirm before calling it.
+        const thread = (await gmailGet(`/threads/${threadId}`, { format: "minimal" }, asUser)) as {
+          messages: Array<{ id: string }>
+        }
+        const messageIds = thread.messages.map((m) => m.id)
+
+        // Flag our copy for immediate purge FIRST: if the Gmail delete succeeds
+        // and this failed, we would silently keep a copy of something the user
+        // asked to erase. Flagging first can only ever purge something already
+        // gone — the safe direction.
+        await binOurCopy(mailbox, [threadId], "purge")
+
+        await Promise.all(messageIds.map((id) => gmailDelete(`/messages/${id}`, asUser)))
+        return NextResponse.json({ success: true, action: "deleted_forever", messages: messageIds.length })
       }
 
       case "mark_read": {
