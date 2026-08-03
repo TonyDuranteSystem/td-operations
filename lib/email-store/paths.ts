@@ -78,3 +78,23 @@ export function captureStatus(input: {
   const complete = bodyStored && attachmentsStored >= attachmentsExpected
   return complete ? "complete" : "pending"
 }
+
+/**
+ * A Content-Type that object storage will actually accept.
+ *
+ * Senders put all sorts of junk in a MIME type — empty strings, stray
+ * parameters (`application/pdf; name="x.pdf"`), non-ASCII filenames folded in,
+ * even blank values. Supabase Storage rejects those outright ("Invalid
+ * Content-Type header"), and because the capture stores every attachment before
+ * marking a message complete, ONE bad label failed the WHOLE email: 218 messages
+ * never got stored (2026-08-03). Normalise to the bare `type/subtype`, and fall
+ * back to a generic binary type when it isn't a valid token.
+ */
+export function safeContentType(raw: string | null | undefined): string {
+  const FALLBACK = "application/octet-stream"
+  if (typeof raw !== "string") return FALLBACK
+  // Drop parameters (";charset=...", ";name=...") and surrounding whitespace.
+  const base = raw.split(";")[0]?.trim().toLowerCase() ?? ""
+  // RFC 2045 token characters only, exactly one "/" separator.
+  return /^[a-z0-9!#$%&'*+.^_`|~-]+\/[a-z0-9!#$%&'*+.^_`|~-]+$/.test(base) ? base : FALLBACK
+}
