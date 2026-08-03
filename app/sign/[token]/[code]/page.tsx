@@ -13,7 +13,18 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { useParams, useSearchParams } from "next/navigation"
 import { PdfViewer, type PdfPageInfo } from "@/components/esign/pdf-viewer"
 import { SignaturePadModal } from "@/components/esign/signature-pad-modal"
-import { normalizedToDomBox } from "@/lib/esign/coordinates"
+import { expandDomBoxToMinimum, normalizedToDomBox } from "@/lib/esign/coordinates"
+
+/**
+ * Minimum on-screen size for a click-to-open field (signature / initials).
+ * A tax return's signature line is ~1.6% of the page height — a ~10px strip the
+ * client cannot see or hit. Display-only: the stored rect (and therefore where
+ * the signature is stamped into the PDF) is unchanged. Width is bumped only for
+ * genuinely tiny boxes, so an enlarged signature never runs into the date field
+ * beside it on the same line.
+ */
+const MIN_FIELD_HIT_WIDTH_PX = 80
+const MIN_FIELD_HIT_HEIGHT_PX = 36
 
 type FieldType = "signature" | "initials" | "date" | "text" | "checkbox"
 
@@ -57,6 +68,7 @@ export default function SignPage() {
   const [signaturePng, setSignaturePng] = useState<string | null>(null)
   const [initialsPng, setInitialsPng] = useState<string | null>(null)
   const [padTarget, setPadTarget] = useState<"signature" | "initials" | null>(null)
+  const [flashFieldId, setFlashFieldId] = useState<string | null>(null)
   const [signedByName, setSignedByName] = useState("")
   const [consent, setConsent] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -108,6 +120,21 @@ export default function SignPage() {
 
   const allFilled = useMemo(() => fields.every(isFilled), [fields, isFilled])
   const canSubmit = allFilled && signedByName.trim().length > 0 && consent && !submitting
+
+  // What is still missing, in document order. Telling the signer WHERE to go is
+  // the whole fix: the box is often pages above the disabled button, so "fill
+  // every highlighted field" on its own leaves them stuck staring at grey.
+  const pendingFields = useMemo(() => fields.filter(f => !isFilled(f)), [fields, isFilled])
+
+  const goToNextField = useCallback(() => {
+    const next = pendingFields[0]
+    if (!next) return
+    const el = document.getElementById(`esign-field-${next.id}`)
+    if (!el) return
+    el.scrollIntoView({ behavior: "smooth", block: "center" })
+    setFlashFieldId(next.id)
+    window.setTimeout(() => setFlashFieldId(cur => (cur === next.id ? null : cur)), 2500)
+  }, [pendingFields])
 
   const submit = useCallback(async () => {
     setError("")
@@ -200,16 +227,24 @@ export default function SignPage() {
               {fields
                 .filter(f => f.page_index === page.index)
                 .map(f => {
-                  const box = normalizedToDomBox(f, page.widthCss, page.heightCss)
+                  const clickToOpen = f.field_type === "signature" || f.field_type === "initials"
+                  const raw = normalizedToDomBox(f, page.widthCss, page.heightCss)
+                  // Only the click-to-open fields are grown: a text/date box is typed
+                  // into in place and must keep the form's own line width.
+                  const box = clickToOpen
+                    ? expandDomBoxToMinimum(raw, MIN_FIELD_HIT_WIDTH_PX, MIN_FIELD_HIT_HEIGHT_PX, page.widthCss, page.heightCss)
+                    : raw
                   const style = { left: box.left, top: box.top, width: box.width, height: box.height } as const
                   const filled = isFilled(f)
                   const ring = filled ? "border-green-500 bg-green-50/40" : "border-blue-500 bg-blue-50/50"
-                  if (f.field_type === "signature" || f.field_type === "initials") {
+                  const flash = flashFieldId === f.id ? " ring-4 ring-amber-400 ring-offset-1" : ""
+                  if (clickToOpen) {
                     const png = f.field_type === "signature" ? signaturePng : initialsPng
                     return (
                       <button
                         key={f.id}
-                        className={`absolute flex items-center justify-center rounded-sm border-2 ${ring}`}
+                        id={`esign-field-${f.id}`}
+                        className={`absolute flex items-center justify-center rounded-sm border-2 ${ring}${flash}`}
                         style={style}
                         onClick={() => setPadTarget(f.field_type as "signature" | "initials")}
                       >
@@ -227,7 +262,8 @@ export default function SignPage() {
                     return (
                       <button
                         key={f.id}
-                        className={`absolute flex items-center justify-center rounded-sm border-2 ${ring}`}
+                        id={`esign-field-${f.id}`}
+                        className={`absolute flex items-center justify-center rounded-sm border-2 ${ring}${flash}`}
                         style={style}
                         onClick={() => setValues(v => ({ ...v, [f.id]: on ? "false" : "true" }))}
                       >
@@ -237,7 +273,7 @@ export default function SignPage() {
                   }
                   if (f.field_type === "date") {
                     return (
-                      <div key={f.id} className={`absolute flex items-center rounded-sm border-2 px-1 ${ring}`} style={style}>
+                      <div key={f.id} id={`esign-field-${f.id}`} className={`absolute flex items-center rounded-sm border-2 px-1 ${ring}${flash}`} style={style}>
                         <span className="truncate text-[10px] text-zinc-700">{values[f.id] || todayUS()}</span>
                       </div>
                     )
@@ -245,10 +281,11 @@ export default function SignPage() {
                   return (
                     <input
                       key={f.id}
+                      id={`esign-field-${f.id}`}
                       value={values[f.id] || ""}
                       onChange={e => setValues(v => ({ ...v, [f.id]: e.target.value }))}
                       placeholder={f.placeholder || "Type here"}
-                      className={`absolute rounded-sm border-2 bg-white px-1 text-[11px] outline-none ${ring}`}
+                      className={`absolute rounded-sm border-2 bg-white px-1 text-[11px] outline-none ${ring}${flash}`}
                       style={style}
                     />
                   )
@@ -261,7 +298,22 @@ export default function SignPage() {
       {/* Sign bar */}
       <div className={`mx-auto mt-6 max-w-3xl rounded-xl border bg-white p-5 ${isPortal ? "mb-4" : ""}`}>
         <h2 className="text-sm font-semibold text-zinc-900">Complete & sign</h2>
-        {!allFilled && <p className="mt-1 text-xs text-amber-600">Fill every highlighted field above to continue.</p>}
+        {!allFilled && (
+          <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 p-3">
+            <p className="text-xs font-medium text-amber-800">
+              {pendingFields.length === 1 ? "1 field still to complete" : `${pendingFields.length} fields still to complete`}
+              {pendingFields[0] ? ` — the next one is on page ${pendingFields[0].page_index + 1}.` : "."}
+            </p>
+            <button
+              onClick={goToNextField}
+              className="mt-2 w-full rounded-md bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600"
+            >
+              {pendingFields[0]?.field_type === "signature"
+                ? "Take me to the signature box"
+                : "Take me to the next field"}
+            </button>
+          </div>
+        )}
         {error && <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div>}
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <input
