@@ -51,7 +51,22 @@ export async function POST(request: NextRequest) {
       .limit(1)
       .maybeSingle()
     if (!sub) return NextResponse.json({ error: 'No submission found for this year.' }, { status: 404 })
-    if (sub.review_status !== null && !isClientEditable(sub.review_status)) {
+    // LOCK — evaluated on the LATEST submission for the account+year, NOT on the
+    // `completed` row above (2026-08-03, bug-hunter finding). The coverage
+    // answers still WRITE to the completed row, but the lock must be read the
+    // same way every other write route and the GET's banner read it, or an
+    // account carrying more than one row for a year gets a page that says
+    // "editable" and a refusal that says "locked" (or the reverse).
+    const { data: lockRow } = await db
+      .from('tax_return_submissions')
+      .select('review_status')
+      .eq('account_id', accountId)
+      .eq('tax_year', taxYear)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const lockStatus = (lockRow?.review_status ?? null) as string | null
+    if (lockStatus !== null && !isClientEditable(lockStatus as never)) {
       return NextResponse.json({ error: 'Your submission is locked (under review or already confirmed) — ask us to reopen it first.' }, { status: 409 })
     }
 

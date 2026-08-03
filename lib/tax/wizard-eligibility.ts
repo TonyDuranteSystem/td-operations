@@ -29,7 +29,10 @@
  *    stages fall through to open).
  *  - The review loop owns any account with a live submission for the target
  *    year: client-editable states resolve to 'review' (edits UPDATE that
- *    submission row); under_review / resubmitted / confirmed are locked.
+ *    submission row); ONLY under_review and confirmed are locked. `resubmitted`
+ *    was locked here until 2026-08-03 and should not be again — it means the
+ *    CLIENT handed data back with no staff review started, and locking it shut
+ *    five accounts out of both this wizard and the tax-financials screen.
  *    Stages 45-49 are deliberately NOT in the open allow-list — the SD parks
  *    at "Data Submitted" for the whole review, so putting them there would
  *    re-open the wizard mid-review.

@@ -19,10 +19,13 @@
  *
  * Soft-warn ALL balance-sheet/tie-out gaps — never hard-block; these clients
  * may owe no US tax and the balance sheet is informational, so the client can
- * accept as-is and own it. The only hard block is a BLOCKING gate (gate 6 —
- * uncategorized; auto-passes in the portal). Coverage questions are enforced
- * separately by the caller. No prose parsing — driven off structured fields so
- * the mapping is unit-testable.
+ * accept as-is and own it. Since 2026-08-03 NO gate is blocking at all — gate 6
+ * was the last one and is now informational (Antonio: a client may confirm with
+ * items still undecided, "we just suggest but they know the truth"), so
+ * `can_accept_as_is` is effectively always true and the field is kept as the
+ * seam for any FUTURE blocking gate. What still refuses a confirm lives in the
+ * route/UI: the coverage questions and in-flight ingestion. No prose parsing —
+ * driven off structured fields so the mapping is unit-testable.
  */
 
 import type { FinancialDraft } from "./financials-engine"

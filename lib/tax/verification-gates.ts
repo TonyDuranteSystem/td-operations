@@ -15,6 +15,7 @@
  * Tolerances: $1 on cash identities (plan-specified), 0.5% on ownership.
  */
 
+import { pendingCount, pendingNet } from "./disclosure-text"
 import type { FinancialDraft } from "./financials-engine"
 import type { OwnershipResolution } from "./ownership-resolution"
 import type { PriorReturnCaseRecord } from "./prior-return-case"
@@ -164,19 +165,22 @@ export function evaluateGates(input: EvaluateGatesInput): GateResult[] {
   //     now lives in the wording, the provisional P&L line, and the
   //     attestation text.
   {
-    const pendingCount = draft.pnl.uncategorizedCount + draft.pnl.foldedUncategorizedCount
-    const pendingNet =
-      draft.pnl.uncategorizedTotal
-      + draft.pnl.foldedUncategorizedIncome
-      - draft.pnl.foldedUncategorizedExpense
-    results.push(pendingCount === 0
+    // Shared with the client-facing sentence (lib/tax/disclosure-text.ts) so the
+    // gate and the disclosure the client signs can never disagree — the first
+    // cut duplicated this arithmetic in the component and got the income half
+    // wrong, producing "−0.00 of expenses" beside a gate saying +120,000.
+    const pending = pendingCount(draft.pnl)
+    const net = pendingNet(draft.pnl)
+    results.push(pending === 0
       ? { id: 6, title: "Every transaction categorized", status: "pass", blocking: false, detail: "You have decided every transaction." }
       : {
           id: 6,
           title: "Every transaction categorized",
           status: "fail",
           blocking: false,
-          detail: `${pendingCount} transaction(s) (net ${pendingNet.toFixed(2)}) are booked on OUR suggestion and not yet confirmed by you — they are already counted in the figures below. Answer them to make these numbers yours.`,
+          // Staff-facing wording; the portal renders the client's language from
+          // gateSixText() off the SAME two numbers.
+          detail: `${pending} transaction(s) (net ${net.toFixed(2)}) are booked on OUR suggestion and not yet confirmed by you — they are already counted in the figures below. Answer them to make these numbers yours.`,
         })
   }
 

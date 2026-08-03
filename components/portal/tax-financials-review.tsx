@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { groupKeyRoot } from '@/lib/tax/question-groups'
 import { resolveInstitution } from '@/lib/tax/bank-identity'
+import { suggestedPhrase, gateSixText } from '@/lib/tax/disclosure-text'
 import ValidationBreakdownPanel from './validation-breakdown'
 
 /** Prominent processing card (Antonio, 2026-07-03: "hourglass or a timer and
@@ -221,6 +222,7 @@ const activeAnswerOf = (g: QuestionGroup): string | null => {
 }
 
 const fmt = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
 const fmtDay = (iso: string, it: boolean) =>
   new Date(`${iso}T00:00:00Z`).toLocaleDateString(it ? 'it-IT' : 'en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 
@@ -246,7 +248,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // choose the good option, but nothing happened" while the server was in fact
   // refusing every tap. Failures are now ALSO shown on the card that was
   // tapped, keyed by its group key ('bulk' for the multi-select bar).
-  const [cardError, setCardError] = useState<{ key: string; message: string } | null>(null)
+  // Keyed by the EXACT group keys that were in the failed request — not by a
+  // 'bulk' sentinel plus "is this card ticked" (bug-hunter). With the sentinel,
+  // a client who unticked the failed cards and ticked three different ones saw
+  // the red refusal jump onto cards that were never part of the failed call.
+  const [cardError, setCardError] = useState<{ keys: string[]; message: string } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [attestChecked, setAttestChecked] = useState(false)
   const [attested, setAttested] = useState(false)
@@ -306,6 +312,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       }
       const v: View = await res.json()
       setView(v)
+      // A successful reload means the screen now reflects the server — any
+      // card-level refusal from before it is stale and must not keep shouting
+      // (bug-hunter). The page-level `error` is already cleared above.
+      setCardError(null)
       setAttested(v.attested) // server truth — a data change resets it
       // Balance editor mirrors the server rows; user edits survive reloads only
       // until saved (save → reload → server truth).
@@ -363,7 +373,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       // Both places: the top strip (unchanged) AND the card they tapped, so a
       // refusal is visible without scrolling to the top of the page.
       setError(msg)
-      setCardError({ key: g.group_key, message: msg })
+      setCardError({ keys: [g.group_key], message: msg })
     } finally {
       setBusy(null)
     }
@@ -389,6 +399,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     const groups = Array.from(bulkSel.values())
     const ids = groups.flatMap(g => g.transaction_ids)
     setBusy('bulk')
+    // Clear on entry like answer() and setBucket() do — without this a stale
+    // red refusal survived a LATER SUCCESS (bug-hunter). A false "that didn't
+    // work" is the same disease this card-level error was added to cure.
+    setCardError(null)
     try {
       const res = await fetch(`${API}/answer`, {
         method: 'POST',
@@ -412,7 +426,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       setError(msg)
       // Pin it to every selected card so the refusal is visible wherever the
       // client is looking, not only in the strip at the top of the page.
-      setCardError({ key: 'bulk', message: msg })
+      setCardError({ keys: groups.map(g => g.group_key), message: msg })
     } finally {
       setBusy(null)
     }
@@ -530,6 +544,16 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // `editable` is absent on the staff workspace payload (never locked) — only
   // an explicit false means locked.
   const locked = view?.editable === false
+  // Every mutating control on this screen is gated on this, not on `busy`
+  // alone (2026-08-03, bug-hunter blocker). The first cut disabled only three
+  // controls while the banner promised "you can't change anything here" — so
+  // Confirm, Upload and Add-category stayed live under a message saying they
+  // weren't. `locked` can only ever be true in CLIENT mode (the staff workspace
+  // payload never carries `editable`, verified), so applying it broadly cannot
+  // lock staff out of their own tool. Deliberately NOT applied to read-only
+  // affordances — reloading, expanding a category, opening a section — because
+  // the banner also promises the client can still READ everything.
+  const busyOrLocked = busy !== null || locked
 
   // One merchant-group question card (chips, bucket select, bulk checkbox).
   // COMPONENT-scope since 2026-07-06 so the country/period cards can render it
@@ -554,7 +578,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               <input
                 type="checkbox"
                 checked={checked}
-                disabled={busy !== null || dirBlocked || locked}
+                disabled={busyOrLocked || dirBlocked}
                 onChange={() => toggleBulk(g)}
                 title={dirBlocked ? (it ? 'Prima completa la selezione nell’altra sezione' : 'Finish your selection in the other section first') : (it ? 'Seleziona per rispondere in blocco' : 'Select to answer together')}
                 className="h-4 w-4 accent-blue-600 disabled:opacity-40"
@@ -568,7 +592,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${lean.cls}`}>{lean.txt}</span>
           <select
             value={g.ai_bucket ?? ''}
-            disabled={busy !== null || locked}
+            disabled={busyOrLocked}
             onChange={e => void setBucket(g, e.target.value)}
             className="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600 disabled:opacity-50"
           >
@@ -589,7 +613,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             return (
               <button
                 key={a.value}
-                disabled={busy !== null || selected || locked}
+                disabled={busyOrLocked || selected}
                 onClick={() => { if (actsOnSelection) setBulkConfirm(a.value); else void answer(g, a.value) }}
                 aria-pressed={selected}
                 className={selected
@@ -604,7 +628,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         {/* The refusal, ON the card that was tapped (2026-08-03). Without this
             the only feedback was a strip at the very top of the page, so a
             client working through the queue saw the button do nothing at all. */}
-        {cardError && (cardError.key === g.group_key || (cardError.key === 'bulk' && checked)) && (
+        {cardError?.keys.includes(g.group_key) && (
           <p role="alert" className="mt-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-800">
             {cardError.message}
           </p>
@@ -761,7 +785,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setError(msg)
-      setCardError({ key: g.group_key, message: msg })
+      setCardError({ keys: [g.group_key], message: msg })
     } finally {
       setBusy(null)
     }
@@ -1036,7 +1060,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               <span className="flex gap-2">
                 <button
                   type="button"
-                  disabled={busy !== null}
+                  disabled={busyOrLocked}
                   onClick={() => void resolveFormat(fp.mapping_id, fp.path, 'confirm')}
                   className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
                 >
@@ -1044,7 +1068,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 </button>
                 <button
                   type="button"
-                  disabled={busy !== null}
+                  disabled={busyOrLocked}
                   onClick={() => void resolveFormat(fp.mapping_id, fp.path, 'reject')}
                   className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-red-400 hover:text-red-600 disabled:opacity-50"
                 >
@@ -1087,7 +1111,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   <span className="text-zinc-500 text-xs ml-2">{f.count} {it ? 'transazioni' : 'transactions'} · {f.from} → {f.to}</span>
                 </div>
                 <button
-                  disabled={busy !== null}
+                  disabled={busyOrLocked}
                   onClick={() => void deleteFile(f)}
                   className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
                 >
@@ -1115,7 +1139,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   <button
                     key={a.account_ref}
                     type="button"
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     onClick={() => { setUploadBank(a.bank); setUploadAccount(a.acct); setUploadNoAcct(false) }}
                     className="rounded-full border border-zinc-300 bg-white px-2.5 py-0.5 text-xs text-zinc-700 hover:border-zinc-900 disabled:opacity-50"
                   >
@@ -1130,7 +1154,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               value={uploadBank}
               onChange={e => setUploadBank(e.target.value)}
               placeholder={it ? 'Nome della banca (es. Mercury)' : 'Bank name (e.g. Mercury)'}
-              disabled={busy !== null}
+              disabled={busyOrLocked}
               className="rounded-md border border-zinc-300 px-2 py-1 text-xs disabled:opacity-50"
             />
             {uploadNeedsAccount && (
@@ -1138,14 +1162,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 value={uploadAccount}
                 onChange={e => setUploadAccount(e.target.value)}
                 placeholder={it ? 'Numero di conto (o ultime 4 cifre)' : 'Account number (or last 4 digits)'}
-                disabled={busy !== null}
+                disabled={busyOrLocked}
                 className="rounded-md border border-red-400 px-2 py-1 text-xs disabled:opacity-50"
               />
             )}
             <select
               value={uploadKind}
               onChange={e => setUploadKind(e.target.value)}
-              disabled={busy !== null}
+              disabled={busyOrLocked}
               className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-600 disabled:opacity-50"
             >
               <option value="checking">{it ? 'Conto corrente' : 'Checking'}</option>
@@ -1158,7 +1182,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 type="file"
                 accept=".csv,.pdf,.zip"
                 multiple
-                disabled={busy !== null}
+                disabled={busyOrLocked}
                 className="hidden"
                 onChange={e => {
                   const files = Array.from(e.target.files ?? [])
@@ -1181,7 +1205,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 type="checkbox"
                 checked={uploadNoAcct}
                 onChange={e => setUploadNoAcct(e.target.checked)}
-                disabled={busy !== null}
+                disabled={busyOrLocked}
               />
               {it
                 ? 'È un servizio multivaluta o crypto (senza numero di conto unico)'
@@ -1241,7 +1265,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           </div>
           <button
             type="button"
-            disabled={busy !== null || processing || view.transactionCount === 0}
+            disabled={busyOrLocked || processing || view.transactionCount === 0}
             onClick={() => void generate()}
             className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
           >
@@ -1279,7 +1303,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               )}
               <button
                 type="button"
-                disabled={busy !== null}
+                disabled={busyOrLocked}
                 onClick={() => setRerunConfirm(true)}
                 className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:border-blue-400 hover:text-blue-700 disabled:opacity-50"
               >
@@ -1343,7 +1367,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           </div>
           <button
             type="button"
-            disabled={busy !== null || view.ingestPending > 0}
+            disabled={busyOrLocked || view.ingestPending > 0}
             onClick={() => void generate()}
             className="shrink-0 inline-flex items-center rounded-md bg-amber-600 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
           >
@@ -1411,6 +1435,8 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           <button
             type="button"
             onClick={() => void load()}
+            /* Reload only — writes nothing, so it stays available while the file
+               is locked (the banner promises the client can still read). */
             disabled={busy !== null}
             className="shrink-0 inline-flex items-center rounded-md border border-amber-400 bg-white px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
           >
@@ -1506,8 +1532,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 <li key={g.id} className="flex items-start gap-3">
                   <span className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${gateColor(g)}`}>{gateIcon(g)}</span>
                   <div>
-                    <div className="text-sm font-medium text-zinc-800">{g.title}</div>
-                    <div className="text-xs text-zinc-500">{g.detail}</div>
+                    <div className="text-sm font-medium text-zinc-800">
+                      {g.id === 6 ? (it ? 'Ogni transazione decisa da te' : 'Every transaction categorized') : g.title}
+                    </div>
+                    {/* Gate 6 is rendered from the client's own numbers so it
+                        speaks their language; every other gate still shows the
+                        module's (English) detail — pre-existing, flagged. */}
+                    <div className="text-xs text-zinc-500">
+                      {g.id === 6 ? gateSixText(view.draft.pnl, it) : g.detail}
+                    </div>
                     {/* Gate 2 staff control (2026-07-06): a first-year company can
                         never produce a prior return — answer it here instead of
                         the gate nagging forever. Hidden over extracted returns
@@ -1516,7 +1549,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       <div className="mt-1.5 flex flex-wrap gap-2">
                         <button
                           type="button"
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => void setPriorReturn('first_year')}
                           className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:border-blue-400 hover:text-blue-700 disabled:opacity-50"
                         >
@@ -1524,7 +1557,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                         </button>
                         <button
                           type="button"
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => void setPriorReturn('never_filed')}
                           className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:border-blue-400 hover:text-blue-700 disabled:opacity-50"
                         >
@@ -1535,7 +1568,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     {isStaff && g.id === 2 && (view.prior_return?.case === 'first_year' || view.prior_return?.case === 'never_filed') && (
                       <button
                         type="button"
-                        disabled={busy !== null}
+                        disabled={busyOrLocked}
                         onClick={() => void setPriorReturn('clear')}
                         className="mt-1.5 rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-xs text-zinc-500 hover:border-red-300 hover:text-red-600 disabled:opacity-50"
                       >
@@ -1645,12 +1678,32 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                           ? `Di cui ancora un nostro suggerimento (${view.draft.pnl.foldedUncategorizedCount})`
                           : `Of which still our suggestion (${view.draft.pnl.foldedUncategorizedCount})`}
                       </dt>
-                      <dd className="font-semibold">−{fmt(view.draft.pnl.foldedUncategorizedExpense)}</dd>
                     </div>
+                    {/* BOTH SIDES (bug-hunter blocker, 2026-08-03). The first cut
+                        printed only foldedUncategorizedExpense with a hardcoded
+                        minus and called them "expenses" — so a client whose
+                        undecided rows are INFLOWS (unidentified incoming wires /
+                        payout batches, the commonest shape here) was shown
+                        "(12) −0.00" while gate 6 on the same screen said
+                        +120,000. Income and expense are now separate lines, each
+                        rendered only when it exists, so the disclosure can never
+                        contradict the gate again. */}
+                    {view.draft.pnl.foldedUncategorizedExpense !== 0 && (
+                      <div className="flex justify-between text-amber-900">
+                        <dt>{it ? 'Uscite' : 'Money out'}</dt>
+                        <dd className="font-semibold">−{fmt(view.draft.pnl.foldedUncategorizedExpense)}</dd>
+                      </div>
+                    )}
+                    {view.draft.pnl.foldedUncategorizedIncome !== 0 && (
+                      <div className="flex justify-between text-amber-900">
+                        <dt>{it ? 'Entrate' : 'Money in'}</dt>
+                        <dd className="font-semibold">{fmt(view.draft.pnl.foldedUncategorizedIncome)}</dd>
+                      </div>
+                    )}
                     <p className="mt-1 text-[11px] leading-snug text-amber-800">
                       {it
-                        ? 'Queste spese sono già incluse nei totali qui sopra, ma le abbiamo classificate noi al posto tuo. Rispondi alle domande più in basso per renderle tue.'
-                        : 'These are already inside the totals above, but we classified them for you. Answer the questions further down to make them yours.'}
+                        ? 'Questi movimenti sono già inclusi nei totali qui sopra, ma li abbiamo classificati noi al posto tuo. Rispondi alle domande più in basso per renderli tuoi.'
+                        : 'These movements are already inside the totals above, but we classified them for you. Answer the questions further down to make them yours.'}
                     </p>
                   </div>
                 )}
@@ -1761,7 +1814,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               <div className="mt-3 flex items-center gap-3">
                 <button
                   onClick={() => void saveBalances()}
-                  disabled={busy !== null || !balDirty}
+                  disabled={busyOrLocked || !balDirty}
                   className="rounded-md bg-zinc-900 px-4 py-1.5 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-50"
                 >
                   {busy === 'balances' ? (it ? 'Salvataggio…' : 'Saving…') : (it ? 'Salva saldi' : 'Save balances')}
@@ -1857,21 +1910,21 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     </div>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       <button
-                        disabled={busy !== null}
+                        disabled={busyOrLocked}
                         onClick={() => setCountryConfirm({ card: c, choice: 'business' })}
                         className="rounded-full border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
                       >
                         {it ? 'Tutto aziendale' : 'All business'}
                       </button>
                       <button
-                        disabled={busy !== null}
+                        disabled={busyOrLocked}
                         onClick={() => setCountryConfirm({ card: c, choice: 'personal' })}
                         className="rounded-full border border-amber-500 bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
                       >
                         {it ? 'Tutto personale' : 'All personal'}
                       </button>
                       <button
-                        disabled={busy !== null}
+                        disabled={busyOrLocked}
                         onClick={() => setInlineReview(k => k === `country-${c.loc_code}` ? null : `country-${c.loc_code}`)}
                         className="rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                       >
@@ -1900,21 +1953,21 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       </div>
                       <div className="mt-3 flex flex-wrap items-center gap-2">
                         <button
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => setPeriodConfirm({ period: p, choice: 'business' })}
                           className="rounded-full border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
                         >
                           {it ? 'Tutto aziendale' : 'All business'}
                         </button>
                         <button
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => setPeriodConfirm({ period: p, choice: 'personal' })}
                           className="rounded-full border border-amber-500 bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
                         >
                           {it ? 'Tutto personale' : 'All personal'}
                         </button>
                         <button
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => setInlineReview(k => k === key ? null : key)}
                           className="rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                         >
@@ -1952,7 +2005,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                           "message us" hint instead of a dead button. */}
                       {(isStaff || b.actor_role === 'client') ? (
                         <button
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => void undoPeriodAnswer(b.id)}
                           className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 font-medium text-zinc-600 hover:border-red-400 hover:text-red-600 disabled:opacity-50"
                         >
@@ -1991,7 +2044,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   </button>
                   <button
                     type="button"
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     onClick={() => { setRerunConfirm(false); void generate() }}
                     className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
                   >
@@ -2031,14 +2084,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 <div className="mt-4 flex justify-end gap-2">
                   <button
                     onClick={() => setCountryConfirm(null)}
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900"
                   >
                     {it ? 'Annulla' : 'Cancel'}
                   </button>
                   <button
                     onClick={() => void confirmCountryAnswer()}
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     className={countryConfirm.choice === 'business'
                       ? 'rounded-full border border-emerald-600 bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50'
                       : 'rounded-full border border-amber-500 bg-amber-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50'}
@@ -2089,14 +2142,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 <div className="mt-4 flex justify-end gap-2">
                   <button
                     onClick={() => setPeriodConfirm(null)}
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900"
                   >
                     {it ? 'Annulla' : 'Cancel'}
                   </button>
                   <button
                     onClick={() => void confirmPeriodAnswer()}
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     className={periodConfirm.choice === 'business'
                       ? 'rounded-full border border-emerald-600 bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50'
                       : 'rounded-full border border-amber-500 bg-amber-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50'}
@@ -2122,7 +2175,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 {ANSWERS.filter(a => bulkDir && a.directions.includes(bulkDir)).map(a => (
                   <button
                     key={a.value}
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     onClick={() => setBulkConfirm(a.value)}
                     className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-blue-600 hover:text-blue-700 disabled:opacity-50"
                   >
@@ -2131,7 +2184,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 ))}
                 <button
                   onClick={() => setBulkSel(new Map())}
-                  disabled={busy !== null}
+                  disabled={busyOrLocked}
                   className="ml-auto rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-500 hover:border-zinc-900 hover:text-zinc-900"
                 >
                   {it ? 'Annulla selezione' : 'Clear selection'} ✕
@@ -2175,14 +2228,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 <div className="mt-4 flex justify-end gap-2">
                   <button
                     onClick={() => setBulkConfirm(null)}
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900"
                   >
                     {it ? 'Annulla' : 'Cancel'}
                   </button>
                   <button
                     onClick={() => void confirmBulkAnswer()}
-                    disabled={busy !== null}
+                    disabled={busyOrLocked}
                     className="rounded-full border border-blue-600 bg-blue-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
                   >
                     {busy !== null ? (it ? 'Registrazione…' : 'Booking…') : (it ? 'Conferma' : 'Confirm')}
@@ -2201,14 +2254,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 </span>
                 <button
                   onClick={() => void undoBulkAnswer()}
-                  disabled={busy !== null}
+                  disabled={busyOrLocked}
                   className="rounded-full border border-emerald-600 bg-white px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
                 >
                   {busy === 'bulk-undo' ? (it ? 'Annullamento…' : 'Undoing…') : (it ? 'Annulla' : 'Undo')}
                 </button>
                 <button
                   onClick={() => setBulkUndo(null)}
-                  disabled={busy !== null}
+                  disabled={busyOrLocked}
                   className="ml-auto text-xs text-emerald-700 hover:text-emerald-900"
                 >
                   {it ? 'Chiudi' : 'Dismiss'} ✕
@@ -2424,7 +2477,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   className="rounded-md border border-zinc-300 px-2 py-1 text-xs"
                 />
                 <button
-                  disabled={busy !== null || newBucket.trim().length < 2}
+                  disabled={busyOrLocked || newBucket.trim().length < 2}
                   onClick={() => void addBucket()}
                   className="rounded-md border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 disabled:opacity-50"
                 >
@@ -2459,14 +2512,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     ) : (
                       <div className="mt-2 flex flex-wrap gap-2">
                         <button
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => void answerCoverage(q, 'no_activity')}
                           className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                         >
                           {it ? 'No — nessuna attività in quei mesi' : 'No — no activity in those months'}
                         </button>
                         <button
-                          disabled={busy !== null}
+                          disabled={busyOrLocked}
                           onClick={() => void answerCoverage(q, 'had_activity')}
                           className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                         >
@@ -2564,8 +2617,8 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 {view.draft.pnl.foldedUncategorizedCount > 0 && (
                   <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
                     {it
-                      ? `Attenzione: ${view.draft.pnl.foldedUncategorizedCount} transazioni sono ancora classificate da noi, non da te. Confermando accetti anche quelle.`
-                      : `Heads up: ${view.draft.pnl.foldedUncategorizedCount} transactions are still classified by us, not by you. Confirming accepts those too.`}
+                      ? `Attenzione: ${suggestedPhrase(view.draft.pnl.foldedUncategorizedCount, true)} ancora classificate da noi, non da te. Confermando accetti anche quelle.`
+                      : `Heads up: ${suggestedPhrase(view.draft.pnl.foldedUncategorizedCount, false)} still classified by us, not by you. Confirming accepts those too.`}
                   </p>
                 )}
                 <label className="flex items-start gap-2 text-sm text-zinc-700">
@@ -2575,12 +2628,16 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       ? 'Confermo di aver controllato il Conto Economico e lo Stato Patrimoniale e accetto questi numeri così come sono, sulla base delle informazioni che ho fornito. Capisco che eventuali conti o redditi non comunicati sono una mia responsabilità.'
                       : 'I confirm I have checked the Profit & Loss and Balance Sheet and I accept these numbers as they are, based on the information I have provided. I understand that any accounts or income I have not reported are my responsibility.'}
                     {view.draft.pnl.foldedUncategorizedCount > 0 && (it
-                      ? ` Accetto inoltre le ${view.draft.pnl.foldedUncategorizedCount} classificazioni fatte dal vostro sistema che non ho verificato.`
-                      : ` I also accept the ${view.draft.pnl.foldedUncategorizedCount} classifications made by your system that I have not reviewed.`)}
+                      ? (view.draft.pnl.foldedUncategorizedCount === 1
+                        ? ' Accetto inoltre la classificazione fatta dal vostro sistema che non ho verificato.'
+                        : ` Accetto inoltre le ${view.draft.pnl.foldedUncategorizedCount} classificazioni fatte dal vostro sistema che non ho verificato.`)
+                      : (view.draft.pnl.foldedUncategorizedCount === 1
+                        ? ' I also accept the 1 classification made by your system that I have not reviewed.'
+                        : ` I also accept the ${view.draft.pnl.foldedUncategorizedCount} classifications made by your system that I have not reviewed.`))}
                   </span>
                 </label>
                 <button
-                  disabled={!attestChecked || !view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || view.ingestPending > 0 || busy !== null}
+                  disabled={!attestChecked || !view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || view.ingestPending > 0 || busyOrLocked}
                   onClick={() => void attest()}
                   className="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-40"
                 >

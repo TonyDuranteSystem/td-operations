@@ -49,6 +49,35 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
 
+    // LOCK (added 2026-08-03, bug-hunter blocker). This route had NO
+    // client-editable check — it only guarded role, ownership and in-flight
+    // ingestion. So a client whose file is `under_review` could be shown the
+    // "your file is with our team" banner, scroll past it, tick the box and
+    // press Confirm: `confirmation_accepted` flipped and `runAttestHandoff`
+    // fired, archiving a "(client-confirmed)" workbook to Drive and raising a
+    // staff task WHILE STAFF WERE STILL REVIEWING. `approved` is client-editable
+    // so the legitimate approve → confirm path is untouched; `confirmed` is not,
+    // which also makes a second attestation a clean refusal.
+    // Same lookup shape as the other write routes and as the GET's banner
+    // (latest submission for the account+year, NO status filter) so the banner
+    // and this refusal can never disagree.
+    const { isClientEditable } = await import('@/lib/tax/review-status')
+    const { data: lockRow } = await supabaseAdmin
+      .from('tax_return_submissions')
+      .select('review_status')
+      .eq('account_id', accountId)
+      .eq('tax_year', taxYear)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const lockStatus = lockRow?.review_status ?? null
+    if (lockStatus !== null && !isClientEditable(lockStatus as never)) {
+      return NextResponse.json(
+        { error: 'Your submission is locked (under review or already confirmed) — ask us to reopen it before confirming.' },
+        { status: 409 },
+      )
+    }
+
     // Server-side guard: never attest while statements are still being read.
     // The numbers are still changing, and a premature confirmation fires the
     // handoff (Excel archive + staff task) on incomplete data. The UI disables

@@ -631,24 +631,41 @@ ${(entityType === "MMLLC" || entityType === "Corp") ? `<li>Bank statements auto-
         .single()
 
       const prev = (curSub?.review_status ?? null) as ReviewStatus | null
-      const nextStatus: ReviewStatus = prev === "revision_requested" ? "resubmitted" : "submitted"
-      const reviewHistory = Array.isArray(curSub?.review_history) ? curSub!.review_history : []
-      reviewHistory.push(
-        buildReviewHistoryEntry({
-          from: prev,
-          to: nextStatus,
-          at: now,
-          by: p.contact_id ? `client:${p.contact_id}` : "portal",
-        }),
-      )
+      // A client re-editing from an ALREADY-resubmitted state must stay
+      // 'resubmitted' (2026-08-03). This branch used to fall through to
+      // 'submitted' for anything that wasn't 'revision_requested', and nothing
+      // here checked the state machine — `resubmitted → submitted` is not a
+      // legal transition. It only became reachable when 'resubmitted' was made
+      // client-editable (the freeze fix): the client edits again, and the
+      // history silently records a forbidden hop that erases the fact they had
+      // already been round once. Staying put is both legal and truthful.
+      const nextStatus: ReviewStatus =
+        prev === "revision_requested" || prev === "resubmitted" ? "resubmitted" : "submitted"
 
-      const { error: rsErr } = await supabaseAdmin
-        .from("tax_return_submissions")
-        .update({ review_status: nextStatus, review_history: reviewHistory, updated_at: now })
-        .eq("id", p.submission_id)
+      if (nextStatus === prev) {
+        // Already there — write nothing. A self-transition is not in the state
+        // machine either, and a history entry saying resubmitted → resubmitted
+        // is noise in the one record that is supposed to be the truth.
+        result.steps.push(step("review_status", "ok", `already ${prev} — unchanged`))
+      } else {
+        const reviewHistory = Array.isArray(curSub?.review_history) ? curSub!.review_history : []
+        reviewHistory.push(
+          buildReviewHistoryEntry({
+            from: prev,
+            to: nextStatus,
+            at: now,
+            by: p.contact_id ? `client:${p.contact_id}` : "portal",
+          }),
+        )
 
-      if (rsErr) result.steps.push(step("review_status", "error", rsErr.message))
-      else result.steps.push(step("review_status", "ok", `review_status → ${nextStatus}`))
+        const { error: rsErr } = await supabaseAdmin
+          .from("tax_return_submissions")
+          .update({ review_status: nextStatus, review_history: reviewHistory, updated_at: now })
+          .eq("id", p.submission_id)
+
+        if (rsErr) result.steps.push(step("review_status", "error", rsErr.message))
+        else result.steps.push(step("review_status", "ok", `review_status → ${nextStatus}`))
+      }
     } catch (e) {
       result.steps.push(step("review_status", "error", e instanceof Error ? e.message : String(e)))
     }
