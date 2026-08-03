@@ -706,3 +706,10 @@ Now: a fixed **50 per page** with a Gmail-style pager (`1 … 4 5 [6] 7 8 … 10
 - Response carries `servedFrom: "local"` when the local path was used.
 
 Note: this only takes effect as the capture fills in — it resumed on 2026-08-02, so most threads still come from Gmail via the fallback until the backfill catches up.
+
+### Instant (push-driven) content capture + no overnight window (2026-08-03)
+
+Antonio: *"is there a way to make it push when I receive on Gmail automatically… instead of every 10 minutes"* — yes, and the pipe already existed.
+
+- **Push now captures content.** Gmail's Pub/Sub push already hit `/api/webhooks/gmail-push` and ran `syncIncremental` for HEADERS. It now also runs `captureBatchLive(mailbox, 10, 1)` so BODIES + attachments land seconds after an email arrives, not up to 10 minutes later. Best-effort and tiny (a push means a handful of new messages); wrapped in try/catch so a capture hiccup can never fail the webhook. The `*/10` capture cron stays as the safety net for anything a push misses (a lapsed watch, a dropped notification), and insert-once means neither path re-downloads stored mail.
+- **History sweep runs any hour** — `email-content-backfill` moved from `*/15 23,0-12 * * *` to `*/15 * * * *`. The overnight window existed because the pull competed with the inbox for Gmail quota (2026-08-02 incident); now that browse/search/open read from our own index, that contention is gone. Its internal throttles (60s budget per mailbox per tick, in-window concurrency 2) are unchanged. `lib/cron-coverage.ts` updated to match (a completeness test enforces parity with `vercel.json`).
