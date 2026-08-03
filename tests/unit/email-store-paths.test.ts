@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
   bodyStoragePath,
+  safeContentType,
   attachmentStoragePath,
   captureStatus,
   assertMailbox,
@@ -53,5 +54,37 @@ describe("email-store capture completeness", () => {
 
   it("throws on negative counts", () => {
     expect(() => captureStatus({ bodyStored: true, attachmentsExpected: -1, attachmentsStored: 0 })).toThrow()
+  })
+})
+
+describe("safeContentType", () => {
+  it("passes a clean type through, lowercased", () => {
+    expect(safeContentType("application/pdf")).toBe("application/pdf")
+    expect(safeContentType("Image/PNG")).toBe("image/png")
+  })
+
+  it("strips parameters that made Storage reject the upload", () => {
+    // the real-world shape behind the 218 failed messages
+    expect(safeContentType('application/pdf; name="Invoice 2025.pdf"')).toBe("application/pdf")
+    expect(safeContentType("text/html; charset=UTF-8")).toBe("text/html")
+  })
+
+  it("falls back for junk instead of failing the whole email", () => {
+    for (const junk of ["", "   ", "not-a-mime", "application/", "/pdf", "app lication/pdf", "application\\pdf"]) {
+      expect(safeContentType(junk)).toBe("application/octet-stream")
+    }
+  })
+
+  it("falls back for null/undefined/non-strings", () => {
+    expect(safeContentType(null)).toBe("application/octet-stream")
+    expect(safeContentType(undefined)).toBe("application/octet-stream")
+    // @ts-expect-error deliberately wrong type
+    expect(safeContentType(42)).toBe("application/octet-stream")
+  })
+
+  it("keeps valid token punctuation (vendor + suffix types)", () => {
+    expect(safeContentType("application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+      .toBe("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    expect(safeContentType("image/svg+xml")).toBe("image/svg+xml")
   })
 })
