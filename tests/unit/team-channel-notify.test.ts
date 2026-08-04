@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { channelNotifiesStaff, SILENT_CHANNEL_SLUGS } from '@/lib/team/channel-notify'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { channelNotifiesStaff, conversationNotifiesParticipants, SILENT_CHANNEL_SLUGS } from '@/lib/team/channel-notify'
 import { countTeamNotifications, buildTeamNotifications, type TeamThreadCountRow, type TeamNotifThreadRow } from '@/lib/team/workspace'
 import { validateTeamPostTarget } from '@/lib/team/post-message-validate'
 
@@ -113,5 +115,65 @@ describe('validateTeamPostTarget — answering inside a bug', () => {
   it('still requires exactly one target', () => {
     expect(validateTeamPostTarget({ root_id: 'r1' })).toMatch(/target is required/i)
     expect(validateTeamPostTarget({ channel: 'td-bug', thread_id: 't1' })).toMatch(/exactly ONE/i)
+  })
+})
+
+/**
+ * Antonio 2026-08-04 — td-bug: "every time Luca do something on his pc I receive
+ * the notification. i want to turn them off." A client conversation toasted on
+ * his screen AND pushed his phone for every message Luca typed into it and every
+ * answer the worker wrote back, because merely OPENING a conversation once marks
+ * you a participant of it for ever.
+ *
+ * Three sites could notify for a conversation — a person posting, Claude
+ * posting, and the in-CRM toast listener. All three must read the SAME predicate
+ * or the phone and the screen drift apart, which is the exact failure this file
+ * already guards against for channels. The source assertions below exist because
+ * two of the three sites are inside route handlers with no pure seam: without
+ * them, deleting the guard from one send path would break nothing and ship.
+ */
+describe('conversationNotifiesParticipants — client conversations are silent', () => {
+  it('does not notify (both the pop-up and the phone push are off)', () => {
+    expect(conversationNotifiesParticipants()).toBe(false)
+  })
+
+  it('is consulted by ALL THREE sites that could notify for a conversation', () => {
+    const sites = [
+      'components/dashboard/realtime-notifications.tsx',
+      'app/api/team/threads/[id]/messages/route.ts',
+      'lib/team/post-message.ts',
+    ]
+    for (const site of sites) {
+      const src = readFileSync(join(process.cwd(), site), 'utf8')
+      expect(src, `${site} must import the shared rule`)
+        .toContain('conversationNotifiesParticipants')
+      // Imported but never called would typecheck and silently notify again.
+      expect(src, `${site} must actually CALL the rule, not just import it`)
+        .toMatch(/conversationNotifiesParticipants\(\)/)
+    }
+  })
+
+  it('keeps the @mention branch ABOVE the conversation branch in both send paths', () => {
+    // An @mention is the deliberate way to reach someone in a now-silent
+    // conversation. If the conversation branch were ever reordered above it, the
+    // mention would be swallowed and there would be NO way to reach a teammate
+    // inside a client conversation.
+    for (const site of ['app/api/team/threads/[id]/messages/route.ts', 'lib/team/post-message.ts']) {
+      const src = readFileSync(join(process.cwd(), site), 'utf8')
+      const mentionAt = src.indexOf('mentions.userIds')
+      const conversationAt = src.indexOf('conversationNotifiesParticipants()')
+      expect(mentionAt, `${site}: mention push not found`).toBeGreaterThan(-1)
+      expect(conversationAt, `${site}: conversation guard not found`).toBeGreaterThan(-1)
+      expect(mentionAt, `${site}: @mention must be handled BEFORE the conversation branch`)
+        .toBeLessThan(conversationAt)
+    }
+  })
+
+  it('leaves the unread COUNTER alone — a quiet number is not an interruption', () => {
+    // Deliberate: Antonio still wants to SEE that a conversation moved, he just
+    // does not want to be pulled out of what he is doing for it.
+    expect(countTeamNotifications([
+      { thread_type: 'discussion', unread_count: 4, is_participant: true },
+    ] as TeamThreadCountRow[])).toBe(4)
   })
 })

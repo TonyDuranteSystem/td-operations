@@ -30,7 +30,7 @@ import { resolveMentions, listTeamMembers } from '@/lib/team/directory'
 import { findOrCreateDm } from '@/lib/team/dm'
 import { sendPushToAdminUsers } from '@/lib/portal/web-push'
 import { sendPushToStaffExcept } from '@/lib/team/notify'
-import { channelNotifiesStaff } from '@/lib/team/channel-notify'
+import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/team/channel-notify'
 import { validateTeamPostTarget, validateTeamPostMessage } from '@/lib/team/post-message-validate'
 import { resolveActingUser } from '@/lib/team/acting-user'
 
@@ -286,8 +286,14 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
       if (channelNotifiesStaff(target.channel_slug ?? target.channel_name ?? null)) {
         await sendPushToStaffExcept(CLAUDE_SENDER_UUID, { title: CLAUDE_SENDER_NAME, body: preview, url, tag }, actingUserId ? [actingUserId] : undefined)
       }
-    } else {
+    } else if (conversationNotifiesParticipants()) {
       // A client discussion: participants only, never every staff device.
+      //
+      // SILENT SINCE 2026-08-04 — the predicate returns false, so this branch
+      // does not run. This is the path that produced the "Conversation · Claude"
+      // pop-ups in Antonio's screenshot: Luca instructs the worker inside a
+      // client conversation, the worker answers, and the answer pushed every
+      // participant. An @mention by Claude still pushes (branch ABOVE).
       const { data: participants } = await admin
         .from('internal_thread_reads')
         .select('user_id')
