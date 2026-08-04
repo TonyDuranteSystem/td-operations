@@ -40,8 +40,23 @@ export interface PendingRead {
   totalChars: number | null
 }
 
-/** Tools whose results are windowed file reads — the ones this contract covers. */
-const WINDOWED_READ_TOOLS = new Set(["read_email_attachment", "read_portal_attachment"])
+/**
+ * Tools whose results are windowed file reads — the ones this contract covers.
+ *
+ * `read_uploaded_file` and `read_drive_file` joined on 2026-08-03 (td-bug,
+ * Luca). Until then the contract covered only files arriving by email or portal
+ * chat: a spreadsheet DROPPED IN THE CHAT and a file read from Drive were both
+ * outside it, so neither the forced-continuation latch nor the server's
+ * "read only X of Y" stamp ever fired for them. Drive was the worse of the two —
+ * the assistant was actively telling staff "put it in Drive as a Google Sheet
+ * and I'll read it in full", which was false.
+ */
+const WINDOWED_READ_TOOLS = new Set([
+  "read_email_attachment",
+  "read_portal_attachment",
+  "read_uploaded_file",
+  "read_drive_file",
+])
 
 /** Most forced continuations per answer attempt cycle. A 125k-char file at the
  *  default 20k window needs ~6; anything needing more is covered by the stamp. */

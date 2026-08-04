@@ -439,11 +439,16 @@ export async function POST(req: NextRequest) {
       imageBlocks.push(...read.imageBlocks)
       documentBlocks.push(...read.documentBlocks)
       if (read.textBlocks.length) {
+        // ONE budget across all the files' TEXT — same rule as the CRM sidebar.
+        const { capTurnTextBudget, SLACK_TEXT_CAP_FOR_SURFACE } = await import("@/lib/ai-agent/attachment-reader")
+        const budgeted = capTurnTextBudget(read.textBlocks, SLACK_TEXT_CAP_FOR_SURFACE())
         // Extracted text goes into the persisted body, so it's still there on later
         // turns. Images can't be: only the "was shown" note survives the replay.
         // Fenced: even a staff member's own upload can be a document a client sent
         // them, and the model must not read instructions out of it.
-        userBody += `\n\n${fenceUntrustedContent("files the staff member attached", read.textBlocks.join("\n\n"))}`
+        userBody += `\n\n${fenceUntrustedContent("files the staff member attached", budgeted.textBlocks.join("\n\n"))}`
+        // OUR instruction, so it must sit outside the untrusted fence.
+        if (budgeted.note) userBody += `\n\n${budgeted.note}`
       }
       // Tell the worker which refs it may attach to an email. BOTH surfaces now:
       // the client-chat panel has the same email capability as the Inbox
@@ -451,7 +456,12 @@ export async function POST(req: NextRequest) {
       // must have the same capabilities it has everywhere").
       if (sendableUploads.length) {
         const list = sendableUploads.map((s) => `${s.ref} — ${s.name}`).join(", ")
-        userBody += `\n\n[FILES YOU CAN ATTACH to an email on this turn (use send_email's \`attach\` with the ref): ${list}. Only these; never a file from an email or Drive.]`
+        // Same two capabilities behind the same refs as the CRM sidebar: READ the
+        // rest of a long upload, and ATTACH it to an email. Reading past the first
+        // window was impossible on every panel surface until 2026-08-03 (td-bug).
+        userBody += `\n\n[FILES YOU UPLOADED on this turn: ${list}.`
+        userBody += ` To read MORE of one (you were shown only its first section above), call read_uploaded_file with its ref.`
+        userBody += ` To attach one to an email, use send_email's \`attach\` with the ref — only these, never a file from an email or Drive.]`
       }
     } catch (err) {
       console.warn("[worker-chat] panel upload read failed (answering without files):", err)
@@ -726,6 +736,11 @@ export async function POST(req: NextRequest) {
       // Server-pinned allow-list. Its presence is what offers read_email_attachment;
       // the model can only name a ref that appears here.
       ...(pinnedEmailAttachments.length ? { pinnedEmailAttachments } : {}),
+      // This turn's panel uploads, pinned for RE-READING. Without this the model
+      // sees only the first window of an uploaded file and has no way to reach the
+      // rest — the same gap the CRM sidebar had (td-bug 2026-08-03). The pin is
+      // the gate: read_uploaded_file exists only because this is set.
+      ...(sendableUploads.length ? { pinnedUploads: sendableUploads } : {}),
       // FULL SLACK-PARITY READ RAILS (Antonio 2026-07-08: "it must be able
       // to work how it works in Slack"). Same switches the Team Workspace
       // grants staff. The code-task rail stays OFF (Antonio-only, R111);
@@ -962,7 +977,10 @@ export async function POST(req: NextRequest) {
         .then(() => {}, () => {})
     }
     console.error("[worker-chat] failed:", error)
-    const detail = error instanceof Error ? error.message : "Worker failed"
-    return NextResponse.json({ error: detail }, { status: 500 })
+    // PLAIN SENTENCE, never the provider's raw payload — same rule as the CRM
+    // sidebar (td-bug 2026-08-03). A transient overload must never read to staff
+    // as a problem with the file they just uploaded. Raw text stays in the log.
+    const { explainWorkerFailure } = await import("@/lib/ai-agent/transient-errors")
+    return NextResponse.json({ error: explainWorkerFailure(error) }, { status: 500 })
   }
 }

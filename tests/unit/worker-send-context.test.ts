@@ -48,6 +48,34 @@ describe("buildWorkerSendContext — the controls survive the handoff", () => {
     expect(ctx!.emailConfirmExempt).toEqual(["someone@example.com"])
   })
 
+  it("REGRESSION: forwards pinnedUploads — without it read_uploaded_file resolves nothing and long files stay unreadable", () => {
+    // MANDATED by buildWorkerSendContext's own docblock. This field is the ONLY
+    // gate on read_uploaded_file: the tool is offered because the pin exists, and
+    // the executor resolves the model's ref against this very list. Drop it from
+    // the builder and everything still typechecks — the tool is simply offered
+    // and then answers "❌ No files were uploaded in this conversation" for a file
+    // the staff member is looking at. That is the shape of failure this whole
+    // job exists to fix (td-bug 2026-08-03, Luca's spreadsheet).
+    const ctx = buildWorkerSendContext({
+      pinnedUploads: [{ ref: "up1", path: "worker-chat/abc.xlsx", name: "Tracking.xlsx" }],
+    })
+    expect(ctx).toBeDefined()
+    expect(ctx!.pinnedUploads).toEqual([
+      { ref: "up1", path: "worker-chat/abc.xlsx", name: "Tracking.xlsx" },
+    ])
+  })
+
+  it("builds a context for pinnedUploads ALONE — a plain upload turn has no send pin at all", () => {
+    // The commonest case by far: staff drops a spreadsheet into the sidebar and
+    // asks a question. No client pinned, no send rail. If that turn produced no
+    // context, the pin would never reach the executor.
+    const ctx = buildWorkerSendContext({
+      pinnedUploads: [{ ref: "up1", path: "worker-chat/abc.xlsx", name: "Tracking.xlsx" }],
+    })
+    expect(ctx).toBeDefined()
+    expect(ctx!.pinnedUploads?.[0]?.ref).toBe("up1")
+  })
+
   it("forwards forceMailbox — the antonio@-impersonation control", () => {
     // MANDATED by buildWorkerSendContext's own docblock: every new control field must
     // be asserted here. Without this, dropping forceMailbox from the builder would
