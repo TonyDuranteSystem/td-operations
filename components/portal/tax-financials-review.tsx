@@ -35,7 +35,7 @@ function ProgressCard({ title, detail, eta }: { title: string; detail: string; e
 
 interface Gate { id: number; title: string; status: 'pass' | 'na' | 'fail'; detail: string; blocking: boolean }
 interface Member { name: string; pct: number; beginning_capital: number; contributions: number; distributions: number; income_share: number; ending_capital: number }
-interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string }
+interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string; suspected_members?: string[]; suspected_count?: number }
 interface Bucket { slug: string; label: string }
 interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
 interface AccountOnFile { account_ref: string; bank: string; acct: string; count: number }
@@ -608,6 +608,28 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           </div>
           <div className="text-xs text-zinc-500">{g.count}× · {fmt(g.total)}{g.currency && g.currency !== 'USD' ? ` ${g.currency}` : ''}</div>
         </div>
+        {/* WHY WE ARE ASKING. Without this the client sees an ordinary card and
+            has no idea we suspect their own owner — which was the entire point
+            of raising it. The wording is exact on purpose: when only some rows
+            in the group match, it says so, because "this may be a payment to
+            X" over a ten-row group where two match is a false statement to a
+            client about their own company. */}
+        {(g.suspected_count ?? 0) > 0 && g.suspected_members?.length ? (
+          <div className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] leading-snug text-amber-800">
+            {(() => {
+              const who = g.suspected_members.join(it ? ' o ' : ' or ')
+              const partial = (g.suspected_count ?? 0) < g.count
+              if (it) {
+                return partial
+                  ? `${g.suspected_count} di questi ${g.count} pagamenti riportano il nome di ${who}, ${g.suspected_members.length > 1 ? 'soci' : 'socio'} della società. Erano pagamenti a un socio?`
+                  : `Questo nome somiglia a ${who}, ${g.suspected_members.length > 1 ? 'soci' : 'socio'} della società. Era un pagamento a un socio?`
+              }
+              return partial
+                ? `${g.suspected_count} of these ${g.count} payments carry the name ${who}, ${g.suspected_members.length > 1 ? 'owners' : 'an owner'} of the company. Was this a payment to an owner?`
+                : `This name looks like ${who}, ${g.suspected_members.length > 1 ? 'owners' : 'an owner'} of the company. Was this a payment to an owner?`
+            })()}
+          </div>
+        ) : null}
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${lean.cls}`}>{lean.txt}</span>
           <select
@@ -2317,8 +2339,22 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 // rowRootKey keys, while group_key now carries a
                 // direction+currency suffix (per-direction split 2026-07-05).
                 const inFilter = (g: QuestionGroup) => !periodFilter || periodFilter.keys.has(groupKeyRoot(g.group_key))
-                const needs = view.questions.filter(g => inFilter(g) && (g.current_category ?? 'uncategorized') === 'uncategorized')
-                const booked = view.questions.filter(g => inFilter(g) && (g.current_category ?? 'uncategorized') !== 'uncategorized')
+                // A group needs a decision when it is undecided OR when we
+                // suspect one of its payments went to an owner.
+                //
+                // THE MARK, NOT THE CATEGORY, EARNS TIER 1 (2026-08-04). The
+                // first design forced these into Tier 1 by rewriting the
+                // category to 'uncategorized', which collided with the AI pass,
+                // the re-sort and the two surfaces' different treatment of
+                // undecided rows. Promoting on the mark instead gives the same
+                // prominence with none of that — and it is the ONLY thing that
+                // re-asks a payee the client once answered "business expense"
+                // for, since the learned rule keeps booking it as an expense.
+                // Without this line the question lands in the section the page
+                // explicitly labels optional, and would simply never be seen.
+                const isSuspected = (g: QuestionGroup) => (g.suspected_count ?? 0) > 0
+                const needs = view.questions.filter(g => inFilter(g) && ((g.current_category ?? 'uncategorized') === 'uncategorized' || isSuspected(g)))
+                const booked = view.questions.filter(g => inFilter(g) && (g.current_category ?? 'uncategorized') !== 'uncategorized' && !isSuspected(g))
                 const glance = booked.filter(g => g.ai_lean === 'personal' || g.ai_lean === 'unsure' || !g.ai_lean)
                 const autoBooked = booked.filter(g => g.ai_lean === 'business')
                 const needsIn = needs.filter(g => g.direction !== 'out')

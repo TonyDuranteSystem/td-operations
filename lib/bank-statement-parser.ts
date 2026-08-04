@@ -10,34 +10,11 @@
  */
 
 import { sniffCsvDialect, parseDelimitedRows, detectCsvSignature, parseRelayCSV, parseMercuryCSV, parseRevolutCSV, parseSlashCSV, parseGenericCSV, stableRowRef, dedupeRefs } from "./bank-csv-parsers"
-import { matchMemberName, findNearMissMember } from "./tax/member-names"
+import { matchMemberName, findNearMissMember, ASK_CLIENT_NOTE } from "./tax/member-names"
+export { ASK_CLIENT_NOTE, suspectedMemberFromNotes } from "./tax/member-names"
 
-/**
- * Note prefix marking a row the system deliberately REFUSED to guess, so the
- * client is asked instead. Exported because the categorisation engine must
- * recognise it — the AI pass is forbidden from resolving a row carrying it,
- * and the re-sort must preserve it. Never string-literal it.
- *
- * NOT yet rendered on the client's question card: the row reaches the queue and
- * is asked, but the card does not yet show WHICH member we suspect. That is the
- * remaining value of this note and it is a UI change, tracked separately —
- * stated here so nobody reads this constant as proof the prompt exists.
- */
-export const ASK_CLIENT_NOTE = "ask: possible payment to member"
-
-/**
- * Categories that are a GUESS rather than a determination — the ones the
- * near-miss check is allowed to reopen. `expense` here is the generic catch-all
- * at the bottom of the rule list (notably "Sent money to", which books 946 rows
- * book-wide); an explicit income or internal-transfer booking is never reopened.
- *
- * `fee` is deliberately NOT in this set. A bank fee is never an owner draw, and
- * demoting one to `uncategorized` would newly make it eligible for the
- * transfer-pair matcher (which skips `fee` but not `uncategorized`) — a fee
- * could then be matched against an unrelated inflow and booked as an internal
- * transfer. Reopening a row must not change what OTHER passes may do to it.
- */
-const GUESSED_CATEGORIES: ReadonlySet<string> = new Set(["uncategorized", "expense"])
+// The suspected-member mark lives in ./tax/member-names (pure, client-safe):
+// the review screen reads it, and this module pulls in the PDF library.
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -184,21 +161,30 @@ export function categorizeTransaction(
       }
       is_related_party = true
       notes = `Member: ${matched}`
-    } else if (tx.amount < 0 && GUESSED_CATEGORIES.has(category)) {
+    } else if (tx.amount < 0) {
       // ASK, DON'T GUESS (Antonio, 2026-08-04). Money out to something carrying
       // a member's SURNAME but not their full name — "Sent money to M. Finelli"
-      // where the members are Gabriele and Matthew Finelli. Until now that fell
-      // straight through to the catch-all below and was deducted as a vendor
-      // payment: an owner draw, gone from the members' capital accounts.
+      // where the members are Gabriele and Matthew Finelli. Left alone this is
+      // deducted as a vendor payment: an owner draw, gone from the members'
+      // capital accounts.
       //
-      // We do not resolve it either way — we cannot know, and a wrong guess in
-      // either direction is wrong money. It goes back to uncategorized so it
-      // reaches the client's question queue, where one tap settles it and the
-      // answer is remembered.
+      // THE MARK DOES NOT TOUCH THE CATEGORY (2026-08-04, second design).
+      // The first cut demoted the row to `uncategorized` to force it in front
+      // of the client. That was unnecessary and expensive: the client's review
+      // already lists `expense` rows, so the row was always visible — and
+      // borrowing a category to mean "we are unsure" put it in the one state
+      // the AI pass is licensed to resolve (it re-booked it and sealed it), made
+      // the periodic re-sort carry a note it otherwise discards, forced `fee`
+      // to be excluded so the transfer-pair matcher would not newly grab it,
+      // and moved the row between the client's folded total and the staff
+      // workspace's unfolded one, so one company-year could report two
+      // different taxable incomes. Every one of those was self-inflicted.
       //
-      // Only outgoing money, and only rows a GUESS produced (uncategorized, or
-      // the generic expense/fee catch-alls). A row an explicit rule booked as
-      // income or an internal transfer is left exactly as it was.
+      // The row now keeps whatever category the evidence supports, and carries
+      // a MARK saying who we suspect. The review screen promotes marked rows
+      // into "Needs your decision" on the strength of the mark, not the
+      // category — the same prominence, none of the collisions.
+      //
       // DESCRIPTION AND COUNTERPARTY ARE SEARCHED SEPARATELY, never joined.
       // The reference-cut inside findNearMissMember makes ONE cut across the
       // text it is given, and Relay / Mercury / Revolut / Slash all put the
@@ -208,11 +194,7 @@ export function categorizeTransaction(
       // never fired on the very shape an owner draw takes. The counterparty
       // field is a pure payee, so nothing in it can be cut.
       const near = findNearMissMember(desc, memberNames) ?? findNearMissMember(cp, memberNames)
-      if (near) {
-        category = "uncategorized"
-        subcategory = ""
-        notes = `${ASK_CLIENT_NOTE} ${near}`
-      }
+      if (near) notes = `${ASK_CLIENT_NOTE} ${near}`
     }
   }
 

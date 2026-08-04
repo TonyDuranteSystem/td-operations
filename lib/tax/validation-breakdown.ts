@@ -35,7 +35,7 @@ import { toUsd, type FxRates } from "./fx"
 import type { FinancialDraft } from "./financials-engine"
 import type { PriorReturnCaseRecord } from "./prior-return-case"
 import type { OwnershipResolution } from "./ownership-resolution"
-import { matchMemberName } from "./member-names"
+import { matchMemberName, suspectedMemberFromNotes } from "./member-names"
 
 /** The row fields validation needs — a superset of what the draft consumes. */
 export interface ValidationRow {
@@ -56,6 +56,7 @@ export type ProvenanceClass =
   | "location_answer"   // manual: period/country answer (human tap or standing-policy sweep)
   | "auto_zero"         // auto: zero-amount
   | "transfer_matcher"  // transfer-pair / own-entity
+  | "asked_member"      // ask: we suspect an owner and the client has not answered
   | "open"              // uncategorized
 
 export function classifyProvenance(row: Pick<ValidationRow, "category" | "notes">): ProvenanceClass {
@@ -66,6 +67,10 @@ export function classifyProvenance(row: Pick<ValidationRow, "category" | "notes"
   if (n.startsWith("manual:")) return "human_answer"
   if (n.startsWith("auto:")) return "auto_zero"
   if (n.startsWith("transfer-pair") || n === "own-entity transfer") return "transfer_matcher"
+  // An OPEN QUESTION, not a confident booking. Without this class the row falls
+  // through to "rules_memory" and the accountant's panel reads a payment we
+  // have explicitly flagged as maybe-an-owner-draw as settled bank vocabulary.
+  if (suspectedMemberFromNotes(n)) return "asked_member"
   return "rules_memory"
 }
 
@@ -133,6 +138,7 @@ const PROVENANCE_LABELS: Record<ProvenanceClass, string> = {
   location_answer: "Location answers & standing policies",
   auto_zero: "Auto-filed zero-amount",
   transfer_matcher: "Internal-transfer matcher",
+  asked_member: "Asked the client — may be an owner payment",
   open: "Still open (uncategorized)",
 }
 

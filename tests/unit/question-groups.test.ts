@@ -89,3 +89,72 @@ describe("categoryForAnswer", () => {
     expect(categoryForAnswer("nonsense")).toBeNull()
   })
 })
+
+/**
+ * THE SUSPECTED-OWNER MARK ON A CARD (2026-08-04).
+ *
+ * The mark says "the payee carries one of this company's members' surnames but
+ * not their full name". It is what earns the card a place in "Needs your
+ * decision" — the category is deliberately left alone. Two ways to get this
+ * wrong, both of which tell a client something false about their own company:
+ * speaking for rows that do not match, and stamping a name across a catch-all
+ * bucket of unrelated payees.
+ */
+describe("groupUncategorized — the suspected-owner mark", () => {
+  const marked = (id: string, description: string, amount: number, name: string | null): UncategorizedRow => ({
+    id, description, counterparty: null, amount, transaction_date: "2025-06-01", bank_name: "Wise",
+    category: "expense",
+    notes: name ? `ask: possible payment to member ${name}` : "",
+  })
+
+  it("carries the suspected owner and the number of rows that match", () => {
+    const [g] = groupUncategorized([
+      marked("a", "Sent money to M. Finelli", -1000, "Gabriele Finelli"),
+      marked("b", "Sent money to M. Finelli", -2000, "Gabriele Finelli"),
+    ])
+    expect(g.suspected_members).toEqual(["Gabriele Finelli"])
+    expect(g.suspected_count).toBe(2)
+  })
+
+  /**
+   * `mode` skips empty values, so a single marked row among nine unmarked ones
+   * would have WON outright and the card would have claimed all ten payments
+   * went to that owner. A distinct list plus a count is the honest shape — the
+   * card can then say "1 of these 10".
+   */
+  it("does not let one marked row speak for the whole group", () => {
+    const rows = [marked("a", "ACME LTD", -100, "Gabriele Finelli")]
+    for (let i = 0; i < 9; i++) rows.push(marked(`x${i}`, "ACME LTD", -100, null))
+    const [g] = groupUncategorized(rows)
+    expect(g.count).toBe(10)
+    expect(g.suspected_count).toBe(1)
+    expect(g.suspected_members).toEqual(["Gabriele Finelli"])
+  })
+
+  it("lists every distinct owner when a group could match more than one", () => {
+    const [g] = groupUncategorized([
+      marked("a", "Sent money to Finelli", -100, "Gabriele Finelli"),
+      marked("b", "Sent money to Finelli", -100, "Matthew Finelli"),
+    ])
+    expect(g.suspected_members).toEqual(["Gabriele Finelli", "Matthew Finelli"])
+  })
+
+  /**
+   * A degenerate root is a CATCH-ALL holding rows with nothing in common.
+   * Stamping an owner's name across it would tell the client that dozens of
+   * unrelated payees might be their business partner.
+   */
+  it("suppresses the mark on a catch-all bucket of unrelated payees", () => {
+    const [g] = groupUncategorized([
+      marked("a", "", -100, "Gabriele Finelli"),
+      marked("b", "", -200, null),
+    ])
+    expect(g.suspected_members).toBeUndefined()
+    expect(g.suspected_count).toBeUndefined()
+  })
+
+  it("leaves ordinary groups with no mark at all", () => {
+    const [g] = groupUncategorized([marked("a", "Aurora Global Holdings Limited", -4000, null)])
+    expect(g.suspected_members).toBeUndefined()
+  })
+})

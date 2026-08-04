@@ -30,6 +30,7 @@ import { aiSuggestCategories, AI_PROMPT_VERSION, type AiCategorizableTx, type Ai
 const EMPTY_AI_STATS = (): AiRunStats => ({ batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false })
 import { getExpenseBuckets } from "./expense-buckets"
 import { fetchMemberRoster } from "./member-roster"
+import { findNearMissMember } from "./member-names"
 
 export interface CategorizationRule {
   id: string
@@ -224,18 +225,13 @@ export function computeRecategorizationUpdates(
     const isAutoTagged = (row.notes ?? "").startsWith("auto:")
     if ((isAiTagged || isAutoTagged) && next.category === "uncategorized") continue
     if (next.category !== row.category || next.subcategory !== (row.subcategory ?? "")) {
-      // The ask-note MUST be carried through. Pass 1 otherwise discards
-      // `next.notes`, so a row reopened by the near-miss check landed in the
-      // client's queue still wearing its previous explanation — typically
-      // "transfer-pair → <id>", which now claims the row is one leg of an
-      // internal transfer when we have just decided we do not know what it is.
-      // (When a rule overrides an AI suggestion the "ai:" tag no longer
-      // applies, so it is cleared — that is the other case below.)
-      const carriesAsk = (next.notes ?? "").startsWith(ASK_CLIENT_NOTE)
+      // When a rule overrides an AI suggestion the "ai:" tag no longer applies.
+      // The suspected-member mark is NOT handled here — it is stamped after the
+      // later passes, because those passes overwrite notes and would erase it.
       updates.set(row.id as string, {
         category: next.category,
         subcategory: next.subcategory,
-        ...(carriesAsk ? { notes: next.notes } : isAiTagged ? { notes: "" } : {}),
+        ...(isAiTagged ? { notes: "" } : {}),
       })
     }
   }
@@ -281,6 +277,49 @@ export function computeRecategorizationUpdates(
   )
   for (const id of ownHits) {
     updates.set(id, { category: "conversion", subcategory: "internal_transfer", notes: "own-entity transfer" })
+  }
+
+  // Pass 3: the SUSPECTED-MEMBER MARK. Stamped LAST, and deliberately so.
+  //
+  // The mark says "the payee carries one of this company's members' surnames
+  // but not their full name — ask the client". It does NOT change the category
+  // (see categorizeTransaction for why the first design did, and why that was
+  // wrong). It has to be written here rather than in pass 1 for two reasons:
+  //
+  //  1. PASSES 2 AND 2b OVERWRITE NOTES. A transfer pair or an own-entity
+  //     transfer stamps its own explanation, which would erase a mark written
+  //     earlier — and those rows are no longer open questions anyway.
+  //  2. PASS 1 ONLY WRITES WHEN A CATEGORY MOVES. Now that the mark never moves
+  //     one, a row already stored as `expense` would never have been written at
+  //     all — so the mark would never appear for a client whose statements were
+  //     ingested BEFORE their members were linked. That is precisely the case
+  //     the periodic re-sort exists for (Lucia Terracciano / Antonio Pezzella),
+  //     so the feature would have shipped dead for every returning client.
+  //
+  // A NOTES-ONLY update is emitted whenever the computed mark differs from the
+  // stored one — including when it must be CLEARED (member removed from the
+  // CRM, payee re-identified, a rule now explains the row). Without the clear
+  // path a stale mark would tell the client something false for ever.
+  for (const row of rows) {
+    const stored = (row.notes ?? "")
+    // Human answers and AI/auto provenance own the note outright.
+    if (stored.startsWith("manual:") || stored.startsWith("ai:") || stored.startsWith("auto:")) continue
+    const u = updates.get(row.id as string)
+    const finalCategory = u?.category ?? (row.category as string)
+    // A row the later passes explained is not an open question. Their note is
+    // the correct one and must stand.
+    if (u?.notes && !u.notes.startsWith(ASK_CLIENT_NOTE)) continue
+    if (finalCategory === "conversion" || finalCategory === "distribution" || finalCategory === "contribution") continue
+
+    const computed = Number(row.amount) < 0
+      ? (findNearMissMember(row.description ?? "", memberNames) ?? findNearMissMember(row.counterparty ?? "", memberNames))
+      : null
+    const want = computed ? `${ASK_CLIENT_NOTE} ${computed}` : ""
+    const has = stored.startsWith(ASK_CLIENT_NOTE) ? stored : ""
+    if (want === has) continue
+    // Note-only when nothing else about the row changed; merged into the
+    // existing update otherwise. The persist step already accepts both.
+    updates.set(row.id as string, { ...(u ?? {}), notes: want })
   }
 
   return { updates, transferPairs: pairs.length }
@@ -405,17 +444,31 @@ export async function recategorizeAccountYear(
     const nextCategory = u.category ?? (orig.category as string)
     const nextSub = u.subcategory ?? ((orig.subcategory as string) ?? "")
     const catChanged = nextCategory !== orig.category || nextSub !== ((orig.subcategory as string) ?? "")
-    if (!catChanged && !u.notes) continue
+    // `notes: ""` is a deliberate CLEAR, not "no note" — it is how a stale
+    // suspected-member mark is removed once the row is explained. Testing
+    // truthiness here would have skipped the clear and left the mark for ever,
+    // so the presence of the key is what counts.
+    const notesChanged = u.notes !== undefined && u.notes !== ((orig.notes as string) ?? "")
+    if (!catChanged && !notesChanged) continue
     if (catChanged) categoryChanged++
     // Report-only: count it and move on. Counted the same way a real run counts
     // it, so "would change N" and "changed N" are the same number.
     if (dryRun) { recategorized++; continue }
     const payload: Record<string, unknown> = { category: nextCategory, subcategory: nextSub }
-    if (u.notes) payload.notes = u.notes
+    if (u.notes !== undefined) payload.notes = u.notes
+    // THE CLIENT MAY BE ANSWERING WHILE THIS RUNS. The decision to skip human
+    // answers is taken from the snapshot read at the top of this function, but
+    // a re-sort over a few thousand rows takes minutes — long enough for the
+    // owner to tap an answer in the portal in between. Without this guard the
+    // write lands on top of their answer: the category reverts while the
+    // "manual:" note stays, and because every later pass refuses to touch a
+    // manual row, that contradiction is then FROZEN — their decision is gone
+    // from their own P&L and nothing will ever put it back.
     const { error: upErr } = await supabaseAdmin
       .from("bank_transactions")
       .update(payload)
       .eq("id", id)
+      .not("notes", "ilike", "manual:%")
     if (upErr) throw new Error(`Failed to update transaction ${id}: ${upErr.message}`)
     recategorized++
   }

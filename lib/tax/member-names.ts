@@ -297,3 +297,35 @@ export function findNearMissMember(text: string | null | undefined, memberNames:
   }
   return null
 }
+
+/**
+ * Prefix marking a row the system deliberately REFUSED to guess — the payee
+ * carries a member's surname but not their full name — followed by the
+ * suspected member's name.
+ *
+ * This mark, NOT the category, is what makes the row a question. Everything
+ * that must respect it:
+ *  - the AI pass is forbidden from resolving a row carrying it, so a guess can
+ *    never answer the question on the client's behalf and seal it;
+ *  - the periodic re-sort writes and clears it even when no category moves;
+ *  - the client's review screen promotes marked rows into "Needs your
+ *    decision" and names the suspected member on the card;
+ *  - the client's own answer overwrites it, which is how it self-clears.
+ *
+ * IT LIVES HERE, not with the statement parser, because the review SCREEN reads
+ * it: the parser pulls in the PDF library and Node's filesystem, so importing
+ * it from a client component breaks the browser build outright.
+ */
+export const ASK_CLIENT_NOTE = "ask: possible payment to member"
+
+/**
+ * The suspected member's name carried by a row's note, or null. The single
+ * reader — the review screens, the validation panel and the engine all use it,
+ * so the note's shape is defined in exactly one place.
+ */
+export function suspectedMemberFromNotes(notes: string | null | undefined): string | null {
+  const n = (notes ?? "").trim()
+  if (!n.startsWith(ASK_CLIENT_NOTE)) return null
+  const name = n.slice(ASK_CLIENT_NOTE.length).trim()
+  return name.length > 0 ? name : null
+}

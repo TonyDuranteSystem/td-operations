@@ -142,19 +142,37 @@ async function createFork(input: { actor: string; taxYear: number; sourceAccount
     .single()
   if (wsErr) throw new Error(wsErr.message)
 
-  // Copy the client's member roster (account_contacts → workspace members).
+  // Copy the client's member roster into the workspace — from the SHARED
+  // reader, not from the contact links alone.
+  //
+  // This fork used to read `account_contacts` only, which gave the accountant's
+  // workspace a NARROWER roster than the client's own books. A company that is
+  // a member exists only on the curated members list and can never be a contact
+  // row, so it vanished here — and the workspace then re-booked that member's
+  // draws as ordinary business expenses. Saving back flipped them again on the
+  // client side: the exact flip-flop the shared roster exists to prevent, just
+  // relocated to the staff surface. A third definition of "who is a member" is
+  // never the answer.
+  const { fetchMemberRoster } = await import('@/lib/tax/member-roster')
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('ownership_pct, contacts(first_name, last_name)')
     .eq('account_id', input.sourceAccountId)
-  const members: MemberInput[] = ((links ?? []) as unknown as Array<{ ownership_pct: number | null; contacts: { first_name: string | null; last_name: string | null } | null }>)
-    .filter(l => l.contacts)
-    .map(l => ({
-      member_type: 'individual',
-      display_name: `${l.contacts!.first_name ?? ''} ${l.contacts!.last_name ?? ''}`.trim(),
-      ownership_pct: l.ownership_pct,
-    }))
-    .filter(m => (m.display_name ?? '').length > 0)
+  // Ownership percentages only exist on the contact links today, so they are
+  // matched back by name; a roster name with no link simply has none, which the
+  // draft already handles (it spreads unattributed movements by ownership and
+  // flags them) rather than dropping the member.
+  const pctByName = new Map<string, number | null>(
+    ((links ?? []) as unknown as Array<{ ownership_pct: number | null; contacts: { first_name: string | null; last_name: string | null } | null }>)
+      .filter(l => l.contacts)
+      .map(l => [`${l.contacts!.first_name ?? ''} ${l.contacts!.last_name ?? ''}`.trim().toLowerCase(), l.ownership_pct]),
+  )
+  const roster = await fetchMemberRoster(supabaseAdmin, input.sourceAccountId)
+  const members: MemberInput[] = roster.names.map(name => ({
+    member_type: 'individual',
+    display_name: name,
+    ownership_pct: pctByName.get(name.toLowerCase()) ?? null,
+  }))
   await insertMembers(ws.id, members)
 
   // Copy the client's transactions for the year into the workspace (private copy).

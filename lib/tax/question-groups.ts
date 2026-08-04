@@ -12,6 +12,7 @@
  */
 
 import { rowRootKey } from "./row-root"
+import { suspectedMemberFromNotes } from "./member-names"
 
 export interface UncategorizedRow {
   id: string
@@ -32,6 +33,9 @@ export interface UncategorizedRow {
   /** The row's current bookkeeping category (no-vanish: lets the review show
    *  the owner's current choice instead of dropping decided rows). */
   category?: string | null
+  /** The row's note. Read ONLY to recover the suspected-member mark — the note
+   *  itself is internal provenance and is never shown to a client. */
+  notes?: string | null
 }
 
 export interface QuestionGroup {
@@ -61,6 +65,19 @@ export interface QuestionGroup {
   /** Mode subcategory — distinguishes owner draws from personal spend inside
    *  'distribution' so the selected chip is honest (2026-07-07). */
   current_subcategory?: string
+  /**
+   * Members this group's payments MIGHT have gone to — the payee carries their
+   * surname but not their full name. Drives promotion into "Needs your
+   * decision" and the line naming them on the card.
+   *
+   * A DISTINCT LIST, never a mode. `mode` skips empty values, so one marked row
+   * among nine unmarked ones would have won outright and the card would have
+   * claimed all ten payments were to that owner — a false statement to a client
+   * about their own company. The count below says how many actually match.
+   */
+  suspected_members?: string[]
+  /** How many rows in this group carry a mark (≤ count). */
+  suspected_count?: number
 }
 
 /** Most-frequent non-empty value in a list (ties → first seen). */
@@ -114,13 +131,17 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
   // ("Unknown - Corporate Card - 6921" groups as its counterparty "Bershka").
   // Split per (root, direction, currency) — same keying as the grouped AI
   // candidates — so answer chips are direction-pure and totals single-currency.
-  const groups = new Map<string, { rows: UncategorizedRow[]; label: string; direction: "in" | "out"; currency: string }>()
+  const groups = new Map<string, { rows: UncategorizedRow[]; label: string; direction: "in" | "out"; currency: string; degenerate: boolean }>()
   for (const r of rows) {
-    const { key, label } = rowRootKey(r.description, r.counterparty)
+    // `degenerate` is captured, not discarded. A degenerate root is a CATCH-ALL
+    // bucket ("(no description)", bare "card"/"spend") holding rows with
+    // nothing in common — so one marked row inside it must NOT stamp an owner's
+    // name across dozens of unrelated payees. Suppressed below.
+    const { key, label, degenerate } = rowRootKey(r.description, r.counterparty)
     const direction = rowDirection(r.amount)
     const currency = (r.currency ?? "").toUpperCase()
     const groupKey = key + GROUP_KEY_SEP + direction + GROUP_KEY_SEP + currency
-    if (!groups.has(groupKey)) groups.set(groupKey, { rows: [], label, direction, currency })
+    if (!groups.has(groupKey)) groups.set(groupKey, { rows: [], label, direction, currency, degenerate: !!degenerate })
     groups.get(groupKey)!.rows.push(r)
   }
   return Array.from(groups.entries())
@@ -131,6 +152,12 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
       const bucket = mode(g.rows.map(r => r.ai_bucket))
       const current_category = mode(g.rows.map(r => r.category))
       const current_subcategory = mode(g.rows.map(r => r.subcategory))
+      // Distinct suspected members + how many rows actually carry a mark.
+      // Never moded (see the field's doc): one marked row must not speak for
+      // the whole group. Suppressed entirely on a degenerate catch-all root.
+      const marked = g.degenerate ? [] : g.rows.map(r => suspectedMemberFromNotes(r.notes)).filter((n): n is string => !!n)
+      const suspected_members = Array.from(new Set(marked)).sort()
+      const suspected_count = marked.length
       return {
         group_key,
         label: g.label,
@@ -144,6 +171,7 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
         ...(bucket ? { ai_bucket: bucket } : {}),
         ...(current_category ? { current_category } : {}),
         ...(current_subcategory ? { current_subcategory } : {}),
+        ...(suspected_members.length ? { suspected_members, suspected_count } : {}),
       }
     })
     .sort((a, b) => b.count - a.count)

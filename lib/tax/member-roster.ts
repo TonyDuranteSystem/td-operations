@@ -158,6 +158,23 @@ export async function fetchMemberRoster(db: RosterDb, accountId: string): Promis
       `[member-roster] account ${accountId}: NO members and NO usable linked contacts. ` +
       `Every owner draw will be treated as a business expense until somebody is on file.`,
     )
+    // REPORT IT WHERE A HUMAN LOOKS. A console line in a serverless log is not
+    // a signal anybody receives; this is the one failure the whole owner-roster
+    // design creates, and it is silent by construction — the categoriser simply
+    // books every draw as a business cost and every gate stays green.
+    //
+    // Reported, NOT thrown: an empty roster is a legitimate state for a brand
+    // new company, and 283 of 330 accounts have no curated members at all, so
+    // throwing here would fail the client's own statement upload for a data gap
+    // that is ours to fix, not theirs.
+    void import("@/lib/system-errors")
+      .then(({ reportSystemError }) => reportSystemError({
+        source: "server",
+        route: "lib/tax/member-roster",
+        message: `No usable owner names on file for account ${accountId} — owner draws will be booked as business expenses`,
+        context: { account_id: accountId, unusable },
+      }))
+      .catch(() => {})
   }
 
   return { names, fromMembers: curated.length, fromContacts: contactNames.length, unusable }
