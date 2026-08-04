@@ -20,12 +20,23 @@
 import { describe, it, expect } from 'vitest'
 import { fetchMemberRoster, type RosterDb } from '@/lib/tax/member-roster'
 
-/** Minimal stand-in for the query builder shape the reader uses. */
+/**
+ * Stand-in for the query builder.
+ *
+ * CRITICAL that this matches reality: supabase-js RESOLVES with
+ * `{ data: null, error }` on a failed query — it does NOT reject. A fake that
+ * rejects would exercise a try/catch that real errors never reach, and the
+ * suite would stay green while production silently categorised every owner
+ * draw as a business expense. So a "failed" read here resolves with an error,
+ * exactly as the driver does. `throws` covers the separate case of the client
+ * itself blowing up (network, bad client).
+ */
 function fakeDb(opts: {
   members?: Array<{ full_name: string | null; company_name: string | null; member_type: string | null }>
   contacts?: Array<{ first_name: string | null; last_name: string | null } | null>
   failMembers?: boolean
   failContacts?: boolean
+  throws?: boolean
 }): RosterDb {
   return {
     from(table: string) {
@@ -33,12 +44,13 @@ function fakeDb(opts: {
         select() {
           return {
             eq() {
+              if (opts.throws) throw new Error('client exploded')
               if (table === 'members') {
-                if (opts.failMembers) return Promise.reject(new Error('members read down'))
-                return Promise.resolve({ data: opts.members ?? [] })
+                if (opts.failMembers) return Promise.resolve({ data: null, error: { message: 'members read down' } })
+                return Promise.resolve({ data: opts.members ?? [], error: null })
               }
-              if (opts.failContacts) return Promise.reject(new Error('contacts read down'))
-              return Promise.resolve({ data: (opts.contacts ?? []).map(c => ({ contacts: c })) })
+              if (opts.failContacts) return Promise.resolve({ data: null, error: { message: 'contacts read down' } })
+              return Promise.resolve({ data: (opts.contacts ?? []).map(c => ({ contacts: c })), error: null })
             },
           }
         },
@@ -130,6 +142,32 @@ describe('fetchMemberRoster — the union', () => {
       failContacts: true,
     }), 'acct')
     expect(b.names).toEqual(['Gabriele Finelli'])
+  })
+
+  /**
+   * THE ONE THAT MUST NOT DEGRADE QUIETLY. An empty roster caused by an outage
+   * is indistinguishable from a company that genuinely has nobody on file — and
+   * that second reading gets acted on: every owner draw books as a deducted
+   * expense on a return somebody signs. Fail the run instead.
+   */
+  it('THROWS when both sources fail, rather than categorising with no owners', async () => {
+    await expect(fetchMemberRoster(fakeDb({ failMembers: true, failContacts: true }), 'acct'))
+      .rejects.toThrow(/roster unavailable/i)
+  })
+
+  it('throws the same way when the client itself explodes', async () => {
+    await expect(fetchMemberRoster(fakeDb({ throws: true }), 'acct'))
+      .rejects.toThrow(/roster unavailable/i)
+  })
+
+  /**
+   * An account that legitimately has nobody on file is NOT an error — it is the
+   * ordinary state of a brand-new company, and it must stay distinguishable
+   * from the outage above.
+   */
+  it('does NOT throw when both sources are simply empty', async () => {
+    const r = await fetchMemberRoster(fakeDb({ members: [], contacts: [] }), 'acct')
+    expect(r.names).toEqual([])
   })
 
   it('is deterministic — the curated spelling wins and order is stable', async () => {

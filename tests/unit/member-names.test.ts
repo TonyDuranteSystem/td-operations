@@ -198,6 +198,42 @@ describe('payeePart — who was paid, not what for', () => {
     expect(payeePart('')).toBe('')
     expect(payeePart(null)).toBe('')
   })
+
+  /**
+   * REGRESSION. A marker at position 0 cut the line to nothing, which switched
+   * the near-miss check OFF for every description of that shape — a member
+   * payment would silently go back to being deducted. With no payee half to
+   * read, search the whole line instead.
+   */
+  it('falls back to the whole line when a marker starts the description', () => {
+    expect(payeePart('REF: Berini payment')).toBe('ref berini payment')
+    expect(payeePart('Invoice 2024-005 Marinoni')).toBe('invoice 2024 005 marinoni')
+  })
+
+  it('so a leading-reference bank format still asks the client', () => {
+    expect(findNearMissMember('REF: Berini payment', ['Donato Renato Berini'])).not.toBeNull()
+  })
+})
+
+/**
+ * Non-Latin scripts normalise to the empty string (the accent-stripping keeps
+ * only a-z0-9). Verified against production: no such member exists today — the
+ * only non-ASCII names are Latin-with-accents ("Nicolò Patti", "Bernát Nimród
+ * Blahó"), which fold correctly. This pins the SAFE failure: such a name is
+ * rejected outright, never admitted as a blanket matcher.
+ */
+describe('non-Latin names fail safe', () => {
+  it('are rejected rather than becoming an empty blanket match', () => {
+    for (const n of ['Пётр Иванов', '张伟', 'Γιώργος Παπαδόπουλος']) {
+      expect(isUsableMemberName(n)).toBe(false)
+      expect(matchMemberName('any vendor payment at all', [n])).toBeNull()
+    }
+  })
+
+  it('the real accented members in production DO fold correctly', () => {
+    expect(matchMemberName('Sent money to NICOLO PATTI', ['Nicolò Patti'])).toBe('Nicolò Patti')
+    expect(matchMemberName('Wire to BERNAT NIMROD BLAHO', ['Bernát Nimród Blahó'])).toBe('Bernát Nimród Blahó')
+  })
 })
 
 describe('buildMemberNames — from contact rows', () => {

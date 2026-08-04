@@ -73,22 +73,53 @@ interface ContactLink {
  * Build the member roster for an account. Curated list first, linked contacts
  * appended, duplicates folded by normalised name.
  *
- * Never throws on a missing source — a company with no curated members is the
- * normal case (283 of 330), and a read failure must not silently produce an
- * EMPTY roster that reads as "this company has no owners". Both reads are
- * independent; whatever is available is used.
+ * AN EMPTY SOURCE IS NORMAL; A FAILED SOURCE IS NOT. A company with no curated
+ * members is the ordinary case (283 of 330 accounts), so one empty read is fine
+ * and the other source carries the roster. But if BOTH reads fail this THROWS,
+ * because an empty roster produced by an outage is indistinguishable from
+ * "this company genuinely has no owners on file" — and that second reading is
+ * acted on: every owner draw for the year books as a deducted business expense,
+ * silently, on a return somebody then signs. Failing the run is recoverable;
+ * quietly filing wrong numbers is not. Same posture as the categorisation-rules
+ * read, which also refuses to continue without its data.
+ *
+ * NOTE ON ERROR SHAPE: supabase-js RESOLVES with `{ data: null, error }` rather
+ * than rejecting, so `data ?? []` is what actually handles a failure — a bare
+ * try/catch here would be dead code and would have logged nothing.
  */
 export async function fetchMemberRoster(db: RosterDb, accountId: string): Promise<MemberRoster> {
-  const [memberRows, contactRows] = await Promise.all([
+  const [members, contacts] = await Promise.all([
     (async () => {
-      const { data } = await db.from("members").select("full_name, company_name, member_type").eq("account_id", accountId)
-      return (data ?? []) as MemberRow[]
-    })().catch(() => [] as MemberRow[]),
+      try {
+        const { data, error } = await db.from("members").select("full_name, company_name, member_type").eq("account_id", accountId)
+        return { rows: (data ?? []) as MemberRow[], error: error ?? null }
+      } catch (e) {
+        return { rows: [] as MemberRow[], error: e }
+      }
+    })(),
     (async () => {
-      const { data } = await db.from("account_contacts").select("contacts(first_name, last_name)").eq("account_id", accountId)
-      return (data ?? []) as unknown as ContactLink[]
-    })().catch(() => [] as ContactLink[]),
+      try {
+        const { data, error } = await db.from("account_contacts").select("contacts(first_name, last_name)").eq("account_id", accountId)
+        return { rows: (data ?? []) as unknown as ContactLink[], error: error ?? null }
+      } catch (e) {
+        return { rows: [] as ContactLink[], error: e }
+      }
+    })(),
   ])
+
+  if (members.error && contacts.error) {
+    throw new Error(
+      `member roster unavailable for account ${accountId} — refusing to categorise with no owners: ` +
+      `${String((members.error as { message?: string })?.message ?? members.error)}`,
+    )
+  }
+  // One source down is survivable, but never in silence: the roster is now
+  // narrower than the truth and some owner draws will book as expenses.
+  if (members.error) console.warn(`[member-roster] account ${accountId}: curated members read FAILED, using linked contacts only`)
+  if (contacts.error) console.warn(`[member-roster] account ${accountId}: linked contacts read FAILED, using curated members only`)
+
+  const memberRows = members.rows
+  const contactRows = contacts.rows
 
   // A company member carries its name in company_name and has no full_name;
   // a person carries full_name. Take whichever is present rather than trusting

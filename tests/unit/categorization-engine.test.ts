@@ -180,6 +180,76 @@ describe('computeRecategorizationUpdates (parity core)', () => {
     })
   })
 
+  /**
+   * NEAR-MISS STABILITY ACROSS RE-RUNS (2026-08-04).
+   *
+   * The sweep runs every four hours. A rule that demotes a row on every pass
+   * and lets something else re-book it on the next is not a safety net, it is a
+   * flip-flop that moves the client's capital accounts on a timer. The real
+   * shape: Dynamiq's "Sent money to Enrico Berini" — same surname as member
+   * Donato Renato Berini — where the generic Wise catch-all books it as a
+   * vendor expense and the near-miss check must reopen it, once, and then leave
+   * it alone.
+   */
+  describe('near-miss demotion is stable across re-runs', () => {
+    const members = ['Donato Renato Berini', 'Sofia Marinoni']
+    const berini = (over = {}) => crow({
+      id: 'nm', description: 'Sent money to Enrico Berini', amount: -580, ...over,
+    })
+
+    it('run 1 reopens a catch-all vendor booking so the client is asked', () => {
+      const { updates } = computeRecategorizationUpdates(
+        [berini({ category: 'expense', subcategory: 'vendor_payment' })], [], members, '',
+      )
+      expect(updates.get('nm')?.category).toBe('uncategorized')
+    })
+
+    it('run 2 leaves it alone — no write at all, so nothing churns', () => {
+      const { updates } = computeRecategorizationUpdates(
+        [berini({ category: 'uncategorized', subcategory: '' })], [], members, '',
+      )
+      expect(updates.get('nm')).toBeUndefined()
+    })
+
+    it('an exact member match still books outright and is NEVER reopened', () => {
+      const exact = crow({ id: 'ex', description: 'Sent money to Donato Renato Berini', amount: -4464.27 })
+      const first = computeRecategorizationUpdates([exact], [], members, '').updates
+      expect(first.get('ex')?.category).toBe('distribution')
+      // ...and re-running on the booked row writes nothing.
+      const booked = crow({ id: 'ex', description: 'Sent money to Donato Renato Berini', amount: -4464.27, category: 'distribution', subcategory: 'member_distribution' })
+      expect(computeRecategorizationUpdates([booked], [], members, '').updates.get('ex')).toBeUndefined()
+    })
+
+    it('a human answer is never reopened, however many times it runs', () => {
+      const answered = berini({ category: 'expense', subcategory: 'vendor_payment', notes: 'manual: client says supplier' })
+      expect(computeRecategorizationUpdates([answered], [], members, '').updates.get('nm')).toBeUndefined()
+    })
+
+    it('an AI-booked row is not downgraded by the near-miss check', () => {
+      // Consistent with the existing guard: no pass may push an ai:/auto: row
+      // back to uncategorized. Documented deliberately — an AI guess on a
+      // near-miss payee survives, and only a human or a rule moves it.
+      const aiRow = berini({ category: 'expense', subcategory: 'vendor_payment', notes: 'ai:high' })
+      expect(computeRecategorizationUpdates([aiRow], [], members, '').updates.get('nm')).toBeUndefined()
+    })
+
+    it('an unrelated supplier is never reopened — the queue must not flood', () => {
+      const vendor = crow({ id: 'v', description: 'Sent money to Aurora Global Holdings Limited', amount: -4000 })
+      const { updates } = computeRecategorizationUpdates([vendor], [], members, '')
+      expect(updates.get('v')?.category ?? 'expense').toBe('expense')
+    })
+
+    it('an INCOMING payment from a near-miss name is left as booked', () => {
+      // Only outgoing money can be a disguised owner draw; reopening inflows
+      // would drag real revenue into the question queue.
+      const inflow = crow({ id: 'in', description: 'Received money from Enrico Berini', amount: 900, category: 'income', subcategory: 'sales' })
+      const after = computeRecategorizationUpdates([inflow], [], members, '').updates.get('in')
+      // It stays INCOME. (The built-in rule also normalises the subcategory to
+      // 'revenue', which is pre-existing behaviour and not what this pins.)
+      expect(after?.category ?? 'income').toBe('income')
+    })
+  })
+
   // A bank_transactions-shaped row (the columns the engine reads).
   const crow = (over: Partial<{
     id: string; transaction_date: string; description: string | null; counterparty: string | null;

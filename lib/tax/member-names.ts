@@ -226,7 +226,13 @@ export function payeePart(text: string | null | undefined): string {
     const at = padded.indexOf(` ${marker} `)
     if (at !== -1 && at < cut) cut = at
   }
-  return hay.slice(0, cut).trim()
+  const head = hay.slice(0, cut).trim()
+  // A marker at the very start ("REF: Berini payment") would cut the line down
+  // to nothing and silently switch the near-miss check OFF for that entire bank
+  // format — a member payment would go back to being deducted in silence.
+  // With no payee half to read, search the WHOLE line: the worst case is one
+  // extra question for the client, against a wrong number nobody sees.
+  return head || hay
 }
 
 /**
