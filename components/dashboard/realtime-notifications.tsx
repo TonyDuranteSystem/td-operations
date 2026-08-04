@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import { MessageSquare, CreditCard, PenTool, FileText } from 'lucide-react'
-import { channelNotifiesStaff } from '@/lib/team/channel-notify'
+import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/team/channel-notify'
 
 /**
  * Global realtime notification listener for the CRM dashboard.
@@ -36,8 +36,7 @@ export function RealtimeNotifications() {
     })
   }, [])
 
-  // Thread ids that should ping me: the DMs I'm in, the client conversations I'm
-  // a participant of (opened / posted / shared into), AND every WORK CHANNEL.
+  // Thread ids that should ping me: the DMs I'm in and every WORK CHANNEL.
   //
   // Channels were deliberately excluded until 2026-07-24 ("never plain channel
   // chatter"). Antonio: "There is only Luca and me... I have to know everything
@@ -45,6 +44,12 @@ export function RealtimeNotifications() {
   // same rule the send route uses to decide the push, read from the SAME
   // predicate (channelNotifiesStaff) so the phone and the screen cannot
   // disagree about what is worth telling you.
+  //
+  // CLIENT CONVERSATIONS were here too until 2026-08-04 and are now silent —
+  // see conversationNotifiesParticipants for why (opening one enrolled you in
+  // it for ever, so Luca's ordinary work toasted on Antonio's screen all day).
+  // The set is still LOADED, not deleted: flipping that predicate back on is
+  // meant to be a one-line change, not an archaeology exercise.
   //
   // Refreshed every 60s so a brand-new DM, conversation or channel starts
   // pinging within a minute.
@@ -231,7 +236,13 @@ export function RealtimeNotifications() {
         && row.mentioned_user_ids.includes(mine)
       const threadId = row?.thread_id
       const isMyDm = !!threadId && myDmThreadIdsRef.current.has(threadId)
-      const isMyConversation = !!threadId && myConversationThreadIdsRef.current.has(threadId)
+      // A client conversation is silent since 2026-08-04 — the predicate is the
+      // ONE place that decides, shared with both send paths so the screen and
+      // the phone cannot drift apart. An @mention inside a conversation is
+      // checked ABOVE and still pops up: that is the deliberate way to reach
+      // someone in a thread that no longer rings on its own.
+      const isMyConversation = conversationNotifiesParticipants()
+        && !!threadId && myConversationThreadIdsRef.current.has(threadId)
       const channelLabel = threadId ? myChannelThreadIdsRef.current.get(threadId) : undefined
       if (!mentionsMe && !isMyDm && !isMyConversation && !channelLabel) return
 

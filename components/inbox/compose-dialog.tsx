@@ -185,7 +185,28 @@ export function ComposeDialog({
       setTrackOpens(true)
       attachments.clear()
       setAttachNotice(null)
-      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      // Refresh the OPEN THREAD too, not just the list — and retry, because a
+      // sent message lands a few seconds later (Gmail indexes it with a lag, and
+      // our own copy of the body + attachments is captured right after). Without
+      // this the thread on screen stays frozen at its pre-send state: Antonio
+      // forwarded 9 PDFs to Worldpay on 2026-08-04, saw no attachments on the
+      // sent email, and they were there all along — captured 8s after the send.
+      // The reply box has done this since it shipped; Compose never did.
+      //
+      // No conversation id needed: invalidating the key PREFIX marks every
+      // thread stale, and react-query refetches only the one actually mounted.
+      const refetch = () => {
+        queryClient.invalidateQueries({ queryKey: ['inbox-messages'] })
+        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      }
+      refetch()
+      // Timers outlive this dialog on purpose — onClose() unmounts it, but the
+      // query client is app-level, so the refresh still lands on the thread
+      // underneath. (Same 4s/12s schedule as compose-reply. It is a stopwatch,
+      // not a signal: a capture slower than 12s still needs a manual refresh —
+      // deliberately left for the separate "refresh when it actually lands" job.)
+      setTimeout(refetch, 4000)
+      setTimeout(refetch, 12000)
       onClose()
     },
   })

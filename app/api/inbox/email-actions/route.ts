@@ -14,7 +14,7 @@ import {
 
 export const dynamic = "force-dynamic"
 
-type EmailAction = "archive" | "star" | "unstar" | "trash" | "untrash" | "forward" | "mark_read" | "mark_unread" | "move_to_label" | "set_color" | "snooze" | "unsnooze"
+type EmailAction = "archive" | "star" | "unstar" | "trash" | "untrash" | "delete_forever" | "forward" | "mark_read" | "mark_unread" | "move_to_label" | "set_color" | "snooze" | "unsnooze"
 
 
 /**
@@ -43,6 +43,10 @@ async function getSnoozeLabelId(asUser: string): Promise<string> {
   }
 }
 
+/** Gmail message/thread/label ids are opaque hex-ish tokens. Anything else is
+ *  rejected before it can reach a URL path — see the gate in POST(). */
+const GMAIL_ID = /^[A-Za-z0-9_-]{1,128}$/
+
 type MinimalThread = { messages?: Array<{ id?: string; labelIds?: string[] }> }
 
 /**
@@ -56,6 +60,67 @@ async function snapshotBeforeTrash(threadId: string, asUser: string): Promise<Re
     return captureRestorableLabels(thread.messages)
   } catch {
     return []
+  }
+}
+
+/**
+ * Our own stored copy's side of a delete/restore (dev_task 01800da8).
+ *
+ * Deleting only moved the email to Gmail's Trash; our copy of the body and
+ * attachments is separate and would otherwise sit there forever. Stamping it
+ * starts the 180-day bin clock — the copy is KEPT and readable the whole time
+ * (Gmail drops its own Trash at ~30 days, so past that ours is the only copy),
+ * then the daily purge sweep removes it for real.
+ *
+ * Best-effort by design: the Gmail action is what the user sees, so a failure
+ * here must never fail their delete, and it is only an OPTIMISATION: the bin
+ * state is reconciled from Gmail's own labels by `reconcileBinState()` on the
+ * index-sync cron, so a missed stamp is corrected within minutes. Never a lost
+ * email.
+ */
+async function binOurCopy(
+  mailbox: string,
+  threadIds: string[],
+  mode: "delete" | "restore",
+) {
+  try {
+    const box = mailbox === "antonio" ? "antonio" : "support"
+    const { markDeleted, markRestored } = await import("@/lib/email-store/deletion")
+    const sel = { threadIds }
+    if (mode === "delete") await markDeleted(box, sel)
+    else await markRestored(box, sel)
+  } catch (err) {
+    console.warn(`[inbox] could not ${mode} our stored copy of ${threadIds.length} thread(s):`, err)
+  }
+}
+
+/** Audit trail for a permanent erase — the rows it destroys are the only other
+ *  record that the email ever existed. Best-effort: never fail the erase itself. */
+async function logPermanentErase(
+  mailbox: string,
+  threadId: string,
+  messageIds: string[],
+  errors: number,
+) {
+  try {
+    const { createClient } = await import("@/lib/supabase/server")
+    const { data: { user } } = await createClient().auth.getUser()
+    await supabaseAdmin.from("action_log").insert({
+      action: "email_delete_forever",
+      entity_type: "email",
+      entity_id: threadId,
+      details: {
+        mailbox,
+        thread_id: threadId,
+        message_ids: messageIds,
+        message_count: messageIds.length,
+        errors,
+        actor: user?.email ?? "unknown",
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any)
+  } catch (err) {
+    console.error("[delete_forever] audit log failed", err)
   }
 }
 
@@ -161,6 +226,19 @@ export async function POST(req: NextRequest) {
     if (!(await checkMailboxAccess(mailbox))) {
       return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
     }
+
+    // Every id in this request is interpolated into a Gmail API path. `new URL()`
+    // NORMALISES dot-segments, so an id like "../messages?maxResults=500" turns
+    // threads.get into messages.list — and whatever that returns then feeds the
+    // per-message loops below. Fail closed on anything that is not a Gmail id.
+    // (Security review, 2026-08-04. Gmail ids are opaque hex-ish tokens.)
+    const badId = [threadId, ...(threadIds ?? []), labelId, destLabelId]
+      .filter((v): v is string => typeof v === "string")
+      .find((v) => !GMAIL_ID.test(v))
+    if (badId !== undefined) {
+      return NextResponse.json({ error: "Invalid id" }, { status: 400 })
+    }
+
     const asUser = resolveMailbox(mailbox)
 
     // Bulk operations
@@ -181,8 +259,10 @@ export async function POST(req: NextRequest) {
               addLabelIds: ["TRASH"],
               removeLabelIds: ["INBOX", "UNREAD", "STARRED", "IMPORTANT"]
             }, asUser)
+            await binOurCopy(mailbox, [tid], "delete")
           } else if (action === 'untrash') {
             await untrashThread(tid, asUser, sanitizeRestorePayload(bulkRestoreIn[tid]))
+            await binOurCopy(mailbox, [tid], "restore")
           } else if (action === 'archive') {
             await gmailPost(`/threads/${tid}/modify`, { removeLabelIds: ['INBOX'] }, asUser)
           } else if (action === 'mark_read') {
@@ -272,6 +352,9 @@ export async function POST(req: NextRequest) {
           removeLabelIds: ["INBOX", "UNREAD", "STARRED", "IMPORTANT"]
         }, asUser) as { id?: string }
 
+        // Our copy joins the bin (Gmail side is done; ours is a separate store).
+        await binOurCopy(mailbox, [threadId], "delete")
+
         // Step 2: Verify by fetching the thread and checking labels
         let verified = false
         try {
@@ -317,8 +400,62 @@ export async function POST(req: NextRequest) {
           }
         }
         const filed = await untrashThread(threadId, asUser, sanitizeRestorePayload(restore), destLabelId)
+        await binOurCopy(mailbox, [threadId], "restore")
         // Report where it ACTUALLY landed — not where we were asked to put it.
         return NextResponse.json({ success: true, action: "untrashed", filedTo: filed.filedTo })
+      }
+
+      case "delete_forever": {
+        // "Delete forever" = ERASE OUR STORED COPY, NOW. For junk and
+        // advertising Antonio does not want us holding at all (2026-08-02).
+        //
+        // It deliberately does NOT hard-delete in Gmail. Our Google grant is
+        // `gmail.modify`, which is documented as "all read/write EXCEPT
+        // immediate permanent deletion" — users.messages.delete needs the full
+        // https://mail.google.com/ scope, which TD has not granted. The first
+        // version of this called it anyway: every click would have 403'd AFTER
+        // flagging our copy for destruction, so the email survived in Gmail and
+        // only our copy died (senior-engineer, 2026-08-04). Gmail empties its own
+        // Trash at ~30 days, so leaving it there erases it on Google's side too.
+        //
+        // PER MESSAGE, NEVER PER THREAD. A trashed thread routinely picks up a
+        // LIVE reply later; thread-scoped erasure would have destroyed that
+        // reply's only stored copy (bug-hunter, 2026-08-04). Only messages
+        // actually carrying TRASH are touched, checked HERE on the server — the
+        // UI showing the button only inside Trash is not a boundary.
+        const thread = (await gmailGet(`/threads/${threadId}`, { format: "minimal" }, asUser)) as MinimalThread
+        const trashed = (thread.messages ?? [])
+          .filter((m) => m?.id && (m.labelIds ?? []).includes("TRASH"))
+          .map((m) => m.id as string)
+
+        if (trashed.length === 0) {
+          return NextResponse.json(
+            { error: "This email is not in the Trash. Delete it first, then erase it." },
+            { status: 400 },
+          )
+        }
+
+        const box = mailbox === "antonio" ? "antonio" : "support"
+        const { purgeMessagesNow } = await import("@/lib/email-store/deletion")
+        const tally = await purgeMessagesNow(box, trashed)
+
+        // Permanent destruction of client correspondence leaves a record of who
+        // did it — the rows themselves are gone, so this is the only trace.
+        await logPermanentErase(box, threadId, trashed, tally.errors)
+
+        if (tally.errors > 0 && tally.purged === 0) {
+          return NextResponse.json(
+            { error: "Could not erase our copy — nothing was deleted. Please try again." },
+            { status: 500 },
+          )
+        }
+        return NextResponse.json({
+          success: true,
+          action: "deleted_forever",
+          messages: tally.purged,
+          objectsRemoved: tally.objectsRemoved,
+          partial: tally.errors > 0,
+        })
       }
 
       case "mark_read": {

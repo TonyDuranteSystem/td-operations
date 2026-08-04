@@ -6,7 +6,7 @@ import { resolveMentions } from '@/lib/team/directory'
 import { triggerClaudeReply } from '@/lib/team/claude-trigger'
 import { sendPushToAdminUsers } from '@/lib/portal/web-push'
 import { sendPushToStaffExcept } from '@/lib/team/notify'
-import { channelNotifiesStaff } from '@/lib/team/channel-notify'
+import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/team/channel-notify'
 import type { ChatAttachment } from '@/lib/types'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -245,11 +245,18 @@ export async function POST(
           tag: `team-thread-${rootId}`,
         })
       }
-    } else if (thread.thread_type === 'discussion') {
+    } else if (thread.thread_type === 'discussion' && conversationNotifiesParticipants()) {
       // A client conversation: ping its PARTICIPANTS (anyone with a read row —
       // opened / posted / shared into), never the whole team. The CLAUDE
       // sentinel and the sender are excluded. This is the participant model that
       // keeps channel chatter silent while a conversation you're in rings.
+      //
+      // SILENT SINCE 2026-08-04 — the predicate returns false, so this branch
+      // does not run. Kept rather than deleted because the participant model is
+      // still the intended shape; what was wrong is that merely OPENING a
+      // conversation joins you to it. See conversationNotifiesParticipants.
+      // An @mention in a conversation still pushes — that branch is ABOVE this
+      // one and must stay above it.
       const { CLAUDE_SENDER_UUID } = await import('@/lib/team/workspace')
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: participants } = await (supabaseAdmin as any)

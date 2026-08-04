@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { InboxHeader } from './inbox-header'
 import { InboxSidebar } from './inbox-sidebar'
 import { ConversationList } from './conversation-list'
+import { SearchSuggestDropdown, type SearchSuggestion } from './search-suggest-dropdown'
 import { MessageThread } from './message-thread'
 import { WhatsappThread } from './whatsapp-thread'
 import { ComposeReply } from './compose-reply'
@@ -85,6 +86,9 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [createDialog, setCreateDialog] = useState<{ type: 'task' | 'service' | 'invoice'; conversation: InboxConversation } | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  // Type-ahead dropdown under the search box (Antonio 2026-08-04). Open only
+  // while the box has focus — a stale dropdown over the list is worse than none.
+  const [suggestOpen, setSuggestOpen] = useState(false)
   const [searchActive, setSearchActive] = useState(false)
   const [moveToOpen, setMoveToOpen] = useState(false)
   const [restoreToOpen, setRestoreToOpen] = useState(false)
@@ -1149,16 +1153,44 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
       {/* Search bar + Read/Unread filter — Gmail only */}
       {!isWhatsApp && (
-        <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-zinc-50">
+        <div className="relative flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-zinc-50">
           <Search className="h-4 w-4 text-zinc-400 shrink-0" />
           <input
             type="text"
             value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') handleSearch() }}
+            onChange={e => { setSearchQuery(e.target.value); setSuggestOpen(true) }}
+            onFocus={() => setSuggestOpen(true)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { setSuggestOpen(false); handleSearch() }
+              // Escape closes the dropdown first; a second press is the browser's.
+              if (e.key === 'Escape') setSuggestOpen(false)
+            }}
             placeholder="Search emails... (from:, subject:, has:attachment)"
             className="flex-1 text-sm bg-transparent outline-none placeholder:text-zinc-400"
           />
+          {suggestOpen && (
+            <SearchSuggestDropdown
+              query={searchQuery}
+              mailbox={activeMailbox}
+              onClose={() => setSuggestOpen(false)}
+              onPick={(sug: SearchSuggestion) => {
+                setSuggestOpen(false)
+                setActiveChannel('gmail')
+                // Same minimal stub the ?thread= deep link opens with: the thread
+                // view fetches its own messages, the header just needs a subject
+                // and a name so it does not flash blank.
+                setSelected({
+                  id: sug.id,
+                  channel: 'gmail',
+                  name: sug.sender || sug.senderEmail,
+                  preview: '',
+                  unread: sug.unread ? 1 : 0,
+                  lastMessageAt: sug.date ?? '',
+                  subject: sug.subject,
+                })
+              }}
+            />
+          )}
           {searchActive && (
             <button onClick={clearSearch} className="p-0.5 rounded hover:bg-zinc-200 text-zinc-400">
               <X className="h-3.5 w-3.5" />
@@ -1319,7 +1351,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             activeChannel={activeChannel}
             selectedId={selected?.id || null}
             onSelect={handleSelect}
-            onDeleted={(conv) => handleEmailDeleted('trash', conv, originViewKey)}
+            onDeleted={(conv, action) => handleEmailDeleted(action ?? 'trash', conv, originViewKey)}
             onRestored={handleEmailRestored}
             overrides={overrides}
             unread={unread}

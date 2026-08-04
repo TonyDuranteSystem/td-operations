@@ -36,3 +36,42 @@ export function channelNotifiesStaff(slug: string | null | undefined): boolean {
   if (!s) return true
   return !(SILENT_CHANNEL_SLUGS as readonly string[]).includes(s)
 }
+
+/**
+ * Does a message in a CLIENT CONVERSATION (thread_type 'discussion') notify its
+ * participants? **No — since 2026-08-04.**
+ *
+ * Antonio: "every time Luca do something on his pc I receive the notification.
+ * I want to turn them off." He was getting a toast AND a phone push for every
+ * message Luca typed into a client conversation and every answer the worker
+ * wrote back — his own screenshot showed three in a row, all of them Luca
+ * working normally.
+ *
+ * THE CAUSE IS THE PARTICIPANT RULE, not the volume. Participation is derived
+ * from `internal_thread_reads`, a row written when you merely OPEN a thread —
+ * so glancing at a client conversation once enrolled him in it permanently.
+ * Two fixes were on the table (2026-08-04) and Antonio picked this one:
+ *   (a) THIS — conversations stop notifying entirely; @mention is the way in.
+ *   (b) rejected for now — notify only for conversations you actually POSTED in
+ *       or were shared into, plus a per-conversation Mute. Narrower and better,
+ *       but a bigger change. **If the silence turns out to be too much, (b) is
+ *       the fix, and THIS FUNCTION is where it goes** — replace the constant
+ *       with the real predicate and all three call sites follow.
+ *
+ * STATED PLAINLY BECAUSE IT IS THE COST: a teammate who writes "Antonio, look
+ * at this" inside a conversation WITHOUT @naming him now reaches nobody in real
+ * time. The Team Chat unread counter still counts conversations (a quiet
+ * number, deliberately left on), and an @mention still pushes — that branch is
+ * checked BEFORE this one at every call site and must stay that way.
+ *
+ * Read by all three sites that could notify for a conversation — the two send
+ * paths (a person posting, and Claude posting) and the in-CRM toast listener —
+ * for the same reason `channelNotifiesStaff` is: the phone and the screen must
+ * not be able to disagree about what is worth interrupting you for.
+ *
+ * NOT the same thing as a deliberate SHARE into a conversation: that is one
+ * person addressing another on purpose and still notifies (see the share route).
+ */
+export function conversationNotifiesParticipants(): boolean {
+  return false
+}
