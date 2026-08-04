@@ -116,9 +116,13 @@ export async function handleIngestWorkspaceStatement(job: Job): Promise<JobResul
     .from("pnl_workspace_members")
     .select("display_name")
     .eq("workspace_id", p.workspace_id)
-  const memberNames = ((memberRows ?? []) as Array<{ display_name: string | null }>)
-    .map(m => (m.display_name ?? "").trim())
-    .filter(n => n.length > 0)
+  // The SAME usable-name rule as every client path (a real first AND last name,
+  // never a blank). "length > 0" let a one-word display name through, and a
+  // single word matches any vendor that happens to contain it.
+  const { filterMemberNames } = await import("@/lib/tax/member-names")
+  const memberNames = filterMemberNames(
+    ((memberRows ?? []) as Array<{ display_name: string | null }>).map(m => m.display_name),
+  )
 
   const { ingestWorkspaceCsv } = await import("@/lib/tax/workspace-ingest")
   const r = await ingestWorkspaceCsv({

@@ -10,6 +10,34 @@
  */
 
 import { sniffCsvDialect, parseDelimitedRows, detectCsvSignature, parseRelayCSV, parseMercuryCSV, parseRevolutCSV, parseSlashCSV, parseGenericCSV, stableRowRef, dedupeRefs } from "./bank-csv-parsers"
+import { matchMemberName, findNearMissMember } from "./tax/member-names"
+
+/**
+ * Note prefix marking a row the system deliberately REFUSED to guess, so the
+ * client is asked instead. Exported because the categorisation engine must
+ * recognise it — the AI pass is forbidden from resolving a row carrying it,
+ * and the re-sort must preserve it. Never string-literal it.
+ *
+ * NOT yet rendered on the client's question card: the row reaches the queue and
+ * is asked, but the card does not yet show WHICH member we suspect. That is the
+ * remaining value of this note and it is a UI change, tracked separately —
+ * stated here so nobody reads this constant as proof the prompt exists.
+ */
+export const ASK_CLIENT_NOTE = "ask: possible payment to member"
+
+/**
+ * Categories that are a GUESS rather than a determination — the ones the
+ * near-miss check is allowed to reopen. `expense` here is the generic catch-all
+ * at the bottom of the rule list (notably "Sent money to", which books 946 rows
+ * book-wide); an explicit income or internal-transfer booking is never reopened.
+ *
+ * `fee` is deliberately NOT in this set. A bank fee is never an owner draw, and
+ * demoting one to `uncategorized` would newly make it eligible for the
+ * transfer-pair matcher (which skips `fee` but not `uncategorized`) — a fee
+ * could then be matched against an unrelated inflow and booked as an internal
+ * transfer. Reopening a row must not change what OTHER passes may do to it.
+ */
+const GUESSED_CATEGORIES: ReadonlySet<string> = new Set(["uncategorized", "expense"])
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -141,21 +169,49 @@ export function categorizeTransaction(
   // keyword rules above; learned rules / AI / manual answers still outrank
   // this whole function via applyRules' precedence and the manual: guard.
   if (tx.amount !== 0 && memberNames.length > 0) {
-    const lowerDesc = desc.toLowerCase()
-    const lowerCounterparty = cp.toLowerCase()
-    for (const name of memberNames) {
-      const lowerName = name.toLowerCase()
-      if (lowerDesc.includes(lowerName) || lowerCounterparty.includes(lowerName)) {
-        if (tx.amount < 0) {
-          category = "distribution"
-          subcategory = "member_distribution"
-        } else {
-          category = "contribution"
-          subcategory = "member_contribution"
-        }
-        is_related_party = true
-        notes = `Member: ${name}`
-        break
+    // Accent- and case-insensitive, matched on WHOLE WORDS (2026-08-04). The
+    // old test lowercased and called String.includes, which both missed
+    // "JOSE MUNOZ" against a CRM "Josè Muñoz" — a missed member is a silently
+    // deducted owner draw — and let a short name hide inside a longer word.
+    const matched = matchMemberName(`${desc} ${cp}`, memberNames)
+    if (matched) {
+      if (tx.amount < 0) {
+        category = "distribution"
+        subcategory = "member_distribution"
+      } else {
+        category = "contribution"
+        subcategory = "member_contribution"
+      }
+      is_related_party = true
+      notes = `Member: ${matched}`
+    } else if (tx.amount < 0 && GUESSED_CATEGORIES.has(category)) {
+      // ASK, DON'T GUESS (Antonio, 2026-08-04). Money out to something carrying
+      // a member's SURNAME but not their full name — "Sent money to M. Finelli"
+      // where the members are Gabriele and Matthew Finelli. Until now that fell
+      // straight through to the catch-all below and was deducted as a vendor
+      // payment: an owner draw, gone from the members' capital accounts.
+      //
+      // We do not resolve it either way — we cannot know, and a wrong guess in
+      // either direction is wrong money. It goes back to uncategorized so it
+      // reaches the client's question queue, where one tap settles it and the
+      // answer is remembered.
+      //
+      // Only outgoing money, and only rows a GUESS produced (uncategorized, or
+      // the generic expense/fee catch-alls). A row an explicit rule booked as
+      // income or an internal transfer is left exactly as it was.
+      // DESCRIPTION AND COUNTERPARTY ARE SEARCHED SEPARATELY, never joined.
+      // The reference-cut inside findNearMissMember makes ONE cut across the
+      // text it is given, and Relay / Mercury / Revolut / Slash all put the
+      // memo in the description and the payee in the counterparty. Joined, a
+      // routine wire memo — "WIRE IN | REF 88123" with counterparty "GABRIELE
+      // FINELLI" — cut at "ref" and threw the payee away, so the check silently
+      // never fired on the very shape an owner draw takes. The counterparty
+      // field is a pure payee, so nothing in it can be cut.
+      const near = findNearMissMember(desc, memberNames) ?? findNearMissMember(cp, memberNames)
+      if (near) {
+        category = "uncategorized"
+        subcategory = ""
+        notes = `${ASK_CLIENT_NOTE} ${near}`
       }
     }
   }

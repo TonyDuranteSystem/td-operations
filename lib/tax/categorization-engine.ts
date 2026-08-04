@@ -23,12 +23,13 @@ import { fetchAllBankTransactionsByYear } from "@/lib/bank-transactions-fetch"
 // lib/owner-finance.ts until the next type regeneration.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
-import { categorizeTransaction, type CategorizedTransaction, type ParsedTransaction } from "@/lib/bank-statement-parser"
+import { categorizeTransaction, ASK_CLIENT_NOTE, type CategorizedTransaction, type ParsedTransaction } from "@/lib/bank-statement-parser"
 import { matchTransferPairs, detectOwnEntityTransfers, type TransferCandidate } from "./transfer-matcher"
 import { aiSuggestCategories, AI_PROMPT_VERSION, type AiCategorizableTx, type AiCategorizeOptions, type AiSuggestion, type AiRunStats } from "./ai-categorizer"
 
 const EMPTY_AI_STATS = (): AiRunStats => ({ batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false })
 import { getExpenseBuckets } from "./expense-buckets"
+import { fetchMemberRoster } from "./member-roster"
 
 export interface CategorizationRule {
   id: string
@@ -109,7 +110,20 @@ export async function getCategorizationRules(accountId: string): Promise<Categor
 
 export interface RecategorizeResult {
   scanned: number
+  /** Rows written. INCLUDES note-only rewrites, where the category is
+   *  unchanged and only the provenance note is re-stamped. */
   recategorized: number
+  /**
+   * Rows whose CATEGORY or subcategory actually moved (2026-08-04).
+   *
+   * `recategorized` is the wrong number to show a human: the transfer-pair and
+   * own-entity passes re-stamp their note on every run, so those rows always
+   * pass the persist gate and inflate the count even when nothing moved — 849
+   * rows across the book today. The stale-classification sweep reports on THIS
+   * number instead, so "would change N" means N transactions really change
+   * category, and a quiet run reads as quiet.
+   */
+  categoryChanged: number
   transferPairs: number
   aiCategorized: number
   aiErrors: string[]
@@ -127,6 +141,15 @@ export interface RecategorizeOptions {
    *  "ai:high" in notes. Off by default (costs API calls). */
   aiAssist?: boolean
   aiOptions?: AiCategorizeOptions
+  /** REPORT ONLY (2026-08-03): run every deterministic pass and report what
+   *  WOULD change, writing nothing. Added for the stale-classification sweep,
+   *  which re-sorts a client's transactions after their record improves — that
+   *  sweep must be watchable before it is trusted with client money. Reuses
+   *  this function rather than re-gathering rows/rules/members elsewhere, so a
+   *  dry run can never diverge from the real thing. Forces `aiAssist` off: the
+   *  AI pass costs money and is not deterministic, so it has no place in a
+   *  preview. */
+  dryRun?: boolean
 }
 
 /** The bank_transactions columns this engine reads (matches the select below).
@@ -201,8 +224,19 @@ export function computeRecategorizationUpdates(
     const isAutoTagged = (row.notes ?? "").startsWith("auto:")
     if ((isAiTagged || isAutoTagged) && next.category === "uncategorized") continue
     if (next.category !== row.category || next.subcategory !== (row.subcategory ?? "")) {
-      // When a rule overrides an AI suggestion, the "ai:" tag no longer applies.
-      updates.set(row.id as string, { category: next.category, subcategory: next.subcategory, ...(isAiTagged ? { notes: "" } : {}) })
+      // The ask-note MUST be carried through. Pass 1 otherwise discards
+      // `next.notes`, so a row reopened by the near-miss check landed in the
+      // client's queue still wearing its previous explanation — typically
+      // "transfer-pair → <id>", which now claims the row is one leg of an
+      // internal transfer when we have just decided we do not know what it is.
+      // (When a rule overrides an AI suggestion the "ai:" tag no longer
+      // applies, so it is cleared — that is the other case below.)
+      const carriesAsk = (next.notes ?? "").startsWith(ASK_CLIENT_NOTE)
+      updates.set(row.id as string, {
+        category: next.category,
+        subcategory: next.subcategory,
+        ...(carriesAsk ? { notes: next.notes } : isAiTagged ? { notes: "" } : {}),
+      })
     }
   }
 
@@ -272,6 +306,19 @@ export function computeRecategorizationUpdates(
 export function decideAiSuggestion(
   s: AiSuggestion,
   effectiveCategory: string | undefined,
+  /**
+   * The row's CURRENT note. A row the deterministic passes deliberately
+   * REFUSED to guess (near-miss on a member's surname) carries the ask-note,
+   * and the AI must not answer the question we just decided we cannot answer.
+   *
+   * Without this the feature defeated itself end to end: the near-miss demoted
+   * the row to `uncategorized`, which is precisely the state the AI is allowed
+   * to resolve — so a high-confidence guess re-booked it as an expense, wrote
+   * its own "ai:" note over the ask, and the "never downgrade an ai: row"
+   * guard then made it permanent. The client was never asked, and never could
+   * be. Lean/bucket hints are still recorded; only the CATEGORY is withheld.
+   */
+  currentNotes?: string | null,
 ): { applied: boolean; update: { category?: CategorizedTransaction["category"]; subcategory?: string; notes?: string; ai_lean?: string; ai_bucket?: string } | null } {
   // Sentinel hints (Phase 3R cond. 4 — poison-pill closure): a VALIDATED
   // suggestion always fills BOTH hints, defaulting to 'unsure'/'other' when the
@@ -282,6 +329,7 @@ export function decideAiSuggestion(
     ai_lean: s.lean ?? "unsure",
     ai_bucket: s.bucket ?? "other",
   }
+  if ((currentNotes ?? "").startsWith(ASK_CLIENT_NOTE)) return { applied: false, update: hint }
   if (s.confidence === "high" && effectiveCategory === "uncategorized") {
     // Version-stamped (Phase 0.5): a challenged categorization must trace to
     // the exact prompt that produced it. All note checks use startsWith("ai:").
@@ -303,19 +351,18 @@ export async function recategorizeAccountYear(
     taxYear,
     "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, account_ref, category, subcategory, is_related_party, notes, ai_lean, ai_bucket, loc_code, loc_source, loc_confidence",
   )
-  if (rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0, aiStats: EMPTY_AI_STATS() }
+  if (rows.length === 0) return { scanned: 0, recategorized: 0, categoryChanged: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0, aiStats: EMPTY_AI_STATS() }
 
   const rules = await getCategorizationRules(accountId)
 
-  // member names for related-party detection (same source the tools use)
-  const { data: links } = await supabaseAdmin
-    .from("account_contacts")
-    .select("contacts(first_name, last_name)")
-    .eq("account_id", accountId)
-  const memberNames = ((links ?? []) as unknown as Array<{ contacts: { first_name: string | null; last_name: string | null } | null }>)
-    .filter(l => l.contacts)
-    .map(l => `${l.contacts!.first_name ?? ""} ${l.contacts!.last_name ?? ""}`.trim())
-    .filter(n => n.length > 0)
+  // ONE reader for "who is a member", shared with the ingest path and every
+  // staff tool — see lib/tax/member-roster.ts. Curated members list UNIONED
+  // with the linked contacts: the curated list has the verified names and the
+  // company members, the contacts have the single-owner companies and the
+  // people who left mid-year. Two paths with two definitions is an oscillation,
+  // not a cosmetic difference.
+  const roster = await fetchMemberRoster(supabaseAdmin, accountId)
+  const memberNames = roster.names
 
   // Company's own legal name — used by the own-entity self-transfer pass below
   // and (when aiAssist) reused for the AI context. Fetched once, unconditionally.
@@ -347,7 +394,11 @@ export async function recategorizeAccountYear(
   // (minutes-long) AI loop — a killed run lost EVERYTHING, including work that
   // never needed the AI. Deterministic writes land now; the AI pass below
   // persists per batch.
+  const dryRun = opts?.dryRun === true
   let recategorized = 0
+  // Counted separately from `recategorized` — see RecategorizeResult. A row
+  // whose note is merely re-stamped is NOT a change a human needs to see.
+  let categoryChanged = 0
   for (const [id, u] of Array.from(updates.entries())) {
     const orig = rows.find(r => r.id === id)
     if (!orig) continue
@@ -355,6 +406,10 @@ export async function recategorizeAccountYear(
     const nextSub = u.subcategory ?? ((orig.subcategory as string) ?? "")
     const catChanged = nextCategory !== orig.category || nextSub !== ((orig.subcategory as string) ?? "")
     if (!catChanged && !u.notes) continue
+    if (catChanged) categoryChanged++
+    // Report-only: count it and move on. Counted the same way a real run counts
+    // it, so "would change N" and "changed N" are the same number.
+    if (dryRun) { recategorized++; continue }
     const payload: Record<string, unknown> = { category: nextCategory, subcategory: nextSub }
     if (u.notes) payload.notes = u.notes
     const { error: upErr } = await supabaseAdmin
@@ -364,10 +419,24 @@ export async function recategorizeAccountYear(
     if (upErr) throw new Error(`Failed to update transaction ${id}: ${upErr.message}`)
     recategorized++
   }
+  // A preview stops here: the AI pass costs money and writes per batch.
+  if (dryRun) {
+    return {
+      scanned: rows.length, recategorized, categoryChanged, transferPairs,
+      aiCategorized: 0, aiErrors: [], aiStats: EMPTY_AI_STATS(),
+      uncategorizedRemaining: rows.filter(r =>
+        (updates.get(r.id as string)?.category ?? (r.category as string)) === "uncategorized").length,
+    }
+  }
 
   // Effective category per row after the deterministic pass (source of truth
   // for the AI candidate filter + apply policy below).
   const effCat = new Map(rows.map(r => [r.id as string, updates.get(r.id as string)?.category ?? (r.category as string)]))
+  // The note AFTER the deterministic passes, not the stored one — a row the
+  // near-miss check just refused to guess carries the ask-note only in this
+  // run's update, and the AI pass must see it there or it will answer the
+  // question we deliberately left open.
+  const notesById = new Map(rows.map(r => [r.id as string, updates.get(r.id as string)?.notes ?? (r.notes as string | null)]))
 
   let aiCategorized = 0
   let aiErrors: string[] = []
@@ -423,7 +492,7 @@ export async function recategorizeAccountYear(
       // .eq('category','uncategorized') so a human answer or re-run landing
       // mid-AI is never overwritten by a verdict decided on stale data.
       const persistSuggestion = async (s: AiSuggestion) => {
-        const d = decideAiSuggestion(s, effCat.get(s.id))
+        const d = decideAiSuggestion(s, effCat.get(s.id), notesById.get(s.id))
         if (!d.update) return
         const payload: Record<string, unknown> = {}
         if (d.update.category) payload.category = d.update.category
@@ -489,5 +558,5 @@ export async function recategorizeAccountYear(
     if (locErr) throw new Error(`Failed to stamp location on transaction ${r.id}: ${locErr.message}`)
   }
 
-  return { scanned: rows.length, recategorized, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining, aiStats, ...(aiNoCandidates ? { aiNoCandidates } : {}) }
+  return { scanned: rows.length, recategorized, categoryChanged, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining, aiStats, ...(aiNoCandidates ? { aiNoCandidates } : {}) }
 }

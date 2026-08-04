@@ -58,6 +58,10 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/tax-reactivation": "30 10 * * *",
   "/api/cron/tax-completion-sweep": "*/30 * * * *",
   "/api/cron/tax-archive-sweep": "*/15 * * * *",
+  // Re-sorts a client's transactions after their record improves (members
+  // linked, legal name fixed, related companies declared). REPORT-ONLY until
+  // TAX_RESTALE_SWEEP_DRY_RUN is "false". 4-hourly: the inputs change rarely.
+  "/api/cron/tax-restale-sweep": "0 */4 * * *",
   "/api/cron/forms-archive-sweep": "*/15 * * * *",
   "/api/cron/airwallex-sync": "*/15 * * * *",
   "/api/cron/stripe-sync": "0 */6 * * *",

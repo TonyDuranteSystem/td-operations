@@ -17,6 +17,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { parseBankStatement, categorizeTransaction } from "@/lib/bank-statement-parser"
 import { sha256Hex, uploadSourceId, analyzeDuplicates, loadExistingRows } from "./statement-uploads"
 import { recategorizeAccountYear } from "./categorization-engine"
+import { fetchMemberRoster } from "./member-roster"
 import { buildAccountRef } from "./bank-identity"
 
 export interface IngestResult {
@@ -107,14 +108,18 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
   }
 
   // 2. Categorize (legacy built-ins + member detection) and keep the tax year.
-  const { data: links } = await supabaseAdmin
-    .from("account_contacts")
-    .select("contacts(first_name, last_name)")
-    .eq("account_id", accountId)
-  const memberNames = ((links ?? []) as unknown as Array<{ contacts: { first_name: string | null; last_name: string | null } | null }>)
-    .filter(l => l.contacts)
-    .map(l => `${l.contacts!.first_name ?? ""} ${l.contacts!.last_name ?? ""}`.trim())
-    .filter(n => n.length > 0)
+  // Same reader as the categorisation engine and the periodic re-sort. These
+  // MUST agree — see lib/tax/member-roster.ts.
+  // The roster read THROWS when both its sources are down, deliberately: with
+  // no owners known, every draw would book as a deducted expense. That refusal
+  // must reach the client as our problem, not as a raw 500 on their upload.
+  let memberNames: string[]
+  try {
+    memberNames = (await fetchMemberRoster(supabaseAdmin, accountId)).names
+  } catch (e) {
+    console.error(`[portal-csv-ingest] member roster unavailable for ${accountId}:`, e)
+    return fail("We could not read your company's owner details, so the file was not processed. Nothing was saved. Please try again shortly — this is on our side, not yours.")
+  }
 
   const bankDetected = parsed.bank_name && parsed.bank_name !== "unknown" ? parsed.bank_name : bankLabel
   // Canonicalize the institution name and build the account identity ONCE per file

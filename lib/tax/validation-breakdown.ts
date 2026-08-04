@@ -35,6 +35,7 @@ import { toUsd, type FxRates } from "./fx"
 import type { FinancialDraft } from "./financials-engine"
 import type { PriorReturnCaseRecord } from "./prior-return-case"
 import type { OwnershipResolution } from "./ownership-resolution"
+import { matchMemberName } from "./member-names"
 
 /** The row fields validation needs — a superset of what the draft consumes. */
 export interface ValidationRow {
@@ -151,16 +152,15 @@ export interface BuildValidationInput {
   memberNames: string[]
 }
 
-/** Same substring rule the categorizer uses to flag members — the exclusion
- *  must mirror the inclusion, or rows leak between the two views. */
+/** THE SAME matcher the categorizer uses to flag members — the exclusion must
+ *  mirror the inclusion, or rows leak between the two views. It used to be a
+ *  hand-rolled lowercase substring test here, which drifted the moment the
+ *  categorizer started normalising accents and matching whole words: a row
+ *  booked as an owner draw would still have shown up in the related-party
+ *  panel. One implementation, imported. */
 export function matchesMemberName(row: Pick<ValidationRow, "description" | "counterparty">, memberNames: string[]): boolean {
   if (memberNames.length === 0) return false
-  const d = (row.description ?? "").toLowerCase()
-  const c = (row.counterparty ?? "").toLowerCase()
-  return memberNames.some(n => {
-    const ln = n.toLowerCase()
-    return ln.length > 0 && (d.includes(ln) || c.includes(ln))
-  })
+  return matchMemberName(`${row.description ?? ""} ${row.counterparty ?? ""}`, memberNames) !== null
 }
 
 export function buildValidationBreakdown(input: BuildValidationInput): ValidationBreakdown {

@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import { applyRules, computeRecategorizationUpdates, decideAiSuggestion, type CategorizationRule } from '@/lib/tax/categorization-engine'
 import type { AiSuggestion } from '@/lib/tax/ai-categorizer'
-import type { ParsedTransaction } from '@/lib/bank-statement-parser'
+import { ASK_CLIENT_NOTE, type ParsedTransaction } from '@/lib/bank-statement-parser'
 
 const tx = (description: string, amount: number, over: Partial<ParsedTransaction> = {}): ParsedTransaction => ({
   transaction_date: '2025-06-01', description, counterparty: '', amount,
@@ -39,6 +39,29 @@ describe('member equity auto-booking (2026-07-07 — Dynamiq: wires to members m
   })
   it('non-member counterparties are untouched', () => {
     expect(applyRules(tx('Wire transfer', -500, { counterparty: 'Acme Corp' }), [], ['Donato Renato Berini']).category).toBe('uncategorized')
+  })
+
+  /**
+   * THE PAYEE MUST BE SEARCHED SEPARATELY FROM THE MEMO (2026-08-04).
+   *
+   * The near-miss check cuts a line at its payment reference, so a supplier's
+   * invoice number mentioning a member is not read as a payment to them. But
+   * Relay, Mercury, Revolut and Slash all put the memo in the description and
+   * the payee in the counterparty field — so searching them JOINED meant a
+   * routine wire memo ("WIRE OUT | REF 88123") cut the payee away entirely and
+   * the check silently never fired. A wire is exactly the shape an owner draw
+   * takes, which made this the worst place to lose it.
+   */
+  it('a REF in the memo must not hide a member in the counterparty field', () => {
+    const relayShape = tx('WIRE OUT | REF 88123 | INVOICE 4471', -4500, { counterparty: 'M. FINELLI' })
+    const out = applyRules(relayShape, [], ['Gabriele Finelli', 'Matthew Finelli'])
+    expect(out.notes.startsWith(ASK_CLIENT_NOTE)).toBe(true)
+  })
+
+  it('and a member named only in the reference is still ignored', () => {
+    const supplier = tx('Sent money to Lope Gomez with reference Finelli factura 2024-005', -900, { counterparty: 'Lope Gomez' })
+    const out = applyRules(supplier, [], ['Gabriele Finelli', 'Matthew Finelli'])
+    expect(out.notes.startsWith(ASK_CLIENT_NOTE)).toBe(false)
   })
 })
 
@@ -177,6 +200,111 @@ describe('computeRecategorizationUpdates (parity core)', () => {
       const manual = crow({ amount: 0, category: 'expense', notes: 'manual: group answer x' })
       const { updates } = computeRecategorizationUpdates([manual], [], [], '')
       expect(updates.get('row-x')).toBeUndefined()
+    })
+  })
+
+  /**
+   * NEAR-MISS STABILITY ACROSS RE-RUNS (2026-08-04).
+   *
+   * The sweep runs every four hours. A rule that demotes a row on every pass
+   * and lets something else re-book it on the next is not a safety net, it is a
+   * flip-flop that moves the client's capital accounts on a timer. The real
+   * shape: Dynamiq's "Sent money to Enrico Berini" — same surname as member
+   * Donato Renato Berini — where the generic Wise catch-all books it as a
+   * vendor expense and the near-miss check must reopen it, once, and then leave
+   * it alone.
+   */
+  describe('near-miss demotion is stable across re-runs', () => {
+    const members = ['Donato Renato Berini', 'Sofia Marinoni']
+    const berini = (over = {}) => crow({
+      id: 'nm', description: 'Sent money to Enrico Berini', amount: -580, ...over,
+    })
+
+    it('run 1 reopens a catch-all vendor booking so the client is asked', () => {
+      const { updates } = computeRecategorizationUpdates(
+        [berini({ category: 'expense', subcategory: 'vendor_payment' })], [], members, '',
+      )
+      expect(updates.get('nm')?.category).toBe('uncategorized')
+    })
+
+    it('run 2 leaves it alone — no write at all, so nothing churns', () => {
+      const { updates } = computeRecategorizationUpdates(
+        [berini({ category: 'uncategorized', subcategory: '' })], [], members, '',
+      )
+      expect(updates.get('nm')).toBeUndefined()
+    })
+
+    it('an exact member match still books outright and is NEVER reopened', () => {
+      const exact = crow({ id: 'ex', description: 'Sent money to Donato Renato Berini', amount: -4464.27 })
+      const first = computeRecategorizationUpdates([exact], [], members, '').updates
+      expect(first.get('ex')?.category).toBe('distribution')
+      // ...and re-running on the booked row writes nothing.
+      const booked = crow({ id: 'ex', description: 'Sent money to Donato Renato Berini', amount: -4464.27, category: 'distribution', subcategory: 'member_distribution' })
+      expect(computeRecategorizationUpdates([booked], [], members, '').updates.get('ex')).toBeUndefined()
+    })
+
+    it('a human answer is never reopened, however many times it runs', () => {
+      const answered = berini({ category: 'expense', subcategory: 'vendor_payment', notes: 'manual: client says supplier' })
+      expect(computeRecategorizationUpdates([answered], [], members, '').updates.get('nm')).toBeUndefined()
+    })
+
+    it('an AI-booked row is not downgraded by the near-miss check', () => {
+      // Consistent with the existing guard: no pass may push an ai:/auto: row
+      // back to uncategorized. Documented deliberately — an AI guess on a
+      // near-miss payee survives, and only a human or a rule moves it.
+      const aiRow = berini({ category: 'expense', subcategory: 'vendor_payment', notes: 'ai:high' })
+      expect(computeRecategorizationUpdates([aiRow], [], members, '').updates.get('nm')).toBeUndefined()
+    })
+
+    /**
+     * THE FEATURE DEFEATING ITSELF. The near-miss demotes the row to
+     * `uncategorized` — which is exactly the state the AI pass is allowed to
+     * resolve. Without a guard, a high-confidence guess re-booked it as an
+     * expense, wrote its own note over the ask, and the "never downgrade an
+     * ai: row" rule then made that permanent: the client was never asked, and
+     * never could be. The AI may still record its advisory hints.
+     */
+    it('the AI pass must NOT answer a question we deliberately left open', () => {
+      const s = { id: 'nm', category: 'expense' as const, subcategory: 'vendor_payment', confidence: 'high' as const, lean: 'business' as const, bucket: 'contractors' }
+      const d = decideAiSuggestion(s, 'uncategorized', `${ASK_CLIENT_NOTE} Donato Renato Berini`)
+      expect(d.applied).toBe(false)
+      expect(d.update?.category).toBeUndefined()
+      expect(d.update?.ai_lean).toBe('business') // hints still recorded
+    })
+
+    it('the AI pass still resolves an ordinary uncategorized row', () => {
+      const s = { id: 'x', category: 'expense' as const, subcategory: 'software', confidence: 'high' as const, lean: 'business' as const, bucket: 'software' }
+      expect(decideAiSuggestion(s, 'uncategorized', null).applied).toBe(true)
+    })
+
+    /**
+     * The reopened row landed in the client's queue still wearing its previous
+     * explanation — typically "transfer-pair → <id>", which claims it is one leg
+     * of an internal transfer when we have just decided we do not know what it
+     * is. Pass 1 discarded the new note entirely.
+     */
+    it('carries the ask-note through, replacing a now-false explanation', () => {
+      const stale = berini({ category: 'conversion', subcategory: 'internal_transfer', notes: 'transfer-pair → abc-123' })
+      const u = computeRecategorizationUpdates([stale], [], members, '').updates.get('nm')
+      expect(u?.category).toBe('uncategorized')
+      expect(u?.notes).toContain('Donato Renato Berini')
+      expect(u?.notes).not.toContain('transfer-pair')
+    })
+
+    it('an unrelated supplier is never reopened — the queue must not flood', () => {
+      const vendor = crow({ id: 'v', description: 'Sent money to Aurora Global Holdings Limited', amount: -4000 })
+      const { updates } = computeRecategorizationUpdates([vendor], [], members, '')
+      expect(updates.get('v')?.category ?? 'expense').toBe('expense')
+    })
+
+    it('an INCOMING payment from a near-miss name is left as booked', () => {
+      // Only outgoing money can be a disguised owner draw; reopening inflows
+      // would drag real revenue into the question queue.
+      const inflow = crow({ id: 'in', description: 'Received money from Enrico Berini', amount: 900, category: 'income', subcategory: 'sales' })
+      const after = computeRecategorizationUpdates([inflow], [], members, '').updates.get('in')
+      // It stays INCOME. (The built-in rule also normalises the subcategory to
+      // 'revenue', which is pre-existing behaviour and not what this pins.)
+      expect(after?.category ?? 'income').toBe('income')
     })
   })
 

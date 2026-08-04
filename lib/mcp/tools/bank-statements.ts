@@ -44,9 +44,13 @@ async function getAccountContext(accountId: string) {
     contacts: { first_name: string; last_name: string } | null
   }>
 
-  const memberNames = contactLinks
-    .filter(l => l.contacts)
-    .map(l => `${l.contacts!.first_name} ${l.contacts!.last_name}`.trim())
+  // The SHARED roster — curated members ∪ linked contacts, with the one
+  // usable-name rule. This tool used to build its own list from the contact
+  // links alone with no rule at all, which made staff processing disagree with
+  // the portal ingest and the periodic re-sort: the same rows flipped category
+  // depending on which path last ran. See lib/tax/member-roster.ts.
+  const { fetchMemberRoster } = await import("@/lib/tax/member-roster")
+  const memberNames = (await fetchMemberRoster(supabaseAdmin, accountId)).names
 
   // Default ownership: split evenly if not set
   const totalMembers = contactLinks.length || 1

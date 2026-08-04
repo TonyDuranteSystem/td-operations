@@ -77,9 +77,14 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
         .from('pnl_workspace_members')
         .select('display_name')
         .eq('workspace_id', workspaceId)
-      const memberNames = ((memberRows ?? []) as Array<{ display_name: string | null }>)
-        .map(m => (m.display_name ?? '').trim())
-        .filter(n => n.length > 0)
+      // Same member definition as the client path — the workspace stores one
+      // display_name per member instead of first + last, but the substring
+      // matching and therefore the safety floor are identical.
+      // See lib/tax/member-names.ts.
+      const { filterMemberNames } = await import('@/lib/tax/member-names')
+      const memberNames = filterMemberNames(
+        ((memberRows ?? []) as Array<{ display_name: string | null }>).map(m => m.display_name),
+      )
       const { recategorizeWorkspace } = await import('@/lib/tax/workspace-recategorize')
       await recategorizeWorkspace(workspaceId, {
         linkedAccountId: (ws.linked_account_id as string | null) ?? null,
