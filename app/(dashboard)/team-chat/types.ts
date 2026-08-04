@@ -12,6 +12,11 @@ export interface TeamCardData {
   /** For 'email_confirm': the exact text that will be sent, so Confirm approves a
    *  MESSAGE and not just an address. */
   body?: string
+  /** For 'email_confirm': the files that will go out, rendered as the files
+   *  themselves. No URL here on purpose — the renderer builds a staff-only path
+   *  from entity_id + position, so this permanent chat row never carries a
+   *  standing link to a client document. */
+  files?: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
 }
 
 export interface Reaction {

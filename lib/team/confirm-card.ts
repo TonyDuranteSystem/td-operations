@@ -16,6 +16,16 @@ export type TeamChatConfirmCard = {
   entity_type: 'worker_prepared_send'
   entity_id: string
   body: string
+  /**
+   * The files that will go out, rendered as the files themselves (image inline,
+   * anything else as a tile that opens) — NOT as a link and NOT as a name in a
+   * subtitle. Deliberately carries no URL: this card is a permanent channel
+   * message, so a baked signed URL would be either a dead tile forever or a
+   * long-lived bearer link to a client document sitting in the scrollback. The
+   * renderer builds a staff-authenticated path from `entity_id` + the position
+   * in this list, and that path re-checks who is asking on every open.
+   */
+  files?: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
 }
 
 /**
@@ -36,19 +46,35 @@ export type TeamChatConfirmCard = {
  * in a long side-effecting function and was shipping untested.
  */
 export function teamChatCardForFrozenDraft(
-  prep: { id: string; kind?: string | null; to_address?: string | null; subject?: string | null; body?: unknown; attachments?: Array<{ name?: string }> | null } | null,
+  prep: {
+    id: string
+    kind?: string | null
+    to_address?: string | null
+    subject?: string | null
+    body?: unknown
+    attachments?: Array<{ name?: string; size?: number; content_type?: string; origin?: string }> | null
+  } | null,
 ): TeamChatConfirmCard | null {
   if (!prep || prep.kind !== 'email') return null
-  const files = (prep.attachments ?? [])
-    .map((a) => a?.name)
-    .filter(Boolean)
-    .join(', ')
+  // Anything without a name cannot be rendered as a file and must not silently
+  // disappear from the card while still being attached to the email — so the
+  // filter is on the FILE, and a nameless one still occupies its position.
+  const files = (prep.attachments ?? []).map((a) => ({
+    name: a?.name || 'file',
+    size: a?.size,
+    content_type: a?.content_type,
+    origin: a?.origin,
+  }))
   return {
     kind: 'email_confirm',
     title: `Confirm email to ${prep.to_address}`,
-    subtitle: [prep.subject, files ? `📎 ${files}` : ''].filter(Boolean).join(' — ') || undefined,
+    // The subject only. The files are rendered as files below — listing their
+    // names here too would put a filename in front of the human as if that were
+    // something they could check.
+    subtitle: prep.subject || undefined,
     entity_type: 'worker_prepared_send',
     entity_id: prep.id,
+    ...(files.length ? { files } : {}),
     // The exact body that will be sent, so Confirm approves a MESSAGE and not
     // just an address (the panels render it for the same reason).
     body: typeof prep.body === 'string' ? prep.body : '',

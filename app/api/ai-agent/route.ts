@@ -263,10 +263,12 @@ async function runSidebarWorker(args: {
   // at confirm time, never from the model).
   const sidebarSendable = (attachments ?? []).map((a, i) => ({
     ref: `up${i + 1}`,
-    path: a.path,
+    source: 'worker_upload' as const,
+    locator: a.path,
     name: a.name,
     contentType: a.mime_type,
     size: a.size,
+    origin: 'you uploaded this just now',
   }))
   if (attachments?.length) {
     try {
@@ -283,8 +285,8 @@ async function runSidebarWorker(args: {
         userBody = `${userBody}\n\n${fenceUntrustedContent('files the staff member attached', read.textBlocks.join('\n\n'))}`
       }
       if (sidebarSendable.length) {
-        const list = sidebarSendable.map((s) => `${s.ref} — ${s.name}`).join(', ')
-        userBody += `\n\n[FILES YOU CAN ATTACH to an email on this turn (use send_email's \`attach\` with the ref): ${list}. Only these; never a file from an email or Drive.]`
+        const { attachableFilesPrompt } = await import('@/lib/inbox/sendable-attachment')
+        userBody += `\n\n${attachableFilesPrompt(sidebarSendable)}`
       }
     } catch (err) {
       // Answer anyway, but never silently: a missing file must not look like a file
@@ -497,6 +499,13 @@ async function runSidebarWorker(args: {
       to: string
       subject: string
       body: string
+      /**
+       * The files that will go out. This surface CAN freeze attachments (its
+       * panel uploads feed `sendable` above) but the card never rendered them,
+       * so a staff member here confirmed an email carrying files they were
+       * never shown.
+       */
+      attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
     } | null = null
     try {
       // Only a row THIS turn created — id snapshot, so no clock skew.
@@ -510,7 +519,13 @@ async function runSidebarWorker(args: {
       // tsconfig has `strict: false`, so `string | null` flowing into `string` compiles
       // silently. The nullability documents the shape; only this check enforces it.
       if (prep && prep.kind === 'email') {
-        preparedSend = { id: prep.id, to: prep.to_address, subject: prep.subject, body: prep.body ?? '' }
+        preparedSend = {
+          id: prep.id,
+          to: prep.to_address,
+          subject: prep.subject,
+          body: prep.body ?? '',
+          attachments: prep.attachments ?? [],
+        }
       }
     } catch (err) {
       // A missing confirm card must never fail the answer itself.

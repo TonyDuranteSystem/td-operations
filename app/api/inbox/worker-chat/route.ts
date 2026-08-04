@@ -201,6 +201,9 @@ export async function POST(req: NextRequest) {
   // Portal-chats: the open client's own email addresses — exempt from the
   // confirm-a-new-recipient step. Empty means every recipient is confirmed.
   let clientOwnAddresses: string[] = []
+  // Portal-chats: files posted in this client's conversation, offered as email
+  // attachments alongside the staff member's own panel uploads.
+  let harvestedChatFiles: Array<{ id: string; name?: string; mimetype?: string; size?: number }> = []
 
   if (gmailThreadId) {
     // Discussing an antonio@ thread exposes its content — same admin-only
@@ -396,6 +399,9 @@ export async function POST(req: NextRequest) {
       console.warn("[worker-chat] client card build failed (answering without card):", err)
     }
 
+    // Files posted in THIS client's chat, kept for the attachable list built
+    // below (it has to be numbered after the panel uploads, which are resolved
+    // further down, so the two ref sets can never collide).
     // Read the SCREENSHOTS/FILES the client sent in this chat. The worker tab used
     // to see only files the staff member pasted here — a client's screenshot in
     // the conversation had no path (read_portal_attachment refuses images). Images
@@ -411,6 +417,12 @@ export async function POST(req: NextRequest) {
         // Filenames/links are client-chosen — fence them.
         userBody += `\n\n${fenceUntrustedContent("files in this client chat", harvested.note.trim())}`
       }
+      // What it can READ in this conversation it can also ATTACH — forwarding a
+      // client's own document to our accountant is an everyday move, and the
+      // panel-upload-only rule meant the staff member had to download the file
+      // and re-upload it to send it. Numbered after the panel uploads so the two
+      // ref sets never collide.
+      harvestedChatFiles = harvested.files
     } catch (err) {
       console.warn("[worker-chat] portal chat attachment harvest failed:", err)
     }
@@ -423,15 +435,16 @@ export async function POST(req: NextRequest) {
   const uploadRefs = (body.attachments ?? [])
     .filter((a): a is { path: string; name?: string; mime_type?: string; size?: number } => typeof a.path === "string")
     .map((a) => ({ id: a.path, name: a.name, mimetype: a.mime_type, size: a.size }))
-  // The staff's uploads THIS turn are the ONLY files the worker may attach to an
-  // outbound email (Inbox surface). Each gets a stable ref the model names; the
-  // path/bytes are resolved server-side at confirm time, never by the model.
+  // Each attachable file gets a stable ref the model names; the location and the
+  // bytes are resolved server-side, never by the model.
   const sendableUploads = uploadRefs.map((r, i) => ({
     ref: `up${i + 1}`,
-    path: r.id,
+    source: "worker_upload" as const,
+    locator: r.id,
     name: r.name ?? "file",
     contentType: r.mimetype,
     size: r.size,
+    origin: "you uploaded this just now",
   }))
   if (uploadRefs.length) {
     try {
@@ -445,18 +458,25 @@ export async function POST(req: NextRequest) {
         // them, and the model must not read instructions out of it.
         userBody += `\n\n${fenceUntrustedContent("files the staff member attached", read.textBlocks.join("\n\n"))}`
       }
-      // Tell the worker which refs it may attach to an email. BOTH surfaces now:
-      // the client-chat panel has the same email capability as the Inbox
-      // (Antonio, 2026-07-29, dev job f55ea3bb — "the worker in the Portal chat
-      // must have the same capabilities it has everywhere").
-      if (sendableUploads.length) {
-        const list = sendableUploads.map((s) => `${s.ref} — ${s.name}`).join(", ")
-        userBody += `\n\n[FILES YOU CAN ATTACH to an email on this turn (use send_email's \`attach\` with the ref): ${list}. Only these; never a file from an email or Drive.]`
-      }
+      // (the attachable list itself is appended after this block, once the
+      // conversation's own files have been added to it — the panel upload is
+      // not the only attachable thing on this screen any more)
     } catch (err) {
       console.warn("[worker-chat] panel upload read failed (answering without files):", err)
     }
   }
+
+  // EVERYTHING ATTACHABLE THIS TURN, in one list: what the staff member just
+  // dropped into the panel, plus what was posted in this client's conversation.
+  // BOTH surfaces get it — the client-chat panel has the same email capability
+  // as the Inbox (Antonio, 2026-07-29, dev job f55ea3bb — "the worker in the
+  // Portal chat must have the same capabilities it has everywhere").
+  const { sendableFromChatRefs, attachableFilesPrompt } = await import("@/lib/inbox/sendable-attachment")
+  const sendableFiles = [
+    ...sendableUploads,
+    ...sendableFromChatRefs(harvestedChatFiles, "posted in this client's chat", sendableUploads.length + 1),
+  ]
+  if (sendableFiles.length) userBody += `\n\n${attachableFilesPrompt(sendableFiles)}`
 
   // One turn can carry email images AND panel uploads AND scanned-PDF blocks.
   // Their per-file caps multiply out well past the Anthropic request limit, and
@@ -595,7 +615,7 @@ export async function POST(req: NextRequest) {
                   gmailThreadId: gmailThreadId ?? null,
                   mailbox: inboxMailboxAddress,
                   defaultReplyToMessageId: inboxDefaultReplyToId ?? null,
-                  sendable: sendableUploads,
+                  sendable: sendableFiles,
                 },
               }
             : {}),
@@ -650,7 +670,7 @@ export async function POST(req: NextRequest) {
             gmailThreadId: null,
             mailbox: TD_MAILBOXES[0],
             defaultReplyToMessageId: null,
-            sendable: sendableUploads,
+            sendable: sendableFiles,
           },
           // Server-enforced client boundary (council Security blocker): on this
           // panel the worker may only look up the client whose chat is open.
@@ -834,7 +854,13 @@ export async function POST(req: NextRequest) {
       to: string | null
       subject: string | null
       body: string
-      attachments: Array<{ name: string; size?: number }>
+      /**
+       * The files that will go out. `content_type` + `origin` are carried so the
+       * card can render the FILE (image inline, anything else as a tile you can
+       * open) and say where it came from — a filename alone is not something a
+       * human can check.
+       */
+      attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
       /** Portal only — the client the WORKER suggested, offered as a chip to click. */
       proposedAccountId?: string | null
       proposedContactId?: string | null

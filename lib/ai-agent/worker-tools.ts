@@ -39,6 +39,7 @@ import {
   computeParamsHash,
 } from "./approvable-tools"
 import { normalizeToolParams } from "./enum-normalization"
+import type { SendableFile } from "@/lib/inbox/sendable-attachment"
 import { sendApprovalNotification } from "./approval-notifications"
 import { sendTelegramApprovalNotification } from "./telegram-notify"
 import { currentApprovalEnv } from "./approval-env"
@@ -465,7 +466,7 @@ export const SEND_EMAIL_TOOL: ToolDef = {
       attach: {
         type: "array",
         items: { type: "string" },
-        description: "Inbox and client-chat worker panels. Refs (from the FILES THE STAFF MEMBER ATTACHED list) of the staff's uploaded file(s) to attach to this email. When set, the email is PREPARED and the staff confirms with a Confirm button — it is NOT sent immediately. You may only attach a file the staff uploaded to THIS message; never a file from an email/attachment or from Drive.",
+        description: "Refs of the file(s) to attach, taken from the FILES YOU CAN ATTACH list you were shown this turn — files the staff member uploaded into the panel, or files posted in this conversation. Every email is PREPARED for the staff member's Confirm either way; attaching does not change that. You may attach ONLY a ref on that list: never a file from Drive, from a client's records, from an email you read, or one you were merely told about. If the list is not there, nothing is attachable this turn — say so instead of guessing at a ref.",
       },
     },
     required: ["to", "subject", "body"],
@@ -3240,7 +3241,7 @@ export interface CallWorkerOptions {
     gmailThreadId?: string | null
     mailbox: string
     defaultReplyToMessageId?: string | null
-    sendable: Array<{ ref: string; path: string; name: string; contentType?: string; size?: number }>
+    sendable: SendableFile[]
   }
   /**
    * Inbox worker only: context to FREEZE a portal-chat message for the Confirm card.
@@ -3385,7 +3386,7 @@ export interface WorkerSendContext {
     gmailThreadId?: string | null
     mailbox: string
     defaultReplyToMessageId?: string | null
-    sendable: Array<{ ref: string; path: string; name: string; contentType?: string; size?: number }>
+    sendable: SendableFile[]
   }
 }
 
