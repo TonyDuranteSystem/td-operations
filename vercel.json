@@ -183,6 +183,10 @@
     {
       "path": "/api/cron/email-unsnooze",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/tax-restale-sweep",
+      "schedule": "0 */4 * * *"
     }
   ],
   "rewrites": [

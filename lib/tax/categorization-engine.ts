@@ -127,6 +127,15 @@ export interface RecategorizeOptions {
    *  "ai:high" in notes. Off by default (costs API calls). */
   aiAssist?: boolean
   aiOptions?: AiCategorizeOptions
+  /** REPORT ONLY (2026-08-03): run every deterministic pass and report what
+   *  WOULD change, writing nothing. Added for the stale-classification sweep,
+   *  which re-sorts a client's transactions after their record improves — that
+   *  sweep must be watchable before it is trusted with client money. Reuses
+   *  this function rather than re-gathering rows/rules/members elsewhere, so a
+   *  dry run can never diverge from the real thing. Forces `aiAssist` off: the
+   *  AI pass costs money and is not deterministic, so it has no place in a
+   *  preview. */
+  dryRun?: boolean
 }
 
 /** The bank_transactions columns this engine reads (matches the select below).
@@ -347,6 +356,7 @@ export async function recategorizeAccountYear(
   // (minutes-long) AI loop — a killed run lost EVERYTHING, including work that
   // never needed the AI. Deterministic writes land now; the AI pass below
   // persists per batch.
+  const dryRun = opts?.dryRun === true
   let recategorized = 0
   for (const [id, u] of Array.from(updates.entries())) {
     const orig = rows.find(r => r.id === id)
@@ -355,6 +365,9 @@ export async function recategorizeAccountYear(
     const nextSub = u.subcategory ?? ((orig.subcategory as string) ?? "")
     const catChanged = nextCategory !== orig.category || nextSub !== ((orig.subcategory as string) ?? "")
     if (!catChanged && !u.notes) continue
+    // Report-only: count it and move on. Counted the same way a real run counts
+    // it, so "would change N" and "changed N" are the same number.
+    if (dryRun) { recategorized++; continue }
     const payload: Record<string, unknown> = { category: nextCategory, subcategory: nextSub }
     if (u.notes) payload.notes = u.notes
     const { error: upErr } = await supabaseAdmin
@@ -363,6 +376,15 @@ export async function recategorizeAccountYear(
       .eq("id", id)
     if (upErr) throw new Error(`Failed to update transaction ${id}: ${upErr.message}`)
     recategorized++
+  }
+  // A preview stops here: the AI pass costs money and writes per batch.
+  if (dryRun) {
+    return {
+      scanned: rows.length, recategorized, transferPairs,
+      aiCategorized: 0, aiErrors: [], aiStats: EMPTY_AI_STATS(),
+      uncategorizedRemaining: rows.filter(r =>
+        (updates.get(r.id as string)?.category ?? (r.category as string)) === "uncategorized").length,
+    }
   }
 
   // Effective category per row after the deterministic pass (source of truth
