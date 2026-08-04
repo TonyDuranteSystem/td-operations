@@ -10,6 +10,23 @@
  */
 
 import { sniffCsvDialect, parseDelimitedRows, detectCsvSignature, parseRelayCSV, parseMercuryCSV, parseRevolutCSV, parseSlashCSV, parseGenericCSV, stableRowRef, dedupeRefs } from "./bank-csv-parsers"
+import { matchMemberName, findNearMissMember } from "./tax/member-names"
+
+/**
+ * Note prefix marking a row the system deliberately REFUSED to guess, so the
+ * client is asked instead. Exported because the review UI and the tests both
+ * key off it — never string-literal it.
+ */
+export const ASK_CLIENT_NOTE = "ask: possible payment to member"
+
+/**
+ * Categories that are a GUESS rather than a determination — the ones the
+ * near-miss check is allowed to reopen. `expense` and `fee` here are the
+ * generic catch-alls at the bottom of the rule list (notably "Sent money to",
+ * which books 946 rows book-wide); an explicit income or internal-transfer
+ * booking is never reopened.
+ */
+const GUESSED_CATEGORIES: ReadonlySet<string> = new Set(["uncategorized", "expense", "fee"])
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -141,21 +158,41 @@ export function categorizeTransaction(
   // keyword rules above; learned rules / AI / manual answers still outrank
   // this whole function via applyRules' precedence and the manual: guard.
   if (tx.amount !== 0 && memberNames.length > 0) {
-    const lowerDesc = desc.toLowerCase()
-    const lowerCounterparty = cp.toLowerCase()
-    for (const name of memberNames) {
-      const lowerName = name.toLowerCase()
-      if (lowerDesc.includes(lowerName) || lowerCounterparty.includes(lowerName)) {
-        if (tx.amount < 0) {
-          category = "distribution"
-          subcategory = "member_distribution"
-        } else {
-          category = "contribution"
-          subcategory = "member_contribution"
-        }
-        is_related_party = true
-        notes = `Member: ${name}`
-        break
+    // Accent- and case-insensitive, matched on WHOLE WORDS (2026-08-04). The
+    // old test lowercased and called String.includes, which both missed
+    // "JOSE MUNOZ" against a CRM "Josè Muñoz" — a missed member is a silently
+    // deducted owner draw — and let a short name hide inside a longer word.
+    const matched = matchMemberName(`${desc} ${cp}`, memberNames)
+    if (matched) {
+      if (tx.amount < 0) {
+        category = "distribution"
+        subcategory = "member_distribution"
+      } else {
+        category = "contribution"
+        subcategory = "member_contribution"
+      }
+      is_related_party = true
+      notes = `Member: ${matched}`
+    } else if (tx.amount < 0 && GUESSED_CATEGORIES.has(category)) {
+      // ASK, DON'T GUESS (Antonio, 2026-08-04). Money out to something carrying
+      // a member's SURNAME but not their full name — "Sent money to M. Finelli"
+      // where the members are Gabriele and Matthew Finelli. Until now that fell
+      // straight through to the catch-all below and was deducted as a vendor
+      // payment: an owner draw, gone from the members' capital accounts.
+      //
+      // We do not resolve it either way — we cannot know, and a wrong guess in
+      // either direction is wrong money. It goes back to uncategorized so it
+      // reaches the client's question queue, where one tap settles it and the
+      // answer is remembered.
+      //
+      // Only outgoing money, and only rows a GUESS produced (uncategorized, or
+      // the generic expense/fee catch-alls). A row an explicit rule booked as
+      // income or an internal transfer is left exactly as it was.
+      const near = findNearMissMember(`${desc} ${cp}`, memberNames)
+      if (near) {
+        category = "uncategorized"
+        subcategory = ""
+        notes = `${ASK_CLIENT_NOTE} ${near}`
       }
     }
   }

@@ -29,7 +29,7 @@ import { aiSuggestCategories, AI_PROMPT_VERSION, type AiCategorizableTx, type Ai
 
 const EMPTY_AI_STATS = (): AiRunStats => ({ batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false })
 import { getExpenseBuckets } from "./expense-buckets"
-import { buildMemberNames } from "./member-names"
+import { fetchMemberRoster } from "./member-roster"
 
 export interface CategorizationRule {
   id: string
@@ -330,18 +330,14 @@ export async function recategorizeAccountYear(
 
   const rules = await getCategorizationRules(accountId)
 
-  // member names for related-party detection (same source the tools use)
-  const { data: links } = await supabaseAdmin
-    .from("account_contacts")
-    .select("contacts(first_name, last_name)")
-    .eq("account_id", accountId)
-  // ONE definition of "who is a member", shared with the ingest path — see
-  // lib/tax/member-names.ts. Two paths with two definitions is an oscillation,
+  // ONE reader for "who is a member", shared with the ingest path and every
+  // staff tool — see lib/tax/member-roster.ts. Curated members list UNIONED
+  // with the linked contacts: the curated list has the verified names and the
+  // company members, the contacts have the single-owner companies and the
+  // people who left mid-year. Two paths with two definitions is an oscillation,
   // not a cosmetic difference.
-  const memberNames = buildMemberNames(
-    ((links ?? []) as unknown as Array<{ contacts: { first_name: string | null; last_name: string | null } | null }>)
-      .map(l => l.contacts),
-  )
+  const roster = await fetchMemberRoster(supabaseAdmin, accountId)
+  const memberNames = roster.names
 
   // Company's own legal name — used by the own-entity self-transfer pass below
   // and (when aiAssist) reused for the AI context. Fetched once, unconditionally.

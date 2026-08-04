@@ -17,7 +17,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { parseBankStatement, categorizeTransaction } from "@/lib/bank-statement-parser"
 import { sha256Hex, uploadSourceId, analyzeDuplicates, loadExistingRows } from "./statement-uploads"
 import { recategorizeAccountYear } from "./categorization-engine"
-import { buildMemberNames } from "./member-names"
+import { fetchMemberRoster } from "./member-roster"
 import { buildAccountRef } from "./bank-identity"
 
 export interface IngestResult {
@@ -108,16 +108,9 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
   }
 
   // 2. Categorize (legacy built-ins + member detection) and keep the tax year.
-  const { data: links } = await supabaseAdmin
-    .from("account_contacts")
-    .select("contacts(first_name, last_name)")
-    .eq("account_id", accountId)
-  // Same definition as the categorisation engine and the periodic re-sort.
-  // These MUST agree — see lib/tax/member-names.ts.
-  const memberNames = buildMemberNames(
-    ((links ?? []) as unknown as Array<{ contacts: { first_name: string | null; last_name: string | null } | null }>)
-      .map(l => l.contacts),
-  )
+  // Same reader as the categorisation engine and the periodic re-sort. These
+  // MUST agree — see lib/tax/member-roster.ts.
+  const memberNames = (await fetchMemberRoster(supabaseAdmin, accountId)).names
 
   const bankDetected = parsed.bank_name && parsed.bank_name !== "unknown" ? parsed.bank_name : bankLabel
   // Canonicalize the institution name and build the account identity ONCE per file

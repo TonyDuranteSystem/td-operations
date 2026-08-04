@@ -19,6 +19,7 @@ import { buildCompletenessSummary } from "./completeness"
 import { resolveOwnership, type OwnershipSource } from "./ownership-resolution"
 import { validatedExtraction, type PriorReturnCaseRecord } from "./prior-return-case"
 import { type FinancialsView } from "./financials-orchestration"
+import { filterMemberNames } from "./member-names"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -128,8 +129,10 @@ export async function getWorkspaceFinancialsView(workspaceId: string): Promise<W
     priorReturn,
     ownership,
     // Same name list the categorizer flags members with — the panel's
-    // owner-exclusion must mirror the flag's inclusion (2026-07-07).
-    memberNames: wizardMembers.map(m => m.name),
+    // owner-exclusion must mirror the flag's inclusion (2026-07-07), which now
+    // means the same usable-name rule too, or the panel excludes an owner the
+    // categorizer never flagged (or vice versa).
+    memberNames: filterMemberNames(wizardMembers.map(m => m.name)),
   })
 
   // providedBalances: [] — balance anchors are a BOOKS concept (account+year);

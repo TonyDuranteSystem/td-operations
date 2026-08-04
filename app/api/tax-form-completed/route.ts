@@ -555,14 +555,12 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
             })
 
             if (statements.length > 0) {
-              // Get member names for categorization
-              const { data: links } = await supabaseAdmin
-                .from("account_contacts")
-                .select("contacts(first_name, last_name)")
-                .eq("account_id", sub.account_id)
-              const memberNames = ((links || []) as unknown as Array<{ contacts: { first_name: string; last_name: string } | null }>)
-                .filter(l => l.contacts)
-                .map(l => `${l.contacts!.first_name} ${l.contacts!.last_name}`.trim())
+              // Member names for categorization — the SHARED roster (curated
+              // members ∪ linked contacts, one usable-name rule). Built by hand
+              // here before, which made this path disagree with the portal
+              // ingest and the re-sort. See lib/tax/member-roster.ts.
+              const { fetchMemberRoster } = await import("@/lib/tax/member-roster")
+              const memberNames = (await fetchMemberRoster(supabaseAdmin, sub.account_id)).names
 
               let totalParsed = 0
               for (const file of statements) {

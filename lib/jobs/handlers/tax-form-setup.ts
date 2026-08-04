@@ -478,13 +478,11 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
           if (statements.length > 0) {
             const { parseBankStatement, categorizeTransaction } = await import("@/lib/bank-statement-parser")
 
-            const { data: links } = await supabaseAdmin
-              .from("account_contacts")
-              .select("contacts(first_name, last_name)")
-              .eq("account_id", p.account_id)
-            const memberNames = ((links || []) as unknown as Array<{ contacts: { first_name: string; last_name: string } | null }>)
-              .filter(l => l.contacts)
-              .map(l => `${l.contacts!.first_name} ${l.contacts!.last_name}`.trim())
+            // Shared roster — curated members ∪ linked contacts, one usable-name
+            // rule. Building this list here by hand made this path disagree with
+            // the portal ingest and the re-sort. See lib/tax/member-roster.ts.
+            const { fetchMemberRoster } = await import("@/lib/tax/member-roster")
+            const memberNames = (await fetchMemberRoster(supabaseAdmin, p.account_id)).names
 
             let totalParsed = 0
             for (const file of statements) {

@@ -67,9 +67,11 @@ export async function handleRecategorizeWorkspaceAi(job: Job, ctx?: JobRunContex
     .from("pnl_workspace_members")
     .select("display_name")
     .eq("workspace_id", p.workspace_id)
-  const memberNames = ((memberRows ?? []) as Array<{ display_name: string | null }>)
-    .map(m => (m.display_name ?? "").trim())
-    .filter(n => n.length > 0)
+  // Same usable-name rule as every other path — see lib/tax/member-names.ts.
+  const { filterMemberNames } = await import("@/lib/tax/member-names")
+  const memberNames = filterMemberNames(
+    ((memberRows ?? []) as Array<{ display_name: string | null }>).map(m => m.display_name),
+  )
 
   // Linked client's business description (v4, review F2) — the field the
   // expense-vs-cogs pin keys on; blank workspaces run without it (the prompt
