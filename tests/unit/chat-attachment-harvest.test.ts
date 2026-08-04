@@ -70,8 +70,29 @@ describe("scope filter", () => {
 
   it("no ids → empty, no query", async () => {
     const out = await harvestPortalChatAttachments({})
-    expect(out).toEqual({ imageBlocks: [], note: "" })
+    expect(out).toEqual({ imageBlocks: [], note: "", files: [] })
     expect(calls.or.length + calls.eq.length).toBe(0)
+  })
+})
+
+describe("harvest — the attachable set", () => {
+  // The worker could always READ these files and never attach one to an email,
+  // so forwarding a client's own document to our accountant meant downloading it
+  // and re-uploading it by hand. `files` is what closes that; if it silently
+  // returned nothing, the capability would ship dead and the worker would go
+  // back to saying it cannot attach anything here.
+  it("offers the client's files as attachable refs, images included", async () => {
+    rowsBox.rows = [row("client", [imgAtt("shot.png"), { url: "https://ydzipybqeebtpcvsbtvs.supabase.co/x/bank.pdf", name: "bank.pdf", mime_type: "application/pdf", size: 900 }])]
+    const out = await harvestPortalChatAttachments({ accountId: "acc-1", contactId: null })
+    expect(out.files.map((f) => f.name)).toEqual(["shot.png", "bank.pdf"])
+    // Refs carry the URL for the server to resolve — never handed to the model.
+    expect(out.files[1].id).toContain("bank.pdf")
+  })
+
+  it("does NOT offer our own outbound files by default — the same scope rule as reading", async () => {
+    rowsBox.rows = [row("admin", [imgAtt("ours.png")])]
+    const out = await harvestPortalChatAttachments({ accountId: "acc-1", contactId: null })
+    expect(out.files).toEqual([])
   })
 })
 
@@ -123,7 +144,7 @@ describe("harvest", () => {
   it("returns empty on a query failure rather than throwing", async () => {
     rowsBox.rows = []
     const out = await harvestPortalChatAttachments({ accountId: "a", contactId: "c" })
-    expect(out).toEqual({ imageBlocks: [], note: "" })
+    expect(out).toEqual({ imageBlocks: [], note: "", files: [] })
   })
 
   it("handles legacy single-attachment columns", async () => {

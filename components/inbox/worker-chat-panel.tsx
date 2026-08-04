@@ -13,9 +13,10 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Bot, Loader2, Paperclip, X } from 'lucide-react'
+import { Bot, Loader2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { WorkerMarkdown } from '@/components/chat/worker-markdown'
+import { ConfirmAttachments } from '@/components/inbox/confirm-attachments'
 import { WorkerComposer } from '@/components/chat/worker-composer'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
@@ -46,7 +47,7 @@ interface PreparedSend {
   /** The exact text that will be sent — rendered so Confirm approves a MESSAGE,
    *  not just an address. */
   body: string
-  attachments: Array<{ name: string; size?: number }>
+  attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
   /** Portal only — the client the worker suggested. A chip to click, never pre-selected. */
   /** Set when the frozen text is confidently NOT the language the card claims. */
   languageMismatch?: 'en' | 'it' | null
@@ -832,15 +833,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
               <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
             </div>
           ) : null}
-          <div className="mt-1.5 space-y-1">
-            {preparedSend.attachments.map((a, i) => (
-              <div key={i} className="flex items-center gap-1.5 text-xs text-zinc-600">
-                <Paperclip className="h-3 w-3 shrink-0" />
-                <span className="font-medium truncate">{a.name}</span>
-                {typeof a.size === 'number' && <span className="text-zinc-400">{(a.size / 1024 / 1024).toFixed(1)} MB</span>}
-              </div>
-            ))}
-          </div>
+          <ConfirmAttachments preparedId={preparedSend.id} attachments={preparedSend.attachments} className="mt-1.5 space-y-1.5" />
           <div className="mt-2 flex items-center gap-2 text-xs">
             <span className="text-zinc-500">From:</span>
             <select

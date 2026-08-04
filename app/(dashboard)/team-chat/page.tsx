@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { uploadTeamAttachment, prepareChatFiles, CHAT_ATTACHMENT_MAX_COUNT } from '@/lib/team/attachment'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
+import { ConfirmAttachments } from '@/components/inbox/confirm-attachments'
 import { TurnBadge } from '@/components/team-chat/turn-badge'
 import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import { sortPanelThreads, filterStreamRoots } from '@/lib/team/thread-meta'
@@ -2309,6 +2310,7 @@ function EmailConfirmCard({ card }: { card: NonNullable<TeamMsg['card']> }) {
             <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{card.body}</p>
           </div>
         ) : null}
+        {card.entity_id ? <ConfirmAttachments preparedId={card.entity_id} attachments={card.files ?? []} /> : null}
         {done ? (
           <p className={cn('mt-2 text-xs font-medium', done === 'sent' ? 'text-emerald-700' : 'text-zinc-500')}>
             {done === 'sent' ? '✅ Sent.' : 'Cancelled — nothing was sent.'}

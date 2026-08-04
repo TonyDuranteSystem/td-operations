@@ -18,6 +18,12 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { TD_MAILBOXES, checkRecipientsAllowed } from "@/lib/inbox/email-recipients"
 import { buildRawEmail } from "@/lib/email/raw-mime"
 import { isValidWorkerUploadPath, WORKER_UPLOAD_BUCKET } from "@/lib/ai-agent/attachment-reader"
+import {
+  materializeSendable,
+  SendableRefusal,
+  type MaterializedAttachment,
+  type SendableFile,
+} from "@/lib/inbox/sendable-attachment"
 import type { PreparedSendKind } from "@/lib/inbox/prepared-send-vocabulary"
 
 /**
@@ -39,14 +45,14 @@ export const MAX_OUTBOUND_PER_FILE_BYTES = MAX_OUTBOUND_ATTACHMENT_BYTES
  */
 class TerminalSendError extends Error {}
 
-/** One file the staff uploaded THIS turn that the worker may attach. */
-export interface SendableUpload {
-  ref: string
-  path: string
-  name: string
-  contentType?: string
-  size?: number
-}
+/**
+ * One file the staff uploaded THIS turn that the worker may attach.
+ *
+ * @deprecated Kept as an alias so existing callers keep compiling. The real
+ * shape now lives in `lib/inbox/sendable-attachment.ts` and carries a `source`
+ * (a panel upload, a file posted in the conversation, …) plus its provenance.
+ */
+export type SendableUpload = SendableFile
 
 export interface PrepareInput {
   threadUuid: string
@@ -59,8 +65,8 @@ export interface PrepareInput {
   body: string
   /** Refs the model asked to attach; resolved against `sendable`. */
   attachRefs: string[]
-  /** The ONLY files attachable — this turn's staff uploads. */
-  sendable: SendableUpload[]
+  /** The ONLY files attachable — what this surface offered the worker THIS turn. */
+  sendable: SendableFile[]
   /** Addresses on the open thread; recipient must be one of these. */
   allowedRecipients: string[]
   actor: string
@@ -162,31 +168,44 @@ export async function prepareWorkerEmailSend(input: PrepareInput): Promise<Prepa
     }
   }
 
-  // Resolve each ref against the staff's uploads. A ref not in the set — or no
-  // refs at all — is a hard refusal: the model can never attach anything else.
+  // Resolve each ref against what this surface OFFERED this turn. A ref not in
+  // the set — or no refs at all — is a hard refusal: the model can never attach
+  // anything else, and it never names a path, a bucket or a URL.
   // No attachments is FINE — a plain email is the ordinary case. It used to be a
   // hard refusal here, which is exactly why only attachment sends ever produced a
   // frozen, confirmable payload and text emails fell back to the re-run path.
-  const resolved: SendableUpload[] = []
+  //
+  // Each resolved file is MATERIALIZED to real bytes in the private bucket here,
+  // BEFORE the row is frozen, so the payload the human confirms is the payload
+  // that leaves — see the header of `sendable-attachment.ts`. A refusal at this
+  // point (unreadable, oversize) destroys nothing: no row exists yet, so the
+  // worker can simply re-prepare without that file on the next turn.
+  const resolved: MaterializedAttachment[] = []
+  let materializedBytes = 0
   for (const ref of input.attachRefs) {
     const hit = input.sendable.find((s) => s.ref === ref)
     if (!hit) {
       const avail = input.sendable.map((s) => `${s.ref} (${s.name})`).join(", ") || "none"
-      return { ok: false, message: `❌ "${ref}" is not a file you attached to this message. Attachable now: ${avail}.` }
+      return { ok: false, message: `❌ "${ref}" is not a file you can attach here. Attachable now: ${avail}.` }
     }
-    if (!isValidWorkerUploadPath(hit.path)) {
-      return { ok: false, message: `❌ "${hit.name}" can't be attached (invalid upload).` }
+    let file: MaterializedAttachment
+    try {
+      // The remaining budget, not the whole cap — three 8 MB files must not each
+      // pass a per-file check and then blow the total.
+      file = await materializeSendable(hit, MAX_OUTBOUND_ATTACHMENT_BYTES - materializedBytes)
+    } catch (err) {
+      if (err instanceof SendableRefusal) return { ok: false, message: `❌ ${err.message}` }
+      console.error("[worker-email-send] materialize failed:", err)
+      return { ok: false, message: `❌ "${hit.name}" couldn't be prepared for sending — please try again.` }
     }
-    resolved.push(hit)
-  }
-
-  // Outbound size guard — sum of raw bytes, before we build anything.
-  const totalBytes = resolved.reduce((n, r) => n + (r.size ?? 0), 0)
-  if (totalBytes > MAX_OUTBOUND_ATTACHMENT_BYTES) {
-    return {
-      ok: false,
-      message: `❌ Too large to email: ${mb(totalBytes)} of attachments (max ${mb(MAX_OUTBOUND_ATTACHMENT_BYTES)}). Send it another way.`,
+    materializedBytes += file.size ?? 0
+    if (materializedBytes > MAX_OUTBOUND_ATTACHMENT_BYTES) {
+      return {
+        ok: false,
+        message: `❌ Too large to email: ${mb(materializedBytes)} of attachments (Gmail's limit is what binds here, ~${mb(MAX_OUTBOUND_ATTACHMENT_BYTES)} of files). I can send it without the largest one.`,
+      }
     }
+    resolved.push(file)
   }
 
   // Freeze the exact payload the staff will confirm.
@@ -202,7 +221,15 @@ export async function prepareWorkerEmailSend(input: PrepareInput): Promise<Prepa
       to_address: input.to,
       subject: input.subject,
       body: input.body,
-      attachments: resolved.map((r) => ({ path: r.path, name: r.name, content_type: r.contentType, size: r.size })),
+      attachments: resolved.map((r) => ({
+        path: r.path,
+        name: r.name,
+        content_type: r.content_type,
+        size: r.size,
+        // Provenance travels with the frozen file so the Confirm card can say
+        // where each one came from. A filename alone cannot be checked.
+        origin: r.origin,
+      })),
       actor: input.actor,
       status: "pending",
     })
@@ -215,7 +242,8 @@ export async function prepareWorkerEmailSend(input: PrepareInput): Promise<Prepa
 
   await supersedeEarlierDrafts({ threadUuid: input.threadUuid, actor: input.actor, kind: "email", keepId: data.id })
 
-  const fileList = resolved.map((r) => `${r.name} (${mb(r.size ?? 0)})`).join(", ")
+  // "(0.0 MB)" is a lie when no size is known — say nothing rather than zero.
+  const fileList = resolved.map((r) => (typeof r.size === "number" ? `${r.name} (${mb(r.size)})` : r.name)).join(", ")
   return {
     ok: true,
     preparedId: data.id,
@@ -447,7 +475,19 @@ export interface FrozenDraft {
   to_address: string | null
   subject: string | null
   body: string | null
-  attachments: Array<{ name: string; size?: number }>
+  /**
+   * The files that will actually go out.
+   *
+   * `content_type` and `origin` are carried so the card can render the FILE —
+   * an image as the image, anything else as a tile you can click open — and say
+   * where it came from. A card that prints a filename and nothing else asks the
+   * human to approve a string; with sources wider than "the file you just
+   * dropped in", the string is the one thing they can no longer verify.
+   *
+   * `path` is deliberately NOT here: the storage location never leaves the
+   * server. The card addresses a file by its INDEX in this array.
+   */
+  attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
   /** Portal only — the client the staff member will confirm this against, if the worker proposed one. */
   proposed_account_id?: string | null
   proposed_contact_id?: string | null
@@ -504,7 +544,18 @@ export async function findPreparedFrozenThisTurn(
   if (error) throw new Error(error.message)
   const row = ((data ?? []) as FrozenDraft[]).find((r) => !prior.ids.has(r.id))
   if (!row) return null
-  return { ...row, attachments: (row.attachments ?? []).map((a) => ({ name: a.name, size: a.size })) }
+  // Strip the storage path, keep everything the card must render. Widening this
+  // map is what makes the tiles real — the previous narrow map is exactly how a
+  // card can show NOTHING while the frozen row carries files.
+  return {
+    ...row,
+    attachments: (row.attachments ?? []).map((a) => ({
+      name: a.name,
+      size: a.size,
+      content_type: a.content_type,
+      origin: a.origin,
+    })),
+  }
 }
 
 /**

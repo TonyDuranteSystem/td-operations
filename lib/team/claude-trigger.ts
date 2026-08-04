@@ -32,6 +32,7 @@ import {
   findPreparedFrozenThisTurn,
   cancelPreparedFrozenThisTurn,
 } from '@/lib/inbox/worker-email-send'
+import type { SendableFile } from '@/lib/inbox/sendable-attachment'
 
 const THINKING_PLACEHOLDER = '…'
 
@@ -266,7 +267,7 @@ export async function processClaudeReply(params: {
       gmailThreadId: string | null
       mailbox: string
       defaultReplyToMessageId: string | null
-      sendable: Array<{ ref: string; path: string; name: string; contentType?: string; size?: number }>
+      sendable: SendableFile[]
     }
   } = {}
   {
@@ -336,13 +337,12 @@ export async function processClaudeReply(params: {
       // Freezing needs a prep context. threadId is the TEAM thread's uuid, which is
       // what the Confirm card is looked up by after the turn.
       //
-      // `sendable` is EMPTY and that is honest: files posted in a team thread are
-      // READ by the worker but are not staged as outbound email attachments here
-      // (that staging exists only on the panels, which upload to the private
-      // worker-attachments bucket). The surface prompt below says so plainly —
-      // without that, the executor's "drop the file into the panel on the same
-      // message" advice names a control this screen does not have, which is the
-      // false-capability class Luca has reported twice.
+      // `sendable` starts empty and is FILLED IN BELOW from the files posted in
+      // this thread, once the carrier message is known (the same message the
+      // reader takes its files from — see there). It stayed empty for a long
+      // time, with a prompt paragraph saying files here could not be emailed;
+      // that was honest but it was the thing Luca reported twice, because
+      // "attach this and send it" is the ordinary way staff work in a channel.
       emailSendPrep: {
         threadUuid: threadId,
         gmailThreadId: null,
@@ -392,7 +392,26 @@ export async function processClaudeReply(params: {
       const { readAttachments, fetchTrustedStorageBytes, attachmentRefsFromChatRow, capMediaBudget, fenceUntrustedContent } = await import(
         '@/lib/ai-agent/attachment-reader'
       )
-      const read = await readAttachments(attachmentRefsFromChatRow(carrier), fetchTrustedStorageBytes)
+      const refs = attachmentRefsFromChatRow(carrier)
+
+      // WHAT IT CAN READ HERE, IT CAN ATTACH. Same refs, same message, so the
+      // two can never disagree ("I've read the EIN letter — but I can't send
+      // it" was the reported bug). The model names a ref; the URL, the bucket
+      // and the bytes are resolved server-side, and the bytes are copied into
+      // the private bucket when the draft is frozen — so what the human
+      // confirms is what leaves, even though a team-chat file sits in a public
+      // bucket that anyone with the link can overwrite the meaning of.
+      if (emailSendRail.emailSendPrep && refs.length) {
+        const { sendableFromChatRefs, attachableFilesPrompt } = await import('@/lib/inbox/sendable-attachment')
+        const origin =
+          carrier.id === prompt.id
+            ? 'posted in this message'
+            : `posted in this thread by ${carrier.sender_name}`
+        emailSendRail.emailSendPrep.sendable = sendableFromChatRefs(refs, origin)
+        userBody += `\n\n${attachableFilesPrompt(emailSendRail.emailSendPrep.sendable)}`
+      }
+
+      const read = await readAttachments(refs, fetchTrustedStorageBytes)
       // Keep the whole turn under the Anthropic request ceiling; name what's dropped.
       const capped = capMediaBudget(read.imageBlocks, read.documentBlocks)
       media.imageBlocks = capped.images
@@ -437,7 +456,7 @@ export async function processClaudeReply(params: {
     const { SLACK_WORKER_SYSTEM_PROMPT } = await import('@/lib/ai-agent/slack-claude')
     const { loadRelevantTemplates, formatTemplatesForPrompt } = await import('@/lib/ai-agent/templates')
 
-    let systemPrompt = `${SLACK_WORKER_SYSTEM_PROMPT}\n\nCONTEXT CORRECTION: you are in the CRM TEAM CHAT (crm.tonydurante.us → Team Chat), not Slack. Same team, same rules, same tools — replies render as chat messages in this internal thread (never client-visible).\n\nEMAIL FROM HERE: you may email ANY address the staff member names. EVERY email is FROZEN for their confirmation — no exceptions. A "Confirm & send" card appears under your reply in this thread with the recipient, subject, body, and a choice of which of our addresses it goes out from (support@ or antonio.durante@). Nothing leaves until they click, so say it is READY FOR THEIR CONFIRMATION, show the exact address, and NEVER say it has been sent.\n\nFILES IN THIS THREAD CANNOT BE EMAILED. You can READ what people post here, but there is no way to attach those files to an outbound email from Team Chat — the attach flow exists only in the Inbox and client-chat panels. If someone asks you to forward a file from this thread, say that plainly and offer to draft the email for them to send with the file themselves. NEVER tell them to "drop the file into the panel" — there is no panel on this screen — and never claim a file is attached.`
+    let systemPrompt = `${SLACK_WORKER_SYSTEM_PROMPT}\n\nCONTEXT CORRECTION: you are in the CRM TEAM CHAT (crm.tonydurante.us → Team Chat), not Slack. Same team, same rules, same tools — replies render as chat messages in this internal thread (never client-visible).\n\nEMAIL FROM HERE: you may email ANY address the staff member names. EVERY email is FROZEN for their confirmation — no exceptions. A "Confirm & send" card appears under your reply in this thread with the recipient, subject, body, and a choice of which of our addresses it goes out from (support@ or antonio.durante@). Nothing leaves until they click, so say it is READY FOR THEIR CONFIRMATION, show the exact address, and NEVER say it has been sent.\n\nFILES POSTED IN THIS THREAD CAN BE EMAILED. When a message here carries files, you are shown a list of refs you may attach — pass them to send_email's \`attach\`. You can attach ONLY the files on that list: nothing from Drive, nothing from an email, nothing from a client's records, and nothing you were merely told about. If the list is not there, no file on this screen is attachable this turn — say so plainly and offer to draft the email for them to send with the file themselves, rather than inventing a way. The attached files appear on the Confirm card, where the staff member can open each one before pressing Confirm — so never claim a file has been sent, only that it is ready for their confirmation.`
     try {
       const templates = await loadRelevantTemplates(prompt.message)
       const block = formatTemplatesForPrompt(templates)

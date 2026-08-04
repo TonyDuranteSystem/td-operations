@@ -32,6 +32,8 @@ import type { WorkerImageBlock } from "@/lib/ai-agent/worker-tools"
 
 /** Images attached to the user turn — each is re-sent every loop iteration, so keep it small. */
 export const MAX_CHAT_IMAGES = 3
+/** How many of this chat's files may be offered as email attachments at once. */
+export const MAX_ATTACHABLE_CHAT_FILES = 10
 /** How many recent messages to scan for attachments. */
 export const CHAT_HARVEST_MESSAGE_LIMIT = 20
 
@@ -39,6 +41,15 @@ export interface PortalChatHarvest {
   imageBlocks: WorkerImageBlock[]
   /** Prose to append to the user body: which images were shown + which docs can be read. */
   note: string
+  /**
+   * The same files, as refs the caller can offer as EMAIL ATTACHMENTS.
+   *
+   * Forwarding what a client posted (their bank letter, their signed form) to
+   * our accountant is an everyday move, and until now the worker could read
+   * those files here but not attach one. Returned as refs, not paths or bytes:
+   * the surface mints the attach-list, the model only ever names a ref.
+   */
+  files: AttachmentRef[]
 }
 
 interface HarvestOpts {
@@ -79,7 +90,7 @@ function scopedQuery(accountId?: string | null, contactId?: string | null) {
  */
 export async function harvestPortalChatAttachments(opts: HarvestOpts): Promise<PortalChatHarvest> {
   const { accountId, contactId, includeAdmin = false } = opts
-  if (!accountId && !contactId) return { imageBlocks: [], note: "" }
+  if (!accountId && !contactId) return { imageBlocks: [], note: "", files: [] }
 
   let rows: Array<{
     sender_type: string
@@ -93,7 +104,7 @@ export async function harvestPortalChatAttachments(opts: HarvestOpts): Promise<P
     rows = (data ?? []) as typeof rows
   } catch (err) {
     console.warn("[chat-attachment-harvest] scope query failed:", err)
-    return { imageBlocks: [], note: "" }
+    return { imageBlocks: [], note: "", files: [] }
   }
 
   // Newest-first already (query orders DESC). Collect refs with their sender, so
@@ -101,9 +112,13 @@ export async function harvestPortalChatAttachments(opts: HarvestOpts): Promise<P
   // filtered out when we only want the client's.
   const imageRefs: AttachmentRef[] = []
   const docLines: string[] = []
+  // Every in-scope file, image or not — the attachable set. Bounded by the same
+  // message window as the rest of this harvest.
+  const allRefs: AttachmentRef[] = []
   for (const row of rows) {
     if (!includeAdmin && row.sender_type === "admin") continue
     for (const ref of attachmentRefsFromChatRow(row)) {
+      if (allRefs.length < MAX_ATTACHABLE_CHAT_FILES) allRefs.push(ref)
       const isImage = (ref.mimetype ?? "").startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(ref.name ?? "")
       if (isImage) {
         if (ref.size && ref.size > MAX_IMAGE_BYTES) continue // known-oversized: skip the download
@@ -132,7 +147,7 @@ export async function harvestPortalChatAttachments(opts: HarvestOpts): Promise<P
   }
 
   const note = lines.length ? `\n\n--- FILES IN THIS CLIENT CHAT ---\n${lines.join("\n")}` : ""
-  return { imageBlocks: read.imageBlocks, note }
+  return { imageBlocks: read.imageBlocks, note, files: allRefs }
 }
 
 /* ------------------------------------------------------------------------- *
