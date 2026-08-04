@@ -106,7 +106,31 @@ export interface MaterializedAttachment {
  */
 export class SendableRefusal extends Error {}
 
-function mb(bytes: number): string {
+/**
+ * The one oversize sentence. `maxBytes` is the REMAINING budget, so when an
+ * earlier file has already used it all the limit is genuinely zero — saying
+ * "limit 0.0 MB" then is nonsense; say what actually happened instead.
+ */
+function oversizeRefusal(name: string, size: number, maxBytes: number): SendableRefusal {
+  if (maxBytes <= 0) {
+    return new SendableRefusal(
+      `"${name}" won't fit — the earlier attachments already use the whole size limit Gmail allows on one email. Send it separately.`,
+    )
+  }
+  return new SendableRefusal(
+    `"${name}" is ${formatBytes(size)} — Gmail won't accept an email that big (room left: ${formatBytes(maxBytes)}). I can send the email without it.`,
+  )
+}
+
+/**
+ * A size a human can read. NEVER "0.0 MB" — that is not a size, it is noise
+ * sitting where a real number belongs, and it appeared in refusal sentences the
+ * same way it appeared on the card ("x.pdf is 0.0 MB — too big, limit 0.0 MB",
+ * which reads as gibberish when a cumulative budget has been exhausted).
+ */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
@@ -153,11 +177,7 @@ async function copyChatAssetIntoPrivateBucket(file: SendableFile, maxBytes: numb
       `"${file.name}" couldn't be read from the conversation (${err instanceof Error ? err.message : "unknown error"}).`,
     )
   }
-  if (bytes.length > maxBytes) {
-    throw new SendableRefusal(
-      `"${file.name}" is ${mb(bytes.length)} — Gmail won't accept an email that big (limit ${mb(maxBytes)}). I can send the email without it.`,
-    )
-  }
+  if (bytes.length > maxBytes) throw oversizeRefusal(file.name, bytes.length, maxBytes)
   const path = `worker-chat/${randomUUID()}.${extensionFor(file.name)}`
   // The declared type came off a chat row (client- or staff-supplied jsonb) and
   // ends up in a MIME header. Shape-check it here, once, rather than trusting it
@@ -245,11 +265,7 @@ async function copyDocumentIntoPrivateBucket(file: SendableFile, maxBytes: numbe
       `"${file.name}" couldn't be read (${err instanceof Error ? err.message : "unknown error"}).`,
     )
   }
-  if (fetched.bytes.length > maxBytes) {
-    throw new SendableRefusal(
-      `"${fetched.name}" is ${mb(fetched.bytes.length)} — Gmail won't accept an email that big (limit ${mb(maxBytes)}). I can send the email without it.`,
-    )
-  }
+  if (fetched.bytes.length > maxBytes) throw oversizeRefusal(fetched.name, fetched.bytes.length, maxBytes)
   const contentType = sanitizeAttachmentMimeType(fetched.contentType || (row.mime_type as string | null) || undefined)
   const path = `worker-chat/${randomUUID()}.${extensionFor(fetched.name)}`
   const { error: upErr } = await supabaseAdmin.storage
@@ -287,11 +303,7 @@ export async function materializeSendable(file: SendableFile, maxBytes: number):
     // confirm path re-checks actual bytes regardless — this is the early, and
     // friendlier, refusal.)
     const actual = (await statWorkerUpload(file.locator)) ?? file.size
-    if (typeof actual === "number" && actual > maxBytes) {
-      throw new SendableRefusal(
-        `"${file.name}" is ${mb(actual)} — Gmail won't accept an email that big (limit ${mb(maxBytes)}). I can send the email without it.`,
-      )
-    }
+    if (typeof actual === "number" && actual > maxBytes) throw oversizeRefusal(file.name, actual, maxBytes)
     return {
       path: file.locator,
       name: file.name,

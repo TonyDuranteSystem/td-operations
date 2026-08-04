@@ -291,6 +291,9 @@ export async function prepareWorkerEmailSend(input: PrepareInput): Promise<Prepa
     .select("id")
     .single()
   if (error || !data) {
+    // No row will ever reference these copies — drop them rather than leave
+    // client documents in the bucket for a draft that does not exist.
+    await discardCopies(resolved)
     console.error("[worker-email-send] prepare insert failed:", error)
     return { ok: false, message: "❌ Couldn't prepare the email — please try again." }
   }
@@ -355,6 +358,9 @@ export async function confirmWorkerEmailSend(
   // reply — mark it cancelled so it can't be retried. Nothing has been sent yet.
   if (claimed.created_at && Date.now() - new Date(claimed.created_at).getTime() > PREPARED_SEND_TTL_MS) {
     await db.from("worker_prepared_sends").update({ status: "cancelled", resolved_at: new Date().toISOString() }).eq("id", preparedId)
+    // Expiry is the routine way a draft dies (30 minutes), so this is the most
+    // common orphan of all.
+    await discardCopies(claimed.attachments as Array<{ path?: string; copied?: boolean }>)
     return { ok: false, reason: "This draft is too old to send — ask the worker to prepare it again." }
   }
 
@@ -377,6 +383,7 @@ export async function confirmWorkerEmailSend(
         const allowed = collectThreadRecipients((thread.messages ?? []) as any)
         if (checkRecipientsAllowed(claimed.to_address, allowed).ok === false) {
           await db.from("worker_prepared_sends").update({ status: "cancelled", resolved_at: new Date().toISOString() }).eq("id", preparedId)
+          await discardCopies(claimed.attachments as Array<{ path?: string; copied?: boolean }>)
           return { ok: false, reason: `${claimed.to_address} is no longer on this thread — send cancelled for safety.` }
         }
       } catch {
@@ -489,6 +496,10 @@ ${plainTextToParagraphs(claimed.body)}
       .update(terminal ? { status: "cancelled", resolved_at: new Date().toISOString() } : { status: "pending", resolved_at: null })
       .eq("id", preparedId)
       .eq("status", "sent")
+    // ONLY on a terminal failure. A transient one rolls the row back to pending
+    // so the staff member can retry — deleting its bytes would make every retry
+    // fail for a reason nobody could see.
+    if (terminal) await discardCopies(claimed.attachments as Array<{ path?: string; copied?: boolean }>)
     console.error("[worker-email-send] confirm/dispatch failed before send:", err)
     return { ok: false, reason: err instanceof Error ? err.message : "send failed" }
   }

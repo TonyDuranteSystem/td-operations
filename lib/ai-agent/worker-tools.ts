@@ -2953,42 +2953,41 @@ async function offerSearchedDocuments(result: string, sendContext: WorkerSendCon
     // the family once, and use it both for the per-file check and as the
     // canonical owner key the mixed-client check compares.
     const pinned = sendContext.pinnedPortalRecipient
-    const family = new Set<string>()
-    const accountOfContact = new Map<string, string>()
-    if (pinned?.account_id) family.add(pinned.account_id)
-    if (pinned?.contact_id) family.add(pinned.contact_id)
-    try {
-      const linkIds = [
-        ...(pinned?.account_id ? [pinned.account_id] : []),
-        ...accountIds,
-      ]
-      if (linkIds.length || pinned?.contact_id) {
-        const { data: links } = await supabaseAdmin
-          .from("account_contacts")
-          .select("account_id, contact_id")
-          .or(
-            [
-              linkIds.length ? `account_id.in.(${linkIds.join(",")})` : null,
-              contactIds.length ? `contact_id.in.(${contactIds.join(",")})` : null,
-              pinned?.contact_id ? `contact_id.eq.${pinned.contact_id}` : null,
-            ]
-              .filter(Boolean)
-              .join(","),
-          )
-        for (const l of (links ?? []) as Array<{ account_id: string; contact_id: string }>) {
-          // A person belongs to the company they are linked to — that company is
-          // the canonical client for their documents.
-          if (!accountOfContact.has(l.contact_id)) accountOfContact.set(l.contact_id, l.account_id)
-          if (family.has(l.account_id)) family.add(l.contact_id)
-          if (family.has(l.contact_id)) family.add(l.account_id)
-        }
+    const { resolveClientFamily, ownerKeyFor } = await import("@/lib/inbox/client-family")
+    let links: Array<{ account_id: string; contact_id: string }> = []
+    // RUN WHENEVER THERE IS ANYTHING TO RESOLVE. The previous guard required a
+    // pinned account or an account-scoped result, so the commonest Inbox shape —
+    // a search that returns only the OWNER's contact-scoped document, e.g. an
+    // ITIN letter — skipped the lookup entirely and the person never resolved to
+    // their company. The mixed-client warning then fired on "the company's
+    // documents + the owner's ITIN", which is the everyday correct email.
+    const linkAccountIds = Array.from(new Set([...(pinned?.account_id ? [pinned.account_id] : []), ...accountIds]))
+    const linkContactIds = Array.from(new Set([...(pinned?.contact_id ? [pinned.contact_id] : []), ...contactIds]))
+    if (linkAccountIds.length || linkContactIds.length) {
+      // Errors are RETURNED by supabase-js, not thrown — destructure and log it,
+      // or a failed lookup degrades every owner key in silence.
+      const { data, error } = await supabaseAdmin
+        .from("account_contacts")
+        .select("account_id, contact_id")
+        .or(
+          [
+            linkAccountIds.length ? `account_id.in.(${linkAccountIds.join(",")})` : null,
+            linkContactIds.length ? `contact_id.in.(${linkContactIds.join(",")})` : null,
+          ]
+            .filter(Boolean)
+            .join(","),
+        )
+      if (error) {
+        // Costs precision, never a missing warning: without the family the
+        // per-file check falls back to the pinned id alone (noisier, not looser).
+        console.warn("[worker-tools] client-family lookup failed:", error.message)
       }
-    } catch (err) {
-      // A failed lookup only costs precision: the per-file check falls back to
-      // the pinned id alone, which is the previous (noisier) behaviour, never a
-      // missing warning.
-      console.warn("[worker-tools] client-family lookup failed:", err)
+      links = (data ?? []) as Array<{ account_id: string; contact_id: string }>
     }
+    const family = resolveClientFamily(links, {
+      accountId: pinned?.account_id ?? null,
+      contactId: pinned?.contact_id ?? null,
+    })
 
     const { sendableFromDocumentRows, attachableFilesPrompt } = await import("@/lib/inbox/sendable-attachment")
     const prep = sendContext.emailSendPrep!
@@ -3010,15 +3009,18 @@ async function offerSearchedDocuments(result: string, sendContext: WorkerSendCon
         // The CLIENT, not the record: a person's document resolves to their
         // company so "the company's articles + the owner's ITIN" is one client,
         // not two.
-        owner_key:
-          (typeof r._account_id === "string" && r._account_id) ||
-          (typeof r._contact_id === "string" && (accountOfContact.get(r._contact_id) || r._contact_id)) ||
-          null,
+        owner_key: ownerKeyFor(
+          {
+            account_id: typeof r._account_id === "string" ? r._account_id : null,
+            contact_id: typeof r._contact_id === "string" ? r._contact_id : null,
+          },
+          family,
+        ) ?? null,
       })),
       {
         recipientAccountId: pinned?.account_id ?? null,
         recipientContactId: pinned?.contact_id ?? null,
-        relatedClientIds: family,
+        relatedClientIds: family.ids,
       },
     )
     // Refs are derived from the document itself, so a re-offer produces the SAME

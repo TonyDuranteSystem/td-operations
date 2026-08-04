@@ -14,6 +14,10 @@ const inserted = vi.hoisted(() => ({ id: "prep-1" }))
 const insertSpy = vi.hoisted(() => vi.fn())
 const removeSpy = vi.hoisted(() => vi.fn())
 const uploadedPaths = vi.hoisted(() => [] as string[])
+/** Rows the supersede UPDATE reports as cancelled. */
+const supersededRows = vi.hoisted(() => ({ value: [] as Array<{ attachments: Array<{ path: string; copied: boolean }> }> }))
+/** Force the freeze INSERT to fail, to exercise that orphan path. */
+const insertFails = vi.hoisted(() => ({ value: false }))
 
 const updateSpy = vi.hoisted(() => vi.fn())
 const eqSpy = vi.hoisted(() => vi.fn())
@@ -40,10 +44,14 @@ vi.mock("@/lib/supabase-admin", () => {
   b.update = (patch: unknown) => { updateSpy(patch); return b }
   b.eq = (col: unknown, val: unknown) => { eqSpy(col, val); return b }
   b.neq = (col: unknown, val: unknown) => { neqSpy(col, val); return b }
-  b.single = async () => ({ data: inserted, error: null })
+  b.single = async () => (insertFails.value ? { data: null, error: { message: "insert boom" } } : { data: inserted, error: null })
+  // The supersede/cancel UPDATEs end in .select("attachments"); the builder is
+  // thenable, so this is what those awaits resolve to.
+  b.select = () => b
   // The supersede runs as a bare awaited chain (update→eq→eq), so the builder
   // must be thenable for it to resolve.
-  b.then = (resolve: (v: unknown) => void) => Promise.resolve({ error: null }).then(resolve)
+  b.then = (resolve: (v: unknown) => void) =>
+    Promise.resolve({ data: supersededRows.value, error: null }).then(resolve)
   return { supabaseAdmin: b }
 })
 
@@ -92,6 +100,9 @@ const sendable = [
 
 beforeEach(() => {
   insertSpy.mockClear(); updateSpy.mockClear(); eqSpy.mockClear(); neqSpy.mockClear(); removeSpy.mockClear()
+  uploadedPaths.length = 0
+  supersededRows.value = []
+  insertFails.value = false
   statSize.value = 400_000
 })
 
@@ -400,5 +411,34 @@ describe("prepareWorkerEmailSend — mixed clients, and cleaning up after oursel
     const r = await prepareWorkerEmailSend({ ...base, attachRefs: ["up1", "bad"], sendable: [upload, chat("bad")] })
     expect(r.ok).toBe(false)
     expect(removeSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe("copies are discarded on EVERY path where a draft dies", () => {
+  // The hunter's audit: these call sites existed but nothing tested them —
+  // deleting any of the discard loops left the suite green. Each case below
+  // fails if its loop is removed.
+  const chatFile = { ref: "c1", source: "chat_asset" as const, locator: "https://ydzipybqeebtpcvsbtvs.supabase.co/storage/v1/object/public/assets/team-chat/a/b.pdf", name: "client-doc.pdf", contentType: "application/pdf" }
+
+  it("SUPERSEDE: redrafting drops the earlier draft's copies", async () => {
+    // The supersede UPDATE returns the rows it cancelled; each one's copies go.
+    supersededRows.value = [{ attachments: [{ path: `worker-chat/${uuid}.pdf`, copied: true }] }]
+    const r = await prepareWorkerEmailSend({ ...base, attachRefs: ["c1"], sendable: [chatFile] })
+    expect(r.ok).toBe(true)
+    expect(removeSpy.mock.calls.flatMap((c) => c[0])).toContain(`worker-chat/${uuid}.pdf`)
+  })
+
+  it("SUPERSEDE: a superseded draft's PANEL UPLOAD is never deleted", async () => {
+    supersededRows.value = [{ attachments: [{ path: `worker-chat/${uuid}.pdf`, copied: false }] }]
+    await prepareWorkerEmailSend({ ...base, attachRefs: [], sendable: [] })
+    expect(removeSpy).not.toHaveBeenCalled()
+  })
+
+  it("INSERT FAILURE: a copy made for a row that never existed is dropped", async () => {
+    insertFails.value = true
+    const r = await prepareWorkerEmailSend({ ...base, attachRefs: ["c1"], sendable: [chatFile] })
+    expect(r.ok).toBe(false)
+    expect(uploadedPaths).toHaveLength(1)
+    expect(removeSpy.mock.calls.flatMap((c) => c[0])).toContain(uploadedPaths[0])
   })
 })
