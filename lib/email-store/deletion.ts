@@ -259,30 +259,66 @@ export async function markRestored(mailbox: Mailbox, sel: BinSelector): Promise<
  * THE SOURCE OF TRUTH for bin state: reconcile every stored copy against the
  * labels Gmail last told us about, in both directions.
  *
- * Runs from the index-sync cron, right after the labels are refreshed. Bounded
- * per pass; the drift set is normally empty, so a quiet run writes nothing.
+ * Runs from the index-sync cron, right after the labels are refreshed.
+ *
+ * It walks the two SMALL sets that can possibly be wrong — the messages Gmail
+ * has in Trash, and the copies we have already binned — rather than a window
+ * over all 27k rows. The first version did the latter and was caught in sandbox
+ * QA doing exactly what the reviewers warned about elsewhere: it stamped the 180
+ * copies that happened to fall in its arbitrary first-500 slice, then returned
+ * zero for ever, leaving 65 trashed copies permanently unbinned. Both sets here
+ * shrink as they are fixed, so repeated passes actually drain.
  */
-export async function reconcileBinState(limit = 500): Promise<{ binned: number; restored: number }> {
+export async function reconcileBinState(pageSize = 1000): Promise<{ binned: number; restored: number }> {
   let binned = 0
   let restored = 0
+
   for (const mailbox of ["support", "antonio"] as Mailbox[]) {
-    const { data, error } = await db
-      .from("email_message_content")
-      .select("message_id, deleted_at, email_index!inner(label_ids)")
-      .eq("mailbox", mailbox)
-      .limit(limit)
-    if (error) throw new Error(`reconcileBinState failed: ${error.message}`)
+    // ── Direction 1: in Gmail's Trash → bin it.
+    // markDeleted's own `deleted_at IS NULL` guard makes this idempotent, so
+    // re-offering an already-binned id is free and never restarts its clock.
+    const trashed = new Set<string>()
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await db
+        .from("email_index")
+        .select("message_id")
+        .eq("mailbox", mailbox)
+        .contains("label_ids", ["TRASH"])
+        .range(from, from + pageSize - 1)
+      if (error) throw new Error(`reconcileBinState(trashed) failed: ${error.message}`)
+      const page = (data ?? []) as Array<{ message_id: string }>
+      for (const r of page) trashed.add(r.message_id)
+      if (page.length < pageSize) break
+    }
+    if (trashed.size > 0) {
+      const ids = Array.from(trashed)
+      for (let i = 0; i < ids.length; i += 500) {
+        binned += await markDeleted(mailbox, { messageIds: ids.slice(i, i + 500) })
+      }
+    }
 
-    type Row = { message_id: string; deleted_at: string | null; email_index: { label_ids: string[] | null } | Array<{ label_ids: string[] | null }> }
-    const rows = ((data ?? []) as Row[]).map((r) => {
-      const idx = Array.isArray(r.email_index) ? r.email_index[0] : r.email_index
-      return { messageId: r.message_id, labelIds: idx?.label_ids ?? null, deletedAt: r.deleted_at }
-    })
-
-    const { toBin, toRestore } = binStateDrift(rows)
-    if (toBin.length) binned += await markDeleted(mailbox, { messageIds: toBin })
-    if (toRestore.length) restored += await markRestored(mailbox, { messageIds: toRestore })
+    // ── Direction 2: binned but no longer in Trash → un-bin it.
+    // Only the bin itself is scanned, and anything Gmail no longer has in Trash
+    // is released — including an email restored inside the Gmail app, which
+    // would otherwise be destroyed at day 180 while alive in the inbox.
+    const stale: string[] = []
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await db
+        .from("email_message_content")
+        .select("message_id")
+        .eq("mailbox", mailbox)
+        .not("deleted_at", "is", null)
+        .range(from, from + pageSize - 1)
+      if (error) throw new Error(`reconcileBinState(binned) failed: ${error.message}`)
+      const page = (data ?? []) as Array<{ message_id: string }>
+      for (const r of page) if (!trashed.has(r.message_id)) stale.push(r.message_id)
+      if (page.length < pageSize) break
+    }
+    for (let i = 0; i < stale.length; i += 500) {
+      restored += await markRestored(mailbox, { messageIds: stale.slice(i, i + 500) })
+    }
   }
+
   return { binned, restored }
 }
 
