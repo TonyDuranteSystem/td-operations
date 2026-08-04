@@ -101,6 +101,75 @@ export interface OwnEntityRow {
   description?: string | null
   counterparty?: string | null
   category: string
+  /** Signed amount. Negative = money OUT, which gets the strict recipient test
+   *  below. Absent/undefined keeps the pre-2026-08-03 contains-match (callers
+   *  that don't know the direction lose nothing). */
+  amount?: number | null
+}
+
+/**
+ * On an OUTGOING payment, is the company named as the RECIPIENT?
+ *
+ * Why this exists (2026-08-03, Titan Real Estate): the old rule asked only
+ * "does this row mention our own name?" — but an outgoing wire ALWAYS mentions
+ * it, as the sender. Titan's payments to F.INVEST Dubai and Bulgaria carried
+ * "From TITAN REAL ESTATE GROUP LLC" and were swallowed as internal transfers:
+ * excluded from the P&L and never queued for the client, hiding 49,000 of real
+ * cost. VSV210's payment to Tony Durante LLC went the same way.
+ *
+ * Two shapes are genuine and must keep working (verified against every
+ * own-entity row in production):
+ *   1. the payee field IS the company  — "Sent money to DYNAMIQ SR LLC"
+ *   2. payee empty, but the text names the company after a DESTINATION marker
+ *      — "ONLINE DOMESTIC WIRE TRANSFER ... A/C: BP INTERNATIONAL"
+ * A name sitting after a SOURCE marker ("from") is the sender, not the payee.
+ *
+ * Deliberately conservative: anything that matches neither is NOT auto-hidden.
+ * It falls through to the normal flow and reaches the client's question queue,
+ * which is the whole point — when we can't tell, we ask instead of guessing.
+ */
+function namedAsRecipient(row: OwnEntityRow, names: string[]): boolean {
+  // 1. Payee field names the company → unambiguous self-transfer.
+  const cp = normalizeEntityName(row.counterparty ?? "")
+  if (cp && names.some(n => cp.includes(n))) return true
+
+  // 2. Fall back to the free text, but only where the name follows a marker
+  //    that means "sent TO". Markers are matched in the SAME normalized space
+  //    as the name, so "A/C:" arrives here as "a c".
+  const hay = normalizeEntityName(row.description ?? "")
+  if (!hay) return false
+  const DESTINATION = [" to ", " a c ", " beneficiary ", " a favore di ", " payee "]
+  const SOURCE = [" from ", " da "]
+
+  // Mercury's export shape is "<payee> | From <sender> | <memo>" — the payee
+  // leads, with no "to" in front of it. So a name sitting BEFORE the first
+  // source marker is the payee. This is what separates two otherwise identical
+  // rows found in production: "Dynamiq Relay (Dynamiq Sr LLC) | From Dynamiq SR
+  // LLC" is Mercury→Relay, the client's own money (KEEP hidden), while
+  // "F. INVEST DUBAI (...) | From TITAN REAL ESTATE GROUP LLC" pays a separate
+  // company (RELEASE). Found by replaying this rule over all 581 real
+  // own-entity rows — without it, Dynamiq's genuine transfer was a false alarm.
+  const firstSource = Math.min(
+    ...SOURCE.map(m => { const i = ` ${hay} `.indexOf(m); return i === -1 ? Number.MAX_SAFE_INTEGER : i }),
+  )
+  if (firstSource !== Number.MAX_SAFE_INTEGER) {
+    const leading = ` ${hay} `.slice(0, firstSource)
+    if (names.some(n => leading.includes(n))) return true
+  }
+
+  for (const n of names) {
+    let at = hay.indexOf(n)
+    while (at !== -1) {
+      const before = ` ${hay.slice(0, at)} `
+      const lastDest = Math.max(...DESTINATION.map(m => before.lastIndexOf(m)))
+      const lastSrc = Math.max(...SOURCE.map(m => before.lastIndexOf(m)))
+      // The NEAREST preceding marker wins — a line can carry both a sender and
+      // a recipient ("... from <own> ... to <vendor>" and the reverse).
+      if (lastDest > lastSrc) return true
+      at = hay.indexOf(n, at + 1)
+    }
+  }
+  return false
 }
 
 export interface OwnEntityOptions {
@@ -148,6 +217,18 @@ export function detectOwnEntityTransfers(rows: OwnEntityRow[], opts: OwnEntityOp
       continue
     }
     if (!matchable.has(r.category)) continue
+
+    // OUTGOING money gets the strict recipient test (2026-08-03). An outgoing
+    // wire always names the company — as the SENDER — so a plain contains-match
+    // swallowed real payments to third parties. See namedAsRecipient.
+    if (typeof r.amount === "number" && r.amount < 0) {
+      if (namedAsRecipient(r, names)) hits.push(r.id)
+      continue
+    }
+
+    // Incoming / unknown direction: unchanged. Here the own name legitimately
+    // appears as the SOURCE ("Received money from <own company>"), so the
+    // contains-match is the correct signal and tightening it would break it.
     const hay = normalizeEntityName(`${r.description ?? ""} ${r.counterparty ?? ""}`)
     if (!hay) continue
     if (names.some(n => hay.includes(n))) hits.push(r.id)

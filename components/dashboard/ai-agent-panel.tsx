@@ -294,7 +294,8 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     // happening to match `min`. Sizing it explicitly keeps the two from drifting.
   }, [input, open])
 
-  const sendMessage = async (msgs: Message[], attachments?: UploadedAttachment[]) => {
+  /** Returns true when the turn completed; false when it failed (caller restores files). */
+  const sendMessage = async (msgs: Message[], attachments?: UploadedAttachment[]): Promise<boolean> => {
     setLoading(true)
     try {
       const res = await fetch('/api/ai-agent', {
@@ -349,9 +350,11 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
         })
         return next
       })
+      return true
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Unknown error'
       setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${errMsg}` }])
+      return false
     } finally {
       setLoading(false)
     }
@@ -386,7 +389,13 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     // Height is NOT reset here — clearing the text re-runs the auto-grow effect,
     // which returns the box to its minimum. Setting 'auto' as well produced a
     // one-frame collapse to a single line before the effect corrected it.
-    await sendMessage(newMessages, filesToSend)
+    const ok = await sendMessage(newMessages, filesToSend)
+    // A failed turn must NOT eat the attachment. The composer clears optimistically
+    // (right feel), but on failure the file is put back so "try again" actually
+    // re-sends it — otherwise the history bubble still shows 📎 while the retry
+    // carries nothing, and the assistant answers about a file it never received
+    // (td-bug 2026-08-03, after a transient provider overload).
+    if (!ok && filesToSend.length) att.restore(filesToSend)
   })
 
   /** Confirm or discard a frozen draft. The endpoint dispatches the stored bytes;

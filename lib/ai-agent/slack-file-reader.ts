@@ -179,8 +179,105 @@ async function stripMergeCells(buffer: Buffer): Promise<Buffer> {
   return Buffer.from(await zip.generateAsync({ type: "nodebuffer" }))
 }
 
-/** Flatten an exceljs workbook buffer to tab-separated rows, sheet by sheet. */
+/**
+ * Render ONE exceljs cell value as the text a reader should see.
+ *
+ * exceljs hands back a tagged OBJECT for several cell kinds, and the old
+ * one-liner only unwrapped objects carrying a `text` key — so a FORMULA cell
+ * and a RICH-TEXT cell both stringified to the literal "[object Object]".
+ * That is the worst possible failure for a spreadsheet: the number is gone and
+ * nothing says so, so the assistant answers a "what's the total?" question from
+ * data that was silently destroyed. Every TD financials/tax workbook is
+ * formula-driven (Luca's tax-returns tracking sheet, td-bug 2026-07-31).
+ *
+ * Dates are emitted as a plain ISO date, NOT `String(Date)`. The default
+ * rendering is both enormous ("Wed Jan 14 2026 19:00:00 GMT-0500 (Eastern
+ * Standard Time)" — ~57 chars against a 20k window) and WRONG: Excel stores a
+ * date at UTC midnight, so any negative-offset host shifts it to the previous
+ * day. On a deadline sheet that is a real, silent off-by-one-day.
+ */
+export function renderCellValue(v: unknown): string {
+  if (v == null) return ""
+  if (v instanceof Date) {
+    // UTC parts: the workbook's serial date is midnight UTC, and local rendering
+    // moves it a day west of Greenwich.
+    const iso = v.toISOString()
+    // Keep a time component only when the cell genuinely carries one.
+    return iso.endsWith("T00:00:00.000Z") ? iso.slice(0, 10) : iso.slice(0, 19).replace("T", " ")
+  }
+  if (typeof v !== "object") return String(v)
+
+  const o = v as Record<string, unknown>
+
+  // Formula cell: { formula, result, ... }. The RESULT is what the human sees in
+  // Excel. A result can legitimately be 0 or "" — check the key, never falsiness.
+  if ("formula" in o || "sharedFormula" in o) {
+    if ("result" in o && o.result != null) {
+      const r = o.result as Record<string, unknown>
+      // A formula that evaluated to an error carries { error: "#DIV/0!" }.
+      if (typeof r === "object" && "error" in r) return String(r.error)
+      return renderCellValue(o.result)
+    }
+    // Never-calculated formula (exceljs stores no cached result): show the
+    // formula so the reader can see a value is missing rather than see nothing.
+    return `=${String(o.formula ?? o.sharedFormula ?? "")}`
+  }
+
+  // Rich text: { richText: [{ text }, ...] } — concatenate the runs.
+  if (Array.isArray(o.richText)) {
+    return o.richText.map((run) => String((run as { text?: unknown })?.text ?? "")).join("")
+  }
+
+  // Hyperlink: { text, hyperlink } — the visible label.
+  if ("text" in o) return String(o.text ?? "")
+
+  // Error cell: { error: "#REF!" }.
+  if ("error" in o) return String(o.error ?? "")
+
+  // Anything else exceljs may add later: JSON beats "[object Object]", because
+  // it is at least inspectable rather than a silent hole.
+  try {
+    return JSON.stringify(v)
+  } catch {
+    return ""
+  }
+}
+
+/** exceljs sheet states that Excel hides from the human looking at the file. */
+function isHiddenSheet(state: unknown): boolean {
+  return state === "hidden" || state === "veryHidden"
+}
+
+/**
+ * Flatten an exceljs workbook buffer to tab-separated rows, sheet by sheet.
+ *
+ * Three things the naive flatten got wrong, all of them silent:
+ *  - a MANIFEST is emitted first. Without it a windowed read that stops early
+ *    hides whole SHEETS behind a character range — the reader is told
+ *    "showing 0–20000 of 61725" and has no way to know two tabs exist at all
+ *    (exactly Luca's case: the SMLLC/MMLLC tabs were entirely past the cut).
+ *  - Excel ROW NUMBERS are kept. `eachRow` skips empty rows, so the Nth emitted
+ *    line is not row N, and any "row 144" the assistant cites was fabricated.
+ *  - HIDDEN sheets are labelled. Excel hides prior-year/scratch tabs from the
+ *    human; feeding them in unmarked lets superseded figures be quoted as current.
+ */
 async function extractXlsx(buffer: Buffer): Promise<string> {
+  // LEGACY .xls (BIFF/OLE2) — a compound-file, not a zip. exceljs reads only the
+  // modern zip-based .xlsx, so this used to fail twice (xlsx.load, then the
+  // merge-strip retry's JSZip) and surface a raw library message AFTER the
+  // upload had already gone green. Banks and older accountants still send .xls.
+  // Detect it by magic bytes and say something a human can act on.
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0 &&
+    buffer[4] === 0xa1 && buffer[5] === 0xb1 && buffer[6] === 0x1a && buffer[7] === 0xe1
+  ) {
+    throw new Error(
+      "this is a legacy Excel 97-2003 file (.xls), which cannot be opened here — " +
+        "open it in Excel and use Save As → Excel Workbook (.xlsx), then send that",
+    )
+  }
+
   const ExcelJS = (await import("exceljs")).default
   let workbook = new ExcelJS.Workbook()
   try {
@@ -201,17 +298,39 @@ async function extractXlsx(buffer: Buffer): Promise<string> {
       throw err
     }
   }
+  const manifest: string[] = []
   const parts: string[] = []
   workbook.eachSheet((sheet) => {
+    const hidden = isHiddenSheet((sheet as unknown as { state?: unknown }).state)
     const rows: string[] = []
-    sheet.eachRow((row) => {
-      // row.values is 1-indexed (index 0 is unused); join non-empty cells with tabs.
+    let lastRowNumber = 0
+    sheet.eachRow((row, rowNumber) => {
+      // row.values is 1-indexed (index 0 is unused); join cells with tabs.
       const values = Array.isArray(row.values) ? row.values.slice(1) : []
-      rows.push(values.map((v) => (v == null ? "" : String(typeof v === "object" && "text" in (v as object) ? (v as { text: unknown }).text : v))).join("\t"))
+      // Prefix the REAL Excel row number so "row 144" means row 144 to the human
+      // too. eachRow skips blank rows, so a gap in the numbers is itself the
+      // signal that rows there are empty — no need to emit them.
+      if (rowNumber > lastRowNumber + 1 && lastRowNumber > 0) {
+        rows.push(`[rows ${lastRowNumber + 1}-${rowNumber - 1} are empty]`)
+      }
+      lastRowNumber = rowNumber
+      rows.push(`${rowNumber}\t${values.map(renderCellValue).join("\t")}`)
     })
-    if (rows.length > 0) parts.push(`--- Sheet: ${sheet.name} ---\n${rows.join("\n")}`)
+    if (rows.length === 0) return
+    const label = hidden ? `${sheet.name} (HIDDEN in Excel)` : sheet.name
+    manifest.push(`  - ${label} — ${rows.length} rows, last row ${lastRowNumber}`)
+    parts.push(
+      `--- Sheet: ${label} ---\n` +
+        (hidden
+          ? `[This sheet is HIDDEN in Excel — the person looking at this workbook does NOT see it. Treat it as superseded/scratch data unless they say otherwise.]\n`
+          : "") +
+        `[Each line starts with its real Excel row number.]\n${rows.join("\n")}`,
+    )
   })
-  return parts.join("\n\n")
+  if (parts.length === 0) return ""
+  // The manifest goes FIRST, before any content, so it survives a truncated read.
+  const header = `WORKBOOK CONTENTS — ${parts.length} sheet(s):\n${manifest.join("\n")}`
+  return [header, ...parts].join("\n\n")
 }
 
 /** Extract docx raw text via mammoth. */

@@ -105,7 +105,17 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) throw new Error("OPENAI_API_KEY not configured — cannot generate embedding")
 
-  const input = text.trim()
+  // CLAMP before sending (td-bug 2026-08-03). text-embedding-3-small rejects
+  // input past ~8191 tokens, and the worker passes the WHOLE user body as the
+  // recall query — which now includes every attached file's extracted text. So
+  // the exact turn where a client's spreadsheet is on the table was the turn the
+  // worker silently forgot every lesson it had learned about that client: the
+  // throw is caught upstream and turned into "", indistinguishable from "no
+  // relevant lessons". A recall query only needs the question, not the payload.
+  // ~4 chars/token, kept well clear of the ceiling.
+  const MAX_EMBED_CHARS = 24_000
+  const trimmed = text.trim()
+  const input = trimmed.length > MAX_EMBED_CHARS ? trimmed.slice(0, MAX_EMBED_CHARS) : trimmed
   if (!input) throw new Error("generateEmbedding: empty input text")
 
   const controller = new AbortController()

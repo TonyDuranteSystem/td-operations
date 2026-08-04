@@ -210,6 +210,13 @@ export const READ_TOOLS: ReadonlySet<string> = new Set([
   //   record is a SEPARATE tool and stays behind approval. Requiring a confirmation to
   //   turn text you just asked for into a PDF would make the feature pointless.
   "pdf_create",
+  // — Same shape as pdf_create: builds a spreadsheet FOR THE STAFF MEMBER into the
+  //   same private scratch bucket and returns the same expiring link. Nothing is
+  //   sent, nothing client-visible, no client record touched — and it is explicitly
+  //   a NEW workbook, never an in-place edit of anything that already exists, so
+  //   there is nothing to overwrite. Gating it would make "give me that as Excel"
+  //   pointless for exactly the same reason it would for the PDF.
+  "spreadsheet_create",
   // — Pure computation, no I/O —
   "classify_text", "classify_list_rules",
   // — Internal engineering surfaces, repo-scoped and secret-blocked —

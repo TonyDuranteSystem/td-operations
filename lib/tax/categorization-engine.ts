@@ -238,6 +238,10 @@ export function computeRecategorizationUpdates(
         description: r.description as string | null,
         counterparty: r.counterparty as string | null,
         category: updates.get(r.id as string)?.category ?? (r.category as string),
+        // Direction matters (2026-08-03): outgoing rows get the strict
+        // "is the company the RECIPIENT?" test, because an outgoing wire always
+        // names the company as the sender.
+        amount: Number(r.amount),
       })),
     { ownNames: [companyName].filter(Boolean) },
   )

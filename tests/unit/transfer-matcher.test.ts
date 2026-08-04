@@ -216,3 +216,128 @@ describe('nameVariants', () => {
     expect(nameVariants('a b c')).toEqual(['a b c', 'abc'])
   })
 })
+
+/**
+ * OUTGOING self-transfers: the company must be the RECIPIENT, not just mentioned.
+ *
+ * Real incident (2026-08-03, TITAN REAL ESTATE GROUP LLC). The old rule asked
+ * only "does the row mention our own name?" — but an outgoing wire ALWAYS
+ * mentions it, as the sender. Titan's payments to his SEPARATE Dubai and
+ * Bulgaria companies carried "From TITAN REAL ESTATE GROUP LLC" and were
+ * booked as internal transfers: 49,000 of real cost vanished from the P&L and
+ * the client was never asked about it. He spotted it himself.
+ *
+ * Every string below is copied from a real production row.
+ */
+describe('detectOwnEntityTransfers — outgoing needs the company as RECIPIENT', () => {
+  const OUT = -5000
+
+  it('REGRESSION Titan: own name as SENDER, another company as payee → NOT a transfer', () => {
+    const hits = detectOwnEntityTransfers([{
+      id: 'titan-dubai', category: 'uncategorized', amount: -48000,
+      counterparty: '',
+      description: 'F. INVEST DUBAI (F. INVEST ADVISORS FZCO) | From TITAN REAL ESTATE GROUP LLC | payment invoice 206 - 207',
+    }], { ownNames: ['TITAN REAL ESTATE GROUP LLC'] })
+    expect(hits).toEqual([])
+  })
+
+  it('REGRESSION VSV210: paid Tony Durante LLC, own name only as sender → NOT a transfer', () => {
+    const hits = detectOwnEntityTransfers([{
+      id: 'vsv-td', category: 'uncategorized', amount: -20,
+      counterparty: 'Services',
+      description: 'Tony Durante (Tony Durante LLC) | From VSV210 LLC via mercury.com',
+    }], { ownNames: ['VSV210 LLC'] })
+    expect(hits).toEqual([])
+  })
+
+  it('KEEPS Dynamiq: payee field IS the company → still a transfer', () => {
+    const hits = detectOwnEntityTransfers([{
+      id: 'dyn', category: 'uncategorized', amount: OUT,
+      counterparty: 'DYNAMIQ SR LLC', description: 'Sent money to DYNAMIQ SR LLC',
+    }], { ownNames: ['Dynamiq SR LLC'] })
+    expect(hits).toEqual(['dyn'])
+  })
+
+  it('KEEPS B&P: no payee field, but the text says A/C: <own> → still a transfer', () => {
+    const hits = detectOwnEntityTransfers([{
+      id: 'bp', category: 'uncategorized', amount: OUT, counterparty: '',
+      description: 'ONLINE DOMESTIC WIRE TRANSFER VIA: PIERMONT BANK NY/026015053 A/C: BP INTERNATIONAL LLC',
+    }], { ownNames: ['B&P International LLC'] })
+    expect(hits).toEqual(['bp'])
+  })
+
+  it('KEEPS the ACH shape: "To <own>" with no payee field', () => {
+    const hits = detectOwnEntityTransfers([{
+      id: 'ach', category: 'uncategorized', amount: -31000, counterparty: '',
+      description: '10/21 Same-Day ACH Payment 11192380086 To Dynamiq SR LLC',
+    }], { ownNames: ['Dynamiq SR LLC'] })
+    expect(hits).toEqual(['ach'])
+  })
+
+  it('no marker either way → NOT hidden; the client gets asked', () => {
+    const hits = detectOwnEntityTransfers([{
+      id: 'bare', category: 'uncategorized', amount: OUT, counterparty: '',
+      description: 'WIRE 8842 DYNAMIQ SR LLC REF 99',
+    }], { ownNames: ['Dynamiq SR LLC'] })
+    expect(hits).toEqual([])
+  })
+
+  it('both markers present → the NEAREST one before the name decides', () => {
+    const own = { ownNames: ['Dynamiq SR LLC'] }
+    // sender first, then paid TO us → recipient
+    expect(detectOwnEntityTransfers([{
+      id: 'a', category: 'uncategorized', amount: OUT, counterparty: '',
+      description: 'From Acme Ltd to Dynamiq SR LLC',
+    }], own)).toEqual(['a'])
+    // paid TO someone else, we are only the sender → not a transfer
+    expect(detectOwnEntityTransfers([{
+      id: 'b', category: 'uncategorized', amount: OUT, counterparty: '',
+      description: 'to Acme Ltd from Dynamiq SR LLC',
+    }], own)).toEqual([])
+  })
+
+  // The two rows below are byte-identical in shape and must go OPPOSITE ways.
+  // Mercury exports as "<payee> | From <sender> | <memo>", so the name in FRONT
+  // of "From" is who got paid. Found by replaying the rule over all 581 real
+  // own-entity rows: without this, Dynamiq's genuine Mercury->Relay move was a
+  // false alarm sent to the client.
+  it('KEEPS Mercury payee-first when the payee IS us (Dynamiq -> own Relay)', () => {
+    const hits = detectOwnEntityTransfers([{
+      id: 'relay', category: 'uncategorized', amount: -5000, counterparty: '',
+      description: 'Dynamiq Relay (Dynamiq Sr LLC) | From Dynamiq SR LLC via mercury.com',
+    }], { ownNames: ['Dynamiq SR LLC'] })
+    expect(hits).toEqual(['relay'])
+  })
+
+  it('RELEASES Mercury payee-first when the payee is someone else (Titan -> F.INVEST)', () => {
+    const hits = detectOwnEntityTransfers([{
+      id: 'finvest', category: 'uncategorized', amount: -48000, counterparty: '',
+      description: 'F. INVEST DUBAI (F. INVEST ADVISORS FZCO) | From TITAN REAL ESTATE GROUP LLC | payment',
+    }], { ownNames: ['TITAN REAL ESTATE GROUP LLC'] })
+    expect(hits).toEqual([])
+  })
+
+  it('INCOMING is untouched — there the own name IS the source', () => {
+    const hits = detectOwnEntityTransfers([{
+      id: 'in', category: 'uncategorized', amount: 5000, counterparty: '',
+      description: 'Received money from DYNAMIQ SR LLC',
+    }], { ownNames: ['Dynamiq SR LLC'] })
+    expect(hits).toEqual(['in'])
+  })
+
+  it('no amount supplied → old behaviour, so other callers are unaffected', () => {
+    const hits = detectOwnEntityTransfers([{
+      id: 'legacy', category: 'uncategorized',
+      counterparty: '', description: 'anything DYNAMIQ SR LLC anything',
+    }], { ownNames: ['Dynamiq SR LLC'] })
+    expect(hits).toEqual(['legacy'])
+  })
+
+  it('an owner draw is still never touched (member precedence)', () => {
+    const hits = detectOwnEntityTransfers([{
+      id: 'draw', category: 'distribution', amount: -1500, counterparty: '',
+      description: 'Lucia Terracciano | From LT PROGRAM LLC',
+    }], { ownNames: ['LT Program LLC'] })
+    expect(hits).toEqual([])
+  })
+})
