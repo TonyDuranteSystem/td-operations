@@ -860,7 +860,7 @@ export async function POST(req: NextRequest) {
        * open) and say where it came from — a filename alone is not something a
        * human can check.
        */
-      attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
+      attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string; warning?: string }>
       /** Portal only — the client the WORKER suggested, offered as a chip to click. */
       proposedAccountId?: string | null
       proposedContactId?: string | null

@@ -25,7 +25,7 @@ export type TeamChatConfirmCard = {
    * renderer builds a staff-authenticated path from `entity_id` + the position
    * in this list, and that path re-checks who is asking on every open.
    */
-  files?: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
+  files?: Array<{ name: string; size?: number; content_type?: string; origin?: string; warning?: string }>
 }
 
 /**
@@ -52,7 +52,7 @@ export function teamChatCardForFrozenDraft(
     to_address?: string | null
     subject?: string | null
     body?: unknown
-    attachments?: Array<{ name?: string; size?: number; content_type?: string; origin?: string }> | null
+    attachments?: Array<{ name?: string; size?: number; content_type?: string; origin?: string; warning?: string }> | null
   } | null,
 ): TeamChatConfirmCard | null {
   if (!prep || prep.kind !== 'email') return null
@@ -64,6 +64,7 @@ export function teamChatCardForFrozenDraft(
     size: a?.size,
     content_type: a?.content_type,
     origin: a?.origin,
+    warning: a?.warning,
   }))
   return {
     kind: 'email_confirm',

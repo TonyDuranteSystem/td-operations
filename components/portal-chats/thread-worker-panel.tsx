@@ -40,7 +40,7 @@ interface PreparedSend {
   /** The exact text that will be sent — confirming an address without seeing the
    *  body is how someone approves one draft while a different one goes out. */
   body: string
-  attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
+  attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string; warning?: string }>
 }
 
 interface ThreadWorkerPanelProps {

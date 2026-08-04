@@ -2901,7 +2901,101 @@ export async function executeWorkerTool(
   if (!WORKER_READ_ONLY_TOOL_NAMES.has(name)) {
     return `❌ Tool "${name}" is not permitted in the Hermes-bridge worker (read-only by design).`
   }
-  return executeTool(name, params as Record<string, unknown>)
+  const result = await executeTool(name, params as Record<string, unknown>)
+  // MINT ON OBSERVATION. A document the worker was just shown becomes attachable
+  // — and ONLY then. The model never gets a document id, a Drive id or a path;
+  // it gets a ref the server minted for a row the server itself returned this
+  // turn. That is what keeps "attach any document" from meaning "the model
+  // chooses which bytes leave the building".
+  if (name === "search_documents" && sendContext?.emailSendPrep) {
+    return offerSearchedDocuments(result, sendContext)
+  }
+  return result
+}
+
+/**
+ * Add the searched documents to this turn's attachable set and hand the model a
+ * ref for each — with the owner named and the internal-only rule applied.
+ *
+ * Never throws: a failure here must cost the ATTACH capability, never the
+ * search answer the staff member asked for.
+ */
+async function offerSearchedDocuments(result: string, sendContext: WorkerSendContext): Promise<string> {
+  try {
+    const parsed = JSON.parse(result) as {
+      documents?: Array<Record<string, unknown>>
+      [k: string]: unknown
+    }
+    const rows = parsed.documents ?? []
+    if (!Array.isArray(rows) || !rows.length) return result
+
+    // Owner display names, one lookup per table rather than per row.
+    const uniq = (vals: unknown[]) => Array.from(new Set(vals.filter((v): v is string => typeof v === "string")))
+    const accountIds = uniq(rows.map((r) => r._account_id))
+    const contactIds = uniq(rows.map((r) => r._contact_id))
+    const names = new Map<string, string>()
+    if (accountIds.length) {
+      const { data } = await supabaseAdmin.from("accounts").select("id, company_name").in("id", accountIds)
+      for (const a of (data ?? []) as Array<{ id: string; company_name: string | null }>) {
+        if (a.company_name) names.set(a.id, a.company_name)
+      }
+    }
+    if (contactIds.length) {
+      const { data } = await supabaseAdmin.from("contacts").select("id, full_name").in("id", contactIds)
+      for (const c of (data ?? []) as Array<{ id: string; full_name: string | null }>) {
+        if (c.full_name) names.set(c.id, c.full_name)
+      }
+    }
+
+    const { sendableFromDocumentRows, attachableFilesPrompt } = await import("@/lib/inbox/sendable-attachment")
+    const prep = sendContext.emailSendPrep!
+    const offered = sendableFromDocumentRows(
+      rows.map((r) => ({
+        id: String(r._id),
+        file_name: (r.file_name as string) ?? null,
+        mime_type: (r._mime_type as string) ?? null,
+        account_id: (r._account_id as string) ?? null,
+        contact_id: (r._contact_id as string) ?? null,
+        portal_visible: (r.portal_visible as boolean) ?? null,
+        flow_stage: (r.flow_stage as string) ?? null,
+        service_type: (r._service_type as string) ?? null,
+        owner_name: (typeof r._account_id === "string" && names.get(r._account_id)) ||
+          (typeof r._contact_id === "string" && names.get(r._contact_id)) || null,
+      })),
+      {
+        recipientAccountId: sendContext.pinnedPortalRecipient?.account_id ?? null,
+        recipientContactId: sendContext.pinnedPortalRecipient?.contact_id ?? null,
+        // Numbered after everything already on offer, so a second search in the
+        // same turn cannot reuse a ref that already means another file.
+        startAt: prep.sendable.filter((f) => f.ref.startsWith("d")).length + 1,
+      },
+    )
+    // Two searches in one turn can return the same document twice. Drop the
+    // earlier offer of a file we are re-offering, so one file never has two live
+    // refs (which is how "attach d2" quietly becomes ambiguous).
+    const reoffered = new Set(offered.map((o) => o.locator))
+    prep.sendable = [
+      ...prep.sendable.filter((f) => f.source !== "document" || !reoffered.has(f.locator)),
+      ...offered,
+    ]
+
+    // Strip the server-only fields and give the model its refs.
+    const forModel = rows.map((r, i) => {
+      const clean: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(r)) if (!k.startsWith("_")) clean[k] = v
+      clean.attach_ref = offered[i]?.ref
+      if (offered[i]?.warning) clean.attach_warning = offered[i].warning
+      return clean
+    })
+    return JSON.stringify({
+      ...parsed,
+      documents: forModel,
+      attachable: attachableFilesPrompt(offered),
+    })
+  } catch (err) {
+    console.warn("[worker-tools] could not offer searched documents as attachments:", err)
+    return result
+  }
 }
 
 /**

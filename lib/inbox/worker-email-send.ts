@@ -18,6 +18,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { TD_MAILBOXES, checkRecipientsAllowed } from "@/lib/inbox/email-recipients"
 import { buildRawEmail } from "@/lib/email/raw-mime"
 import { isValidWorkerUploadPath, WORKER_UPLOAD_BUCKET } from "@/lib/ai-agent/attachment-reader"
+import { MAX_EMAIL_ATTACHMENT_FILES } from "@/lib/inbox/email-attachment-staging"
 import {
   materializeSendable,
   SendableRefusal,
@@ -180,6 +181,18 @@ export async function prepareWorkerEmailSend(input: PrepareInput): Promise<Prepa
   // that leaves — see the header of `sendable-attachment.ts`. A refusal at this
   // point (unreadable, oversize) destroys nothing: no row exists yet, so the
   // worker can simply re-prepare without that file on the next turn.
+  // SEVERAL FILES ON ONE EMAIL IS THE ORDINARY CASE and always has been — the
+  // loop below resolves every ref the worker named. The only bound is the same
+  // one the manual composer already applies: "email them all of Acme's 2025
+  // documents" would otherwise fetch forty files inside a single request and
+  // die on the function timeout, which reads to the staff member as the feature
+  // being broken rather than as too large an ask.
+  if (input.attachRefs.length > MAX_EMAIL_ATTACHMENT_FILES) {
+    return {
+      ok: false,
+      message: `❌ That's ${input.attachRefs.length} files on one email — ${MAX_EMAIL_ATTACHMENT_FILES} is the most that will go in one go. Send them in two emails, or say which ones matter.`,
+    }
+  }
   const resolved: MaterializedAttachment[] = []
   let materializedBytes = 0
   for (const ref of input.attachRefs) {
@@ -229,6 +242,10 @@ export async function prepareWorkerEmailSend(input: PrepareInput): Promise<Prepa
         // Provenance travels with the frozen file so the Confirm card can say
         // where each one came from. A filename alone cannot be checked.
         origin: r.origin,
+        // And the loud line, when there is one (someone else's document, or one
+        // we hold back from clients). Antonio's rule is warn-never-block, which
+        // only works if the warning survives all the way to the card.
+        warning: r.warning,
       })),
       actor: input.actor,
       status: "pending",
@@ -487,7 +504,7 @@ export interface FrozenDraft {
    * `path` is deliberately NOT here: the storage location never leaves the
    * server. The card addresses a file by its INDEX in this array.
    */
-  attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
+  attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string; warning?: string }>
   /** Portal only — the client the staff member will confirm this against, if the worker proposed one. */
   proposed_account_id?: string | null
   proposed_contact_id?: string | null
@@ -554,6 +571,7 @@ export async function findPreparedFrozenThisTurn(
       size: a.size,
       content_type: a.content_type,
       origin: a.origin,
+      warning: a.warning,
     })),
   }
 }

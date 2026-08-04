@@ -229,6 +229,52 @@ describe("prepareWorkerEmailSend", () => {
     expect(row.attachments[0].size).toBe(9_100_000)
   })
 
+  it("attaches SEVERAL files to one email — each frozen in its own right, in the order asked for", async () => {
+    // "attach these two and send it" is ordinary; the card renders one tile per
+    // file, so the frozen row has to carry every one of them.
+    const two = [
+      ...sendable,
+      {
+        ref: "up2",
+        source: "worker_upload" as const,
+        locator: `worker-chat/${uuid}.pdf`,
+        name: "ein.pdf",
+        contentType: "application/pdf",
+        size: 120_000,
+        origin: "posted in this thread by Luca",
+      },
+    ]
+    const r = await prepareWorkerEmailSend({ ...base, attachRefs: ["up1", "up2"], sendable: two })
+    expect(r.ok).toBe(true)
+    const row = insertSpy.mock.calls[0][0] as { attachments: Array<Record<string, unknown>> }
+    expect(row.attachments).toHaveLength(2)
+    expect(row.attachments.map((a) => a.name)).toEqual(["affidavit.pdf", "ein.pdf"])
+    // Both are named back to the staff member, not just the first.
+    expect(r.ok && r.message).toMatch(/affidavit\.pdf/)
+    expect(r.ok && r.message).toMatch(/ein\.pdf/)
+  })
+
+  it("carries each file's WARNING onto the frozen row — a warning that stops at the resolver is not a warning", async () => {
+    const flagged = [{ ...sendable[0], warning: "⚠️ Internal document — we do not normally share this one with clients." }]
+    await prepareWorkerEmailSend({ ...base, attachRefs: ["up1"], sendable: flagged })
+    const row = insertSpy.mock.calls[0][0] as { attachments: Array<Record<string, unknown>> }
+    expect(row.attachments[0].warning).toMatch(/Internal document/)
+  })
+
+  it("REFUSES more files than one email can carry, and says how to proceed", async () => {
+    const many = Array.from({ length: 11 }, (_, i) => ({
+      ref: `up${i + 1}`,
+      source: "worker_upload" as const,
+      locator: goodPath,
+      name: `f${i + 1}.pdf`,
+      size: 10,
+    }))
+    const r = await prepareWorkerEmailSend({ ...base, attachRefs: many.map((m) => m.ref), sendable: many })
+    expect(r.ok).toBe(false)
+    expect(r.ok === false && r.message).toMatch(/Send them in two emails/)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
   it("freezes the attachment's location/name/type/size AND its provenance — never bytes", async () => {
     // `origin` is what makes the Confirm card checkable: it turns "EIN Letter.pdf"
     // (which looks identical whoever it belongs to) into "EIN Letter.pdf, posted in

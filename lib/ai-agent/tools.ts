@@ -1287,7 +1287,11 @@ async function searchDocuments(p: any) {
 
   let q = supabaseAdmin
     .from('documents')
-    .select('file_name, document_type_name, category_name, flow_stage, created_at, drive_file_id, drive_link, portal_visible, ocr_text')
+    // `id`, `account_id`/`contact_id` and `service_type` are for the SERVER, not
+    // the model: they are what lets the caller offer a document as an email
+    // attachment with its OWNER named and the internal-only rule applied. They
+    // are stripped from the model-visible payload below.
+    .select('id, account_id, contact_id, file_name, mime_type, document_type_name, category_name, flow_stage, created_at, drive_file_id, drive_link, portal_visible, ocr_text, service_deliveries(service_type)')
     .order('created_at', { ascending: false })
     .limit(limit)
   q = accountId && contactId
@@ -1308,6 +1312,13 @@ async function searchDocuments(p: any) {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const documents = (data ?? []).map((d: any) => ({
+    // Server-only fields (see the select above). The worker executor reads these
+    // to build the attachable list and removes them before the model sees this.
+    _id: d.id,
+    _account_id: d.account_id ?? null,
+    _contact_id: d.contact_id ?? null,
+    _service_type: d.service_deliveries?.service_type ?? null,
+    _mime_type: d.mime_type ?? null,
     file_name: d.file_name,
     type: d.document_type_name || d.category_name || null,
     flow_stage: d.flow_stage,

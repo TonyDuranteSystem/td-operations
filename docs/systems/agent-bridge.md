@@ -1,5 +1,7 @@
 # Hermes ↔ Claude Agent Bridge
 
+_Last verified against code: 2026-08-03b — Claude (**Touch only: `worker-tools.ts` gained `offerSearchedDocuments`, which turns a `search_documents` result into this turn's attachable-file set when the call has an email freeze context. The Hermes-bridge worker has no such context, so nothing changes for it, and the read-only tool gate is untouched. Full detail in `docs/systems/inbox.md` (2026-08-03b).**)_
+
 _Last verified against code: 2026-08-03 — Claude (**Touch only: `worker-tools.ts` — the `send_email` `attach` parameter description and the `sendable` type it carries (now `SendableFile`, with a `source` and provenance). No change to the bridge, the worker's tool set, or the action rail, which stays OFF (R108/R111). Full detail in `docs/systems/inbox.md` (2026-08-03).**)_
 
 _Last verified against code: 2026-08-02 — Claude (**NO bridge behaviour change.** `worker-tools.ts` gained two send-context fields (`portalSendPrep`, `portalFrozenThisTurn`) so the INBOX worker can freeze a portal-chat message behind its Confirm card — dev job d2024649, sandbox only. The Hermes worker's read-only tool allow-list is untouched and it cannot reach the new control: the freeze path requires an Inbox thread + a staff actor, and R108 Phase-1 remains RESEARCH ONLY with no send/write/mutate tools. Recorded here only because the shared engine file changed. Prior note retained below.**)

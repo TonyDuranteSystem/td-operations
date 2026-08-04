@@ -51,6 +51,7 @@ vi.mock("@/lib/ai-agent/attachment-reader", async () => {
 import {
   materializeSendable,
   sendableFromChatRefs,
+  sendableFromDocumentRows,
   attachableFilesPrompt,
   SendableRefusal,
   type SendableFile,
@@ -156,5 +157,96 @@ describe("sendableFromChatRefs / attachableFilesPrompt", () => {
 
   it("says nothing at all when there is nothing to attach (no false capability)", () => {
     expect(attachableFilesPrompt([])).toBe("")
+  })
+})
+
+describe("sendableFromDocumentRows — a document we hold on record", () => {
+  const base = {
+    id: "doc-1",
+    file_name: "EIN Letter.pdf",
+    mime_type: "application/pdf",
+    account_id: "acct-A",
+    owner_name: "Flowiz Studio LLC",
+    // A client-safe stage for Company Formation, so no internal-only warning.
+    service_type: "Company Formation",
+    flow_stage: "EIN Received",
+    portal_visible: false,
+  }
+
+  it("names the OWNER on the card — 'EIN Letter.pdf' is identical across every company we serve", () => {
+    const [f] = sendableFromDocumentRows([base])
+    expect(f.origin).toBe("on file for Flowiz Studio LLC")
+    expect(f.source).toBe("document")
+    // The model gets a ref; the document id stays server-side in the locator.
+    expect(f.ref).toBe("d1")
+    expect(f.locator).toBe("doc-1")
+  })
+
+  it("WARNS LOUDLY when the file belongs to a different client than the screen — and still offers it", () => {
+    // Antonio, 2026-08-03: "let it through with a loud warning on the card."
+    // Emailing one client's document to their own accountant is legitimate;
+    // only the human can tell that apart from a mix-up.
+    const [f] = sendableFromDocumentRows([base], { recipientAccountId: "acct-B" })
+    expect(f.warning).toMatch(/belongs to Flowiz Studio LLC/)
+    expect(f.warning).toMatch(/Check before you send/)
+    expect(f.locator).toBe("doc-1") // offered, not withheld
+  })
+
+  it("does NOT warn when the file belongs to the client this screen is about", () => {
+    const [f] = sendableFromDocumentRows([base], { recipientAccountId: "acct-A" })
+    expect(f.warning).toBeUndefined()
+  })
+
+  it("cannot assert a mismatch off a client screen (a team channel) — and does not pretend to", () => {
+    const [f] = sendableFromDocumentRows([base], {})
+    expect(f.warning).toBeUndefined()
+  })
+
+  it("WARNS on an internal-only document — the signed SS-4 must never reach a client unnoticed", () => {
+    // flow_stage 'Signed' is deliberately absent from the client-safe allowlist
+    // for Company Formation: the signed SS-4 carries the responsible party's tax ID.
+    const [f] = sendableFromDocumentRows([{ ...base, file_name: "SS-4 signed.pdf", flow_stage: "Signed" }])
+    expect(f.warning).toMatch(/Internal document/)
+  })
+
+  it("treats an explicitly published document as client-safe", () => {
+    const [f] = sendableFromDocumentRows([{ ...base, flow_stage: "Signed", portal_visible: true }])
+    expect(f.warning).toBeUndefined()
+  })
+
+  it("stacks BOTH warnings when a file is internal AND another client's", () => {
+    const [f] = sendableFromDocumentRows([{ ...base, flow_stage: "Signed" }], { recipientAccountId: "acct-B" })
+    expect(f.warning).toMatch(/belongs to/)
+    expect(f.warning).toMatch(/Internal document/)
+  })
+
+  it("numbers refs so a second search in the same turn cannot reuse a live ref", () => {
+    const files = sendableFromDocumentRows([base, { ...base, id: "doc-2" }], { startAt: 3 })
+    expect(files.map((f) => f.ref)).toEqual(["d3", "d4"])
+  })
+})
+
+describe("MORE THAN ONE FILE on one email", () => {
+  it("offers several files at once, each with its own ref, and lists them all to the worker", () => {
+    const files = [
+      ...sendableFromChatRefs([{ id: "u1", name: "a.pdf" }, { id: "u2", name: "b.png" }], "posted in this thread"),
+      ...sendableFromDocumentRows(
+        [{ id: "doc-9", file_name: "Articles.pdf", owner_name: "Flowiz Studio LLC", service_type: "Company Formation", flow_stage: "Articles Received" }],
+        { startAt: 1 },
+      ),
+    ]
+    expect(files.map((f) => f.ref)).toEqual(["f1", "f2", "d1"])
+    const line = attachableFilesPrompt(files)
+    for (const name of ["a.pdf", "b.png", "Articles.pdf"]) expect(line).toContain(name)
+    // It must know several refs are allowed on ONE email, or it attaches one and
+    // narrates the rest.
+    expect(line).toMatch(/several refs for several files/)
+  })
+
+  it("repeats a file's warning in the list, so the worker cannot attach a flagged file silently", () => {
+    const [f] = sendableFromDocumentRows(
+      [{ id: "doc-3", file_name: "SS-4 signed.pdf", owner_name: "ACME LLC", service_type: "Company Formation", flow_stage: "Signed" }],
+    )
+    expect(attachableFilesPrompt([f])).toMatch(/Internal document/)
   })
 })

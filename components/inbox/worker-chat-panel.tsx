@@ -47,7 +47,7 @@ interface PreparedSend {
   /** The exact text that will be sent — rendered so Confirm approves a MESSAGE,
    *  not just an address. */
   body: string
-  attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
+  attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string; warning?: string }>
   /** Portal only — the client the worker suggested. A chip to click, never pre-selected. */
   /** Set when the frozen text is confidently NOT the language the card claims. */
   languageMismatch?: 'en' | 'it' | null

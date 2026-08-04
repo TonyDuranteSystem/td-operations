@@ -75,7 +75,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     to: string
     subject: string
     body: string
-    attachments?: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
+    attachments?: Array<{ name: string; size?: number; content_type?: string; origin?: string; warning?: string }>
   } | null>(null)
   const [confirming, setConfirming] = useState(false)
   // WHICH OF OUR ADDRESSES IT GOES OUT FROM — chosen here, re-checked by the server.

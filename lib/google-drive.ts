@@ -807,6 +807,52 @@ export async function downloadFileBinary(fileId: string): Promise<{ buffer: Buff
 }
 
 /**
+ * What a Google-native file becomes when we need real BYTES for it.
+ *
+ * `downloadFileBinary` asks for `?alt=media`, which Drive REFUSES for anything
+ * under `application/vnd.google-apps.*` (403 fileNotDownloadable) — so a Doc or
+ * a Sheet cannot be attached to an email by that path at all. Exporting is the
+ * only way to get bytes, and the extension has to be rewritten to match or the
+ * recipient gets a file their machine cannot open.
+ */
+const NATIVE_EXPORTS: Array<{ match: string; mimeType: string; ext: string }> = [
+  { match: "spreadsheet", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ext: "xlsx" },
+  { match: "presentation", mimeType: "application/pdf", ext: "pdf" },
+  { match: "drawing", mimeType: "application/pdf", ext: "pdf" },
+  // Docs and everything else Google-native → PDF, which is what we actually
+  // send people.
+  { match: "", mimeType: "application/pdf", ext: "pdf" },
+]
+
+/**
+ * Binary bytes for a Drive file, EXPORTING it when it is a Google-native doc.
+ *
+ * Use this anywhere the bytes leave the building (email attachments). Returns
+ * the filename with the exported extension applied, so "Engagement letter"
+ * arrives as "Engagement letter.pdf" rather than as something unopenable.
+ */
+export async function downloadFileBinaryForSend(
+  fileId: string,
+): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
+  if (driveMocked()) return downloadFileBinary(fileId)
+  const meta = (await getFileMetadata(fileId)) as { mimeType: string; name: string }
+  if (!meta.mimeType?.startsWith("application/vnd.google-apps.")) {
+    return downloadFileBinary(fileId)
+  }
+  const rule = NATIVE_EXPORTS.find((r) => r.match && meta.mimeType.includes(r.match)) ?? NATIVE_EXPORTS[NATIVE_EXPORTS.length - 1]
+  const token = await getAccessToken()
+  const url = `${DRIVE_API}/files/${fileId}/export?mimeType=${encodeURIComponent(rule.mimeType)}&supportsAllDrives=true`
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) throw new Error(`Drive export ${res.status}: ${res.statusText}`)
+  const base = (meta.name || "document").replace(/\.[a-z0-9]{1,8}$/i, "")
+  return {
+    buffer: Buffer.from(await res.arrayBuffer()),
+    mimeType: rule.mimeType,
+    fileName: `${base}.${rule.ext}`,
+  }
+}
+
+/**
  * Download file content (text-based files only)
  */
 export async function downloadFileContent(fileId: string): Promise<string> {

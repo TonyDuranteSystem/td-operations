@@ -22,8 +22,14 @@ export interface ConfirmAttachment {
   name: string
   size?: number
   content_type?: string
-  /** "posted in this thread by Luca" / "you uploaded this just now". */
+  /** "posted in this thread by Luca" / "on file for ACME LLC". */
   origin?: string
+  /**
+   * The loud line: someone else's document, or one we hold back from clients.
+   * Never blocks — Antonio's rule is that the human decides — but it must be
+   * impossible to miss, so it renders in red above the file, not as a footnote.
+   */
+  warning?: string
 }
 
 /** Where the browser fetches attachment #index of a frozen draft. Staff-gated. */
@@ -71,6 +77,9 @@ export function ConfirmAttachments({
               {size && <span className="shrink-0 text-zinc-400">{size}</span>}
             </div>
             {a.origin && <p className="mt-0.5 pl-5 text-[11px] text-zinc-500">{a.origin}</p>}
+            {a.warning && (
+              <p className="mt-1 rounded-md bg-red-50 px-2 py-1 text-[11px] font-medium text-red-700">{a.warning}</p>
+            )}
           </a>
         )
       })}

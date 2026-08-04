@@ -16,7 +16,7 @@ export interface TeamCardData {
    *  themselves. No URL here on purpose — the renderer builds a staff-only path
    *  from entity_id + position, so this permanent chat row never carries a
    *  standing link to a client document. */
-  files?: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
+  files?: Array<{ name: string; size?: number; content_type?: string; origin?: string; warning?: string }>
 }
 
 export interface Reaction {

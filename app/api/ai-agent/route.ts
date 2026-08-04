@@ -505,7 +505,7 @@ async function runSidebarWorker(args: {
        * so a staff member here confirmed an email carrying files they were
        * never shown.
        */
-      attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
+      attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string; warning?: string }>
     } | null = null
     try {
       // Only a row THIS turn created — id snapshot, so no clock skew.
