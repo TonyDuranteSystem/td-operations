@@ -34,6 +34,38 @@ describe('decideRestale — who may be re-sorted', () => {
     expect(decideRestale(c({ confirmed: true, transactions: 10_000 })).eligible).toBe(false)
   })
 
+  // The SECOND signal. `confirmation_accepted` alone is not proof a return is
+  // still open: the staff review loop has its own state, and a cron must not
+  // re-sort numbers a client has finished with or a colleague is working on.
+  it('NEVER a return marked confirmed in the review loop', () => {
+    expect(decideRestale(c({ reviewStatuses: ['confirmed'] }))).toEqual({
+      eligible: false, reason: 'staff_reviewing',
+    })
+  })
+
+  it('NEVER while staff are actively reviewing', () => {
+    expect(decideRestale(c({ reviewStatuses: ['under_review'] }))).toEqual({
+      eligible: false, reason: 'staff_reviewing',
+    })
+  })
+
+  // An account-year can carry several submission rows; one hands-off row is
+  // enough to protect the whole year.
+  it('one hands-off row among several protects the account-year', () => {
+    expect(decideRestale(c({ reviewStatuses: ['submitted', null, 'confirmed'] })).eligible).toBe(false)
+  })
+
+  it('open review states stay eligible — that is the whole point', () => {
+    for (const s of ['submitted', 'resubmitted', 'revision_requested', 'approved', 'reopened', null]) {
+      expect(decideRestale(c({ reviewStatuses: [s] })).eligible).toBe(true)
+    }
+  })
+
+  it('no submission row at all is still eligible (nothing to protect yet)', () => {
+    expect(decideRestale(c({ reviewStatuses: [] })).eligible).toBe(true)
+    expect(decideRestale(c({ reviewStatuses: undefined })).eligible).toBe(true)
+  })
+
   it('nothing to sort → skipped', () => {
     expect(decideRestale(c({ transactions: 0 }))).toEqual({
       eligible: false, reason: 'no_transactions',
@@ -69,6 +101,15 @@ describe('describeRestaleResult — the line a human reads', () => {
 describe('run cap', () => {
   it('is bounded so one tick can never run away', () => {
     expect(RESTALE_MAX_ACCOUNTS_PER_RUN).toBeGreaterThan(0)
-    expect(RESTALE_MAX_ACCOUNTS_PER_RUN).toBeLessThanOrEqual(25)
+    expect(RESTALE_MAX_ACCOUNTS_PER_RUN).toBeLessThanOrEqual(100)
+  })
+
+  // The cap is a runaway guard, not a batch size. There is no cursor, so a cap
+  // below the number of eligible account-years starves the tail FOREVER — the
+  // first cut capped at 8 against 16 real account-years and reprocessed the
+  // same tiny ones every 4 hours while looking healthy.
+  it('sits above the whole book, so nothing is starved', () => {
+    const ACCOUNT_YEARS_IN_PRODUCTION = 16
+    expect(RESTALE_MAX_ACCOUNTS_PER_RUN).toBeGreaterThan(ACCOUNT_YEARS_IN_PRODUCTION)
   })
 })

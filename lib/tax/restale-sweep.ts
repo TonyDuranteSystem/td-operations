@@ -40,6 +40,17 @@ export interface RestaleCandidate {
   transactions: number
   /** True once the CLIENT has attested the financials. */
   confirmed: boolean
+  /**
+   * The review state of the account-year's submissions. "Finished or in
+   * somebody's hands" is TWO independent signals and checking only one is not
+   * enough: `confirmation_accepted` records the client's attestation, while
+   * `review_status` records where the return sits in the staff review loop.
+   * A return can be `confirmed` in the review loop, and staff can be actively
+   * working one (`under_review`) — neither should have a cron re-sorting the
+   * numbers underneath it. Pass every review_status found for the account-year;
+   * the safest one wins.
+   */
+  reviewStatuses?: (string | null)[]
 }
 
 export interface RestaleDecision {
@@ -48,7 +59,11 @@ export interface RestaleDecision {
     | "eligible"
     | "no_transactions"
     | "already_confirmed"
+    | "staff_reviewing"
 }
+
+/** Review states where a background job must keep its hands off. */
+const HANDS_OFF: ReadonlySet<string> = new Set(["confirmed", "under_review"])
 
 /**
  * May the sweep re-sort this account-year?
@@ -65,15 +80,29 @@ export interface RestaleDecision {
  */
 export function decideRestale(c: RestaleCandidate): RestaleDecision {
   if (c.confirmed) return { eligible: false, reason: "already_confirmed" }
+  // The second signal. `confirmation_accepted` alone is NOT proof a return is
+  // still open — a return marked `confirmed` in the review loop, or one a staff
+  // member is actively reviewing, is equally off-limits (QA 2026-08-04).
+  if ((c.reviewStatuses ?? []).some(s => s !== null && HANDS_OFF.has(s))) {
+    return { eligible: false, reason: "staff_reviewing" }
+  }
   if (c.transactions <= 0) return { eligible: false, reason: "no_transactions" }
   return { eligible: true, reason: "eligible" }
 }
 
-/** Biggest account-year seen in production is ~10k rows; the deterministic
- *  pass is pure CPU plus one chunked update. Cap the run anyway so a future
- *  book ten times this size can never blow the function window — the leftovers
- *  are simply picked up on the next tick. */
-export const RESTALE_MAX_ACCOUNTS_PER_RUN = 8
+/**
+ * Runaway guard, NOT a work-sharing batch size.
+ *
+ * The first cut set this to 8 and took the SMALLEST account-years first with
+ * no record of what had already been swept — so the same tiny account-years
+ * were reprocessed forever and the ones this job was built for were never
+ * reached (16 account-years exist today). Correcting the ordering is not
+ * enough on its own: without a cursor, a cap below the total starves the tail
+ * permanently. So the cap sits comfortably ABOVE the whole book and the route
+ * REPORTS any overflow rather than dropping it silently. If the book ever
+ * outgrows one run, the honest fix is a swept-at marker, not a bigger number.
+ */
+export const RESTALE_MAX_ACCOUNTS_PER_RUN = 40
 
 /** Report-only unless this is explicitly set to the string "false", matching
  *  the other tax sweeps. A sweep that rewrites client money must be watched

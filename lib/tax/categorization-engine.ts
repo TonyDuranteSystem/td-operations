@@ -109,7 +109,20 @@ export async function getCategorizationRules(accountId: string): Promise<Categor
 
 export interface RecategorizeResult {
   scanned: number
+  /** Rows written. INCLUDES note-only rewrites, where the category is
+   *  unchanged and only the provenance note is re-stamped. */
   recategorized: number
+  /**
+   * Rows whose CATEGORY or subcategory actually moved (2026-08-04).
+   *
+   * `recategorized` is the wrong number to show a human: the transfer-pair and
+   * own-entity passes re-stamp their note on every run, so those rows always
+   * pass the persist gate and inflate the count even when nothing moved — 849
+   * rows across the book today. The stale-classification sweep reports on THIS
+   * number instead, so "would change N" means N transactions really change
+   * category, and a quiet run reads as quiet.
+   */
+  categoryChanged: number
   transferPairs: number
   aiCategorized: number
   aiErrors: string[]
@@ -312,7 +325,7 @@ export async function recategorizeAccountYear(
     taxYear,
     "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, account_ref, category, subcategory, is_related_party, notes, ai_lean, ai_bucket, loc_code, loc_source, loc_confidence",
   )
-  if (rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0, aiStats: EMPTY_AI_STATS() }
+  if (rows.length === 0) return { scanned: 0, recategorized: 0, categoryChanged: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0, aiStats: EMPTY_AI_STATS() }
 
   const rules = await getCategorizationRules(accountId)
 
@@ -321,10 +334,23 @@ export async function recategorizeAccountYear(
     .from("account_contacts")
     .select("contacts(first_name, last_name)")
     .eq("account_id", accountId)
+  // MINIMUM LENGTH (2026-08-04). Member names are matched by plain
+  // case-insensitive SUBSTRING (bank-statement-parser), and an outflow that
+  // matches becomes an owner draw — money leaves the P&L and lands in members'
+  // capital. A short or partial contact name therefore blanket-matches
+  // unrelated merchants: a contact stored as "Ada" would turn Canada, Nevada
+  // and Amadeus into owner withdrawals. The company-name path already guards
+  // exactly this with a ≥5 floor (transfer-matcher: "a short/generic name can
+  // never blanket-match vendors"); the member path had none, and the
+  // stale-classification sweep would apply it to a whole year unattended.
+  // Excluded names simply are not auto-detected — those rows stay in the
+  // client's question queue, visible and one tap to fix. That is the safe
+  // direction; silently rebooking a year is not.
+  const MIN_MEMBER_NAME = 5
   const memberNames = ((links ?? []) as unknown as Array<{ contacts: { first_name: string | null; last_name: string | null } | null }>)
     .filter(l => l.contacts)
     .map(l => `${l.contacts!.first_name ?? ""} ${l.contacts!.last_name ?? ""}`.trim())
-    .filter(n => n.length > 0)
+    .filter(n => n.length >= MIN_MEMBER_NAME)
 
   // Company's own legal name — used by the own-entity self-transfer pass below
   // and (when aiAssist) reused for the AI context. Fetched once, unconditionally.
@@ -358,6 +384,9 @@ export async function recategorizeAccountYear(
   // persists per batch.
   const dryRun = opts?.dryRun === true
   let recategorized = 0
+  // Counted separately from `recategorized` — see RecategorizeResult. A row
+  // whose note is merely re-stamped is NOT a change a human needs to see.
+  let categoryChanged = 0
   for (const [id, u] of Array.from(updates.entries())) {
     const orig = rows.find(r => r.id === id)
     if (!orig) continue
@@ -365,6 +394,7 @@ export async function recategorizeAccountYear(
     const nextSub = u.subcategory ?? ((orig.subcategory as string) ?? "")
     const catChanged = nextCategory !== orig.category || nextSub !== ((orig.subcategory as string) ?? "")
     if (!catChanged && !u.notes) continue
+    if (catChanged) categoryChanged++
     // Report-only: count it and move on. Counted the same way a real run counts
     // it, so "would change N" and "changed N" are the same number.
     if (dryRun) { recategorized++; continue }
@@ -380,7 +410,7 @@ export async function recategorizeAccountYear(
   // A preview stops here: the AI pass costs money and writes per batch.
   if (dryRun) {
     return {
-      scanned: rows.length, recategorized, transferPairs,
+      scanned: rows.length, recategorized, categoryChanged, transferPairs,
       aiCategorized: 0, aiErrors: [], aiStats: EMPTY_AI_STATS(),
       uncategorizedRemaining: rows.filter(r =>
         (updates.get(r.id as string)?.category ?? (r.category as string)) === "uncategorized").length,
@@ -511,5 +541,5 @@ export async function recategorizeAccountYear(
     if (locErr) throw new Error(`Failed to stamp location on transaction ${r.id}: ${locErr.message}`)
   }
 
-  return { scanned: rows.length, recategorized, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining, aiStats, ...(aiNoCandidates ? { aiNoCandidates } : {}) }
+  return { scanned: rows.length, recategorized, categoryChanged, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining, aiStats, ...(aiNoCandidates ? { aiNoCandidates } : {}) }
 }

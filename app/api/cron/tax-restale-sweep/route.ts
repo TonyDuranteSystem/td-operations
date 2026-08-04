@@ -60,12 +60,25 @@ export async function GET(request: NextRequest) {
     // pure and unit-tested (decideRestale).
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = supabaseAdmin as any
-    const { data: txAgg } = await db
-      .from("bank_transactions")
-      .select("account_id, tax_year")
-      .limit(50000)
+    // MUST be paged. supabase-js caps a single select at 1000 rows, so a plain
+    // `.limit(50000)` here silently returned a twentieth of the table (19,463
+    // rows today) — the sweep would have built its candidate list from a
+    // fraction of the data, miscounting transactions per account-year and
+    // skipping most clients entirely. Same trap this table already has a
+    // dedicated helper for; see lib/bank-transactions-fetch.ts. Caught in QA
+    // before this ever ran.
+    const { fetchAllPaged } = await import("@/lib/bank-transactions-fetch")
+    const txAgg = await fetchAllPaged<{ account_id: string; tax_year: number }>(async (from, to) => {
+      const { data, error } = await db
+        .from("bank_transactions")
+        .select("account_id, tax_year")
+        .order("id", { ascending: true })
+        .range(from, to)
+      if (error) throw new Error(error.message)
+      return (data ?? []) as Array<{ account_id: string; tax_year: number }>
+    })
     const counts = new Map<string, { account_id: string; tax_year: number; n: number }>()
-    for (const r of (txAgg ?? []) as Array<{ account_id: string; tax_year: number }>) {
+    for (const r of txAgg) {
       if (!r.account_id || !r.tax_year) continue
       const k = `${r.account_id}:${r.tax_year}`
       const e = counts.get(k) ?? { account_id: r.account_id, tax_year: r.tax_year, n: 0 }
@@ -73,26 +86,60 @@ export async function GET(request: NextRequest) {
       counts.set(k, e)
     }
 
-    const { data: subs } = await db
-      .from("tax_return_submissions")
-      .select("account_id, tax_year, confirmation_accepted")
-    const confirmed = new Set(
-      ((subs ?? []) as Array<{ account_id: string; tax_year: number; confirmation_accepted: boolean | null }>)
-        .filter(s => s.confirmation_accepted === true)
-        .map(s => `${s.account_id}:${s.tax_year}`),
-    )
+    // FAIL CLOSED. This is the query that protects attested and under-review
+    // returns, and it used to discard its error — one timeout and `subs` came
+    // back null, every client looked unconfirmed, and the sweep would have
+    // re-sorted returns clients had already signed off on while logging
+    // success. Paged for the same reason as the transactions read: a single
+    // select caps at 1000 rows (94 today, but the guard must not rot).
+    const subs = await fetchAllPaged<{
+      account_id: string; tax_year: number
+      confirmation_accepted: boolean | null; review_status: string | null
+    }>(async (from, to) => {
+      const { data, error } = await db
+        .from("tax_return_submissions")
+        .select("account_id, tax_year, confirmation_accepted, review_status")
+        .order("id", { ascending: true })
+        .range(from, to)
+      // Throwing here aborts the whole run. That is the point: no protection
+      // data means no sweep, never a sweep with the guard switched off.
+      if (error) throw new Error(`submission guard read failed: ${error.message}`)
+      return (data ?? []) as Array<{
+        account_id: string; tax_year: number
+        confirmation_accepted: boolean | null; review_status: string | null
+      }>
+    })
+    // BOTH signals, gathered per account-year. An account-year can carry more
+    // than one submission row (13 do, book-wide), so every row's state counts —
+    // the strictest wins inside decideRestale.
+    const confirmed = new Set<string>()
+    const statuses = new Map<string, (string | null)[]>()
+    for (const s of subs) {
+      const k = `${s.account_id}:${s.tax_year}`
+      if (s.confirmation_accepted === true) confirmed.add(k)
+      statuses.set(k, [...(statuses.get(k) ?? []), s.review_status])
+    }
 
     const candidates: RestaleCandidate[] = Array.from(counts.values()).map(c => ({
       account_id: c.account_id,
       tax_year: c.tax_year,
       transactions: c.n,
       confirmed: confirmed.has(`${c.account_id}:${c.tax_year}`),
+      reviewStatuses: statuses.get(`${c.account_id}:${c.tax_year}`) ?? [],
     }))
 
-    const eligible = candidates
+    // Deterministic order + NO SILENT TRUNCATION. The first cut took the 8
+    // SMALLEST every run with no memory of what it had already swept, so the
+    // same handful of tiny account-years were processed forever and the real
+    // ones (LT Program, TP Balance — the accounts this exists for) were never
+    // reached, while the job reported itself healthy. The cap now comfortably
+    // covers the whole book (16 account-years today); if it is ever exceeded,
+    // the overflow is REPORTED, not dropped in silence.
+    const allEligible = candidates
       .filter(c => decideRestale(c).eligible)
-      .sort((a, b) => a.transactions - b.transactions) // cheapest first
-      .slice(0, RESTALE_MAX_ACCOUNTS_PER_RUN)
+      .sort((a, b) => (a.account_id === b.account_id ? a.tax_year - b.tax_year : a.account_id.localeCompare(b.account_id)))
+    const eligible = allEligible.slice(0, RESTALE_MAX_ACCOUNTS_PER_RUN)
+    const skippedForCap = allEligible.length - eligible.length
 
     const { recategorizeAccountYear } = await import("@/lib/tax/categorization-engine")
     const changedLines: string[] = []
@@ -103,10 +150,13 @@ export async function GET(request: NextRequest) {
       const company = (acct?.company_name as string) ?? c.account_id
       try {
         const res = await recategorizeAccountYear(c.account_id, c.tax_year, { dryRun })
-        if (res.recategorized > 0) {
-          totalChanged += res.recategorized
+        // categoryChanged, NOT recategorized — the latter counts note-only
+        // rewrites (849 rows book-wide re-stamp their note every run), which
+        // would drown a real correction in permanent noise.
+        if (res.categoryChanged > 0) {
+          totalChanged += res.categoryChanged
           changedLines.push(describeRestaleResult({
-            company, taxYear: c.tax_year, scanned: res.scanned, changed: res.recategorized, dryRun,
+            company, taxYear: c.tax_year, scanned: res.scanned, changed: res.categoryChanged, dryRun,
           }))
         }
       } catch (e) {
@@ -125,10 +175,13 @@ export async function GET(request: NextRequest) {
       const head = dryRun
         ? "🔎 Stale-classification sweep (REPORT ONLY — nothing was written):"
         : "♻️ Stale-classification sweep — transactions re-sorted after client details changed:"
+      const overflow = skippedForCap > 0
+        ? `\n⚠️ ${skippedForCap} more account-year(s) were NOT reached this run — the book has outgrown one pass and needs a swept-at marker.`
+        : ""
       try {
         await postTeamMessage({
           channel: "td-taxreturn",
-          message: `${head}\n${changedLines.map(l => `• ${l}`).join("\n")}`,
+          message: `${head}\n${changedLines.map(l => `• ${l}`).join("\n")}${overflow}`,
         })
       } catch (e) {
         console.error("[tax-restale-sweep] team post failed (sweep result stands):", e)
@@ -141,6 +194,7 @@ export async function GET(request: NextRequest) {
       candidates: candidates.length,
       eligible: eligible.length,
       accountsWithChanges: changedLines.length,
+      skippedForCap,
       transactionsChanged: totalChanged,
       details: changedLines,
       ms: Date.now() - started,
