@@ -16,6 +16,9 @@ import {
   readAttachments,
   attachmentRefsFromChatRow,
   isMediaError,
+  isTooLargeError,
+  capTurnTextBudget,
+  maxTurnTextChars,
   capMediaBudget,
   MAX_MEDIA_BASE64_BYTES,
   fetchTrustedStorageBytes,
@@ -521,5 +524,64 @@ describe("fetchTrustedStorageBytes", () => {
     await fetchTrustedStorageBytes({ id: "https://xjcxlmlpeywtwkhstjlw.supabase.co/storage/v1/object/public/assets/a.png" })
     expect(spy.mock.calls[0][1]).toMatchObject({ redirect: "manual" })
     spy.mockRestore()
+  })
+})
+
+/**
+ * The turn-level TEXT budget, and the too-large recovery that used to shed the
+ * wrong thing (td-bug 2026-08-03).
+ */
+describe("capTurnTextBudget — too much attached text is trimmed, never silently", () => {
+  it("leaves a normal turn completely untouched", () => {
+    const blocks = ["short file a", "short file b"]
+    const out = capTurnTextBudget(blocks, 20_000)
+    expect(out.textBlocks).toEqual(blocks)
+    expect(out.note).toBeNull()
+  })
+
+  it("trims past the budget and SAYS SO — a silent trim reads as 'that was the whole file'", () => {
+    const blocks = [
+      "a".repeat(30_000),
+      "b".repeat(30_000),
+      "c".repeat(30_000),
+    ]
+    const out = capTurnTextBudget(blocks, 20_000)
+    const total = out.textBlocks.reduce((n, t) => n + t.length, 0)
+    expect(total).toBeLessThanOrEqual(maxTurnTextChars(20_000) + 200)
+    expect(out.note).toBeTruthy()
+  })
+
+  it("the note points at the way to get the rest, and forbids answering without it", () => {
+    const out = capTurnTextBudget([("x".repeat(90_000))], 20_000)
+    expect(out.note).toMatch(/read_uploaded_file/)
+    expect(out.note).toMatch(/do not total|absent/i)
+  })
+
+  it("scales with the per-file window, so one dial moves both", () => {
+    expect(maxTurnTextChars(20_000)).toBeLessThan(maxTurnTextChars(100_000))
+  })
+})
+
+describe("isTooLargeError — split from isMediaError so the right thing gets dropped", () => {
+  it("recognises an over-long request even with NO media attached", () => {
+    // The spreadsheet case exactly: no image, no document block, so isMediaError
+    // short-circuited false and the panel printed raw provider JSON.
+    const err = new Error("Claude API error 400: prompt is too long")
+    expect(isTooLargeError(err)).toBe(true)
+    expect(isMediaError(err, false)).toBe(false)
+  })
+
+  it("recognises the 413 and request-too-large spellings", () => {
+    expect(isTooLargeError(new Error("HTTP 413"))).toBe(true)
+    expect(isTooLargeError(new Error("request too large"))).toBe(true)
+  })
+
+  it("does not fire on an ordinary failure", () => {
+    expect(isTooLargeError(new Error("Claude API error 529: overloaded"))).toBe(false)
+  })
+
+  it("still treats genuinely bad media as a media error", () => {
+    const err = new Error("Claude API error 400: could not process image")
+    expect(isMediaError(err, true)).toBe(true)
   })
 })

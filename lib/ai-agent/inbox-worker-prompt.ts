@@ -171,7 +171,7 @@ export function renderCapabilityBlock(caps: WorkerCapabilities): string {
   // document — and without it, it has previously invented a Python sandbox rather than
   // admit it could not make a file. Nothing else about the wording changes.
   const files = `
-- FILES: you cannot create a file yourself. You have NO code execution, no Python, no shell. The ONLY way to produce a document is the \`pdf_create\` tool (reach it with \`use_tool\` if it is not in your direct list) — it takes the finished text and returns a real download link. Never say a file is "attached" or "ready" unless you called that tool on this turn and it returned a link.`
+- FILES: you cannot create a file yourself. You have NO code execution, no Python, no shell. Two tools produce a file (reach either with \`use_tool\` if it is not in your direct list): \`pdf_create\` for a letter, notice or any prose document, and \`spreadsheet_create\` for a table, list, tracker or a corrected copy of a spreadsheet someone uploaded — it builds a NEW workbook from rows you supply, so say plainly that their original formatting and formulas are not carried over. Never say a file is "attached" or "ready" unless you called one of those tools on this turn and it returned a link.`
 
   const approvals = caps.canQueueApprovals
     ? `

@@ -452,11 +452,16 @@ export async function POST(req: NextRequest) {
       imageBlocks.push(...read.imageBlocks)
       documentBlocks.push(...read.documentBlocks)
       if (read.textBlocks.length) {
+        // ONE budget across all the files' TEXT — same rule as the CRM sidebar.
+        const { capTurnTextBudget, SLACK_TEXT_CAP_FOR_SURFACE } = await import("@/lib/ai-agent/attachment-reader")
+        const budgeted = capTurnTextBudget(read.textBlocks, SLACK_TEXT_CAP_FOR_SURFACE())
         // Extracted text goes into the persisted body, so it's still there on later
         // turns. Images can't be: only the "was shown" note survives the replay.
         // Fenced: even a staff member's own upload can be a document a client sent
         // them, and the model must not read instructions out of it.
-        userBody += `\n\n${fenceUntrustedContent("files the staff member attached", read.textBlocks.join("\n\n"))}`
+        userBody += `\n\n${fenceUntrustedContent("files the staff member attached", budgeted.textBlocks.join("\n\n"))}`
+        // OUR instruction, so it must sit outside the untrusted fence.
+        if (budgeted.note) userBody += `\n\n${budgeted.note}`
       }
       // (the attachable list itself is appended after this block, once the
       // conversation's own files have been added to it — the panel upload is
@@ -476,7 +481,14 @@ export async function POST(req: NextRequest) {
     ...sendableUploads,
     ...sendableFromChatRefs(harvestedChatFiles, "posted in this client's chat", sendableUploads.length + 1),
   ]
-  if (sendableFiles.length) userBody += `\n\n${attachableFilesPrompt(sendableFiles)}`
+  if (sendableFiles.length) {
+    userBody += `\n\n${attachableFilesPrompt(sendableFiles)}`
+    // The SAME refs are readable, not just attachable — you were shown only the
+    // first window of each. Reading past it was impossible on every panel surface
+    // until 2026-08-03 (td-bug, Luca): the text carried a "continue with offset"
+    // marker and no tool here could act on it.
+    userBody += `\n[You were shown only the FIRST SECTION of each of those files. To read more of one, call read_uploaded_file with its ref (and the offset a previous INCOMPLETE READ gave you). Never total, count, compare or say something is absent from a file until you have read to its end.]`
+  }
 
   // One turn can carry email images AND panel uploads AND scanned-PDF blocks.
   // Their per-file caps multiply out well past the Anthropic request limit, and
@@ -746,6 +758,15 @@ export async function POST(req: NextRequest) {
       // Server-pinned allow-list. Its presence is what offers read_email_attachment;
       // the model can only name a ref that appears here.
       ...(pinnedEmailAttachments.length ? { pinnedEmailAttachments } : {}),
+      // This turn's panel uploads, pinned for RE-READING. Without this the model
+      // sees only the first window of an uploaded file and has no way to reach the
+      // rest — the same gap the CRM sidebar had (td-bug 2026-08-03). The pin is
+      // the gate: read_uploaded_file exists only because this is set.
+      // READ pin = the SAME set as the attach list, deliberately. "What it can
+      // read and what it can attach are the same set by construction" is the rule
+      // the attachable list already follows; a narrower read pin would recreate
+      // exactly the drift that rule exists to prevent.
+      ...(sendableFiles.length ? { pinnedUploads: sendableFiles } : {}),
       // FULL SLACK-PARITY READ RAILS (Antonio 2026-07-08: "it must be able
       // to work how it works in Slack"). Same switches the Team Workspace
       // grants staff. The code-task rail stays OFF (Antonio-only, R111);
@@ -988,7 +1009,10 @@ export async function POST(req: NextRequest) {
         .then(() => {}, () => {})
     }
     console.error("[worker-chat] failed:", error)
-    const detail = error instanceof Error ? error.message : "Worker failed"
-    return NextResponse.json({ error: detail }, { status: 500 })
+    // PLAIN SENTENCE, never the provider's raw payload — same rule as the CRM
+    // sidebar (td-bug 2026-08-03). A transient overload must never read to staff
+    // as a problem with the file they just uploaded. Raw text stays in the log.
+    const { explainWorkerFailure } = await import("@/lib/ai-agent/transient-errors")
+    return NextResponse.json({ error: explainWorkerFailure(error) }, { status: 500 })
   }
 }

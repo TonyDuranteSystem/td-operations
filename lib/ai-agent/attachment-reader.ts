@@ -372,6 +372,87 @@ export function fenceUntrustedContent(label: string, body: string): string {
 export const MAX_MEDIA_BASE64_BYTES = 16 * 1024 * 1024
 
 /**
+ * Ceiling on the TOTAL extracted TEXT appended to one user turn.
+ *
+ * The media budget above has never had a text counterpart, so five uploads each
+ * within the per-file read window could still add up past what the model will
+ * accept — and the failure mode is ugly: the request comes back "prompt is too
+ * long", which `isMediaError` matches only when media is present, so a pure-
+ * spreadsheet turn rethrows and the panel shows raw JSON.
+ *
+ * Sized against the per-file window rather than pinned to a magic number: the
+ * default window is 20k chars, five files is the per-turn limit, and the
+ * multiplier leaves the system prompt, tool definitions, thread context and the
+ * growing tool-result transcript room to breathe. Raising the per-surface window
+ * therefore raises this in step, which is the point — one dial, not two that can
+ * disagree.
+ */
+export function maxTurnTextChars(perFileCap: number): number {
+  return Math.max(perFileCap, perFileCap * 3)
+}
+
+/**
+ * The per-file read window in force for the CRM panels.
+ *
+ * A thin accessor, not a second constant: `SLACK_FILE_TEXT_CHAR_CAP` is a single
+ * module-level value shared by five surfaces AND by the read-completion
+ * forgery arithmetic, so the panels must read the SAME number rather than keep
+ * their own. `WORKER_FILE_READ_CAP_DASHBOARD` lets the CRM panels be tuned on
+ * their own without moving the number Slack, Inbox reads and the forgery gate
+ * all depend on — a config change, no deploy.
+ */
+export function SLACK_TEXT_CAP_FOR_SURFACE(): number {
+  const override = Number(process.env.WORKER_FILE_READ_CAP_DASHBOARD)
+  if (Number.isFinite(override) && override >= 1_000) return Math.floor(override)
+  // Lazy require avoids pulling the extractor into every route that imports this.
+  return Number(process.env.WORKER_FILE_READ_CAP) >= 1_000
+    ? Math.floor(Number(process.env.WORKER_FILE_READ_CAP))
+    : 20_000
+}
+
+/**
+ * Trim the per-file extracted texts to fit the turn's total text budget.
+ *
+ * Whatever is trimmed is NAMED, for exactly the reason `capMediaBudget` names
+ * what it drops: a silent trim reads to the model as "that is the whole file",
+ * which is the lie this entire job exists to remove. A file that is cut here is
+ * still fully readable — `read_uploaded_file` can page through it — so the note
+ * says so rather than implying the content is lost.
+ */
+export function capTurnTextBudget(
+  textBlocks: string[],
+  perFileCap: number,
+): { textBlocks: string[]; note: string | null } {
+  const budget = maxTurnTextChars(perFileCap)
+  const total = textBlocks.reduce((n, t) => n + t.length, 0)
+  if (total <= budget) return { textBlocks: textBlocks, note: null }
+
+  const kept: string[] = []
+  let used = 0
+  let trimmed = 0
+  for (const block of textBlocks) {
+    if (used + block.length <= budget) {
+      kept.push(block)
+      used += block.length
+      continue
+    }
+    const room = budget - used
+    if (room > 500) {
+      kept.push(`${block.slice(0, room)}\n[…this file was cut short to fit this message.]`)
+      used = budget
+    }
+    trimmed++
+  }
+  return {
+    textBlocks: kept,
+    note:
+      `[${trimmed} of the attached file(s) were shortened or not included because too much text was attached at once. ` +
+      `Nothing is lost — use read_uploaded_file with a file's ref (and an offset) to read any of them in full. ` +
+      `Do NOT total, count, compare or say something is absent until you have.]`,
+  }
+}
+
+/**
  * Trim media to fit MAX_MEDIA_BASE64_BYTES, keeping images before documents.
  *
  * Images are what the staff member actually pasted or is asking about, and are
@@ -431,8 +512,26 @@ export function isMediaError(err: unknown, hasMedia: boolean): boolean {
   if (!hasMedia) return false
   const msg = err instanceof Error ? err.message : String(err)
   const badMedia = /\b400\b/.test(msg) && /image|document|pdf/i.test(msg)
-  const tooMuch = /\b413\b/.test(msg) || /request too large|request_too_large|too many bytes|prompt is too long|exceeds? the maximum/i.test(msg)
-  return badMedia || tooMuch
+  return badMedia || isTooLargeError(err)
+}
+
+/**
+ * Was the request simply TOO BIG? Independent of whether any media was attached.
+ *
+ * Split out of `isMediaError` (td-bug 2026-08-03) because the two were fused and
+ * that fusion had two bad consequences. A turn carrying only an extracted
+ * spreadsheet has no image or document block, so `hasMedia` was false, so an
+ * over-long request rethrew and the panel printed the provider's raw JSON. And
+ * when an image DID happen to be attached, the retry dropped the image — leaving
+ * the oversized TEXT in place, so it failed identically, at double the latency,
+ * while telling the staff member their (innocent) image could not be processed.
+ */
+export function isTooLargeError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return (
+    /\b413\b/.test(msg) ||
+    /request too large|request_too_large|too many bytes|prompt is too long|exceeds? the maximum/i.test(msg)
+  )
 }
 
 /**
@@ -452,6 +551,31 @@ export async function callWorkerWithAttachments(
   try {
     return await callWorker(userBody, opts)
   } catch (err) {
+    // TOO BIG is its own recovery, and it must shed the thing that is actually
+    // big. Dropping the images off a turn whose bulk is an extracted spreadsheet
+    // fails identically and blames the wrong file (td-bug 2026-08-03).
+    if (isTooLargeError(err)) {
+      console.warn(
+        `[attachment-reader] request too large, retrying smaller: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      )
+      const slimmed: CallWorkerOptions = { ...opts }
+      delete slimmed.images
+      delete slimmed.documents
+      // Keep the head of the body (the staff member's actual question lives
+      // there, before any appended file text) and tell the model plainly that
+      // the files are still READABLE — they are, one window at a time.
+      const HEAD = 30_000
+      const trimmedBody = userBody.length > HEAD ? userBody.slice(0, HEAD) : userBody
+      const note =
+        userBody.length > HEAD || hasMedia
+          ? "\n\n[Note: this message was too large for one request, so the attached file text was shortened and any images were removed. " +
+            "Nothing is lost: use read_uploaded_file with a file's ref (and an offset) to read it in full, and say plainly that you have not read all of it yet " +
+            "rather than guessing, totalling, or stating that something is absent.]"
+          : ""
+      return await callWorker(`${trimmedBody}${note}`, slimmed)
+    }
     if (!isMediaError(err, hasMedia)) throw err
     console.warn(
       `[attachment-reader] media-related API error, retrying without attachments: ${

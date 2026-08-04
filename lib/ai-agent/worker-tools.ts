@@ -84,6 +84,7 @@ import {
 import { buildThreadContext, buildReplayTurns, type ReplayTurn } from "./thread-context"
 import { createThreadSummary, getThreadSummary, resolveThread } from "./thread-summaries"
 import { buildRelatedThreadsSuffix, embedThreadSummary } from "./thread-recall"
+import { isTransientStatus, retryDelayMs, canRetryWithin, MAX_TRANSIENT_RETRIES } from "./transient-errors"
 
 /**
  * The complete read-only allow-list. Adding a tool here is a deliberate
@@ -836,6 +837,20 @@ async function searchCallsForWorker(params: Record<string, unknown>): Promise<st
 /** Char cap on a single returned doc/file so a long document can't blow the worker's context. */
 const DOC_RESULT_CAP = 40_000
 
+/**
+ * One WINDOW of a long Drive file, using the SAME marker contract as every other
+ * windowed read (slack-file-reader's `windowText`) so the read-to-the-end ledger,
+ * the forced-continuation latch and the absence guard all recognise it.
+ *
+ * Kept as a named helper so the reason stays attached to the behaviour: what
+ * this replaced was a tail-only "…(truncated at 40000 chars)" note that NOTHING
+ * in the system detected as an incomplete read.
+ */
+async function windowTextForDrive(text: string, offset: number): Promise<string> {
+  const { windowText } = await import("@/lib/ai-agent/slack-file-reader")
+  return windowText(text, offset, DOC_RESULT_CAP)
+}
+
 /** Return a ~`radius`-char window of `text` centred on the first match of `q` (case-insensitive), else the head. Exported for tests. */
 export function snippetAround(text: string, q: string, radius = 220): string {
   if (typeof text !== "string" || !text) return ""
@@ -912,10 +927,17 @@ export const READ_DRIVE_FILE_TOOL: ToolDef = {
   description: [
     "Read the TEXT content of a Google Drive file by id: plain text, CSV, Google Docs/Sheets, AND the text layer of PDFs / Word / Excel documents. Get the id from drive_search / drive_list_folder first.",
     "NOTE: a scanned/image-only PDF (no text layer) and plain images can't be read here (no OCR) — the tool will tell you when that's the case.",
+    "LONG FILES: a long file comes back one section at a time. If the result says INCOMPLETE READ, call this tool AGAIN with the `offset` it gives you, and repeat until the end — never total, count, compare, or state that something is absent from the file until you have read the whole thing.",
   ].join("\n"),
   parameters: {
     type: "object",
-    properties: { file_id: { type: "string", description: "Google Drive file id (from drive_search / drive_list_folder)." } },
+    properties: {
+      file_id: { type: "string", description: "Google Drive file id (from drive_search / drive_list_folder)." },
+      offset: {
+        type: "number",
+        description: "Character position to continue reading from — use the exact offset given by a previous INCOMPLETE READ result. Omit to start from the beginning.",
+      },
+    },
     required: ["file_id"],
   },
 }
@@ -962,6 +984,89 @@ export const READ_EMAIL_ATTACHMENT_TOOL: ToolDef = {
     },
     required: ["ref"],
   },
+}
+
+export const READ_UPLOADED_FILE_TOOL: ToolDef = {
+  name: "read_uploaded_file",
+  description: [
+    "Read MORE of a file offered on this turn — one the person just uploaded, or one posted in this conversation (spreadsheet, Word doc, PDF, CSV, zip).",
+    "You were already shown the FIRST SECTION of each of those files directly in the message above. Use this tool to read the REST.",
+    "Pass the `ref` exactly as listed in the FILES line in the message above (e.g. 'up1', 'f2') — nothing else is readable.",
+    "LONG FILES: a long file comes back one section at a time. If a result says INCOMPLETE READ, call this tool AGAIN with the `offset` it gives you, and repeat until it says the file ends. Never total, count, compare, or say something is absent from the file until you have read to the end.",
+    "SPREADSHEETS: the workbook's sheet list is shown at the top of the first section — if a sheet named there has not appeared yet, its rows are further in and you must keep reading.",
+    "Images do NOT need this tool; you can already see them.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      ref: { type: "string", description: "The ref from the FILES YOU UPLOADED list (e.g. 'up1')." },
+      offset: {
+        type: "number",
+        description: "Character position to continue reading from — use the exact offset given by a previous INCOMPLETE READ result. Omit to start from the beginning.",
+      },
+    },
+    required: ["ref"],
+  },
+}
+
+/**
+ * read_uploaded_file handler — resolves the model-supplied ref against the
+ * server-pinned uploads for THIS call, then reads that window of the file.
+ *
+ * The pin is the security boundary, exactly as for email attachments: the model
+ * names a ref, never a storage path, so it cannot steer the service-key download
+ * at another user's file. `fetchWorkerUploadBytes` re-validates the path shape
+ * server-side on top of that.
+ */
+export async function readUploadedFileForWorker(
+  params: Record<string, unknown>,
+  pinned?: PinnedUpload[] | null,
+): Promise<string> {
+  const ref = typeof params.ref === "string" ? params.ref.trim() : ""
+  if (!ref) return "ref is required."
+  if (!pinned?.length) return "❌ There are no files available to read on this turn."
+
+  const match = pinned.find((a) => a.ref === ref)
+  if (!match) {
+    const available = pinned.map((a) => `${a.ref} (${a.name})`).join(", ")
+    return `❌ "${ref}" is not a file available on this turn. Available: ${available}.`
+  }
+  // Continue-reading position (long files come back one window at a time).
+  const offset = Number.isFinite(Number(params.offset)) ? Math.max(0, Math.floor(Number(params.offset))) : 0
+
+  try {
+    const { readAttachmentBuffer, fetchWorkerUploadBytes, fetchTrustedStorageBytes, fenceUntrustedContent } =
+      await import("@/lib/ai-agent/attachment-reader")
+    const ref_ = { id: match.locator, name: match.name, mimetype: match.contentType }
+    // Two transports, one boundary. A private-bucket path is read with the
+    // service key (and re-validated for shape); a chat asset is a public storage
+    // URL fetched behind the host allow-list. Neither locator came from the model.
+    const buffer =
+      match.source === "worker_upload"
+        ? await fetchWorkerUploadBytes(ref_)
+        : await fetchTrustedStorageBytes(ref_)
+    const read = await readAttachmentBuffer(
+      buffer,
+      { id: match.ref, name: match.name, mimetype: match.contentType },
+      false,
+      offset,
+    )
+    switch (read.kind) {
+      case "text":
+        // A staff member can be forwarded a document written by anyone. Its text
+        // is data, never an instruction.
+        return fenceUntrustedContent(match.name, read.text)
+      case "image":
+        return `"${match.name}" is an image — it was already shown to you with the message; look at it directly.`
+      case "document":
+      case "scanned":
+        return `❌ "${match.name}" is a scanned PDF with no text layer, so its text can't be extracted.`
+      case "error":
+        return read.note
+    }
+  } catch (err) {
+    return `❌ Couldn't read "${match.name}": ${err instanceof Error ? err.message : String(err)}`
+  }
 }
 
 /**
@@ -1241,7 +1346,17 @@ async function fetchStoredExtraction(fileId: string): Promise<StoredExtraction |
 export async function readDriveFileForWorker(params: Record<string, unknown>): Promise<string> {
   const fileId = typeof params.file_id === "string" ? params.file_id.trim() : ""
   if (!fileId) return "file_id is required (find it with drive_search / drive_list_folder)."
-  const cap = (s: string) => (s.length > DOC_RESULT_CAP ? `${s.slice(0, DOC_RESULT_CAP)}…(truncated at ${DOC_RESULT_CAP} chars)` : s)
+  // Continue-reading position (long files come back one window at a time).
+  const offset = Number.isFinite(Number(params.offset)) ? Math.max(0, Math.floor(Number(params.offset))) : 0
+  // WINDOWED, not silently truncated (td-bug 2026-08-03). The old `cap` appended
+  // "…(truncated at 40000 chars)" at the TAIL — a marker that matches none of
+  // answer-guards' INCOMPLETE_READ_PATTERNS and sits outside its head-only scan.
+  // So a two-thirds read of a client's spreadsheet registered as a COMPLETED
+  // lookup and satisfied the absence guard: the worker could state "that company
+  // isn't in the file" while affirmatively confirming it had looked. Worse, the
+  // assistant recommends this very route to staff as the fix for a long chat
+  // upload ("convert it to a Google Sheet and I'll read it in full").
+  const cap = (s: string) => windowTextForDrive(s, offset)   // async — every call site awaits
 
   /** Stored text + a reason we fell back to it, or the bare reason when nothing is stored. */
   const storedOr = async (reason: string, recovery: string): Promise<string> => {
@@ -1255,7 +1370,7 @@ export async function readDriveFileForWorker(params: Record<string, unknown>): P
     // 1) Text export path (Google Docs/Sheets/Slides + plain text).
     const { downloadFileContent } = await import("@/lib/google-drive")
     const content = await downloadFileContent(fileId)
-    if (content && content.trim()) return cap(content)
+    if (content && content.trim()) return await cap(content)
 
     // 2) Binary path — read PDF/Office text (WS3.3, council): most client
     // documents in Drive are PDFs, which downloadFileContent returns empty for.
@@ -1284,7 +1399,7 @@ export async function readDriveFileForWorker(params: Record<string, unknown>): P
         "We have no saved text for it either — it needs to be processed before its text is readable here.",
       )
     }
-    return cap(text)
+    return await cap(text)
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err)
     // Raw upstream text is logged, not returned (council/Security).
@@ -2824,6 +2939,15 @@ export async function executeWorkerTool(
     }
     return readEmailAttachmentForWorker(params, sendContext?.pinnedEmailAttachments)
   }
+  // read_uploaded_file — same shape and same boundary: offered only when the
+  // server pinned THIS turn's uploads, and the executor re-checks the name AND
+  // resolves the ref against that same pinned list (defense-in-depth).
+  if (name === "read_uploaded_file") {
+    if (!availableNames?.has(name)) {
+      return `❌ Tool "${name}" is not permitted in this worker call (uploaded-file reading not enabled).`
+    }
+    return readUploadedFileForWorker(params, sendContext?.pinnedUploads)
+  }
   // recall_thread — on-demand FULL/searched recall of THIS conversation's permanent
   // transcript (Slack-only, gated via enableThreadRecall). The thread_id is injected
   // server-side (currentThreadId) — the model can't address another conversation.
@@ -3223,6 +3347,22 @@ export interface CallWorkerOptions {
    */
   pinnedEmailAttachments?: PinnedEmailAttachment[] | null
   /**
+   * The files the staff member UPLOADED on this turn, keyed by the same short ref
+   * the send rail uses. read_uploaded_file takes only that ref.
+   *
+   * Why this exists (td-bug 2026-08-03, Luca): a panel upload is handed to the
+   * model bytes-at-door, ONE window deep, and until now there was no way to read
+   * the rest — `read_portal_attachment` is offered on these surfaces but takes a
+   * PUBLIC url, while panel uploads live in a PRIVATE bucket reachable only by
+   * service key. So the model was told "continue with offset: N", saw a
+   * plausible-looking tool, and could only fail. Worse than having no tool.
+   *
+   * Same hard-pin rule as the email attachments: the model can only name a ref
+   * the SERVER put here, so a model-supplied storage path can never reach the
+   * service-key client.
+   */
+  pinnedUploads?: PinnedUpload[] | null
+  /**
    * Addresses that need NO confirm step (thread participants / the client's own
    * addresses / our mailboxes). Any other address is still reachable, but its draft
    * is FROZEN for the staff member to confirm once — see
@@ -3253,6 +3393,30 @@ export interface CallWorkerOptions {
     threadUuid: string
     locale: string
   }
+}
+
+/**
+ * One file the staff member uploaded this turn that the worker may re-read.
+ * `path` is a storage path in the private worker-attachments bucket — it never
+ * comes from the model, only from the server's own record of this turn's upload.
+ */
+export interface PinnedUpload {
+  /** Short server-minted handle the model uses (e.g. "up1"). */
+  ref: string
+  /**
+   * Where the bytes live. Structurally the SAME shape as `SendableFile` in
+   * lib/inbox/sendable-attachment.ts, and that is deliberate: a surface offers
+   * ONE set of refs and they are both readable and attachable. Two lists would
+   * drift straight back into "it described a file it cannot send" — or, here,
+   * "it offered to read a file it cannot open".
+   */
+  source: "worker_upload" | "chat_asset"
+  /** SERVER-MINTED, never round-trips through the model: a private-bucket object
+   *  path for `worker_upload`, the already-stored public URL for `chat_asset`. */
+  locator: string
+  name: string
+  contentType?: string
+  size?: number
 }
 
 /** One email attachment the worker may open, resolved server-side. */
@@ -3366,6 +3530,12 @@ export interface WorkerSendContext {
    */
   clientScope?: import("./client-scope").ClientScope | null
   pinnedEmailAttachments?: PinnedEmailAttachment[] | null
+  /**
+   * This turn's staff uploads, re-readable by `read_uploaded_file`. Set it and
+   * the tool is offered; leave it and the model can only ever see the first
+   * window of an uploaded file. See WorkerSendContext.pinnedUploads.
+   */
+  pinnedUploads?: PinnedUpload[] | null
 
   /**
    * SERVER-CAPTURED sink (mutable): every off-thread address the model actually
@@ -3418,6 +3588,7 @@ export function buildWorkerSendContext(
     onBehalfOf?: string | null
     pinnedPortalRecipient?: { account_id?: string | null; contact_id?: string | null } | null
     pinnedEmailAttachments?: PinnedEmailAttachment[] | null
+    pinnedUploads?: PinnedUpload[] | null
     emailConfirmExempt?: string[]
     forceMailbox?: "support" | "antonio"
     emailSendPrep?: WorkerSendContext["emailSendPrep"]
@@ -3434,6 +3605,7 @@ export function buildWorkerSendContext(
     opts.onBehalfOf ||
     opts.pinnedPortalRecipient ||
     opts.pinnedEmailAttachments?.length ||
+    opts.pinnedUploads?.length ||
     opts.emailConfirmExempt !== undefined ||
     opts.forceMailbox ||
     opts.emailSendPrep ||
@@ -3450,6 +3622,7 @@ export function buildWorkerSendContext(
     onBehalfOf: opts.onBehalfOf ?? null,
     pinnedPortalRecipient: opts.pinnedPortalRecipient ?? null,
     pinnedEmailAttachments: opts.pinnedEmailAttachments ?? null,
+    pinnedUploads: opts.pinnedUploads ?? null,
     capturedOffThreadAttempts,
     memoryClientKey: opts.clientKey ?? null,
     clientScope: opts.clientScope ?? null,
@@ -3479,7 +3652,8 @@ export function buildWorkerSendContext(
  * Luca reported on 10 July, reproduced by the very feature built to fix it.
  */
 export interface WorkerArtifact {
-  kind: "pdf"
+  /** File family, used by the panel to pick an icon. */
+  kind: "pdf" | "spreadsheet"
   /** Time-limited signed link. Expires; never a permanent public URL. */
   url: string
   /** What to call it in the UI. */
@@ -3494,11 +3668,21 @@ export interface WorkerArtifact {
  * link that came from a client's email.
  */
 export function extractArtifact(toolName: string, result: unknown): WorkerArtifact | null {
-  if (toolName !== "pdf_create" && toolName !== "use_tool") return null
+  // Tools known to PRODUCE a file. A new producer must be listed here or its file
+  // is invisible to the panel — and worse, `artifacts` stays empty, so the
+  // phantom-file latch fires and forces the model to make the file all over again.
+  const PRODUCERS = new Set(["pdf_create", "spreadsheet_create", "use_tool"])
+  if (!PRODUCERS.has(toolName)) return null
   const text = typeof result === "string" ? result : ""
   const m = text.match(/^Download:\s+(https:\/\/\S+)$/m)
   if (!m) return null
-  return { kind: "pdf", url: m[1], label: "Download PDF" }
+  // The signed link carries the real filename in its download disposition, so the
+  // extension in the URL is the honest signal of WHAT was produced — the tool name
+  // is not, because `use_tool` wraps either producer.
+  const isSheet = /\.xlsx(\?|$)/i.test(m[1]) || /Spreadsheet ready/i.test(text)
+  return isSheet
+    ? { kind: "spreadsheet", url: m[1], label: "Download spreadsheet" }
+    : { kind: "pdf", url: m[1], label: "Download PDF" }
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -3780,7 +3964,14 @@ export async function runWorkerLoop(
     const callTimeout = callTimeoutForBudget(Date.now() - loopStart, WORKER_WALL_CLOCK_BUDGET_MS, ANTHROPIC_TIMEOUT_MS)
     const timeout = setTimeout(() => controller.abort(), callTimeout)
 
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    // RETRY the model call on a transient upstream failure (td-bug 2026-08-03).
+    // Before this, a single 529 "overloaded" threw away the entire turn — every
+    // tool call the loop had already completed with it — and surfaced raw JSON
+    // to staff. Bounded by attempts AND by the turn's remaining wall clock, so a
+    // retry can never push the function past its hard deadline.
+    let res: Response | null = null
+    for (let attempt = 0; ; attempt++) {
+      res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "x-api-key": apiKey,
@@ -3803,7 +3994,13 @@ export async function runWorkerLoop(
         messages: currentMessages,
       }),
       signal: controller.signal,
-    })
+      })
+      if (res.ok || !isTransientStatus(res.status) || attempt >= MAX_TRANSIENT_RETRIES) break
+      const delay = retryDelayMs(attempt + 1, res.headers.get("retry-after"))
+      if (!canRetryWithin(Date.now() - loopStart, WORKER_WALL_CLOCK_BUDGET_MS, delay)) break
+      console.warn(`[worker] transient ${res.status} from model API — retry ${attempt + 1} in ${delay}ms`)
+      await new Promise((r) => setTimeout(r, delay))
+    }
     clearTimeout(timeout)
 
     if (!res.ok) {
@@ -4344,6 +4541,14 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // never be offered without the allow-list that constrains it.
   if (opts.pinnedEmailAttachments?.length && !tools.some((t) => t.name === READ_EMAIL_ATTACHMENT_TOOL.name)) {
     tools = [...tools, READ_EMAIL_ATTACHMENT_TOOL]
+  }
+
+  // read_uploaded_file — same rule: the presence of the server's upload pin IS
+  // the gate, so the tool can never be offered without the allow-list that
+  // constrains it. Without this the model is shown a "continue with offset: N"
+  // marker it has no way to act on (td-bug 2026-08-03).
+  if (opts.pinnedUploads?.length && !tools.some((t) => t.name === READ_UPLOADED_FILE_TOOL.name)) {
+    tools = [...tools, READ_UPLOADED_FILE_TOOL]
   }
 
   // Slack-only: append the READ-ONLY Calendly tools (cal_list_bookings /

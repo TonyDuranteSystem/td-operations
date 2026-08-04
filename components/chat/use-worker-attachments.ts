@@ -103,6 +103,36 @@ export function useWorkerAttachments() {
     setLimitNotice(null)
   }, [writeFiles])
 
+  /**
+   * Put files BACK on the composer after a turn failed to send.
+   *
+   * The composer clears optimistically the moment a send starts, which is the
+   * right feel — but it meant a failed turn ATE the attachment: the bubble in
+   * the history still showed "📎 Tracking.xlsx", the staged file was gone, and
+   * typing "try again" posted a message with NO file while the screen implied
+   * otherwise. Luca hit exactly this after a transient provider overload
+   * (td-bug 2026-08-03) and reasonably concluded the file was the problem.
+   *
+   * The uploaded bytes are still in the bucket, so restoring the refs is enough;
+   * nothing is re-uploaded.
+   */
+  const restore = useCallback((items: UploadedAttachment[]) => {
+    if (!items.length) return
+    writeFiles((prev) => {
+      const known = new Set(prev.map((f) => f.path).filter(Boolean))
+      const revived = items
+        .filter((i) => !known.has(i.path))
+        .map((i) => ({
+          localId: `restored-${i.path}`,
+          name: i.name,
+          size: i.size ?? 0,
+          mimeType: i.mime_type ?? "application/octet-stream",
+          path: i.path,
+        }))
+      return [...prev, ...revived].slice(0, MAX_FILES)
+    })
+  }, [writeFiles])
+
   const add = useCallback(async (incoming: File[]) => {
     if (!incoming.length) return
 
@@ -222,7 +252,7 @@ export function useWorkerAttachments() {
   // (see worker-dropzone.tsx) — a file dropped outside a registered target makes
   // the browser navigate away from the page, so the thin composer strip was the
   // wrong place for it.
-  return { files, uploading, limitNotice, add, remove, clear, uploaded, failed, onPaste }
+  return { files, uploading, limitNotice, add, remove, clear, restore, uploaded, failed, onPaste }
 }
 
 /** The shape the panel hands down to the composer and the drop zone. */
