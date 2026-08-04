@@ -2275,6 +2275,11 @@ function EmailConfirmCard({ card }: { card: NonNullable<TeamMsg['card']> }) {
   // WHICH OF OUR ADDRESSES IT GOES OUT FROM — chosen here, re-checked by the server.
   const [sendAs, setSendAs] = useState<'support' | 'antonio'>('support')
   const [error, setError] = useState<string | null>(null)
+  // The card is a PERMANENT chat message, so its baked-in file list would go
+  // stale the moment a file is added or removed. The server updates the stored
+  // message too; this keeps the screen in step immediately, without waiting for
+  // the row to come back round.
+  const [files, setFiles] = useState(card.files ?? [])
   const preparedId = card.entity_id
 
   const resolve = async (action: 'confirm' | 'cancel') => {
@@ -2310,7 +2315,16 @@ function EmailConfirmCard({ card }: { card: NonNullable<TeamMsg['card']> }) {
             <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{card.body}</p>
           </div>
         ) : null}
-        {card.entity_id ? <ConfirmAttachments preparedId={card.entity_id} attachments={card.files ?? []} /> : null}
+        {preparedId ? (
+          <ConfirmAttachments
+            preparedId={preparedId}
+            attachments={files}
+            // Editing is offered only while the card is still live — once it has
+            // been sent or cancelled there is nothing to edit, and offering it
+            // would promise a control that cannot work.
+            onChange={done ? undefined : setFiles}
+          />
+        ) : null}
         {done ? (
           <p className={cn('mt-2 text-xs font-medium', done === 'sent' ? 'text-emerald-700' : 'text-zinc-500')}>
             {done === 'sent' ? '✅ Sent.' : 'Cancelled — nothing was sent.'}

@@ -332,7 +332,12 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
               <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
             </div>
           ) : null}
-          <ConfirmAttachments preparedId={preparedSend.id} attachments={preparedSend.attachments} className="mt-1.5 space-y-1.5" />
+          <ConfirmAttachments
+            preparedId={preparedSend.id}
+            attachments={preparedSend.attachments}
+            className="mt-1.5 space-y-1.5"
+            onChange={files => setPreparedSend(p => (p ? { ...p, attachments: files } : p))}
+          />
           <div className="mt-2 flex items-center gap-2 text-xs">
             <span className="text-zinc-500">From:</span>
             <select

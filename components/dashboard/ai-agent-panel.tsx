@@ -759,7 +759,11 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
                 <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
               </div>
             ) : null}
-            <ConfirmAttachments preparedId={preparedSend.id} attachments={preparedSend.attachments ?? []} />
+            <ConfirmAttachments
+              preparedId={preparedSend.id}
+              attachments={preparedSend.attachments ?? []}
+              onChange={files => setPreparedSend(p => (p ? { ...p, attachments: files } : p))}
+            />
             <div className="mt-2 flex items-center gap-2 text-xs">
               <span className="text-zinc-500">From:</span>
               <select
