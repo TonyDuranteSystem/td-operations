@@ -466,7 +466,7 @@ export const SEND_EMAIL_TOOL: ToolDef = {
       attach: {
         type: "array",
         items: { type: "string" },
-        description: "Refs of the file(s) to attach, taken from the FILES YOU CAN ATTACH list you were shown this turn — files the staff member uploaded into the panel, or files posted in this conversation. Every email is PREPARED for the staff member's Confirm either way; attaching does not change that. You may attach ONLY a ref on that list: never a file from Drive, from a client's records, from an email you read, or one you were merely told about. If the list is not there, nothing is attachable this turn — say so instead of guessing at a ref.",
+        description: "Refs of the file(s) to attach — several refs attach several files to the one email. Take them from the FILES YOU CAN ATTACH list you were shown THIS turn: the staff member's panel uploads, files posted in this conversation, and any client document you looked up with search_documents this turn (each result carries an attach_ref). Every email is PREPARED for the staff member's Confirm either way; attaching does not change that. You may attach ONLY a ref you were shown THIS turn — never a raw id, path or link, and never a ref from an earlier message: if the file you want was found in an earlier turn, RUN THE SEARCH AGAIN to have it re-offered (the ref stays the same), rather than saying you cannot attach it. Where a file's entry carries a warning, repeat that warning in your reply so the staff member reads it before confirming.",
       },
     },
     required: ["to", "subject", "body"],
@@ -2954,6 +2954,9 @@ async function offerSearchedDocuments(result: string, sendContext: WorkerSendCon
         id: String(r._id),
         file_name: (r.file_name as string) ?? null,
         mime_type: (r._mime_type as string) ?? null,
+        // The type is what identifies an SS-4 — the document the internal-only
+        // warning exists for, and the one the flow-stage rule never caught.
+        document_type_name: (r.type as string) ?? null,
         account_id: (r._account_id as string) ?? null,
         contact_id: (r._contact_id as string) ?? null,
         portal_visible: (r.portal_visible as boolean) ?? null,
@@ -2965,14 +2968,13 @@ async function offerSearchedDocuments(result: string, sendContext: WorkerSendCon
       {
         recipientAccountId: sendContext.pinnedPortalRecipient?.account_id ?? null,
         recipientContactId: sendContext.pinnedPortalRecipient?.contact_id ?? null,
-        // Numbered after everything already on offer, so a second search in the
-        // same turn cannot reuse a ref that already means another file.
-        startAt: prep.sendable.filter((f) => f.ref.startsWith("d")).length + 1,
       },
     )
-    // Two searches in one turn can return the same document twice. Drop the
-    // earlier offer of a file we are re-offering, so one file never has two live
-    // refs (which is how "attach d2" quietly becomes ambiguous).
+    // Refs are derived from the document itself, so a re-offer produces the SAME
+    // ref and this is a genuine de-duplication rather than a renumbering. (It was
+    // renumbering that broke: the "next number" was computed from a list that
+    // shrinks here, so a third search could mint an already-live ref and "attach
+    // d3" would freeze a different client's file than the one just shown.)
     const reoffered = new Set(offered.map((o) => o.locator))
     prep.sendable = [
       ...prep.sendable.filter((f) => f.source !== "document" || !reoffered.has(f.locator)),
@@ -2993,8 +2995,24 @@ async function offerSearchedDocuments(result: string, sendContext: WorkerSendCon
       attachable: attachableFilesPrompt(offered),
     })
   } catch (err) {
+    // The attach capability is lost, which is fine — but the server-only fields
+    // must NOT survive into the model's view, or it is handed document UUIDs it
+    // will then try to pass as a ref.
     console.warn("[worker-tools] could not offer searched documents as attachments:", err)
-    return result
+    try {
+      const parsed = JSON.parse(result) as { documents?: Array<Record<string, unknown>> }
+      if (!Array.isArray(parsed.documents)) return result
+      return JSON.stringify({
+        ...parsed,
+        documents: parsed.documents.map((r) => {
+          const clean: Record<string, unknown> = {}
+          for (const [k, v] of Object.entries(r)) if (!k.startsWith("_")) clean[k] = v
+          return clean
+        }),
+      })
+    } catch {
+      return result
+    }
   }
 }
 

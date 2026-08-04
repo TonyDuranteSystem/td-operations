@@ -12,6 +12,7 @@ const uuidConst = vi.hoisted(() => "0f8fad5b-d9cb-469f-a165-70867728950e")
 const statSize = vi.hoisted(() => ({ value: 400_000 as number | null }))
 const inserted = vi.hoisted(() => ({ id: "prep-1" }))
 const insertSpy = vi.hoisted(() => vi.fn())
+const removeSpy = vi.hoisted(() => vi.fn())
 
 const updateSpy = vi.hoisted(() => vi.fn())
 const eqSpy = vi.hoisted(() => vi.fn())
@@ -30,6 +31,7 @@ vi.mock("@/lib/supabase-admin", () => {
         error: null,
       }),
       upload: async () => ({ data: { path: "ok" }, error: null }),
+      remove: async (paths: string[]) => { removeSpy(paths); return { data: null, error: null } },
     }),
   }
   b.insert = (row: unknown) => { insertSpy(row); return b }
@@ -73,7 +75,7 @@ const sendable = [
 ]
 
 beforeEach(() => {
-  insertSpy.mockClear(); updateSpy.mockClear(); eqSpy.mockClear(); neqSpy.mockClear()
+  insertSpy.mockClear(); updateSpy.mockClear(); eqSpy.mockClear(); neqSpy.mockClear(); removeSpy.mockClear()
   statSize.value = 400_000
 })
 
@@ -288,6 +290,87 @@ describe("prepareWorkerEmailSend", () => {
       content_type: "application/pdf",
       size: 400_000,
       origin: "you uploaded this just now",
+      warning: undefined,
+      owner_label: undefined,
+      // A panel upload is the staff member's OWN object — never marked as our
+      // copy, so cleanup can never delete it out from under their panel.
+      copied: false,
     })
+  })
+})
+
+describe("prepareWorkerEmailSend — mixed clients, and cleaning up after ourselves", () => {
+  const chat = (name: string, owner?: string) => ({
+    ref: name,
+    source: "chat_asset" as const,
+    // Not a real host — materialize refuses it, which is what the cleanup test wants.
+    locator: `https://attacker.example.com/${name}.pdf`,
+    name: `${name}.pdf`,
+    ...(owner ? { ownerLabel: owner } : {}),
+  })
+
+  it("FLAGS an email that mixes two clients' files — on EVERY file, and with both names", async () => {
+    // The per-file mismatch check needs a client pinned to the screen, and the
+    // Inbox has none — which is exactly the surface where "reply to the
+    // accountant with the client's document" happens. Comparing the owners of
+    // what is actually going out works everywhere, and is the only check that
+    // can see a mix (each file on its own is perfectly fine).
+    const owned = (ref: string, owner: string) => ({
+      ref,
+      source: "worker_upload" as const,
+      locator: goodPath,
+      name: `${ref}.pdf`,
+      size: 10,
+      ownerLabel: owner,
+    })
+    const r = await prepareWorkerEmailSend({
+      ...base,
+      attachRefs: ["up1", "up2"],
+      sendable: [owned("up1", "Acme LLC"), owned("up2", "Beta LLC")],
+    })
+    expect(r.ok).toBe(true)
+    const row = insertSpy.mock.calls[0][0] as { attachments: Array<{ warning?: string }> }
+    for (const a of row.attachments) {
+      expect(a.warning).toMatch(/different clients/)
+      expect(a.warning).toMatch(/Acme LLC/)
+      expect(a.warning).toMatch(/Beta LLC/)
+    }
+  })
+
+  it("does NOT flag an email whose files all belong to the same client", async () => {
+    const owned = (ref: string) => ({
+      ref,
+      source: "worker_upload" as const,
+      locator: goodPath,
+      name: `${ref}.pdf`,
+      size: 10,
+      ownerLabel: "Acme LLC",
+    })
+    const r = await prepareWorkerEmailSend({ ...base, attachRefs: ["up1", "up2"], sendable: [owned("up1"), owned("up2")] })
+    expect(r.ok).toBe(true)
+    const row = insertSpy.mock.calls[0][0] as { attachments: Array<{ warning?: string }> }
+    expect(row.attachments.every((a) => !a.warning)).toBe(true)
+  })
+
+  it("DELETES the copies it already made when a later file in the same email fails", async () => {
+    // Without this, "attach these three" where the third is unreadable leaves
+    // the first two copies of client documents in the bucket with no row on
+    // earth referencing them.
+    const good = {
+      ref: "up1",
+      source: "worker_upload" as const,
+      locator: goodPath,
+      name: "ok.pdf",
+      size: 10,
+    }
+    const r = await prepareWorkerEmailSend({
+      ...base,
+      attachRefs: ["up1", "bad"],
+      sendable: [good, chat("bad")],
+    })
+    expect(r.ok).toBe(false)
+    // The panel upload is NOT ours to delete; nothing was copied for it.
+    expect(removeSpy).not.toHaveBeenCalled()
+    expect(insertSpy).not.toHaveBeenCalled()
   })
 })

@@ -20,6 +20,7 @@ import { buildRawEmail } from "@/lib/email/raw-mime"
 import { isValidWorkerUploadPath, WORKER_UPLOAD_BUCKET } from "@/lib/ai-agent/attachment-reader"
 import { MAX_EMAIL_ATTACHMENT_FILES } from "@/lib/inbox/email-attachment-staging"
 import {
+  discardCopies,
   materializeSendable,
   SendableRefusal,
   type MaterializedAttachment,
@@ -140,7 +141,7 @@ export async function supersedeEarlierDrafts(opts: {
 }): Promise<void> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabaseAdmin as any)
+    const { data: killed } = await (supabaseAdmin as any)
       .from("worker_prepared_sends")
       .update({ status: "cancelled", resolved_at: new Date().toISOString() })
       .eq("thread_uuid", opts.threadUuid)
@@ -148,6 +149,13 @@ export async function supersedeEarlierDrafts(opts: {
       .eq("kind", opts.kind)
       .eq("status", "pending")
       .neq("id", opts.keepId)
+      .select("attachments")
+    // A superseded draft's copies can never be sent — drop them. Only OUR copies
+    // (a panel upload belongs to the staff member's own screen). Redrafting five
+    // times otherwise leaves five sets of client documents in the bucket forever.
+    for (const row of (killed ?? []) as Array<{ attachments?: Array<{ path?: string; copied?: boolean }> }>) {
+      await discardCopies(row.attachments)
+    }
   } catch {
     // Best-effort: failing to supersede must never fail a draft that IS frozen.
   }
@@ -207,18 +215,35 @@ export async function prepareWorkerEmailSend(input: PrepareInput): Promise<Prepa
       // pass a per-file check and then blow the total.
       file = await materializeSendable(hit, MAX_OUTBOUND_ATTACHMENT_BYTES - materializedBytes)
     } catch (err) {
+      // Whatever was already copied for THIS draft is now unreachable — no row
+      // will ever reference it. Drop it rather than leaving client documents
+      // accumulating in the bucket for a send that never happened.
+      await discardCopies(resolved)
       if (err instanceof SendableRefusal) return { ok: false, message: `❌ ${err.message}` }
       console.error("[worker-email-send] materialize failed:", err)
       return { ok: false, message: `❌ "${hit.name}" couldn't be prepared for sending — please try again.` }
     }
     materializedBytes += file.size ?? 0
     if (materializedBytes > MAX_OUTBOUND_ATTACHMENT_BYTES) {
+      await discardCopies([...resolved, file])
       return {
         ok: false,
         message: `❌ Too large to email: ${mb(materializedBytes)} of attachments (Gmail's limit is what binds here, ~${mb(MAX_OUTBOUND_ATTACHMENT_BYTES)} of files). I can send it without the largest one.`,
       }
     }
     resolved.push(file)
+  }
+
+  // AN EMAIL THAT MIXES TWO CLIENTS' FILES. No single file's own warning can see
+  // this — each one is individually fine, and on a screen with no client pinned
+  // (the Inbox, a team channel) the per-file mismatch check cannot fire at all.
+  // Comparing the owners of what is actually going out works on every surface,
+  // which is the point: the flagship flow for this feature is replying to an
+  // accountant from the Inbox with a client's document attached.
+  const owners = Array.from(new Set(resolved.map((r) => r.ownerLabel).filter((o): o is string => Boolean(o))))
+  if (owners.length > 1) {
+    const note = `⚠️ These files belong to different clients (${owners.join(", ")}). Check that is deliberate before you send.`
+    for (const r of resolved) r.warning = r.warning ? `${r.warning} ${note}` : note
   }
 
   // Freeze the exact payload the staff will confirm.
@@ -246,6 +271,11 @@ export async function prepareWorkerEmailSend(input: PrepareInput): Promise<Prepa
         // we hold back from clients). Antonio's rule is warn-never-block, which
         // only works if the warning survives all the way to the card.
         warning: r.warning,
+        // Whose file it is, and whether the object is a copy WE made — the
+        // latter is what makes cleanup safe (a panel upload must never be
+        // deleted out from under the staff member's own panel).
+        owner_label: r.ownerLabel,
+        copied: r.copied,
       })),
       actor: input.actor,
       status: "pending",
@@ -595,17 +625,20 @@ export async function cancelPreparedFrozenThisTurn(
     const db = supabaseAdmin as any
     const { data } = await db
       .from("worker_prepared_sends")
-      .select("id")
+      .select("id, attachments")
       .eq("thread_uuid", threadUuid)
       .eq("actor", actor)
       .eq("status", "pending")
-    const mine = ((data ?? []) as Array<{ id: string }>).map((r) => r.id).filter((id) => !prior.ids.has(id))
-    if (!mine.length) return
+    const rows = ((data ?? []) as Array<{ id: string; attachments?: Array<{ path?: string; copied?: boolean }> }>)
+      .filter((r) => !prior.ids.has(r.id))
+    if (!rows.length) return
     await db
       .from("worker_prepared_sends")
       .update({ status: "cancelled" })
-      .in("id", mine)
+      .in("id", rows.map((r) => r.id))
       .eq("status", "pending")
+    // Nothing can send these now — drop the copies we made for them.
+    for (const r of rows) await discardCopies(r.attachments)
   } catch {
     // Best-effort — this runs on an error path already.
   }

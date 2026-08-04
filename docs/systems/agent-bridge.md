@@ -1,5 +1,7 @@
 # Hermes ↔ Claude Agent Bridge
 
+_Last verified against code: 2026-08-04 — Claude (**Touch only: `worker-tools.ts` — the document-offer step now mints content-derived refs and strips its server-only fields on the failure path as well. The Hermes-bridge worker carries no email freeze context, so that step never runs for it and nothing here changes; the read-only tool gate is untouched. Full detail in `docs/systems/inbox.md` (2026-08-04).**)_
+
 _Last verified against code: 2026-08-03b — Claude (**Touch only: `worker-tools.ts` gained `offerSearchedDocuments`, which turns a `search_documents` result into this turn's attachable-file set when the call has an email freeze context. The Hermes-bridge worker has no such context, so nothing changes for it, and the read-only tool gate is untouched. Full detail in `docs/systems/inbox.md` (2026-08-03b).**)_
 
 _Last verified against code: 2026-08-03 — Claude (**Touch only: `worker-tools.ts` — the `send_email` `attach` parameter description and the `sendable` type it carries (now `SendableFile`, with a `source` and provenance). No change to the bridge, the worker's tool set, or the action rail, which stays OFF (R108/R111). Full detail in `docs/systems/inbox.md` (2026-08-03).**)_

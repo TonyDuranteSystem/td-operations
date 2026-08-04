@@ -18,6 +18,8 @@ const uploadSpy = vi.hoisted(() => vi.fn())
 const fetchedUrls = vi.hoisted(() => [] as string[])
 const fetchBytes = vi.hoisted(() => ({ value: Buffer.from("hello world") }))
 
+const removeSpy = vi.hoisted(() => vi.fn())
+
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
     storage: {
@@ -26,6 +28,10 @@ vi.mock("@/lib/supabase-admin", () => ({
         upload: async (path: string, bytes: Buffer, opts: unknown) => {
           uploadSpy(path, bytes, opts)
           return { data: { path }, error: null }
+        },
+        remove: async (paths: string[]) => {
+          removeSpy(paths)
+          return { data: null, error: null }
         },
       }),
     },
@@ -49,9 +55,12 @@ vi.mock("@/lib/ai-agent/attachment-reader", async () => {
 })
 
 import {
+  discardCopies,
   materializeSendable,
   sendableFromChatRefs,
   sendableFromDocumentRows,
+  documentRef,
+  internalDocumentReason,
   attachableFilesPrompt,
   SendableRefusal,
   type SendableFile,
@@ -73,6 +82,7 @@ const chatFile: SendableFile = {
 
 beforeEach(() => {
   uploadSpy.mockClear()
+  removeSpy.mockClear()
   fetchedUrls.length = 0
   fetchBytes.value = Buffer.from("hello world")
 })
@@ -178,7 +188,7 @@ describe("sendableFromDocumentRows — a document we hold on record", () => {
     expect(f.origin).toBe("on file for Flowiz Studio LLC")
     expect(f.source).toBe("document")
     // The model gets a ref; the document id stays server-side in the locator.
-    expect(f.ref).toBe("d1")
+    expect(f.ref).toBe(documentRef("doc-1"))
     expect(f.locator).toBe("doc-1")
   })
 
@@ -220,9 +230,32 @@ describe("sendableFromDocumentRows — a document we hold on record", () => {
     expect(f.warning).toMatch(/Internal document/)
   })
 
-  it("numbers refs so a second search in the same turn cannot reuse a live ref", () => {
-    const files = sendableFromDocumentRows([base, { ...base, id: "doc-2" }], { startAt: 3 })
-    expect(files.map((f) => f.ref)).toEqual(["d3", "d4"])
+  it("derives the ref FROM THE DOCUMENT, so a re-offer is idempotent and two files can never share one", () => {
+    // Positional numbering is what broke: the counter was computed from a list
+    // that shrinks when a file is re-offered, so a third search in one turn could
+    // mint an already-live ref — and resolution takes the FIRST match, so
+    // "attach d3" would have frozen a different client's document than the one
+    // the model was shown, carrying that file's warning and owner too.
+    const first = sendableFromDocumentRows([base, { ...base, id: "doc-2" }])
+    const reoffered = sendableFromDocumentRows([base])
+    expect(first[0].ref).toBe(reoffered[0].ref)
+    expect(first[0].ref).not.toBe(first[1].ref)
+    expect(documentRef("doc-1")).toBe(first[0].ref)
+  })
+
+  it("SURVIVES the three-search sequence that produced the collision", () => {
+    // 1) both of Acme's docs, 2) narrow to one (a re-offer), 3) a different
+    // client's doc. Every live ref must still point at exactly one file.
+    const round1 = sendableFromDocumentRows([base, { ...base, id: "doc-2" }])
+    const round2 = sendableFromDocumentRows([base])
+    const round3 = sendableFromDocumentRows([{ ...base, id: "doc-C", owner_name: "Beta LLC", account_id: "acct-B" }])
+    const live = [...round1, ...round2, ...round3]
+    const byRef = new Map<string, Set<string>>()
+    for (const f of live) {
+      if (!byRef.has(f.ref)) byRef.set(f.ref, new Set())
+      byRef.get(f.ref)!.add(f.locator)
+    }
+    for (const [ref, locators] of byRef) expect(`${ref}:${locators.size}`).toBe(`${ref}:1`)
   })
 })
 
@@ -232,10 +265,12 @@ describe("MORE THAN ONE FILE on one email", () => {
       ...sendableFromChatRefs([{ id: "u1", name: "a.pdf" }, { id: "u2", name: "b.png" }], "posted in this thread"),
       ...sendableFromDocumentRows(
         [{ id: "doc-9", file_name: "Articles.pdf", owner_name: "Flowiz Studio LLC", service_type: "Company Formation", flow_stage: "Articles Received" }],
-        { startAt: 1 },
       ),
     ]
-    expect(files.map((f) => f.ref)).toEqual(["f1", "f2", "d1"])
+    expect(files.map((f) => f.ref)).toEqual(["f1", "f2", documentRef("doc-9")])
+    // Every ref distinct — that is the property that matters when several files
+    // ride one email.
+    expect(new Set(files.map((f) => f.ref)).size).toBe(3)
     const line = attachableFilesPrompt(files)
     for (const name of ["a.pdf", "b.png", "Articles.pdf"]) expect(line).toContain(name)
     // It must know several refs are allowed on ONE email, or it attaches one and
@@ -245,8 +280,76 @@ describe("MORE THAN ONE FILE on one email", () => {
 
   it("repeats a file's warning in the list, so the worker cannot attach a flagged file silently", () => {
     const [f] = sendableFromDocumentRows(
-      [{ id: "doc-3", file_name: "SS-4 signed.pdf", owner_name: "ACME LLC", service_type: "Company Formation", flow_stage: "Signed" }],
+      [{ id: "doc-3", file_name: "SS-4 signed.pdf", document_type_name: "Form SS-4 (Signed)", owner_name: "ACME LLC" }],
     )
     expect(attachableFilesPrompt([f])).toMatch(/Internal document/)
+  })
+})
+
+describe("which documents are actually held back from clients", () => {
+  // THE RULE THIS REPLACED WAS BOTH TOO WIDE AND POINTED THE WRONG WAY. It asked
+  // the PORTAL-visibility policy, which fails closed on a document with no flow
+  // stage — and 4,847 of 4,929 real documents have no service delivery at all,
+  // so it flagged 3,185 of them (65%) while never once catching the signed SS-4
+  // (584 rows, every one with a null flow stage). A warning on two thirds of
+  // everything is a warning nobody reads.
+  const plain = { id: "d", file_name: "Bank letter.pdf", document_type_name: "Bank Statement", portal_visible: false }
+
+  it("does NOT flag an ordinary document — the case 98% of our records are in", () => {
+    expect(internalDocumentReason(plain)).toBeNull()
+    expect(sendableFromDocumentRows([plain])[0].warning).toBeUndefined()
+  })
+
+  it("FLAGS the signed SS-4 — the document the rule exists for, which the old rule missed", () => {
+    for (const name of ["Form SS-4", "Form SS-4 (Signed)", "SS-4", "SS-4 + Articles (IRS Package)"]) {
+      expect(internalDocumentReason({ id: "d", document_type_name: name })).toMatch(/tax ID/)
+    }
+    // Also when only the filename carries it.
+    expect(internalDocumentReason({ id: "d", file_name: "ss4 signed scan.pdf" })).toMatch(/tax ID/)
+  })
+
+  it("does not flag an EIN letter or Articles — what a bank actually asks the client for", () => {
+    expect(internalDocumentReason({ id: "d", document_type_name: "EIN Letter (IRS)" })).toBeNull()
+    expect(internalDocumentReason({ id: "d", file_name: "Articles of Organization.pdf" })).toBeNull()
+  })
+
+  it("still applies the curated rule to a REAL flow document (the 39 rows it was written for)", () => {
+    expect(
+      internalDocumentReason({ id: "d", file_name: "draft.pdf", service_type: "Tax Return", flow_stage: "Tax Return Prepared" }),
+    ).toMatch(/internal working document/)
+    expect(
+      internalDocumentReason({ id: "d", file_name: "filed.pdf", service_type: "Tax Return", flow_stage: "Filed with IRS" }),
+    ).toBeNull()
+  })
+
+  it("an explicitly published document is never flagged, whatever it is", () => {
+    expect(internalDocumentReason({ id: "d", document_type_name: "Form SS-4", portal_visible: true })).toBeNull()
+  })
+})
+
+describe("discardCopies — cleaning up after a draft that will never be sent", () => {
+  const uuid = "0f8fad5b-d9cb-469f-a165-70867728950e"
+
+  it("deletes OUR copies", async () => {
+    await discardCopies([
+      { path: `worker-chat/${uuid}.pdf`, copied: true },
+      { path: `worker-chat/${uuid}.png`, copied: true },
+    ])
+    expect(removeSpy).toHaveBeenCalledOnce()
+    expect(removeSpy.mock.calls[0][0]).toHaveLength(2)
+  })
+
+  it("NEVER deletes a panel upload — that object belongs to the staff member's own screen", async () => {
+    // Deleting it would pull the file out from under the panel they are still
+    // looking at, and they never asked us to remove anything.
+    await discardCopies([{ path: `worker-chat/${uuid}.pdf`, copied: false }])
+    expect(removeSpy).not.toHaveBeenCalled()
+  })
+
+  it("ignores anything whose path is not a private-bucket path, and never throws", async () => {
+    await expect(
+      discardCopies([{ path: "signed-documents/secret.pdf", copied: true }, { copied: true }, null as never]),
+    ).resolves.toBeUndefined()
+    expect(removeSpy).not.toHaveBeenCalled()
   })
 })

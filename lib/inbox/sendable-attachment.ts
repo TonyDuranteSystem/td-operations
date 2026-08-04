@@ -22,7 +22,7 @@
  * Adding a future source (Drive/CRM documents) = one entry in `fetchBytes`
  * below plus a surface that mints refs for it. Nothing downstream changes.
  */
-import { randomUUID } from "crypto"
+import { createHash, randomUUID } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import {
   WORKER_UPLOAD_BUCKET,
@@ -67,6 +67,11 @@ export interface SendableFile {
    * only exists in a comment is not a warning.
    */
   warning?: string
+  /**
+   * Whose file this is, as a bare name — used to spot an email that mixes two
+   * clients' documents together, which no single file's own warning can see.
+   */
+  ownerLabel?: string
 }
 
 /** A file resolved to real bytes in the private bucket, ready to freeze. */
@@ -78,6 +83,14 @@ export interface MaterializedAttachment {
   size?: number
   origin?: string
   warning?: string
+  ownerLabel?: string
+  /**
+   * TRUE when we made this copy for the send (a chat file or a stored document).
+   * FALSE for a panel upload, which is the staff member's own object and must
+   * never be deleted by our cleanup — deleting it would pull the file out from
+   * under the panel they are still looking at.
+   */
+  copied?: boolean
 }
 
 /**
@@ -157,6 +170,8 @@ async function copyChatAssetIntoPrivateBucket(file: SendableFile, maxBytes: numb
     size: bytes.length,
     origin: file.origin,
     warning: file.warning,
+    ownerLabel: file.ownerLabel,
+    copied: true,
   }
 }
 
@@ -243,6 +258,8 @@ async function copyDocumentIntoPrivateBucket(file: SendableFile, maxBytes: numbe
     size: fetched.bytes.length,
     origin: file.origin,
     warning: file.warning,
+    ownerLabel: file.ownerLabel,
+    copied: true,
   }
 }
 
@@ -273,10 +290,36 @@ export async function materializeSendable(file: SendableFile, maxBytes: number):
       size: actual,
       origin: file.origin,
       warning: file.warning,
+      ownerLabel: file.ownerLabel,
+      // NOT a copy — this object belongs to the staff member's panel. Cleanup
+      // must never delete it.
+      copied: false,
     }
   }
   if (file.source === "document") return copyDocumentIntoPrivateBucket(file, maxBytes)
   return copyChatAssetIntoPrivateBucket(file, maxBytes)
+}
+
+/**
+ * Delete copies WE made for a draft that will never be sent.
+ *
+ * Only objects marked `copied` — a panel upload is the staff member's own file
+ * and deleting it would pull it out from under the panel they are looking at.
+ * Best-effort: a failure here must never fail the thing that triggered it
+ * (a cancel, a supersede, a mid-prepare refusal).
+ */
+export async function discardCopies(
+  attachments: Array<{ path?: string; copied?: boolean }> | null | undefined,
+): Promise<void> {
+  const paths = (attachments ?? [])
+    .filter((a) => a?.copied && typeof a.path === "string" && isValidWorkerUploadPath(a.path))
+    .map((a) => a.path as string)
+  if (!paths.length) return
+  try {
+    await supabaseAdmin.storage.from(WORKER_UPLOAD_BUCKET).remove(paths)
+  } catch (err) {
+    console.warn("[sendable-attachment] could not discard unused copies:", err)
+  }
 }
 
 /**
@@ -306,6 +349,7 @@ export interface DocumentRowForOffer {
   id: string
   file_name?: string | null
   mime_type?: string | null
+  document_type_name?: string | null
   account_id?: string | null
   contact_id?: string | null
   portal_visible?: boolean | null
@@ -313,6 +357,48 @@ export interface DocumentRowForOffer {
   service_type?: string | null
   /** Display name of the account/contact the document belongs to. */
   owner_name?: string | null
+}
+
+/**
+ * Documents we hold back from clients, matched on what the record ACTUALLY says.
+ *
+ * THE FIRST VERSION OF THIS GOT IT BACKWARDS. It asked `isClientSafeFlowDoc`,
+ * which is the PORTAL-VISIBILITY policy: written to fail closed, so a document
+ * with no flow stage is "not client-safe". As a portal rule that is right. As an
+ * email warning it is inverted — and the numbers say so: of 4,929 documents on
+ * record, only 39 are flow-stamped at all, so that rule flagged 3,185 of them
+ * (65%), while the ONE document it exists for — the signed SS-4 — is not a flow
+ * document and was never caught by it (584 SS-4 rows, every one with a null flow
+ * stage). A warning on two thirds of everything is a warning nobody reads, and it
+ * was not even pointed at the right file.
+ *
+ * So: a FLOW document is judged by the curated allowlist (that rule is correct
+ * for the 39 documents it was written for), and an ordinary document is judged by
+ * what it IS. Anything else is not flagged.
+ */
+const INTERNAL_DOCUMENT_PATTERNS: Array<{ re: RegExp; why: string }> = [
+  {
+    // Antonio's standing rule: the SS-4, signed OR unsigned, is internal — it
+    // carries the responsible party's tax ID and a client never needs it (the
+    // EIN letter and the Articles are what a bank asks for).
+    re: /\bss[-\s]?4\b/i,
+    why: "the SS-4 carries the responsible party's tax ID and is never shared with clients",
+  },
+]
+
+/** Why this document is one we hold back, or null when it is ordinary. */
+export function internalDocumentReason(row: DocumentRowForOffer): string | null {
+  // An admin explicitly published it — that decision wins over everything.
+  if (row.portal_visible === true) return null
+  const haystack = `${row.document_type_name ?? ""} ${row.file_name ?? ""}`
+  for (const p of INTERNAL_DOCUMENT_PATTERNS) if (p.re.test(haystack)) return p.why
+  // A flow-stamped document: the curated portal allowlist is the right judge.
+  if (row.service_type && row.flow_stage) {
+    if (!isClientSafeFlowDoc(row.service_type, row.flow_stage, row.portal_visible)) {
+      return "this is an internal working document for that service, not a client copy"
+    }
+  }
+  return null
 }
 
 /**
@@ -336,12 +422,15 @@ export interface DocumentRowForOffer {
  */
 export function sendableFromDocumentRows(
   rows: DocumentRowForOffer[],
-  opts: { recipientAccountId?: string | null; recipientContactId?: string | null; startAt?: number } = {},
+  opts: { recipientAccountId?: string | null; recipientContactId?: string | null } = {},
 ): SendableFile[] {
-  const startAt = opts.startAt ?? 1
-  return rows.map((r, i) => {
+  return rows.map((r) => {
     const owner = r.owner_name?.trim() || null
     const knowsRecipient = Boolean(opts.recipientAccountId || opts.recipientContactId)
+    // A contact-scoped document (an ITIN letter, a passport) belongs to the
+    // PERSON behind the company, so on a screen pinned to their account it is
+    // not somebody else's file. Matching either id is what stops the warning
+    // false-firing on a client's own person-level documents.
     const belongsToRecipient =
       (opts.recipientAccountId && r.account_id === opts.recipientAccountId) ||
       (opts.recipientContactId && r.contact_id === opts.recipientContactId)
@@ -351,19 +440,39 @@ export function sendableFromDocumentRows(
         `⚠️ This file belongs to ${owner ?? "a different client"} — not the client this screen is about. Check before you send it.`,
       )
     }
-    if (!isClientSafeFlowDoc(r.service_type, r.flow_stage, r.portal_visible)) {
-      warnings.push("⚠️ Internal document — we do not normally share this one with clients.")
-    }
+    const internal = internalDocumentReason(r)
+    if (internal) warnings.push(`⚠️ Internal document — ${internal}.`)
     return {
-      ref: `d${startAt + i}`,
+      ref: documentRef(r.id),
       source: "document" as const,
       locator: r.id,
       name: r.file_name || "document",
       contentType: r.mime_type || undefined,
       origin: owner ? `on file for ${owner}` : "on file in the CRM",
+      ...(owner ? { ownerLabel: owner } : {}),
       ...(warnings.length ? { warning: warnings.join(" ") } : {}),
     }
   })
+}
+
+/**
+ * A document's ref, DERIVED FROM THE DOCUMENT — never from its position.
+ *
+ * Positional numbering broke exactly the way positional numbering always breaks
+ * here: the offer list is mutated during a turn (a second search re-offers a
+ * file and drops the older entry), so the "next number" was computed from a list
+ * that had shrunk, and a third search could mint `d3` a second time. Resolution
+ * takes the FIRST match, so "attach d3" would have frozen a different client's
+ * document than the one the model was just shown — carrying that file's warning
+ * and owner label too, so the card could not reveal the swap.
+ *
+ * Content-derived means a re-offer produces the SAME ref (idempotent, no dedup
+ * needed) and two different documents can never share one. The same lesson is
+ * already recorded on the email-attachment refs; this is the sibling that had
+ * not learned it.
+ */
+export function documentRef(documentId: string): string {
+  return `d${createHash("sha256").update(documentId).digest("hex").slice(0, 6)}`
 }
 
 /**

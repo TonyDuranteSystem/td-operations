@@ -72,13 +72,42 @@ export async function GET(
   }
   const bytes = Buffer.from(await file.arrayBuffer())
 
-  // Quote-strip the filename: it reaches a header, and it can carry a client's
-  // own naming (or an inbound file's) rather than ours.
-  const filename = String(att.name ?? "file").replace(/["\r\n]/g, "")
+  // The filename can be a client's own naming ("Contratto società.pdf", or a
+  // name in Chinese). A raw non-Latin-1 character makes Node reject the header
+  // and 500 the click; the MIME encoded-word form used for email is NOT valid
+  // here and would show the user the encoding itself. So: an ASCII-safe
+  // `filename` plus the RFC 5987 `filename*` that browsers actually read.
+  const rawName = String(att.name ?? "file")
+    .replace(/[\r\n"\\]/g, "")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim()
+    .slice(0, 180)
+  const safeName = rawName || "file"
+  // eslint-disable-next-line no-control-regex
+  const asciiName = /^[\x20-\x7e]*$/.test(safeName) ? safeName : safeName.replace(/[^\x20-\x7e]/g, "_")
+  const dispositionName = `filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`
+  const declared = (att.content_type || file.type || "application/octet-stream").toLowerCase()
+
+  // WHAT MAY RENDER IN THE BROWSER, AND WHAT MUST ONLY DOWNLOAD.
+  //
+  // These bytes can originate with a CLIENT — anything they posted in a portal
+  // chat is attachable, and its content type comes off their own upload. Served
+  // `inline` from the CRM's own origin, an HTML or SVG file would run script in
+  // a staff session, and the file tile makes clicking it the designed action.
+  // So: a short allow-list renders, everything else downloads, and `nosniff`
+  // stops the browser second-guessing the type we declare.
+  const renderable =
+    declared.startsWith("image/") && !declared.includes("svg")
+      ? declared
+      : declared === "application/pdf" || declared.startsWith("text/plain")
+        ? declared
+        : null
   return new NextResponse(new Uint8Array(bytes), {
     headers: {
-      "Content-Type": att.content_type || file.type || "application/octet-stream",
-      "Content-Disposition": `inline; filename="${filename}"`,
+      "Content-Type": renderable ?? "application/octet-stream",
+      "Content-Disposition": `${renderable ? "inline" : "attachment"}; ${dispositionName}`,
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "default-src 'none'; sandbox",
       "Cache-Control": "private, no-store",
     },
   })

@@ -89,10 +89,16 @@ describe("harvest — the attachable set", () => {
     expect(out.files[1].id).toContain("bank.pdf")
   })
 
-  it("does NOT offer our own outbound files by default — the same scope rule as reading", async () => {
+  it("DOES offer our own outbound files — 'attach the SS-4 I sent them' is an ordinary ask", async () => {
+    // READING stays scoped to the client's files (the worker is answering about
+    // what THEY sent), but excluding our own posts from the ATTACHABLE set
+    // produced a false "I can't attach that" for a file sitting right there in
+    // the conversation.
     rowsBox.rows = [row("admin", [imgAtt("ours.png")])]
     const out = await harvestPortalChatAttachments({ accountId: "acc-1", contactId: null })
-    expect(out.files).toEqual([])
+    expect(out.files.map((f) => f.name)).toEqual(["ours.png"])
+    // ...and it is still not fed to the model as one of the client's images.
+    expect(out.imageBlocks).toEqual([])
   })
 })
 

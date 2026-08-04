@@ -455,13 +455,23 @@ async function runSidebarWorker(args: {
       // hit the executor's "there's no file on this message to attach — ask the
       // staff member to drop the file into the panel" branch: telling them to do
       // the thing they had just done, every time.
-      emailSendPrep: {
-        threadUuid: threadId,
-        gmailThreadId: null,
-        mailbox: TD_MAILBOXES[0],
-        defaultReplyToMessageId: null,
-        sendable: sidebarSendable,
-      },
+      // GATED ON EMAIL ACTUALLY BEING AVAILABLE. Off a client page this surface
+      // has no send_email tool at all (`buildSidebarSendRails` returns {}), but a
+      // freeze context set unconditionally still made the document search hand
+      // back "FILES YOU CAN ATTACH to an email" — a system prompt saying "you
+      // cannot send email" and a tool result saying "here is what you can email",
+      // in the same turn. The false-capability class again.
+      ...(rails.email.enableEmailSend
+        ? {
+            emailSendPrep: {
+              threadUuid: threadId,
+              gmailThreadId: null,
+              mailbox: TD_MAILBOXES[0],
+              defaultReplyToMessageId: null,
+              sendable: sidebarSendable,
+            },
+          }
+        : {}),
       // WHO asked. Without it a send from here is logged as the generic worker and
       // "who told it to do that" has no answer.
       sendActor,

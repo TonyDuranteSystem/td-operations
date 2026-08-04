@@ -116,9 +116,15 @@ export async function harvestPortalChatAttachments(opts: HarvestOpts): Promise<P
   // message window as the rest of this harvest.
   const allRefs: AttachmentRef[] = []
   for (const row of rows) {
-    if (!includeAdmin && row.sender_type === "admin") continue
+    // ATTACHABLE includes OUR OWN posts. Reading is scoped to the client's files
+    // (the worker is answering about what THEY sent), but "attach the SS-4 I
+    // sent them in the chat" is an ordinary ask, and excluding it produced a
+    // false "I can't" for a file sitting right there in the conversation.
     for (const ref of attachmentRefsFromChatRow(row)) {
       if (allRefs.length < MAX_ATTACHABLE_CHAT_FILES) allRefs.push(ref)
+    }
+    if (!includeAdmin && row.sender_type === "admin") continue
+    for (const ref of attachmentRefsFromChatRow(row)) {
       const isImage = (ref.mimetype ?? "").startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(ref.name ?? "")
       if (isImage) {
         if (ref.size && ref.size > MAX_IMAGE_BYTES) continue // known-oversized: skip the download

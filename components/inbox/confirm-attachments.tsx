@@ -37,6 +37,13 @@ export function preparedAttachmentHref(preparedId: string, index: number): strin
   return `/api/inbox/worker-chat/prepared-send/${preparedId}/attachment/${index}`
 }
 
+/** A size a human can read — KB below a megabyte, never "0.0 MB". */
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
 function isImage(a: ConfirmAttachment): boolean {
   return (a.content_type ?? '').startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(a.name)
 }
@@ -55,9 +62,10 @@ export function ConfirmAttachments({
     <div className={className ?? 'mt-2 space-y-1.5'}>
       {attachments.map((a, i) => {
         const href = preparedAttachmentHref(preparedId, i)
-        // Size is shown only when it is actually known. "0.0 MB" under a 14 MB
-        // file is worse than saying nothing.
-        const size = typeof a.size === 'number' ? `${(a.size / 1024 / 1024).toFixed(1)} MB` : null
+        // Size is shown only when it is actually known, and in a unit that says
+        // something: every small file used to read "0.0 MB", which is not a size,
+        // it is noise sitting where a real number belongs.
+        const size = typeof a.size === 'number' ? formatFileSize(a.size) : null
         return (
           <a
             key={i}
