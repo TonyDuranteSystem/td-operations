@@ -265,6 +265,9 @@ export async function recategorizeWorkspaceAi(
   const buckets = await getExpenseBuckets(db)
 
   const catById = new Map(rows.map(r => [r.id as string, r.category as string]))
+  // Same guard as the client path: the AI must not resolve a row the
+  // deterministic passes deliberately refused to guess (see decideAiSuggestion).
+  const notesById = new Map(rows.map(r => [r.id as string, (r.notes as string | null) ?? null]))
   let aiCategorized = 0
   let labeled = 0
   const written = new Set<string>()
@@ -292,7 +295,7 @@ export async function recategorizeWorkspaceAi(
   // additive and unguarded. Group-applied rows get a size-stamped note
   // (ai:high@v3:gN — review F5a) so a challenged group verdict is auditable.
   const persistSuggestion = async (s: AiSuggestion, groupSize = 1, stampPlace?: string) => {
-    const d = decideAiSuggestion(s, catById.get(s.id))
+    const d = decideAiSuggestion(s, catById.get(s.id), notesById.get(s.id))
     if (!d.update) return
     const payload: Record<string, unknown> = {}
     if (d.update.category) payload.category = d.update.category

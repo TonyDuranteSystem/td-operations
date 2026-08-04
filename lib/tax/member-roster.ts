@@ -128,13 +128,17 @@ export async function fetchMemberRoster(db: RosterDb, accountId: string): Promis
 
   const contactNames = buildMemberNames(contactRows.map(l => l.contacts))
 
-  // Every linked person whose record cannot produce a usable name. Counted
-  // BEFORE dedupe so the number means "records needing a fix", not "names lost".
-  const unusable = contactRows.filter(l => {
-    const c = l.contacts
-    const built = `${c?.first_name ?? ""} ${c?.last_name ?? ""}`.trim()
-    return !isUsableMemberName(built)
-  }).length
+  // Every record on EITHER source that cannot produce a usable name. Counted
+  // before dedupe so the number means "records needing a fix", not "names
+  // lost". The curated side is counted too: a members row whose name is a
+  // single word (a one-word trading name) is dropped exactly like a blank
+  // contact, and counting only contacts made that drop invisible.
+  const unusable =
+    contactRows.filter(l => {
+      const c = l.contacts
+      return !isUsableMemberName(`${c?.first_name ?? ""} ${c?.last_name ?? ""}`.trim())
+    }).length +
+    memberRows.filter(m => !isUsableMemberName(m.full_name || m.company_name)).length
 
   const names = dedupeMemberNames([...curated, ...contactNames])
 
@@ -145,8 +149,8 @@ export async function fetchMemberRoster(db: RosterDb, accountId: string): Promis
   // data defect somebody can fix in a minute, once they know it exists.
   if (unusable > 0) {
     console.warn(
-      `[member-roster] account ${accountId}: ${unusable} linked contact(s) have no usable name ` +
-      `— owner draws to those people cannot be detected. Fix the contact record.`,
+      `[member-roster] account ${accountId}: ${unusable} member/contact record(s) have no usable name ` +
+      `(blank, or a single word) — owner draws to them cannot be detected. Fix the record.`,
     )
   }
   if (names.length === 0) {

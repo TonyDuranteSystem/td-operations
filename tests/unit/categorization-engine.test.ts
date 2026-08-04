@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import { applyRules, computeRecategorizationUpdates, decideAiSuggestion, type CategorizationRule } from '@/lib/tax/categorization-engine'
 import type { AiSuggestion } from '@/lib/tax/ai-categorizer'
-import type { ParsedTransaction } from '@/lib/bank-statement-parser'
+import { ASK_CLIENT_NOTE, type ParsedTransaction } from '@/lib/bank-statement-parser'
 
 const tx = (description: string, amount: number, over: Partial<ParsedTransaction> = {}): ParsedTransaction => ({
   transaction_date: '2025-06-01', description, counterparty: '', amount,
@@ -39,6 +39,29 @@ describe('member equity auto-booking (2026-07-07 — Dynamiq: wires to members m
   })
   it('non-member counterparties are untouched', () => {
     expect(applyRules(tx('Wire transfer', -500, { counterparty: 'Acme Corp' }), [], ['Donato Renato Berini']).category).toBe('uncategorized')
+  })
+
+  /**
+   * THE PAYEE MUST BE SEARCHED SEPARATELY FROM THE MEMO (2026-08-04).
+   *
+   * The near-miss check cuts a line at its payment reference, so a supplier's
+   * invoice number mentioning a member is not read as a payment to them. But
+   * Relay, Mercury, Revolut and Slash all put the memo in the description and
+   * the payee in the counterparty field — so searching them JOINED meant a
+   * routine wire memo ("WIRE OUT | REF 88123") cut the payee away entirely and
+   * the check silently never fired. A wire is exactly the shape an owner draw
+   * takes, which made this the worst place to lose it.
+   */
+  it('a REF in the memo must not hide a member in the counterparty field', () => {
+    const relayShape = tx('WIRE OUT | REF 88123 | INVOICE 4471', -4500, { counterparty: 'M. FINELLI' })
+    const out = applyRules(relayShape, [], ['Gabriele Finelli', 'Matthew Finelli'])
+    expect(out.notes.startsWith(ASK_CLIENT_NOTE)).toBe(true)
+  })
+
+  it('and a member named only in the reference is still ignored', () => {
+    const supplier = tx('Sent money to Lope Gomez with reference Finelli factura 2024-005', -900, { counterparty: 'Lope Gomez' })
+    const out = applyRules(supplier, [], ['Gabriele Finelli', 'Matthew Finelli'])
+    expect(out.notes.startsWith(ASK_CLIENT_NOTE)).toBe(false)
   })
 })
 
@@ -231,6 +254,41 @@ describe('computeRecategorizationUpdates (parity core)', () => {
       // near-miss payee survives, and only a human or a rule moves it.
       const aiRow = berini({ category: 'expense', subcategory: 'vendor_payment', notes: 'ai:high' })
       expect(computeRecategorizationUpdates([aiRow], [], members, '').updates.get('nm')).toBeUndefined()
+    })
+
+    /**
+     * THE FEATURE DEFEATING ITSELF. The near-miss demotes the row to
+     * `uncategorized` — which is exactly the state the AI pass is allowed to
+     * resolve. Without a guard, a high-confidence guess re-booked it as an
+     * expense, wrote its own note over the ask, and the "never downgrade an
+     * ai: row" rule then made that permanent: the client was never asked, and
+     * never could be. The AI may still record its advisory hints.
+     */
+    it('the AI pass must NOT answer a question we deliberately left open', () => {
+      const s = { id: 'nm', category: 'expense' as const, subcategory: 'vendor_payment', confidence: 'high' as const, lean: 'business' as const, bucket: 'contractors' }
+      const d = decideAiSuggestion(s, 'uncategorized', `${ASK_CLIENT_NOTE} Donato Renato Berini`)
+      expect(d.applied).toBe(false)
+      expect(d.update?.category).toBeUndefined()
+      expect(d.update?.ai_lean).toBe('business') // hints still recorded
+    })
+
+    it('the AI pass still resolves an ordinary uncategorized row', () => {
+      const s = { id: 'x', category: 'expense' as const, subcategory: 'software', confidence: 'high' as const, lean: 'business' as const, bucket: 'software' }
+      expect(decideAiSuggestion(s, 'uncategorized', null).applied).toBe(true)
+    })
+
+    /**
+     * The reopened row landed in the client's queue still wearing its previous
+     * explanation — typically "transfer-pair → <id>", which claims it is one leg
+     * of an internal transfer when we have just decided we do not know what it
+     * is. Pass 1 discarded the new note entirely.
+     */
+    it('carries the ask-note through, replacing a now-false explanation', () => {
+      const stale = berini({ category: 'conversion', subcategory: 'internal_transfer', notes: 'transfer-pair → abc-123' })
+      const u = computeRecategorizationUpdates([stale], [], members, '').updates.get('nm')
+      expect(u?.category).toBe('uncategorized')
+      expect(u?.notes).toContain('Donato Renato Berini')
+      expect(u?.notes).not.toContain('transfer-pair')
     })
 
     it('an unrelated supplier is never reopened — the queue must not flood', () => {

@@ -14,19 +14,30 @@ import { matchMemberName, findNearMissMember } from "./tax/member-names"
 
 /**
  * Note prefix marking a row the system deliberately REFUSED to guess, so the
- * client is asked instead. Exported because the review UI and the tests both
- * key off it — never string-literal it.
+ * client is asked instead. Exported because the categorisation engine must
+ * recognise it — the AI pass is forbidden from resolving a row carrying it,
+ * and the re-sort must preserve it. Never string-literal it.
+ *
+ * NOT yet rendered on the client's question card: the row reaches the queue and
+ * is asked, but the card does not yet show WHICH member we suspect. That is the
+ * remaining value of this note and it is a UI change, tracked separately —
+ * stated here so nobody reads this constant as proof the prompt exists.
  */
 export const ASK_CLIENT_NOTE = "ask: possible payment to member"
 
 /**
  * Categories that are a GUESS rather than a determination — the ones the
- * near-miss check is allowed to reopen. `expense` and `fee` here are the
- * generic catch-alls at the bottom of the rule list (notably "Sent money to",
- * which books 946 rows book-wide); an explicit income or internal-transfer
- * booking is never reopened.
+ * near-miss check is allowed to reopen. `expense` here is the generic catch-all
+ * at the bottom of the rule list (notably "Sent money to", which books 946 rows
+ * book-wide); an explicit income or internal-transfer booking is never reopened.
+ *
+ * `fee` is deliberately NOT in this set. A bank fee is never an owner draw, and
+ * demoting one to `uncategorized` would newly make it eligible for the
+ * transfer-pair matcher (which skips `fee` but not `uncategorized`) — a fee
+ * could then be matched against an unrelated inflow and booked as an internal
+ * transfer. Reopening a row must not change what OTHER passes may do to it.
  */
-const GUESSED_CATEGORIES: ReadonlySet<string> = new Set(["uncategorized", "expense", "fee"])
+const GUESSED_CATEGORIES: ReadonlySet<string> = new Set(["uncategorized", "expense"])
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -188,7 +199,15 @@ export function categorizeTransaction(
       // Only outgoing money, and only rows a GUESS produced (uncategorized, or
       // the generic expense/fee catch-alls). A row an explicit rule booked as
       // income or an internal transfer is left exactly as it was.
-      const near = findNearMissMember(`${desc} ${cp}`, memberNames)
+      // DESCRIPTION AND COUNTERPARTY ARE SEARCHED SEPARATELY, never joined.
+      // The reference-cut inside findNearMissMember makes ONE cut across the
+      // text it is given, and Relay / Mercury / Revolut / Slash all put the
+      // memo in the description and the payee in the counterparty. Joined, a
+      // routine wire memo — "WIRE IN | REF 88123" with counterparty "GABRIELE
+      // FINELLI" — cut at "ref" and threw the payee away, so the check silently
+      // never fired on the very shape an owner draw takes. The counterparty
+      // field is a pure payee, so nothing in it can be cut.
+      const near = findNearMissMember(desc, memberNames) ?? findNearMissMember(cp, memberNames)
       if (near) {
         category = "uncategorized"
         subcategory = ""

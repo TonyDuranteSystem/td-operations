@@ -254,6 +254,23 @@ export function payeePart(text: string | null | undefined): string {
  * Only the surname counts — a first name like "Marco" would question every
  * vendor called Marco. Returns the member whose surname matched, or null.
  */
+/**
+ * Tokens that mark a name as a COMPANY rather than a person. Used only to
+ * switch the near-miss check OFF — a company is identified by its full legal
+ * name, which the exact matcher already handles.
+ */
+const COMPANY_TOKENS: ReadonlySet<string> = new Set([
+  "llc", "ltd", "limited", "inc", "incorporated", "corp", "corporation", "co",
+  "gmbh", "srl", "srls", "spa", "sas", "sarl", "bv", "nv", "ab", "oy", "ou",
+  "plc", "llp", "lp", "holding", "holdings", "group", "trading", "capital",
+  "ventures", "solutions", "services", "consulting", "partners", "sa", "ag",
+])
+
+/** Does this roster name look like a company rather than a person? */
+export function looksLikeCompany(name: string): boolean {
+  return nameParts(name).some(p => COMPANY_TOKENS.has(p))
+}
+
 export function findNearMissMember(text: string | null | undefined, memberNames: string[]): string | null {
   // An exact match is not a near miss — that path books the row outright.
   if (matchMemberName(text, memberNames)) return null
@@ -266,6 +283,12 @@ export function findNearMissMember(text: string | null | undefined, memberNames:
   const hay = payeePart(text)
   if (!hay) return null
   for (const name of memberNames) {
+    // A COMPANY member has no surname. Taking the last word of a legal name
+    // gives you "Limited", "Holdings" or "GmbH" — which would then question
+    // every UK or German supplier on the books, the exact flood this function
+    // exists to avoid. A company is identified by its full legal name, and
+    // `matchMemberName` already does that exactly.
+    if (looksLikeCompany(name)) continue
     const parts = nameParts(name)
     if (parts.length < MIN_NAME_PARTS) continue
     const surname = parts[parts.length - 1]

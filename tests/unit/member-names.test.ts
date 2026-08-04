@@ -24,7 +24,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildMemberNames, filterMemberNames, isUsableMemberName, dedupeMemberNames,
-  matchMemberName, findNearMissMember, normalizeForMatch, nameParts, payeePart,
+  matchMemberName, findNearMissMember, normalizeForMatch, nameParts, payeePart, looksLikeCompany,
   MIN_NAME_PART_LENGTH, MIN_NAME_PARTS, MIN_SURNAME_LENGTH, MIN_FULL_NAME_LENGTH,
 } from '@/lib/tax/member-names'
 
@@ -233,6 +233,36 @@ describe('non-Latin names fail safe', () => {
   it('the real accented members in production DO fold correctly', () => {
     expect(matchMemberName('Sent money to NICOLO PATTI', ['Nicolò Patti'])).toBe('Nicolò Patti')
     expect(matchMemberName('Wire to BERNAT NIMROD BLAHO', ['Bernát Nimród Blahó'])).toBe('Bernát Nimród Blahó')
+  })
+})
+
+/**
+ * A COMPANY member has no surname. Taking the last word of a legal name yields
+ * "Limited" / "Holdings" / "GmbH", which would question every UK or German
+ * supplier on the books — the exact flood the near-miss check exists to avoid.
+ * Verified against production: all 10 company members today end in LLC or LTD
+ * (3 letters, already below the surname floor), so this closes the hazard
+ * before a member named "… Limited" ever arrives.
+ */
+describe('company members never produce a near-miss', () => {
+  it('recognises a company by its legal tokens', () => {
+    for (const n of ['Aurora Global Holdings Limited', 'Indaco LTD', 'estro llc', 'Kira Strategy LLC', 'Something GmbH']) {
+      expect(looksLikeCompany(n)).toBe(true)
+    }
+    for (const n of ['Gabriele Finelli', 'Lucia Terracciano', 'Nicolò Patti']) {
+      expect(looksLikeCompany(n)).toBe(false)
+    }
+  })
+
+  it('does NOT question every supplier sharing a corporate word', () => {
+    const roster = ['Aurora Global Holdings Limited']
+    expect(findNearMissMember('Sent money to Kingsway Trading Limited', roster)).toBeNull()
+    expect(findNearMissMember('Sent money to Berlin Handels GmbH', ['Munich Handels GmbH'])).toBeNull()
+  })
+
+  it('but an EXACT company match still books outright', () => {
+    expect(matchMemberName('Sent money to Aurora Global Holdings Limited', ['Aurora Global Holdings Limited']))
+      .toBe('Aurora Global Holdings Limited')
   })
 })
 

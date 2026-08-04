@@ -23,7 +23,7 @@ import { fetchAllBankTransactionsByYear } from "@/lib/bank-transactions-fetch"
 // lib/owner-finance.ts until the next type regeneration.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
-import { categorizeTransaction, type CategorizedTransaction, type ParsedTransaction } from "@/lib/bank-statement-parser"
+import { categorizeTransaction, ASK_CLIENT_NOTE, type CategorizedTransaction, type ParsedTransaction } from "@/lib/bank-statement-parser"
 import { matchTransferPairs, detectOwnEntityTransfers, type TransferCandidate } from "./transfer-matcher"
 import { aiSuggestCategories, AI_PROMPT_VERSION, type AiCategorizableTx, type AiCategorizeOptions, type AiSuggestion, type AiRunStats } from "./ai-categorizer"
 
@@ -224,8 +224,19 @@ export function computeRecategorizationUpdates(
     const isAutoTagged = (row.notes ?? "").startsWith("auto:")
     if ((isAiTagged || isAutoTagged) && next.category === "uncategorized") continue
     if (next.category !== row.category || next.subcategory !== (row.subcategory ?? "")) {
-      // When a rule overrides an AI suggestion, the "ai:" tag no longer applies.
-      updates.set(row.id as string, { category: next.category, subcategory: next.subcategory, ...(isAiTagged ? { notes: "" } : {}) })
+      // The ask-note MUST be carried through. Pass 1 otherwise discards
+      // `next.notes`, so a row reopened by the near-miss check landed in the
+      // client's queue still wearing its previous explanation — typically
+      // "transfer-pair → <id>", which now claims the row is one leg of an
+      // internal transfer when we have just decided we do not know what it is.
+      // (When a rule overrides an AI suggestion the "ai:" tag no longer
+      // applies, so it is cleared — that is the other case below.)
+      const carriesAsk = (next.notes ?? "").startsWith(ASK_CLIENT_NOTE)
+      updates.set(row.id as string, {
+        category: next.category,
+        subcategory: next.subcategory,
+        ...(carriesAsk ? { notes: next.notes } : isAiTagged ? { notes: "" } : {}),
+      })
     }
   }
 
@@ -295,6 +306,19 @@ export function computeRecategorizationUpdates(
 export function decideAiSuggestion(
   s: AiSuggestion,
   effectiveCategory: string | undefined,
+  /**
+   * The row's CURRENT note. A row the deterministic passes deliberately
+   * REFUSED to guess (near-miss on a member's surname) carries the ask-note,
+   * and the AI must not answer the question we just decided we cannot answer.
+   *
+   * Without this the feature defeated itself end to end: the near-miss demoted
+   * the row to `uncategorized`, which is precisely the state the AI is allowed
+   * to resolve — so a high-confidence guess re-booked it as an expense, wrote
+   * its own "ai:" note over the ask, and the "never downgrade an ai: row"
+   * guard then made it permanent. The client was never asked, and never could
+   * be. Lean/bucket hints are still recorded; only the CATEGORY is withheld.
+   */
+  currentNotes?: string | null,
 ): { applied: boolean; update: { category?: CategorizedTransaction["category"]; subcategory?: string; notes?: string; ai_lean?: string; ai_bucket?: string } | null } {
   // Sentinel hints (Phase 3R cond. 4 — poison-pill closure): a VALIDATED
   // suggestion always fills BOTH hints, defaulting to 'unsure'/'other' when the
@@ -305,6 +329,7 @@ export function decideAiSuggestion(
     ai_lean: s.lean ?? "unsure",
     ai_bucket: s.bucket ?? "other",
   }
+  if ((currentNotes ?? "").startsWith(ASK_CLIENT_NOTE)) return { applied: false, update: hint }
   if (s.confidence === "high" && effectiveCategory === "uncategorized") {
     // Version-stamped (Phase 0.5): a challenged categorization must trace to
     // the exact prompt that produced it. All note checks use startsWith("ai:").
@@ -407,6 +432,11 @@ export async function recategorizeAccountYear(
   // Effective category per row after the deterministic pass (source of truth
   // for the AI candidate filter + apply policy below).
   const effCat = new Map(rows.map(r => [r.id as string, updates.get(r.id as string)?.category ?? (r.category as string)]))
+  // The note AFTER the deterministic passes, not the stored one — a row the
+  // near-miss check just refused to guess carries the ask-note only in this
+  // run's update, and the AI pass must see it there or it will answer the
+  // question we deliberately left open.
+  const notesById = new Map(rows.map(r => [r.id as string, updates.get(r.id as string)?.notes ?? (r.notes as string | null)]))
 
   let aiCategorized = 0
   let aiErrors: string[] = []
@@ -462,7 +492,7 @@ export async function recategorizeAccountYear(
       // .eq('category','uncategorized') so a human answer or re-run landing
       // mid-AI is never overwritten by a verdict decided on stale data.
       const persistSuggestion = async (s: AiSuggestion) => {
-        const d = decideAiSuggestion(s, effCat.get(s.id))
+        const d = decideAiSuggestion(s, effCat.get(s.id), notesById.get(s.id))
         if (!d.update) return
         const payload: Record<string, unknown> = {}
         if (d.update.category) payload.category = d.update.category

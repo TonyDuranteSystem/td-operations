@@ -110,7 +110,16 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
   // 2. Categorize (legacy built-ins + member detection) and keep the tax year.
   // Same reader as the categorisation engine and the periodic re-sort. These
   // MUST agree — see lib/tax/member-roster.ts.
-  const memberNames = (await fetchMemberRoster(supabaseAdmin, accountId)).names
+  // The roster read THROWS when both its sources are down, deliberately: with
+  // no owners known, every draw would book as a deducted expense. That refusal
+  // must reach the client as our problem, not as a raw 500 on their upload.
+  let memberNames: string[]
+  try {
+    memberNames = (await fetchMemberRoster(supabaseAdmin, accountId)).names
+  } catch (e) {
+    console.error(`[portal-csv-ingest] member roster unavailable for ${accountId}:`, e)
+    return fail("We could not read your company's owner details, so the file was not processed. Nothing was saved. Please try again shortly — this is on our side, not yours.")
+  }
 
   const bankDetected = parsed.bank_name && parsed.bank_name !== "unknown" ? parsed.bank_name : bankLabel
   // Canonicalize the institution name and build the account identity ONCE per file
