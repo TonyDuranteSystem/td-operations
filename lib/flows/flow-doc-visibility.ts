@@ -28,13 +28,25 @@ export const CLIENT_SAFE_FLOW_DOC_STAGES: Record<string, ReadonlySet<string>> = 
     'Articles Received',
     // EIN Letter (CP 575) — uploaded on the final "EIN Received" stage.
     'EIN Received',
-    // NOTE: the signed SS-4 (flow_stage="Signed") is intentionally NOT listed.
-    // Per Antonio it is an INTERNAL tax document that must NEVER be shared with
-    // the client (it carries the responsible party's tax ID and is not needed to
-    // open a bank account — the EIN + Articles of Organization suffice). The SS-4
-    // sign handler writes it portal_visible=false so it stays staff-only in the
-    // workspace document viewer (which is service_delivery_id-scoped, not
-    // portal_visible-gated) and never surfaces on the client portal.
+    // THE SS-4 RULE WAS REVERSED — Antonio, 2026-08-04: "the SS4 visible to the
+    // client is ok." It had stood as "INTERNAL, must NEVER be shared with the
+    // client" (it carries the responsible party's tax ID and a bank needs the
+    // EIN letter + Articles instead), and that reasoning is kept here because it
+    // explains why the code looks the way it does — but it is NO LONGER THE
+    // RULE. Do not re-derive the old one from the shape of this file.
+    //
+    // WHAT ACTUALLY CHANGED, AND WHAT DID NOT:
+    //  - CHANGED: the email-attachment warning. The worker used to red-flag
+    //    every SS-4 on the Confirm card; it no longer does (see
+    //    `internalDocumentReason` in lib/inbox/sendable-attachment.ts).
+    //  - UNCHANGED: this allowlist, and therefore what the PORTAL shows. The
+    //    signed SS-4 (flow_stage="Signed") is still not listed, and the sign
+    //    handler still writes portal_visible=false. Reversing the warning is a
+    //    one-line decision; changing what 704 SS-4 documents do on the client
+    //    portal is a behaviour change nobody asked for, so it was deliberately
+    //    NOT made here. (178 of those rows already carry portal_visible=true
+    //    and are therefore already visible — that pre-dates this note.)
+    //    If the portal should show them too, that is its own change.
   ]),
   'State Annual Report': new Set([
     'Due Date', // the filed annual report

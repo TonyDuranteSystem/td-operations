@@ -388,43 +388,43 @@ export interface DocumentRowForOffer {
 }
 
 /**
- * Documents we hold back from clients, matched on what the record ACTUALLY says.
+ * Documents we hold back from clients.
  *
- * THE FIRST VERSION OF THIS GOT IT BACKWARDS. It asked `isClientSafeFlowDoc`,
- * which is the PORTAL-VISIBILITY policy: written to fail closed, so a document
- * with no flow stage is "not client-safe". As a portal rule that is right. As an
- * email warning it is inverted — and the numbers say so: of 4,929 documents on
- * record, only 39 are flow-stamped at all, so that rule flagged 3,185 of them
- * (65%), while the ONE document it exists for — the signed SS-4 — is not a flow
- * document and was never caught by it (584 SS-4 rows, every one with a null flow
- * stage). A warning on two thirds of everything is a warning nobody reads, and it
- * was not even pointed at the right file.
+ * TWO RULES, AND BOTH HAVE HISTORY WORTH KEEPING.
  *
- * So: a FLOW document is judged by the curated allowlist (that rule is correct
- * for the 39 documents it was written for), and an ordinary document is judged by
- * what it IS. Anything else is not flagged.
+ * (1) A FLOW document is judged by the curated portal allowlist — correct for
+ * the ~39 flow-stamped rows it was written for (an unsigned prepared return is
+ * a working draft, not a client copy).
+ *
+ * (2) A NAMED list for ordinary documents, which is currently EMPTY. It held
+ * the SS-4 until Antonio reversed that rule on 2026-08-04 ("the SS4 visible to
+ * the client is ok"), and the shape is kept so the next such document is one
+ * line rather than a redesign.
+ *
+ * WHAT MUST NOT COME BACK: this used to ask `isClientSafeFlowDoc` for
+ * EVERYTHING. That is the PORTAL-visibility policy, which fails closed on a
+ * document with no flow stage — and only 39 of 4,929 documents are flow-stamped,
+ * so it flagged 3,185 of them (65%). A warning on two thirds of everything is a
+ * warning nobody reads. Do not reuse a fail-closed visibility policy as a
+ * warning rule.
  */
 const INTERNAL_DOCUMENT_PATTERNS: Array<{ re: RegExp; why: string }> = [
-  {
-    // Antonio's standing rule: the SS-4, signed OR unsigned, is internal — it
-    // carries the responsible party's tax ID and a client never needs it (the
-    // EIN letter and the Articles are what a bank asks for).
-    re: /\bss[-\s]?4\b/i,
-    why: "the SS-4 carries the responsible party's tax ID and is never shared with clients",
-  },
+  // EMPTY, DELIBERATELY. The SS-4 used to be listed here on the standing rule
+  // that it never goes to a client. **Antonio reversed that on 2026-08-04:
+  // "the SS4 visible to the client is ok."** The list stays as the seam for a
+  // future named-internal document; today there is none, so no ordinary
+  // document is flagged and the only warnings a staff member sees are about
+  // WHOSE file it is — which are the ones worth reading.
 ]
 
 /** Why this document is one we hold back, or null when it is ordinary. */
 export function internalDocumentReason(row: DocumentRowForOffer): string | null {
-  // THE NAMED RULES ARE CHECKED FIRST, BEFORE "an admin published it".
-  //
-  // Ordering this the other way round silently un-flagged the SS-4 on 178 of the
-  // 704 SS-4 documents on record, because they carry portal_visible=true. That
-  // flag is supposed to mean "an admin deliberately published this" — but the
-  // SS-4 is a document Antonio has ruled is NEVER client-facing, so a row that
-  // says otherwise is far more likely to be a data defect than a decision, and
-  // the whole point of this warning is the case where the record is wrong. It
-  // costs nothing to warn: the human still decides, and nothing is blocked.
+  // NAMED RULES FIRST, BEFORE "an admin published it" — kept for when the list
+  // is non-empty again. The reasoning: a document type we have RULED is never
+  // client-facing should still be flagged on a row whose visibility flag says
+  // otherwise, because that flag is then more likely a data defect than a
+  // decision, and warning costs nothing. (The list is empty today — the SS-4
+  // came off it on 2026-08-04.)
   const haystack = `${row.document_type_name ?? ""} ${row.file_name ?? ""}`
   for (const p of INTERNAL_DOCUMENT_PATTERNS) if (p.re.test(haystack)) return p.why
   // For a FLOW document, publishing IS the deliberate decision and wins — that

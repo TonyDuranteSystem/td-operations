@@ -280,7 +280,7 @@ describe("MORE THAN ONE FILE on one email", () => {
 
   it("repeats a file's warning in the list, so the worker cannot attach a flagged file silently", () => {
     const [f] = sendableFromDocumentRows(
-      [{ id: "doc-3", file_name: "SS-4 signed.pdf", document_type_name: "Form SS-4 (Signed)", owner_name: "ACME LLC" }],
+      [{ id: "doc-3", file_name: "draft.pdf", service_type: "Tax Return", flow_stage: "Tax Return Prepared", owner_name: "ACME LLC" }],
     )
     expect(attachableFilesPrompt([f])).toMatch(/Internal document/)
   })
@@ -300,12 +300,15 @@ describe("which documents are actually held back from clients", () => {
     expect(sendableFromDocumentRows([plain])[0].warning).toBeUndefined()
   })
 
-  it("FLAGS the signed SS-4 — the document the rule exists for, which the old rule missed", () => {
+  it("does NOT flag the SS-4 — Antonio reversed that rule on 2026-08-04", () => {
+    // "the SS4 visible to the client is ok." It was flagged until then, on the
+    // standing rule that it never goes to a client. With it gone, NO ordinary
+    // document carries an internal warning, and the only warnings left are
+    // about whose file it is.
     for (const name of ["Form SS-4", "Form SS-4 (Signed)", "SS-4", "SS-4 + Articles (IRS Package)"]) {
-      expect(internalDocumentReason({ id: "d", document_type_name: name })).toMatch(/tax ID/)
+      expect(internalDocumentReason({ id: "d", document_type_name: name })).toBeNull()
     }
-    // Also when only the filename carries it.
-    expect(internalDocumentReason({ id: "d", file_name: "ss4 signed scan.pdf" })).toMatch(/tax ID/)
+    expect(internalDocumentReason({ id: "d", file_name: "ss4 signed scan.pdf" })).toBeNull()
   })
 
   it("does not flag an EIN letter or Articles — what a bank actually asks the client for", () => {
@@ -322,12 +325,16 @@ describe("which documents are actually held back from clients", () => {
     ).toBeNull()
   })
 
-  it("STILL flags an SS-4 that is marked client-visible — the flag is more likely a data defect than a decision", () => {
-    // 178 of the 704 SS-4 documents on record carry portal_visible=true, which
-    // contradicts Antonio's standing rule that the SS-4 never goes to a client.
-    // The warning exists for exactly the case where the record is wrong, and it
-    // blocks nothing — so a named-internal document is flagged regardless.
-    expect(internalDocumentReason({ id: "d", document_type_name: "Form SS-4", portal_visible: true })).toMatch(/tax ID/)
+  it("a named-internal document would still be flagged even when marked client-visible", () => {
+    // The LIST is empty today (the SS-4 came off it), but the ORDER still
+    // matters for whatever goes on it next: a type we have ruled never
+    // client-facing should be flagged even on a row whose visibility flag says
+    // otherwise, because that flag is then likelier a data defect than a
+    // decision. Proven through the flow rule, which is the live half.
+    expect(internalDocumentReason({ id: "d", document_type_name: "Form SS-4", portal_visible: true })).toBeNull()
+    expect(
+      internalDocumentReason({ id: "d", file_name: "draft.pdf", service_type: "Tax Return", flow_stage: "Tax Return Prepared" }),
+    ).toMatch(/internal working document/)
   })
 
   it("a published FLOW document is not flagged — there, publishing IS the deliberate decision", () => {
