@@ -29,6 +29,7 @@ import { aiSuggestCategories, AI_PROMPT_VERSION, type AiCategorizableTx, type Ai
 
 const EMPTY_AI_STATS = (): AiRunStats => ({ batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false })
 import { getExpenseBuckets } from "./expense-buckets"
+import { buildMemberNames } from "./member-names"
 
 export interface CategorizationRule {
   id: string
@@ -334,23 +335,13 @@ export async function recategorizeAccountYear(
     .from("account_contacts")
     .select("contacts(first_name, last_name)")
     .eq("account_id", accountId)
-  // MINIMUM LENGTH (2026-08-04). Member names are matched by plain
-  // case-insensitive SUBSTRING (bank-statement-parser), and an outflow that
-  // matches becomes an owner draw — money leaves the P&L and lands in members'
-  // capital. A short or partial contact name therefore blanket-matches
-  // unrelated merchants: a contact stored as "Ada" would turn Canada, Nevada
-  // and Amadeus into owner withdrawals. The company-name path already guards
-  // exactly this with a ≥5 floor (transfer-matcher: "a short/generic name can
-  // never blanket-match vendors"); the member path had none, and the
-  // stale-classification sweep would apply it to a whole year unattended.
-  // Excluded names simply are not auto-detected — those rows stay in the
-  // client's question queue, visible and one tap to fix. That is the safe
-  // direction; silently rebooking a year is not.
-  const MIN_MEMBER_NAME = 5
-  const memberNames = ((links ?? []) as unknown as Array<{ contacts: { first_name: string | null; last_name: string | null } | null }>)
-    .filter(l => l.contacts)
-    .map(l => `${l.contacts!.first_name ?? ""} ${l.contacts!.last_name ?? ""}`.trim())
-    .filter(n => n.length >= MIN_MEMBER_NAME)
+  // ONE definition of "who is a member", shared with the ingest path — see
+  // lib/tax/member-names.ts. Two paths with two definitions is an oscillation,
+  // not a cosmetic difference.
+  const memberNames = buildMemberNames(
+    ((links ?? []) as unknown as Array<{ contacts: { first_name: string | null; last_name: string | null } | null }>)
+      .map(l => l.contacts),
+  )
 
   // Company's own legal name — used by the own-entity self-transfer pass below
   // and (when aiAssist) reused for the AI context. Fetched once, unconditionally.
