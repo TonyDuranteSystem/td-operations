@@ -66,12 +66,36 @@ describe("teamChatCardForFrozenDraft", () => {
     })
   })
 
-  it("names the attachments in the subtitle, so Confirm approves the FILES too", () => {
+  it("carries the FILES themselves so the card can render them — a filename in a subtitle is not something a human can check", () => {
+    // CONTRACT CHANGED: the names used to be joined into the subtitle. With a file
+    // now able to come from a conversation (and later from a client's records),
+    // one company's "EIN Letter.pdf" reads exactly like another's — so the card
+    // renders each file, openable, with where it came from.
     const card = teamChatCardForFrozenDraft({
       ...emailDraft,
-      attachments: [{ name: "affidavit.pdf" }, { name: "ein.pdf" }],
+      attachments: [
+        { name: "affidavit.pdf", size: 400, content_type: "application/pdf", origin: "posted in this thread by Luca" },
+        { name: "ein.pdf" },
+      ],
     })
-    expect(card?.subtitle).toBe("Re: your password reset — 📎 affidavit.pdf, ein.pdf")
+    expect(card?.subtitle).toBe("Re: your password reset")
+    expect(card?.files).toEqual([
+      { name: "affidavit.pdf", size: 400, content_type: "application/pdf", origin: "posted in this thread by Luca" },
+      { name: "ein.pdf", size: undefined, content_type: undefined, origin: undefined },
+    ])
+  })
+
+  it("keeps a NAMELESS attachment in position rather than dropping it — the card must never show fewer files than the email carries", () => {
+    const card = teamChatCardForFrozenDraft({ ...emailDraft, attachments: [{ size: 10 }, { name: "ein.pdf" }] })
+    expect(card?.files?.length).toBe(2)
+    expect(card?.files?.[0].name).toBe("file")
+  })
+
+  it("carries NO url — this card is a permanent channel row, so it must not hold a standing link to a client document", () => {
+    const card = teamChatCardForFrozenDraft({ ...emailDraft, attachments: [{ name: "affidavit.pdf" }] })
+    expect(JSON.stringify(card)).not.toMatch(/https?:\/\//)
+    // The renderer addresses the file by the frozen row's id + its position.
+    expect(card?.entity_id).toBe("prep-1")
   })
 
   it("carries the exact body — Confirm approves a MESSAGE, not just an address", () => {

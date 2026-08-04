@@ -263,10 +263,12 @@ async function runSidebarWorker(args: {
   // at confirm time, never from the model).
   const sidebarSendable = (attachments ?? []).map((a, i) => ({
     ref: `up${i + 1}`,
-    path: a.path,
+    source: 'worker_upload' as const,
+    locator: a.path,
     name: a.name,
     contentType: a.mime_type,
     size: a.size,
+    origin: 'you uploaded this just now',
   }))
   if (attachments?.length) {
     try {
@@ -292,15 +294,15 @@ async function runSidebarWorker(args: {
         if (budgeted.note) userBody = `${userBody}\n\n${budgeted.note}`
       }
       if (sidebarSendable.length) {
-        const list = sidebarSendable.map((s) => `${s.ref} — ${s.name}`).join(', ')
-        // TWO capabilities behind the SAME refs, stated separately so neither is
-        // guessed at. Reading the rest of a long upload used to be impossible
-        // here: the extracted text carried a "continue with offset: N" marker
-        // and there was no tool on this surface that could act on it, so a
-        // spreadsheet past the window was simply lost (td-bug 2026-08-03, Luca).
-        userBody += `\n\n[FILES YOU UPLOADED on this turn: ${list}.`
-        userBody += ` To read MORE of one (you were shown only its first section above), call read_uploaded_file with its ref.`
-        userBody += ` To attach one to an email, use send_email's \`attach\` with the ref — only these, never a file from an email or Drive.]`
+        // ONE set of refs, TWO capabilities. The attach half is the shared helper
+        // (single source of truth across surfaces); the read half is stated right
+        // after it, because reading the REST of a long file was impossible here
+        // until 2026-08-03 — the extracted text carried a "continue with offset:
+        // N" marker and no tool on this surface could act on it, so a spreadsheet
+        // past the first window was simply lost (td-bug, Luca).
+        const { attachableFilesPrompt } = await import('@/lib/inbox/sendable-attachment')
+        userBody += `\n\n${attachableFilesPrompt(sidebarSendable)}`
+        userBody += `\n[You were shown only the FIRST SECTION of each of those files. To read more of one, call read_uploaded_file with its ref (and the offset a previous INCOMPLETE READ gave you). Never total, count, compare or say something is absent from a file until you have read to its end.]`
       }
     } catch (err) {
       // Answer anyway, but never silently: a missing file must not look like a file
@@ -453,6 +455,7 @@ async function runSidebarWorker(args: {
       // window can be read to its end instead of answered from its first page.
       // The pin is the gate: read_uploaded_file exists only because this is set,
       // and it can only resolve a ref that appears here.
+      // READ pin = the SAME refs the attach list offers, by construction.
       ...(sidebarSendable.length ? { pinnedUploads: sidebarSendable } : {}),
       // Client-facing sends, aimed by the server (see buildSidebarSendRails).
       ...rails.portal,
@@ -530,6 +533,13 @@ async function runSidebarWorker(args: {
       to: string
       subject: string
       body: string
+      /**
+       * The files that will go out. This surface CAN freeze attachments (its
+       * panel uploads feed `sendable` above) but the card never rendered them,
+       * so a staff member here confirmed an email carrying files they were
+       * never shown.
+       */
+      attachments: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
     } | null = null
     try {
       // Only a row THIS turn created — id snapshot, so no clock skew.
@@ -543,7 +553,13 @@ async function runSidebarWorker(args: {
       // tsconfig has `strict: false`, so `string | null` flowing into `string` compiles
       // silently. The nullability documents the shape; only this check enforces it.
       if (prep && prep.kind === 'email') {
-        preparedSend = { id: prep.id, to: prep.to_address, subject: prep.subject, body: prep.body ?? '' }
+        preparedSend = {
+          id: prep.id,
+          to: prep.to_address,
+          subject: prep.subject,
+          body: prep.body ?? '',
+          attachments: prep.attachments ?? [],
+        }
       }
     } catch (err) {
       // A missing confirm card must never fail the answer itself.

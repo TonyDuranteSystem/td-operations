@@ -39,6 +39,7 @@ import {
   computeParamsHash,
 } from "./approvable-tools"
 import { normalizeToolParams } from "./enum-normalization"
+import type { SendableFile } from "@/lib/inbox/sendable-attachment"
 import { sendApprovalNotification } from "./approval-notifications"
 import { sendTelegramApprovalNotification } from "./telegram-notify"
 import { currentApprovalEnv } from "./approval-env"
@@ -466,7 +467,7 @@ export const SEND_EMAIL_TOOL: ToolDef = {
       attach: {
         type: "array",
         items: { type: "string" },
-        description: "Inbox and client-chat worker panels. Refs (from the FILES THE STAFF MEMBER ATTACHED list) of the staff's uploaded file(s) to attach to this email. When set, the email is PREPARED and the staff confirms with a Confirm button — it is NOT sent immediately. You may only attach a file the staff uploaded to THIS message; never a file from an email/attachment or from Drive.",
+        description: "Refs of the file(s) to attach, taken from the FILES YOU CAN ATTACH list you were shown this turn — files the staff member uploaded into the panel, or files posted in this conversation. Every email is PREPARED for the staff member's Confirm either way; attaching does not change that. You may attach ONLY a ref on that list: never a file from Drive, from a client's records, from an email you read, or one you were merely told about. If the list is not there, nothing is attachable this turn — say so instead of guessing at a ref.",
       },
     },
     required: ["to", "subject", "body"],
@@ -988,9 +989,9 @@ export const READ_EMAIL_ATTACHMENT_TOOL: ToolDef = {
 export const READ_UPLOADED_FILE_TOOL: ToolDef = {
   name: "read_uploaded_file",
   description: [
-    "Read MORE of a file the person just uploaded in this chat (spreadsheet, Word doc, PDF, CSV, zip).",
-    "You were already shown the FIRST SECTION of each upload directly in the message above. Use this tool to read the REST.",
-    "Pass the `ref` exactly as listed under FILES YOU UPLOADED in the message above — nothing else is readable.",
+    "Read MORE of a file offered on this turn — one the person just uploaded, or one posted in this conversation (spreadsheet, Word doc, PDF, CSV, zip).",
+    "You were already shown the FIRST SECTION of each of those files directly in the message above. Use this tool to read the REST.",
+    "Pass the `ref` exactly as listed in the FILES line in the message above (e.g. 'up1', 'f2') — nothing else is readable.",
     "LONG FILES: a long file comes back one section at a time. If a result says INCOMPLETE READ, call this tool AGAIN with the `offset` it gives you, and repeat until it says the file ends. Never total, count, compare, or say something is absent from the file until you have read to the end.",
     "SPREADSHEETS: the workbook's sheet list is shown at the top of the first section — if a sheet named there has not appeared yet, its rows are further in and you must keep reading.",
     "Images do NOT need this tool; you can already see them.",
@@ -1023,24 +1024,30 @@ export async function readUploadedFileForWorker(
 ): Promise<string> {
   const ref = typeof params.ref === "string" ? params.ref.trim() : ""
   if (!ref) return "ref is required."
-  if (!pinned?.length) return "❌ No files were uploaded in this conversation."
+  if (!pinned?.length) return "❌ There are no files available to read on this turn."
 
   const match = pinned.find((a) => a.ref === ref)
   if (!match) {
     const available = pinned.map((a) => `${a.ref} (${a.name})`).join(", ")
-    return `❌ "${ref}" is not a file uploaded here. Available: ${available}.`
+    return `❌ "${ref}" is not a file available on this turn. Available: ${available}.`
   }
   // Continue-reading position (long files come back one window at a time).
   const offset = Number.isFinite(Number(params.offset)) ? Math.max(0, Math.floor(Number(params.offset))) : 0
 
   try {
-    const { readAttachmentBuffer, fetchWorkerUploadBytes, fenceUntrustedContent } = await import(
-      "@/lib/ai-agent/attachment-reader"
-    )
-    const buffer = await fetchWorkerUploadBytes({ id: match.path, name: match.name, mimetype: match.mimetype })
+    const { readAttachmentBuffer, fetchWorkerUploadBytes, fetchTrustedStorageBytes, fenceUntrustedContent } =
+      await import("@/lib/ai-agent/attachment-reader")
+    const ref_ = { id: match.locator, name: match.name, mimetype: match.contentType }
+    // Two transports, one boundary. A private-bucket path is read with the
+    // service key (and re-validated for shape); a chat asset is a public storage
+    // URL fetched behind the host allow-list. Neither locator came from the model.
+    const buffer =
+      match.source === "worker_upload"
+        ? await fetchWorkerUploadBytes(ref_)
+        : await fetchTrustedStorageBytes(ref_)
     const read = await readAttachmentBuffer(
       buffer,
-      { id: match.ref, name: match.name, mimetype: match.mimetype },
+      { id: match.ref, name: match.name, mimetype: match.contentType },
       false,
       offset,
     )
@@ -3374,7 +3381,7 @@ export interface CallWorkerOptions {
     gmailThreadId?: string | null
     mailbox: string
     defaultReplyToMessageId?: string | null
-    sendable: Array<{ ref: string; path: string; name: string; contentType?: string; size?: number }>
+    sendable: SendableFile[]
   }
   /**
    * Inbox worker only: context to FREEZE a portal-chat message for the Confirm card.
@@ -3396,9 +3403,19 @@ export interface CallWorkerOptions {
 export interface PinnedUpload {
   /** Short server-minted handle the model uses (e.g. "up1"). */
   ref: string
-  path: string
+  /**
+   * Where the bytes live. Structurally the SAME shape as `SendableFile` in
+   * lib/inbox/sendable-attachment.ts, and that is deliberate: a surface offers
+   * ONE set of refs and they are both readable and attachable. Two lists would
+   * drift straight back into "it described a file it cannot send" — or, here,
+   * "it offered to read a file it cannot open".
+   */
+  source: "worker_upload" | "chat_asset"
+  /** SERVER-MINTED, never round-trips through the model: a private-bucket object
+   *  path for `worker_upload`, the already-stored public URL for `chat_asset`. */
+  locator: string
   name: string
-  mimetype?: string
+  contentType?: string
   size?: number
 }
 
@@ -3539,7 +3556,7 @@ export interface WorkerSendContext {
     gmailThreadId?: string | null
     mailbox: string
     defaultReplyToMessageId?: string | null
-    sendable: Array<{ ref: string; path: string; name: string; contentType?: string; size?: number }>
+    sendable: SendableFile[]
   }
 }
 

@@ -7,6 +7,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
  * prepare freezes, it never dispatches.
  */
 
+const uuidConst = vi.hoisted(() => "0f8fad5b-d9cb-469f-a165-70867728950e")
+/** What storage reports the object's REAL size to be; null = stat unavailable. */
+const statSize = vi.hoisted(() => ({ value: 400_000 as number | null }))
 const inserted = vi.hoisted(() => ({ id: "prep-1" }))
 const insertSpy = vi.hoisted(() => vi.fn())
 
@@ -17,6 +20,18 @@ const neqSpy = vi.hoisted(() => vi.fn())
 vi.mock("@/lib/supabase-admin", () => {
   const b: Record<string, unknown> = {}
   b.from = () => b
+  // Attachments are now MATERIALIZED at prepare (real bytes in the private
+  // bucket), so the resolver stats the object and — for a file posted in a
+  // conversation — copies it in. Both go through storage.
+  b.storage = {
+    from: () => ({
+      list: async () => ({
+        data: statSize.value === null ? [] : [{ name: `${uuidConst}.pdf`, metadata: { size: statSize.value } }],
+        error: null,
+      }),
+      upload: async () => ({ data: { path: "ok" }, error: null }),
+    }),
+  }
   b.insert = (row: unknown) => { insertSpy(row); return b }
   b.select = () => b
   b.update = (patch: unknown) => { updateSpy(patch); return b }
@@ -45,9 +60,22 @@ const base = {
   allowedRecipients: ["client@acme.com", "support@tonydurante.us"],
   actor: "luca@tonydurante.us",
 }
-const sendable = [{ ref: "up1", path: goodPath, name: "affidavit.pdf", contentType: "application/pdf", size: 400_000 }]
+const sendable = [
+  {
+    ref: "up1",
+    source: "worker_upload" as const,
+    locator: goodPath,
+    name: "affidavit.pdf",
+    contentType: "application/pdf",
+    size: 400_000,
+    origin: "you uploaded this just now",
+  },
+]
 
-beforeEach(() => { insertSpy.mockClear(); updateSpy.mockClear(); eqSpy.mockClear(); neqSpy.mockClear() })
+beforeEach(() => {
+  insertSpy.mockClear(); updateSpy.mockClear(); eqSpy.mockClear(); neqSpy.mockClear()
+  statSize.value = 400_000
+})
 
 describe("prepareWorkerEmailSend — supersede", () => {
   it("CANCELS this actor's earlier pending EMAIL drafts — after the new one is safely frozen", async () => {
@@ -113,7 +141,7 @@ describe("prepareWorkerEmailSend", () => {
   it("REFUSES a ref the staff didn't upload this turn (model can't attach anything else)", async () => {
     const r = await prepareWorkerEmailSend({ ...base, attachRefs: ["up99"], sendable })
     expect(r.ok).toBe(false)
-    expect(r.ok === false && r.message).toMatch(/not a file you attached/)
+    expect(r.ok === false && r.message).toMatch(/not a file you can attach here/)
     expect(insertSpy).not.toHaveBeenCalled()
   })
 
@@ -163,7 +191,7 @@ describe("prepareWorkerEmailSend", () => {
   })
 
   it("REFUSES an upload whose path is not a valid worker-upload path (no path traversal / other bucket)", async () => {
-    const bad = [{ ref: "up1", path: "signed-documents/secret.pdf", name: "x.pdf", size: 10 }]
+    const bad = [{ ref: "up1", source: "worker_upload" as const, locator: "signed-documents/secret.pdf", name: "x.pdf", size: 10 }]
     const r = await prepareWorkerEmailSend({ ...base, attachRefs: ["up1"], sendable: bad })
     expect(r.ok).toBe(false)
     expect(r.ok === false && r.message).toMatch(/can't be attached/)
@@ -171,10 +199,11 @@ describe("prepareWorkerEmailSend", () => {
   })
 
   it("REFUSES over the outbound size limit with a clean message", async () => {
-    const big = [{ ref: "up1", path: goodPath, name: "huge.pdf", size: MAX_OUTBOUND_ATTACHMENT_BYTES + 1 }]
+    statSize.value = MAX_OUTBOUND_ATTACHMENT_BYTES + 1
+    const big = [{ ref: "up1", source: "worker_upload" as const, locator: goodPath, name: "huge.pdf", size: MAX_OUTBOUND_ATTACHMENT_BYTES + 1 }]
     const r = await prepareWorkerEmailSend({ ...base, attachRefs: ["up1"], sendable: big })
     expect(r.ok).toBe(false)
-    expect(r.ok === false && r.message).toMatch(/Too large to email/)
+    expect(r.ok === false && r.message).toMatch(/Gmail won't accept an email that big/)
     expect(insertSpy).not.toHaveBeenCalled()
   })
 
@@ -184,9 +213,35 @@ describe("prepareWorkerEmailSend", () => {
     expect(insertSpy).not.toHaveBeenCalled()
   })
 
-  it("freezes only the resolved attachment's path/name/size — never bytes", async () => {
+  it("REFUSES on the DECLARED size when storage can't be stat'd — a stat failure must not turn an oversize file into an unchecked one", async () => {
+    statSize.value = null
+    const big = [{ ref: "up1", source: "worker_upload" as const, locator: goodPath, name: "huge.pdf", size: MAX_OUTBOUND_ATTACHMENT_BYTES + 1 }]
+    const r = await prepareWorkerEmailSend({ ...base, attachRefs: ["up1"], sendable: big })
+    expect(r.ok).toBe(false)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it("freezes the REAL size, not the browser-declared one (the card must not print a wrong MB)", async () => {
+    statSize.value = 9_100_000
+    const lying = [{ ref: "up1", source: "worker_upload" as const, locator: goodPath, name: "affidavit.pdf", size: 12 }]
+    await prepareWorkerEmailSend({ ...base, attachRefs: ["up1"], sendable: lying })
+    const row = insertSpy.mock.calls[0][0] as { attachments: Array<Record<string, unknown>> }
+    expect(row.attachments[0].size).toBe(9_100_000)
+  })
+
+  it("freezes the attachment's location/name/type/size AND its provenance — never bytes", async () => {
+    // `origin` is what makes the Confirm card checkable: it turns "EIN Letter.pdf"
+    // (which looks identical whoever it belongs to) into "EIN Letter.pdf, posted in
+    // this thread by Luca". Dropping it here would leave the card rendering a bare
+    // filename again while the code around it claims otherwise.
     await prepareWorkerEmailSend({ ...base, attachRefs: ["up1"], sendable })
     const row = insertSpy.mock.calls[0][0] as { attachments: Array<Record<string, unknown>> }
-    expect(row.attachments[0]).toEqual({ path: goodPath, name: "affidavit.pdf", content_type: "application/pdf", size: 400_000 })
+    expect(row.attachments[0]).toEqual({
+      path: goodPath,
+      name: "affidavit.pdf",
+      content_type: "application/pdf",
+      size: 400_000,
+      origin: "you uploaded this just now",
+    })
   })
 })

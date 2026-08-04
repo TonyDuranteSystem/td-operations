@@ -57,11 +57,13 @@ describe("buildWorkerSendContext — the controls survive the handoff", () => {
     // the staff member is looking at. That is the shape of failure this whole
     // job exists to fix (td-bug 2026-08-03, Luca's spreadsheet).
     const ctx = buildWorkerSendContext({
-      pinnedUploads: [{ ref: "up1", path: "worker-chat/abc.xlsx", name: "Tracking.xlsx" }],
+      pinnedUploads: [
+        { ref: "up1", source: "worker_upload", locator: "worker-chat/abc.xlsx", name: "Tracking.xlsx" },
+      ],
     })
     expect(ctx).toBeDefined()
     expect(ctx!.pinnedUploads).toEqual([
-      { ref: "up1", path: "worker-chat/abc.xlsx", name: "Tracking.xlsx" },
+      { ref: "up1", source: "worker_upload", locator: "worker-chat/abc.xlsx", name: "Tracking.xlsx" },
     ])
   })
 
@@ -70,7 +72,9 @@ describe("buildWorkerSendContext — the controls survive the handoff", () => {
     // asks a question. No client pinned, no send rail. If that turn produced no
     // context, the pin would never reach the executor.
     const ctx = buildWorkerSendContext({
-      pinnedUploads: [{ ref: "up1", path: "worker-chat/abc.xlsx", name: "Tracking.xlsx" }],
+      pinnedUploads: [
+        { ref: "up1", source: "worker_upload", locator: "worker-chat/abc.xlsx", name: "Tracking.xlsx" },
+      ],
     })
     expect(ctx).toBeDefined()
     expect(ctx!.pinnedUploads?.[0]?.ref).toBe("up1")

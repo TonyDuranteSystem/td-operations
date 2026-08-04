@@ -11,6 +11,7 @@ import { clientKeyFromPath } from '@/lib/ai-agent/sidebar-scope'
 import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
+import { ConfirmAttachments } from '@/components/inbox/confirm-attachments'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -69,7 +70,13 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
   const [restoring, setRestoring] = useState(false)
   /** A draft frozen server-side, waiting for this staff member to confirm it.
    *  Confirm sends EXACTLY these bytes — it does not re-ask the assistant. */
-  const [preparedSend, setPreparedSend] = useState<{ id: string; to: string; subject: string; body: string } | null>(null)
+  const [preparedSend, setPreparedSend] = useState<{
+    id: string
+    to: string
+    subject: string
+    body: string
+    attachments?: Array<{ name: string; size?: number; content_type?: string; origin?: string }>
+  } | null>(null)
   const [confirming, setConfirming] = useState(false)
   // WHICH OF OUR ADDRESSES IT GOES OUT FROM — chosen here, re-checked by the server.
   const [sendAs, setSendAs] = useState<'support' | 'antonio'>('support')
@@ -752,6 +759,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
                 <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
               </div>
             ) : null}
+            <ConfirmAttachments preparedId={preparedSend.id} attachments={preparedSend.attachments ?? []} />
             <div className="mt-2 flex items-center gap-2 text-xs">
               <span className="text-zinc-500">From:</span>
               <select
