@@ -7,8 +7,18 @@
  * a review_history entry) — it does NOT touch review_status; the existing
  * staff-review → approve → final-confirm machine is unchanged.
  *
- * HARD GATE: refused while any blocking gate fails (gate 6 — uncategorized
- * must be zero). OWNER-ONLY — attestation is signing-like, never a teammate's.
+ * Refused while any BLOCKING gate fails. Since 2026-08-03 no gate is blocking
+ * (Antonio: the client may confirm with items still undecided — "we just
+ * suggest but they know the truth"), so this check is a kept-in-place guard for
+ * any future blocking gate rather than a live barrier. What still refuses:
+ * unanswered/incomplete coverage questions. What the client accepted is
+ * RECORDED — the number of transactions still booked on our suggestion at the
+ * moment of attestation goes into the review_history entry, so we can always
+ * show exactly how much of a confirmed P&L was ours, not theirs. (Deliberately
+ * NOT mirrored into financials_meta: that column is read-modify-written by the
+ * coverage route too, and a second whole-object write here could clobber a
+ * concurrent coverage answer.)
+ * OWNER-ONLY — attestation is signing-like, never a teammate's.
  */
 
 import { createClient } from '@/lib/supabase/server'
@@ -39,6 +49,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
 
+    // LOCK (added 2026-08-03, bug-hunter blocker). This route had NO
+    // client-editable check — it only guarded role, ownership and in-flight
+    // ingestion. So a client whose file is `under_review` could be shown the
+    // "your file is with our team" banner, scroll past it, tick the box and
+    // press Confirm: `confirmation_accepted` flipped and `runAttestHandoff`
+    // fired, archiving a "(client-confirmed)" workbook to Drive and raising a
+    // staff task WHILE STAFF WERE STILL REVIEWING. `approved` is client-editable
+    // so the legitimate approve → confirm path is untouched; `confirmed` is not,
+    // which also makes a second attestation a clean refusal.
+    // Same lookup shape as the other write routes and as the GET's banner
+    // (latest submission for the account+year, NO status filter) so the banner
+    // and this refusal can never disagree.
+    const { resolveEditability } = await import('@/lib/tax/resolve-submission')
+    const { editable: canEdit } = await resolveEditability(supabaseAdmin, accountId, taxYear)
+    if (!canEdit) {
+      return NextResponse.json(
+        { error: 'Your submission is locked (under review or already confirmed) — ask us to reopen it before confirming.' },
+        { status: 409 },
+      )
+    }
+
     // Server-side guard: never attest while statements are still being read.
     // The numbers are still changing, and a premature confirmation fires the
     // handoff (Excel archive + staff task) on incomplete data. The UI disables
@@ -51,7 +82,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // The hard gate: every blocking gate must pass right now.
+    // Every blocking gate must pass right now. No gate is blocking today (see
+    // the header) — kept so a future blocking gate is enforced automatically.
     const { getFinancialsView } = await import('@/lib/tax/financials-orchestration')
     const view = await getFinancialsView(accountId, taxYear)
     if (!view.canConfirm) {
@@ -61,15 +93,15 @@ export async function POST(request: NextRequest) {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = supabaseAdmin as any // financials_meta not yet in database.types.ts
-    const { data: sub } = await db
-      .from('tax_return_submissions')
-      .select('id, review_history, confirmation_accepted, financials_meta')
-      .eq('account_id', accountId)
-      .eq('tax_year', taxYear)
-      .eq('status', 'completed')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    // SAME resolver as the lock above (2026-08-03) — two different reads meant
+    // the lock could be judged on one row and the attestation written to
+    // another. It also used to demand `status='completed'`, so a client whose
+    // row had become `reviewed` could never confirm at all: a permanent 404 on
+    // the last step of their tax return.
+    const { resolveClientSubmission } = await import('@/lib/tax/resolve-submission')
+    const sub = await resolveClientSubmission<{ id: string; review_history: unknown; confirmation_accepted: boolean | null; financials_meta: Record<string, unknown> | null }>(
+      db, accountId, taxYear, 'id, review_history, confirmation_accepted, financials_meta',
+    )
     if (!sub) return NextResponse.json({ error: 'No submission found for this year.' }, { status: 404 })
 
     // Coverage must be resolved too (§3.4) — gate 1 can't see what an export
@@ -100,12 +132,26 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `You told us these exports are incomplete — please delete the file and upload the entire period: ${incomplete.map(q => q.bank_key).join(', ')}.` }, { status: 422 })
     }
 
+    // What was still OUR suggestion at the moment they confirmed (2026-08-03).
+    // The client may confirm with items undecided, so the record must say how
+    // many — otherwise a confirmed P&L looks fully client-approved forever and
+    // nobody can tell later which figures they actually chose. Exactly one of
+    // the two counters is non-zero by construction (see gate 6).
+    const suggestedNotReviewed =
+      view.draft.pnl.uncategorizedCount + view.draft.pnl.foldedUncategorizedCount
+    const suggestedNet =
+      view.draft.pnl.uncategorizedTotal
+      + view.draft.pnl.foldedUncategorizedIncome
+      - view.draft.pnl.foldedUncategorizedExpense
+
     const history = Array.isArray(sub.review_history) ? sub.review_history : []
     const entry = {
       at: new Date().toISOString(),
       actor: 'client',
       event: 'financials_attested',
-      note: `Client attested the generated P&L and Balance Sheet for ${taxYear} (gates: ${view.gates.map(g => `${g.id}=${g.status}`).join(', ')}).`,
+      note: `Client attested the generated P&L and Balance Sheet for ${taxYear} (gates: ${view.gates.map(g => `${g.id}=${g.status}`).join(', ')}; ${suggestedNotReviewed} transaction(s) net ${suggestedNet.toFixed(2)} were still booked on our suggestion, not reviewed by the client).`,
+      suggested_not_reviewed: suggestedNotReviewed,
+      suggested_not_reviewed_net: Number(suggestedNet.toFixed(2)),
     }
     const { error } = await supabaseAdmin
       .from('tax_return_submissions')

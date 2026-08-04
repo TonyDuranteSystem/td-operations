@@ -86,8 +86,22 @@ export function canTransition(from: ReviewStatus | null, to: ReviewStatus): bool
  * Statuses where the client may still edit/resubmit their data (spec §5 banner:
  * Edit button shown at submitted / revision_requested / approved). `under_review`
  * (staff actively reviewing) and `confirmed` (locked, read-only) are NOT editable.
+ *
+ * `resubmitted` added 2026-08-03 (Economicamente / Imperium freeze). It was
+ * missing since the original Slices 1-3 commit — the spec §5 list enumerated
+ * three states and `resubmitted` simply fell outside it — which locked EVERY
+ * client who re-sent their data out of the whole tax-financials screen: all
+ * eight write routes 409'd, so the categorization step we were asking them to
+ * do was impossible. Five accounts were frozen when this was found (Titan Real
+ * Estate had been locked that same morning). `resubmitted` is semantically
+ * identical to `submitted` — the client has handed data back and NO staff
+ * member has started reviewing; the guard that matters (`under_review`) is
+ * still closed, and the state machine moves resubmitted → under_review the
+ * moment staff actually begin. The rule is evaluated per request, so shipping
+ * this alone unlocks the frozen accounts with no data edit and no client
+ * notification.
  */
-const CLIENT_EDITABLE = new Set<ReviewStatus>(["submitted", "revision_requested", "approved", "reopened"])
+const CLIENT_EDITABLE = new Set<ReviewStatus>(["submitted", "resubmitted", "revision_requested", "approved", "reopened"])
 
 /** Replaces the old `sent_to_accountant` wizard lock: locked = NOT editable. */
 export function isClientEditable(status: ReviewStatus | null): boolean {

@@ -111,7 +111,7 @@ describe("decideTaxWizardEligibility — formation-year guard (strict direction)
 })
 
 describe("decideTaxWizardEligibility — review loop", () => {
-  it.each(["submitted", "revision_requested", "approved", "reopened"] as const)(
+  it.each(["submitted", "resubmitted", "revision_requested", "approved", "reopened"] as const)(
     "client-editable status %s → review mode pinned to the submission",
     (status) => {
       const r = decideTaxWizardEligibility(inputs({ submissions: [sub({ review_status: status })] }))
@@ -127,9 +127,18 @@ describe("decideTaxWizardEligibility — review loop", () => {
     expect(r.reason).toBe("under_review")
   })
 
-  it("resubmitted locks (staff round in flight)", () => {
+  // Flipped 2026-08-03 (Economicamente / Imperium freeze). `resubmitted` is NOT
+  // "a staff round in flight" — that state is `under_review`, still locked
+  // above. Resubmitted means the CLIENT just handed data back and nobody has
+  // started reviewing, exactly like `submitted`. Locking it shut the client out
+  // of their own wizard, so the financials screen's "Made a mistake? Edit my
+  // information" link was a dead end: Andrea Santellocco reported "non mi sta
+  // facendo modificare" and got the locked message on the Edit path too.
+  it("resubmitted stays editable (client handed data back, no staff review started)", () => {
     const r = decideTaxWizardEligibility(inputs({ submissions: [sub({ review_status: "resubmitted" })] }))
-    expect(r.reason).toBe("under_review")
+    expect(r.mode).toBe("review")
+    expect(r.reason).toBeNull()
+    expect(r.submissionId).toBe("sub-1")
   })
 
   it("confirmed locks with its own reason", () => {

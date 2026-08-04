@@ -51,6 +51,24 @@ export async function POST(request: NextRequest) {
     if (!(await isAccountOwner(user, accountId))) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
+
+    // LOCK (added 2026-08-03, bug-hunter blocker). Deleting a statement was
+    // already refused while the file is with our team, but UPLOADING one was
+    // not — so a locked client could drop in a new CSV and shift the P&L
+    // underneath the staff member reviewing it, with no refusal and no signal.
+    // Same resolver as the GET's banner and every other write route.
+    {
+      const { supabaseAdmin } = await import('@/lib/supabase-admin')
+      const { resolveEditability } = await import('@/lib/tax/resolve-submission')
+      const { editable: canEdit } = await resolveEditability(supabaseAdmin, accountId, taxYear)
+      if (!canEdit) {
+        return NextResponse.json(
+          { error: 'Your submission is locked (under review or already confirmed) — ask us to reopen it before adding statements.' },
+          { status: 409 },
+        )
+      }
+    }
+
     if (!/\.(csv|pdf|zip)$/i.test(file.name)) {
       return NextResponse.json(
         { error: 'Please upload a CSV or PDF statement. Open your online banking, export this account\'s transactions for the entire year, and upload the CSV or the official PDF statement.' },

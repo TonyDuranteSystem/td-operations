@@ -415,26 +415,35 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
     {
       try {
         const prev = sub.review_status ?? null
-        const nextStatus: ReviewStatus = prev === "revision_requested" ? "resubmitted" : "submitted"
-        const { data: curSub } = await supabaseAdmin
-          .from("tax_return_submissions")
-          .select("review_history")
-          .eq("id", submission_id)
-          .single()
-        const reviewHistory = Array.isArray(curSub?.review_history) ? curSub!.review_history : []
-        reviewHistory.push(
-          buildReviewHistoryEntry({
-            from: (prev as ReviewStatus | null),
-            to: nextStatus,
-            at: new Date().toISOString(),
-            by: sub.contact_id ? `client:${sub.contact_id}` : "tax-form",
-          }),
-        )
-        await supabaseAdmin
-          .from("tax_return_submissions")
-          .update({ review_status: nextStatus, review_history: reviewHistory, updated_at: new Date().toISOString() })
-          .eq("id", submission_id)
-        results.push({ step: "review_status", status: "ok", detail: `review_status -> ${nextStatus}` })
+        // Same rule as the portal handler (2026-08-03): a re-submit from an
+        // already-'resubmitted' state STAYS there. Falling through to
+        // 'submitted' writes a transition the state machine forbids and erases
+        // the fact that the client had already been round once.
+        const nextStatus: ReviewStatus =
+          prev === "revision_requested" || prev === "resubmitted" ? "resubmitted" : "submitted"
+        if (nextStatus === prev) {
+          results.push({ step: "review_status", status: "ok", detail: `already ${prev} — unchanged` })
+        } else {
+          const { data: curSub } = await supabaseAdmin
+            .from("tax_return_submissions")
+            .select("review_history")
+            .eq("id", submission_id)
+            .single()
+          const reviewHistory = Array.isArray(curSub?.review_history) ? curSub!.review_history : []
+          reviewHistory.push(
+            buildReviewHistoryEntry({
+              from: (prev as ReviewStatus | null),
+              to: nextStatus,
+              at: new Date().toISOString(),
+              by: sub.contact_id ? `client:${sub.contact_id}` : "tax-form",
+            }),
+          )
+          await supabaseAdmin
+            .from("tax_return_submissions")
+            .update({ review_status: nextStatus, review_history: reviewHistory, updated_at: new Date().toISOString() })
+            .eq("id", submission_id)
+          results.push({ step: "review_status", status: "ok", detail: `review_status -> ${nextStatus}` })
+        }
       } catch (e) {
         results.push({ step: "review_status", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }

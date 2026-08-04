@@ -16,7 +16,6 @@
 
 import { createHash } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { isClientEditable, type ReviewStatus } from "./review-status"
 
 export function sha256Hex(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex")
@@ -118,16 +117,10 @@ export interface DeleteResult {
  * the client confirmed (post-confirm lock) — staff must reopen first.
  */
 export async function deleteStatementRows(accountId: string, taxYear: number, sourceFileId: string): Promise<DeleteResult> {
-  const { data: sub } = await supabaseAdmin
-    .from("tax_return_submissions")
-    .select("review_status")
-    .eq("account_id", accountId)
-    .eq("tax_year", taxYear)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  const rs = (sub?.review_status ?? null) as ReviewStatus | null
-  if (rs !== null && !isClientEditable(rs)) {
+  // Same resolver as every other tax-financials surface (see resolve-submission.ts).
+  const { resolveEditability } = await import("./resolve-submission")
+  const { editable: canEdit } = await resolveEditability(supabaseAdmin, accountId, taxYear)
+  if (!canEdit) {
     return { ok: false, deleted: 0, error: "Your submission is locked (under review or already confirmed) — ask us to reopen it before changing files." }
   }
 
