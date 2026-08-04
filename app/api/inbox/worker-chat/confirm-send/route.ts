@@ -81,11 +81,20 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === "cancel") {
-    await db
+    const { data: cancelled } = await db
       .from("worker_prepared_sends")
       .update({ status: "cancelled", resolved_at: new Date().toISOString() })
       .eq("id", preparedId)
       .eq("status", "pending")
+      .select("attachments")
+    // Cancel is THE button the warnings are designed to make people press, so
+    // it is the most common way a draft dies — and the copies we made for it can
+    // never be sent now. Discarded from what the guarded UPDATE actually
+    // returned, so a row claimed by a concurrent confirm keeps its bytes.
+    const { discardCopies } = await import("@/lib/inbox/sendable-attachment")
+    for (const row of (cancelled ?? []) as Array<{ attachments?: Array<{ path?: string; copied?: boolean }> }>) {
+      await discardCopies(row.attachments)
+    }
     return NextResponse.json({ ok: true, cancelled: true })
   }
 

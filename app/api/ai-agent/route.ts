@@ -261,6 +261,9 @@ async function runSidebarWorker(args: {
   // The staff's uploads THIS turn are the ONLY files attachable to an outbound
   // email, each behind a short ref the model names (paths/bytes resolve server-side
   // at confirm time, never from the model).
+  // Set when this turn HAS panel uploads; the prompt line itself is only added
+  // once we know email is actually available on this screen.
+  let attachablePromptPending = false
   const sidebarSendable = (attachments ?? []).map((a, i) => ({
     ref: `up${i + 1}`,
     source: 'worker_upload' as const,
@@ -284,10 +287,12 @@ async function runSidebarWorker(args: {
         // an image can't, which is why only its "was shown" note is kept.
         userBody = `${userBody}\n\n${fenceUntrustedContent('files the staff member attached', read.textBlocks.join('\n\n'))}`
       }
-      if (sidebarSendable.length) {
-        const { attachableFilesPrompt } = await import('@/lib/inbox/sendable-attachment')
-        userBody += `\n\n${attachableFilesPrompt(sidebarSendable)}`
-      }
+      // NOT advertised here — see below. Off a client page this surface has no
+      // send_email tool at all, and telling the worker "here is what you can
+      // attach to an email" while the system prompt says it cannot send email
+      // is the same false capability the gate on emailSendPrep closes. The list
+      // is appended after the rails are known.
+      attachablePromptPending = sidebarSendable.length > 0
     } catch (err) {
       // Answer anyway, but never silently: a missing file must not look like a file
       // the worker read and found nothing in.
@@ -383,6 +388,16 @@ async function runSidebarWorker(args: {
   // (parent job 74701b48), and until that exists an unpinned send is one the server
   // cannot check.
   const rails = await buildSidebarSendRails(clientKey)
+
+  // NOW the attachable list can be honest: only where email is genuinely
+  // available on this screen. Off a client page the sidebar has no send_email
+  // tool, so advertising files to attach would promise a control that is not
+  // there — the exact contradiction the emailSendPrep gate below closes, which
+  // this line has to close on the prompt side.
+  if (attachablePromptPending && rails.email.enableEmailSend) {
+    const { attachableFilesPrompt } = await import('@/lib/inbox/sendable-attachment')
+    userBody += `\n\n${attachableFilesPrompt(sidebarSendable)}`
+  }
 
   // WHO the client on this page actually is — name, language, services, addresses.
   // Without this the assistant holds a client-scoped boundary and a client-pinned send

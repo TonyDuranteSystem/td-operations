@@ -68,10 +68,16 @@ export interface SendableFile {
    */
   warning?: string
   /**
-   * Whose file this is, as a bare name — used to spot an email that mixes two
-   * clients' documents together, which no single file's own warning can see.
+   * Whose file this is, as a bare name — for display on the card.
    */
   ownerLabel?: string
+  /**
+   * The CLIENT this file belongs to, as a stable id — what the mixed-client
+   * check compares. Deliberately NOT the label: a company and the person behind
+   * it have different names but are the same client, so comparing names would
+   * flag "Acme's articles + its owner's ITIN" as a mix when it is not one.
+   */
+  ownerKey?: string
 }
 
 /** A file resolved to real bytes in the private bucket, ready to freeze. */
@@ -84,6 +90,7 @@ export interface MaterializedAttachment {
   origin?: string
   warning?: string
   ownerLabel?: string
+  ownerKey?: string
   /**
    * TRUE when we made this copy for the send (a chat file or a stored document).
    * FALSE for a panel upload, which is the staff member's own object and must
@@ -171,6 +178,7 @@ async function copyChatAssetIntoPrivateBucket(file: SendableFile, maxBytes: numb
     origin: file.origin,
     warning: file.warning,
     ownerLabel: file.ownerLabel,
+    ownerKey: file.ownerKey,
     copied: true,
   }
 }
@@ -259,6 +267,7 @@ async function copyDocumentIntoPrivateBucket(file: SendableFile, maxBytes: numbe
     origin: file.origin,
     warning: file.warning,
     ownerLabel: file.ownerLabel,
+    ownerKey: file.ownerKey,
     copied: true,
   }
 }
@@ -291,6 +300,7 @@ export async function materializeSendable(file: SendableFile, maxBytes: number):
       origin: file.origin,
       warning: file.warning,
       ownerLabel: file.ownerLabel,
+      ownerKey: file.ownerKey,
       // NOT a copy — this object belongs to the staff member's panel. Cleanup
       // must never delete it.
       copied: false,
@@ -357,6 +367,12 @@ export interface DocumentRowForOffer {
   service_type?: string | null
   /** Display name of the account/contact the document belongs to. */
   owner_name?: string | null
+  /**
+   * The CLIENT this file belongs to, once a person has been resolved to their
+   * company. Supplied by the caller, which is the only place that can do the
+   * lookup; falls back to the row's own ids.
+   */
+  owner_key?: string | null
 }
 
 /**
@@ -388,10 +404,20 @@ const INTERNAL_DOCUMENT_PATTERNS: Array<{ re: RegExp; why: string }> = [
 
 /** Why this document is one we hold back, or null when it is ordinary. */
 export function internalDocumentReason(row: DocumentRowForOffer): string | null {
-  // An admin explicitly published it — that decision wins over everything.
-  if (row.portal_visible === true) return null
+  // THE NAMED RULES ARE CHECKED FIRST, BEFORE "an admin published it".
+  //
+  // Ordering this the other way round silently un-flagged the SS-4 on 178 of the
+  // 704 SS-4 documents on record, because they carry portal_visible=true. That
+  // flag is supposed to mean "an admin deliberately published this" — but the
+  // SS-4 is a document Antonio has ruled is NEVER client-facing, so a row that
+  // says otherwise is far more likely to be a data defect than a decision, and
+  // the whole point of this warning is the case where the record is wrong. It
+  // costs nothing to warn: the human still decides, and nothing is blocked.
   const haystack = `${row.document_type_name ?? ""} ${row.file_name ?? ""}`
   for (const p of INTERNAL_DOCUMENT_PATTERNS) if (p.re.test(haystack)) return p.why
+  // For a FLOW document, publishing IS the deliberate decision and wins — that
+  // is what the curated allowlist already encodes.
+  if (row.portal_visible === true) return null
   // A flow-stamped document: the curated portal allowlist is the right judge.
   if (row.service_type && row.flow_stage) {
     if (!isClientSafeFlowDoc(row.service_type, row.flow_stage, row.portal_visible)) {
@@ -422,18 +448,32 @@ export function internalDocumentReason(row: DocumentRowForOffer): string | null 
  */
 export function sendableFromDocumentRows(
   rows: DocumentRowForOffer[],
-  opts: { recipientAccountId?: string | null; recipientContactId?: string | null } = {},
+  opts: {
+    recipientAccountId?: string | null
+    recipientContactId?: string | null
+    /**
+     * EVERY id that is still "this client": the pinned account, the people
+     * linked to it, and their other companies.
+     *
+     * Matching only the one pinned id is not enough, and the everyday case
+     * proves it: an ITIN letter belongs to the PERSON, not the company, so on a
+     * screen pinned to Acme LLC the owner's own ITIN row (account id null,
+     * contact id set) looked like somebody else's file. "Send the accountant
+     * the company documents and the owner's ITIN" would have carried a red
+     * warning on a perfectly correct email — which is precisely the
+     * warning-fatigue this whole rule exists to avoid.
+     */
+    relatedClientIds?: Iterable<string> | null
+  } = {},
 ): SendableFile[] {
+  const family = new Set<string>(opts.relatedClientIds ?? [])
+  if (opts.recipientAccountId) family.add(opts.recipientAccountId)
+  if (opts.recipientContactId) family.add(opts.recipientContactId)
   return rows.map((r) => {
     const owner = r.owner_name?.trim() || null
-    const knowsRecipient = Boolean(opts.recipientAccountId || opts.recipientContactId)
-    // A contact-scoped document (an ITIN letter, a passport) belongs to the
-    // PERSON behind the company, so on a screen pinned to their account it is
-    // not somebody else's file. Matching either id is what stops the warning
-    // false-firing on a client's own person-level documents.
+    const knowsRecipient = family.size > 0
     const belongsToRecipient =
-      (opts.recipientAccountId && r.account_id === opts.recipientAccountId) ||
-      (opts.recipientContactId && r.contact_id === opts.recipientContactId)
+      (r.account_id && family.has(r.account_id)) || (r.contact_id && family.has(r.contact_id))
     const warnings: string[] = []
     if (knowsRecipient && !belongsToRecipient) {
       warnings.push(
@@ -450,6 +490,12 @@ export function sendableFromDocumentRows(
       contentType: r.mime_type || undefined,
       origin: owner ? `on file for ${owner}` : "on file in the CRM",
       ...(owner ? { ownerLabel: owner } : {}),
+      // The canonical client for this file. `owner_key` is supplied by the
+      // caller when it has resolved a person to their company; otherwise the
+      // row's own ids stand in.
+      ...(r.owner_key || r.account_id || r.contact_id
+        ? { ownerKey: r.owner_key || r.account_id || r.contact_id || undefined }
+        : {}),
       ...(warnings.length ? { warning: warnings.join(" ") } : {}),
     }
   })

@@ -115,14 +115,25 @@ export async function harvestPortalChatAttachments(opts: HarvestOpts): Promise<P
   // Every in-scope file, image or not — the attachable set. Bounded by the same
   // message window as the rest of this harvest.
   const allRefs: AttachmentRef[] = []
+  // ATTACHABLE includes OUR OWN posts. Reading stays scoped to the client's files
+  // (the worker is answering about what THEY sent), but "attach the SS-4 I sent
+  // them in the chat" is an ordinary ask, and excluding it produced a false
+  // "I can't" for a file sitting right there in the conversation.
+  //
+  // Collected in TWO passes, client first: a formation hand-off posts several
+  // documents in a row, and a single newest-first pass would fill the cap with
+  // our own outbound files and push the client's own file — the one they are
+  // asking about — back out of the attachable set.
+  const clientRefs: AttachmentRef[] = []
+  const ourRefs: AttachmentRef[] = []
   for (const row of rows) {
-    // ATTACHABLE includes OUR OWN posts. Reading is scoped to the client's files
-    // (the worker is answering about what THEY sent), but "attach the SS-4 I
-    // sent them in the chat" is an ordinary ask, and excluding it produced a
-    // false "I can't" for a file sitting right there in the conversation.
-    for (const ref of attachmentRefsFromChatRow(row)) {
-      if (allRefs.length < MAX_ATTACHABLE_CHAT_FILES) allRefs.push(ref)
-    }
+    const target = row.sender_type === "admin" ? ourRefs : clientRefs
+    target.push(...attachmentRefsFromChatRow(row))
+  }
+  allRefs.push(...clientRefs.slice(0, MAX_ATTACHABLE_CHAT_FILES))
+  allRefs.push(...ourRefs.slice(0, Math.max(0, MAX_ATTACHABLE_CHAT_FILES - allRefs.length)))
+
+  for (const row of rows) {
     if (!includeAdmin && row.sender_type === "admin") continue
     for (const ref of attachmentRefsFromChatRow(row)) {
       const isImage = (ref.mimetype ?? "").startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(ref.name ?? "")

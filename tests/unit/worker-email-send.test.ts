@@ -13,6 +13,7 @@ const statSize = vi.hoisted(() => ({ value: 400_000 as number | null }))
 const inserted = vi.hoisted(() => ({ id: "prep-1" }))
 const insertSpy = vi.hoisted(() => vi.fn())
 const removeSpy = vi.hoisted(() => vi.fn())
+const uploadedPaths = vi.hoisted(() => [] as string[])
 
 const updateSpy = vi.hoisted(() => vi.fn())
 const eqSpy = vi.hoisted(() => vi.fn())
@@ -30,7 +31,7 @@ vi.mock("@/lib/supabase-admin", () => {
         data: statSize.value === null ? [] : [{ name: `${uuidConst}.pdf`, metadata: { size: statSize.value } }],
         error: null,
       }),
-      upload: async () => ({ data: { path: "ok" }, error: null }),
+      upload: async (path: string) => { uploadedPaths.push(path); return { data: { path }, error: null } },
       remove: async (paths: string[]) => { removeSpy(paths); return { data: null, error: null } },
     }),
   }
@@ -44,6 +45,21 @@ vi.mock("@/lib/supabase-admin", () => {
   // must be thenable for it to resolve.
   b.then = (resolve: (v: unknown) => void) => Promise.resolve({ error: null }).then(resolve)
   return { supabaseAdmin: b }
+})
+
+vi.mock("@/lib/ai-agent/attachment-reader", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/ai-agent/attachment-reader")>(
+    "@/lib/ai-agent/attachment-reader",
+  )
+  return {
+    ...actual,
+    // Our own storage host resolves; anything else is refused, which is how the
+    // cleanup test gets one successful copy followed by one failure.
+    fetchTrustedStorageBytes: async (ref: { id: string }) => {
+      if (!ref.id.includes("ydzipybqeebtpcvsbtvs.supabase.co")) throw new Error("untrusted host")
+      return Buffer.from("copied bytes")
+    },
+  }
 })
 
 import { prepareWorkerEmailSend, MAX_OUTBOUND_ATTACHMENT_BYTES } from "@/lib/inbox/worker-email-send"
@@ -300,13 +316,14 @@ describe("prepareWorkerEmailSend", () => {
 })
 
 describe("prepareWorkerEmailSend — mixed clients, and cleaning up after ourselves", () => {
-  const chat = (name: string, owner?: string) => ({
+  // "good" resolves (the mocked fetcher returns bytes); "bad" is refused.
+  const chat = (name: string) => ({
     ref: name,
     source: "chat_asset" as const,
-    // Not a real host — materialize refuses it, which is what the cleanup test wants.
-    locator: `https://attacker.example.com/${name}.pdf`,
+    locator: name === "good"
+      ? "https://ydzipybqeebtpcvsbtvs.supabase.co/storage/v1/object/public/assets/team-chat/x/y.pdf"
+      : "https://attacker.example.com/bad.pdf",
     name: `${name}.pdf`,
-    ...(owner ? { ownerLabel: owner } : {}),
   })
 
   it("FLAGS an email that mixes two clients' files — on EVERY file, and with both names", async () => {
@@ -315,18 +332,22 @@ describe("prepareWorkerEmailSend — mixed clients, and cleaning up after oursel
     // accountant with the client's document" happens. Comparing the owners of
     // what is actually going out works everywhere, and is the only check that
     // can see a mix (each file on its own is perfectly fine).
-    const owned = (ref: string, owner: string) => ({
+    // ownerKEY is what identifies the client — a company and the person behind
+    // it have different names and are the same client, so the check compares
+    // keys and only uses the labels for the sentence.
+    const owned = (ref: string, owner: string, key: string) => ({
       ref,
       source: "worker_upload" as const,
       locator: goodPath,
       name: `${ref}.pdf`,
       size: 10,
       ownerLabel: owner,
+      ownerKey: key,
     })
     const r = await prepareWorkerEmailSend({
       ...base,
       attachRefs: ["up1", "up2"],
-      sendable: [owned("up1", "Acme LLC"), owned("up2", "Beta LLC")],
+      sendable: [owned("up1", "Acme LLC", "acct-A"), owned("up2", "Beta LLC", "acct-B")],
     })
     expect(r.ok).toBe(true)
     const row = insertSpy.mock.calls[0][0] as { attachments: Array<{ warning?: string }> }
@@ -337,16 +358,19 @@ describe("prepareWorkerEmailSend — mixed clients, and cleaning up after oursel
     }
   })
 
-  it("does NOT flag an email whose files all belong to the same client", async () => {
-    const owned = (ref: string) => ({
+  it("does NOT flag the company's document plus its own owner's document — same client, different names", async () => {
+    const owned = (ref: string, key: string) => ({
       ref,
       source: "worker_upload" as const,
       locator: goodPath,
       name: `${ref}.pdf`,
       size: 10,
-      ownerLabel: "Acme LLC",
+      ownerLabel: key === "acct-A" ? "Acme LLC" : "Mario Rossi",
+      ownerKey: key,
     })
-    const r = await prepareWorkerEmailSend({ ...base, attachRefs: ["up1", "up2"], sendable: [owned("up1"), owned("up2")] })
+    // THE EVERYDAY CASE: the company's document and its own owner's document.
+    // Different NAMES, same client — this must not be flagged as a mix.
+    const r = await prepareWorkerEmailSend({ ...base, attachRefs: ["up1", "up2"], sendable: [owned("up1", "acct-A"), owned("up2", "acct-A")] })
     expect(r.ok).toBe(true)
     const row = insertSpy.mock.calls[0][0] as { attachments: Array<{ warning?: string }> }
     expect(row.attachments.every((a) => !a.warning)).toBe(true)
@@ -355,22 +379,26 @@ describe("prepareWorkerEmailSend — mixed clients, and cleaning up after oursel
   it("DELETES the copies it already made when a later file in the same email fails", async () => {
     // Without this, "attach these three" where the third is unreadable leaves
     // the first two copies of client documents in the bucket with no row on
-    // earth referencing them.
-    const good = {
-      ref: "up1",
-      source: "worker_upload" as const,
-      locator: goodPath,
-      name: "ok.pdf",
-      size: 10,
-    }
+    // earth referencing them. The FIRST file here is a chat file, so it really
+    // is copied — the earlier version of this test used a panel upload, which is
+    // never copied, so it asserted nothing and passed with the feature removed.
     const r = await prepareWorkerEmailSend({
       ...base,
-      attachRefs: ["up1", "bad"],
-      sendable: [good, chat("bad")],
+      attachRefs: ["good", "bad"],
+      sendable: [chat("good"), chat("bad")],
     })
     expect(r.ok).toBe(false)
-    // The panel upload is NOT ours to delete; nothing was copied for it.
-    expect(removeSpy).not.toHaveBeenCalled()
+    // The copy made for the first file was removed.
+    expect(removeSpy).toHaveBeenCalled()
+    expect(uploadedPaths).toHaveLength(1)
+    expect(removeSpy.mock.calls.at(-1)?.[0]).toEqual([uploadedPaths[0]])
     expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it("NEVER deletes a panel upload when a later file fails — that object is the staff member's own", async () => {
+    const upload = { ref: "up1", source: "worker_upload" as const, locator: goodPath, name: "ok.pdf", size: 10 }
+    const r = await prepareWorkerEmailSend({ ...base, attachRefs: ["up1", "bad"], sendable: [upload, chat("bad")] })
+    expect(r.ok).toBe(false)
+    expect(removeSpy).not.toHaveBeenCalled()
   })
 })

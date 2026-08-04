@@ -240,10 +240,18 @@ export async function prepareWorkerEmailSend(input: PrepareInput): Promise<Prepa
   // Comparing the owners of what is actually going out works on every surface,
   // which is the point: the flagship flow for this feature is replying to an
   // accountant from the Inbox with a client's document attached.
-  const owners = Array.from(new Set(resolved.map((r) => r.ownerLabel).filter((o): o is string => Boolean(o))))
-  if (owners.length > 1) {
-    const note = `⚠️ These files belong to different clients (${owners.join(", ")}). Check that is deliberate before you send.`
-    for (const r of resolved) r.warning = r.warning ? `${r.warning} ${note}` : note
+  // Compared by CLIENT KEY, not by name: a company and the person behind it have
+  // different names and are the same client, so comparing labels would flag
+  // "the company's articles + the owner's ITIN letter" — an everyday, correct
+  // email — as a mix. And the note goes only on the files that HAVE an owner: a
+  // staff member does not need to be told that the PDF they dropped in
+  // themselves thirty seconds ago belongs to somebody else.
+  const owned = resolved.filter((r) => r.ownerKey)
+  const distinctClients = new Set(owned.map((r) => r.ownerKey))
+  if (distinctClients.size > 1) {
+    const names = Array.from(new Set(owned.map((r) => r.ownerLabel).filter((o): o is string => Boolean(o))))
+    const note = `⚠️ These files belong to different clients (${names.join(", ")}). Check that is deliberate before you send.`
+    for (const r of owned) r.warning = r.warning ? `${r.warning} ${note}` : note
   }
 
   // Freeze the exact payload the staff will confirm.
@@ -632,13 +640,19 @@ export async function cancelPreparedFrozenThisTurn(
     const rows = ((data ?? []) as Array<{ id: string; attachments?: Array<{ path?: string; copied?: boolean }> }>)
       .filter((r) => !prior.ids.has(r.id))
     if (!rows.length) return
-    await db
+    // Discard from what the guarded UPDATE actually cancelled, NOT from the
+    // SELECT: a row claimed by a concurrent confirm in between would otherwise
+    // have its bytes deleted out from under a send that is still running, and
+    // the retry after that failure could never succeed.
+    const { data: cancelled } = await db
       .from("worker_prepared_sends")
       .update({ status: "cancelled" })
       .in("id", rows.map((r) => r.id))
       .eq("status", "pending")
-    // Nothing can send these now — drop the copies we made for them.
-    for (const r of rows) await discardCopies(r.attachments)
+      .select("attachments")
+    for (const r of (cancelled ?? []) as Array<{ attachments?: Array<{ path?: string; copied?: boolean }> }>) {
+      await discardCopies(r.attachments)
+    }
   } catch {
     // Best-effort — this runs on an error path already.
   }

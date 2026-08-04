@@ -2947,6 +2947,49 @@ async function offerSearchedDocuments(result: string, sendContext: WorkerSendCon
       }
     }
 
+    // WHO COUNTS AS "THIS CLIENT". A company and the people behind it are ONE
+    // client: an ITIN letter is filed against the PERSON, so on a screen pinned
+    // to their company it would otherwise read as somebody else's file. Resolve
+    // the family once, and use it both for the per-file check and as the
+    // canonical owner key the mixed-client check compares.
+    const pinned = sendContext.pinnedPortalRecipient
+    const family = new Set<string>()
+    const accountOfContact = new Map<string, string>()
+    if (pinned?.account_id) family.add(pinned.account_id)
+    if (pinned?.contact_id) family.add(pinned.contact_id)
+    try {
+      const linkIds = [
+        ...(pinned?.account_id ? [pinned.account_id] : []),
+        ...accountIds,
+      ]
+      if (linkIds.length || pinned?.contact_id) {
+        const { data: links } = await supabaseAdmin
+          .from("account_contacts")
+          .select("account_id, contact_id")
+          .or(
+            [
+              linkIds.length ? `account_id.in.(${linkIds.join(",")})` : null,
+              contactIds.length ? `contact_id.in.(${contactIds.join(",")})` : null,
+              pinned?.contact_id ? `contact_id.eq.${pinned.contact_id}` : null,
+            ]
+              .filter(Boolean)
+              .join(","),
+          )
+        for (const l of (links ?? []) as Array<{ account_id: string; contact_id: string }>) {
+          // A person belongs to the company they are linked to — that company is
+          // the canonical client for their documents.
+          if (!accountOfContact.has(l.contact_id)) accountOfContact.set(l.contact_id, l.account_id)
+          if (family.has(l.account_id)) family.add(l.contact_id)
+          if (family.has(l.contact_id)) family.add(l.account_id)
+        }
+      }
+    } catch (err) {
+      // A failed lookup only costs precision: the per-file check falls back to
+      // the pinned id alone, which is the previous (noisier) behaviour, never a
+      // missing warning.
+      console.warn("[worker-tools] client-family lookup failed:", err)
+    }
+
     const { sendableFromDocumentRows, attachableFilesPrompt } = await import("@/lib/inbox/sendable-attachment")
     const prep = sendContext.emailSendPrep!
     const offered = sendableFromDocumentRows(
@@ -2964,10 +3007,18 @@ async function offerSearchedDocuments(result: string, sendContext: WorkerSendCon
         service_type: (r._service_type as string) ?? null,
         owner_name: (typeof r._account_id === "string" && names.get(r._account_id)) ||
           (typeof r._contact_id === "string" && names.get(r._contact_id)) || null,
+        // The CLIENT, not the record: a person's document resolves to their
+        // company so "the company's articles + the owner's ITIN" is one client,
+        // not two.
+        owner_key:
+          (typeof r._account_id === "string" && r._account_id) ||
+          (typeof r._contact_id === "string" && (accountOfContact.get(r._contact_id) || r._contact_id)) ||
+          null,
       })),
       {
-        recipientAccountId: sendContext.pinnedPortalRecipient?.account_id ?? null,
-        recipientContactId: sendContext.pinnedPortalRecipient?.contact_id ?? null,
+        recipientAccountId: pinned?.account_id ?? null,
+        recipientContactId: pinned?.contact_id ?? null,
+        relatedClientIds: family,
       },
     )
     // Refs are derived from the document itself, so a re-offer produces the SAME

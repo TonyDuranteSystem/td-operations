@@ -1,5 +1,7 @@
 # Hermes ↔ Claude Agent Bridge
 
+_Last verified against code: 2026-08-04b — Claude (**Touch only: `worker-tools.ts` — the document-offer step gained a client-family lookup and a canonical owner key. The Hermes-bridge worker carries no email freeze context, so that step still never runs for it. Full detail in `docs/systems/inbox.md` (2026-08-04b).**)_
+
 _Last verified against code: 2026-08-04 — Claude (**Touch only: `worker-tools.ts` — the document-offer step now mints content-derived refs and strips its server-only fields on the failure path as well. The Hermes-bridge worker carries no email freeze context, so that step never runs for it and nothing here changes; the read-only tool gate is untouched. Full detail in `docs/systems/inbox.md` (2026-08-04).**)_
 
 _Last verified against code: 2026-08-03b — Claude (**Touch only: `worker-tools.ts` gained `offerSearchedDocuments`, which turns a `search_documents` result into this turn's attachable-file set when the call has an email freeze context. The Hermes-bridge worker has no such context, so nothing changes for it, and the read-only tool gate is untouched. Full detail in `docs/systems/inbox.md` (2026-08-03b).**)_

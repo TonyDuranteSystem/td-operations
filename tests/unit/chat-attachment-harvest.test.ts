@@ -89,6 +89,16 @@ describe("harvest — the attachable set", () => {
     expect(out.files[1].id).toContain("bank.pdf")
   })
 
+  it("keeps the CLIENT's files in the attachable set even when we posted more than the cap", async () => {
+    // A formation hand-off posts several documents in a row. Newest-first in one
+    // pass would fill the cap with our own files and push out the file the
+    // client actually sent — the one being asked about.
+    const many = Array.from({ length: 12 }, (_, i) => row("admin", [imgAtt(`ours-${i}.png`)]))
+    rowsBox.rows = [...many, row("client", [imgAtt("theirs.png")])]
+    const out = await harvestPortalChatAttachments({ accountId: "acc-1", contactId: null })
+    expect(out.files.map((f) => f.name)).toContain("theirs.png")
+  })
+
   it("DOES offer our own outbound files — 'attach the SS-4 I sent them' is an ordinary ask", async () => {
     // READING stays scoped to the client's files (the worker is answering about
     // what THEY sent), but excluding our own posts from the ATTACHABLE set

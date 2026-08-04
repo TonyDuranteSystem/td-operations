@@ -85,7 +85,12 @@ export async function GET(
   const safeName = rawName || "file"
   // eslint-disable-next-line no-control-regex
   const asciiName = /^[\x20-\x7e]*$/.test(safeName) ? safeName : safeName.replace(/[^\x20-\x7e]/g, "_")
-  const dispositionName = `filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`
+  // encodeURIComponent leaves ! ' ( ) * unescaped, and none of those are valid
+  // in an RFC 5987 ext-value — an apostrophe is especially bad, since the value
+  // is a charset'lang'value triple. Real filenames hit this constantly
+  // ("EIN Letter (IRS) - Acme.pdf", "Client's letter.pdf").
+  const rfc5987 = encodeURIComponent(safeName).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+  const dispositionName = `filename="${asciiName}"; filename*=UTF-8''${rfc5987}`
   const declared = (att.content_type || file.type || "application/octet-stream").toLowerCase()
 
   // WHAT MAY RENDER IN THE BROWSER, AND WHAT MUST ONLY DOWNLOAD.
@@ -107,7 +112,11 @@ export async function GET(
       "Content-Type": renderable ?? "application/octet-stream",
       "Content-Disposition": `${renderable ? "inline" : "attachment"}; ${dispositionName}`,
       "X-Content-Type-Options": "nosniff",
-      "Content-Security-Policy": "default-src 'none'; sandbox",
+      // `default-src 'none'` alone blanks a directly-opened image and bare
+      // `sandbox` breaks the browser's PDF viewer — and those are the only two
+      // types served inline, i.e. it would break the exact click the card is
+      // built around. Allow the document to load ITSELF and nothing else.
+      "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; object-src 'self'; plugin-types application/pdf; sandbox",
       "Cache-Control": "private, no-store",
     },
   })

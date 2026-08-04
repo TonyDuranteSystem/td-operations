@@ -322,8 +322,24 @@ describe("which documents are actually held back from clients", () => {
     ).toBeNull()
   })
 
-  it("an explicitly published document is never flagged, whatever it is", () => {
-    expect(internalDocumentReason({ id: "d", document_type_name: "Form SS-4", portal_visible: true })).toBeNull()
+  it("STILL flags an SS-4 that is marked client-visible — the flag is more likely a data defect than a decision", () => {
+    // 178 of the 704 SS-4 documents on record carry portal_visible=true, which
+    // contradicts Antonio's standing rule that the SS-4 never goes to a client.
+    // The warning exists for exactly the case where the record is wrong, and it
+    // blocks nothing — so a named-internal document is flagged regardless.
+    expect(internalDocumentReason({ id: "d", document_type_name: "Form SS-4", portal_visible: true })).toMatch(/tax ID/)
+  })
+
+  it("a published FLOW document is not flagged — there, publishing IS the deliberate decision", () => {
+    expect(
+      internalDocumentReason({
+        id: "d",
+        file_name: "draft.pdf",
+        service_type: "Tax Return",
+        flow_stage: "Tax Return Prepared",
+        portal_visible: true,
+      }),
+    ).toBeNull()
   })
 })
 
