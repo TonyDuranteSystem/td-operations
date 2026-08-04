@@ -86,6 +86,19 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // Reconcile the BIN against the labels we just refreshed (dev_task 01800da8).
+  // This is the source of truth for deletion state, in both directions: an email
+  // Antonio deletes in the Gmail app on his phone never touches our API and would
+  // otherwise be kept forever with no clock, and one he RESTORES in Gmail would
+  // otherwise still be destroyed at day 180 while it is alive in his inbox.
+  // Right after the label sync is the moment the labels are freshest.
+  try {
+    const { reconcileBinState } = await import("@/lib/email-store/deletion")
+    results.bin = await reconcileBinState()
+  } catch (err) {
+    results.bin = { error: err instanceof Error ? err.message : String(err) }
+  }
+
   const { count } = await db
     .from("email_index")
     .select("id", { count: "exact", head: true })

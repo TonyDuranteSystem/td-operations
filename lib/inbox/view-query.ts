@@ -29,7 +29,7 @@ export type InboxView =
  * lead the next session to conclude `untrash` doesn't belong here and to model it
  * somewhere else, which is how a second, drifting copy of these rules gets born.
  */
-export type RowAction = "trash" | "archive" | "untrash" | "snooze" | "unsnooze"
+export type RowAction = "trash" | "archive" | "untrash" | "snooze" | "unsnooze" | "erase"
 
 /**
  * Normalise the raw UI state into a view. `label` beats `search` — the route's
@@ -168,6 +168,12 @@ export function removesFromView(action: RowAction, view: InboxView): boolean {
         snooze: false,
         // Unsnooze ADDs INBOX — never removes from Trash.
         unsnooze: false,
+        // Erase ("delete forever") destroys our stored copy AND its index row —
+        // the row is gone from every list, including this one. Trash is the ONLY
+        // view the action is offered in, so this entry is the one that matters:
+        // without it the row sat in Trash for ever after being "deleted
+        // permanently" (bug-hunter + senior-engineer, 2026-08-04).
+        erase: true,
       }[action]
     case "inbox":
       // `labelIds: INBOX`.
@@ -179,6 +185,7 @@ export function removesFromView(action: RowAction, view: InboxView): boolean {
         untrash: false,
         snooze: true, // strips INBOX → leaves (this is the snooze mechanism)
         unsnooze: false, // ADDs INBOX — an appearance (pin), never a removal
+        erase: true, // the index row is deleted → gone from every list
       }[action]
     case "label":
       // `labelIds = <this label> + q = -in:trash`.
@@ -201,6 +208,7 @@ export function removesFromView(action: RowAction, view: InboxView): boolean {
         // Accepted: in the Snoozed view the woken row lingers until the next
         // refetch — the safe direction (council SE + bug-hunter, 2026-07-28).
         unsnooze: false,
+        erase: true, // the index row is deleted → gone from every list
       }[action]
     case "search":
       // `q = <query> -in:trash -in:spam` over ALL mail.
@@ -215,6 +223,7 @@ export function removesFromView(action: RowAction, view: InboxView): boolean {
         untrash: false, // re-admitted to the search, not removed
         snooze: false, // all-mail search doesn't require INBOX → stays
         unsnooze: false,
+        erase: true, // the index row is deleted → gone from every list
       }[action]
   }
 }

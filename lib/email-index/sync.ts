@@ -8,8 +8,17 @@
  *    historyId (called from the gmail-push webhook, best-effort)
  *  - `indexThread(mailbox, threadId)` — upsert every message of one thread
  *
- * Gmail is the SOURCE OF TRUTH: rows are safe to wipe and rebuild. No
- * bodies, no attachments — headers, snippet, label state, CRM linkage only.
+ * Gmail is the SOURCE OF TRUTH for the CONTENTS of these rows. No bodies, no
+ * attachments — headers, snippet, label state, CRM linkage only.
+ *
+ * ⚠️ THESE ROWS ARE NO LONGER SAFE TO WIPE AND REBUILD. That was true until the
+ * Own-Inbox content store landed (2026-08-01): `email_message_content` and
+ * `email_attachment` now reference `email_index` ON DELETE CASCADE, so a
+ * `DELETE`/`TRUNCATE` here silently destroys ~27k stored bodies and ~15k stored
+ * attachments and strands their bucket objects with no pointer left to purge
+ * them. `20260709-0300-email-index-labels.sql` truncates this table on the old
+ * assumption — do not repeat it. The bin purge in `lib/email-store/deletion.ts`
+ * is the only sanctioned delete, and it removes the storage objects first.
  */
 
 import { gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
