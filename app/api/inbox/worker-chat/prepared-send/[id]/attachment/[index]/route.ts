@@ -112,11 +112,24 @@ export async function GET(
       "Content-Type": renderable ?? "application/octet-stream",
       "Content-Disposition": `${renderable ? "inline" : "attachment"}; ${dispositionName}`,
       "X-Content-Type-Options": "nosniff",
-      // `default-src 'none'` alone blanks a directly-opened image and bare
-      // `sandbox` breaks the browser's PDF viewer — and those are the only two
-      // types served inline, i.e. it would break the exact click the card is
-      // built around. Allow the document to load ITSELF and nothing else.
-      "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; object-src 'self'; plugin-types application/pdf; sandbox",
+      // NO `sandbox` DIRECTIVE, and no `default-src 'none'` on its own.
+      //
+      // `sandbox` forces an opaque origin and disables the browser's built-in
+      // PDF plugin, and a bare `default-src 'none'` blanks a directly-opened
+      // image — between them they would break the exact click this feature is
+      // built around, on the two types it renders. VERIFIED: an image opened
+      // from a card renders (browser reported it as a 32×32 document). NOT
+      // verified: a large PDF in real Chrome — the in-app browser used for QA
+      // intercepts big file responses as downloads, so the render could not be
+      // exercised there. The headers are correct (`application/pdf`, `inline`),
+      // and this is worth one look on a real machine.
+      //
+      // What remains is still strict: a document served from here may load
+      // itself and nothing else — no scripts, no frames, no fetches — and it
+      // only ever applies to the three types allowed inline above. Anything
+      // else (HTML, SVG) is forced to download before the CSP is even the
+      // question, and `nosniff` stops the browser reinterpreting the type.
+      "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; object-src 'self'",
       "Cache-Control": "private, no-store",
     },
   })
