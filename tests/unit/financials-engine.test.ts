@@ -505,3 +505,45 @@ describe("buildFinancialDraft — foreign-currency conversion to USD (Phase 2)",
     expect(draft.notes.some(n => n.toLowerCase().includes("exchange rate"))).toBe(false)
   })
 })
+
+/**
+ * WHICH OWNER — the client's confirmation must reach the K-1.
+ *
+ * A flagged payment carries only a SURNAME by construction (that is why we ask),
+ * so name-matching can never attribute it. Without reading the client's answer,
+ * a draw they just confirmed belongs to one partner is spread across all of them
+ * by ownership % — withdrawals appear on the K-1 of a partner who received
+ * nothing, and the totals still tie so no gate notices.
+ */
+describe("confirmed owner attribution (2026-08-04)", () => {
+  const members = [
+    { name: "Gabriele Finelli", pct: 50, source: "wizard" as const },
+    { name: "Matthew Finelli", pct: 50, source: "wizard" as const },
+  ]
+  const draw = (notes: string | null) => tx({
+    id: "d1", description: "Sent money to M. Finelli", counterparty: "M. FINELLI",
+    amount: -40000, category: "distribution", subcategory: "member_distribution", notes,
+  })
+  const build = (notes: string | null) => buildFinancialDraft({
+    taxYear: 2025, transactions: [draw(notes)], members, priorReturn: null,
+  })
+
+  it("credits the confirmed owner in full", () => {
+    const d = build("manual: client answer (owner_draw) | Member: Gabriele Finelli")
+    const g = d.members.find(m => m.name === "Gabriele Finelli")!
+    const m = d.members.find(m => m.name === "Matthew Finelli")!
+    expect(g.distributions).toBe(40000)
+    expect(m.distributions).toBe(0)
+  })
+
+  it("without the confirmation it is split across BOTH — the bug this prevents", () => {
+    const d = build("manual: client answer (owner_draw)")
+    expect(d.members.find(m => m.name === "Gabriele Finelli")!.distributions).toBe(20000)
+    expect(d.members.find(m => m.name === "Matthew Finelli")!.distributions).toBe(20000)
+  })
+
+  it("an unknown name in the note falls back to spreading, never to a wrong partner", () => {
+    const d = build("manual: client answer (owner_draw) | Member: Someone Else")
+    expect(d.members.find(m => m.name === "Gabriele Finelli")!.distributions).toBe(20000)
+  })
+})

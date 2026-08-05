@@ -450,26 +450,50 @@ export async function recategorizeAccountYear(
     // so the presence of the key is what counts.
     const notesChanged = u.notes !== undefined && u.notes !== ((orig.notes as string) ?? "")
     if (!catChanged && !notesChanged) continue
-    if (catChanged) categoryChanged++
     // Report-only: count it and move on. Counted the same way a real run counts
     // it, so "would change N" and "changed N" are the same number.
-    if (dryRun) { recategorized++; continue }
+    if (dryRun) { recategorized++; if (catChanged) categoryChanged++; continue }
     const payload: Record<string, unknown> = { category: nextCategory, subcategory: nextSub }
     if (u.notes !== undefined) payload.notes = u.notes
+
     // THE CLIENT MAY BE ANSWERING WHILE THIS RUNS. The decision to skip human
     // answers is taken from the snapshot read at the top of this function, but
     // a re-sort over a few thousand rows takes minutes — long enough for the
-    // owner to tap an answer in the portal in between. Without this guard the
+    // owner to tap an answer in the portal in between. Without a guard the
     // write lands on top of their answer: the category reverts while the
     // "manual:" note stays, and because every later pass refuses to touch a
     // manual row, that contradiction is then FROZEN — their decision is gone
     // from their own P&L and nothing will ever put it back.
-    const { error: upErr } = await supabaseAdmin
-      .from("bank_transactions")
-      .update(payload)
-      .eq("id", id)
-      .not("notes", "ilike", "manual:%")
+    //
+    // THE FILTER IS CHOSEN PER ROW, FROM THE SNAPSHOT, BECAUSE `NOT (NULL ILIKE
+    // …)` IS NULL. A bare `.not("notes","ilike","manual:%")` therefore EXCLUDES
+    // every row whose note is NULL — the update matches nothing, PostgREST
+    // returns no error, and the counters happily report a write that never
+    // happened. Those rows then never converge: the same "would change N" is
+    // reported every run, for ever. NULL notes are not a legacy quirk — the
+    // client's own Undo writes them — and there are 519 on production today.
+    //
+    // Both branches are safe under READ COMMITTED:
+    //  - stored note NULL, and the client answers in between → the row is no
+    //    longer NULL, `.is(null)` misses, nothing is written (their answer wins);
+    //  - stored note not NULL, same race → the not-ilike filter excludes it.
+    // Either way the human's answer survives and we skip; we never overwrite.
+    //
+    // (The repo's other NULL-safe site issues TWO updates whose filters union —
+    // it has to, because it writes by predicate rather than by id. Here the id
+    // is known, so one correctly-chosen filter does the same job in one write.)
+    const storedNoteIsNull = (orig.notes as string | null) === null
+    const guarded = supabaseAdmin.from("bank_transactions").update(payload).eq("id", id)
+    const { data: written, error: upErr } = await (storedNoteIsNull
+      ? guarded.is("notes", null)
+      : guarded.not("notes", "ilike", "manual:%")
+    ).select("id")
     if (upErr) throw new Error(`Failed to update transaction ${id}: ${upErr.message}`)
+    // COUNT ONLY WHAT ACTUALLY LANDED. A 0-row match is the guard doing its job
+    // (the client answered mid-run), not a change — counting it would report
+    // work to the team channel that never happened and hide non-convergence.
+    if ((written ?? []).length === 0) continue
+    if (catChanged) categoryChanged++
     recategorized++
   }
   // A preview stops here: the AI pass costs money and writes per batch.

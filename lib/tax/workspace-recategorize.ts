@@ -116,13 +116,32 @@ export async function recategorizeWorkspace(
     const nextCategory = u.category ?? (orig.category as string)
     const nextSub = u.subcategory ?? ((orig.subcategory as string) ?? "")
     const catChanged = nextCategory !== orig.category || nextSub !== ((orig.subcategory as string) ?? "")
-    if (!catChanged && !u.notes && u.ai_lean === undefined && u.ai_bucket === undefined) continue
+    // PARITY WITH THE CLIENT PATH, both halves of it.
+    //
+    // `notes: ""` is a deliberate CLEAR — how a stale suspected-member mark is
+    // removed. Testing truthiness dropped it, so this surface could STAMP a
+    // mark and never remove it: the accountant kept seeing an amber line naming
+    // somebody who is no longer an owner, and — worse — the AI pass refuses to
+    // categorise any row carrying the mark, so the row was permanently stuck
+    // with no pass able to resolve it.
+    const notesChanged = u.notes !== undefined && u.notes !== ((orig.notes as string) ?? "")
+    if (!catChanged && !notesChanged && u.ai_lean === undefined && u.ai_bucket === undefined) continue
     const payload: Record<string, unknown> = { category: nextCategory, subcategory: nextSub }
-    if (u.notes) payload.notes = u.notes
+    if (u.notes !== undefined) payload.notes = u.notes
     if (u.ai_lean !== undefined) payload.ai_lean = u.ai_lean
     if (u.ai_bucket !== undefined) payload.ai_bucket = u.ai_bucket
-    const { error } = await db.from("pnl_workspace_transactions").update(payload).eq("id", id)
+    // And the same mid-run guard: staff answer in the workspace while a
+    // Generate is running. This surface had NO guard at all. The filter is
+    // chosen per row from the snapshot because `NOT (NULL ILIKE …)` is NULL,
+    // which would silently exclude every row whose note is NULL.
+    const storedNoteIsNull = (orig.notes as string | null) === null
+    const guarded = db.from("pnl_workspace_transactions").update(payload).eq("id", id)
+    const { data: written, error } = await (storedNoteIsNull
+      ? guarded.is("notes", null)
+      : guarded.not("notes", "ilike", "manual:%")
+    ).select("id")
     if (error) throw new Error(`Failed to update workspace transaction ${id}: ${error.message}`)
+    if ((written ?? []).length === 0) continue
     recategorized++
   }
 

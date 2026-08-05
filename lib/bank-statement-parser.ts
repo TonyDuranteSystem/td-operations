@@ -206,7 +206,17 @@ export function categorizeTransaction(
       const lowerEntity = entity.toLowerCase()
       if (lowerDesc.includes(lowerEntity) || lowerCounterparty.includes(lowerEntity)) {
         is_related_party = true
-        notes = notes ? `${notes} | Related entity: ${entity}` : `Related entity: ${entity}`
+        // NEVER append to the suspected-member mark. The mark's whole tail is
+        // read back as the owner's NAME and rendered to the client, so
+        // concatenating here put internal provenance inside it: the card read
+        // "This name looks like Gabriele Finelli | Related entity: Acme FZCO,
+        // an owner of the company." A payment to something carrying an owner's
+        // surname is very often that owner's other declared company, so this is
+        // the common intersection, not a corner. The related-party fact is
+        // already carried by the flag above, which is what the panels read.
+        if (!notes.startsWith(ASK_CLIENT_NOTE)) {
+          notes = notes ? `${notes} | Related entity: ${entity}` : `Related entity: ${entity}`
+        }
         break
       }
     }

@@ -158,3 +158,42 @@ describe("groupUncategorized — the suspected-owner mark", () => {
     expect(g.suspected_members).toBeUndefined()
   })
 })
+
+/**
+ * THE OWNER QUESTION ANSWERS ONLY THE FLAGGED PAYMENTS.
+ *
+ * A card can mix flagged and unflagged payments — the payee often lives in the
+ * counterparty while the group's name comes from the description. Booking the
+ * whole group on a "yes" turns real supplier payments into withdrawals on a
+ * partner's K-1, so the flagged ids travel separately.
+ */
+describe("groupUncategorized — the flagged ids travel with the group", () => {
+  const mk = (id: string, description: string, counterparty: string | null, name: string | null): UncategorizedRow => ({
+    id, description, counterparty, amount: -1000, transaction_date: "2025-06-01", bank_name: "Relay",
+    category: "expense", notes: name ? `ask: possible payment to member ${name}` : "",
+  })
+
+  it("carries only the flagged ids, not the whole group", () => {
+    const [g] = groupUncategorized([
+      mk("flagged", "WIRE OUT", "G FINELLI", "Gabriele Finelli"),
+      mk("supplier-a", "WIRE OUT", "ACME LTD", null),
+      mk("supplier-b", "WIRE OUT", "BOSCH GMBH", null),
+    ])
+    expect(g.count).toBe(3)
+    expect(g.suspected_count).toBe(1)
+    expect(g.suspected_ids).toEqual(["flagged"])
+    // The merchant answer still covers the whole group — that is its job.
+    expect(g.transaction_ids).toHaveLength(3)
+  })
+
+  it("has no flagged ids when nothing is flagged", () => {
+    const [g] = groupUncategorized([mk("a", "ACME LTD", null, null)])
+    expect(g.suspected_ids).toBeUndefined()
+  })
+
+  it("suppresses the flagged ids on a catch-all bucket, like the names", () => {
+    const [g] = groupUncategorized([mk("a", "", null, "Gabriele Finelli")])
+    expect(g.suspected_ids).toBeUndefined()
+    expect(g.suspected_members).toBeUndefined()
+  })
+})

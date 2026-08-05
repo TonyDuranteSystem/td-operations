@@ -162,16 +162,29 @@ async function createFork(input: { actor: string; taxYear: number; sourceAccount
   // matched back by name; a roster name with no link simply has none, which the
   // draft already handles (it spreads unattributed movements by ownership and
   // flags them) rather than dropping the member.
-  const pctByName = new Map<string, number | null>(
-    ((links ?? []) as unknown as Array<{ ownership_pct: number | null; contacts: { first_name: string | null; last_name: string | null } | null }>)
-      .filter(l => l.contacts)
-      .map(l => [`${l.contacts!.first_name ?? ''} ${l.contacts!.last_name ?? ''}`.trim().toLowerCase(), l.ownership_pct]),
-  )
+  // Matched on the NORMALISED name (accents folded), because the curated list
+  // and the contact link routinely spell the same person differently —
+  // "Nicolò Patti" vs "Nicolo Patti". A raw lowercase key misses, the member
+  // forks with no ownership %, and the accountant is then blocked by an
+  // ownership gate on a company whose ownership is fully on file.
+  const { normalizeForMatch, looksLikeCompany } = await import('@/lib/tax/member-names')
+  const pctByName = new Map<string, number | null>()
+  for (const l of ((links ?? []) as unknown as Array<{ ownership_pct: number | null; contacts: { first_name: string | null; last_name: string | null } | null }>)) {
+    if (!l.contacts) continue
+    const key = normalizeForMatch(`${l.contacts.first_name ?? ''} ${l.contacts.last_name ?? ''}`)
+    if (!key) continue
+    // Both spellings present with DIFFERENT percentages is ambiguous — record
+    // nothing rather than let the last row silently decide a K-1 split. A
+    // missing percentage is flagged by the ownership gate; a wrong one is not.
+    if (pctByName.has(key) && pctByName.get(key) !== l.ownership_pct) { pctByName.set(key, null); continue }
+    pctByName.set(key, l.ownership_pct)
+  }
   const roster = await fetchMemberRoster(supabaseAdmin, input.sourceAccountId)
   const members: MemberInput[] = roster.names.map(name => ({
-    member_type: 'individual',
+    // A company member forked as an individual misstates what it is.
+    member_type: looksLikeCompany(name) ? 'company' : 'individual',
     display_name: name,
-    ownership_pct: pctByName.get(name.toLowerCase()) ?? null,
+    ownership_pct: pctByName.get(normalizeForMatch(name)) ?? null,
   }))
   await insertMembers(ws.id, members)
 

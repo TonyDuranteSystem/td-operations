@@ -326,6 +326,10 @@ export const ASK_CLIENT_NOTE = "ask: possible payment to member"
 export function suspectedMemberFromNotes(notes: string | null | undefined): string | null {
   const n = (notes ?? "").trim()
   if (!n.startsWith(ASK_CLIENT_NOTE)) return null
-  const name = n.slice(ASK_CLIENT_NOTE.length).trim()
+  // Cut at the first " | ". The writer no longer appends anything after the
+  // mark, but rows written before that fix carry "… | Related entity: X" — and
+  // this tail is rendered to the client AS THE OWNER'S NAME, so the read side
+  // has to be defensive too rather than waiting for a re-sort to clean up.
+  const name = n.slice(ASK_CLIENT_NOTE.length).split(" | ")[0].trim()
   return name.length > 0 ? name : null
 }

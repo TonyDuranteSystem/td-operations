@@ -98,7 +98,7 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
   const txRows = await fetchAllBankTransactionsByYear<Record<string, unknown>>(
     accountId,
     taxYear,
-    "id, transaction_date, description, counterparty, amount, currency, category, subcategory, bank_name, account_type, account_ref, balance_after, ai_bucket",
+    "id, transaction_date, description, counterparty, amount, currency, category, subcategory, bank_name, account_type, account_ref, balance_after, ai_bucket, notes",
   )
   const transactions = txRows.map(r => ({ ...r, amount: Number(r.amount) })) as DraftTransaction[]
 

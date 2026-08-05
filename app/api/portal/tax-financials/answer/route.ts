@@ -33,6 +33,31 @@ export async function POST(request: NextRequest) {
     // memory. Distinct notes tag = undo route's guard.
     const isBulk = body.bulk === true
     const groupLabels: string[] = Array.isArray(body.group_labels) ? body.group_labels.map(String).slice(0, 50) : []
+    /**
+     * ANSWERING THE OWNER QUESTION, not the merchant question.
+     *
+     * The suspected-member mark is per ROW; the merchant chips answer a whole
+     * GROUP. Reusing the chips for it produced wrong tax returns three ways:
+     * a partial group booked all its rows, the answer taught a merchant rule
+     * that then re-booked every sibling row on the next re-sort (a durable
+     * database row no code fix removes), and there was no slot for WHICH owner.
+     *
+     * So the owner question posts its own shape:
+     *  - `suspected: true` — only the flagged ids are sent, and NO rule is
+     *    learned, because "this payment was to an owner" says nothing about the
+     *    merchant;
+     *  - `member` — WHO. Without it a confirmed draw cannot be attributed and
+     *    is spread across every partner by ownership %, putting withdrawals on
+     *    the K-1 of a partner who received nothing. Written into the note in
+     *    the same shape the exact-match path uses, so attribution finds it.
+     */
+    const isSuspectedAnswer = body.suspected === true
+    const suspectedMember = typeof body.member === 'string' ? body.member.trim().slice(0, 120) : ''
+
+    const buildAnswerNote = () => {
+      const base = isBulk ? `manual: bulk client answer (${answer})` : `manual: client answer (${answer})`
+      return isSuspectedAnswer && suspectedMember ? `${base} | Member: ${suspectedMember}` : base
+    }
 
     if (!accountId || !Number.isInteger(taxYear) || transactionIds.length === 0 || !answer) {
       return NextResponse.json({ error: 'account_id, tax_year, transaction_ids and answer required' }, { status: 400 })
@@ -90,7 +115,12 @@ export async function POST(request: NextRequest) {
     for (let i = 0; i < transactionIds.length; i += 200) {
       const { data, error } = await supabaseAdmin
         .from('bank_transactions')
-        .update({ category: mapped.category, subcategory: mapped.subcategory, notes: isBulk ? `manual: bulk client answer (${answer})` : `manual: client answer (${answer})` })
+        // The note carries WHO when the client confirmed an owner. `attributeToMember`
+        // needs the member's FULL name in the row text to credit the right partner,
+        // and a flagged payment only ever carries a surname — so without this the
+        // draw lands in "unattributed" and is spread across every partner by
+        // ownership %, and the totals still tie so no gate notices.
+        .update({ category: mapped.category, subcategory: mapped.subcategory, notes: buildAnswerNote() })
         .eq('account_id', accountId)
         .eq('tax_year', taxYear)
         // Bulk only books rows still awaiting a decision — never stomps prior
@@ -152,7 +182,10 @@ export async function POST(request: NextRequest) {
       // rules before global ones). Fire-and-forget: a learning failure must
       // NEVER break the client's answer. NEVER on bulk: permanent per-merchant
       // memory requires a per-merchant decision, not a sweep.
-      if (!isBulk) try {
+      // NEVER learn from the owner question. It answers who a PAYMENT went to,
+      // not what a MERCHANT is — and a learned rule keyed on the merchant root
+      // would re-book every sibling row on the next re-sort, permanently.
+      if (!isBulk && !isSuspectedAnswer) try {
         const { upsertLearnedMerchantRules, makeSupabaseRuleStore } = await import('@/lib/tax/learned-rules')
         await upsertLearnedMerchantRules(
           makeSupabaseRuleStore(supabaseAdmin),

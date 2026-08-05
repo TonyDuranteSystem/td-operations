@@ -78,6 +78,14 @@ export interface QuestionGroup {
   suspected_members?: string[]
   /** How many rows in this group carry a mark (≤ count). */
   suspected_count?: number
+  /**
+   * The ids of ONLY the marked rows. The owner question answers these and
+   * nothing else — a group can mix marked and unmarked payments (the payee
+   * often lives in the counterparty while the group's name comes from the
+   * description), and booking all of them as owner draws on a "yes" turns real
+   * supplier payments into withdrawals on a partner's K-1.
+   */
+  suspected_ids?: string[]
 }
 
 /** Most-frequent non-empty value in a list (ties → first seen). */
@@ -155,9 +163,11 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
       // Distinct suspected members + how many rows actually carry a mark.
       // Never moded (see the field's doc): one marked row must not speak for
       // the whole group. Suppressed entirely on a degenerate catch-all root.
-      const marked = g.degenerate ? [] : g.rows.map(r => suspectedMemberFromNotes(r.notes)).filter((n): n is string => !!n)
+      const markedRows = g.degenerate ? [] : g.rows.filter(r => suspectedMemberFromNotes(r.notes))
+      const marked = markedRows.map(r => suspectedMemberFromNotes(r.notes)!).filter(Boolean)
       const suspected_members = Array.from(new Set(marked)).sort()
       const suspected_count = marked.length
+      const suspected_ids = markedRows.map(r => r.id)
       return {
         group_key,
         label: g.label,
@@ -171,7 +181,7 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
         ...(bucket ? { ai_bucket: bucket } : {}),
         ...(current_category ? { current_category } : {}),
         ...(current_subcategory ? { current_subcategory } : {}),
-        ...(suspected_members.length ? { suspected_members, suspected_count } : {}),
+        ...(suspected_members.length ? { suspected_members, suspected_count, suspected_ids } : {}),
       }
     })
     .sort((a, b) => b.count - a.count)

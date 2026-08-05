@@ -35,7 +35,7 @@ function ProgressCard({ title, detail, eta }: { title: string; detail: string; e
 
 interface Gate { id: number; title: string; status: 'pass' | 'na' | 'fail'; detail: string; blocking: boolean }
 interface Member { name: string; pct: number; beginning_capital: number; contributions: number; distributions: number; income_share: number; ending_capital: number }
-interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string; suspected_members?: string[]; suspected_count?: number }
+interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string; suspected_members?: string[]; suspected_count?: number; suspected_ids?: string[] }
 interface Bucket { slug: string; label: string }
 interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
 interface AccountOnFile { account_ref: string; bank: string; acct: string; count: number }
@@ -365,6 +365,44 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     return () => clearInterval(t)
   }, [view, load])
 
+  /**
+   * THE OWNER QUESTION — answered separately from the merchant chips.
+   *
+   * It targets ONLY the flagged payments, never the whole group, and it never
+   * teaches a merchant rule: "this payment went to an owner" says nothing about
+   * the merchant, and a learned rule keyed on the merchant would re-book every
+   * sibling payment on the next re-sort — a durable database row no later code
+   * change removes. `member` records WHO, without which a confirmed draw is
+   * spread across every partner by ownership % and lands on the K-1 of somebody
+   * who received nothing.
+   */
+  const answerOwnerQuestion = async (g: QuestionGroup, value: string, member?: string) => {
+    const ids = g.suspected_ids ?? []
+    if (ids.length === 0) return
+    setBusy(g.group_key)
+    setCardError(null)
+    try {
+      const res = await fetch(`${API}/answer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account_id: accountId, tax_year: taxYear,
+          transaction_ids: ids, answer: value, suspected: true,
+          ...(member ? { member } : {}),
+        }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Risposta non salvata — riprova.' : 'Could not save your answer — please try again.'))
+      }
+      await load()
+    } catch (e) {
+      setCardError({ keys: [g.group_key], message: e instanceof Error ? e.message : 'Could not save your answer.' })
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const answer = async (g: QuestionGroup, value: string) => {
     setBusy(g.group_key)
     setCardError(null)
@@ -614,20 +652,47 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             in the group match, it says so, because "this may be a payment to
             X" over a ten-row group where two match is a false statement to a
             client about their own company. */}
+        {/* THE OWNER QUESTION — its own control, not a merchant chip.
+            The merchant chips answer "what IS this merchant"; this answers
+            "did this PAYMENT go to an owner". Reusing the chips for it booked
+            whole groups on a partial match, taught a merchant rule that
+            re-booked every sibling payment, and had no slot for WHICH owner —
+            three ways to a wrong K-1. "No" leaves the bookkeeping untouched. */}
         {(g.suspected_count ?? 0) > 0 && g.suspected_members?.length ? (
-          <div className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] leading-snug text-amber-800">
-            {(() => {
-              const who = g.suspected_members.join(it ? ' o ' : ' or ')
-              const partial = (g.suspected_count ?? 0) < g.count
-              if (it) {
+          <div className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-snug text-amber-900">
+            <div className="mb-1.5">
+              {(() => {
+                const who = g.suspected_members.join(it ? ' o ' : ' or ')
+                const partial = (g.suspected_count ?? 0) < g.count
+                if (it) {
+                  return partial
+                    ? `${g.suspected_count} di questi ${g.count} pagamenti riportano il nome di ${who}. Erano pagamenti a un socio?`
+                    : `Questo nome somiglia a ${who}. Era un pagamento a un socio?`
+                }
                 return partial
-                  ? `${g.suspected_count} di questi ${g.count} pagamenti riportano il nome di ${who}, ${g.suspected_members.length > 1 ? 'soci' : 'socio'} della società. Erano pagamenti a un socio?`
-                  : `Questo nome somiglia a ${who}, ${g.suspected_members.length > 1 ? 'soci' : 'socio'} della società. Era un pagamento a un socio?`
-              }
-              return partial
-                ? `${g.suspected_count} of these ${g.count} payments carry the name ${who}, ${g.suspected_members.length > 1 ? 'owners' : 'an owner'} of the company. Was this a payment to an owner?`
-                : `This name looks like ${who}, ${g.suspected_members.length > 1 ? 'owners' : 'an owner'} of the company. Was this a payment to an owner?`
-            })()}
+                  ? `${g.suspected_count} of these ${g.count} payments carry the name ${who}. Was this a payment to an owner?`
+                  : `This name looks like ${who}. Was this a payment to an owner?`
+              })()}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {g.suspected_members.map(m => (
+                <button
+                  key={m}
+                  disabled={busyOrLocked}
+                  onClick={() => void answerOwnerQuestion(g, 'owner_draw', m)}
+                  className="rounded-full border border-amber-400 bg-white px-2 py-0.5 text-[11px] font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                >
+                  {it ? `Sì — ${m}` : `Yes — ${m}`}
+                </button>
+              ))}
+              <button
+                disabled={busyOrLocked}
+                onClick={() => void answerOwnerQuestion(g, 'business_expense')}
+                className="rounded-full border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-50"
+              >
+                {it ? 'No — un fornitore' : 'No — a supplier'}
+              </button>
+            </div>
           </div>
         ) : null}
         <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -2675,6 +2740,25 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                         ? 'Abbiamo lavorato solo con ciò che ci hai dato: se esistono altri conti o redditi che non abbiamo visto, vanno aggiunti — altrimenti la dichiarazione sarà incompleta. Quella scelta, e la sua responsabilità, sono tue.'
                         : 'We worked only with what you gave us: if there are other accounts or income we didn\'t see, they need to be added — otherwise the return is incomplete. That choice, and the responsibility for it, is yours.'}
                     </li>
+                    {/* OPEN OWNER QUESTIONS. A flagged payment keeps whatever
+                        category it had, so it is invisible to the "still
+                        uncategorized" figures this block is built on — a client
+                        could otherwise sign off reading "everything is
+                        categorized" while a possible owner withdrawal is open.
+                        Counted from the questions already in the payload, so
+                        there is no second source of truth and no currency
+                        conversion to get wrong. It does NOT block confirming. */}
+                    {(() => {
+                      const openOwnerQs = (view?.questions ?? []).reduce((n, q) => n + (q.suspected_count ?? 0), 0)
+                      if (openOwnerQs === 0) return null
+                      return (
+                        <li className="font-medium text-amber-800">
+                          {it
+                            ? `${openOwnerQs} ${openOwnerQs === 1 ? 'pagamento potrebbe essere' : 'pagamenti potrebbero essere'} a un socio e ${openOwnerQs === 1 ? 'non ha' : 'non hanno'} ancora una tua risposta. Se ${openOwnerQs === 1 ? 'lo lasci' : 'li lasci'} così, ${openOwnerQs === 1 ? 'resterà registrato' : 'resteranno registrati'} come ${openOwnerQs === 1 ? 'è' : 'sono'} adesso.`
+                            : `${openOwnerQs} ${openOwnerQs === 1 ? 'payment may be' : 'payments may be'} to an owner and ${openOwnerQs === 1 ? 'has' : 'have'} no answer from you yet. If you leave ${openOwnerQs === 1 ? 'it' : 'them'}, ${openOwnerQs === 1 ? 'it stays' : 'they stay'} booked as ${openOwnerQs === 1 ? 'it is' : 'they are'} now.`}
+                        </li>
+                      )
+                    })()}
                     <li>
                       {it
                         ? 'Non sei ancora pronto? Puoi modificare le tue informazioni o caricare altri estratti conto qui sopra, invece di confermare.'
