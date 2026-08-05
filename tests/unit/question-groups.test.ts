@@ -140,17 +140,24 @@ describe("groupUncategorized — the suspected-owner mark", () => {
   })
 
   /**
-   * A degenerate root is a CATCH-ALL holding rows with nothing in common.
-   * Stamping an owner's name across it would tell the client that dozens of
-   * unrelated payees might be their business partner.
+   * A catch-all bucket ("(no description)", bare card/spend) holds rows with
+   * nothing in common. An earlier cut HID the owner question there so an
+   * owner's name could not be stamped across unrelated payees — but that meant
+   * the question was raised in the data and asked of NOBODY, and 1,271
+   * outgoing payments on production have a description that weak.
+   *
+   * It is shown now, because the two things that made hiding necessary are
+   * gone: the card states how many of the group's payments actually match, and
+   * the answer targets only those ids.
    */
-  it("suppresses the mark on a catch-all bucket of unrelated payees", () => {
+  it("still asks the question inside a catch-all bucket, honestly scoped", () => {
     const [g] = groupUncategorized([
       marked("a", "", -100, "Gabriele Finelli"),
       marked("b", "", -200, null),
     ])
-    expect(g.suspected_members).toBeUndefined()
-    expect(g.suspected_count).toBeUndefined()
+    expect(g.count).toBe(2)
+    expect(g.suspected_count).toBe(1)
+    expect(g.suspected_members).toEqual(["Gabriele Finelli"])
   })
 
   it("leaves ordinary groups with no mark at all", () => {
@@ -191,9 +198,12 @@ describe("groupUncategorized — the flagged ids travel with the group", () => {
     expect(g.suspected_ids).toBeUndefined()
   })
 
-  it("suppresses the flagged ids on a catch-all bucket, like the names", () => {
-    const [g] = groupUncategorized([mk("a", "", null, "Gabriele Finelli")])
-    expect(g.suspected_ids).toBeUndefined()
-    expect(g.suspected_members).toBeUndefined()
+  it("targets only the flagged payment inside a catch-all bucket", () => {
+    const [g] = groupUncategorized([
+      mk("flagged", "", null, "Gabriele Finelli"),
+      mk("other", "", null, null),
+    ])
+    expect(g.suspected_ids).toEqual(["flagged"])
+    expect(g.transaction_ids).toHaveLength(2)
   })
 })

@@ -141,10 +141,12 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
   // candidates — so answer chips are direction-pure and totals single-currency.
   const groups = new Map<string, { rows: UncategorizedRow[]; label: string; direction: "in" | "out"; currency: string; degenerate: boolean }>()
   for (const r of rows) {
-    // `degenerate` is captured, not discarded. A degenerate root is a CATCH-ALL
-    // bucket ("(no description)", bare "card"/"spend") holding rows with
-    // nothing in common — so one marked row inside it must NOT stamp an owner's
-    // name across dozens of unrelated payees. Suppressed below.
+    // `degenerate` marks a CATCH-ALL bucket ("(no description)", bare
+    // "card"/"spend") holding rows with nothing in common. It is captured so
+    // the card can SAY so — not to hide the owner question, which is what an
+    // earlier cut did and which meant a flagged payment in one of these buckets
+    // was flagged in the data, withheld from the AI, and asked of NOBODY.
+    // 1,271 outgoing payments on production have a description this weak.
     const { key, label, degenerate } = rowRootKey(r.description, r.counterparty)
     const direction = rowDirection(r.amount)
     const currency = (r.currency ?? "").toUpperCase()
@@ -162,8 +164,15 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
       const current_subcategory = mode(g.rows.map(r => r.subcategory))
       // Distinct suspected members + how many rows actually carry a mark.
       // Never moded (see the field's doc): one marked row must not speak for
-      // the whole group. Suppressed entirely on a degenerate catch-all root.
-      const markedRows = g.degenerate ? [] : g.rows.filter(r => suspectedMemberFromNotes(r.notes))
+      // the whole group.
+      //
+      // NOT suppressed on a catch-all root any more. That suppression was a
+      // guard for a problem since solved properly: the card states how many of
+      // the group's payments actually match ("1 of these 40 …") and the answer
+      // targets only those ids, so naming the owner can no longer overclaim.
+      // Keeping it would have been the worse trade — a question raised and
+      // shown to nobody.
+      const markedRows = g.rows.filter(r => suspectedMemberFromNotes(r.notes))
       const marked = markedRows.map(r => suspectedMemberFromNotes(r.notes)!).filter(Boolean)
       const suspected_members = Array.from(new Set(marked)).sort()
       const suspected_count = marked.length
