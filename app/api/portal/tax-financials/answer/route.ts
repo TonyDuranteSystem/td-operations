@@ -88,6 +88,78 @@ export async function POST(request: NextRequest) {
     // meter — captured BEFORE the update overwrites the notes. Chunked ×200: a
     // single .in() with ~950+ ids overflows the PostgREST URL and 500s, and the
     // request cap above is 2000.
+    /**
+     * THE OWNER QUESTION ONLY ANSWERS PAYMENTS THAT ACTUALLY CARRY THE MARK.
+     *
+     * The ids come from a screen that may have been open for hours. In between,
+     * the nightly re-sort can CLEAR a mark (member removed from the CRM, payee
+     * re-identified). Without this check a stale tab books real supplier
+     * payments as withdrawals on a named partner's capital account and K-1 —
+     * and every gate still ties, because spreading and crediting both preserve
+     * the totals. It also fences a future UI edit that passes the whole group's
+     * ids instead of the flagged ones: that swap compiles and passes the tests.
+     */
+    let ownerAnswerIds: string[] = transactionIds
+    if (isSuspectedAnswer) {
+      const { ASK_CLIENT_NOTE: MARK } = await import('@/lib/tax/member-names')
+      const marked: string[] = []
+      for (let i = 0; i < transactionIds.length; i += 200) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data } = await (supabaseAdmin as any)
+          .from('bank_transactions')
+          .select('id')
+          .eq('account_id', accountId)
+          .eq('tax_year', taxYear)
+          .in('id', transactionIds.slice(i, i + 200))
+          .like('notes', `${MARK}%`)
+        marked.push(...((data ?? []) as Array<{ id: string }>).map(r => r.id))
+      }
+      if (marked.length === 0) {
+        return NextResponse.json({ error: 'That question has already been answered or is no longer open — please refresh.' }, { status: 409 })
+      }
+      ownerAnswerIds = marked
+
+      /**
+       * AND THE OWNER MUST BE ONE THE K-1 CAN ACTUALLY CREDIT.
+       *
+       * The roster that RAISES the question (curated members ∪ linked contacts)
+       * is deliberately wider than the roster that ALLOCATES money (this year's
+       * declared members, with an ownership %). A member who left mid-year, or
+       * who is on file but not declared for this year, is offered on the card —
+       * and the confirmation then resolves to nobody, so the amount is spread
+       * across every remaining partner by ownership %. Withdrawals appear on the
+       * K-1 of somebody who received nothing, and the balance sheet still ties,
+       * so no gate objects.
+       *
+       * Refusing is the honest outcome: we say plainly that the member list has
+       * to be fixed first, instead of writing an answer we cannot honour.
+       */
+      if (suspectedMember && mapped.category === 'distribution') {
+        const { resolveOwnership } = await import('@/lib/tax/ownership-resolution')
+        const { sameName } = await import('@/lib/tax/ownership-resolution')
+        const { data: subRow } = await supabaseAdmin
+          .from('tax_return_submissions')
+          .select('submitted_data')
+          .eq('account_id', accountId).eq('tax_year', taxYear)
+          .order('created_at', { ascending: false }).limit(1).maybeSingle()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const sd = (subRow?.submitted_data ?? {}) as any
+        const wizardMembers = Array.isArray(sd?.members)
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ? sd.members.map((m: any) => ({ name: String(m?.full_name ?? m?.name ?? ''), pct: Number(m?.ownership_pct ?? m?.pct ?? 0) })).filter((m: { name: string }) => m.name)
+          : []
+        if (wizardMembers.length > 0) {
+          const creditable = resolveOwnership({ priorK1s: [], wizardMembers, accountContacts: [] })
+            .members.filter(m => m.pct !== null)
+          if (creditable.length > 0 && !creditable.some(m => sameName(m.name, suspectedMember))) {
+            return NextResponse.json({
+              error: `We can't record this as a payment to ${suspectedMember} yet — they are not on this year's member list. Send us a message and we'll fix the member list first.`,
+            }, { status: 409 })
+          }
+        }
+      }
+    }
+
     const aiPre: Array<{ id: string; category: string; notes: string }> = []
     for (let i = 0; i < transactionIds.length; i += 200) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -112,7 +184,7 @@ export async function POST(request: NextRequest) {
     // changed rows would be worse than the failed chunk.
     const updated: Array<{ id: string; description: string | null; counterparty: string | null; amount: number | string }> = []
     let updateError: string | null = null
-    for (let i = 0; i < transactionIds.length; i += 200) {
+    for (let i = 0; i < ownerAnswerIds.length; i += 200) {
       const { data, error } = await supabaseAdmin
         .from('bank_transactions')
         // The note carries WHO when the client confirmed an owner. `attributeToMember`
@@ -126,7 +198,7 @@ export async function POST(request: NextRequest) {
         // Bulk only books rows still awaiting a decision — never stomps prior
         // bookings (keeps undo exact: prior state uniformly 'uncategorized').
         .in('category', isBulk ? ['uncategorized'] : ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution', 'refund'])
-        .in('id', transactionIds.slice(i, i + 200))
+        .in('id', ownerAnswerIds.slice(i, i + 200))
         .select('id, description, counterparty, amount')
       if (error) { updateError = error.message; break }
       updated.push(...((data ?? []) as typeof updated))

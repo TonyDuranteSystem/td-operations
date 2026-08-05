@@ -61,16 +61,18 @@ export type ProvenanceClass =
 
 export function classifyProvenance(row: Pick<ValidationRow, "category" | "notes">): ProvenanceClass {
   const n = row.notes ?? ""
+  // THE MARK OUTRANKS "still open". A flagged row that is also uncategorized is
+  // not a generic undecided payment — it is one we have specifically told the
+  // client may be a payment to their own owner. Testing `uncategorized` first
+  // hid exactly the rows the accountant most needs to see, and made the two
+  // panels tell different stories about the same payment.
+  if (suspectedMemberFromNotes(n)) return "asked_member"
   if (row.category === "uncategorized") return "open"
   if (n.startsWith("ai:")) return "ai"
   if (n.startsWith("manual: period answer") || n.startsWith("manual: country answer")) return "location_answer"
   if (n.startsWith("manual:")) return "human_answer"
   if (n.startsWith("auto:")) return "auto_zero"
   if (n.startsWith("transfer-pair") || n === "own-entity transfer") return "transfer_matcher"
-  // An OPEN QUESTION, not a confident booking. Without this class the row falls
-  // through to "rules_memory" and the accountant's panel reads a payment we
-  // have explicitly flagged as maybe-an-owner-draw as settled bank vocabulary.
-  if (suspectedMemberFromNotes(n)) return "asked_member"
   return "rules_memory"
 }
 

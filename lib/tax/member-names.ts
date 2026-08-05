@@ -76,6 +76,13 @@ export const MIN_SURNAME_LENGTH = 4
  */
 export function normalizeForMatch(value: string | null | undefined): string {
   return (value ?? "")
+    // APOSTROPHES ARE DELETED, NOT SPACED. Banks and SWIFT routinely strip
+    // them: "Marco D'Amico" arrives as "MARCO DAMICO". Turning the apostrophe
+    // into a space produced "marco d amico", which matches neither the exact
+    // name nor the surname — so the payment was silently deducted and no
+    // question was ever raised. The client base is heavily Italian
+    // (D'Amico, D'Angelo, Dell'Orto) and Irish names do the same.
+    .replace(/['\u2019\u02BC]/g, "")
     .normalize("NFD")
     // Combining diacritical marks — "è" becomes "e", "ñ" becomes "n".
     .replace(/[̀-ͯ]/g, "")
@@ -260,10 +267,18 @@ export function payeePart(text: string | null | undefined): string {
  * name, which the exact matcher already handles.
  */
 const COMPANY_TOKENS: ReadonlySet<string> = new Set([
-  "llc", "ltd", "limited", "inc", "incorporated", "corp", "corporation", "co",
-  "gmbh", "srl", "srls", "spa", "sas", "sarl", "bv", "nv", "ab", "oy", "ou",
-  "plc", "llp", "lp", "holding", "holdings", "group", "trading", "capital",
-  "ventures", "solutions", "services", "consulting", "partners", "sa", "ag",
+  // NO 2-LETTER TOKENS. "sa", "co", "ou", "ab", "bv", "nv", "lp" are real
+  // Portuguese/Italian name particles and surnames — "João Sá Ferreira" was
+  // being treated as a company, which switches the owner question OFF for a
+  // real person and silently deducts their draws. A legal suffix that short
+  // is not worth that trade.
+  "llc", "ltd", "ltda", "limited", "inc", "incorporated", "corp", "corporation",
+  "gmbh", "ugmbh", "srl", "srls", "spa", "sas", "sarl", "sl", "slu", "kft",
+  "sro", "doo", "aps", "pte", "sdn", "bhd", "pty", "oyj", "plc", "llp",
+  "holding", "holdings", "group", "trading", "capital", "ventures", "solutions",
+  "services", "consulting", "partners", "advisors", "management", "associates",
+  "enterprises", "industries", "systems", "technologies", "labs", "studio",
+  "digital", "media", "agency", "international", "properties",
 ])
 
 /** Does this roster name look like a company rather than a person? */

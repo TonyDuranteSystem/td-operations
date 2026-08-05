@@ -86,6 +86,18 @@ export interface QuestionGroup {
    * supplier payments into withdrawals on a partner's K-1.
    */
   suspected_ids?: string[]
+  /**
+   * Flagged ids grouped BY the owner they were flagged for.
+   *
+   * The card renders one "Yes" button per suspected owner, so a single flat id
+   * list is not enough: tapping "Yes — Gabriele" would post EVERY marked row in
+   * the group, including the ones flagged for Matthew, and credit them all to
+   * Gabriele's capital account and K-1. Two owners sharing a surname is exactly
+   * when this card appears, so that is the normal case, not the corner.
+   *
+   * A row flagged for both appears under both — the client decides which.
+   */
+  suspected_by_member?: Record<string, string[]>
 }
 
 /** Most-frequent non-empty value in a list (ties → first seen). */
@@ -176,6 +188,12 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
       const suspected_members = Array.from(new Set(markedRows.flatMap(r => suspectedMembersFromNotes(r.notes)))).sort()
       const suspected_count = markedRows.length
       const suspected_ids = markedRows.map(r => r.id)
+      const suspected_by_member: Record<string, string[]> = {}
+      for (const r of markedRows) {
+        for (const name of suspectedMembersFromNotes(r.notes)) {
+          (suspected_by_member[name] ??= []).push(r.id)
+        }
+      }
       return {
         group_key,
         label: g.label,
@@ -189,7 +207,7 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
         ...(bucket ? { ai_bucket: bucket } : {}),
         ...(current_category ? { current_category } : {}),
         ...(current_subcategory ? { current_subcategory } : {}),
-        ...(suspected_members.length ? { suspected_members, suspected_count, suspected_ids } : {}),
+        ...(suspected_members.length ? { suspected_members, suspected_count, suspected_ids, suspected_by_member } : {}),
       }
     })
     .sort((a, b) => b.count - a.count)

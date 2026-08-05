@@ -370,3 +370,37 @@ describe('every matching owner is offered, not just the first', () => {
       .toEqual(['Gabriele Finelli'])
   })
 })
+
+/**
+ * NAMES THE MATCHER USED TO MISS ENTIRELY — the silent-deduction direction.
+ */
+describe('name shapes that were being missed', () => {
+  it('matches an apostrophe surname the bank stripped', () => {
+    // Banks and SWIFT send "MARCO DAMICO" for "Marco D'Amico".
+    expect(matchMemberName('Sent money to MARCO DAMICO', ["Marco D'Amico"])).toBe("Marco D'Amico")
+    expect(matchMemberName("bonifico a Marco D'Amico", ["Marco D'Amico"])).toBe("Marco D'Amico")
+    // and the near-miss twin
+    expect(findNearMissMembers('WIRE OUT DAMICO', ["Marco D'Amico"])).toEqual(["Marco D'Amico"])
+  })
+
+  it('curly apostrophes normalise the same way', () => {
+    expect(matchMemberName('Sent money to MARCO DAMICO', ['Marco D’Amico'])).toBe('Marco D’Amico')
+  })
+
+  /**
+   * A two-letter legal suffix is also a real name particle — "João Sá
+   * Ferreira", "Maria Sa Silva". Treating those as companies switched the owner
+   * question OFF for a real person and deducted their draws in silence.
+   */
+  it('does not mistake a short name particle for a company', () => {
+    expect(looksLikeCompany('João Sá Ferreira')).toBe(false)
+    expect(looksLikeCompany('Maria Sa Silva')).toBe(false)
+    expect(findNearMissMembers('WIRE OUT FERREIRA', ['João Sá Ferreira'])).toEqual(['João Sá Ferreira'])
+  })
+
+  it('still recognises company members, including non-US forms', () => {
+    for (const n of ['Nexo Agency LLC', 'Indaco LTD', 'Something GmbH', 'Foo Technologies', 'Bar Media', 'Baz SL']) {
+      expect(looksLikeCompany(n)).toBe(true)
+    }
+  })
+})

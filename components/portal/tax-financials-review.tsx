@@ -35,7 +35,7 @@ function ProgressCard({ title, detail, eta }: { title: string; detail: string; e
 
 interface Gate { id: number; title: string; status: 'pass' | 'na' | 'fail'; detail: string; blocking: boolean }
 interface Member { name: string; pct: number; beginning_capital: number; contributions: number; distributions: number; income_share: number; ending_capital: number }
-interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string; suspected_members?: string[]; suspected_count?: number; suspected_ids?: string[] }
+interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string; suspected_members?: string[]; suspected_count?: number; suspected_ids?: string[]; suspected_by_member?: Record<string, string[]> }
 interface Bucket { slug: string; label: string }
 interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
 interface AccountOnFile { account_ref: string; bank: string; acct: string; count: number }
@@ -377,7 +377,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
    * who received nothing.
    */
   const answerOwnerQuestion = async (g: QuestionGroup, value: string, member?: string) => {
-    const ids = g.suspected_ids ?? []
+    // "Yes — <owner>" answers ONLY the payments flagged for THAT owner. The
+    // flat list would credit one partner with another's withdrawals, which is
+    // the normal case here: this card appears precisely when two owners share a
+    // surname. "No — a supplier" clears every flagged payment on the card.
+    const ids = member ? (g.suspected_by_member?.[member] ?? []) : (g.suspected_ids ?? [])
     if (ids.length === 0) return
     setBusy(g.group_key)
     setCardError(null)
@@ -403,6 +407,21 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     }
   }
 
+  /**
+   * The merchant chips answer "what IS this merchant". They must NEVER consume
+   * an open owner question: booking a flagged payment with a `manual:` note
+   * settles it for ever (no pass will re-raise it), so an owner withdrawal is
+   * silently deducted and the client is never asked. Bulk is worse — it sweeps
+   * many cards at once and says nothing about owners.
+   *
+   * The owner question keeps its own buttons; the merchant answer covers
+   * everything else on the card.
+   */
+  const merchantAnswerIds = (g: QuestionGroup) => {
+    const flagged = new Set(g.suspected_ids ?? [])
+    return flagged.size === 0 ? g.transaction_ids : g.transaction_ids.filter(id => !flagged.has(id))
+  }
+
   const answer = async (g: QuestionGroup, value: string) => {
     setBusy(g.group_key)
     setCardError(null)
@@ -410,7 +429,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       const res = await fetch(`${API}/answer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, transaction_ids: g.transaction_ids, answer: value }),
+        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, transaction_ids: merchantAnswerIds(g), answer: value }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
@@ -452,7 +471,8 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const confirmBulkAnswer = async () => {
     if (!bulkConfirm || bulkSel.size === 0) return
     const groups = Array.from(bulkSel.values())
-    const ids = groups.flatMap(g => g.transaction_ids)
+    // Bulk never touches an open owner question — see merchantAnswerIds.
+    const ids = groups.flatMap(g => merchantAnswerIds(g))
     setBusy('bulk')
     // Clear on entry like answer() and setBucket() do — without this a stale
     // red refusal survived a LATER SUCCESS (bug-hunter). A false "that didn't
@@ -682,7 +702,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   onClick={() => void answerOwnerQuestion(g, 'owner_draw', m)}
                   className="rounded-full border border-amber-400 bg-white px-2 py-0.5 text-[11px] font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
                 >
-                  {it ? `Sì — ${m}` : `Yes — ${m}`}
+                  {it ? `Sì — ${m}` : `Yes — ${m}`}{(g.suspected_by_member?.[m]?.length ?? 0) < (g.suspected_count ?? 0) ? ` (${g.suspected_by_member?.[m]?.length})` : ''}
                 </button>
               ))}
               <button

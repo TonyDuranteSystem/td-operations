@@ -207,3 +207,52 @@ describe("groupUncategorized — the flagged ids travel with the group", () => {
     expect(g.transaction_ids).toHaveLength(2)
   })
 })
+
+/**
+ * "YES — <OWNER>" MUST ANSWER ONLY THAT OWNER'S PAYMENTS.
+ *
+ * The card shows one Yes button per suspected owner. A single flat id list
+ * would post every marked row in the group, crediting one partner with
+ * another's withdrawals on their capital account and K-1 — and this card
+ * appears precisely when two owners share a surname, so that is the normal
+ * case, not a corner.
+ */
+describe("groupUncategorized — flagged ids are grouped BY owner", () => {
+  const ASK = 'ask: possible payment to member '
+  const row = (id: string, amount: number, names: string[]) => ({
+    id, description: 'Sent money to Finelli', counterparty: null, amount,
+    transaction_date: '2025-06-01', bank_name: 'Wise', category: 'expense',
+    notes: names.length ? ASK + names.join('; ') : '',
+  })
+
+  it("splits the ids per owner", () => {
+    const [g] = groupUncategorized([
+      row('gab', -18000, ['Gabriele Finelli']),
+      row('mat', -4000, ['Matthew Finelli']),
+    ])
+    expect(g.suspected_count).toBe(2)
+    expect(g.suspected_by_member).toEqual({
+      'Gabriele Finelli': ['gab'],
+      'Matthew Finelli': ['mat'],
+    })
+    // The whole-card list still exists, for "No — a supplier".
+    expect(g.suspected_ids).toEqual(['gab', 'mat'])
+  })
+
+  it("a payment flagged for BOTH appears under both — the client decides", () => {
+    const [g] = groupUncategorized([row('either', -5000, ['Gabriele Finelli', 'Matthew Finelli'])])
+    expect(g.suspected_by_member).toEqual({
+      'Gabriele Finelli': ['either'],
+      'Matthew Finelli': ['either'],
+    })
+  })
+
+  it("unflagged payments in the group belong to no owner", () => {
+    const [g] = groupUncategorized([
+      row('flagged', -1000, ['Gabriele Finelli']),
+      row('supplier', -2000, []),
+    ])
+    expect(Object.values(g.suspected_by_member ?? {}).flat()).toEqual(['flagged'])
+    expect(g.count).toBe(2)
+  })
+})
