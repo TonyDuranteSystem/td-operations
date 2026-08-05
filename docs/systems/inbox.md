@@ -654,7 +654,15 @@ narrowest row — browser-measured); explicit width/height on every image.
 in-app images load from the serving deployment. In the REPLY composer both appear
 only once the reply box gains focus (focus-LATCHED, since touching the picker blurs
 the textarea) and fold away after a send — while reading a thread they were eating
-the reading space (Antonio's production QA, 2026-08-05). Compose resets to support+default on
+the reading space (Antonio's production QA, 2026-08-05). Folding back: clicking
+outside the composer with an EMPTY draft collapses the area (checked against the
+container, so using the picker doesn't collapse it); a draft WITH text never
+auto-folds. The full preview sits behind a Preview toggle, closed by default.
+**Save draft** (same QA): `/api/inbox/draft` saves the typed reply as a REAL Gmail
+draft, threaded, same mailbox gates as reply, signature BAKED IN (a draft may be
+sent from Gmail's own UI where our send path never runs), no quoted history (Gmail
+adds its own when the draft is opened). TEXT-ONLY by design — the UI disables Save
+draft while upload files are staged rather than silently dropping them. Compose resets to support+default on
 every close (sticky-sender bug). Assets: `public/images/signature-antonio-{gala,hat}.jpg`
 (hat frame Antonio-approved), `signature-td-mark.png` (derived from the app icon —
 regenerate from `public/portal-icons/icon-512.png` if the brand mark ever changes),
