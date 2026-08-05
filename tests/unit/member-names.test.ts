@@ -26,6 +26,7 @@ import {
   buildMemberNames, filterMemberNames, isUsableMemberName, dedupeMemberNames,
   matchMemberName, findNearMissMember, normalizeForMatch, nameParts, payeePart, looksLikeCompany,
   MIN_NAME_PART_LENGTH, MIN_NAME_PARTS, MIN_SURNAME_LENGTH, MIN_FULL_NAME_LENGTH,
+  findNearMissMembers, suspectedMembersFromNotes, ASK_CLIENT_NOTE, SUSPECTED_SEP,
 } from '@/lib/tax/member-names'
 
 describe('isUsableMemberName — the single predicate', () => {
@@ -326,5 +327,46 @@ describe('the builders agree', () => {
       const viaDisplayName = filterMemberNames([`${c.first_name ?? ''} ${c.last_name ?? ''}`.trim()])
       expect(viaContacts).toEqual(viaDisplayName)
     }
+  })
+})
+
+/**
+ * TWO OWNERS SHARING A SURNAME — Titan's real shape (Gabriele and Matthew
+ * Finelli). Returning only the FIRST match meant the card offered one name, so
+ * a client whose payment went to the other one had no way to say so: they
+ * either credited the wrong partner's K-1 or answered "not an owner". Both
+ * wrong. We narrow the field; the client picks.
+ */
+describe('every matching owner is offered, not just the first', () => {
+  const titan = ['Gabriele Finelli', 'Matthew Finelli']
+
+  it('returns BOTH owners for a shared surname', () => {
+    expect(findNearMissMembers('Sent money to M. Finelli', titan))
+      .toEqual(['Gabriele Finelli', 'Matthew Finelli'])
+  })
+
+  it('returns just the one when only one surname matches', () => {
+    expect(findNearMissMembers('payment Gallerani', ['Marco Gallerani', 'Gabriele Finelli']))
+      .toEqual(['Marco Gallerani'])
+  })
+
+  it('returns none on an exact match — that books outright', () => {
+    expect(findNearMissMembers('Sent money to Matthew Finelli', titan)).toEqual([])
+  })
+
+  it('returns none for an unrelated supplier', () => {
+    expect(findNearMissMembers('Sent money to Aurora Global Holdings Limited', titan)).toEqual([])
+  })
+
+  it('the note carries every name, and the reader gets them all back', () => {
+    const note = `${ASK_CLIENT_NOTE} ${['Gabriele Finelli', 'Matthew Finelli'].join(SUSPECTED_SEP)}`
+    expect(suspectedMembersFromNotes(note)).toEqual(['Gabriele Finelli', 'Matthew Finelli'])
+    // and the old single-name shape still reads
+    expect(suspectedMembersFromNotes(`${ASK_CLIENT_NOTE} Gabriele Finelli`)).toEqual(['Gabriele Finelli'])
+  })
+
+  it('an appended related-entity tail never becomes a name', () => {
+    expect(suspectedMembersFromNotes(`${ASK_CLIENT_NOTE} Gabriele Finelli | Related entity: Acme FZCO`))
+      .toEqual(['Gabriele Finelli'])
   })
 })

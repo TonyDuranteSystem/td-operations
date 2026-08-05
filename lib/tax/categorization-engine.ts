@@ -30,7 +30,7 @@ import { aiSuggestCategories, AI_PROMPT_VERSION, type AiCategorizableTx, type Ai
 const EMPTY_AI_STATS = (): AiRunStats => ({ batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false })
 import { getExpenseBuckets } from "./expense-buckets"
 import { fetchMemberRoster } from "./member-roster"
-import { findNearMissMember } from "./member-names"
+import { findNearMissMembers, SUSPECTED_SEP } from "./member-names"
 
 export interface CategorizationRule {
   id: string
@@ -312,9 +312,12 @@ export function computeRecategorizationUpdates(
     if (finalCategory === "conversion" || finalCategory === "distribution" || finalCategory === "contribution") continue
 
     const computed = Number(row.amount) < 0
-      ? (findNearMissMember(row.description ?? "", memberNames) ?? findNearMissMember(row.counterparty ?? "", memberNames))
-      : null
-    const want = computed ? `${ASK_CLIENT_NOTE} ${computed}` : ""
+      ? Array.from(new Set([
+          ...findNearMissMembers(row.description ?? "", memberNames),
+          ...findNearMissMembers(row.counterparty ?? "", memberNames),
+        ]))
+      : []
+    const want = computed.length ? `${ASK_CLIENT_NOTE} ${computed.join(SUSPECTED_SEP)}` : ""
     const has = stored.startsWith(ASK_CLIENT_NOTE) ? stored : ""
     if (want === has) continue
     // Note-only when nothing else about the row changed; merged into the

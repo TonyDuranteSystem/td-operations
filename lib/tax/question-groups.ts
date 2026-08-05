@@ -12,7 +12,7 @@
  */
 
 import { rowRootKey } from "./row-root"
-import { suspectedMemberFromNotes } from "./member-names"
+import { suspectedMembersFromNotes } from "./member-names"
 
 export interface UncategorizedRow {
   id: string
@@ -172,10 +172,9 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
       // targets only those ids, so naming the owner can no longer overclaim.
       // Keeping it would have been the worse trade — a question raised and
       // shown to nobody.
-      const markedRows = g.rows.filter(r => suspectedMemberFromNotes(r.notes))
-      const marked = markedRows.map(r => suspectedMemberFromNotes(r.notes)!).filter(Boolean)
-      const suspected_members = Array.from(new Set(marked)).sort()
-      const suspected_count = marked.length
+      const markedRows = g.rows.filter(r => suspectedMembersFromNotes(r.notes).length > 0)
+      const suspected_members = Array.from(new Set(markedRows.flatMap(r => suspectedMembersFromNotes(r.notes)))).sort()
+      const suspected_count = markedRows.length
       const suspected_ids = markedRows.map(r => r.id)
       return {
         group_key,

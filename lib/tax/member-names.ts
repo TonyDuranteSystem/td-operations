@@ -271,6 +271,42 @@ export function looksLikeCompany(name: string): boolean {
   return nameParts(name).some(p => COMPANY_TOKENS.has(p))
 }
 
+export function findNearMissMembers(text: string | null | undefined, memberNames: string[]): string[] {
+  // EVERY member whose surname matches, not just the first.
+  //
+  // Two owners sharing a surname is not exotic — Titan's members are Gabriele
+  // and Matthew Finelli. Returning only the first meant the card offered one
+  // name, so a client whose payment went to the OTHER one had no way to say so:
+  // they either credited the wrong partner's K-1 or answered "not an owner",
+  // and both are wrong. The client picks; we only narrow the field.
+  if (matchMemberName(text, memberNames)) return []
+  const hay = payeePart(text)
+  if (!hay) return []
+  const out: string[] = []
+  for (const name of memberNames) {
+    if (looksLikeCompany(name)) continue
+    const parts = nameParts(name)
+    if (parts.length < MIN_NAME_PARTS) continue
+    const surname = parts[parts.length - 1]
+    if (surname.length < MIN_SURNAME_LENGTH) continue
+    if (containsWholePhrase(hay, surname)) out.push(name)
+  }
+  return out
+}
+
+/** Separator between suspected members inside the mark. */
+export const SUSPECTED_SEP = "; "
+
+/** Every suspected member carried by a row's note. The single reader. */
+export function suspectedMembersFromNotes(notes: string | null | undefined): string[] {
+  const n = (notes ?? "").trim()
+  if (!n.startsWith(ASK_CLIENT_NOTE)) return []
+  // Cut at the first " | " — rows written before that fix carry an appended
+  // "| Related entity: X", and this tail is rendered to the client AS A NAME.
+  const tail = n.slice(ASK_CLIENT_NOTE.length).split(" | ")[0]
+  return tail.split(SUSPECTED_SEP).map(x => x.trim()).filter(Boolean)
+}
+
 export function findNearMissMember(text: string | null | undefined, memberNames: string[]): string | null {
   // An exact match is not a near miss — that path books the row outright.
   if (matchMemberName(text, memberNames)) return null
@@ -324,12 +360,5 @@ export const ASK_CLIENT_NOTE = "ask: possible payment to member"
  * so the note's shape is defined in exactly one place.
  */
 export function suspectedMemberFromNotes(notes: string | null | undefined): string | null {
-  const n = (notes ?? "").trim()
-  if (!n.startsWith(ASK_CLIENT_NOTE)) return null
-  // Cut at the first " | ". The writer no longer appends anything after the
-  // mark, but rows written before that fix carry "… | Related entity: X" — and
-  // this tail is rendered to the client AS THE OWNER'S NAME, so the read side
-  // has to be defensive too rather than waiting for a re-sort to clean up.
-  const name = n.slice(ASK_CLIENT_NOTE.length).split(" | ")[0].trim()
-  return name.length > 0 ? name : null
+  return suspectedMembersFromNotes(notes)[0] ?? null
 }

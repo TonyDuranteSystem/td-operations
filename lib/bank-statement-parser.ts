@@ -10,7 +10,7 @@
  */
 
 import { sniffCsvDialect, parseDelimitedRows, detectCsvSignature, parseRelayCSV, parseMercuryCSV, parseRevolutCSV, parseSlashCSV, parseGenericCSV, stableRowRef, dedupeRefs } from "./bank-csv-parsers"
-import { matchMemberName, findNearMissMember, ASK_CLIENT_NOTE } from "./tax/member-names"
+import { matchMemberName, findNearMissMembers, SUSPECTED_SEP, ASK_CLIENT_NOTE } from "./tax/member-names"
 export { ASK_CLIENT_NOTE, suspectedMemberFromNotes } from "./tax/member-names"
 
 // The suspected-member mark lives in ./tax/member-names (pure, client-safe):
@@ -193,8 +193,14 @@ export function categorizeTransaction(
       // FINELLI" — cut at "ref" and threw the payee away, so the check silently
       // never fired on the very shape an owner draw takes. The counterparty
       // field is a pure payee, so nothing in it can be cut.
-      const near = findNearMissMember(desc, memberNames) ?? findNearMissMember(cp, memberNames)
-      if (near) notes = `${ASK_CLIENT_NOTE} ${near}`
+      // EVERY owner whose surname matches, not just the first — two owners
+      // sharing a surname is real (Titan: Gabriele and Matthew Finelli), and
+      // offering only one gives the client no way to name the other.
+      const near = Array.from(new Set([
+        ...findNearMissMembers(desc, memberNames),
+        ...findNearMissMembers(cp, memberNames),
+      ]))
+      if (near.length) notes = `${ASK_CLIENT_NOTE} ${near.join(SUSPECTED_SEP)}`
     }
   }
 
