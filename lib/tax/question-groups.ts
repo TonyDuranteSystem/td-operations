@@ -263,7 +263,11 @@ export const ANSWER_CHOICES = [
   // "Business income" there would inflate revenue. Both directions: an
   // out-refund is you returning money to a customer.
   { value: "refund", category: "refund", subcategory: "client_confirmed", directions: ["in", "out"], label: "Refund / money back", labelIt: "Rimborso / soldi restituiti" },
-  { value: "own_transfer", category: "conversion", subcategory: "internal_transfer", directions: ["in", "out"], label: "Transfer between my own accounts", labelIt: "Trasferimento tra i miei conti" },
+  // "the COMPANY's own accounts", not "my own accounts" (2026-08-05, VSV210):
+  // Enrico read the old wording as covering his PERSONAL account and booked his
+  // member deposit as an internal transfer — which removed it from the books
+  // entirely. Personal→company money is "My own money put into the company".
+  { value: "own_transfer", category: "conversion", subcategory: "internal_transfer", directions: ["in", "out"], label: "Transfer between the company's own accounts", labelIt: "Trasferimento tra i conti della società" },
   { value: "bank_fee", category: "fee", subcategory: "bank_fee", directions: ["out"], label: "Bank / platform fee", labelIt: "Commissione bancaria / piattaforma" },
 ] as const
 
@@ -272,4 +276,40 @@ export type AnswerValue = (typeof ANSWER_CHOICES)[number]["value"]
 export function categoryForAnswer(value: string): { category: string; subcategory: string } | null {
   const c = ANSWER_CHOICES.find(a => a.value === value)
   return c ? { category: c.category, subcategory: c.subcategory } : null
+}
+
+/**
+ * Does this note say a HUMAN chose "own_transfer" for the row? (2026-08-05,
+ * VSV210 no-vanish fix.)
+ *
+ * A row booked 'conversion' by a person is the one answer that used to vanish
+ * from the review forever: the feed excludes 'conversion' (deliberately — the
+ * category is also written by the AUTO transfer-pair/own-entity/zero-amount
+ * passes, and exposing those would flood every client's review with internal
+ * plumbing). This predicate is the scoping that lets ONLY the human-answered
+ * rows back in — feed AND write path must use the same predicate, or the
+ * restored card renders with dead buttons (council blocker, 2026-08-05).
+ *
+ * The four writers of a human own_transfer note:
+ *   portal single answer      → "manual: client answer (own_transfer)"
+ *   portal bulk answer        → "manual: bulk client answer (own_transfer)"
+ *   staff workspace answer    → "manual: staff answer (own_transfer)"
+ *   staff workspace bulk      → "manual: bulk staff answer (own_transfer)"
+ * (staff variants carried onto client rows by Save-to-client). Matched as
+ * PREFIXES: answer notes never carry trailers for own_transfer (the
+ * "| Member:"/"| Of:" tails are owner-question shapes), but prefix-matching
+ * keeps this true even if a tail is ever added. Auto notes ("transfer-pair →
+ * id", "own-entity transfer", "auto: zero-amount", "manual: period answer …")
+ * must never match.
+ */
+export const HUMAN_OWN_TRANSFER_NOTE_PREFIXES = [
+  "manual: client answer (own_transfer)",
+  "manual: bulk client answer (own_transfer)",
+  "manual: staff answer (own_transfer)",
+  "manual: bulk staff answer (own_transfer)",
+] as const
+
+export function isHumanOwnTransferNote(notes: string | null | undefined): boolean {
+  const n = notes ?? ""
+  return HUMAN_OWN_TRANSFER_NOTE_PREFIXES.some(p => n.startsWith(p))
 }

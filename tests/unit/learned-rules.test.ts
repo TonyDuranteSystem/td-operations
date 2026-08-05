@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   deriveLearnedRules,
+  deriveEvictionPatterns,
+  deactivateConversionRulesForRows,
   upsertLearnedMerchantRules,
   MIN_LEARN_PATTERN_LENGTH,
   LEARN_PATTERN_STOPLIST,
@@ -272,5 +274,71 @@ describe('upsertLearnedMerchantRules — direction reconciliation', () => {
     const active = Object.values(rows).filter(r => r.active !== false)
     expect(active).toHaveLength(2)
     expect(active.map(r => r.direction).sort()).toEqual(['in', 'out'])
+  })
+})
+
+/**
+ * MULTI-WORD RAIL ROOTS (2026-08-05, VSV210): "WISE US, INC." slipped past the
+ * exact-match rail check and a mis-tapped own_transfer answer learned
+ * "everything incoming via Wise = internal transfer" — live on production.
+ * A root whose FIRST word is a rail name is the rail, not a merchant.
+ */
+describe('deriveLearnedRules — dressed-rail-root guard', () => {
+  it('never learns from a rail dressed in corporate suffixes', () => {
+    expect(deriveLearnedRules([{ description: 'WISE US, INC. | LOAN FROM AMEMBER -WR', counterparty: null, amount: 2914.83 }], 'conversion', 'internal_transfer')).toHaveLength(0)
+    expect(deriveLearnedRules([{ description: 'Revolut Ltd | card top-up', counterparty: null, amount: -50 }], 'expense', 'client_confirmed')).toHaveLength(0)
+  })
+
+  it('still learns rail + MEANINGFUL word (a specific money flow) and merchants containing a rail word', () => {
+    const payout = deriveLearnedRules([{ description: 'Stripe Payout', counterparty: null, amount: 900 }], 'income', 'revenue')
+    expect(payout).toHaveLength(1)
+    expect(payout[0].pattern).toBe('Stripe Payout')
+    const cafe = deriveLearnedRules([{ description: 'Clockwise Cafe', counterparty: null, amount: -12 }], 'expense', 'client_confirmed')
+    expect(cafe).toHaveLength(1)
+    expect(cafe[0].pattern).toBe('Clockwise Cafe')
+  })
+})
+
+/**
+ * RULE EVICTION when a human CORRECTS an own_transfer answer: the poisoned
+ * rule was learned under the older, looser filters, so eviction must derive
+ * patterns WITHOUT the rail/stoplist skips — otherwise exactly the rules that
+ * need killing (rail roots like "WISE US, INC.") are unevictable.
+ */
+describe('deriveEvictionPatterns', () => {
+  it('includes rail roots the learn path skips', () => {
+    const patterns = deriveEvictionPatterns([{ description: 'WISE US, INC. | LOAN FROM AMEMBER -WR', counterparty: null, amount: 2914.83 }])
+    expect(patterns).toEqual(['WISE US, INC.'])
+  })
+
+  it('still skips degenerate/counterparty-fallback roots (they can never equal a learned pattern)', () => {
+    expect(deriveEvictionPatterns([{ description: null, counterparty: 'Fiverr', amount: -20 }])).toEqual([])
+  })
+})
+
+describe('deactivateConversionRulesForRows', () => {
+  it('deactivates only active account-scoped conversion rules matching the rows\' roots', async () => {
+    const calls: Record<string, unknown[]> = { update: [], eq: [], in: [] }
+    const chain = {
+      update(patch: unknown) { calls.update.push(patch); return chain },
+      eq(...a: unknown[]) { calls.eq.push(a); return chain },
+      is(...a: unknown[]) { calls.eq.push(a); return chain },
+      in(...a: unknown[]) { calls.in.push(a); return chain },
+      select() { return Promise.resolve({ data: [{ id: 'r1' }], error: null }) },
+    }
+    const db = { from: () => chain }
+    const n = await deactivateConversionRulesForRows(db, 'acct-1', [{ description: 'WISE US, INC. | LOAN FROM AMEMBER -WR', counterparty: null, amount: 2914.83 }])
+    expect(n).toBe(1)
+    expect(calls.update[0]).toMatchObject({ active: false })
+    expect(calls.in[0]).toEqual(['pattern', ['WISE US, INC.']])
+    expect(calls.eq).toEqual(expect.arrayContaining([['account_id', 'acct-1'], ['category', 'conversion'], ['active', true]]))
+  })
+
+  it('touches nothing when the rows yield no pattern', async () => {
+    let fromCalled = false
+    const db = { from: () => { fromCalled = true; throw new Error('should not query') } }
+    const n = await deactivateConversionRulesForRows(db, 'acct-1', [{ description: null, counterparty: 'X', amount: 1 }])
+    expect(n).toBe(0)
+    expect(fromCalled).toBe(false)
   })
 })
