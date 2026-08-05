@@ -35,7 +35,7 @@ function ProgressCard({ title, detail, eta }: { title: string; detail: string; e
 
 interface Gate { id: number; title: string; status: 'pass' | 'na' | 'fail'; detail: string; blocking: boolean }
 interface Member { name: string; pct: number; beginning_capital: number; contributions: number; distributions: number; income_share: number; ending_capital: number }
-interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string; suspected_members?: string[]; suspected_count?: number; suspected_ids?: string[]; suspected_by_member?: Record<string, string[]>; confirmed_by_member?: Record<string, string[]>; confirmed_alternatives?: string[] }
+interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; has_auto_paired_leg?: boolean; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string; suspected_members?: string[]; suspected_count?: number; suspected_ids?: string[]; suspected_by_member?: Record<string, string[]>; confirmed_by_member?: Record<string, string[]>; confirmed_alternatives?: string[] }
 interface Bucket { slug: string; label: string }
 interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
 interface AccountOnFile { account_ref: string; bank: string; acct: string; count: number }
@@ -877,10 +877,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               : (it
                 ? 'Registrato come trasferimento tra i conti della società. Se in realtà era un pagamento, scegli la voce corretta qui sopra.'
                 : "Booked as a transfer between the company's own accounts. If it was really a payment, pick the correct answer above.")}
-            {(view?.questions ?? []).some(o => o.group_key !== g.group_key
+            {(g.has_auto_paired_leg
+              // Server-detected AUTO partner leg (never in this feed) — OR a
+              // sibling human-answered group of the same merchant, opposite
+              // direction. Both mean: changing only THIS side leaves the other
+              // half of a real transfer behind (bug-hunter major, 2026-08-06).
+              || (view?.questions ?? []).some(o => o.group_key !== g.group_key
               && (o.current_category ?? '') === 'conversion'
               && o.direction !== g.direction
-              && groupKeyRoot(o.group_key) === groupKeyRoot(g.group_key)) && (
+              && groupKeyRoot(o.group_key) === groupKeyRoot(g.group_key))) && (
               <span className="mt-1 block font-medium">
                 {it
                   ? 'Attenzione: esiste il movimento opposto registrato come trasferimento. Se cambi questo, controlla anche l\'altro lato.'

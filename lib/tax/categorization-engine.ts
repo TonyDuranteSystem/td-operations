@@ -31,6 +31,7 @@ const EMPTY_AI_STATS = (): AiRunStats => ({ batchesSent: 0, batchesFailed: 0, su
 import { getExpenseBuckets } from "./expense-buckets"
 import { fetchMemberRoster } from "./member-roster"
 import { findNearMissMembers, SUSPECTED_SEP } from "./member-names"
+import { transferPairNoteFor } from "./question-groups"
 
 export interface CategorizationRule {
   id: string
@@ -260,8 +261,11 @@ export function computeRecategorizationUpdates(
 
   const pairs = matchTransferPairs(candidates)
   for (const p of pairs) {
-    updates.set(p.outflowId, { category: "conversion", subcategory: "internal_transfer", notes: `transfer-pair → ${p.inflowId}` })
-    updates.set(p.inflowId, { category: "conversion", subcategory: "internal_transfer", notes: `transfer-pair → ${p.outflowId}` })
+    // Single source of truth for the note format: the feed's paired-leg
+    // detection (has_auto_paired_leg) matches on EXACT equality with
+    // transferPairNoteFor — a drift here would silently blind that warning.
+    updates.set(p.outflowId, { category: "conversion", subcategory: "internal_transfer", notes: transferPairNoteFor(p.inflowId) })
+    updates.set(p.inflowId, { category: "conversion", subcategory: "internal_transfer", notes: transferPairNoteFor(p.outflowId) })
   }
 
   // Pass 2b: own-entity self-transfers — money to/from the company's OWN name is
