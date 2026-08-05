@@ -62,6 +62,20 @@ import {
 } from "@/lib/ai-agent/worker-tools"
 import { renderClientCard, sanitizeCardValue } from "@/lib/ai-agent/client-card"
 
+/**
+ * The tools this call was actually handed. `executeWorkerTool` now refuses
+ * `send_portal_message` outright when it is not in this set — a real,
+ * irreversible, client-visible send must never fire on a call that was not
+ * offered the tool (added 2026-08-05; it was one of only two injected tools
+ * missing that check, and it failed OPEN). These tests exercise the pin and the
+ * language guard, so they must declare the tool as offered, exactly as the live
+ * surfaces do via `enableSlackSend`.
+ */
+const OFFERED_PORTAL_SEND = new Set(["send_portal_message"])
+
+
+
+
 // The REAL drafts from the incident (2026-07-17) — the guard must refuse the
 // first and pass the second, or it is worse than useless.
 const INCIDENT_ENGLISH_DRAFT = `Hi Adam,
@@ -166,7 +180,7 @@ describe("send latch + guard wiring in executeWorkerTool", () => {
     const result = await executeWorkerTool(
       "send_portal_message",
       { message: INCIDENT_ENGLISH_DRAFT },
-      undefined,
+      OFFERED_PORTAL_SEND,
       null,
       null,
       sendContext,
@@ -187,7 +201,7 @@ describe("send latch + guard wiring in executeWorkerTool", () => {
     const result = await executeWorkerTool(
       "send_portal_message",
       { message: INCIDENT_ITALIAN_DRAFT },
-      undefined,
+      OFFERED_PORTAL_SEND,
       null,
       null,
       sendContext,
@@ -203,7 +217,7 @@ describe("send latch + guard wiring in executeWorkerTool", () => {
     const result = await executeWorkerTool(
       "send_portal_message",
       { message: INCIDENT_ITALIAN_DRAFT },
-      undefined,
+      OFFERED_PORTAL_SEND,
       null,
       null,
       sendContext,
@@ -224,7 +238,7 @@ describe("send latch + guard wiring in executeWorkerTool", () => {
     const result = await executeWorkerTool(
       "send_portal_message",
       { contact_id: "c-1", message: INCIDENT_ENGLISH_DRAFT },
-      undefined,
+      OFFERED_PORTAL_SEND,
       null,
       null,
       sendContext,
@@ -237,7 +251,7 @@ describe("send latch + guard wiring in executeWorkerTool", () => {
     const result = await executeWorkerTool(
       "send_portal_message",
       { contact_id: "c-1", message: INCIDENT_ENGLISH_DRAFT },
-      undefined,
+      OFFERED_PORTAL_SEND,
       null,
       null,
       undefined,

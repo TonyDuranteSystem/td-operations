@@ -83,10 +83,22 @@ export async function embedThreadSummary(threadId: string): Promise<boolean> {
   try {
     const { data, error } = await db()
       .from("thread_summaries")
-      .select("title, outcome, summary_text, tags")
+      .select("title, outcome, summary_text, tags, client_key")
       .eq("thread_id", threadId)
       .maybeSingle()
     if (error || !data) return false
+    // ⛔ DON'T INDEX WHAT CAN NEVER BE MATCHED.
+    //
+    // Since 2026-08-05 an UNLABELLED conversation is inert in the recall filter —
+    // it matches nothing, in any context (migration 20260805-0800). Embedding one
+    // would spend an OpenAI call per turn to store a vector no query can ever
+    // reach, and would quietly rebuild the very pool of unattributed client
+    // conversations that made this feature unsafe to switch on: the Inbox surface
+    // has no client to name, so it mints an unlabelled row on every email thread.
+    //
+    // Skipping here is also the honest signal. If a conversation cannot be
+    // attributed to a client, we do not keep a searchable copy of it.
+    if (!data.client_key) return false
     const text = composeThreadEmbeddingText(data)
     if (!text) return false // nothing to represent yet
     const embedding = await generateEmbedding(text)
