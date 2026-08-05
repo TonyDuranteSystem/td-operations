@@ -161,6 +161,18 @@ const PHOTO_FILES: Record<Exclude<SignatureVariant, "text" | "none">, string> = 
 
 const LOGO_FILE = "tony-logos.png"
 
+/**
+ * The standalone red TD mark — the same file the app uses as its icon, which
+ * is the shape people already recognise (Antonio, 2026-08-05). On image
+ * variants it sits beside the company block the way Antonio's portrait sits
+ * beside his, giving mail from the shared mailbox a recognisable face.
+ */
+const TD_MARK_FILE = "signature-td-mark.png"
+
+export function signatureMarkUrl(baseUrl: string = APP_BASE_URL): string {
+  return assetUrl(TD_MARK_FILE, baseUrl)
+}
+
 interface Identity {
   name: string
   title: string | null
@@ -297,13 +309,24 @@ export function buildSignatureHtml(options: SignatureOptions): string {
     detailRows(id) +
     `</td>`
 
-  const body = photoUrl
-    ? `<table cellpadding="0" cellspacing="0" border="0"><tr>` +
+  // The left cell beside the identity block: Antonio's portrait on his mail,
+  // the recognisable TD mark on the company's. Text-only stays bare.
+  let avatarCell = ""
+  if (photoUrl) {
+    avatarCell =
       `<td valign="top" style="padding-right:16px">` +
       `<img src="${photoUrl}" width="96" height="96" alt="${id.name}" ` +
       `style="display:block;width:96px;height:96px;border-radius:48px;border:2px solid ${RULE}" />` +
-      `</td>${details}</tr></table>`
-    : `<table cellpadding="0" cellspacing="0" border="0"><tr>${details}</tr></table>`
+      `</td>`
+  } else if (withImages && !id.showsPhoto) {
+    avatarCell =
+      `<td valign="top" style="padding-right:16px">` +
+      `<img src="${signatureMarkUrl(baseUrl)}" width="64" height="64" alt="${COMPANY_NAME}" ` +
+      `style="display:block;width:64px;height:64px" />` +
+      `</td>`
+  }
+
+  const body = `<table cellpadding="0" cellspacing="0" border="0"><tr>${avatarCell}${details}</tr></table>`
 
   // The logo rides with the images. On "text" there is nothing below the
   // details at all - that is the whole point of the variant.

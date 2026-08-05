@@ -278,3 +278,39 @@ describe('the "none" variant — no signature at all', () => {
     }
   })
 })
+
+describe("the TD mark on the company block", () => {
+  // The mark is the app's own icon — the shape people already recognise. It
+  // gives mail from the shared mailbox a face the way Antonio's portrait
+  // gives his (Antonio, 2026-08-05).
+  it("sits beside the support block on image variants", () => {
+    for (const variant of ["gala", "hat"] as const) {
+      const html = buildSignatureHtml({ sender: "support", variant, baseUrl: BASE })
+      expect(html).toContain(`${BASE}/images/signature-td-mark.png`)
+      expect(html).toContain('alt="Tony Durante LLC"')
+    }
+  })
+
+  it("never appears on Antonio's block — his portrait is the avatar there", () => {
+    for (const v of SIGNATURE_VARIANTS) {
+      expect(
+        buildSignatureHtml({ sender: "antonio", variant: v, baseUrl: BASE })
+      ).not.toContain("signature-td-mark")
+    }
+  })
+
+  it("stays off the text-only and none variants, which are image-free by decision", () => {
+    for (const sender of ["antonio", "support"] as const) {
+      for (const v of ["text", "none"] as const) {
+        expect(
+          buildSignatureHtml({ sender, variant: v, baseUrl: BASE })
+        ).not.toContain("signature-td-mark")
+      }
+    }
+  })
+
+  it("is explicitly sized like every other image", () => {
+    const html = buildSignatureHtml({ sender: "support", variant: "gala", baseUrl: BASE })
+    expect(html).toMatch(/signature-td-mark\.png" width="64" height="64"/)
+  })
+})
