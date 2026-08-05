@@ -48,17 +48,21 @@ export function SignatureControls({
   // Support never carries a portrait — a face on the shared mailbox would
   // misattribute the mail — so offering "hat vs award" there would be a
   // choice that changes nothing. Only the logo is in play.
+  //
+  // "Compact" = the identity block with a small TD mark and no banner. The
+  // mark is on every signed email by Antonio's decision (2026-08-05); the
+  // only way to send without it is "No signature".
   const photoOptions =
     sender === 'antonio'
       ? [
           { value: 'gala', label: 'Award photo' },
           { value: 'hat', label: 'Hat photo' },
-          { value: 'text', label: 'Text only' },
+          { value: 'text', label: 'Compact' },
           { value: 'none', label: 'No signature' },
         ]
       : [
-          { value: 'gala', label: 'With logo' },
-          { value: 'text', label: 'Text only' },
+          { value: 'gala', label: 'Full' },
+          { value: 'text', label: 'Compact' },
           { value: 'none', label: 'No signature' },
         ]
 

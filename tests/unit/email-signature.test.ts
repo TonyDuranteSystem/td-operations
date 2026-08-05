@@ -148,13 +148,16 @@ describe("buildSignatureHtml", () => {
     expect(html).toContain("tony-logos.png")
   })
 
-  // The whole point of "text": a reply must not stack images down a thread.
-  it("emits no images at all on the text variant, not even the logo", () => {
+  // Compact ("text") carries the small TD mark and NOTHING else - no
+  // portrait, no banner. The mark is on every signed email by Antonio's
+  // decision (2026-08-05); heavy images still must not stack down a thread.
+  it("compact keeps exactly one image: the small TD mark", () => {
     for (const sender of ["antonio", "support"] as const) {
       const html = buildSignatureHtml({ sender, variant: "text", baseUrl: BASE })
-      expect(html).not.toContain("<img")
-      expect(html).not.toContain(".jpg")
-      expect(html).not.toContain(".png")
+      expect(html.match(/<img/g)).toHaveLength(1)
+      expect(html).toContain('signature-td-mark.png" width="40" height="40"')
+      expect(html).not.toContain(".jpg") // no portrait
+      expect(html).not.toContain("tony-logos") // no banner
     }
   })
 
@@ -291,26 +294,47 @@ describe("the TD mark on the company block", () => {
     }
   })
 
-  it("never appears on Antonio's block — his portrait is the avatar there", () => {
-    for (const v of SIGNATURE_VARIANTS) {
+  it("yields to Antonio's portrait on his photo variants", () => {
+    for (const v of ["gala", "hat"] as const) {
       expect(
         buildSignatureHtml({ sender: "antonio", variant: v, baseUrl: BASE })
       ).not.toContain("signature-td-mark")
     }
   })
 
-  it("stays off the text-only and none variants, which are image-free by decision", () => {
+  it("appears small on compact for BOTH senders - the logo is on every signed email", () => {
     for (const sender of ["antonio", "support"] as const) {
-      for (const v of ["text", "none"] as const) {
-        expect(
-          buildSignatureHtml({ sender, variant: v, baseUrl: BASE })
-        ).not.toContain("signature-td-mark")
-      }
+      expect(
+        buildSignatureHtml({ sender, variant: "text", baseUrl: BASE })
+      ).toContain('signature-td-mark.png" width="40" height="40"')
+    }
+  })
+
+  it("stays off 'none' - the only way to send with no logo at all", () => {
+    for (const sender of ["antonio", "support"] as const) {
+      expect(
+        buildSignatureHtml({ sender, variant: "none", baseUrl: BASE })
+      ).not.toContain("signature-td-mark")
     }
   })
 
   it("is explicitly sized like every other image", () => {
     const html = buildSignatureHtml({ sender: "support", variant: "gala", baseUrl: BASE })
     expect(html).toMatch(/signature-td-mark\.png" width="64" height="64"/)
+  })
+})
+
+describe("banner width", () => {
+  // Inside an auto-layout table a shrinkable image loses the width
+  // negotiation to the narrowest row: the banner rendered 242px on the
+  // company block while rendering 300px on Antonio's (browser-measured
+  // 2026-08-05). Fixed width is the guard.
+  it("is pinned at 300px with no shrink-to-fit escape hatch", () => {
+    for (const sender of ["antonio", "support"] as const) {
+      const html = buildSignatureHtml({ sender, variant: "gala", baseUrl: BASE })
+      const banner = html.match(/<img[^>]*tony-logos[^>]*>/)?.[0] ?? ""
+      expect(banner).toContain('width="300"')
+      expect(banner).not.toContain("max-width")
+    }
   })
 })

@@ -37,10 +37,13 @@ import { APP_BASE_URL } from "@/lib/config"
 
 /**
  * What the sender picked for this one email.
- *  - "gala" / "hat" -> full signature: logo, plus Antonio's photo when the
- *    mail leaves from his own address (support has no photo by design).
- *  - "text"         -> identity block only. NO images at all, not even the
- *    logo. The default on replies so a face does not repeat down a thread.
+ *  - "gala" / "hat" -> full signature: banner logo, plus Antonio's photo when
+ *    the mail leaves from his own address (support has no photo by design).
+ *  - "text"         -> COMPACT: the identity block with a small TD mark and
+ *    nothing else - no portrait, no banner. The default on replies so a face
+ *    and a wide banner do not repeat down a thread. The mark stays because
+ *    Antonio wants the TD logo present on every signed email, however small
+ *    (2026-08-05: "I want the logo TD everywhere also in text only").
  *  - "none"         -> NOTHING. Not a block, not a sign-off, not a stray
  *    blank line. For the one-line reply mid-thread where any signature is
  *    noise (Antonio, 2026-08-05).
@@ -310,30 +313,42 @@ export function buildSignatureHtml(options: SignatureOptions): string {
     `</td>`
 
   // The left cell beside the identity block: Antonio's portrait on his mail,
-  // the recognisable TD mark on the company's. Text-only stays bare.
-  let avatarCell = ""
+  // the recognisable TD mark on the company's. The compact variant keeps a
+  // SMALL mark - the TD logo is present on every signed email, however small
+  // (Antonio, 2026-08-05); only "none" sends bare.
+  const markCell = (px: number) =>
+    `<td valign="top" style="padding-right:16px">` +
+    `<img src="${signatureMarkUrl(baseUrl)}" width="${px}" height="${px}" alt="${COMPANY_NAME}" ` +
+    `style="display:block;width:${px}px;height:${px}px" />` +
+    `</td>`
+
+  let avatarCell: string
   if (photoUrl) {
     avatarCell =
       `<td valign="top" style="padding-right:16px">` +
       `<img src="${photoUrl}" width="96" height="96" alt="${id.name}" ` +
       `style="display:block;width:96px;height:96px;border-radius:48px;border:2px solid ${RULE}" />` +
       `</td>`
-  } else if (withImages && !id.showsPhoto) {
-    avatarCell =
-      `<td valign="top" style="padding-right:16px">` +
-      `<img src="${signatureMarkUrl(baseUrl)}" width="64" height="64" alt="${COMPANY_NAME}" ` +
-      `style="display:block;width:64px;height:64px" />` +
-      `</td>`
+  } else if (withImages) {
+    avatarCell = markCell(64)
+  } else {
+    avatarCell = markCell(40)
   }
 
   const body = `<table cellpadding="0" cellspacing="0" border="0"><tr>${avatarCell}${details}</tr></table>`
 
-  // The logo rides with the images. On "text" there is nothing below the
-  // details at all - that is the whole point of the variant.
+  // The wide banner rides with the full variants only. Compact ("text")
+  // keeps its small mark beside the block but nothing below it - the point
+  // of compact is that nothing stacks down a long thread.
+  // Fixed 300px, deliberately NOT max-width:100%: inside an auto-layout
+  // table a shrinkable image loses the width negotiation to whichever row
+  // is narrowest, so the banner rendered 242px on the company block (whose
+  // identity row is narrower than Antonio's) while rendering 300px on his.
+  // Browser-measured 2026-08-05. 300px is safe on phone-width mail clients.
   const logo = withImages
     ? `<tr><td style="padding-top:16px;border-top:1px solid ${RULE}">` +
       `<img src="${signatureLogoUrl(baseUrl)}" width="300" alt="${COMPANY_NAME}" ` +
-      `style="display:block;width:300px;max-width:100%;height:auto" />` +
+      `style="display:block;width:300px;height:auto" />` +
       `</td></tr>`
     : ""
 
