@@ -10,6 +10,7 @@ import {
 } from "@/lib/inbox/email-attachment-staging"
 import {
   buildSignature,
+  hasSignature,
   parseSignatureVariant,
   signatureFromName,
   signatureSenderForAddress,
@@ -132,11 +133,17 @@ export async function POST(req: NextRequest) {
         signature_variant,
         DEFAULT_REPLY_SIGNATURE_VARIANT
       )
-      const signature = buildSignature({
-        sender: signatureSender,
-        variant: signatureVariant,
-        includeSignoff: false,
-      })
+      // On "none" the signature is omitted ENTIRELY rather than passed as an
+      // empty pair — the MIME builder puts a blank-line separator around
+      // whatever it is given, so an empty signature would still leave the
+      // reply trailing two blank lines into the quoted history.
+      const signature = hasSignature(signatureVariant)
+        ? buildSignature({
+            sender: signatureSender,
+            variant: signatureVariant,
+            includeSignoff: false,
+          })
+        : undefined
 
       const raw = buildReplyMime({
         asUser,

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
   buildSignature,
+  hasSignature,
   buildSignatureHtml,
   buildSignatureText,
   parseSignatureVariant,
@@ -233,5 +234,47 @@ describe("defaults", () => {
   it("leads with the award portrait on new mail and stays text-only on replies", () => {
     expect(DEFAULT_SIGNATURE_VARIANT).toBe("gala")
     expect(DEFAULT_REPLY_SIGNATURE_VARIANT).toBe("text")
+  })
+})
+
+describe('the "none" variant — no signature at all', () => {
+  it("produces nothing on either half, for either sender", () => {
+    for (const sender of ["antonio", "support"] as const) {
+      expect(buildSignatureHtml({ sender, variant: "none", baseUrl: BASE })).toBe("")
+      expect(buildSignatureText({ sender, variant: "none", baseUrl: BASE })).toBe("")
+    }
+  })
+
+  it("drops the sign-off too — 'no signature' means no 'Best regards' either", () => {
+    const html = buildSignatureHtml({ sender: "antonio", variant: "none", baseUrl: BASE })
+    const text = buildSignatureText({ sender: "antonio", variant: "none", baseUrl: BASE })
+    expect(html).not.toContain("Best regards")
+    expect(text).not.toContain("Best regards")
+  })
+
+  it("has no photo URL", () => {
+    expect(signaturePhotoUrl("none", BASE)).toBeNull()
+  })
+
+  it("is a real variant that survives parsing", () => {
+    expect(parseSignatureVariant("none")).toBe("none")
+  })
+
+  // This is the guard the call sites depend on: they must branch on it rather
+  // than concatenate "", or the separator around the empty string survives and
+  // the email trails blank lines.
+  it("is the only variant hasSignature() rejects", () => {
+    expect(hasSignature("none")).toBe(false)
+    for (const v of SIGNATURE_VARIANTS.filter((x) => x !== "none")) {
+      expect(hasSignature(v)).toBe(true)
+    }
+  })
+
+  it("leaves every OTHER variant still producing a block", () => {
+    for (const v of SIGNATURE_VARIANTS.filter((x) => x !== "none")) {
+      expect(buildSignatureText({ sender: "antonio", variant: v, baseUrl: BASE })).toContain(
+        "Antonio Noel Durante"
+      )
+    }
   })
 })

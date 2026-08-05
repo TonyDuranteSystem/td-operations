@@ -53,11 +53,13 @@ export function SignatureControls({
       ? [
           { value: 'gala', label: 'Award photo' },
           { value: 'hat', label: 'Hat photo' },
-          { value: 'text', label: 'No photo' },
+          { value: 'text', label: 'Text only' },
+          { value: 'none', label: 'No signature' },
         ]
       : [
           { value: 'gala', label: 'With logo' },
           { value: 'text', label: 'Text only' },
+          { value: 'none', label: 'No signature' },
         ]
 
   return (

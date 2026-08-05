@@ -20,6 +20,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import {
   buildSignatureHtml,
   buildSignatureText,
+  hasSignature,
   parseSignatureVariant,
   signatureFromName,
   signatureSenderForAddress,
@@ -162,9 +163,14 @@ export function wrapEmailWithBrandShell(
     variant: SignatureVariant
   } = { sender: "support", variant: DEFAULT_SIGNATURE_VARIANT }
 ): string {
+  // On "none" the signature line is dropped entirely rather than left as an
+  // empty line inside the shell.
+  const sig = buildSignatureHtml({
+    sender: signature.sender,
+    variant: signature.variant,
+  })
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;max-width:600px;margin:0 auto;padding:24px">
-${bodyHtml}
-${buildSignatureHtml({ sender: signature.sender, variant: signature.variant })}
+${bodyHtml}${sig ? `\n${sig}` : ""}
 </div>`
 }
 
@@ -236,10 +242,15 @@ export async function sendEmail(
       // strips tags out of the HTML, which turns a table-based signature into
       // junk - so when the caller gave us plain text we keep that text and
       // append the signature's own plain form.
+      //
+      // On "none" the separator is skipped too, not just the block: appending
+      // "\n\n" + "" would leave the email ending in blank lines.
       if (!body_text && !bodyWasHtml) {
-        body_text = `${sanitizeToAscii(params.body_html).trim()}\n\n${sanitizeToAscii(
-          buildSignatureText({ sender: signatureSender, variant })
-        )}`
+        const authored = sanitizeToAscii(params.body_html).trim()
+        const sigText = hasSignature(variant)
+          ? sanitizeToAscii(buildSignatureText({ sender: signatureSender, variant }))
+          : ""
+        body_text = sigText ? `${authored}\n\n${sigText}` : authored
       }
     }
 

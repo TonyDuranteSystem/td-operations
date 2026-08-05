@@ -41,9 +41,24 @@ import { APP_BASE_URL } from "@/lib/config"
  *    mail leaves from his own address (support has no photo by design).
  *  - "text"         -> identity block only. NO images at all, not even the
  *    logo. The default on replies so a face does not repeat down a thread.
+ *  - "none"         -> NOTHING. Not a block, not a sign-off, not a stray
+ *    blank line. For the one-line reply mid-thread where any signature is
+ *    noise (Antonio, 2026-08-05).
  */
-export const SIGNATURE_VARIANTS = ["gala", "hat", "text"] as const
+export const SIGNATURE_VARIANTS = ["gala", "hat", "text", "none"] as const
 export type SignatureVariant = (typeof SIGNATURE_VARIANTS)[number]
+
+/**
+ * Whether this variant produces anything at all.
+ *
+ * Call sites MUST branch on this rather than appending an empty string:
+ * concatenating "" still leaves the separator around it, which is how a
+ * "no signature" email ends up with two trailing blank lines before the
+ * quoted history.
+ */
+export function hasSignature(variant: SignatureVariant): boolean {
+  return variant !== "none"
+}
 
 /** New emails lead with the award portrait (Antonio, 2026-08-05). */
 export const DEFAULT_SIGNATURE_VARIANT: SignatureVariant = "gala"
@@ -139,7 +154,7 @@ const FONT = "Arial,Helvetica,sans-serif"
 const SIGNOFF = "Best regards,"
 
 /** Photo files live in public/images and are square, 192px (2x of 96px). */
-const PHOTO_FILES: Record<Exclude<SignatureVariant, "text">, string> = {
+const PHOTO_FILES: Record<Exclude<SignatureVariant, "text" | "none">, string> = {
   gala: "signature-antonio-gala.jpg",
   hat: "signature-antonio-hat.jpg",
 }
@@ -190,7 +205,7 @@ export function signaturePhotoUrl(
   variant: SignatureVariant,
   baseUrl: string = APP_BASE_URL
 ): string | null {
-  if (variant === "text") return null
+  if (variant === "text" || variant === "none") return null
   return assetUrl(PHOTO_FILES[variant], baseUrl)
 }
 
@@ -221,6 +236,7 @@ export interface SignatureOptions {
  * Uses \n; MIME builders normalise line endings themselves.
  */
 export function buildSignatureText(options: SignatureOptions): string {
+  if (!hasSignature(options.variant)) return ""
   const id = identityFor(options.sender)
   const lines: string[] = []
 
@@ -264,6 +280,7 @@ function detailRows(id: Identity): string {
  */
 export function buildSignatureHtml(options: SignatureOptions): string {
   const { sender, variant } = options
+  if (!hasSignature(variant)) return ""
   const baseUrl = options.baseUrl ?? APP_BASE_URL
   const id = identityFor(sender)
   const withImages = variant !== "text"
