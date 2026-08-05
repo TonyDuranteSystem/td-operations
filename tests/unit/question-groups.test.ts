@@ -256,3 +256,56 @@ describe("groupUncategorized — flagged ids are grouped BY owner", () => {
     expect(g.count).toBe(2)
   })
 })
+
+/**
+ * AN ANSWER MUST STAY CHANGEABLE. The mark is consumed the moment the client
+ * answers, so without carrying what they confirmed the buttons vanish — and a
+ * mis-tap could then only be undone by tapping a merchant chip, which re-books
+ * every payment on the card and writes a permanent merchant rule. Correcting
+ * one attribution corrupted twenty other payments.
+ */
+describe("groupUncategorized — what the client already confirmed", () => {
+  const confirmed = (id: string, who: string) => ({
+    id, description: 'Sent money to Finelli', counterparty: null, amount: -9000,
+    transaction_date: '2025-06-01', bank_name: 'Wise', category: 'distribution',
+    subcategory: 'member_distribution', notes: `manual: client answer (owner_draw) | Member: ${who}`,
+  })
+
+  it("carries who was confirmed, and on which payments", () => {
+    const [g] = groupUncategorized([
+      confirmed('a', 'Gabriele Finelli'),
+      confirmed('b', 'Gabriele Finelli'),
+      confirmed('c', 'Matthew Finelli'),
+    ])
+    expect(g.confirmed_by_member).toEqual({
+      'Gabriele Finelli': ['a', 'b'],
+      'Matthew Finelli': ['c'],
+    })
+  })
+
+  it("is absent when nothing has been confirmed", () => {
+    const [g] = groupUncategorized([{
+      id: 'x', description: 'ACME LTD', counterparty: null, amount: -100,
+      transaction_date: '2025-06-01', bank_name: 'Wise', category: 'expense', notes: '',
+    }])
+    expect(g.confirmed_by_member).toBeUndefined()
+  })
+
+  it("a staff answer is carried the same way", () => {
+    const [g] = groupUncategorized([{
+      id: 's', description: 'Sent money to Finelli', counterparty: null, amount: -100,
+      transaction_date: '2025-06-01', bank_name: 'Wise', category: 'distribution',
+      notes: 'manual: staff answer (owner_draw) | Member: Gabriele Finelli',
+    }])
+    expect(g.confirmed_by_member).toEqual({ 'Gabriele Finelli': ['s'] })
+  })
+
+  it("an ordinary answer with no owner is not treated as confirmed", () => {
+    const [g] = groupUncategorized([{
+      id: 'p', description: 'Glovo', counterparty: null, amount: -30,
+      transaction_date: '2025-06-01', bank_name: 'Wise', category: 'expense',
+      notes: 'manual: client answer (business_expense)',
+    }])
+    expect(g.confirmed_by_member).toBeUndefined()
+  })
+})

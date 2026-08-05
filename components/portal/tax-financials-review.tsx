@@ -35,7 +35,7 @@ function ProgressCard({ title, detail, eta }: { title: string; detail: string; e
 
 interface Gate { id: number; title: string; status: 'pass' | 'na' | 'fail'; detail: string; blocking: boolean }
 interface Member { name: string; pct: number; beginning_capital: number; contributions: number; distributions: number; income_share: number; ending_capital: number }
-interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string; suspected_members?: string[]; suspected_count?: number; suspected_ids?: string[]; suspected_by_member?: Record<string, string[]> }
+interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string; suspected_members?: string[]; suspected_count?: number; suspected_ids?: string[]; suspected_by_member?: Record<string, string[]>; confirmed_by_member?: Record<string, string[]> }
 interface Bucket { slug: string; label: string }
 interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
 interface AccountOnFile { account_ref: string; bank: string; acct: string; count: number }
@@ -381,7 +381,9 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     // flat list would credit one partner with another's withdrawals, which is
     // the normal case here: this card appears precisely when two owners share a
     // surname. "No — a supplier" clears every flagged payment on the card.
-    const ids = member ? (g.suspected_by_member?.[member] ?? []) : (g.suspected_ids ?? [])
+    const ids = member
+      ? (g.suspected_by_member?.[member] ?? [])
+      : (g.suspected_ids ?? [])
     if (ids.length === 0) return
     setBusy(g.group_key)
     setCardError(null)
@@ -420,6 +422,43 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const merchantAnswerIds = (g: QuestionGroup) => {
     const flagged = new Set(g.suspected_ids ?? [])
     return flagged.size === 0 ? g.transaction_ids : g.transaction_ids.filter(id => !flagged.has(id))
+  }
+
+  /**
+   * CHANGE AN ANSWER ALREADY GIVEN. Same shape as the owner question, but the
+   * ids come from what the client previously confirmed rather than from an open
+   * mark — the mark is consumed the moment they answer.
+   *
+   * Without this a mis-tap was unrecoverable from the screen: the only control
+   * left was a merchant chip, which re-books every payment in the group and
+   * writes a permanent merchant rule. Correcting one attribution corrupted
+   * twenty other payments.
+   */
+  const changeOwnerAnswer = async (g: QuestionGroup, was: string, value: string, member?: string) => {
+    const ids = g.confirmed_by_member?.[was] ?? []
+    if (ids.length === 0) return
+    setBusy(g.group_key)
+    setCardError(null)
+    try {
+      const res = await fetch(`${API}/answer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account_id: accountId, tax_year: taxYear,
+          transaction_ids: ids, answer: value, suspected: true, reanswer: true,
+          ...(member ? { member } : {}),
+        }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Modifica non salvata — riprova.' : 'Could not change your answer — please try again.'))
+      }
+      await load()
+    } catch (e) {
+      setCardError({ keys: [g.group_key], message: e instanceof Error ? e.message : 'Could not change your answer.' })
+    } finally {
+      setBusy(null)
+    }
   }
 
   const answer = async (g: QuestionGroup, value: string) => {
@@ -715,6 +754,40 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             </div>
           </div>
         ) : null}
+        {/* ALREADY ANSWERED — still changeable. The mark is consumed the moment
+            the client answers, so without this the buttons vanish and a mis-tap
+            can only be undone by tapping a merchant chip, which re-books every
+            payment on the card and writes a permanent merchant rule. */}
+        {Object.entries(g.confirmed_by_member ?? {}).map(([who, ids]) => (
+          <div key={who} className="mt-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[11px] leading-snug text-emerald-900">
+            <div className="mb-1.5">
+              {it
+                ? `Hai indicato che ${ids.length === 1 ? 'questo pagamento è' : `${ids.length} di questi pagamenti sono`} andat${ids.length === 1 ? 'o' : 'i'} a ${who}.`
+                : `You said ${ids.length === 1 ? 'this payment went' : `${ids.length} of these payments went`} to ${who}.`}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {(g.suspected_members ?? Object.keys(g.confirmed_by_member ?? {}))
+                .filter(m => m !== who)
+                .map(m => (
+                  <button
+                    key={m}
+                    disabled={busyOrLocked}
+                    onClick={() => void changeOwnerAnswer(g, who, 'owner_draw', m)}
+                    className="rounded-full border border-emerald-400 bg-white px-2 py-0.5 text-[11px] font-medium text-emerald-900 hover:bg-emerald-100 disabled:opacity-50"
+                  >
+                    {it ? `No — era ${m}` : `No — it was ${m}`}
+                  </button>
+                ))}
+              <button
+                disabled={busyOrLocked}
+                onClick={() => void changeOwnerAnswer(g, who, 'business_expense')}
+                className="rounded-full border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-50"
+              >
+                {it ? 'No — un fornitore' : 'No — a supplier'}
+              </button>
+            </div>
+          </div>
+        ))}
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${lean.cls}`}>{lean.txt}</span>
           <select

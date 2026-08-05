@@ -12,7 +12,7 @@
  */
 
 import { rowRootKey } from "./row-root"
-import { suspectedMembersFromNotes } from "./member-names"
+import { suspectedMembersFromNotes, confirmedMemberFromNote } from "./member-names"
 
 export interface UncategorizedRow {
   id: string
@@ -98,6 +98,17 @@ export interface QuestionGroup {
    * A row flagged for both appears under both — the client decides which.
    */
   suspected_by_member?: Record<string, string[]>
+  /**
+   * Owners the client has already CONFIRMED on this card, and which payments.
+   *
+   * Kept so the question stays answerable after it is answered. Once the client
+   * taps "Yes — X" the mark is consumed, the amber block vanished, and there
+   * was no control left that carries a member name — so a mis-tap could only be
+   * corrected by tapping a merchant chip, which re-books every payment in the
+   * group and writes a permanent merchant rule. Correcting one attribution
+   * corrupted twenty other payments.
+   */
+  confirmed_by_member?: Record<string, string[]>
 }
 
 /** Most-frequent non-empty value in a list (ties → first seen). */
@@ -188,6 +199,11 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
       const suspected_members = Array.from(new Set(markedRows.flatMap(r => suspectedMembersFromNotes(r.notes)))).sort()
       const suspected_count = markedRows.length
       const suspected_ids = markedRows.map(r => r.id)
+      const confirmed_by_member: Record<string, string[]> = {}
+      for (const r of g.rows) {
+        const who = confirmedMemberFromNote(r.notes)
+        if (who) (confirmed_by_member[who] ??= []).push(r.id)
+      }
       const suspected_by_member: Record<string, string[]> = {}
       for (const r of markedRows) {
         for (const name of suspectedMembersFromNotes(r.notes)) {
@@ -208,6 +224,7 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
         ...(current_category ? { current_category } : {}),
         ...(current_subcategory ? { current_subcategory } : {}),
         ...(suspected_members.length ? { suspected_members, suspected_count, suspected_ids, suspected_by_member } : {}),
+        ...(Object.keys(confirmed_by_member).length ? { confirmed_by_member } : {}),
       }
     })
     .sort((a, b) => b.count - a.count)

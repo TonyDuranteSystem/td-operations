@@ -99,9 +99,15 @@ export async function POST(request: NextRequest) {
      * the totals. It also fences a future UI edit that passes the whole group's
      * ids instead of the flagged ones: that swap compiles and passes the tests.
      */
+    // A RE-ANSWER targets rows the client ALREADY confirmed, which no longer
+    // carry the mark (their own answer consumed it). Those are verified by the
+    // confirmation marker instead, so changing a mis-tap stays as safe as the
+    // first answer: still only rows this client personally decided.
+    const isReanswer = body.reanswer === true
     let ownerAnswerIds: string[] = transactionIds
     if (isSuspectedAnswer) {
-      const { ASK_CLIENT_NOTE: MARK } = await import('@/lib/tax/member-names')
+      const { ASK_CLIENT_NOTE: MARK, CONFIRMED_MEMBER_SEP } = await import('@/lib/tax/member-names')
+      const requiredPrefix = isReanswer ? null : `${MARK}%`
       const marked: string[] = []
       for (let i = 0; i < transactionIds.length; i += 200) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -111,11 +117,15 @@ export async function POST(request: NextRequest) {
           .eq('account_id', accountId)
           .eq('tax_year', taxYear)
           .in('id', transactionIds.slice(i, i + 200))
-          .like('notes', `${MARK}%`)
+          .like('notes', requiredPrefix ?? `%${CONFIRMED_MEMBER_SEP}%`)
         marked.push(...((data ?? []) as Array<{ id: string }>).map(r => r.id))
       }
       if (marked.length === 0) {
-        return NextResponse.json({ error: 'That question has already been answered or is no longer open — please refresh.' }, { status: 409 })
+        return NextResponse.json({
+          error: isReanswer
+            ? 'That answer is no longer on file — please refresh and try again.'
+            : 'That question has already been answered or is no longer open — please refresh.',
+        }, { status: 409 })
       }
       ownerAnswerIds = marked
 

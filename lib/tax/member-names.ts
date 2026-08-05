@@ -377,3 +377,23 @@ export const ASK_CLIENT_NOTE = "ask: possible payment to member"
 export function suspectedMemberFromNotes(notes: string | null | undefined): string | null {
   return suspectedMembersFromNotes(notes)[0] ?? null
 }
+
+/** Marker the client's own owner answer carries, naming who they confirmed. */
+export const CONFIRMED_MEMBER_SEP = " | Member: "
+
+/**
+ * The owner a client CONFIRMED on this row, or null.
+ *
+ * Read so the card can keep showing the question after it is answered — the
+ * mark is gone by then, and without this the client has no way back if they
+ * picked the wrong person. Tapping a merchant chip instead re-books the whole
+ * group, so "no way back" meant "correcting one attribution corrupts twenty
+ * other payments".
+ */
+export function confirmedMemberFromNote(notes: string | null | undefined): string | null {
+  const n = (notes ?? "")
+  const at = n.indexOf(CONFIRMED_MEMBER_SEP)
+  if (at === -1) return null
+  const name = n.slice(at + CONFIRMED_MEMBER_SEP.length).split(" | ")[0].trim()
+  return name.length > 0 ? name : null
+}
