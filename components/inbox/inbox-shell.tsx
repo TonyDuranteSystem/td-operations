@@ -31,6 +31,7 @@ import {
 import { ORIGIN_UNKNOWN, viewKey, type RowAction, type ViewScope } from '@/lib/inbox/view-query'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
+import { openMarkReadSettled } from '@/lib/inbox/pending-mark-read'
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
   gmail: Mail,
@@ -618,6 +619,12 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     // email, with no Undo, while A survives (council, 2026-07-16).
     mutationFn: async ({ action, forwardTo, color, labelId, snoozeUntil, conv }: { action: string; forwardTo?: string; color?: string | null; labelId?: string; labelName?: string; snoozeUntil?: string; snoozeLabel?: string; originView?: string; conv?: InboxConversation | null }) => {
       if (!conv) return
+      // "Mark unread" must land AFTER the open-time auto-mark-read: that
+      // background call is slow, and raced it settles last and silently
+      // re-reads the thread the user just marked unread (Antonio's
+      // production QA, 2026-08-05 — "works only after I go back and
+      // reopen"). Waiting costs at most the tail of one in-flight request.
+      if (action === 'mark_unread') await openMarkReadSettled(conv.id)
       const threadId = conv.id.replace('gmail:', '')
       const res = await fetch('/api/inbox/email-actions', {
         method: 'POST',
