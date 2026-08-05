@@ -26,6 +26,13 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
   const [signatureVariant, setSignatureVariant] = useState<SignatureVariant>(
     DEFAULT_REPLY_SIGNATURE_VARIANT
   )
+  // The signature picker + preview appear only once the reader starts
+  // replying — while READING a thread they were eating the reading space
+  // (Antonio's production QA, 2026-08-05). Focus-latched rather than
+  // focus-bound: touching the picker blurs the textarea, so a naive
+  // "visible while focused" would snap the controls away mid-choice.
+  // Resets on send (below) and on thread switch (key= remount).
+  const [composing, setComposing] = useState(false)
   const [aiLoading, setAiLoading] = useState(false)
   const [attachNotice, setAttachNotice] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -87,6 +94,10 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
       setMessage('')
       attachments.clear()
       setAttachNotice(null)
+      // Back to reading mode: fold the signature controls away and drop any
+      // per-reply variant override so the next reply starts at the default.
+      setComposing(false)
+      setSignatureVariant(DEFAULT_REPLY_SIGNATURE_VARIANT)
       const refetch = () => {
         queryClient.invalidateQueries({
           queryKey: ['inbox-messages', conversation.id],
@@ -185,8 +196,9 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
           twenty-message thread; overridable per reply. The mailbox is NOT
           selectable here — a reply must go through the same mailbox the
           thread lives in, which is the one being viewed. The preview shows
-          exactly what will be appended under the typed reply. */}
-      {isEmail && (
+          exactly what will be appended under the typed reply — but only
+          once the reader starts replying, never while just reading. */}
+      {isEmail && composing && (
         <div className="mb-2 space-y-2">
           <SignatureControls
             sender={mailbox === 'antonio' ? 'antonio' : 'support'}
@@ -205,6 +217,7 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
+          onFocus={() => setComposing(true)}
           onKeyDown={handleKeyDown}
           onPaste={isEmail ? attachments.onPaste : undefined}
           placeholder={
