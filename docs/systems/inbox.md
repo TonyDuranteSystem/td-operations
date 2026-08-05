@@ -606,6 +606,18 @@ Function.
   contacts on multiple accounts; 30s polling refetches up to ~200 threads +
   the whole `account_contacts` table.
 
+## Mark-unread vs the open-time auto-mark-read (2026-08-05)
+
+Opening a conversation fires a background mark-read against Gmail (slow: thread
+fetch + one modify per message). The header's "Mark unread" is a single thread
+modify — raced, the stale auto-read used to land LAST and silently undo the
+user's choice ("works only after I go back and reopen", Antonio's production
+QA). `lib/inbox/pending-mark-read.ts` serializes them: the thread view records
+its in-flight call, the header action awaits it before writing. Module-level on
+purpose — the two components sit in different trees (the thread view is also
+mounted by portal-chats). A failed auto-read settles the wait rather than
+wedging the button.
+
 ## Outgoing email signatures (dev job fb7629ea — 2026-08-05)
 
 **The one definition:** `lib/email/signature.ts`. Every outgoing-email identity fact
