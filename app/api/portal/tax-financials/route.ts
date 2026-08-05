@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
       // ('conversion') are excluded (not an owner spend decision).
       const { data, error } = await db
         .from('bank_transactions')
-        .select('id, description, counterparty, amount, currency, transaction_date, bank_name, ai_lean, ai_bucket, category, subcategory')
+        .select('id, description, counterparty, amount, currency, transaction_date, bank_name, ai_lean, ai_bucket, category, subcategory, notes')
         .eq('account_id', accountId)
         .eq('tax_year', taxYear)
         // 'refund' included since 2026-07-05 — AI-booked refunds were invisible
@@ -78,6 +78,9 @@ export async function GET(request: NextRequest) {
       ai_bucket: (r.ai_bucket as string | null) ?? null,
       category: String(r.category ?? 'uncategorized'),
       subcategory: (r.subcategory as string | null) ?? null,
+      // Carried ONLY so the suspected-member mark can be recovered; the note
+      // itself never reaches the client.
+      notes: (r.notes as string | null) ?? null,
     })))
 
     // Per-file sources for the delete/replace cards (§6) + coverage below.

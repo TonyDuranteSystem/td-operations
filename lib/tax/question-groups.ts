@@ -12,6 +12,7 @@
  */
 
 import { rowRootKey } from "./row-root"
+import { suspectedMembersFromNotes, confirmedMemberFromNote, candidatesFromNote } from "./member-names"
 
 export interface UncategorizedRow {
   id: string
@@ -32,6 +33,9 @@ export interface UncategorizedRow {
   /** The row's current bookkeeping category (no-vanish: lets the review show
    *  the owner's current choice instead of dropping decided rows). */
   category?: string | null
+  /** The row's note. Read ONLY to recover the suspected-member mark — the note
+   *  itself is internal provenance and is never shown to a client. */
+  notes?: string | null
 }
 
 export interface QuestionGroup {
@@ -61,6 +65,60 @@ export interface QuestionGroup {
   /** Mode subcategory — distinguishes owner draws from personal spend inside
    *  'distribution' so the selected chip is honest (2026-07-07). */
   current_subcategory?: string
+  /**
+   * Members this group's payments MIGHT have gone to — the payee carries their
+   * surname but not their full name. Drives promotion into "Needs your
+   * decision" and the line naming them on the card.
+   *
+   * A DISTINCT LIST, never a mode. `mode` skips empty values, so one marked row
+   * among nine unmarked ones would have won outright and the card would have
+   * claimed all ten payments were to that owner — a false statement to a client
+   * about their own company. The count below says how many actually match.
+   */
+  suspected_members?: string[]
+  /** How many rows in this group carry a mark (≤ count). */
+  suspected_count?: number
+  /**
+   * The ids of ONLY the marked rows. The owner question answers these and
+   * nothing else — a group can mix marked and unmarked payments (the payee
+   * often lives in the counterparty while the group's name comes from the
+   * description), and booking all of them as owner draws on a "yes" turns real
+   * supplier payments into withdrawals on a partner's K-1.
+   */
+  suspected_ids?: string[]
+  /**
+   * Flagged ids grouped BY the owner they were flagged for.
+   *
+   * The card renders one "Yes" button per suspected owner, so a single flat id
+   * list is not enough: tapping "Yes — Gabriele" would post EVERY marked row in
+   * the group, including the ones flagged for Matthew, and credit them all to
+   * Gabriele's capital account and K-1. Two owners sharing a surname is exactly
+   * when this card appears, so that is the normal case, not the corner.
+   *
+   * A row flagged for both appears under both — the client decides which.
+   */
+  suspected_by_member?: Record<string, string[]>
+  /**
+   * Owners the client has already CONFIRMED on this card, and which payments.
+   *
+   * Kept so the question stays answerable after it is answered. Once the client
+   * taps "Yes — X" the mark is consumed, the amber block vanished, and there
+   * was no control left that carries a member name — so a mis-tap could only be
+   * corrected by tapping a merchant chip, which re-books every payment in the
+   * group and writes a permanent merchant rule. Correcting one attribution
+   * corrupted twenty other payments.
+   */
+  confirmed_by_member?: Record<string, string[]>
+  /**
+   * The ORIGINAL candidate owners recorded when the question was answered.
+   *
+   * Answering "Yes — Gabriele" consumes the mark on rows flagged for BOTH
+   * brothers, so the open-question list empties — and the change buttons then
+   * had nobody to offer except "a supplier". A client who mis-tapped Gabriele
+   * could not say Matthew, in the exact scenario the card exists for. The
+   * answer note keeps the candidates, and the change buttons are rebuilt here.
+   */
+  confirmed_alternatives?: string[]
 }
 
 /** Most-frequent non-empty value in a list (ties → first seen). */
@@ -114,13 +172,19 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
   // ("Unknown - Corporate Card - 6921" groups as its counterparty "Bershka").
   // Split per (root, direction, currency) — same keying as the grouped AI
   // candidates — so answer chips are direction-pure and totals single-currency.
-  const groups = new Map<string, { rows: UncategorizedRow[]; label: string; direction: "in" | "out"; currency: string }>()
+  const groups = new Map<string, { rows: UncategorizedRow[]; label: string; direction: "in" | "out"; currency: string; degenerate: boolean }>()
   for (const r of rows) {
-    const { key, label } = rowRootKey(r.description, r.counterparty)
+    // `degenerate` marks a CATCH-ALL bucket ("(no description)", bare
+    // "card"/"spend") holding rows with nothing in common. It is captured so
+    // the card can SAY so — not to hide the owner question, which is what an
+    // earlier cut did and which meant a flagged payment in one of these buckets
+    // was flagged in the data, withheld from the AI, and asked of NOBODY.
+    // 1,271 outgoing payments on production have a description this weak.
+    const { key, label, degenerate } = rowRootKey(r.description, r.counterparty)
     const direction = rowDirection(r.amount)
     const currency = (r.currency ?? "").toUpperCase()
     const groupKey = key + GROUP_KEY_SEP + direction + GROUP_KEY_SEP + currency
-    if (!groups.has(groupKey)) groups.set(groupKey, { rows: [], label, direction, currency })
+    if (!groups.has(groupKey)) groups.set(groupKey, { rows: [], label, direction, currency, degenerate: !!degenerate })
     groups.get(groupKey)!.rows.push(r)
   }
   return Array.from(groups.entries())
@@ -131,6 +195,35 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
       const bucket = mode(g.rows.map(r => r.ai_bucket))
       const current_category = mode(g.rows.map(r => r.category))
       const current_subcategory = mode(g.rows.map(r => r.subcategory))
+      // Distinct suspected members + how many rows actually carry a mark.
+      // Never moded (see the field's doc): one marked row must not speak for
+      // the whole group.
+      //
+      // NOT suppressed on a catch-all root any more. That suppression was a
+      // guard for a problem since solved properly: the card states how many of
+      // the group's payments actually match ("1 of these 40 …") and the answer
+      // targets only those ids, so naming the owner can no longer overclaim.
+      // Keeping it would have been the worse trade — a question raised and
+      // shown to nobody.
+      const markedRows = g.rows.filter(r => suspectedMembersFromNotes(r.notes).length > 0)
+      const suspected_members = Array.from(new Set(markedRows.flatMap(r => suspectedMembersFromNotes(r.notes)))).sort()
+      const suspected_count = markedRows.length
+      const suspected_ids = markedRows.map(r => r.id)
+      const confirmed_by_member: Record<string, string[]> = {}
+      const confirmedAlternatives = new Set<string>()
+      for (const r of g.rows) {
+        const who = confirmedMemberFromNote(r.notes)
+        if (who) {
+          (confirmed_by_member[who] ??= []).push(r.id)
+          for (const c of candidatesFromNote(r.notes)) confirmedAlternatives.add(c)
+        }
+      }
+      const suspected_by_member: Record<string, string[]> = {}
+      for (const r of markedRows) {
+        for (const name of suspectedMembersFromNotes(r.notes)) {
+          (suspected_by_member[name] ??= []).push(r.id)
+        }
+      }
       return {
         group_key,
         label: g.label,
@@ -144,6 +237,8 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
         ...(bucket ? { ai_bucket: bucket } : {}),
         ...(current_category ? { current_category } : {}),
         ...(current_subcategory ? { current_subcategory } : {}),
+        ...(suspected_members.length ? { suspected_members, suspected_count, suspected_ids, suspected_by_member } : {}),
+        ...(Object.keys(confirmed_by_member).length ? { confirmed_by_member, ...(confirmedAlternatives.size ? { confirmed_alternatives: Array.from(confirmedAlternatives).sort() } : {}) } : {}),
       }
     })
     .sort((a, b) => b.count - a.count)

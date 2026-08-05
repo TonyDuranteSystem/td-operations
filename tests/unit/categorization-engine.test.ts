@@ -220,18 +220,55 @@ describe('computeRecategorizationUpdates (parity core)', () => {
       id: 'nm', description: 'Sent money to Enrico Berini', amount: -580, ...over,
     })
 
-    it('run 1 reopens a catch-all vendor booking so the client is asked', () => {
+    /**
+     * THE MARK DOES NOT MOVE THE CATEGORY (2026-08-04, second design).
+     * The row keeps whatever the evidence supports and carries a mark naming
+     * the suspected owner; the review screen promotes it on the mark. The first
+     * design rewrote the category to force prominence, which collided with the
+     * AI pass, the re-sort and the two surfaces' folding rules.
+     */
+    it('run 1 marks the row WITHOUT touching its category', () => {
       const { updates } = computeRecategorizationUpdates(
         [berini({ category: 'expense', subcategory: 'vendor_payment' })], [], members, '',
       )
-      expect(updates.get('nm')?.category).toBe('uncategorized')
+      const u = updates.get('nm')
+      expect(u?.notes).toContain('Donato Renato Berini')
+      expect(u?.category ?? 'expense').toBe('expense')
+    })
+
+    /**
+     * THE CASE THE WHOLE FEATURE EXISTS FOR. A row ingested BEFORE its member
+     * was linked sits stored as `expense`. Nothing about its category changes,
+     * so the old pass-1 write condition never fired and the mark was never
+     * saved — the feature shipped dead for exactly the returning clients the
+     * periodic re-sort was built to rescue.
+     */
+    it('marks a row already stored as expense — a note-only write', () => {
+      const { updates } = computeRecategorizationUpdates(
+        [berini({ category: 'expense', subcategory: 'vendor_payment', notes: '' })], [], members, '',
+      )
+      expect(updates.get('nm')?.notes).toContain('Donato Renato Berini')
     })
 
     it('run 2 leaves it alone — no write at all, so nothing churns', () => {
       const { updates } = computeRecategorizationUpdates(
-        [berini({ category: 'uncategorized', subcategory: '' })], [], members, '',
+        [berini({ category: 'expense', subcategory: 'vendor_payment', notes: `${ASK_CLIENT_NOTE} Donato Renato Berini` })],
+        [], members, '',
       )
       expect(updates.get('nm')).toBeUndefined()
+    })
+
+    /**
+     * A STALE MARK MUST BE REMOVED. Member taken off the CRM, payee
+     * re-identified, a rule now explains the row — without a clear path the
+     * card would keep telling the client something false for ever.
+     */
+    it('clears the mark when it no longer applies', () => {
+      const { updates } = computeRecategorizationUpdates(
+        [berini({ category: 'expense', subcategory: 'vendor_payment', notes: `${ASK_CLIENT_NOTE} Donato Renato Berini` })],
+        [], [], '',
+      )
+      expect(updates.get('nm')?.notes).toBe('')
     })
 
     it('an exact member match still books outright and is NEVER reopened', () => {
@@ -283,12 +320,30 @@ describe('computeRecategorizationUpdates (parity core)', () => {
      * of an internal transfer when we have just decided we do not know what it
      * is. Pass 1 discarded the new note entirely.
      */
-    it('carries the ask-note through, replacing a now-false explanation', () => {
-      const stale = berini({ category: 'conversion', subcategory: 'internal_transfer', notes: 'transfer-pair → abc-123' })
-      const u = computeRecategorizationUpdates([stale], [], members, '').updates.get('nm')
-      expect(u?.category).toBe('uncategorized')
+    /**
+     * A row that ends up as an internal transfer or an equity movement is NOT
+     * an open question, so it is never marked. The mark is stamped AFTER the
+     * transfer-pair and own-entity passes precisely so it cannot overwrite the
+     * explanation they wrote.
+     */
+    it('never marks a row that ends up as an internal transfer', () => {
+      const asTransfer = rule({ pattern: 'Sent money to', category: 'conversion', subcategory: 'internal_transfer', direction: 'out' })
+      const u = computeRecategorizationUpdates([berini({})], [asTransfer], members, '').updates.get('nm')
+      expect(u?.category).toBe('conversion')
+      expect(u?.notes ?? '').not.toContain('ask:')
+    })
+
+    /**
+     * The reverse of the guard above: a row that a learned rule books as an
+     * ordinary expense IS still an open question, and marking it is the only
+     * thing that re-asks a payee the client once answered "business expense"
+     * for — the rule keeps winning on the category, but the question returns.
+     */
+    it('DOES mark a row a learned rule booked as an expense', () => {
+      const learned = rule({ pattern: 'enrico berini', category: 'expense', subcategory: 'contractors', account_id: 'acct-1' })
+      const u = computeRecategorizationUpdates([berini({})], [learned], members, '').updates.get('nm')
+      expect(u?.category).toBe('expense')
       expect(u?.notes).toContain('Donato Renato Berini')
-      expect(u?.notes).not.toContain('transfer-pair')
     })
 
     it('an unrelated supplier is never reopened — the queue must not flood', () => {
@@ -455,5 +510,40 @@ describe('zero-amount booking (v4, review F5)', () => {
       [], [], 'QA LLC',
     )
     expect(updates.has('z2')).toBe(false)
+  })
+})
+
+/**
+ * A CONSUMED QUESTION IS STILL A CHANGE. When a later pass explains a marked
+ * row, its note overwrites the mark — an open client question disappears from
+ * the portal. The announce-everything counter must include exactly that, or a
+ * mark-only sweep posts "0 owner questions raised/cleared" while one vanished.
+ */
+describe('markChangedIds counts a mark consumed by another pass', () => {
+  const members = ['Donato Renato Berini', 'Sofia Marinoni']
+  const mrow = (over: Record<string, unknown>) => ({
+    id: 'row-x', transaction_date: '2025-06-01', description: 'GENERIC PMT 001', counterparty: '',
+    amount: -100, currency: 'USD', balance_after: null, transaction_ref: 'ref-x',
+    bank_name: 'Slash', account_type: 'USD', category: 'uncategorized', subcategory: null,
+    is_related_party: false, notes: null, ai_lean: null, ai_bucket: null, ...over,
+  })
+
+  it('an own-entity explanation of a marked row is counted', () => {
+    const row = mrow({
+      id: 'oe', description: 'Sent money to Dynamiq SR LLC', amount: -900,
+      category: 'expense', subcategory: 'vendor_payment',
+      notes: 'ask: possible payment to member Donato Renato Berini',
+    })
+    const { updates, markChangedIds } = computeRecategorizationUpdates([row], [], members, 'Dynamiq SR LLC')
+    // the pass explains it as an internal transfer…
+    expect(updates.get('oe')?.category).toBe('conversion')
+    // …and that consumption is announced, not silent
+    expect(markChangedIds.has('oe')).toBe(true)
+  })
+
+  it('an unmarked row explained the same way is NOT counted as a mark change', () => {
+    const row = mrow({ id: 'x', description: 'Sent money to Dynamiq SR LLC', amount: -900, category: 'expense', subcategory: 'vendor_payment' })
+    const { markChangedIds } = computeRecategorizationUpdates([row], [], members, 'Dynamiq SR LLC')
+    expect(markChangedIds.has('x')).toBe(false)
   })
 })

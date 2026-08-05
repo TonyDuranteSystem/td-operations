@@ -142,19 +142,50 @@ async function createFork(input: { actor: string; taxYear: number; sourceAccount
     .single()
   if (wsErr) throw new Error(wsErr.message)
 
-  // Copy the client's member roster (account_contacts → workspace members).
+  // Copy the client's member roster into the workspace — from the SHARED
+  // reader, not from the contact links alone.
+  //
+  // This fork used to read `account_contacts` only, which gave the accountant's
+  // workspace a NARROWER roster than the client's own books. A company that is
+  // a member exists only on the curated members list and can never be a contact
+  // row, so it vanished here — and the workspace then re-booked that member's
+  // draws as ordinary business expenses. Saving back flipped them again on the
+  // client side: the exact flip-flop the shared roster exists to prevent, just
+  // relocated to the staff surface. A third definition of "who is a member" is
+  // never the answer.
+  const { fetchMemberRoster } = await import('@/lib/tax/member-roster')
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('ownership_pct, contacts(first_name, last_name)')
     .eq('account_id', input.sourceAccountId)
-  const members: MemberInput[] = ((links ?? []) as unknown as Array<{ ownership_pct: number | null; contacts: { first_name: string | null; last_name: string | null } | null }>)
-    .filter(l => l.contacts)
-    .map(l => ({
-      member_type: 'individual',
-      display_name: `${l.contacts!.first_name ?? ''} ${l.contacts!.last_name ?? ''}`.trim(),
-      ownership_pct: l.ownership_pct,
-    }))
-    .filter(m => (m.display_name ?? '').length > 0)
+  // Ownership percentages only exist on the contact links today, so they are
+  // matched back by name; a roster name with no link simply has none, which the
+  // draft already handles (it spreads unattributed movements by ownership and
+  // flags them) rather than dropping the member.
+  // Matched on the NORMALISED name (accents folded), because the curated list
+  // and the contact link routinely spell the same person differently —
+  // "Nicolò Patti" vs "Nicolo Patti". A raw lowercase key misses, the member
+  // forks with no ownership %, and the accountant is then blocked by an
+  // ownership gate on a company whose ownership is fully on file.
+  const { normalizeForMatch, looksLikeCompany } = await import('@/lib/tax/member-names')
+  const pctByName = new Map<string, number | null>()
+  for (const l of ((links ?? []) as unknown as Array<{ ownership_pct: number | null; contacts: { first_name: string | null; last_name: string | null } | null }>)) {
+    if (!l.contacts) continue
+    const key = normalizeForMatch(`${l.contacts.first_name ?? ''} ${l.contacts.last_name ?? ''}`)
+    if (!key) continue
+    // Both spellings present with DIFFERENT percentages is ambiguous — record
+    // nothing rather than let the last row silently decide a K-1 split. A
+    // missing percentage is flagged by the ownership gate; a wrong one is not.
+    if (pctByName.has(key) && pctByName.get(key) !== l.ownership_pct) { pctByName.set(key, null); continue }
+    pctByName.set(key, l.ownership_pct)
+  }
+  const roster = await fetchMemberRoster(supabaseAdmin, input.sourceAccountId)
+  const members: MemberInput[] = roster.names.map(name => ({
+    // A company member forked as an individual misstates what it is.
+    member_type: looksLikeCompany(name) ? 'company' : 'individual',
+    display_name: name,
+    ownership_pct: pctByName.get(normalizeForMatch(name)) ?? null,
+  }))
   await insertMembers(ws.id, members)
 
   // Copy the client's transactions for the year into the workspace (private copy).

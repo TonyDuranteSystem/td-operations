@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   decideRestale, describeRestaleResult, restaleIsDryRun,
-  RESTALE_MAX_ACCOUNTS_PER_RUN,
+  RESTALE_MAX_ACCOUNTS_PER_RUN, sweepBudgetExhausted, RESTALE_TIME_BUDGET_MS,
 } from '@/lib/tax/restale-sweep'
 
 const c = (over: Partial<Parameters<typeof decideRestale>[0]> = {}) => ({
@@ -111,5 +111,44 @@ describe('run cap', () => {
   it('sits above the whole book, so nothing is starved', () => {
     const ACCOUNT_YEARS_IN_PRODUCTION = 16
     expect(RESTALE_MAX_ACCOUNTS_PER_RUN).toBeGreaterThan(ACCOUNT_YEARS_IN_PRODUCTION)
+  })
+})
+
+/**
+ * The runaway guard counts ACCOUNTS; the ceiling that bites is wall-clock.
+ * Killed mid-loop, rows are already rewritten and the team post never runs —
+ * the one thing this job promises never to do — and the fixed ordering means
+ * every later run re-sweeps the same head and starves the tail.
+ */
+describe("sweepBudgetExhausted — the time door", () => {
+  it("keeps going well inside the budget", () => {
+    expect(sweepBudgetExhausted(0, 1_000)).toBe(false)
+    expect(sweepBudgetExhausted(0, RESTALE_TIME_BUDGET_MS - 1)).toBe(false)
+  })
+
+  it("stops at the budget, before the platform kills the run", () => {
+    expect(sweepBudgetExhausted(0, RESTALE_TIME_BUDGET_MS)).toBe(true)
+    expect(sweepBudgetExhausted(0, RESTALE_TIME_BUDGET_MS + 60_000)).toBe(true)
+  })
+
+  it("leaves headroom under the route's own ceiling", () => {
+    expect(RESTALE_TIME_BUDGET_MS).toBeLessThan(300_000)
+  })
+})
+
+describe("describeRestaleResult — a mark-only run must not read as silence", () => {
+  it("names owner questions when only marks moved", () => {
+    const line = describeRestaleResult({ company: "LT Program LLC", taxYear: 2025, scanned: 900, changed: 0, marks: 3, dryRun: false })
+    expect(line).toContain("3 owner questions")
+  })
+
+  it("says nothing extra when no mark moved", () => {
+    const line = describeRestaleResult({ company: "LT Program LLC", taxYear: 2025, scanned: 900, changed: 4, marks: 0, dryRun: false })
+    expect(line).not.toContain("owner question")
+  })
+
+  it("uses the singular for one", () => {
+    expect(describeRestaleResult({ company: "X", taxYear: 2025, scanned: 1, changed: 0, marks: 1, dryRun: true }))
+      .toContain("1 owner question ")
   })
 })

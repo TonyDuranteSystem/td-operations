@@ -38,7 +38,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     const reviewable = await fetchAllPaged<Record<string, unknown>>(async (from, to) => {
       const { data, error } = await db
         .from('pnl_workspace_transactions')
-        .select('id, description, counterparty, amount, currency, transaction_date, bank_name, ai_lean, ai_bucket, category, subcategory')
+        .select('id, description, counterparty, amount, currency, transaction_date, bank_name, ai_lean, ai_bucket, category, subcategory, notes')
         .eq('workspace_id', workspaceId)
         // 'refund' included since 2026-07-05 — AI-booked refunds were invisible
         // in the review (no-vanish violation): the client could never see or
@@ -62,6 +62,9 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       ai_bucket: (r.ai_bucket as string | null) ?? null,
       category: String(r.category ?? 'uncategorized'),
       subcategory: (r.subcategory as string | null) ?? null,
+      // Carried ONLY so the suspected-member mark can be recovered; the note
+      // itself never reaches the client.
+      notes: (r.notes as string | null) ?? null,
     })))
 
     // Per-file source cards.

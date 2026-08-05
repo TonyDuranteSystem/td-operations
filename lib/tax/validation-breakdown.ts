@@ -35,7 +35,7 @@ import { toUsd, type FxRates } from "./fx"
 import type { FinancialDraft } from "./financials-engine"
 import type { PriorReturnCaseRecord } from "./prior-return-case"
 import type { OwnershipResolution } from "./ownership-resolution"
-import { matchMemberName } from "./member-names"
+import { matchMemberName, suspectedMemberFromNotes } from "./member-names"
 
 /** The row fields validation needs — a superset of what the draft consumes. */
 export interface ValidationRow {
@@ -56,10 +56,17 @@ export type ProvenanceClass =
   | "location_answer"   // manual: period/country answer (human tap or standing-policy sweep)
   | "auto_zero"         // auto: zero-amount
   | "transfer_matcher"  // transfer-pair / own-entity
+  | "asked_member"      // ask: we suspect an owner and the client has not answered
   | "open"              // uncategorized
 
 export function classifyProvenance(row: Pick<ValidationRow, "category" | "notes">): ProvenanceClass {
   const n = row.notes ?? ""
+  // THE MARK OUTRANKS "still open". A flagged row that is also uncategorized is
+  // not a generic undecided payment — it is one we have specifically told the
+  // client may be a payment to their own owner. Testing `uncategorized` first
+  // hid exactly the rows the accountant most needs to see, and made the two
+  // panels tell different stories about the same payment.
+  if (suspectedMemberFromNotes(n)) return "asked_member"
   if (row.category === "uncategorized") return "open"
   if (n.startsWith("ai:")) return "ai"
   if (n.startsWith("manual: period answer") || n.startsWith("manual: country answer")) return "location_answer"
@@ -133,6 +140,7 @@ const PROVENANCE_LABELS: Record<ProvenanceClass, string> = {
   location_answer: "Location answers & standing policies",
   auto_zero: "Auto-filed zero-amount",
   transfer_matcher: "Internal-transfer matcher",
+  asked_member: "Asked the client — may be an owner payment",
   open: "Still open (uncategorized)",
 }
 

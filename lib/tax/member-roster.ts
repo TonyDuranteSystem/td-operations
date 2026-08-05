@@ -152,13 +152,62 @@ export async function fetchMemberRoster(db: RosterDb, accountId: string): Promis
       `[member-roster] account ${accountId}: ${unusable} member/contact record(s) have no usable name ` +
       `(blank, or a single word) — owner draws to them cannot be detected. Fix the record.`,
     )
+    // REPORTED, not just logged. A console line in a serverless function is not
+    // a signal anybody receives, and this failure is silent by construction:
+    // that member's draws simply book as business costs and every gate stays
+    // green. Ten such records exist on production today.
+    void reportRosterProblem(accountId, `${unusable} member/contact record(s) have no usable name — owner draws to them cannot be detected`, { unusable })
+  }
+  if (members.error || contacts.error) {
+    // One source down means a NARROWER roster than the truth, which is the
+    // silently-wrong direction. It survived as a console line only.
+    void reportRosterProblem(accountId, `member roster read partially failed — the roster is narrower than the truth, some owner draws will book as expenses`, {
+      members_error: String((members.error as { message?: string })?.message ?? members.error ?? ""),
+      contacts_error: String((contacts.error as { message?: string })?.message ?? contacts.error ?? ""),
+    })
   }
   if (names.length === 0) {
     console.warn(
       `[member-roster] account ${accountId}: NO members and NO usable linked contacts. ` +
       `Every owner draw will be treated as a business expense until somebody is on file.`,
     )
+    // REPORT IT WHERE A HUMAN LOOKS. A console line in a serverless log is not
+    // a signal anybody receives; this is the one failure the whole owner-roster
+    // design creates, and it is silent by construction — the categoriser simply
+    // books every draw as a business cost and every gate stays green.
+    //
+    // Reported, NOT thrown: an empty roster is a legitimate state for a brand
+    // new company, and 283 of 330 accounts have no curated members at all, so
+    // throwing here would fail the client's own statement upload for a data gap
+    // that is ours to fix, not theirs.
+    void reportRosterProblem(accountId, "No usable owner names on file — owner draws will be booked as business expenses", { unusable })
   }
 
   return { names, fromMembers: curated.length, fromContacts: contactNames.length, unusable }
+}
+
+/**
+ * One reporting path for every way the roster can be quietly wrong.
+ *
+ * Fire-and-forget by design: a reporting failure must never break a client's
+ * statement upload. But it must REACH somebody — every failure mode here is
+ * invisible otherwise, because a narrower roster just books fewer owner draws
+ * and no gate can tell the difference.
+ */
+function reportRosterProblem(accountId: string, message: string, context: Record<string, unknown>): void {
+  void import("@/lib/system-errors")
+    .then(({ reportSystemError }) => reportSystemError({
+      source: "server",
+      // The account id lives in the ROUTE, deliberately. The dedup fingerprint
+      // normalizes UUIDs out of the MESSAGE but uses the route verbatim — with
+      // a bare route, three different companies' roster problems merged into
+      // ONE feed entry pinned to whichever company was reported first, so staff
+      // fixed that company and the entry kept re-occurring under the fixed
+      // company's name for ever. Per-account routes give each company its own
+      // entry and its own resolve lifecycle.
+      route: `lib/tax/member-roster:${accountId}`,
+      message: `${message} (account ${accountId})`,
+      context: { account_id: accountId, ...context },
+    }))
+    .catch(() => {})
 }

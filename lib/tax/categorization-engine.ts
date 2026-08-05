@@ -30,6 +30,7 @@ import { aiSuggestCategories, AI_PROMPT_VERSION, type AiCategorizableTx, type Ai
 const EMPTY_AI_STATS = (): AiRunStats => ({ batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false })
 import { getExpenseBuckets } from "./expense-buckets"
 import { fetchMemberRoster } from "./member-roster"
+import { findNearMissMembers, SUSPECTED_SEP } from "./member-names"
 
 export interface CategorizationRule {
   id: string
@@ -124,6 +125,16 @@ export interface RecategorizeResult {
    * category, and a quiet run reads as quiet.
    */
   categoryChanged: number
+  /**
+   * Rows whose suspected-owner MARK was added or removed (2026-08-04).
+   *
+   * The mark never moves a category by design, so it is invisible to
+   * `categoryChanged` — and the sweep gates its team post on that number. The
+   * result was that the exact scenario the sweep exists for (a member linked in
+   * the CRM after ingest) raised new owner questions on a client's portal and
+   * announced NOTHING, reading as "0 changes" while it was working.
+   */
+  marksChanged: number
   transferPairs: number
   aiCategorized: number
   aiErrors: string[]
@@ -199,7 +210,7 @@ export function computeRecategorizationUpdates(
   // the review card / human answer decides the booking. NEVER feed these into
   // ownNames/nameVariants (that would auto-book conversion — reviewer F2).
   relatedEntities: string[] = [],
-): { updates: Map<string, RecatUpdate>; transferPairs: number } {
+): { updates: Map<string, RecatUpdate>; transferPairs: number; markChangedIds: Set<string> } {
   // Pass 1: rules. (ai_lean/ai_bucket are ADVISORY review hints — #2 — written
   // for residual rows even when their category stays uncategorized.)
   const updates = new Map<string, RecatUpdate>()
@@ -224,18 +235,13 @@ export function computeRecategorizationUpdates(
     const isAutoTagged = (row.notes ?? "").startsWith("auto:")
     if ((isAiTagged || isAutoTagged) && next.category === "uncategorized") continue
     if (next.category !== row.category || next.subcategory !== (row.subcategory ?? "")) {
-      // The ask-note MUST be carried through. Pass 1 otherwise discards
-      // `next.notes`, so a row reopened by the near-miss check landed in the
-      // client's queue still wearing its previous explanation — typically
-      // "transfer-pair → <id>", which now claims the row is one leg of an
-      // internal transfer when we have just decided we do not know what it is.
-      // (When a rule overrides an AI suggestion the "ai:" tag no longer
-      // applies, so it is cleared — that is the other case below.)
-      const carriesAsk = (next.notes ?? "").startsWith(ASK_CLIENT_NOTE)
+      // When a rule overrides an AI suggestion the "ai:" tag no longer applies.
+      // The suspected-member mark is NOT handled here — it is stamped after the
+      // later passes, because those passes overwrite notes and would erase it.
       updates.set(row.id as string, {
         category: next.category,
         subcategory: next.subcategory,
-        ...(carriesAsk ? { notes: next.notes } : isAiTagged ? { notes: "" } : {}),
+        ...(isAiTagged ? { notes: "" } : {}),
       })
     }
   }
@@ -283,7 +289,62 @@ export function computeRecategorizationUpdates(
     updates.set(id, { category: "conversion", subcategory: "internal_transfer", notes: "own-entity transfer" })
   }
 
-  return { updates, transferPairs: pairs.length }
+  // Pass 3: the SUSPECTED-MEMBER MARK. Stamped LAST, and deliberately so.
+  //
+  // The mark says "the payee carries one of this company's members' surnames
+  // but not their full name — ask the client". It does NOT change the category
+  // (see categorizeTransaction for why the first design did, and why that was
+  // wrong). It has to be written here rather than in pass 1 for two reasons:
+  //
+  //  1. PASSES 2 AND 2b OVERWRITE NOTES. A transfer pair or an own-entity
+  //     transfer stamps its own explanation, which would erase a mark written
+  //     earlier — and those rows are no longer open questions anyway.
+  //  2. PASS 1 ONLY WRITES WHEN A CATEGORY MOVES. Now that the mark never moves
+  //     one, a row already stored as `expense` would never have been written at
+  //     all — so the mark would never appear for a client whose statements were
+  //     ingested BEFORE their members were linked. That is precisely the case
+  //     the periodic re-sort exists for (Lucia Terracciano / Antonio Pezzella),
+  //     so the feature would have shipped dead for every returning client.
+  //
+  // A NOTES-ONLY update is emitted whenever the computed mark differs from the
+  // stored one — including when it must be CLEARED (member removed from the
+  // CRM, payee re-identified, a rule now explains the row). Without the clear
+  // path a stale mark would tell the client something false for ever.
+  const markChangedIds = new Set<string>()
+  for (const row of rows) {
+    const stored = (row.notes ?? "")
+    // Human answers and AI/auto provenance own the note outright.
+    if (stored.startsWith("manual:") || stored.startsWith("ai:") || stored.startsWith("auto:")) continue
+    const u = updates.get(row.id as string)
+    const finalCategory = u?.category ?? (row.category as string)
+    // A row the later passes explained is not an open question. Their note is
+    // the correct one and must stand — but if it OVERWRITES a stored mark, that
+    // is an open client question disappearing from the portal, and the
+    // announce-everything counter must say so. Without this, a transfer-pair
+    // explaining a marked row read as "0 owner questions raised/cleared" while
+    // one had just vanished from the client's screen.
+    if (u?.notes && !u.notes.startsWith(ASK_CLIENT_NOTE)) {
+      if (stored.startsWith(ASK_CLIENT_NOTE)) markChangedIds.add(row.id as string)
+      continue
+    }
+    if (finalCategory === "conversion" || finalCategory === "distribution" || finalCategory === "contribution") continue
+
+    const computed = Number(row.amount) < 0
+      ? Array.from(new Set([
+          ...findNearMissMembers(row.description ?? "", memberNames),
+          ...findNearMissMembers(row.counterparty ?? "", memberNames),
+        ]))
+      : []
+    const want = computed.length ? `${ASK_CLIENT_NOTE} ${computed.join(SUSPECTED_SEP)}` : ""
+    const has = stored.startsWith(ASK_CLIENT_NOTE) ? stored : ""
+    if (want === has) continue
+    markChangedIds.add(row.id as string)
+    // Note-only when nothing else about the row changed; merged into the
+    // existing update otherwise. The persist step already accepts both.
+    updates.set(row.id as string, { ...(u ?? {}), notes: want })
+  }
+
+  return { updates, transferPairs: pairs.length, markChangedIds }
 }
 
 /**
@@ -351,7 +412,7 @@ export async function recategorizeAccountYear(
     taxYear,
     "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, account_ref, category, subcategory, is_related_party, notes, ai_lean, ai_bucket, loc_code, loc_source, loc_confidence",
   )
-  if (rows.length === 0) return { scanned: 0, recategorized: 0, categoryChanged: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0, aiStats: EMPTY_AI_STATS() }
+  if (rows.length === 0) return { scanned: 0, recategorized: 0, categoryChanged: 0, marksChanged: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0, aiStats: EMPTY_AI_STATS() }
 
   const rules = await getCategorizationRules(accountId)
 
@@ -384,7 +445,7 @@ export async function recategorizeAccountYear(
   // pure deterministic core, extracted so the standalone P&L workspace tool
   // categorizes IDENTICALLY to this client path (no divergence — parity
   // guarantee). See computeRecategorizationUpdates above.
-  const { updates, transferPairs } = computeRecategorizationUpdates(rows, rules, memberNames, companyName, relatedEntities)
+  const { updates, transferPairs, markChangedIds } = computeRecategorizationUpdates(rows, rules, memberNames, companyName, relatedEntities)
 
   // Pass 3 (optional, Slice 5b): AI assist on what's STILL uncategorized after
   // the deterministic passes. Only high-confidence suggestions are applied,
@@ -399,30 +460,70 @@ export async function recategorizeAccountYear(
   // Counted separately from `recategorized` — see RecategorizeResult. A row
   // whose note is merely re-stamped is NOT a change a human needs to see.
   let categoryChanged = 0
+  let marksChanged = 0
   for (const [id, u] of Array.from(updates.entries())) {
     const orig = rows.find(r => r.id === id)
     if (!orig) continue
     const nextCategory = u.category ?? (orig.category as string)
     const nextSub = u.subcategory ?? ((orig.subcategory as string) ?? "")
     const catChanged = nextCategory !== orig.category || nextSub !== ((orig.subcategory as string) ?? "")
-    if (!catChanged && !u.notes) continue
-    if (catChanged) categoryChanged++
+    // `notes: ""` is a deliberate CLEAR, not "no note" — it is how a stale
+    // suspected-member mark is removed once the row is explained. Testing
+    // truthiness here would have skipped the clear and left the mark for ever,
+    // so the presence of the key is what counts.
+    const notesChanged = u.notes !== undefined && u.notes !== ((orig.notes as string) ?? "")
+    if (!catChanged && !notesChanged) continue
     // Report-only: count it and move on. Counted the same way a real run counts
     // it, so "would change N" and "changed N" are the same number.
-    if (dryRun) { recategorized++; continue }
+    if (dryRun) { recategorized++; if (catChanged) categoryChanged++; if (markChangedIds.has(id)) marksChanged++; continue }
     const payload: Record<string, unknown> = { category: nextCategory, subcategory: nextSub }
-    if (u.notes) payload.notes = u.notes
-    const { error: upErr } = await supabaseAdmin
-      .from("bank_transactions")
-      .update(payload)
-      .eq("id", id)
+    if (u.notes !== undefined) payload.notes = u.notes
+
+    // THE CLIENT MAY BE ANSWERING WHILE THIS RUNS. The decision to skip human
+    // answers is taken from the snapshot read at the top of this function, but
+    // a re-sort over a few thousand rows takes minutes — long enough for the
+    // owner to tap an answer in the portal in between. Without a guard the
+    // write lands on top of their answer: the category reverts while the
+    // "manual:" note stays, and because every later pass refuses to touch a
+    // manual row, that contradiction is then FROZEN — their decision is gone
+    // from their own P&L and nothing will ever put it back.
+    //
+    // THE FILTER IS CHOSEN PER ROW, FROM THE SNAPSHOT, BECAUSE `NOT (NULL ILIKE
+    // …)` IS NULL. A bare `.not("notes","ilike","manual:%")` therefore EXCLUDES
+    // every row whose note is NULL — the update matches nothing, PostgREST
+    // returns no error, and the counters happily report a write that never
+    // happened. Those rows then never converge: the same "would change N" is
+    // reported every run, for ever. NULL notes are not a legacy quirk — the
+    // client's own Undo writes them — and there are 519 on production today.
+    //
+    // Both branches are safe under READ COMMITTED:
+    //  - stored note NULL, and the client answers in between → the row is no
+    //    longer NULL, `.is(null)` misses, nothing is written (their answer wins);
+    //  - stored note not NULL, same race → the not-ilike filter excludes it.
+    // Either way the human's answer survives and we skip; we never overwrite.
+    //
+    // (The repo's other NULL-safe site issues TWO updates whose filters union —
+    // it has to, because it writes by predicate rather than by id. Here the id
+    // is known, so one correctly-chosen filter does the same job in one write.)
+    const storedNoteIsNull = (orig.notes as string | null) === null
+    const guarded = supabaseAdmin.from("bank_transactions").update(payload).eq("id", id)
+    const { data: written, error: upErr } = await (storedNoteIsNull
+      ? guarded.is("notes", null)
+      : guarded.not("notes", "ilike", "manual:%")
+    ).select("id")
     if (upErr) throw new Error(`Failed to update transaction ${id}: ${upErr.message}`)
+    // COUNT ONLY WHAT ACTUALLY LANDED. A 0-row match is the guard doing its job
+    // (the client answered mid-run), not a change — counting it would report
+    // work to the team channel that never happened and hide non-convergence.
+    if ((written ?? []).length === 0) continue
+    if (catChanged) categoryChanged++
+    if (markChangedIds.has(id)) marksChanged++
     recategorized++
   }
   // A preview stops here: the AI pass costs money and writes per batch.
   if (dryRun) {
     return {
-      scanned: rows.length, recategorized, categoryChanged, transferPairs,
+      scanned: rows.length, recategorized, categoryChanged, marksChanged, transferPairs,
       aiCategorized: 0, aiErrors: [], aiStats: EMPTY_AI_STATS(),
       uncategorizedRemaining: rows.filter(r =>
         (updates.get(r.id as string)?.category ?? (r.category as string)) === "uncategorized").length,
@@ -558,5 +659,5 @@ export async function recategorizeAccountYear(
     if (locErr) throw new Error(`Failed to stamp location on transaction ${r.id}: ${locErr.message}`)
   }
 
-  return { scanned: rows.length, recategorized, categoryChanged, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining, aiStats, ...(aiNoCandidates ? { aiNoCandidates } : {}) }
+  return { scanned: rows.length, recategorized, categoryChanged, marksChanged, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining, aiStats, ...(aiNoCandidates ? { aiNoCandidates } : {}) }
 }
