@@ -606,6 +606,16 @@ Function.
   contacts on multiple accounts; 30s polling refetches up to ~200 threads +
   the whole `account_contacts` table.
 
+## Row action icons — instant hover labels (2026-08-05)
+
+The desktop row-hover quick actions (color mark, file to folder, mark
+read/unread, snooze, restore, erase, delete) carry the instant `HoverHint`
+legend, the same one the header toolbar uses — the browser-native `title`
+tooltip alone appears only after a long still hover and reads as "no label"
+in practice. The mobile inline bar keeps native titles on purpose: it is
+touch, hover does not exist there. Any NEW row action must be wrapped the
+same way.
+
 ## Mark-unread vs the open-time auto-mark-read (2026-08-05)
 
 Opening a conversation fires a background mark-read against Gmail (slow: thread

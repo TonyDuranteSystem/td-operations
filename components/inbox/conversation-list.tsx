@@ -21,6 +21,7 @@ import {
 } from '@/lib/inbox/conversation-reconcile'
 import { toInboxView, viewKey } from '@/lib/inbox/view-query'
 import { buildPageNumbers } from '@/lib/inbox/pager'
+import { HoverHint } from './hover-hint'
 
 const EMPTY_OVERRIDES: Map<string, RowOverride> = new Map()
 const EMPTY_UNREAD: Map<string, UnreadOverride> = new Map()
@@ -672,7 +673,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                 <div className="flex items-center gap-0.5 bg-white border border-zinc-200 rounded-lg shadow-md px-1 py-0.5">
                 {onSetColor && (
                   <div className="relative">
-                    <button
+                    <HoverHint label="Mark with a color"><button
                       onClick={(e) => {
                         e.stopPropagation()
                         setRowMenu(rowMenu?.id === conv.id && rowMenu.kind === 'color' ? null : { id: conv.id, kind: 'color' })
@@ -688,7 +689,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                       ) : (
                         <Palette className="h-4 w-4" />
                       )}
-                    </button>
+                    </button></HoverHint>
                     {rowMenu?.id === conv.id && rowMenu.kind === 'color' && (
                       <>
                         <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setRowMenu(null) }} />
@@ -727,7 +728,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                 )}
                 {onMoveToLabel && (userLabels?.length ?? 0) > 0 && (
                   <div className="relative">
-                    <button
+                    <HoverHint label="File to folder"><button
                       onClick={(e) => {
                         e.stopPropagation()
                         setRowMenu(rowMenu?.id === conv.id && rowMenu.kind === 'label' ? null : { id: conv.id, kind: 'label' })
@@ -736,7 +737,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                       title="File to folder"
                     >
                       <FolderInput className="h-4 w-4" />
-                    </button>
+                    </button></HoverHint>
                     {rowMenu?.id === conv.id && rowMenu.kind === 'label' && (
                       <>
                         <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setRowMenu(null) }} />
@@ -766,7 +767,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                     )}
                   </div>
                 )}
-                <button
+                <HoverHint label={conv.unread > 0 ? 'Mark as read' : 'Mark as unread'}><button
                   onClick={(e) => {
                     e.stopPropagation()
                     markMutation.mutate({ conv, action: conv.unread > 0 ? 'mark_read' : 'mark_unread' })
@@ -776,10 +777,10 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                   title={conv.unread > 0 ? 'Mark as read' : 'Mark as unread'}
                 >
                   {conv.unread > 0 ? <Mail className="h-4 w-4" /> : <MailOpen className="h-4 w-4" />}
-                </button>
+                </button></HoverHint>
                 {onSnooze && !inTrash && (
                   <div className="relative">
-                    <button
+                    <HoverHint label="Snooze"><button
                       onClick={(e) => {
                         e.stopPropagation()
                         setRowMenu(rowMenu?.id === conv.id && rowMenu.kind === 'snooze' ? null : { id: conv.id, kind: 'snooze' })
@@ -788,7 +789,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                       title="Snooze"
                     >
                       <AlarmClock className="h-4 w-4" />
-                    </button>
+                    </button></HoverHint>
                     {rowMenu?.id === conv.id && rowMenu.kind === 'snooze' && (
                       <>
                         <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setRowMenu(null) }} />
@@ -818,7 +819,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                      trashed thread — a no-op that still toasted "Email deleted".
                      Restore is the action that belongs here. */
                   <>
-                  <button
+                  <HoverHint label="Restore to Inbox"><button
                     onClick={(e) => {
                       e.stopPropagation()
                       restoreMutation.mutate({ conv })
@@ -828,8 +829,8 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                     title="Restore to Inbox"
                   >
                     <ArchiveRestore className="h-4 w-4" />
-                  </button>
-                    <button
+                  </button></HoverHint>
+                    <HoverHint label="Erase from our storage"><button
                       onClick={(e) => {
                         e.stopPropagation()
                         if (confirm('Erase this email from our storage for good?\n\nThe copy we hold — the message and any attachments — is deleted immediately and cannot be recovered. It stays in Gmail\u2019s Trash, which Gmail empties on its own after about 30 days.')) {
@@ -841,10 +842,10 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                       title="Erase from our storage"
                     >
                       <FlameKindling className="h-4 w-4" />
-                    </button>
+                    </button></HoverHint>
                   </>
                 ) : (
-                  <button
+                  <HoverHint label="Delete"><button
                     onClick={(e) => {
                       e.stopPropagation()
                       deleteMutation.mutate(conv)
@@ -854,7 +855,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                     title="Delete"
                   >
                     <Trash2 className="h-4 w-4" />
-                  </button>
+                  </button></HoverHint>
                 )}
                 </div>
               </div>
