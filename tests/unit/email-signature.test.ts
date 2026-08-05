@@ -338,3 +338,15 @@ describe("banner width", () => {
     }
   })
 })
+
+describe("relative base URL (in-app preview)", () => {
+  // The compose/reply preview renders with baseUrl "" so images load from
+  // whichever deployment serves the CRM — the client bundle cannot see the
+  // server's base-URL override, and production may not carry the assets yet.
+  it("an empty base yields root-relative image paths", () => {
+    const html = buildSignatureHtml({ sender: "antonio", variant: "gala", baseUrl: "" })
+    expect(html).toContain('src="/images/signature-antonio-gala.jpg"')
+    expect(html).toContain('src="/images/tony-logos.png"')
+    expect(html).not.toContain('src="https://')
+  })
+})

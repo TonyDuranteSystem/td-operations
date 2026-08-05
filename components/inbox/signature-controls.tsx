@@ -1,6 +1,12 @@
 'use client'
 
-import type { SignatureVariant, SignatureSender } from '@/lib/email/signature'
+import { useMemo } from 'react'
+import {
+  buildSignatureHtml,
+  hasSignature,
+  type SignatureVariant,
+  type SignatureSender,
+} from '@/lib/email/signature'
 
 interface SignatureControlsProps {
   /** Which mailbox the email will leave from. */
@@ -105,6 +111,66 @@ export function SignatureControls({
           ))}
         </select>
       </label>
+    </div>
+  )
+}
+
+interface SignaturePreviewProps {
+  sender: SignatureSender
+  variant: SignatureVariant
+  /**
+   * True on paths where the sender types their own closing (compose, reply)
+   * — the preview must show exactly what will be appended, and those paths
+   * attach the block without "Best regards," (bug-hunter fix, 2026-08-05).
+   */
+  authorWritesClosing?: boolean
+  className?: string
+}
+
+/**
+ * Live preview of the signature that will be appended at send time.
+ *
+ * Exists because the composer is a plain textarea: the signature is attached
+ * server-side, so without this the sender picks an option blind and only
+ * sees the result in their Sent folder (Antonio's QA, 2026-08-05).
+ *
+ * The HTML comes from the same builder the send paths call — the preview
+ * cannot drift from the real output. baseUrl is RELATIVE ("") on purpose:
+ * the email itself carries absolute production URLs, but in-app the images
+ * must load from whichever deployment is serving the CRM (the client bundle
+ * cannot see the server's base-URL override, and production may not carry
+ * the assets yet while this is sandbox-only).
+ */
+export function SignaturePreview({
+  sender,
+  variant,
+  authorWritesClosing = true,
+  className = '',
+}: SignaturePreviewProps) {
+  const html = useMemo(
+    () =>
+      hasSignature(variant)
+        ? buildSignatureHtml({
+            sender,
+            variant,
+            includeSignoff: !authorWritesClosing,
+            baseUrl: '',
+          })
+        : '',
+    [sender, variant, authorWritesClosing]
+  )
+
+  return (
+    <div className={`rounded-lg border border-zinc-200 bg-zinc-50/60 px-3 py-2 ${className}`}>
+      <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-400 mb-1">
+        Signature preview — added when you send
+      </p>
+      {html ? (
+        // Our own generated markup, no user input — safe to inject.
+        <div className="bg-white rounded-md p-3 overflow-x-auto" dangerouslySetInnerHTML={{ __html: html }} />
+      ) : (
+        <p className="text-xs text-zinc-400 italic">No signature — the email ends with your text.</p>
+      )}
     </div>
   )
 }

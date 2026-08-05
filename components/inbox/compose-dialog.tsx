@@ -8,7 +8,7 @@ import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { useEmailAttachments } from './use-email-attachments'
 import { EmailAttachmentChips } from './email-attachment-chips'
 import { RecipientAutocomplete } from './recipient-autocomplete'
-import { SignatureControls } from './signature-controls'
+import { SignatureControls, SignaturePreview } from './signature-controls'
 import {
   DEFAULT_SIGNATURE_VARIANT,
   type SignatureSender,
@@ -497,6 +497,13 @@ export function ComposeDialog({
             placeholder="Write your email..."
             className="w-full min-h-[200px] px-5 py-3 text-sm outline-none bg-transparent resize-none"
           />
+
+          {/* What will be appended under the text — the composer is a plain
+              textarea, so without this the signature is invisible until the
+              email is in Sent (Antonio's QA, 2026-08-05). */}
+          <div className="px-5 pb-3">
+            <SignaturePreview sender={mailbox} variant={signatureVariant} />
+          </div>
         </div>
 
         {/* Footer */}
