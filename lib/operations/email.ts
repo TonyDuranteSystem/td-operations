@@ -126,6 +126,30 @@ function looksLikeHtml(input: string): boolean {
 }
 
 /**
+ * Best-effort HTML -> readable plain text (tag strip + entity decode).
+ * Fine for paragraph-shaped content; NOT fine for table layouts, whose cells
+ * produce no whitespace — which is why signature text is authored, never
+ * pushed through here.
+ */
+export function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<\/li>/gi, "\n")
+    .replace(/<li>/gi, "* ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
+/**
  * Convert a plain-text string (with blank lines as paragraph separators and
  * single newlines as line breaks) to HTML paragraphs. Always escapes HTML
  * entities — assume input is plain text. Callers who already have HTML
@@ -165,9 +189,18 @@ export function wrapEmailWithBrandShell(
 ): string {
   // On "none" the signature line is dropped entirely rather than left as an
   // empty line inside the shell.
+  //
+  // includeSignoff FALSE: everything wrapped here is human-authored (the
+  // compose dialog), and Antonio's real sent mail shows he usually types his
+  // own closing - an automatic "Best regards," on top produced a double
+  // closing on most composed emails (bug-hunter MAJOR, 2026-08-05). Same
+  // rule the reply path always had. The occasional email with no typed
+  // closing runs straight into the name block, which reads fine; the worker
+  // paths keep the sign-off because the model writes none.
   const sig = buildSignatureHtml({
     sender: signature.sender,
     variant: signature.variant,
+    includeSignoff: false,
   })
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;max-width:600px;margin:0 auto;padding:24px">
 ${bodyHtml}${sig ? `\n${sig}` : ""}
@@ -238,19 +271,26 @@ export async function sendEmail(
         variant,
       })
 
-      // The text/plain half must be AUTHORED, not derived. The fallback below
-      // strips tags out of the HTML, which turns a table-based signature into
-      // junk - so when the caller gave us plain text we keep that text and
-      // append the signature's own plain form.
+      // The text/plain half must be AUTHORED, not derived. The generic
+      // fallback below strips tags out of the FULL html - including the
+      // signature table, whose cells produce no whitespace, so the block
+      // came out glued together ("Best regards,Tony Durante LLC" - bug
+      // hunter, 2026-08-05). So for EVERY wrapped send with no caller text:
+      // derive text from the CONTENT only, then append the signature's own
+      // authored plain form. includeSignoff false, mirroring the HTML half.
       //
       // On "none" the separator is skipped too, not just the block: appending
       // "\n\n" + "" would leave the email ending in blank lines.
-      if (!body_text && !bodyWasHtml) {
-        const authored = sanitizeToAscii(params.body_html).trim()
+      if (!body_text) {
+        const contentText = bodyWasHtml
+          ? htmlToPlainText(contentHtml)
+          : sanitizeToAscii(params.body_html).trim()
         const sigText = hasSignature(variant)
-          ? sanitizeToAscii(buildSignatureText({ sender: signatureSender, variant }))
+          ? sanitizeToAscii(
+              buildSignatureText({ sender: signatureSender, variant, includeSignoff: false })
+            )
           : ""
-        body_text = sigText ? `${authored}\n\n${sigText}` : authored
+        body_text = sigText ? `${contentText}\n\n${sigText}` : contentText
       }
     }
 
@@ -287,22 +327,10 @@ export async function sendEmail(
       }
     }
 
-    // Plain text fallback derived from HTML when not provided
-    const plainText = body_text || htmlBody
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/p>/gi, "\n\n")
-      .replace(/<\/div>/gi, "\n")
-      .replace(/<\/li>/gi, "\n")
-      .replace(/<li>/gi, "* ")
-      .replace(/<[^>]+>/g, "")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&#39;/g, "'")
-      .replace(/&quot;/g, '"')
-      .replace(/\n{3,}/g, "\n\n")
-      .trim()
+    // Plain text fallback derived from HTML when not provided. Wrapped sends
+    // never reach this (their text half is authored above); this covers the
+    // dedicated senders that build their own HTML and pass no body_text.
+    const plainText = body_text || htmlToPlainText(htmlBody)
 
     // Duplicate detection — skipped for replies and when explicitly requested
     if (!params.reply_to_message_id && !params.skip_duplicate_check) {

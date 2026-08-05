@@ -1551,20 +1551,24 @@ async function sendEmail(p: any) {
   // definition in lib/email/signature.ts so they cannot drift.
   // plainTextToParagraphs handles escaping of the model-written body.
   const { plainTextToParagraphs } = await import('@/lib/operations/email')
-  const { buildSignatureHtml, DEFAULT_SIGNATURE_VARIANT } = await import(
+  const { buildSignature, DEFAULT_SIGNATURE_VARIANT } = await import(
     '@/lib/email/signature'
   )
   // The worker writes no closing of its own, so the signature carries one.
   // It always uses the default variant — which portrait goes on a message is
   // a human's call, not the model's, so it is deliberately not a tool param.
-  const signatureHtml = buildSignatureHtml({
+  const signature = buildSignature({
     sender: fromKey,
     variant: DEFAULT_SIGNATURE_VARIANT,
   })
   const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;max-width:600px;margin:0 auto;padding:24px">
 ${plainTextToParagraphs(p.body)}
-${signatureHtml}
+${signature.html}
 </div>`
+  // The text/plain half, signed the same. This MIME used to declare
+  // multipart/alternative and then ship ONLY an html part — a plain-text
+  // reader saw nothing at all (pre-existing; bug hunter, 2026-08-05).
+  const plainBody = `${p.body}\n\n${signature.text}`
 
   // If replying, get original message headers for threading
   let inReplyTo = ''
@@ -1621,6 +1625,11 @@ ${signatureHtml}
   const rawEmail = [
     ...headers,
     '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    Buffer.from(plainBody).toString('base64'),
     `--${boundary}`,
     'Content-Type: text/html; charset=UTF-8',
     'Content-Transfer-Encoding: base64',

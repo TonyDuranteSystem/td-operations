@@ -541,3 +541,52 @@ describe("sendEmail — wrap_with_brand", () => {
     expect(decoded).toContain("<p>Raw HTML body</p>")
   })
 })
+
+describe("sendEmail — bug-hunter fixes 2026-08-05", () => {
+  // The MAJOR: humans type their own closings (verified against Antonio's
+  // real sent mail), so the wrapped compose path must not add "Best regards,"
+  // on top — that produced a double closing on most composed emails.
+  it("wrapped sends carry NO automatic sign-off in either half", async () => {
+    const { sendEmail } = await import("@/lib/operations/email")
+    await sendEmail({
+      to: "client@example.com",
+      subject: "No double closing",
+      body_html: "All set on my side.\n\nThanks,\nAntonio",
+      wrap_with_brand: true,
+    })
+    const rawB64 = (gmailPostCalls[0].body as { raw: string }).raw
+    const mime = Buffer.from(rawB64, "base64url").toString("utf-8")
+    const part = (type: string) => {
+      const seg = mime.split(`Content-Type: ${type}`)[1]
+      const b64 = seg.match(/\r\n\r\n([A-Za-z0-9+/=]+)/)?.[1] || ""
+      return Buffer.from(b64, "base64").toString("utf-8")
+    }
+    expect(part("text/html")).not.toContain("Best regards")
+    expect(part("text/plain")).not.toContain("Best regards")
+    // The typed closing is still there, once.
+    expect(part("text/plain")).toContain("Thanks,\nAntonio")
+  })
+
+  // The template MINOR: an HTML body used to fall through to the tag-strip
+  // fallback, which glued the signature table into junk in the text half.
+  it("HTML bodies (templates) get an authored, un-glued text half", async () => {
+    const { sendEmail } = await import("@/lib/operations/email")
+    await sendEmail({
+      to: "client@example.com",
+      subject: "Template body",
+      body_html: "<p>Dear client,</p><p>Your documents are ready.</p>",
+      wrap_with_brand: true,
+    })
+    const rawB64 = (gmailPostCalls[0].body as { raw: string }).raw
+    const mime = Buffer.from(rawB64, "base64url").toString("utf-8")
+    const seg = mime.split("Content-Type: text/plain")[1]
+    const b64 = seg.match(/\r\n\r\n([A-Za-z0-9+/=]+)/)?.[1] || ""
+    const text = Buffer.from(b64, "base64").toString("utf-8")
+    expect(text).toContain("Dear client,")
+    expect(text).toContain("Your documents are ready.")
+    // The signature arrives authored: name on its own line, not glued.
+    expect(text).toContain("\nTony Durante LLC\n")
+    expect(text).not.toContain("cellpadding")
+    expect(text).not.toMatch(/regards,Tony/)
+  })
+})

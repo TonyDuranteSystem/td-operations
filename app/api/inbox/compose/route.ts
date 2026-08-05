@@ -5,6 +5,7 @@ import { sendEmail, renderEmailTemplate, type SendEmailAttachment } from "@/lib/
 import {
   parseSignatureVariant,
   parseSignatureSender,
+  signatureSenderForAddress,
   SIGNATURE_MAILBOX_ADDRESSES,
 } from "@/lib/email/signature"
 import {
@@ -88,6 +89,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: "Not authorized for this mailbox" },
         { status: 403 }
+      )
+    }
+
+    // Configuration landmine guard (bug hunter, 2026-08-05): the support
+    // path deliberately does not pin an address — it follows the deployment
+    // default (GOOGLE_IMPERSONATE_EMAIL, then support@). If that default is
+    // ever pointed at Antonio's PERSONAL mailbox, every non-admin compose
+    // would carry his name, portrait and direct line with no gate. Fail
+    // LOUDLY instead of sending — a misconfiguration must never be silent.
+    if (
+      senderKey !== "antonio" &&
+      signatureSenderForAddress(process.env.GOOGLE_IMPERSONATE_EMAIL) === "antonio"
+    ) {
+      console.error(
+        "compose: GOOGLE_IMPERSONATE_EMAIL points at the personal mailbox; refusing non-admin default send"
+      )
+      return NextResponse.json(
+        { error: "Email sending is misconfigured — contact the administrator." },
+        { status: 500 }
       )
     }
 

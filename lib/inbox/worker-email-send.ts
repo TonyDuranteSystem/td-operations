@@ -18,7 +18,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { TD_MAILBOXES, checkRecipientsAllowed } from "@/lib/inbox/email-recipients"
 import { buildRawEmail } from "@/lib/email/raw-mime"
 import {
-  buildSignatureHtml,
+  buildSignature,
   signatureFromName,
   signatureSenderForAddress,
   SIGNATURE_MAILBOX_ADDRESSES,
@@ -430,13 +430,15 @@ export async function confirmWorkerEmailSend(
     // Branded HTML — same shell the worker's text sends use. This block and
     // the one in lib/ai-agent/tools.ts were byte-identical copies of a
     // hand-rolled banner + sign-off + footer; both now call the single
-    // definition in lib/email/signature.ts.
+    // definition in lib/email/signature.ts. Sign-off stays ON here: the
+    // model writes no closing of its own.
+    const signature = buildSignature({
+      sender: signatureSenderForAddress(sender.email),
+      variant: DEFAULT_SIGNATURE_VARIANT,
+    })
     const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;max-width:600px;margin:0 auto;padding:24px">
 ${plainTextToParagraphs(claimed.body)}
-${buildSignatureHtml({
-  sender: signatureSenderForAddress(sender.email),
-  variant: DEFAULT_SIGNATURE_VARIANT,
-})}
+${signature.html}
 </div>`
 
     // Threading headers. Strip CR/LF from the recipient before it enters a raw
@@ -470,7 +472,15 @@ ${buildSignatureHtml({
 
     const stamp = Date.now()
     const raw = buildRawEmail(
-      { headerLines, htmlBody: html, plainText: claimed.body, attachments: files },
+      // Both halves signed — an HTML-only signature is the drift the shared
+      // module exists to prevent (bug hunter, 2026-08-05): plain-text readers
+      // got an unsigned message, and html/text divergence scores with filters.
+      {
+        headerLines,
+        htmlBody: html,
+        plainText: `${claimed.body}\n\n${signature.text}`,
+        attachments: files,
+      },
       { outer: `outer_${stamp}`, alt: `alt_${stamp}` },
     )
     const payload: Record<string, unknown> = { raw }

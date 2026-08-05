@@ -99,6 +99,13 @@ export function ComposeDialog({
     if (!open) {
       clearAttachments()
       setAttachNotice(null)
+      // Sender + signature must NOT stick across emails: after one send
+      // "From: Antonio", an unrelated compose hours later silently
+      // defaulting to his personal mailbox is exactly how his direct line
+      // ends up on a support matter (bug hunter, 2026-08-05). Every fresh
+      // dialog starts at the safe default.
+      setMailbox('support')
+      setSignatureVariant(DEFAULT_SIGNATURE_VARIANT)
     }
   }, [open, clearAttachments])
 
