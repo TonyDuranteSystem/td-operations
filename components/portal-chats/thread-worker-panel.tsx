@@ -15,6 +15,11 @@ import { Bot, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { WorkerMarkdown } from '@/components/chat/worker-markdown'
+import {
+  WorkerArtifactLinks,
+  parseWorkerArtifacts,
+  type WorkerArtifactLink,
+} from '@/components/chat/worker-artifacts'
 import { WorkerComposer } from '@/components/chat/worker-composer'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
@@ -26,6 +31,13 @@ interface ChatMsg {
   text: string
   /** agent_messages row id — present on worker replies, enables the 🧠 button. */
   id?: string
+  /**
+   * Files the worker PRODUCED on this turn (Antonio, 2026-08-05: "must be able to
+   * produce files everywhere"). Server-attested, never parsed from the reply text.
+   * Live turns only — the links are time-limited, so restoring an old one would
+   * render a button that fails.
+   */
+  artifacts?: WorkerArtifactLink[]
 }
 
 /**
@@ -201,7 +213,7 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
         }),
       })
       const raw = await res.text()
-      let data: { reply?: string; error?: string; messageId?: string; preparedSend?: PreparedSend | null } = {}
+      let data: { reply?: string; error?: string; messageId?: string; preparedSend?: PreparedSend | null; artifacts?: unknown } = {}
       try { data = JSON.parse(raw) } catch { /* non-JSON = gateway error */ }
       if (!res.ok) {
         throw new Error(
@@ -212,7 +224,13 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
         )
       }
       sentContextRef.current = true
-      setMessages(prev => [...prev, { role: 'worker', text: data.reply || '(empty reply)', id: data.messageId }])
+      setMessages(prev => [...prev, {
+        role: 'worker',
+        text: data.reply || '(empty reply)',
+        id: data.messageId,
+        // Shared parser: a malformed payload is dropped, never rendered as a dead button.
+        artifacts: parseWorkerArtifacts(data.artifacts),
+      }])
       // A frozen email waiting on a human — render the Confirm card. `?? null` is
       // load-bearing: a turn that prepares nothing must CLEAR a previous card, or a
       // stale frozen email stays on screen under a new conversation and one click
@@ -270,6 +288,8 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
               )}
             >
               {m.role === 'worker' ? <WorkerMarkdown text={m.text} /> : m.text}
+              {/* Produced files, from server data — present whatever the reply says. */}
+              {m.role === 'worker' ? <WorkerArtifactLinks artifacts={m.artifacts} /> : null}
             </div>
             {/* 🧠 — make THIS reply a rule for everyone (global, client details
                 scrubbed). Only on worker replies we have a row id for. */}

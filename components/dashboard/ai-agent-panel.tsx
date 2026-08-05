@@ -8,6 +8,11 @@ import { useHoldToSend } from '@/components/chat/use-hold-to-send'
 import { useWorkerAttachments, type UploadedAttachment } from '@/components/chat/use-worker-attachments'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { clientKeyFromPath } from '@/lib/ai-agent/sidebar-scope'
+import {
+  WorkerArtifactLinks,
+  parseWorkerArtifacts,
+  type WorkerArtifactLink,
+} from '@/components/chat/worker-artifacts'
 import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
@@ -24,7 +29,7 @@ interface Message {
    * "Here's the PDF" with the link missing — the same thing Luca reported on 10 July,
    * reproduced by the feature meant to fix it.
    */
-  artifacts?: { kind: string; url: string; label: string }[]
+  artifacts?: WorkerArtifactLink[]
   /** Id of the stored turn this came from — present only for restored/sent turns.
    *  Without it a message cannot be edited or deleted, because there is no row to
    *  rewind to. */
@@ -345,7 +350,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
         next.push({
           role: 'assistant',
           content: (data.content || 'No response.') + engineNote + toolInfo,
-          artifacts: Array.isArray(data.artifacts) ? data.artifacts : undefined,
+          artifacts: parseWorkerArtifacts(data.artifacts),
           turnId,
         })
         return next
@@ -662,22 +667,10 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
                 )}
                 {/* Produced files, rendered from server data — present whatever the
                     reply text happens to say about them. */}
-                {msg.artifacts?.length ? (
-                  <div className="flex flex-wrap gap-2 pt-2">
-                    {msg.artifacts.map((a, ai) => (
-                      <a
-                        key={ai}
-                        href={a.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 transition-colors"
-                      >
-                        <FileText className="h-3.5 w-3.5" />
-                        {a.label}
-                      </a>
-                    ))}
-                  </div>
-                ) : null}
+                {/* Shared with the Inbox and Portal Chats panels — one renderer, so a
+                    download control cannot quietly exist on one screen and not another
+                    (which is exactly the state this replaced). */}
+                <WorkerArtifactLinks artifacts={msg.artifacts} />
               </div>
             </div>
           ))}

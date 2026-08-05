@@ -26,6 +26,8 @@ import {
   buildMemberNames, filterMemberNames, isUsableMemberName, dedupeMemberNames,
   matchMemberName, findNearMissMember, normalizeForMatch, nameParts, payeePart, looksLikeCompany,
   MIN_NAME_PART_LENGTH, MIN_NAME_PARTS, MIN_SURNAME_LENGTH, MIN_FULL_NAME_LENGTH,
+  findNearMissMembers, suspectedMembersFromNotes, ASK_CLIENT_NOTE, SUSPECTED_SEP,
+  candidatesFromNote, confirmedMemberFromNote,
 } from '@/lib/tax/member-names'
 
 describe('isUsableMemberName — the single predicate', () => {
@@ -326,5 +328,102 @@ describe('the builders agree', () => {
       const viaDisplayName = filterMemberNames([`${c.first_name ?? ''} ${c.last_name ?? ''}`.trim()])
       expect(viaContacts).toEqual(viaDisplayName)
     }
+  })
+})
+
+/**
+ * TWO OWNERS SHARING A SURNAME — Titan's real shape (Gabriele and Matthew
+ * Finelli). Returning only the FIRST match meant the card offered one name, so
+ * a client whose payment went to the other one had no way to say so: they
+ * either credited the wrong partner's K-1 or answered "not an owner". Both
+ * wrong. We narrow the field; the client picks.
+ */
+describe('every matching owner is offered, not just the first', () => {
+  const titan = ['Gabriele Finelli', 'Matthew Finelli']
+
+  it('returns BOTH owners for a shared surname', () => {
+    expect(findNearMissMembers('Sent money to M. Finelli', titan))
+      .toEqual(['Gabriele Finelli', 'Matthew Finelli'])
+  })
+
+  it('returns just the one when only one surname matches', () => {
+    expect(findNearMissMembers('payment Gallerani', ['Marco Gallerani', 'Gabriele Finelli']))
+      .toEqual(['Marco Gallerani'])
+  })
+
+  it('returns none on an exact match — that books outright', () => {
+    expect(findNearMissMembers('Sent money to Matthew Finelli', titan)).toEqual([])
+  })
+
+  it('returns none for an unrelated supplier', () => {
+    expect(findNearMissMembers('Sent money to Aurora Global Holdings Limited', titan)).toEqual([])
+  })
+
+  it('the note carries every name, and the reader gets them all back', () => {
+    const note = `${ASK_CLIENT_NOTE} ${['Gabriele Finelli', 'Matthew Finelli'].join(SUSPECTED_SEP)}`
+    expect(suspectedMembersFromNotes(note)).toEqual(['Gabriele Finelli', 'Matthew Finelli'])
+    // and the old single-name shape still reads
+    expect(suspectedMembersFromNotes(`${ASK_CLIENT_NOTE} Gabriele Finelli`)).toEqual(['Gabriele Finelli'])
+  })
+
+  it('an appended related-entity tail never becomes a name', () => {
+    expect(suspectedMembersFromNotes(`${ASK_CLIENT_NOTE} Gabriele Finelli | Related entity: Acme FZCO`))
+      .toEqual(['Gabriele Finelli'])
+  })
+})
+
+/**
+ * NAMES THE MATCHER USED TO MISS ENTIRELY — the silent-deduction direction.
+ */
+describe('name shapes that were being missed', () => {
+  it('matches an apostrophe surname the bank stripped', () => {
+    // Banks and SWIFT send "MARCO DAMICO" for "Marco D'Amico".
+    expect(matchMemberName('Sent money to MARCO DAMICO', ["Marco D'Amico"])).toBe("Marco D'Amico")
+    expect(matchMemberName("bonifico a Marco D'Amico", ["Marco D'Amico"])).toBe("Marco D'Amico")
+    // and the near-miss twin
+    expect(findNearMissMembers('WIRE OUT DAMICO', ["Marco D'Amico"])).toEqual(["Marco D'Amico"])
+  })
+
+  it('curly apostrophes normalise the same way', () => {
+    expect(matchMemberName('Sent money to MARCO DAMICO', ['Marco D’Amico'])).toBe('Marco D’Amico')
+  })
+
+  /**
+   * A two-letter legal suffix is also a real name particle — "João Sá
+   * Ferreira", "Maria Sa Silva". Treating those as companies switched the owner
+   * question OFF for a real person and deducted their draws in silence.
+   */
+  it('does not mistake a short name particle for a company', () => {
+    expect(looksLikeCompany('João Sá Ferreira')).toBe(false)
+    expect(looksLikeCompany('Maria Sa Silva')).toBe(false)
+    expect(findNearMissMembers('WIRE OUT FERREIRA', ['João Sá Ferreira'])).toEqual(['João Sá Ferreira'])
+  })
+
+  it('still recognises company members, including non-US forms', () => {
+    for (const n of ['Nexo Agency LLC', 'Indaco LTD', 'Something GmbH', 'Foo Technologies', 'Bar Media', 'Baz SL']) {
+      expect(looksLikeCompany(n)).toBe(true)
+    }
+  })
+})
+
+/**
+ * THE CANDIDATE BREADCRUMB. Answering "Yes — Gabriele" consumes the mark on
+ * rows flagged for BOTH brothers, so without remembering who else was in the
+ * running, the change buttons could only offer "a supplier" — a client who
+ * mis-tapped had no way to say it was Matthew, in the exact shared-surname
+ * case the card exists for.
+ */
+describe('candidatesFromNote — the answer remembers who was in the running', () => {
+  it('round-trips the candidate list through an answered note', () => {
+    const note = 'manual: client answer (owner_draw) | Member: Gabriele Finelli | Of: Gabriele Finelli; Matthew Finelli'
+    expect(candidatesFromNote(note)).toEqual(['Gabriele Finelli', 'Matthew Finelli'])
+    // and the confirmed-member reader is NOT confused by the trailer
+    expect(confirmedMemberFromNote(note)).toBe('Gabriele Finelli')
+  })
+
+  it('is empty on notes without the breadcrumb', () => {
+    expect(candidatesFromNote('manual: client answer (owner_draw) | Member: Gabriele Finelli')).toEqual([])
+    expect(candidatesFromNote('ask: possible payment to member Gabriele Finelli')).toEqual([])
+    expect(candidatesFromNote('')).toEqual([])
   })
 })

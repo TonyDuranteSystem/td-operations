@@ -732,7 +732,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { reply } = await callWorkerWithAttachments(userBody, {
+    const { reply, artifacts } = await callWorkerWithAttachments(userBody, {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
       // Capability statement GENERATED from the rails actually assigned above, so what
@@ -1010,7 +1010,20 @@ export async function POST(req: NextRequest) {
         ? `${reply}\n\n⚠️ **Correction from the system: no message was actually prepared, so there is no card to confirm.** Nothing is waiting to send. Ask again — say "prepare the portal message now" — and check that the Confirm card appears before relying on it.`
         : reply
 
-    return NextResponse.json({ reply: correctedReply, threadId, preparedSend, messageId: rowId })
+    // FILES THE WORKER PRODUCED THIS TURN (Antonio, 2026-08-05: "must be able to
+    // produce files everywhere"). Captured SERVER-SIDE from the tool's own output,
+    // never parsed out of the reply text — the panel renders the download itself, so
+    // it exists whatever the model happens to write about it. Until now this route
+    // destructured only `reply`, so on the Inbox and Portal Chats panels a document
+    // the worker really did build was thrown away at the last step: it said "here's
+    // your spreadsheet" and there was nothing to click.
+    return NextResponse.json({
+      reply: correctedReply,
+      threadId,
+      preparedSend,
+      messageId: rowId,
+      artifacts: artifacts ?? [],
+    })
   } catch (error) {
     if (rowId) {
       await db

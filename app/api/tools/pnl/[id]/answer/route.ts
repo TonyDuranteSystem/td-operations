@@ -30,7 +30,21 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   if (!isDashboardUser(user)) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
 
   try {
-    const body = await request.json().catch(() => ({})) as { answer?: string; transaction_ids?: string[]; bulk?: boolean; group_labels?: string[] }
+    const body = await request.json().catch(() => ({})) as { answer?: string; transaction_ids?: string[]; bulk?: boolean; group_labels?: string[]; suspected?: boolean; member?: string }
+    /**
+     * THE OWNER QUESTION — same contract as the client portal route.
+     *
+     * This surface renders the identical card, so it can post the identical
+     * answer. Without these two fields it silently dropped both halves:
+     *  - no `| Member:` tail, so the confirmed owner was unknown and the draw
+     *    was spread across every partner by ownership % — straight into the
+     *    accountant's own workbook;
+     *  - and it LEARNED a merchant rule, account-scoped for a forked workspace,
+     *    which then re-booked every sibling payment on the real client's next
+     *    re-sort and suppressed the question for ever.
+     */
+    const isSuspectedAnswer = body.suspected === true
+    const suspectedMember = typeof body.member === 'string' ? body.member.trim().slice(0, 120) : ''
     const ids = Array.isArray(body.transaction_ids) ? body.transaction_ids.filter(Boolean) : []
     if (!body.answer || ids.length === 0) {
       return NextResponse.json({ error: 'answer and transaction_ids are required.' }, { status: 400 })
@@ -75,7 +89,10 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     for (let i = 0; i < ids.length; i += 200) {
       const { data, error } = await db
         .from('pnl_workspace_transactions')
-        .update({ category: mapped.category, subcategory: mapped.subcategory, notes: isBulk ? `manual: bulk staff answer (${body.answer})` : `manual: staff answer (${body.answer})` })
+        .update({ category: mapped.category, subcategory: mapped.subcategory, notes: (() => {
+          const base = isBulk ? `manual: bulk staff answer (${body.answer})` : `manual: staff answer (${body.answer})`
+          return isSuspectedAnswer && suspectedMember ? `${base} | Member: ${suspectedMember}` : base
+        })() })
         .eq('workspace_id', params.id)
         // Bulk only books rows still awaiting a decision — it must never stomp
         // heterogeneous prior bookings (that also keeps undo exact: prior state
@@ -125,7 +142,10 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     // Auto-learn (fire-and-forget — learning must never fail the answer).
     // NEVER on bulk: permanent per-merchant memory requires a per-merchant
     // decision, not a sweep.
-    if (!isBulk && updatedRows.length > 0) {
+    // Never learn from the owner question — it answers who a PAYMENT went to,
+    // not what a MERCHANT is, and here the rule would be written against the
+    // REAL client's account from a scratch workspace.
+    if (!isBulk && !isSuspectedAnswer && updatedRows.length > 0) {
       try {
         const { data: ws } = await db
           .from('pnl_workspaces')

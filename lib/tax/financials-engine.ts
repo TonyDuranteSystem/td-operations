@@ -46,6 +46,9 @@ export interface DraftTransaction {
   /** AI-assigned expense bucket slug (catalog_entries 'expense_categories') — the
    *  grouping key for the operating-expense breakdown. Null/absent → "other". */
   ai_bucket?: string | null
+  /** Provenance note. Read ONLY for the "| Member: X" tail a client writes when
+   *  they confirm which owner a payment went to — see attributeToMember. */
+  notes?: string | null
 }
 
 export interface MemberCapital {
@@ -142,6 +145,29 @@ export interface BuildDraftInput {
    *  source (after prior return and statement balance columns) and the
    *  per-bank tie-out anchor. */
   providedBalances?: ProvidedBankBalance[]
+}
+
+/**
+ * The member a client EXPLICITLY confirmed, from the note's "| Member: X" tail.
+ *
+ * Name-matching cannot cover this case by construction: the whole reason we ask
+ * is that the payee carries only a SURNAME, and matching needs the full name.
+ * Without reading the confirmed answer, a draw the client just told us belongs
+ * to Gabriele lands in "unattributed" and is spread across every partner by
+ * ownership % — putting withdrawals on the K-1 of a partner who received
+ * nothing, while the totals still tie so no gate notices.
+ */
+export function confirmedMemberFromNotes(notes: string | null | undefined, members: ResolvedMember[]): ResolvedMember | null {
+  const at = (notes ?? "").indexOf("| Member: ")
+  if (at === -1) return null
+  // Cut at the NEXT " | " — the answer note may carry further trailers after
+  // the member (the "| Of: A; B" candidate breadcrumb that keeps the change
+  // buttons honest). Reading to end-of-string swallowed that trailer into the
+  // name, sameName failed, and the confirmed draw silently fell back to being
+  // spread across every partner — undoing the exact fix this reader exists for.
+  const name = (notes ?? "").slice(at + "| Member: ".length).split(" | ")[0].trim()
+  if (!name) return null
+  return members.find(m => sameName(m.name, name)) ?? null
 }
 
 /** Match a counterparty/description to a member by name. Exported for tests. */
@@ -336,12 +362,19 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
   let unattributedDist = 0
 
   for (const t of contribTxs) {
-    const m = attributeToMember(t.counterparty, allocatable) ?? attributeToMember(t.description, allocatable)
+    // Same precedence as distributions — a confirmed member wins.
+    const m = confirmedMemberFromNotes(t.notes, allocatable)
+      ?? attributeToMember(t.counterparty, allocatable)
+      ?? attributeToMember(t.description, allocatable)
     if (m) byMember.get(m.name)!.contributions += Number(t.amount)
     else unattributedContrib += Number(t.amount)
   }
   for (const t of distTxs) {
-    const m = attributeToMember(t.counterparty, allocatable) ?? attributeToMember(t.description, allocatable)
+    // The client's own confirmation wins over name-matching — it is the only
+    // signal that can identify a surname-only payee.
+    const m = confirmedMemberFromNotes(t.notes, allocatable)
+      ?? attributeToMember(t.counterparty, allocatable)
+      ?? attributeToMember(t.description, allocatable)
     if (m) byMember.get(m.name)!.distributions += Math.abs(Number(t.amount))
     else unattributedDist += Math.abs(Number(t.amount))
   }

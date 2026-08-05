@@ -120,6 +120,7 @@ export async function resolveThread(
   threadId: string,
   outcome: string | null,
   summaryText: string | null,
+  clientKey?: string | null,
 ): Promise<ThreadSummary | null> {
   if (!threadId || typeof threadId !== "string") return null
 
@@ -129,6 +130,27 @@ export async function resolveThread(
       resolved_at: new Date().toISOString(),
       outcome: typeof outcome === "string" && outcome.length > 0 ? outcome.slice(0, 300) : null,
       summary_text: typeof summaryText === "string" ? summaryText : null,
+      // ⛔ THE LABEL MUST FOLLOW THE CONTENT, TURN BY TURN.
+      //
+      // `summary_text` is REWRITTEN on every turn, but `client_key` used to be
+      // stamped once when the row was created and never touched again. The two
+      // therefore drifted apart in both directions, and the recall filter compares
+      // the CURRENT turn's client against that stale label:
+      //   · open the sidebar off a client page → row labelled with nothing → walk
+      //     to a client's page and keep typing → the summary is now about that
+      //     client while the row stays unlabelled;
+      //   · start on client A's page, continue on client B's → a row labelled A
+      //     holding B's business, which then surfaces in A's conversations.
+      // A Team Chat thread linked to a client AFTER its first @claude turn had the
+      // same shape, and so did a Slack thread tagged after the fact.
+      //
+      // Re-stamping here — at the same moment the summary is written — makes the
+      // label describe the text it is stored next to, which is the only thing the
+      // filter can honestly compare. Passing `undefined` (a caller that does not
+      // know) leaves the existing label untouched; passing an explicit null on a
+      // turn with no client CLEARS it, so a conversation that stops being about a
+      // client stops being recallable for them.
+      ...(clientKey !== undefined ? { client_key: clientKey || null } : {}),
     })
     .eq("thread_id", threadId)
     .select(SELECT_COLS)

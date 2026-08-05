@@ -2682,9 +2682,22 @@ export async function executeWorkerTool(
     // would silently bypass the confirm card — don't.
   }
   if (name === "send_portal_message") {
-    // Slack-only direct send (gated at the tool-list level via enableSlackSend).
-    // Reaches here only when the model was actually handed the tool, same as
-    // start_code_task above.
+    // ⛔ EXECUTOR GATE FIRST — this is a REAL, IRREVERSIBLE, CLIENT-VISIBLE send
+    // (it also auto-emails the client, R103), so it must never fire on a call that
+    // was not handed the tool.
+    //
+    // This branch previously carried the comment "reaches here only when the model
+    // was actually handed the tool" and NO check. That assumption is the one this
+    // codebase refuses everywhere else, and here it was load-bearing in the worst
+    // place: the two surfaces that never enable the tool (the Hermes cron and the
+    // portal reply-suggester) also build NO send context, and BOTH remaining
+    // safeties below — the fail-closed pin check and the Italian/English language
+    // guard — are themselves conditioned on a send context existing. So a leaked
+    // tool name on those surfaces fell through every layer to the live send with
+    // model-chosen recipient ids. One line closes all of it.
+    if (!availableNames?.has("send_portal_message")) {
+      return `❌ Tool "send_portal_message" is not permitted in this worker call (portal sending not enabled). Do NOT claim anything was sent — show the staff member the draft instead.`
+    }
     //
     // PORTAL RECIPIENT STAYS PINNED TO THE SURFACE'S CLIENT.
     //
@@ -2879,10 +2892,20 @@ export async function executeWorkerTool(
       typeof params.extension === "string" ? params.extension : undefined,
     )
   }
-  // Read-only SQL — Slack-only (gated via enableDbRead at the tool-list level, same
-  // as start_code_task / send_portal_message). Reaches here only when the model was
-  // handed the tool. Hardened + audit-logged inside runReadOnlySqlForWorker.
+  // Read-only SQL — gated via enableDbRead at the tool-list level. Hardened +
+  // audit-logged inside runReadOnlySqlForWorker.
+  //
+  // The executor re-check is NOT redundant with that tool-list gate. This branch
+  // used to say "reaches here only when the model was handed the tool" — the exact
+  // assumption every sibling branch in this file explicitly refuses to make ("even
+  // if a name leaks", R108, repeated a dozen times). It was one of only two injected
+  // tools without the check, and the one that fails OPEN into raw client data: the
+  // Hermes cron and the portal suggester build NO send context at all, so nothing
+  // else downstream would have stopped it either. Same shape as the send_email gate.
   if (name === "run_sql_query") {
+    if (!availableNames?.has("run_sql_query")) {
+      return `❌ Tool "run_sql_query" is not permitted in this worker call (database reads not enabled).`
+    }
     return runReadOnlySqlForWorker(params)
   }
   // Circleback call reading — Slack-only (gated via enableCallReads at the tool-list
@@ -4332,6 +4355,14 @@ export async function runWorkerLoop(
           toolsUsed,
           reachedMaxLoops: false,
           wallsHit,
+          // A FILE THAT WAS BUILT MUST COME BACK ON EVERY EXIT, NOT JUST THE HAPPY ONE.
+          // `artifacts` used to be returned only from the normal exit above, so a
+          // document produced by a tool and then followed by an empty/truncated model
+          // turn was silently discarded — the panel showed no download, and the
+          // phantom-file guard would later see an empty list and push the model to
+          // build the very same file again. The file exists; hand it over.
+          succeededTools,
+          artifacts,
         }
       }
     }
@@ -4451,6 +4482,13 @@ export async function runWorkerLoop(
             toolsUsed,
             reachedMaxLoops: true,
             wallsHit,
+            // THE EXIT MOST LIKELY TO HAVE BUILT A FILE. A "make me a spreadsheet of
+            // these six companies" turn is exactly the shape that chains many tools
+            // and then runs out of loop budget — so this synthesis path is where a
+            // produced document was most often lost. Returning it here is the whole
+            // point of Antonio's "must be able to produce files everywhere".
+            succeededTools,
+            artifacts,
           }
         }
       }
@@ -4470,6 +4508,12 @@ export async function runWorkerLoop(
     toolsUsed,
     reachedMaxLoops: true,
     wallsHit,
+    // Even the generic give-up message hands back anything that WAS produced. The
+    // staff member gets "I ran out of room" AND the spreadsheet that got built
+    // before that happened, rather than being told to start over on work that is
+    // already sitting in storage.
+    succeededTools,
+    artifacts,
   }
 }
 
@@ -4850,7 +4894,11 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
         : proposed
           ? "action_proposed"
           : "investigation_complete"
-      await resolveThread(threadId, outcome, oneParagraphSummary(result.reply))
+      // The client key is re-stamped WITH the summary, every turn — the label has to
+      // describe the text it is stored next to, or cross-conversation recall compares
+      // this turn's client against a label written when the thread began. See
+      // resolveThread for the two ways they used to drift apart.
+      await resolveThread(threadId, outcome, oneParagraphSummary(result.reply), opts.clientKey ?? null)
       // Persistent memory: re-embed this thread's fresh summary so it's recallable by
       // FUTURE conversations (cross-thread "connect the dots"). Slack-only (the gate),
       // best-effort — never block the reply over a memory write.

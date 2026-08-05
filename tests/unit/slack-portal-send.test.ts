@@ -83,11 +83,25 @@ const logAction = vi.fn()
 vi.mock("@/lib/mcp/action-log", () => ({ logAction: (...a: unknown[]) => logAction(...a) }))
 
 import {
+
+
   sendPortalMessageFromWorker,
   executeWorkerTool,
   WORKER_TOOLS,
   SEND_PORTAL_MESSAGE_TOOL,
 } from "@/lib/ai-agent/worker-tools"
+
+/**
+ * The tools this call was actually handed. `executeWorkerTool` now refuses
+ * `send_portal_message` outright when it is not in this set — a real,
+ * irreversible, client-visible send must never fire on a call that was not
+ * offered the tool (added 2026-08-05; it was one of only two injected tools
+ * missing that check, and it failed OPEN). These tests exercise the pin and the
+ * language guard, so they must declare the tool as offered, exactly as the live
+ * surfaces do via `enableSlackSend`.
+ */
+const OFFERED_PORTAL_SEND = new Set(["send_portal_message"])
+
 
 beforeEach(() => {
   responses = {}
@@ -159,7 +173,7 @@ describe("send_portal_message — safety wiring", () => {
   })
 
   it("executeWorkerTool routes send_portal_message (NOT rejected by the read-only guard)", async () => {
-    const r = await executeWorkerTool("send_portal_message", { contact_id: "cnt-5", message: "routed" })
+    const r = await executeWorkerTool("send_portal_message", { contact_id: "cnt-5", message: "routed" }, OFFERED_PORTAL_SEND)
     expect(r).not.toContain("not permitted")
     expect(r).toContain("✅ Portal message sent")
   })
@@ -189,7 +203,7 @@ describe("CRM Portal Chats panel — send attribution + recipient pin", () => {
     const r = await executeWorkerTool(
       "send_portal_message",
       { message: "no recipient supplied" },
-      undefined,
+      OFFERED_PORTAL_SEND,
       undefined,
       undefined,
       { actor: "crm-portal:luca@tonydurante.us", pinnedPortalRecipient: { account_id: "acc-PIN" } },
@@ -209,7 +223,7 @@ describe("CRM Portal Chats panel — send attribution + recipient pin", () => {
     const r = await executeWorkerTool(
       "send_portal_message",
       { contact_id: "cnt-ATTACKER", message: "pinned" },
-      undefined,
+      OFFERED_PORTAL_SEND,
       undefined,
       undefined,
       { actor: "crm-portal:luca@tonydurante.us", pinnedPortalRecipient: { account_id: "acc-PIN" } },
@@ -217,5 +231,62 @@ describe("CRM Portal Chats panel — send attribution + recipient pin", () => {
     expect(r).toContain("✅ Portal message sent")
     expect(lastInsertedRow).toMatchObject({ account_id: "acc-PIN", contact_id: "cnt-PINNED" })
     expect(lastInsertedRow).not.toMatchObject({ contact_id: "cnt-ATTACKER" })
+  })
+})
+
+/**
+ * THE EXECUTOR GATE (added 2026-08-05, from the worker capability audit).
+ *
+ * `send_portal_message` is a real, irreversible, CLIENT-VISIBLE send that also
+ * auto-emails the client (R103). It was one of only two conditionally-injected
+ * tools with no `availableNames` re-check, and it failed OPEN — the branch carried
+ * a comment asserting it "reaches here only when the model was handed the tool",
+ * which is the exact assumption every sibling branch in the file explicitly refuses
+ * to make ("even if a name leaks", R108).
+ *
+ * That mattered most on the surfaces that never offer it: the Hermes cron and the
+ * portal reply-suggester build NO send context at all, and BOTH remaining
+ * safeties — the fail-closed pin check and the Italian/English language guard —
+ * are themselves conditioned on a send context existing. So a leaked tool name
+ * there fell through every layer to the live send with model-chosen recipient ids.
+ */
+describe("send_portal_message — executor availability gate", () => {
+  it("refuses when the tool was NOT offered on this call (empty set)", async () => {
+    const r = await executeWorkerTool(
+      "send_portal_message",
+      { contact_id: "cnt-5", message: "should never send" },
+      new Set<string>(),
+    )
+    expect(r).toContain("not permitted")
+    expect(r).not.toContain("✅")
+  })
+
+  it("refuses when availableNames is absent entirely — the research-worker shape", async () => {
+    // Hermes / the portal suggester pass no tool set and no send context. Before the
+    // gate this reached sendPortalMessageFromWorker and delivered to a real client.
+    const r = await executeWorkerTool("send_portal_message", {
+      contact_id: "cnt-5",
+      message: "should never send",
+    })
+    expect(r).toContain("not permitted")
+    expect(r).not.toContain("✅")
+  })
+
+  it("tells the model NOT to claim a send, so a refusal can't become a false 'sent'", async () => {
+    const r = await executeWorkerTool(
+      "send_portal_message",
+      { contact_id: "cnt-5", message: "x" },
+      new Set<string>(),
+    )
+    expect(r.toLowerCase()).toContain("do not claim")
+  })
+
+  it("still runs normally when the tool WAS offered", async () => {
+    const r = await executeWorkerTool(
+      "send_portal_message",
+      { contact_id: "cnt-5", message: "offered" },
+      OFFERED_PORTAL_SEND,
+    )
+    expect(r).toContain("✅ Portal message sent")
   })
 })

@@ -76,6 +76,13 @@ export const MIN_SURNAME_LENGTH = 4
  */
 export function normalizeForMatch(value: string | null | undefined): string {
   return (value ?? "")
+    // APOSTROPHES ARE DELETED, NOT SPACED. Banks and SWIFT routinely strip
+    // them: "Marco D'Amico" arrives as "MARCO DAMICO". Turning the apostrophe
+    // into a space produced "marco d amico", which matches neither the exact
+    // name nor the surname — so the payment was silently deducted and no
+    // question was ever raised. The client base is heavily Italian
+    // (D'Amico, D'Angelo, Dell'Orto) and Irish names do the same.
+    .replace(/['\u2019\u02BC]/g, "")
     .normalize("NFD")
     // Combining diacritical marks — "è" becomes "e", "ñ" becomes "n".
     .replace(/[̀-ͯ]/g, "")
@@ -260,15 +267,59 @@ export function payeePart(text: string | null | undefined): string {
  * name, which the exact matcher already handles.
  */
 const COMPANY_TOKENS: ReadonlySet<string> = new Set([
-  "llc", "ltd", "limited", "inc", "incorporated", "corp", "corporation", "co",
-  "gmbh", "srl", "srls", "spa", "sas", "sarl", "bv", "nv", "ab", "oy", "ou",
-  "plc", "llp", "lp", "holding", "holdings", "group", "trading", "capital",
-  "ventures", "solutions", "services", "consulting", "partners", "sa", "ag",
+  // NO 2-LETTER TOKENS. "sa", "co", "ou", "ab", "bv", "nv", "lp" are real
+  // Portuguese/Italian name particles and surnames — "João Sá Ferreira" was
+  // being treated as a company, which switches the owner question OFF for a
+  // real person and silently deducts their draws. A legal suffix that short
+  // is not worth that trade.
+  "llc", "ltd", "ltda", "limited", "inc", "incorporated", "corp", "corporation",
+  "gmbh", "ugmbh", "srl", "srls", "spa", "sas", "sarl", "sl", "slu", "kft",
+  "sro", "doo", "aps", "pte", "sdn", "bhd", "pty", "oyj", "plc", "llp",
+  "holding", "holdings", "group", "trading", "capital", "ventures", "solutions",
+  "services", "consulting", "partners", "advisors", "management", "associates",
+  "enterprises", "industries", "systems", "technologies", "labs", "studio",
+  "digital", "media", "agency", "international", "properties",
 ])
 
 /** Does this roster name look like a company rather than a person? */
 export function looksLikeCompany(name: string): boolean {
   return nameParts(name).some(p => COMPANY_TOKENS.has(p))
+}
+
+export function findNearMissMembers(text: string | null | undefined, memberNames: string[]): string[] {
+  // EVERY member whose surname matches, not just the first.
+  //
+  // Two owners sharing a surname is not exotic — Titan's members are Gabriele
+  // and Matthew Finelli. Returning only the first meant the card offered one
+  // name, so a client whose payment went to the OTHER one had no way to say so:
+  // they either credited the wrong partner's K-1 or answered "not an owner",
+  // and both are wrong. The client picks; we only narrow the field.
+  if (matchMemberName(text, memberNames)) return []
+  const hay = payeePart(text)
+  if (!hay) return []
+  const out: string[] = []
+  for (const name of memberNames) {
+    if (looksLikeCompany(name)) continue
+    const parts = nameParts(name)
+    if (parts.length < MIN_NAME_PARTS) continue
+    const surname = parts[parts.length - 1]
+    if (surname.length < MIN_SURNAME_LENGTH) continue
+    if (containsWholePhrase(hay, surname)) out.push(name)
+  }
+  return out
+}
+
+/** Separator between suspected members inside the mark. */
+export const SUSPECTED_SEP = "; "
+
+/** Every suspected member carried by a row's note. The single reader. */
+export function suspectedMembersFromNotes(notes: string | null | undefined): string[] {
+  const n = (notes ?? "").trim()
+  if (!n.startsWith(ASK_CLIENT_NOTE)) return []
+  // Cut at the first " | " — rows written before that fix carry an appended
+  // "| Related entity: X", and this tail is rendered to the client AS A NAME.
+  const tail = n.slice(ASK_CLIENT_NOTE.length).split(" | ")[0]
+  return tail.split(SUSPECTED_SEP).map(x => x.trim()).filter(Boolean)
 }
 
 export function findNearMissMember(text: string | null | undefined, memberNames: string[]): string | null {
@@ -296,4 +347,74 @@ export function findNearMissMember(text: string | null | undefined, memberNames:
     if (containsWholePhrase(hay, surname)) return name
   }
   return null
+}
+
+/**
+ * Prefix marking a row the system deliberately REFUSED to guess — the payee
+ * carries a member's surname but not their full name — followed by the
+ * suspected member's name.
+ *
+ * This mark, NOT the category, is what makes the row a question. Everything
+ * that must respect it:
+ *  - the AI pass is forbidden from resolving a row carrying it, so a guess can
+ *    never answer the question on the client's behalf and seal it;
+ *  - the periodic re-sort writes and clears it even when no category moves;
+ *  - the client's review screen promotes marked rows into "Needs your
+ *    decision" and names the suspected member on the card;
+ *  - the client's own answer overwrites it, which is how it self-clears.
+ *
+ * IT LIVES HERE, not with the statement parser, because the review SCREEN reads
+ * it: the parser pulls in the PDF library and Node's filesystem, so importing
+ * it from a client component breaks the browser build outright.
+ */
+export const ASK_CLIENT_NOTE = "ask: possible payment to member"
+
+/**
+ * The suspected member's name carried by a row's note, or null. The single
+ * reader — the review screens, the validation panel and the engine all use it,
+ * so the note's shape is defined in exactly one place.
+ */
+export function suspectedMemberFromNotes(notes: string | null | undefined): string | null {
+  return suspectedMembersFromNotes(notes)[0] ?? null
+}
+
+/** Marker the client's own owner answer carries, naming who they confirmed. */
+export const CONFIRMED_MEMBER_SEP = " | Member: "
+
+/**
+ * The owner a client CONFIRMED on this row, or null.
+ *
+ * Read so the card can keep showing the question after it is answered — the
+ * mark is gone by then, and without this the client has no way back if they
+ * picked the wrong person. Tapping a merchant chip instead re-books the whole
+ * group, so "no way back" meant "correcting one attribution corrupts twenty
+ * other payments".
+ */
+export function confirmedMemberFromNote(notes: string | null | undefined): string | null {
+  const n = (notes ?? "")
+  const at = n.indexOf(CONFIRMED_MEMBER_SEP)
+  if (at === -1) return null
+  const name = n.slice(at + CONFIRMED_MEMBER_SEP.length).split(" | ")[0].trim()
+  return name.length > 0 ? name : null
+}
+
+/**
+ * Marker carrying the ORIGINAL candidate owners on an answered row.
+ *
+ * When two owners share a surname, answering "Yes — Gabriele" consumes the
+ * mark on rows that were flagged for BOTH brothers. Without remembering who
+ * else was in the running, the change buttons could only offer "No — a
+ * supplier": a client who mis-tapped had no way to say it was Matthew, in the
+ * exact scenario the card exists for. The answer note therefore keeps the
+ * candidate list, and the change buttons are rebuilt from it.
+ */
+export const CANDIDATES_SEP = " | Of: "
+
+/** The original candidate owners recorded on an answered row, or []. */
+export function candidatesFromNote(notes: string | null | undefined): string[] {
+  const n = (notes ?? "")
+  const at = n.indexOf(CANDIDATES_SEP)
+  if (at === -1) return []
+  const tail = n.slice(at + CANDIDATES_SEP.length).split(" | ")[0]
+  return tail.split(SUSPECTED_SEP).map(x => x.trim()).filter(Boolean)
 }

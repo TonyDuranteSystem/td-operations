@@ -35,7 +35,7 @@ function ProgressCard({ title, detail, eta }: { title: string; detail: string; e
 
 interface Gate { id: number; title: string; status: 'pass' | 'na' | 'fail'; detail: string; blocking: boolean }
 interface Member { name: string; pct: number; beginning_capital: number; contributions: number; distributions: number; income_share: number; ending_capital: number }
-interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string }
+interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string; suspected_members?: string[]; suspected_count?: number; suspected_ids?: string[]; suspected_by_member?: Record<string, string[]>; confirmed_by_member?: Record<string, string[]>; confirmed_alternatives?: string[] }
 interface Bucket { slug: string; label: string }
 interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
 interface AccountOnFile { account_ref: string; bank: string; acct: string; count: number }
@@ -365,6 +365,109 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     return () => clearInterval(t)
   }, [view, load])
 
+  /**
+   * THE OWNER QUESTION — answered separately from the merchant chips.
+   *
+   * It targets ONLY the flagged payments, never the whole group, and it never
+   * teaches a merchant rule: "this payment went to an owner" says nothing about
+   * the merchant, and a learned rule keyed on the merchant would re-book every
+   * sibling payment on the next re-sort — a durable database row no later code
+   * change removes. `member` records WHO, without which a confirmed draw is
+   * spread across every partner by ownership % and lands on the K-1 of somebody
+   * who received nothing.
+   */
+  const answerOwnerQuestion = async (g: QuestionGroup, value: string, member?: string) => {
+    // "Yes — <owner>" answers ONLY the payments flagged for THAT owner. The
+    // flat list would credit one partner with another's withdrawals, which is
+    // the normal case here: this card appears precisely when two owners share a
+    // surname. "No — a supplier" clears every flagged payment on the card.
+    const ids = member
+      ? (g.suspected_by_member?.[member] ?? [])
+      : (g.suspected_ids ?? [])
+    if (ids.length === 0) return
+    setBusy(g.group_key)
+    setCardError(null)
+    try {
+      const res = await fetch(`${API}/answer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account_id: accountId, tax_year: taxYear,
+          transaction_ids: ids, answer: value, suspected: true,
+          ...(member ? { member } : {}),
+        }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Risposta non salvata — riprova.' : 'Could not save your answer — please try again.'))
+      }
+      await load()
+    } catch (e) {
+      setCardError({ keys: [g.group_key], message: e instanceof Error ? e.message : 'Could not save your answer.' })
+      // The usual failure here is a STALE CARD (the overnight re-sort cleared
+      // or answered the question while the tab sat open) — the server 409s and
+      // tells the client to refresh. Do it for them: without this they sit on a
+      // card that re-fails on every tap until they find the reload button.
+      void load()
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  /**
+   * The merchant chips answer "what IS this merchant". They must NEVER consume
+   * an open owner question: booking a flagged payment with a `manual:` note
+   * settles it for ever (no pass will re-raise it), so an owner withdrawal is
+   * silently deducted and the client is never asked. Bulk is worse — it sweeps
+   * many cards at once and says nothing about owners.
+   *
+   * The owner question keeps its own buttons; the merchant answer covers
+   * everything else on the card.
+   */
+  const merchantAnswerIds = (g: QuestionGroup) => {
+    const flagged = new Set(g.suspected_ids ?? [])
+    return flagged.size === 0 ? g.transaction_ids : g.transaction_ids.filter(id => !flagged.has(id))
+  }
+
+  /**
+   * CHANGE AN ANSWER ALREADY GIVEN. Same shape as the owner question, but the
+   * ids come from what the client previously confirmed rather than from an open
+   * mark — the mark is consumed the moment they answer.
+   *
+   * Without this a mis-tap was unrecoverable from the screen: the only control
+   * left was a merchant chip, which re-books every payment in the group and
+   * writes a permanent merchant rule. Correcting one attribution corrupted
+   * twenty other payments.
+   */
+  const changeOwnerAnswer = async (g: QuestionGroup, was: string, value: string, member?: string) => {
+    const ids = g.confirmed_by_member?.[was] ?? []
+    if (ids.length === 0) return
+    setBusy(g.group_key)
+    setCardError(null)
+    try {
+      const res = await fetch(`${API}/answer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account_id: accountId, tax_year: taxYear,
+          transaction_ids: ids, answer: value, suspected: true, reanswer: true,
+          ...(member ? { member } : {}),
+        }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Modifica non salvata — riprova.' : 'Could not change your answer — please try again.'))
+      }
+      await load()
+    } catch (e) {
+      setCardError({ keys: [g.group_key], message: e instanceof Error ? e.message : 'Could not change your answer.' })
+      // Same stale-card refresh as the first answer above.
+      void load()
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const answer = async (g: QuestionGroup, value: string) => {
     setBusy(g.group_key)
     setCardError(null)
@@ -372,7 +475,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       const res = await fetch(`${API}/answer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, transaction_ids: g.transaction_ids, answer: value }),
+        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, transaction_ids: merchantAnswerIds(g), answer: value }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
@@ -414,7 +517,8 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const confirmBulkAnswer = async () => {
     if (!bulkConfirm || bulkSel.size === 0) return
     const groups = Array.from(bulkSel.values())
-    const ids = groups.flatMap(g => g.transaction_ids)
+    // Bulk never touches an open owner question — see merchantAnswerIds.
+    const ids = groups.flatMap(g => merchantAnswerIds(g))
     setBusy('bulk')
     // Clear on entry like answer() and setBucket() do — without this a stale
     // red refusal survived a LATER SUCCESS (bug-hunter). A false "that didn't
@@ -608,6 +712,110 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           </div>
           <div className="text-xs text-zinc-500">{g.count}× · {fmt(g.total)}{g.currency && g.currency !== 'USD' ? ` ${g.currency}` : ''}</div>
         </div>
+        {/* WHY WE ARE ASKING. Without this the client sees an ordinary card and
+            has no idea we suspect their own owner — which was the entire point
+            of raising it. The wording is exact on purpose: when only some rows
+            in the group match, it says so, because "this may be a payment to
+            X" over a ten-row group where two match is a false statement to a
+            client about their own company. */}
+        {/* THE OWNER QUESTION — its own control, not a merchant chip.
+            The merchant chips answer "what IS this merchant"; this answers
+            "did this PAYMENT go to an owner". Reusing the chips for it booked
+            whole groups on a partial match, taught a merchant rule that
+            re-booked every sibling payment, and had no slot for WHICH owner —
+            three ways to a wrong K-1. "No" leaves the bookkeeping untouched. */}
+        {(g.suspected_count ?? 0) > 0 && g.suspected_members?.length ? (
+          <div className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-snug text-amber-900">
+            <div className="mb-1.5">
+              {(() => {
+                const who = g.suspected_members.join(it ? ' o ' : ' or ')
+                const partial = (g.suspected_count ?? 0) < g.count
+                if (it) {
+                  return partial
+                    ? `${g.suspected_count} di questi ${g.count} pagamenti riportano il nome di ${who}. Erano pagamenti a un socio?`
+                    : `Questo nome somiglia a ${who}. Era un pagamento a un socio?`
+                }
+                return partial
+                  ? `${g.suspected_count} of these ${g.count} payments carry the name ${who}. Was this a payment to an owner?`
+                  : `This name looks like ${who}. Was this a payment to an owner?`
+              })()}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {g.suspected_members.map(m => (
+                <button
+                  key={m}
+                  disabled={busyOrLocked}
+                  onClick={() => void answerOwnerQuestion(g, 'owner_draw', m)}
+                  className="rounded-full border border-amber-400 bg-white px-2 py-0.5 text-[11px] font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                >
+                  {it ? `Sì — ${m}` : `Yes — ${m}`}{(g.suspected_by_member?.[m]?.length ?? 0) < (g.suspected_count ?? 0) ? ` (${g.suspected_by_member?.[m]?.length})` : ''}
+                </button>
+              ))}
+              <button
+                disabled={busyOrLocked}
+                onClick={() => void answerOwnerQuestion(g, 'business_expense')}
+                className="rounded-full border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-50"
+              >
+                {it ? 'No — un fornitore' : 'No — a supplier'}
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {/* ALREADY ANSWERED — still changeable. The mark is consumed the moment
+            the client answers, so without this the buttons vanish and a mis-tap
+            can only be undone by tapping a merchant chip, which re-books every
+            payment on the card and writes a permanent merchant rule. */}
+        {Object.entries(g.confirmed_by_member ?? {}).map(([who, ids]) => (
+          <div key={who} className="mt-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[11px] leading-snug text-emerald-900">
+            <div className="mb-1.5">
+              {it
+                ? `Hai indicato che ${ids.length === 1 ? 'questo pagamento è' : `${ids.length} di questi pagamenti sono`} andat${ids.length === 1 ? 'o' : 'i'} a ${who}.`
+                : `You said ${ids.length === 1 ? 'this payment went' : `${ids.length} of these payments went`} to ${who}.`}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {/* Alternatives = every owner the payment could have gone to:
+                  still-open suspects, the recorded original candidates, and
+                  anyone else confirmed on the card. Without the recorded
+                  candidates, answering "Yes — Gabriele" left NO way to say
+                  "it was Matthew" when both were flagged on the same rows —
+                  the exact shared-surname case the card exists for. */}
+              {Array.from(new Set([
+                ...(g.suspected_members ?? []),
+                ...(g.confirmed_alternatives ?? []),
+                ...Object.keys(g.confirmed_by_member ?? {}),
+              ]))
+                .filter(m => m !== who)
+                .map(m => (
+                  <button
+                    key={m}
+                    disabled={busyOrLocked}
+                    onClick={() => void changeOwnerAnswer(g, who, 'owner_draw', m)}
+                    className="rounded-full border border-emerald-400 bg-white px-2 py-0.5 text-[11px] font-medium text-emerald-900 hover:bg-emerald-100 disabled:opacity-50"
+                  >
+                    {it ? `No — era ${m}` : `No — it was ${m}`}
+                  </button>
+                ))}
+              <button
+                disabled={busyOrLocked}
+                onClick={() => {
+                  // ONE-WAY DOOR, so it asks first. Answering "a supplier"
+                  // removes the owner question for good — the note loses its
+                  // member trail and nothing re-raises it. On a phone this
+                  // button sits next to the others; a mis-tap here was the one
+                  // answer the client could never take back.
+                  const msg = it
+                    ? 'Confermi che NON è un pagamento a un socio? Dopo questa scelta la domanda non verrà più mostrata.'
+                    : 'Confirm this was NOT a payment to an owner? After this, the question will no longer be shown.'
+                  if (!window.confirm(msg)) return
+                  void changeOwnerAnswer(g, who, 'business_expense')
+                }}
+                className="rounded-full border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-50"
+              >
+                {it ? 'No — un fornitore' : 'No — a supplier'}
+              </button>
+            </div>
+          </div>
+        ))}
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${lean.cls}`}>{lean.txt}</span>
           <select
@@ -2317,8 +2525,22 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 // rowRootKey keys, while group_key now carries a
                 // direction+currency suffix (per-direction split 2026-07-05).
                 const inFilter = (g: QuestionGroup) => !periodFilter || periodFilter.keys.has(groupKeyRoot(g.group_key))
-                const needs = view.questions.filter(g => inFilter(g) && (g.current_category ?? 'uncategorized') === 'uncategorized')
-                const booked = view.questions.filter(g => inFilter(g) && (g.current_category ?? 'uncategorized') !== 'uncategorized')
+                // A group needs a decision when it is undecided OR when we
+                // suspect one of its payments went to an owner.
+                //
+                // THE MARK, NOT THE CATEGORY, EARNS TIER 1 (2026-08-04). The
+                // first design forced these into Tier 1 by rewriting the
+                // category to 'uncategorized', which collided with the AI pass,
+                // the re-sort and the two surfaces' different treatment of
+                // undecided rows. Promoting on the mark instead gives the same
+                // prominence with none of that — and it is the ONLY thing that
+                // re-asks a payee the client once answered "business expense"
+                // for, since the learned rule keeps booking it as an expense.
+                // Without this line the question lands in the section the page
+                // explicitly labels optional, and would simply never be seen.
+                const isSuspected = (g: QuestionGroup) => (g.suspected_count ?? 0) > 0
+                const needs = view.questions.filter(g => inFilter(g) && ((g.current_category ?? 'uncategorized') === 'uncategorized' || isSuspected(g)))
+                const booked = view.questions.filter(g => inFilter(g) && (g.current_category ?? 'uncategorized') !== 'uncategorized' && !isSuspected(g))
                 const glance = booked.filter(g => g.ai_lean === 'personal' || g.ai_lean === 'unsure' || !g.ai_lean)
                 const autoBooked = booked.filter(g => g.ai_lean === 'business')
                 const needsIn = needs.filter(g => g.direction !== 'out')
@@ -2639,6 +2861,25 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                         ? 'Abbiamo lavorato solo con ciò che ci hai dato: se esistono altri conti o redditi che non abbiamo visto, vanno aggiunti — altrimenti la dichiarazione sarà incompleta. Quella scelta, e la sua responsabilità, sono tue.'
                         : 'We worked only with what you gave us: if there are other accounts or income we didn\'t see, they need to be added — otherwise the return is incomplete. That choice, and the responsibility for it, is yours.'}
                     </li>
+                    {/* OPEN OWNER QUESTIONS. A flagged payment keeps whatever
+                        category it had, so it is invisible to the "still
+                        uncategorized" figures this block is built on — a client
+                        could otherwise sign off reading "everything is
+                        categorized" while a possible owner withdrawal is open.
+                        Counted from the questions already in the payload, so
+                        there is no second source of truth and no currency
+                        conversion to get wrong. It does NOT block confirming. */}
+                    {(() => {
+                      const openOwnerQs = (view?.questions ?? []).reduce((n, q) => n + (q.suspected_count ?? 0), 0)
+                      if (openOwnerQs === 0) return null
+                      return (
+                        <li className="font-medium text-amber-800">
+                          {it
+                            ? `${openOwnerQs} ${openOwnerQs === 1 ? 'pagamento potrebbe essere' : 'pagamenti potrebbero essere'} a un socio e ${openOwnerQs === 1 ? 'non ha' : 'non hanno'} ancora una tua risposta. Se ${openOwnerQs === 1 ? 'lo lasci' : 'li lasci'} così, ${openOwnerQs === 1 ? 'resterà registrato' : 'resteranno registrati'} come ${openOwnerQs === 1 ? 'è' : 'sono'} adesso.`
+                            : `${openOwnerQs} ${openOwnerQs === 1 ? 'payment may be' : 'payments may be'} to an owner and ${openOwnerQs === 1 ? 'has' : 'have'} no answer from you yet. If you leave ${openOwnerQs === 1 ? 'it' : 'them'}, ${openOwnerQs === 1 ? 'it stays' : 'they stay'} booked as ${openOwnerQs === 1 ? 'it is' : 'they are'} now.`}
+                        </li>
+                      )
+                    })()}
                     <li>
                       {it
                         ? 'Non sei ancora pronto? Puoi modificare le tue informazioni o caricare altri estratti conto qui sopra, invece di confermare.'
