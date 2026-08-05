@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { merchantRoot, groupUncategorized, categoryForAnswer, groupKeyRoot, rowDirection, GROUP_KEY_SEP, type UncategorizedRow } from "@/lib/tax/question-groups"
+import { merchantRoot, groupUncategorized, categoryForAnswer, groupKeyRoot, rowDirection, GROUP_KEY_SEP, isHumanOwnTransferNote, type UncategorizedRow } from "@/lib/tax/question-groups"
 
 function row(id: string, description: string, amount: number, date = "2025-06-01"): UncategorizedRow {
   return { id, description, counterparty: null, amount, transaction_date: date, bank_name: "Mercury" }
@@ -335,5 +335,38 @@ describe("groupUncategorized — confirmed answers keep their candidates", () =>
     }])
     expect(g.confirmed_by_member).toEqual({ 'Donato Renato Berini': ['a'] })
     expect(g.confirmed_alternatives).toBeUndefined()
+  })
+})
+
+/**
+ * THE ONE ANSWER THAT USED TO VANISH (2026-08-05, VSV210). A human
+ * "own_transfer" answer books category 'conversion', which the review feed
+ * excludes — the row disappeared forever. The predicate below is the scoping
+ * that lets ONLY human-answered rows back in: feed and write path both key on
+ * it, so a drift here silently re-opens either the vanish bug (too narrow) or
+ * a flood of auto transfer-pairs into every client's review (too wide).
+ */
+describe('isHumanOwnTransferNote', () => {
+  it('matches all four human own_transfer answer variants', () => {
+    expect(isHumanOwnTransferNote('manual: client answer (own_transfer)')).toBe(true)
+    expect(isHumanOwnTransferNote('manual: bulk client answer (own_transfer)')).toBe(true)
+    expect(isHumanOwnTransferNote('manual: staff answer (own_transfer)')).toBe(true)
+    expect(isHumanOwnTransferNote('manual: bulk staff answer (own_transfer)')).toBe(true)
+  })
+
+  it('never matches auto-detected conversion notes', () => {
+    expect(isHumanOwnTransferNote('transfer-pair → 1de1e605-f5de-4d1d-9114-fdb1293f4264')).toBe(false)
+    expect(isHumanOwnTransferNote('own-entity transfer')).toBe(false)
+    expect(isHumanOwnTransferNote('auto: zero-amount')).toBe(false)
+  })
+
+  it('never matches other manual notes (answers to different questions, staff corrections, period sweeps)', () => {
+    expect(isHumanOwnTransferNote('manual: client answer (business_expense)')).toBe(false)
+    expect(isHumanOwnTransferNote('manual: period answer batch-3')).toBe(false)
+    expect(isHumanOwnTransferNote('manual: staff correction 2026-08-03 — was auto-booked as own-entity internal transfer')).toBe(false)
+    expect(isHumanOwnTransferNote('ai:high@v4')).toBe(false)
+    expect(isHumanOwnTransferNote('')).toBe(false)
+    expect(isHumanOwnTransferNote(null)).toBe(false)
+    expect(isHumanOwnTransferNote(undefined)).toBe(false)
   })
 })

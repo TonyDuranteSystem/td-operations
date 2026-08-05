@@ -53,6 +53,23 @@ export const LEARN_PATTERN_STOPLIST = new Set([
   "versamento", "prelievo", "fattura", "addebito", "accredito",
 ])
 
+/** Corporate-suffix / jurisdiction words that carry no merchant identity —
+ *  used ONLY to unmask a payment rail hiding behind them ("WISE US, INC.").
+ *  Deliberately short: adding real words here would start skipping genuine
+ *  merchants. */
+const CORPORATE_NOISE_WORDS = new Set([
+  "inc", "incorporated", "llc", "ltd", "limited", "corp", "corporation",
+  "co", "company", "sa", "srl", "gmbh", "plc", "us", "usa", "uk", "eu", "europe",
+])
+
+/** Is this root just a payment rail dressed in corporate suffixes?
+ *  ("WISE US, INC." → yes; "Stripe Payout" → no; "Clockwise Cafe" → no.) */
+export function isDressedRailRoot(root: string): boolean {
+  const meaningful = root.toLowerCase().split(/[^a-z0-9]+/)
+    .filter(w => w.length > 0 && !CORPORATE_NOISE_WORDS.has(w))
+  return meaningful.length === 1 && RAIL_SET.has(meaningful[0])
+}
+
 /**
  * PURE: derive the per-client rule(s) to learn from a set of answered rows and
  * the category they were assigned. Groups the rows by merchant root (normally
@@ -78,6 +95,15 @@ export function deriveLearnedRules(
     if (key.toLowerCase() === "(no description)") continue
     if (LEARN_PATTERN_STOPLIST.has(key.toLowerCase())) continue // generic banking word — never a contains-rule
     if (RAIL_SET.has(key.toLowerCase())) continue // payment rail — a contains-rule would book every carried merchant
+    // Multi-word rail roots (2026-08-05, VSV210): "WISE US, INC." slipped past
+    // the exact-match rail check above and a mis-tapped own_transfer answer
+    // learned "everything incoming via Wise = internal transfer" — every future
+    // Wise deposit silently left the books. A rail name dressed in corporate
+    // suffixes ("Wise US, Inc.", "Revolut Ltd") is still just the rail — but a
+    // rail name plus a MEANINGFUL word ("Stripe Payout") is a specific money
+    // flow and stays learnable, and a merchant that merely contains a rail
+    // word ("Clockwise Cafe") is untouched.
+    if (isDressedRailRoot(key)) continue
     if (!byRoot.has(key)) byRoot.set(key, { ins: 0, outs: 0 })
     const amt = Number(r.amount)
     if (amt > 0) byRoot.get(key)!.ins += 1
@@ -219,4 +245,58 @@ export async function upsertLearnedMerchantRules(
     }
   }
   return { created, updated }
+}
+
+/**
+ * PURE: the merchant-root patterns of a set of rows, for RULE EVICTION —
+ * deliberately WITHOUT the learn-time stoplist/rail skips. Eviction targets
+ * rules that were LEARNED UNDER OLDER, LOOSER filters (VSV210's mis-tapped
+ * own_transfer answer learned "WISE US, INC." → conversion before the
+ * first-word rail guard existed); filtering here would make exactly those
+ * poisoned rules unevictable. Blank/degenerate/counterparty-fallback roots
+ * are still skipped — they can never equal a learned pattern.
+ */
+export function deriveEvictionPatterns(rows: LearnableRow[]): string[] {
+  const out = new Set<string>()
+  for (const r of rows) {
+    const { label, source, degenerate } = rowRootKey(r.description, r.counterparty)
+    if (source !== "description" || degenerate) continue
+    const key = label.trim()
+    if (key.length < MIN_LEARN_PATTERN_LENGTH) continue
+    out.add(key)
+  }
+  return Array.from(out)
+}
+
+/**
+ * Deactivate this account's active learned conversion rules for the given
+ * rows' merchant roots (2026-08-05, VSV210): when a client CORRECTS an
+ * own_transfer answer, the original tap's learned "merchant → conversion"
+ * rule must die with it — re-learning alone no longer covers rail roots
+ * (the first-word rail guard skips them), so the poisoned rule would keep
+ * re-booking every future deposit as an internal transfer. Fire-and-forget
+ * from the answer route; failures must never break the client's correction.
+ */
+export async function deactivateConversionRulesForRows(
+  db: { from: (table: string) => any }, // eslint-disable-line @typescript-eslint/no-explicit-any
+  accountId: string,
+  rows: LearnableRow[],
+): Promise<number> {
+  const patterns = deriveEvictionPatterns(rows)
+  if (patterns.length === 0) return 0
+  const { data, error } = await db
+    .from("bank_categorization_rules")
+    .update({
+      active: false,
+      notes: "deactivated: the client changed their own_transfer answer for this merchant",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("account_id", accountId)
+    .is("workspace_id", null)
+    .eq("category", "conversion")
+    .eq("active", true)
+    .in("pattern", patterns)
+    .select("id")
+  if (error) throw new Error(error.message)
+  return ((data ?? []) as Array<{ id: string }>).length
 }
