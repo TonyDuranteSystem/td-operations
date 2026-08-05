@@ -196,7 +196,10 @@ const ANSWERS = [
   { value: 'business_income', directions: ['in'], en: 'Business income / a sale', it: 'Incasso aziendale / vendita' },
   { value: 'owner_money_in', directions: ['in'], en: 'My own money put in', it: 'Soldi miei messi nella società' },
   { value: 'refund', directions: ['in', 'out'], en: 'Refund / money back', it: 'Rimborso / soldi restituiti' },
-  { value: 'own_transfer', directions: ['in', 'out'], en: 'Transfer between my own accounts', it: 'Trasferimento tra i miei conti' },
+  // "the COMPANY's own accounts" (2026-08-05, VSV210): the old "my own
+  // accounts" wording read as covering the owner's PERSONAL account, and a
+  // member deposit answered this way left the books entirely.
+  { value: 'own_transfer', directions: ['in', 'out'], en: "Transfer between the company's own accounts", it: 'Trasferimento tra i conti della società' },
   { value: 'bank_fee', directions: ['out'], en: 'Bank / platform fee', it: 'Commissione bancaria' },
 ]
 
@@ -475,10 +478,16 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       const res = await fetch(`${API}/answer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, transaction_ids: merchantAnswerIds(g), answer: value }),
+        // Changing a HUMAN own_transfer answer targets 'conversion' rows the
+        // shared filter refuses — the flag routes it through the server-side
+        // note verification instead (2026-08-05, VSV210 no-vanish fix).
+        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, transaction_ids: merchantAnswerIds(g), answer: value, ...(g.current_category === 'conversion' ? { own_transfer_change: true } : {}) }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
+        // A 409 means the card is stale (rows changed under it) — refresh so
+        // the client lands on the current state, same as the owner paths.
+        if (res.status === 409) void load()
         throw new Error(d.error || (it ? 'Risposta non salvata — riprova.' : 'Could not save your answer — please try again.'))
       }
       await load()
@@ -853,6 +862,33 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             )
           })}
         </div>
+        {/* Human-answered "company transfer" cards (2026-08-05, VSV210): these
+            used to vanish forever. Now that they are back and changeable, say
+            the one thing the mis-tap needs — personal money is NOT a company
+            transfer — and warn when the matching opposite leg would stay
+            behind (changing only one leg of a real two-leg transfer would
+            manufacture income or expense out of thin air). */}
+        {(g.current_category ?? '') === 'conversion' && (
+          <div className="mt-2 rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-[11px] leading-snug text-sky-900">
+            {g.direction === 'in'
+              ? (it
+                ? 'Era denaro dal tuo conto personale? Allora non è un trasferimento della società — scegli "Soldi miei messi nella società".'
+                : 'Was this money from your personal account? Then it is not a company transfer — choose "My own money put into the company".')
+              : (it
+                ? 'Registrato come trasferimento tra i conti della società. Se in realtà era un pagamento, scegli la voce corretta qui sopra.'
+                : "Booked as a transfer between the company's own accounts. If it was really a payment, pick the correct answer above.")}
+            {(view?.questions ?? []).some(o => o.group_key !== g.group_key
+              && (o.current_category ?? '') === 'conversion'
+              && o.direction !== g.direction
+              && groupKeyRoot(o.group_key) === groupKeyRoot(g.group_key)) && (
+              <span className="mt-1 block font-medium">
+                {it
+                  ? 'Attenzione: esiste il movimento opposto registrato come trasferimento. Se cambi questo, controlla anche l\'altro lato.'
+                  : 'Note: the matching opposite movement is also booked as a transfer. If you change this one, check the other side too.'}
+              </span>
+            )}
+          </div>
+        )}
         {/* The refusal, ON the card that was tapped (2026-08-03). Without this
             the only feedback was a strip at the very top of the page, so a
             client working through the queue saw the button do nothing at all. */}

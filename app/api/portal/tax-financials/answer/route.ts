@@ -124,7 +124,47 @@ export async function POST(request: NextRequest) {
     // confirmation marker instead, so changing a mis-tap stays as safe as the
     // first answer: still only rows this client personally decided.
     const isReanswer = body.reanswer === true
+    /**
+     * CHANGING A HUMAN "own_transfer" ANSWER (2026-08-05, VSV210 no-vanish fix).
+     *
+     * Rows a person booked as "transfer between the company's own accounts"
+     * carry category 'conversion' — which the shared update filter below
+     * deliberately refuses (a merchant chip must never clobber an AUTO
+     * transfer-pair). Without this flag the restored card's buttons silently
+     * update ZERO rows and return 200 (council blocker). With it, the ids are
+     * re-verified server-side against the strict human-answer note predicate —
+     * same shape as the owner-question verification: only rows this client's
+     * side actually decided, 409 when none still match (stale tab).
+     */
+    const isOwnTransferChange = body.own_transfer_change === true
     let ownerAnswerIds: string[] = transactionIds
+    if (isOwnTransferChange && (isBulk || isSuspectedAnswer)) {
+      return NextResponse.json({ error: 'Invalid request shape.' }, { status: 400 })
+    }
+    if (isOwnTransferChange) {
+      const { isHumanOwnTransferNote } = await import('@/lib/tax/question-groups')
+      const verified: string[] = []
+      for (let i = 0; i < transactionIds.length; i += 200) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data } = await (supabaseAdmin as any)
+          .from('bank_transactions')
+          .select('id, notes')
+          .eq('account_id', accountId)
+          .eq('tax_year', taxYear)
+          .eq('category', 'conversion')
+          .in('id', transactionIds.slice(i, i + 200))
+          .like('notes', 'manual:%')
+        for (const r of ((data ?? []) as Array<{ id: string; notes: string | null }>)) {
+          if (isHumanOwnTransferNote(r.notes)) verified.push(r.id)
+        }
+      }
+      if (verified.length === 0) {
+        return NextResponse.json({
+          error: 'That answer is no longer on file — please refresh and try again.',
+        }, { status: 409 })
+      }
+      ownerAnswerIds = verified
+    }
     if (isSuspectedAnswer) {
       const { ASK_CLIENT_NOTE: MARK, CONFIRMED_MEMBER_SEP, suspectedMembersFromNotes, candidatesFromNote } = await import('@/lib/tax/member-names')
       const requiredPrefix = isReanswer ? null : `${MARK}%`
@@ -243,7 +283,10 @@ export async function POST(request: NextRequest) {
         .eq('tax_year', taxYear)
         // Bulk only books rows still awaiting a decision — never stomps prior
         // bookings (keeps undo exact: prior state uniformly 'uncategorized').
-        .in('category', isBulk ? ['uncategorized'] : ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution', 'refund'])
+        // An own_transfer CHANGE targets exactly the 'conversion' rows the
+        // verification above proved were human-answered — never widen the
+        // shared list itself, or merchant chips could clobber auto pairs.
+        .in('category', isOwnTransferChange ? ['conversion'] : isBulk ? ['uncategorized'] : ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution', 'refund'])
         .in('id', ownerAnswerIds.slice(i, i + 200))
         .select('id, description, counterparty, amount')
       if (error) { updateError = error.message; break }
@@ -304,7 +347,20 @@ export async function POST(request: NextRequest) {
       // not what a MERCHANT is — and a learned rule keyed on the merchant root
       // would re-book every sibling row on the next re-sort, permanently.
       if (!isBulk && !isSuspectedAnswer) try {
-        const { upsertLearnedMerchantRules, makeSupabaseRuleStore } = await import('@/lib/tax/learned-rules')
+        const { upsertLearnedMerchantRules, makeSupabaseRuleStore, deactivateConversionRulesForRows } = await import('@/lib/tax/learned-rules')
+        // Correcting an own_transfer answer must also KILL the rule that tap
+        // learned (2026-08-05, VSV210: "WISE US, INC." → conversion was live on
+        // production). Re-learning alone no longer overwrites rail-root rules —
+        // the first-word rail guard skips them — so without this the poisoned
+        // rule keeps re-booking every future deposit as an internal transfer.
+        if (isOwnTransferChange && mapped.category !== 'conversion') {
+          const evicted = await deactivateConversionRulesForRows(
+            supabaseAdmin,
+            accountId,
+            (updated ?? []) as Array<{ description: string | null; counterparty: string | null; amount: number | string }>,
+          )
+          if (evicted > 0) console.warn(`[tax-financials] own_transfer change deactivated ${evicted} learned conversion rule(s)`)
+        }
         await upsertLearnedMerchantRules(
           makeSupabaseRuleStore(supabaseAdmin),
           accountId,

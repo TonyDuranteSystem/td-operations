@@ -66,7 +66,7 @@ export async function GET(request: NextRequest) {
       if (error) throw new Error(error.message)
       return (data ?? []) as Record<string, unknown>[]
     })
-    const questions = groupUncategorized(uncatRows.map(r => ({
+    const toQuestionRow = (r: Record<string, unknown>) => ({
       id: String(r.id),
       description: String(r.description ?? ''),
       counterparty: (r.counterparty as string | null) ?? null,
@@ -81,7 +81,46 @@ export async function GET(request: NextRequest) {
       // Carried ONLY so the suspected-member mark can be recovered; the note
       // itself never reaches the client.
       notes: (r.notes as string | null) ?? null,
-    })))
+    })
+    const questions = groupUncategorized(uncatRows.map(toQuestionRow))
+
+    // HUMAN-answered own_transfer rows come BACK into the review (2026-08-05,
+    // VSV210 no-vanish fix): "Transfer between the company's own accounts" was
+    // the only answer that vanished irreversibly — the category it books
+    // ('conversion') is excluded above, so neither the client nor staff could
+    // see or change a mis-tap. Re-included here under the STRICT note
+    // predicate: only rows a person answered, NEVER the auto transfer-pair /
+    // own-entity / zero-amount bookings (exposing those would flood every
+    // review with internal plumbing — council blocker, 2026-08-05).
+    //
+    // Grouped SEPARATELY and key-suffixed: mixing them into the main rows
+    // would let `mode(category)` mis-render a whole mixed-root group, and a
+    // shared group_key would collide with the open group of the same merchant
+    // (duplicate React keys + the bulk key-set would match both).
+    const { isHumanOwnTransferNote } = await import('@/lib/tax/question-groups')
+    const conversionRows = await fetchAllPaged<Record<string, unknown>>(async (from, to) => {
+      const { data, error } = await db
+        .from('bank_transactions')
+        .select('id, description, counterparty, amount, currency, transaction_date, bank_name, ai_lean, ai_bucket, category, subcategory, notes')
+        .eq('account_id', accountId)
+        .eq('tax_year', taxYear)
+        .eq('category', 'conversion')
+        // Coarse DB-side cut; the exact three-prefix predicate runs in JS below
+        // (PostgREST or() with parenthesised like-values is a documented
+        // quoting minefield in this repo — one plain like + JS filter is safer).
+        .like('notes', 'manual:%')
+        .order('id', { ascending: true })
+        .range(from, to)
+      if (error) throw new Error(error.message)
+      return (data ?? []) as Record<string, unknown>[]
+    })
+    const answeredOwnTransfers = conversionRows.filter(r => isHumanOwnTransferNote((r.notes as string | null) ?? null))
+    if (answeredOwnTransfers.length > 0) {
+      const { GROUP_KEY_SEP } = await import('@/lib/tax/question-groups')
+      for (const g of groupUncategorized(answeredOwnTransfers.map(toQuestionRow))) {
+        questions.push({ ...g, group_key: g.group_key + GROUP_KEY_SEP + 'own_transfer_answered' })
+      }
+    }
 
     // Per-file sources for the delete/replace cards (§6) + coverage below.
     type SourceRow = { source_file_id: string | null; bank_name: string; account_type: string | null; account_ref: string | null; transaction_date: string }
