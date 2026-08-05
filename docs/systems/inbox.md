@@ -651,7 +651,10 @@ narrowest row — browser-measured); explicit width/height on every image.
 
 **UI:** `components/inbox/signature-controls.tsx` — the picker (never a modal on send)
 + `SignaturePreview`, rendered by the SAME builder with a ROOT-RELATIVE base URL so
-in-app images load from the serving deployment. Compose resets to support+default on
+in-app images load from the serving deployment. In the REPLY composer both appear
+only once the reply box gains focus (focus-LATCHED, since touching the picker blurs
+the textarea) and fold away after a send — while reading a thread they were eating
+the reading space (Antonio's production QA, 2026-08-05). Compose resets to support+default on
 every close (sticky-sender bug). Assets: `public/images/signature-antonio-{gala,hat}.jpg`
 (hat frame Antonio-approved), `signature-td-mark.png` (derived from the app icon —
 regenerate from `public/portal-icons/icon-512.png` if the brand mark ever changes),
