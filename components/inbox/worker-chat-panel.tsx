@@ -16,6 +16,11 @@ import { useEffect, useRef, useState } from 'react'
 import { Bot, Loader2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { WorkerMarkdown } from '@/components/chat/worker-markdown'
+import {
+  WorkerArtifactLinks,
+  parseWorkerArtifacts,
+  type WorkerArtifactLink,
+} from '@/components/chat/worker-artifacts'
 import { ConfirmAttachments } from '@/components/inbox/confirm-attachments'
 import { WorkerComposer } from '@/components/chat/worker-composer'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
@@ -26,6 +31,16 @@ import type { InboxConversation } from '@/lib/types'
 interface ChatMsg {
   role: 'user' | 'worker'
   text: string
+  /**
+   * Files the worker PRODUCED on this turn (Antonio, 2026-08-05: "must be able to
+   * produce files everywhere"). Server-attested — captured from the file-building
+   * tool's own output, never parsed from the reply text, so the download is there
+   * whatever the worker happens to write about it.
+   *
+   * NOT restored by the history fetch: only the live turn carries them, because the
+   * links are time-limited and a resurrected expired link is a button that fails.
+   */
+  artifacts?: WorkerArtifactLink[]
   /**
    * Server-attested off-thread address the worker tried to email and was refused.
    * When set, this worker bubble shows a "Confirm & send" button. The address
@@ -380,7 +395,12 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
         }),
       })
       const raw = await res.text()
-      let data: { reply?: string; error?: string; preparedSend?: PreparedSend | null } = {}
+      let data: {
+        reply?: string
+        error?: string
+        preparedSend?: PreparedSend | null
+        artifacts?: unknown
+      } = {}
       try { data = JSON.parse(raw) } catch { /* non-JSON = gateway error */ }
       if (!res.ok) {
         throw new Error(
@@ -395,6 +415,9 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
       setMessages(prev => [...prev, {
         role: 'worker',
         text: data.reply || '(empty reply)',
+        // Parsed through the shared helper so a malformed payload can never throw
+        // inside the render — a bad entry is dropped, not shown as a dead button.
+        artifacts: parseWorkerArtifacts(data.artifacts),
       }])
       // Attachment confirm (Confirm & send box) — this feature.
       // ?? null so a turn that prepares NOTHING clears a previous card — otherwise a
@@ -471,6 +494,8 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
               )}
             >
               {m.role === 'worker' ? <WorkerMarkdown text={m.text} /> : m.text}
+              {/* Produced files, from server data — present whatever the reply says. */}
+              {m.role === 'worker' ? <WorkerArtifactLinks artifacts={m.artifacts} /> : null}
             </div>
           </div>
         ))}
