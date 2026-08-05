@@ -4894,7 +4894,11 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
         : proposed
           ? "action_proposed"
           : "investigation_complete"
-      await resolveThread(threadId, outcome, oneParagraphSummary(result.reply))
+      // The client key is re-stamped WITH the summary, every turn — the label has to
+      // describe the text it is stored next to, or cross-conversation recall compares
+      // this turn's client against a label written when the thread began. See
+      // resolveThread for the two ways they used to drift apart.
+      await resolveThread(threadId, outcome, oneParagraphSummary(result.reply), opts.clientKey ?? null)
       // Persistent memory: re-embed this thread's fresh summary so it's recallable by
       // FUTURE conversations (cross-thread "connect the dots"). Slack-only (the gate),
       // best-effort — never block the reply over a memory write.

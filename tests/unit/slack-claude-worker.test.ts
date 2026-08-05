@@ -189,7 +189,19 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // (Antonio's D1) — the worker offers "Want me to save this to memory?" and
     // saves only on confirmation, replacing silent auto-save; the MEMORY block
     // now spells out the ask + the client auto-scoping.)
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(12200)
+    // → 12400 (2026-08-05, dev job 86b056b0: PAST CONVERSATIONS — two lines telling
+    // the worker to call find_client_threads before answering "where did we land on
+    // X", and never to say "no record" without having run it. Context: the deep
+    // cross-conversation memory feature is built but switched OFF and, per a full
+    // council pass, unsafe to switch on as-is (332 of 388 stored conversations carry
+    // no client label, and an unlabelled one used to match in EVERY context). The
+    // PULL tool already exists and is already enabled on all four surfaces — it takes
+    // a client id instead of guessing from cosine distance, so it has no leak surface
+    // at all. This line is the cheap experiment that was preferred over flipping the
+    // switch. Drafted at ~660 chars and cut by 70% to the trigger + the refusal it
+    // exists to stop; the detail lives in the tool's own description, not here.
+    // Trim elsewhere before raising this again.)
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(12400)
   })
 
   it("makes consulting the sources before answering MANDATORY (not a fallback)", () => {

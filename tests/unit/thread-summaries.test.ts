@@ -300,3 +300,56 @@ describe("searchThreads (DB path)", () => {
     expect(res.scanned).toBe(2)
   })
 })
+
+/**
+ * THE LABEL MUST FOLLOW THE CONTENT (2026-08-05, dev job 86b056b0).
+ *
+ * `summary_text` is rewritten on every turn, but `client_key` used to be stamped
+ * once at row creation and never touched again — while cross-conversation recall
+ * compares the CURRENT turn's client against that stale label. The two drifted in
+ * both directions: a row labelled with nobody quietly filling with a named client's
+ * business (sidebar opened off a client page, then navigated onto one), and a row
+ * labelled client A holding client B's business (navigated between clients mid-chat).
+ *
+ * resolveThread now re-stamps the label at the same moment it writes the summary.
+ */
+describe("resolveThread — the client label tracks the summary it is stored next to", () => {
+  it("stamps the client on a thread that began with no client", async () => {
+    await createThreadSummary("11111111-1111-4111-8111-111111111111", "investigation", "t")
+    expect((await getThreadSummary("11111111-1111-4111-8111-111111111111"))?.client_key).toBeNull()
+
+    await resolveThread("11111111-1111-4111-8111-111111111111", "done", "now about client A", "account:AAA")
+    expect((await getThreadSummary("11111111-1111-4111-8111-111111111111"))?.client_key).toBe("account:AAA")
+  })
+
+  it("re-points the label when the conversation moves to a different client", async () => {
+    await createThreadSummary("22222222-2222-4222-8222-222222222222", "investigation", "t", null, null, "account:AAA")
+    await resolveThread("22222222-2222-4222-8222-222222222222", "done", "now about client B", "account:BBB")
+    const row = await getThreadSummary("22222222-2222-4222-8222-222222222222")
+    // The summary is B's, so the label must be B's — otherwise this row surfaces
+    // inside client A's conversations carrying client B's business.
+    expect(row?.summary_text).toBe("now about client B")
+    expect(row?.client_key).toBe("account:BBB")
+  })
+
+  it("CLEARS the label when the turn has no client, so it stops being recallable", async () => {
+    await createThreadSummary("33333333-3333-4333-8333-333333333333", "investigation", "t", null, null, "account:AAA")
+    await resolveThread("33333333-3333-4333-8333-333333333333", "done", "general question", null)
+    expect((await getThreadSummary("33333333-3333-4333-8333-333333333333"))?.client_key).toBeNull()
+  })
+
+  it("leaves the label untouched when the caller does not say (undefined ≠ null)", async () => {
+    await createThreadSummary("44444444-4444-4444-8444-444444444444", "investigation", "t", null, null, "account:AAA")
+    await resolveThread("44444444-4444-4444-8444-444444444444", "done", "same client")
+    expect((await getThreadSummary("44444444-4444-4444-8444-444444444444"))?.client_key).toBe("account:AAA")
+  })
+
+  it("still writes the summary and outcome as before", async () => {
+    await createThreadSummary("55555555-5555-4555-8555-555555555555", "investigation", "t")
+    await resolveThread("55555555-5555-4555-8555-555555555555", "investigation_complete", "the summary", "contact:CCC")
+    const row = await getThreadSummary("55555555-5555-4555-8555-555555555555")
+    expect(row?.outcome).toBe("investigation_complete")
+    expect(row?.summary_text).toBe("the summary")
+    expect(row?.resolved_at).toBeTruthy()
+  })
+})
