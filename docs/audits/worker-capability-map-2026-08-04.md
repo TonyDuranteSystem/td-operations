@@ -78,7 +78,7 @@ Legend: **✅** wired on · **—** not wired · **⚙** conditional on an env/D
 | **Confirm card — email** | ✅ | ✅ | ✅ `ai-agent:583` | ✅ `claude-trigger:564-589` | — | — |
 | **Confirm card — portal** | ✅ `:653` | **— none, by design** ⁴ | — | — | — | — |
 | Max tool iterations | 20 `:798` | 20 | 20 `ai-agent:468` | 20 `claude-trigger:475` | 6 `suggest:229` (lenses: 4) | `context_json.max_iterations`, clamped [1,50] `hermes-bridge:65-70` |
-| Dedicated API key | — | — | — | ✅ `WORKER_KEY_TEAM_CHAT` `claude-trigger:474` | — | — |
+| Dedicated API key | — | — | — | **requested but NOT set** ¹ | — | — |
 
 **¹ The base 33 is a default, not a floor.** Whenever `threadId` is set — which is every surface except the suggester — `callWorker` **replaces** the tool list with `getToolsForThreadType(threadType)` (`worker-tools.ts:4589`). The stored `thread_summaries.thread_type` decides: `investigation` (the default, `thread-routing.ts:40`) and `action_request` resolve to all 33; `bug_report` = 22, `client_audit` = 20, `internal_ops` = 5 (`thread-routing.ts:114-129`). No live surface writes a non-default type today, so the ✅ holds in practice. **Note the ordering:** every conditional injection happens *after* the narrowing (`:4640-4758`), so thread-type routing constrains the read set only — it is not a security boundary over sends, SQL or the catalog bridge, despite `thread-routing.ts:9-11` describing it as defense-in-depth.
 
@@ -330,7 +330,10 @@ All in `runWorkerLoop`, each latching once, all failing **open** on error (`:428
 | `SLACK_BOT_TOKEN_CLAUDE` | still consumed by the weekly memory digest | — | `memory-digest/route.ts:77-87` |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CRON_SECRET` | base credentials | — | various |
 
-**Deployed values are not verified.** Every row is the code default. The two consequential unknowns are `WORKER_WEB_SEARCH_ENABLED` and `THREAD_RECALL_SEMANTIC_ENABLED`. A behavioural signal on the action rail: `approval_queue` has 22 rows, first 2026-06-05, **last 2026-07-10 12:23** — the day of the switch-off. That is consistent with the rail being off; it is inference, not verification.
+**Deployed env NAMES verified 2026-08-05** (`vercel env ls production`, project `td-operations`, 56 names — values stay encrypted).
+**PRESENT:** `WORKER_WEB_SEARCH_ENABLED` (17d), `ASSISTANT_FULL_REACH_ENABLED` (48d), `APPROVAL_RAIL_ENABLED`, `AGENT_MAX_TOOL_LOOPS`, `SLACK_WORKER_ANTHROPIC_KEY`, `OPENAI_API_KEY`.
+**ABSENT — so the code default is provably in force:** `THREAD_RECALL_SEMANTIC_ENABLED` (cross-thread recall is OFF, corroborated by 0 of 388 summaries ever embedded), `WORKER_ACTIONS_ENABLED` (action rail OFF — no longer just an inference from the quiet queue), `WORKER_MODEL` (the stored `app_settings` row is the only model authority), `WORKER_KEY_TEAM_CHAT` (**Team Chat runs on the SHARED key — §1's "dedicated key" row was wrong**), and every `WORKER_FULL_REACH_*` (so the legacy global `ASSISTANT_FULL_REACH_ENABLED` decides catalog reach, and its value is unread).
+**Still unknown:** the VALUES of `WORKER_WEB_SEARCH_ENABLED` and `ASSISTANT_FULL_REACH_ENABLED` — readable in the Vercel dashboard, not by this audit without pulling production secrets. A behavioural signal on the action rail: `approval_queue` has 22 rows, first 2026-06-05, **last 2026-07-10 12:23** — the day of the switch-off. That is consistent with the rail being off; it is inference, not verification.
 
 **Not an env var, and the one that matters most:** the model is a database row — `app_settings.worker_model` = `claude-fable-5`.
 
