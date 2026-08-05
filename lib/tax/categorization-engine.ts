@@ -327,7 +327,22 @@ export function computeRecategorizationUpdates(
       if (stored.startsWith(ASK_CLIENT_NOTE)) markChangedIds.add(row.id as string)
       continue
     }
-    if (finalCategory === "conversion" || finalCategory === "distribution" || finalCategory === "contribution") continue
+    if (finalCategory === "conversion" || finalCategory === "distribution" || finalCategory === "contribution") {
+      // A row that ENDS UP as an equity movement or internal transfer is not an
+      // open question — but a stale ask-mark left on it IS a live hazard: the
+      // review shows a false open question over settled money, and one tap of
+      // "No — a supplier" would then un-book a genuine member draw into a
+      // deducted expense under a frozen human note. Happens when the roster
+      // gains a member whose FULL name matches a row that only near-missed
+      // another member's surname before (the shared-surname + post-ingest
+      // roster fix populations — exactly who this feature serves). Clear it,
+      // and count it: an open question disappearing is a change.
+      if (stored.startsWith(ASK_CLIENT_NOTE) && !(u?.notes ?? "").startsWith(ASK_CLIENT_NOTE)) {
+        markChangedIds.add(row.id as string)
+        updates.set(row.id as string, { ...(u ?? {}), notes: u?.notes ?? "" })
+      }
+      continue
+    }
 
     const computed = Number(row.amount) < 0
       ? Array.from(new Set([

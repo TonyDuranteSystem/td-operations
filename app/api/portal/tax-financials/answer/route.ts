@@ -52,7 +52,10 @@ export async function POST(request: NextRequest) {
      *    the same shape the exact-match path uses, so attribution finds it.
      */
     const isSuspectedAnswer = body.suspected === true
-    const suspectedMember = typeof body.member === 'string' ? body.member.trim().slice(0, 120) : ''
+    // The name is written into a note whose grammar uses " | " and "; " as
+    // separators — strip those so a crafted value cannot forge extra trailers.
+    // Roster names never legitimately contain them.
+    const suspectedMember = typeof body.member === 'string' ? body.member.replace(/[|;]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) : ''
 
     // Candidates the mark originally named — captured during verification below
     // and written back onto the answer, so the change buttons can still offer
@@ -61,7 +64,16 @@ export async function POST(request: NextRequest) {
     let ownerCandidates: string[] = []
     const buildAnswerNote = () => {
       const base = isBulk ? `manual: bulk client answer (${answer})` : `manual: client answer (${answer})`
-      if (!(isSuspectedAnswer && suspectedMember)) return base
+      if (!isSuspectedAnswer) return base
+      if (!suspectedMember) {
+        // "No — a supplier." Keep the candidates on the note anyway: this is
+        // the one answer with no path back from the screen (no Member tail →
+        // the change block never renders), so the breadcrumb is what lets
+        // support see WHO the question was about if the client later disputes
+        // it, instead of archaeology. No money reader consumes it — the K-1
+        // reader requires the Member tail, which this note does not have.
+        return ownerCandidates.length > 0 ? `${base} | Of: ${ownerCandidates.join('; ')}` : base
+      }
       const others = ownerCandidates.filter(c => c !== suspectedMember)
       const of = others.length > 0 ? ` | Of: ${ownerCandidates.join('; ')}` : ''
       return `${base} | Member: ${suspectedMember}${of}`
@@ -170,16 +182,18 @@ export async function POST(request: NextRequest) {
         // across the other partners' K-1s. Same lesson as the roster: never a
         // second definition of "who are the members".
         const { extractWizardMembers } = await import('@/lib/tax/financials-orchestration')
-        // COMPLETED submissions only — the same resolver rule the draft uses.
-        // "Newest of any status" is the exact trap resolveEditability exists to
-        // close: an unfilled pending form would outrank the real answers.
-        const { data: subRow } = await supabaseAdmin
-          .from('tax_return_submissions')
-          .select('submitted_data')
-          .eq('account_id', accountId).eq('tax_year', taxYear)
-          .eq('status', 'completed')
-          .order('created_at', { ascending: false }).limit(1).maybeSingle()
-        const wizardMembers = extractWizardMembers((subRow?.submitted_data as Record<string, unknown> | null) ?? {})
+        // THE CANONICAL SUBMISSION RESOLVER — not a hand-rolled status filter.
+        // The second cut of this guard read completed-only, which this repo's
+        // own resolver documents as the classic bug: most files under review
+        // sit at 'reviewed' (43 of 76 real 2025 submissions today), so the
+        // guard was dead for the MAJORITY — including the exact moment the
+        // re-answer feature exists for, a client correcting an owner answer
+        // mid-review. Third hand-rolled reader today; each one was wrong.
+        const { resolveClientSubmission } = await import('@/lib/tax/resolve-submission')
+        const subData = await resolveClientSubmission<{ submitted_data: Record<string, unknown> | null }>(
+          supabaseAdmin, accountId, taxYear, 'submitted_data',
+        )
+        const wizardMembers = extractWizardMembers(subData?.submitted_data ?? {})
         if (wizardMembers.length > 0) {
           const creditable = resolveOwnership({ priorK1s: [], wizardMembers, accountContacts: [] })
             .members.filter(m => m.pct !== null)
