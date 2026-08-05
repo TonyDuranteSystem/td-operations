@@ -1,6 +1,8 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
 
-_Last verified against code: 2026-08-05 — Claude (**THE WORKER CAN HAND YOU A FILE FROM THE INBOX AND PORTAL-CHATS PANELS. dev job 86cb9449.** Both panels had ZERO download capability — no artifact plumbing in the route, no render control in the component — so a spreadsheet or PDF the worker genuinely built was dropped at the last step and the reply announced a file that could not be clicked. The route now returns the produced files and both panels render them via the shared `WorkerArtifactLinks` component, the same one the CRM sidebar uses. Antonio, 2026-08-05: "must be able to produce files everywhere." NOT restored by the history fetch on purpose — the links are time-limited, so resurrecting an old one would render a button that fails. Full engine-side detail (including the three loop exits that were discarding files) in `docs/systems/ai-agent.md` (2026-08-05).)_
+_Last verified against code: 2026-08-05b — Claude (**OUTGOING EMAIL SIGNATURES — ONE MODULE, EVERY SEND PATH. dev job fb7629ea.** See the "Outgoing email signatures" section below for the full rules; the one-line version: `lib/email/signature.ts` is the single definition of who signs what, all four send sites call it, compose/reply attach it WITHOUT a sign-off because humans type their own — verified against Antonio's real sent mail — and the composers render a live preview from the same builder so what you see is what goes out.)_
+
+_Previous entry: 2026-08-05 — Claude (**THE WORKER CAN HAND YOU A FILE FROM THE INBOX AND PORTAL-CHATS PANELS. dev job 86cb9449.** Both panels had ZERO download capability — no artifact plumbing in the route, no render control in the component — so a spreadsheet or PDF the worker genuinely built was dropped at the last step and the reply announced a file that could not be clicked. The route now returns the produced files and both panels render them via the shared `WorkerArtifactLinks` component, the same one the CRM sidebar uses. Antonio, 2026-08-05: "must be able to produce files everywhere." NOT restored by the history fetch on purpose — the links are time-limited, so resurrecting an old one would render a button that fails. Full engine-side detail (including the three loop exits that were discarding files) in `docs/systems/ai-agent.md` (2026-08-05).)_
 
 _Last verified against code: 2026-08-04e — Claude (**ADD AND REMOVE FILES ON THE CONFIRM CARD. Antonio, 2026-08-04, after Luca confirmed the attachment work: "I want the upload button on the card as well" — all four screens, and remove a file too.** New route `POST/PUT /api/inbox/worker-chat/prepared-send/[id]/attachments`: PUT mints a signed direct-to-storage upload into the PRIVATE bucket (same path shape as everywhere else — the client never chooses it, and it is re-validated on attach), POST applies an add or a remove. The rules live in `lib/inbox/prepared-attachment-edit.ts`, PURE and tested, because today's three hunter rounds all landed on the same lesson: a rule inside a route cannot be tested, and an untested rule is wrong in ways nobody sees. **WHY EDITING A FROZEN DRAFT IS ALLOWED AT ALL:** the freeze exists so the MODEL cannot change what a human has read. A person editing their OWN draft before pressing Confirm is not that. So the rule is narrower than "frozen" — files only, never the recipient/subject/body, and that restriction is enforced by those operations simply not existing. **THE BUG THIS NEARLY SHIPPED WITH, caught by a live run and not by reading the code:** the owner is stored as `<surface>:<who>` and `who` IS NOT THE SAME KIND OF THING per surface — the Inbox, client panel and sidebar record an EMAIL, Team Chat records the sender's DISPLAY NAME. An email-only comparison locked a person out of their own card in Team Chat, i.e. on exactly the screen the button was asked for. `isOwnDraft` now takes every identity the user answers to (email + team display name, resolved through the team directory, which is the one definition of a staff display name) and matches any; it fails CLOSED on an unattributed draft or an empty identity. **Other guards, each mutation-proven:** own draft only (a channel/thread/client screen is SHARED, so without it a colleague could add a file to the draft you are about to send); pending only; the write-back is conditional on `status='pending'` so a Confirm racing an edit wins; adding is idempotent (a double-click cannot attach twice); the 10-file bound and the byte budget are re-checked; a card-added file is marked `copied` so cancel/supersede cleanup takes it, while a panel upload never is; a removed file's copy is deleted immediately. **The Team Chat card is SYNCED in the same request** — it is a permanent chat message with the file list baked in, so without that it would show fewer files than the email carries, which is the exact failure the last three rounds removed. Editing is offered only while the card is live (`onChange` omitted once sent/cancelled), and a surface that cannot refresh its own state simply does not pass the callback, so it can never show a control that would leave the card disagreeing with the email. Tests: 19 in `prepared-attachment-edit.test.ts` + a 9-check live run on the deployed sandbox (both owner shapes, add, remove-with-cleanup, card sync, sent-draft refusal). Suite 8,010 green; lint + build clean. SANDBOX ONLY.)_
 
@@ -603,6 +605,57 @@ Function.
 - Known debt (audit 2026-07-07): email→account lookup is last-write-wins for
   contacts on multiple accounts; 30s polling refetches up to ~200 threads +
   the whole `account_contacts` table.
+
+## Outgoing email signatures (dev job fb7629ea — 2026-08-05)
+
+**The one definition:** `lib/email/signature.ts`. Every outgoing-email identity fact
+(names, title, phones, address, brand red, mailbox addresses, From display names) and
+every builder (`buildSignature` / `buildSignatureHtml` / `buildSignatureText`,
+`parseSignatureVariant`, `parseSignatureSender`, `signatureSenderForAddress`,
+`signatureFromName`) lives here. Before this there were THREE hand-rolled shells and a
+byte-duplicated worker sign-off; do not hand-roll a fourth — call the module.
+
+**Senders:** `support` (company block: Tony Durante LLC, +1 (727) 452-1093, address,
+TD mark) and `antonio` (personal block: Antonio Noel Durante, Executive Director,
++1 727 423 4285, portrait). Resolved from the FULL sending address, never a prefix.
+Support NEVER carries a portrait.
+
+**Variants (per-email, chosen next to Send):** `gala` (award portrait, the new-email
+default) · `hat` · `text` = "Compact" (small 40px TD mark, no banner — the REPLY
+default, so nothing stacks down a thread; Antonio wants the TD mark on every signed
+email) · `none` (truly nothing — no block, no sign-off, no separator; call sites must
+branch on `hasSignature()`, never concatenate an empty string, or the blank-line
+separator survives).
+
+**Four send sites, one rule each:**
+- Compose (`/api/inbox/compose` → `sendEmail` + `wrapEmailWithBrandShell`): signature
+  at the BOTTOM (the old top banner + nameless footer are gone), `includeSignoff:false`
+  — the author types the closing (double-closing bug, hunter MAJOR 2026-08-05). New
+  emails can send from antonio@ via the From picker; server-gated by the same admin
+  check as replies, plus a loud-fail guard if the deployment default address ever
+  points at the personal mailbox. The support path deliberately does NOT pin an
+  explicit address (preserves the `GOOGLE_IMPERSONATE_EMAIL` fallback).
+- Reply (`/api/inbox/reply` → `buildReplyMime`): signature between the typed reply and
+  the quoted history, both MIME halves, `includeSignoff:false`. Omitting the signature
+  keeps the historical MIME byte-for-byte (test-pinned).
+- Worker text + worker attachment sends: sign-off ON (the model writes no closing),
+  BOTH halves signed; the text path now ships a real text/plain part (it used to
+  declare multipart/alternative with only an html part).
+
+**Hard rules the tests enforce:** ASCII only (the compose-path sanitizer rewrites
+smart punctuation — a typographic signature would differ between paths); every fact
+lives in text because Outlook blocks images by default; the text/plain half is
+AUTHORED, never tag-stripped from the table (glued-junk bug); the wide banner is
+pinned at 300px with no max-width (auto-layout tables shrink a flexible image to the
+narrowest row — browser-measured); explicit width/height on every image.
+
+**UI:** `components/inbox/signature-controls.tsx` — the picker (never a modal on send)
++ `SignaturePreview`, rendered by the SAME builder with a ROOT-RELATIVE base URL so
+in-app images load from the serving deployment. Compose resets to support+default on
+every close (sticky-sender bug). Assets: `public/images/signature-antonio-{gala,hat}.jpg`
+(hat frame Antonio-approved), `signature-td-mark.png` (derived from the app icon —
+regenerate from `public/portal-icons/icon-512.png` if the brand mark ever changes),
+`tony-logos.png` (banner, carries "Your Way to Freedom" + the three certifications).
 
 ## How to verify current state
 
