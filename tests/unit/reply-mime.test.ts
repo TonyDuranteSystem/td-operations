@@ -105,3 +105,63 @@ describe('buildReplyMime with attachments', () => {
     expect(/^[\x20-\x7E\r\n]+$/.test(headerBlock)).toBe(true)
   })
 })
+
+describe('buildReplyMime — signature', () => {
+  const base = {
+    asUser: 'antonio.durante@tonydurante.us',
+    replyTo: 'Client <client@example.com>',
+    subject: 'Re: Hello',
+    inReplyTo: '<msg-1@mail.gmail.com>',
+    references: '',
+    message: 'Thanks, will do.',
+    lastBody: 'Original question here.',
+    lastDate: 'Tue, 4 Aug 2026 12:00:00 -0400',
+    lastFrom: 'Client <client@example.com>',
+    boundary: 'td_sig',
+  }
+  const sig = { html: '<div id="sig">SIG-HTML</div>', text: 'SIG-TEXT' }
+
+  const decodePart = (mime: string, type: 'text/plain' | 'text/html') => {
+    const part = mime.split(`Content-Type: ${type}`)[1]
+    const b64 = part.match(/\r\n\r\n([A-Za-z0-9+/=]+)/)?.[1] || ''
+    return Buffer.from(b64, 'base64').toString('utf-8')
+  }
+
+  it('omitting the signature leaves the previous output byte-for-byte', () => {
+    expect(buildReplyMime(base)).toBe(buildReplyMime({ ...base, signature: undefined }))
+  })
+
+  it('signs BOTH halves — plain-text readers cannot fall back to images', () => {
+    const mime = buildReplyMime({ ...base, signature: sig })
+    expect(decodePart(mime, 'text/plain')).toContain('SIG-TEXT')
+    expect(decodePart(mime, 'text/html')).toContain('SIG-HTML')
+  })
+
+  // Every client puts the signature under the reply and above the quote.
+  it('places the signature after the reply and before the quoted history', () => {
+    const html = decodePart(buildReplyMime({ ...base, signature: sig }), 'text/html')
+    expect(html.indexOf('Thanks, will do.')).toBeLessThan(html.indexOf('SIG-HTML'))
+    expect(html.indexOf('SIG-HTML')).toBeLessThan(html.indexOf('gmail_quote'))
+
+    const text = decodePart(buildReplyMime({ ...base, signature: sig }), 'text/plain')
+    expect(text.indexOf('Thanks, will do.')).toBeLessThan(text.indexOf('SIG-TEXT'))
+    expect(text.indexOf('SIG-TEXT')).toBeLessThan(text.indexOf('> Original question here.'))
+  })
+
+  // The signature is our own generated markup; the typed message never is.
+  it('escapes the typed message but not the generated signature', () => {
+    const html = decodePart(
+      buildReplyMime({ ...base, message: '<b>hi</b>', signature: sig }),
+      'text/html'
+    )
+    expect(html).toContain('&lt;b&gt;hi&lt;/b&gt;')
+    expect(html).toContain('<div id="sig">')
+  })
+
+  it('adds a display name to From only when one is given', () => {
+    expect(buildReplyMime(base)).toContain('From: antonio.durante@tonydurante.us')
+    expect(
+      buildReplyMime({ ...base, fromName: 'Antonio Noel Durante' })
+    ).toContain('From: Antonio Noel Durante <antonio.durante@tonydurante.us>')
+  })
+})

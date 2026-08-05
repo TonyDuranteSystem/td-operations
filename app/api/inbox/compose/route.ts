@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import { sendEmail, renderEmailTemplate, type SendEmailAttachment } from "@/lib/operations/email"
+import {
+  parseSignatureVariant,
+  parseSignatureSender,
+  SIGNATURE_MAILBOX_ADDRESSES,
+} from "@/lib/email/signature"
 import {
   parseStagedAttachmentInputs,
   loadStagedEmailAttachments,
@@ -39,6 +45,14 @@ interface ComposeRequest {
    * TD-branded shell (logo + footer). Plain-text bodies are auto-paragraphed.
    */
   wrap_with_brand?: boolean
+  /**
+   * Which mailbox to send from: "support" (shared, the default) or "antonio"
+   * (his personal one, admin-only). Before this existed every new email left
+   * from one fixed mailbox with no per-email choice.
+   */
+  mailbox?: string
+  /** Which signature the sender picked: "gala" | "hat" | "text". */
+  signature_variant?: string
 }
 
 function plainToHtml(text: string): string {
@@ -64,6 +78,17 @@ export async function POST(req: NextRequest) {
 
     if (!payload.to) {
       return NextResponse.json({ error: "to is required" }, { status: 400 })
+    }
+
+    // Sending mailbox. antonio@ is his PERSONAL mailbox and is admin-only —
+    // the same server-side gate the reply route uses, because hiding the
+    // control in the UI is not a security boundary.
+    const senderKey = parseSignatureSender(payload.mailbox)
+    if (!(await checkMailboxAccess(payload.mailbox))) {
+      return NextResponse.json(
+        { error: "Not authorized for this mailbox" },
+        { status: 403 }
+      )
     }
 
     // Staged file attachments — validate + load up front so a missing or
@@ -129,6 +154,15 @@ export async function POST(req: NextRequest) {
       attachments,
       skip_duplicate_check: payload.skip_duplicate_check,
       wrap_with_brand: wrap,
+      // Only PIN the address when the sender explicitly picked the personal
+      // mailbox. Leaving it undefined for "support" preserves the existing
+      // fallback (GOOGLE_IMPERSONATE_EMAIL, then support@) — hardcoding the
+      // literal here would silently move every outgoing email if that
+      // variable is set to something else on a deployment.
+      ...(senderKey === "antonio"
+        ? { as_user: SIGNATURE_MAILBOX_ADDRESSES.antonio }
+        : {}),
+      signature_variant: parseSignatureVariant(payload.signature_variant),
     })
 
     if (result.outcome === "duplicate_blocked") {

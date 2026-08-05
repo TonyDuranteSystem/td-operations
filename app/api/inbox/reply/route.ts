@@ -8,6 +8,13 @@ import {
   loadStagedEmailAttachments,
   deleteStagedEmailAttachments,
 } from "@/lib/inbox/email-attachment-staging"
+import {
+  buildSignature,
+  parseSignatureVariant,
+  signatureFromName,
+  signatureSenderForAddress,
+  DEFAULT_REPLY_SIGNATURE_VARIANT,
+} from "@/lib/email/signature"
 
 export const dynamic = "force-dynamic"
 
@@ -20,11 +27,13 @@ export async function POST(req: NextRequest) {
     if (denied) return denied
 
     const body = await req.json()
-    const { conversationId, message, channel, mailbox } = body as {
+    const { conversationId, message, channel, mailbox, signature_variant } = body as {
       conversationId: string
       message: string
       channel: "whatsapp" | "telegram" | "gmail"
       mailbox?: string
+      /** "gala" | "hat" | "text". Replies default to text-only. */
+      signature_variant?: string
     }
 
     if (!conversationId || !message) {
@@ -114,6 +123,21 @@ export async function POST(req: NextRequest) {
       // Gmail-parity MIME: multipart/alternative (plain + HTML), quoted
       // history, RFC 2047-encoded To/Subject. Pure builder — unit-tested in
       // tests/unit/reply-mime.test.ts.
+      // The signature sits between the reply and the quoted history. Replies
+      // default to TEXT ONLY so a portrait does not stack down a long thread
+      // (Antonio, 2026-08-05); the composer can override per reply. The
+      // sign-off is left off — the staff member writes their own closing.
+      const signatureSender = signatureSenderForAddress(asUser)
+      const signatureVariant = parseSignatureVariant(
+        signature_variant,
+        DEFAULT_REPLY_SIGNATURE_VARIANT
+      )
+      const signature = buildSignature({
+        sender: signatureSender,
+        variant: signatureVariant,
+        includeSignoff: false,
+      })
+
       const raw = buildReplyMime({
         asUser,
         replyTo,
@@ -125,6 +149,8 @@ export async function POST(req: NextRequest) {
         lastDate,
         lastFrom: from,
         attachments,
+        signature,
+        fromName: signatureFromName(signatureSender),
       })
       const encodedRaw = Buffer.from(raw).toString("base64url")
 

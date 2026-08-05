@@ -7,6 +7,11 @@ import { cn } from '@/lib/utils'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { useEmailAttachments } from './use-email-attachments'
 import { EmailAttachmentChips } from './email-attachment-chips'
+import { SignatureControls } from './signature-controls'
+import {
+  DEFAULT_REPLY_SIGNATURE_VARIANT,
+  type SignatureVariant,
+} from '@/lib/email/signature'
 import type { InboxConversation } from '@/lib/types'
 
 interface ComposeReplyProps {
@@ -18,6 +23,9 @@ interface ComposeReplyProps {
 
 export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
   const [message, setMessage] = useState('')
+  const [signatureVariant, setSignatureVariant] = useState<SignatureVariant>(
+    DEFAULT_REPLY_SIGNATURE_VARIANT
+  )
   const [aiLoading, setAiLoading] = useState(false)
   const [attachNotice, setAttachNotice] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -65,6 +73,7 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
           message: text,
           channel: conversation.channel,
           mailbox,
+          signature_variant: signatureVariant,
           ...(staged.length > 0 && { attachments: staged }),
         }),
       })
@@ -170,6 +179,20 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
       {isEmail && (
         <div className="mb-2 empty:hidden">
           <EmailAttachmentChips attachments={attachments} />
+        </div>
+      )}
+      {/* Replies default to text-only so a portrait does not stack down a
+          twenty-message thread; overridable per reply. The mailbox is NOT
+          selectable here — a reply must go through the same mailbox the
+          thread lives in, which is the one being viewed. */}
+      {isEmail && (
+        <div className="mb-2">
+          <SignatureControls
+            sender={mailbox === 'antonio' ? 'antonio' : 'support'}
+            variant={signatureVariant}
+            onVariantChange={setSignatureVariant}
+            disabled={sendMutation.isPending}
+          />
         </div>
       )}
 

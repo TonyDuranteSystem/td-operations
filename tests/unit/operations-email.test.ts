@@ -431,14 +431,37 @@ describe("plainTextToParagraphs", () => {
 })
 
 describe("wrapEmailWithBrandShell", () => {
-  it("wraps body with logo + footer + Arial font stack", async () => {
+  it("wraps the body with the Arial stack and the sender's signature", async () => {
     const { wrapEmailWithBrandShell } = await import("@/lib/operations/email")
     const out = wrapEmailWithBrandShell("<p>Hi</p>")
-    expect(out).toContain("https://app.tonydurante.us/images/logo.jpg")
-    expect(out).toContain("Tony Durante LLC")
-    expect(out).toContain("support@tonydurante.us")
     expect(out).toContain("font-family:Arial,Helvetica,sans-serif")
     expect(out).toContain("<p>Hi</p>")
+    // Company block, with the logo now living inside the signature.
+    expect(out).toContain("Tony Durante LLC")
+    expect(out).toContain("support@tonydurante.us")
+    expect(out).toContain("+1 (727) 452-1093")
+    expect(out).toContain("https://app.tonydurante.us/images/tony-logos.png")
+  })
+
+  // The logo used to sit in a banner ABOVE the message; business mail puts
+  // its branding in the signature (Antonio, 2026-08-05).
+  it("no longer emits the old top banner or the nameless footer", async () => {
+    const { wrapEmailWithBrandShell } = await import("@/lib/operations/email")
+    const out = wrapEmailWithBrandShell("<p>Hi</p>")
+    expect(out).not.toContain("logo.jpg")
+    // The logo must appear once, in the signature — not twice.
+    expect(out.match(/tony-logos\.png/g)).toHaveLength(1)
+    // Body first, branding after.
+    expect(out.indexOf("<p>Hi</p>")).toBeLessThan(out.indexOf("tony-logos.png"))
+  })
+
+  it("uses Antonio's block, and his photo, when the mail is his", async () => {
+    const { wrapEmailWithBrandShell } = await import("@/lib/operations/email")
+    const out = wrapEmailWithBrandShell("<p>Hi</p>", { sender: "antonio", variant: "gala" })
+    expect(out).toContain("Antonio Noel Durante")
+    expect(out).toContain("Executive Director")
+    expect(out).toContain("+1 727 423 4285")
+    expect(out).toContain("signature-antonio-gala.jpg")
   })
 })
 
@@ -457,11 +480,49 @@ describe("sendEmail — wrap_with_brand", () => {
     const htmlPart = mime.split("Content-Type: text/html")[1]
     const htmlBase64 = htmlPart.match(/\r\n\r\n([A-Za-z0-9+/=]+)/)?.[1] || ""
     const decoded = Buffer.from(htmlBase64, "base64").toString("utf-8")
-    expect(decoded).toContain("logo.jpg")
     expect(decoded).toContain("<p>Hello Antonio,</p>")
     expect(decoded).toContain("<p>First paragraph.</p>")
     expect(decoded).toContain("<p>Second paragraph.</p>")
     expect(decoded).toContain("support@tonydurante.us")
+    expect(decoded).toContain("tony-logos.png")
+  })
+
+  // The fallback derives text/plain by stripping tags out of the HTML, which
+  // turns a table-based signature into junk. The signature's own plain form
+  // has to be authored instead.
+  it("authors the plain-text part rather than stripping tags off the table", async () => {
+    const { sendEmail } = await import("@/lib/operations/email")
+    await sendEmail({
+      to: "client@example.com",
+      subject: "Plain text half",
+      body_html: "Hello Antonio,\n\nFirst paragraph.",
+      wrap_with_brand: true,
+    })
+    const rawB64 = (gmailPostCalls[0].body as { raw: string }).raw
+    const mime = Buffer.from(rawB64, "base64url").toString("utf-8")
+    const textPart = mime.split("Content-Type: text/plain")[1]
+    const textBase64 = textPart.match(/\r\n\r\n([A-Za-z0-9+/=]+)/)?.[1] || ""
+    const decoded = Buffer.from(textBase64, "base64").toString("utf-8")
+    expect(decoded).toContain("Hello Antonio,")
+    expect(decoded).toContain("Tony Durante LLC")
+    expect(decoded).toContain("+1 (727) 452-1093")
+    // No tag debris, and no table attributes leaking through.
+    expect(decoded).not.toContain("cellpadding")
+    expect(decoded).not.toMatch(/<[a-z/]/i)
+  })
+
+  it("labels the From line with the sender, not always the company", async () => {
+    const { sendEmail } = await import("@/lib/operations/email")
+    await sendEmail({
+      to: "client@example.com",
+      subject: "From name",
+      body_html: "Hello.",
+      wrap_with_brand: true,
+      as_user: "antonio.durante@tonydurante.us",
+    })
+    const rawB64 = (gmailPostCalls[0].body as { raw: string }).raw
+    const mime = Buffer.from(rawB64, "base64url").toString("utf-8")
+    expect(mime).toContain("From: Antonio Noel Durante <antonio.durante@tonydurante.us>")
   })
 
   it("leaves body untouched when wrap_with_brand is not set", async () => {

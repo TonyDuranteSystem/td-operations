@@ -17,6 +17,15 @@ import { gmailPost, gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmai
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import {
+  buildSignatureHtml,
+  buildSignatureText,
+  parseSignatureVariant,
+  signatureFromName,
+  signatureSenderForAddress,
+  DEFAULT_SIGNATURE_VARIANT,
+  type SignatureVariant,
+} from "@/lib/email/signature"
 
 // ─── ASCII sanitizer ────────────────────────────────────────
 
@@ -70,6 +79,13 @@ export interface SendEmailParams {
    * dedicated send tools that build their own HTML shells.
    */
   wrap_with_brand?: boolean
+  /**
+   * Which signature the sender picked for THIS email: "gala" | "hat" (full
+   * block, with Antonio's portrait when it leaves from his address) or
+   * "text" (identity block only, no images). Only read when
+   * wrap_with_brand is on. Defaults to the award portrait.
+   */
+  signature_variant?: SignatureVariant
 }
 
 export interface SendEmailResult {
@@ -129,21 +145,26 @@ export function plainTextToParagraphs(input: string): string {
 }
 
 /**
- * Wrap a body fragment with the TD-branded shell: logo header, Arial font
- * stack, readable color, and TD contact footer. Matches the typographic
- * style already used by welcome-package and other dedicated send tools.
+ * Wrap a body fragment with the TD shell: Arial stack, readable colour, and
+ * the sender's signature at the bottom.
+ *
+ * The logo used to sit in a BANNER above the message and the footer carried
+ * only "Tony Durante LLC / support@" - no human name, no title, no phone.
+ * Business mail puts its branding in the signature, so the logo moved down
+ * into it and the old footer is gone (Antonio, 2026-08-05). Everything the
+ * block says now comes from lib/email/signature.ts, which the reply and
+ * worker paths share, so the three can no longer drift apart.
  */
-export function wrapEmailWithBrandShell(bodyHtml: string): string {
-  const logoUrl = `${APP_BASE_URL}/images/logo.jpg`
+export function wrapEmailWithBrandShell(
+  bodyHtml: string,
+  signature: {
+    sender: ReturnType<typeof signatureSenderForAddress>
+    variant: SignatureVariant
+  } = { sender: "support", variant: DEFAULT_SIGNATURE_VARIANT }
+): string {
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;max-width:600px;margin:0 auto;padding:24px">
-<div style="text-align:center;padding:8px 0 20px 0;border-bottom:1px solid #e5e7eb;margin-bottom:24px">
-<img src="${logoUrl}" alt="Tony Durante LLC" style="max-width:180px;height:auto;display:inline-block" />
-</div>
 ${bodyHtml}
-<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:13px">
-<p style="margin:4px 0"><strong style="color:#1a1a1a">Tony Durante LLC</strong></p>
-<p style="margin:4px 0"><a href="mailto:support@tonydurante.us" style="color:#2563eb;text-decoration:none">support@tonydurante.us</a></p>
-</div>
+${buildSignatureHtml({ sender: signature.sender, variant: signature.variant })}
 </div>`
 }
 
@@ -193,18 +214,35 @@ export async function sendEmail(
   try {
     const subject = sanitizeToAscii(params.subject)
     let body_html = sanitizeToAscii(params.body_html)
-    const body_text = params.body_text ? sanitizeToAscii(params.body_text) : undefined
+    let body_text = params.body_text ? sanitizeToAscii(params.body_text) : undefined
 
-    // Brand-shell wrapping: convert plain text to paragraphs (if applicable)
-    // and wrap with the TD logo + footer shell. Opt-in via wrap_with_brand.
+    // Resolved BEFORE the shell: whose signature goes on this mail is decided
+    // by which mailbox it leaves from, so the address has to be known first.
+    const fromEmail = params.as_user || DEFAULT_EMAIL()
+    const signatureSender = signatureSenderForAddress(fromEmail)
+
+    // Brand-shell wrapping: plain text becomes paragraphs, then the sender's
+    // signature is appended. Opt-in via wrap_with_brand.
     if (params.wrap_with_brand) {
-      const contentHtml = looksLikeHtml(body_html)
-        ? body_html
-        : plainTextToParagraphs(body_html)
-      body_html = wrapEmailWithBrandShell(contentHtml)
+      const bodyWasHtml = looksLikeHtml(body_html)
+      const contentHtml = bodyWasHtml ? body_html : plainTextToParagraphs(body_html)
+      const variant = parseSignatureVariant(params.signature_variant)
+      body_html = wrapEmailWithBrandShell(contentHtml, {
+        sender: signatureSender,
+        variant,
+      })
+
+      // The text/plain half must be AUTHORED, not derived. The fallback below
+      // strips tags out of the HTML, which turns a table-based signature into
+      // junk - so when the caller gave us plain text we keep that text and
+      // append the signature's own plain form.
+      if (!body_text && !bodyWasHtml) {
+        body_text = `${sanitizeToAscii(params.body_html).trim()}\n\n${sanitizeToAscii(
+          buildSignatureText({ sender: signatureSender, variant })
+        )}`
+      }
     }
 
-    const fromEmail = params.as_user || DEFAULT_EMAIL()
     const track_opens = params.track_opens !== false
 
     // Download Drive attachments + merge with inline attachments
@@ -291,7 +329,9 @@ export async function sendEmail(
       : subject
 
     const mimeHeaders = [
-      `From: Tony Durante LLC <${fromEmail}>`,
+      // The From name follows the mailbox. Mail from Antonio's address signed
+      // "Antonio Noel Durante" must not arrive labelled as the company.
+      `From: ${signatureFromName(signatureSender)} <${fromEmail}>`,
       `To: ${params.to}`,
       `Subject: ${encodedSubject}`,
     ]

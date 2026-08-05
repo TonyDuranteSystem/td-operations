@@ -8,6 +8,12 @@ import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { useEmailAttachments } from './use-email-attachments'
 import { EmailAttachmentChips } from './email-attachment-chips'
 import { RecipientAutocomplete } from './recipient-autocomplete'
+import { SignatureControls } from './signature-controls'
+import {
+  DEFAULT_SIGNATURE_VARIANT,
+  type SignatureSender,
+  type SignatureVariant,
+} from '@/lib/email/signature'
 
 interface EmailTemplate {
   id: string
@@ -31,6 +37,14 @@ interface ComposeDialogProps {
   prefillLeadId?: string
   prefillLinkLabel?: string
   prefillTag?: string
+  /**
+   * Offer the "send from Antonio" choice. Server-gated regardless
+   * (lib/inbox/mailbox-access.ts); false just hides a control that would 403.
+   * Defaults false, so surfaces that don't know the caller's role — the
+   * account/contact detail pages — keep sending from support exactly as
+   * they did before this control existed.
+   */
+  canUsePersonalMailbox?: boolean
 }
 
 export function ComposeDialog({
@@ -44,6 +58,7 @@ export function ComposeDialog({
   prefillLeadId = '',
   prefillLinkLabel = '',
   prefillTag = '',
+  canUsePersonalMailbox = false,
 }: ComposeDialogProps) {
   const [to, setTo] = useState(prefillTo)
   const [cc, setCc] = useState('')
@@ -56,6 +71,12 @@ export function ComposeDialog({
   const [templateId, setTemplateId] = useState<string>('')
   const [driveFileIds, setDriveFileIds] = useState('')
   const [trackOpens, setTrackOpens] = useState(true)
+  // New emails lead with the award portrait; the sender can change it per
+  // email right next to Send (Antonio, 2026-08-05).
+  const [mailbox, setMailbox] = useState<SignatureSender>('support')
+  const [signatureVariant, setSignatureVariant] = useState<SignatureVariant>(
+    DEFAULT_SIGNATURE_VARIANT
+  )
   const [accountId, setAccountId] = useState(prefillAccountId)
   const [contactId, setContactId] = useState(prefillContactId)
   const [leadId, setLeadId] = useState(prefillLeadId)
@@ -165,6 +186,8 @@ export function ComposeDialog({
           ...(staged.length > 0 && { attachments: staged }),
           track_opens: trackOpens,
           wrap_with_brand: true,
+          mailbox,
+          signature_variant: signatureVariant,
         }),
       })
       if (!res.ok) {
@@ -470,8 +493,18 @@ export function ComposeDialog({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-5 py-3 border-t gap-3">
-          <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center justify-between px-5 py-3 border-t gap-3">
+          <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+            {/* Always visible, so the sender can see what is attached without
+                being interrupted by a dialog on every send. */}
+            <SignatureControls
+              sender={mailbox}
+              onSenderChange={setMailbox}
+              variant={signatureVariant}
+              onVariantChange={setSignatureVariant}
+              canUsePersonalMailbox={canUsePersonalMailbox}
+              disabled={sendMutation.isPending}
+            />
             <button
               onClick={() => setTrackOpens(!trackOpens)}
               className={`flex items-center gap-1.5 text-xs ${

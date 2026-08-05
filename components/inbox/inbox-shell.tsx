@@ -1711,6 +1711,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         onClose={() => { setComposeOpen(false); setForwardData(null) }}
         prefillSubject={forwardData ? `Fwd: ${forwardData.subject}` : ''}
         prefillBody={forwardData?.body || ''}
+        canUsePersonalMailbox={canUsePersonalMailbox}
       />
 
       {createDialog && (

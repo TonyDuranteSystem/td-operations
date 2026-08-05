@@ -1,0 +1,237 @@
+import { describe, it, expect } from "vitest"
+import {
+  buildSignature,
+  buildSignatureHtml,
+  buildSignatureText,
+  parseSignatureVariant,
+  parseSignatureSender,
+  signaturePhotoUrl,
+  signatureLogoUrl,
+  SIGNATURE_VARIANTS,
+  DEFAULT_SIGNATURE_VARIANT,
+  DEFAULT_REPLY_SIGNATURE_VARIANT,
+} from "@/lib/email/signature"
+
+const BASE = "https://app.example.test"
+
+describe("parseSignatureVariant", () => {
+  it("accepts every real variant", () => {
+    for (const v of SIGNATURE_VARIANTS) {
+      expect(parseSignatureVariant(v)).toBe(v)
+    }
+  })
+
+  // A bad value must never be why a staff member's email fails to send.
+  it.each([undefined, null, "", "GALA", "photo", 7, {}, []])(
+    "falls back rather than throwing on %p",
+    (bad) => {
+      expect(parseSignatureVariant(bad)).toBe(DEFAULT_SIGNATURE_VARIANT)
+    }
+  )
+
+  it("honours a caller-supplied fallback, which is how replies stay text-only", () => {
+    expect(parseSignatureVariant(undefined, "text")).toBe("text")
+    expect(parseSignatureVariant(undefined, DEFAULT_REPLY_SIGNATURE_VARIANT)).toBe("text")
+  })
+
+  it("does not let a supplied fallback override a valid value", () => {
+    expect(parseSignatureVariant("hat", "text")).toBe("hat")
+  })
+})
+
+describe("parseSignatureSender", () => {
+  it("resolves the personal mailbox only on an exact match", () => {
+    expect(parseSignatureSender("antonio")).toBe("antonio")
+  })
+
+  // Fails to the SHARED mailbox: a wrong guess must not put Antonio's name
+  // and direct line on mail he did not send.
+  it.each(["Antonio", "ANTONIO", "antonio.durante@tonydurante.us", undefined, null, "", "support", 1])(
+    "falls back to support on %p",
+    (bad) => {
+      expect(parseSignatureSender(bad)).toBe("support")
+    }
+  )
+})
+
+describe("asset URLs", () => {
+  it("builds absolute URLs, since a relative src is dead once the mail leaves", () => {
+    expect(signaturePhotoUrl("gala", BASE)).toBe(`${BASE}/images/signature-antonio-gala.jpg`)
+    expect(signaturePhotoUrl("hat", BASE)).toBe(`${BASE}/images/signature-antonio-hat.jpg`)
+    expect(signatureLogoUrl(BASE)).toBe(`${BASE}/images/tony-logos.png`)
+  })
+
+  it("has no photo for the text variant", () => {
+    expect(signaturePhotoUrl("text", BASE)).toBeNull()
+  })
+
+  it("does not double the slash when the base URL has a trailing one", () => {
+    expect(signatureLogoUrl("https://x.test/")).toBe("https://x.test/images/tony-logos.png")
+    expect(signaturePhotoUrl("gala", "https://x.test///")).toBe(
+      "https://x.test/images/signature-antonio-gala.jpg"
+    )
+  })
+})
+
+describe("buildSignatureText", () => {
+  it("carries Antonio's identity in full", () => {
+    const text = buildSignatureText({ sender: "antonio", variant: "gala", baseUrl: BASE })
+    expect(text).toContain("Antonio Noel Durante")
+    expect(text).toContain("Executive Director, Tony Durante LLC")
+    expect(text).toContain("10225 Ulmerton Rd, Suite 3D, Largo, FL 33771")
+    expect(text).toContain("+1 727 423 4285")
+    expect(text).toContain("antonio.durante@tonydurante.us")
+  })
+
+  it("carries the company identity for support, with the company line not his", () => {
+    const text = buildSignatureText({ sender: "support", variant: "gala", baseUrl: BASE })
+    expect(text).toContain("Tony Durante LLC")
+    expect(text).toContain("+1 (727) 452-1093")
+    expect(text).toContain("support@tonydurante.us")
+    expect(text).not.toContain("Antonio")
+    expect(text).not.toContain("+1 727 423 4285")
+    expect(text).not.toContain("antonio.durante@tonydurante.us")
+  })
+
+  it("is identical across variants - the picture never changes the facts", () => {
+    const base = { sender: "antonio" as const, baseUrl: BASE }
+    const gala = buildSignatureText({ ...base, variant: "gala" })
+    expect(buildSignatureText({ ...base, variant: "hat" })).toBe(gala)
+    expect(buildSignatureText({ ...base, variant: "text" })).toBe(gala)
+  })
+
+  it("omits the sign-off when the author writes their own", () => {
+    const withIt = buildSignatureText({ sender: "antonio", variant: "text", baseUrl: BASE })
+    const without = buildSignatureText({
+      sender: "antonio",
+      variant: "text",
+      includeSignoff: false,
+      baseUrl: BASE,
+    })
+    expect(withIt.startsWith("Best regards,")).toBe(true)
+    expect(without.startsWith("Antonio Noel Durante")).toBe(true)
+    expect(without).not.toContain("Best regards")
+  })
+
+  it("contains no HTML - it is the text/plain half", () => {
+    for (const variant of SIGNATURE_VARIANTS) {
+      const text = buildSignatureText({ sender: "antonio", variant, baseUrl: BASE })
+      expect(text).not.toMatch(/<[a-z/]/i)
+    }
+  })
+})
+
+describe("buildSignatureHtml", () => {
+  it("shows Antonio's photo when the mail leaves from his own address", () => {
+    const html = buildSignatureHtml({ sender: "antonio", variant: "gala", baseUrl: BASE })
+    expect(html).toContain(`${BASE}/images/signature-antonio-gala.jpg`)
+    expect(html).toContain(`${BASE}/images/tony-logos.png`)
+  })
+
+  it("swaps the portrait when the sender picks the hat", () => {
+    const html = buildSignatureHtml({ sender: "antonio", variant: "hat", baseUrl: BASE })
+    expect(html).toContain("signature-antonio-hat.jpg")
+    expect(html).not.toContain("signature-antonio-gala.jpg")
+  })
+
+  // Support is the shared mailbox. A face on it would misattribute the mail.
+  it("never puts a portrait on support, whichever variant is asked for", () => {
+    for (const variant of SIGNATURE_VARIANTS) {
+      const html = buildSignatureHtml({ sender: "support", variant, baseUrl: BASE })
+      expect(html).not.toContain("signature-antonio")
+    }
+  })
+
+  it("still brands support with the logo", () => {
+    const html = buildSignatureHtml({ sender: "support", variant: "gala", baseUrl: BASE })
+    expect(html).toContain("tony-logos.png")
+  })
+
+  // The whole point of "text": a reply must not stack images down a thread.
+  it("emits no images at all on the text variant, not even the logo", () => {
+    for (const sender of ["antonio", "support"] as const) {
+      const html = buildSignatureHtml({ sender, variant: "text", baseUrl: BASE })
+      expect(html).not.toContain("<img")
+      expect(html).not.toContain(".jpg")
+      expect(html).not.toContain(".png")
+    }
+  })
+
+  it("keeps every fact in the text so a blocked image loses nothing", () => {
+    const html = buildSignatureHtml({ sender: "antonio", variant: "gala", baseUrl: BASE })
+    const stripped = html.replace(/<[^>]+>/g, " ")
+    expect(stripped).toContain("Antonio Noel Durante")
+    expect(stripped).toContain("Executive Director")
+    expect(stripped).toContain("10225 Ulmerton Rd, Suite 3D, Largo, FL 33771")
+    expect(stripped).toContain("+1 727 423 4285")
+    expect(stripped).toContain("antonio.durante@tonydurante.us")
+  })
+
+  it("names the person in alt text, which is what Outlook shows while blocked", () => {
+    const html = buildSignatureHtml({ sender: "antonio", variant: "gala", baseUrl: BASE })
+    expect(html).toContain('alt="Antonio Noel Durante"')
+  })
+
+  it("sizes every image explicitly so the layout cannot jump on load", () => {
+    const html = buildSignatureHtml({ sender: "antonio", variant: "gala", baseUrl: BASE })
+    for (const img of html.match(/<img[^>]+>/g) ?? []) {
+      expect(img).toMatch(/\swidth="\d+"/)
+    }
+  })
+
+  // Outlook renders mail through Word: no flexbox, no grid.
+  it("lays out with tables, not flex or grid", () => {
+    const html = buildSignatureHtml({ sender: "antonio", variant: "gala", baseUrl: BASE })
+    expect(html).toContain("<table")
+    expect(html).not.toMatch(/display:\s*(flex|grid)/)
+  })
+
+  // sanitizeToAscii() rewrites these on the compose path only, so a
+  // typographic signature would differ between paths.
+  it("stays ASCII, because one send path rewrites smart punctuation", () => {
+    for (const sender of ["antonio", "support"] as const) {
+      for (const variant of SIGNATURE_VARIANTS) {
+        const { html, text } = buildSignature({ sender, variant, baseUrl: BASE })
+        // eslint-disable-next-line no-control-regex
+        expect(html).not.toMatch(/[^\x00-\x7F]/)
+        // eslint-disable-next-line no-control-regex
+        expect(text).not.toMatch(/[^\x00-\x7F]/)
+      }
+    }
+  })
+
+  it("strips punctuation out of the tel: link so it dials", () => {
+    const html = buildSignatureHtml({ sender: "antonio", variant: "text", baseUrl: BASE })
+    expect(html).toContain('href="tel:+17274234285"')
+    const support = buildSignatureHtml({ sender: "support", variant: "text", baseUrl: BASE })
+    expect(support).toContain('href="tel:+17274521093"')
+  })
+
+  it("omits the sign-off when the author writes their own", () => {
+    const html = buildSignatureHtml({
+      sender: "antonio",
+      variant: "gala",
+      includeSignoff: false,
+      baseUrl: BASE,
+    })
+    expect(html).not.toContain("Best regards")
+  })
+})
+
+describe("buildSignature", () => {
+  it("returns both halves, which is what every MIME builder needs", () => {
+    const sig = buildSignature({ sender: "antonio", variant: "gala", baseUrl: BASE })
+    expect(sig.html).toBe(buildSignatureHtml({ sender: "antonio", variant: "gala", baseUrl: BASE }))
+    expect(sig.text).toBe(buildSignatureText({ sender: "antonio", variant: "gala", baseUrl: BASE }))
+  })
+})
+
+describe("defaults", () => {
+  // These two encode Antonio's decision of 2026-08-05 and are the reason a
+  // long thread does not fill with his face. Changing them is a product
+  // decision, so make it fail loudly here first.
+  it("leads with the award portrait on new mail and stays text-only on replies", () => {
+    expect(DEFAULT_SIGNATURE_VARIANT).toBe("gala")
+    expect(DEFAULT_REPLY_SIGNATURE_VARIANT).toBe("text")
+  })
+})

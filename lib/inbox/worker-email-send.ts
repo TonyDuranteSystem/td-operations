@@ -17,6 +17,13 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { TD_MAILBOXES, checkRecipientsAllowed } from "@/lib/inbox/email-recipients"
 import { buildRawEmail } from "@/lib/email/raw-mime"
+import {
+  buildSignatureHtml,
+  signatureFromName,
+  signatureSenderForAddress,
+  SIGNATURE_MAILBOX_ADDRESSES,
+  DEFAULT_SIGNATURE_VARIANT,
+} from "@/lib/email/signature"
 import { isValidWorkerUploadPath, WORKER_UPLOAD_BUCKET } from "@/lib/ai-agent/attachment-reader"
 import { MAX_EMAIL_ATTACHMENT_FILES } from "@/lib/inbox/email-attachment-staging"
 import {
@@ -90,9 +97,17 @@ export type PrepareResult =
   | { ok: true; preparedId: string; message: string }
   | { ok: false; message: string }
 
+// Display names come from lib/email/signature.ts so the From line agrees with
+// the signature block at the bottom of the message.
 const SENDERS: Record<string, { email: string; name: string }> = {
-  "support@tonydurante.us": { email: "support@tonydurante.us", name: "Tony Durante" },
-  "antonio.durante@tonydurante.us": { email: "antonio.durante@tonydurante.us", name: "Antonio Durante" },
+  [SIGNATURE_MAILBOX_ADDRESSES.support]: {
+    email: SIGNATURE_MAILBOX_ADDRESSES.support,
+    name: signatureFromName("support"),
+  },
+  [SIGNATURE_MAILBOX_ADDRESSES.antonio]: {
+    email: SIGNATURE_MAILBOX_ADDRESSES.antonio,
+    name: signatureFromName("antonio"),
+  },
 }
 
 function mb(bytes: number): string {
@@ -367,9 +382,9 @@ export async function confirmWorkerEmailSend(
   try {
     const { gmailGet, gmailPost, getHeader } = await import("@/lib/gmail")
     const { plainTextToParagraphs } = await import("@/lib/operations/email")
-    const { APP_BASE_URL } = await import("@/lib/config")
 
-    const sender = SENDERS[claimed.mailbox] ?? SENDERS["support@tonydurante.us"]
+    const sender =
+      SENDERS[claimed.mailbox] ?? SENDERS[SIGNATURE_MAILBOX_ADDRESSES.support]
 
     // Re-validate recipient is still on the thread (the thread may have changed
     // since prepare). Fail closed — never send to an address that dropped off.
@@ -412,18 +427,16 @@ export async function confirmWorkerEmailSend(
     }
     // (per-file + cumulative caps already enforced inside the loop above)
 
-    // Branded HTML — same shell the worker's text sends use.
-    const signoff = sender.email.startsWith("antonio") ? "Antonio Durante" : "The Tony Durante LLC Team"
+    // Branded HTML — same shell the worker's text sends use. This block and
+    // the one in lib/ai-agent/tools.ts were byte-identical copies of a
+    // hand-rolled banner + sign-off + footer; both now call the single
+    // definition in lib/email/signature.ts.
     const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;max-width:600px;margin:0 auto;padding:24px">
-<div style="text-align:center;padding:4px 0 18px 0;border-bottom:1px solid #e5e7eb;margin-bottom:24px">
-<img src="${APP_BASE_URL}/images/tony-logos.png" alt="Tony Durante LLC — Your Way to Freedom" style="width:100%;max-width:540px;height:auto;display:inline-block" />
-</div>
 ${plainTextToParagraphs(claimed.body)}
-<p style="margin-top:24px">Best regards,<br />${signoff}</p>
-<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:13px">
-<p style="margin:4px 0"><strong style="color:#1a1a1a">Tony Durante LLC</strong></p>
-<p style="margin:4px 0"><a href="mailto:support@tonydurante.us" style="color:#2563eb;text-decoration:none">support@tonydurante.us</a></p>
-</div>
+${buildSignatureHtml({
+  sender: signatureSenderForAddress(sender.email),
+  variant: DEFAULT_SIGNATURE_VARIANT,
+})}
 </div>`
 
     // Threading headers. Strip CR/LF from the recipient before it enters a raw
