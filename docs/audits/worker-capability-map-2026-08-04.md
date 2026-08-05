@@ -73,18 +73,20 @@ Legend: **✅** wired on · **—** not wired · **⚙** conditional on an env/D
 | Attachments **in** (images / PDF blocks) | ✅ `:763` | ✅ | ✅ `ai-agent:470` | ✅ `claude-trigger:479` | ✅ images only `suggest:230` | — |
 | Re-readable uploads (`pinnedUploads`) | ✅ `:780` | ✅ | ✅ `:477` | — (§8b.6) | — | — |
 | Email-attachment pin | ✅ `:767` | — | — | — | — | — |
-| Artifacts **out** (PDF/spreadsheet) | ⚙ produced, **discarded by the route** (§8b.8) | ⚙ same | ⚙ rendered `ai-agent:599` | ⚙ produced, not rendered | — | — |
+| Artifacts **out** (PDF/spreadsheet) | ✅ **fixed 2026-08-05** ⁵ | ✅ ⁵ | ✅ ⁵ | ⚙ produced, not rendered | — | — |
 | Client-scope boundary | — | ✅ `:697` (but see §5) | — (built, not passed — §8b.2) | — | — | — |
 | **Confirm card — email** | ✅ | ✅ | ✅ `ai-agent:583` | ✅ `claude-trigger:564-589` | — | — |
 | **Confirm card — portal** | ✅ `:653` | **— none, by design** ⁴ | — | — | — | — |
 | Max tool iterations | 20 `:798` | 20 | 20 `ai-agent:468` | 20 `claude-trigger:475` | 6 `suggest:229` (lenses: 4) | `context_json.max_iterations`, clamped [1,50] `hermes-bridge:65-70` |
-| Dedicated API key | — | — | — | **requested but NOT set** ¹ | — | — |
+| Dedicated API key | — | — | — | code requests one; the variable is **not set on production**, so it runs on the SHARED key (`claude-trigger:474` + verified env list, §6) | — | — |
 
 **¹ The base 33 is a default, not a floor.** Whenever `threadId` is set — which is every surface except the suggester — `callWorker` **replaces** the tool list with `getToolsForThreadType(threadType)` (`worker-tools.ts:4589`). The stored `thread_summaries.thread_type` decides: `investigation` (the default, `thread-routing.ts:40`) and `action_request` resolve to all 33; `bug_report` = 22, `client_audit` = 20, `internal_ops` = 5 (`thread-routing.ts:114-129`). No live surface writes a non-default type today, so the ✅ holds in practice. **Note the ordering:** every conditional injection happens *after* the narrowing (`:4640-4758`), so thread-type routing constrains the read set only — it is not a security boundary over sends, SQL or the catalog bridge, despite `thread-routing.ts:9-11` describing it as defense-in-depth.
 
 **² Cross-thread semantic recall is dark by default.** `semanticRecallEnabled()` returns `process.env.THREAD_RECALL_SEMANTIC_ENABLED === "true"`, documented as OFF so the code could ship before its migration (`thread-recall.ts:32-44`). Both consumers early-return on it (`:82`, `:114`), so `buildRelatedThreadsSuffix` yields `""` and `embedThreadSummary` writes nothing unless it is set. **Not verified** whether it is set in production.
 
 **³ Web tools need `WORKER_WEB_SEARCH_ENABLED === "true"` on top of the per-call flag** (`worker-tools.ts:4804`). **Not verified** in production.
+
+**⁵ Fixed since this audit was written** (commit `d290c85e`, sandbox only). At the time of the audit only the sidebar could hand over a produced file, and `runWorkerLoop` returned `artifacts` from one of its four exits — so a file built late in a long turn was discarded even there. All three panels now render produced files through one shared component, and all four exits return them. §8b.8 is therefore CLOSED. The two missing executor re-checks in §5 (`run_sql_query`, `send_portal_message`) are closed by the same commit.
 
 **⁴ Portal Chats has no portal Confirm card, and is not supposed to have one.** Antonio, 2026-08-04, on reading v1 of this audit: *"we don't need the card in the portal chats — unless the worker has to send an email from the portal chats. When we use the worker in the portal chats regarding the client we are in, we don't need any cards. We talk to the worker, decide the message to send, the worker drafts the message and we say 'send it', that's it."*
 
