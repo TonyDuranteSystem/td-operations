@@ -32,6 +32,18 @@ export interface BuildReplyMimeInput {
   boundary?: string
   /** Staged file attachments (loaded server-side from the private bucket). */
   attachments?: ReplyMimeAttachment[]
+  /**
+   * The sender's signature, both halves, already built by
+   * lib/email/signature.ts. Sits BETWEEN the reply and the quoted history,
+   * which is where every mail client puts one. Omit for no signature.
+   *
+   * Both halves or neither: passing only the HTML would leave the text/plain
+   * part unsigned, and plain-text readers are exactly the ones who cannot
+   * fall back to the images.
+   */
+  signature?: { html: string; text: string }
+  /** Display name for the From header. Omitted -> bare address, as before. */
+  fromName?: string
 }
 
 /**
@@ -79,10 +91,17 @@ export function buildReplyMime(input: BuildReplyMimeInput): string {
       `</blockquote></div>`
   }
 
+  // The signature is pre-built HTML from lib/email/signature.ts, NOT user
+  // input, so it is concatenated rather than escaped — unlike `message`,
+  // which is what the staff member typed and is always escaped.
+  const signatureHtml = input.signature?.html ?? ""
+  const signatureText = input.signature ? `\r\n\r\n${input.signature.text}` : ""
+
   const messageHtml = escapeHtml(message).replace(/\r?\n/g, "<br />")
   const htmlBody =
     `<div dir="ltr" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5">` +
     messageHtml +
+    signatureHtml +
     `</div>` +
     quotedHtml
 
@@ -101,7 +120,7 @@ export function buildReplyMime(input: BuildReplyMimeInput): string {
     : `multipart/alternative; boundary="${boundary}"`
 
   const headers = [
-    `From: ${asUser}`,
+    `From: ${input.fromName ? `${input.fromName} <${asUser}>` : asUser}`,
     `To: ${encodeAddressHeader(replyTo)}`,
     `Subject: ${encodedSubject}`,
     `In-Reply-To: ${inReplyTo}`,
@@ -110,7 +129,9 @@ export function buildReplyMime(input: BuildReplyMimeInput): string {
     `Content-Type: ${topContentType}`,
   ]
 
-  const plainBase64 = Buffer.from(message + quotedPlain, "utf-8").toString("base64")
+  const plainBase64 = Buffer.from(message + signatureText + quotedPlain, "utf-8").toString(
+    "base64"
+  )
   const htmlBase64 = Buffer.from(htmlBody, "utf-8").toString("base64")
 
   const alternativePart =

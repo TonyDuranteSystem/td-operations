@@ -52,6 +52,7 @@ What lives here instead:
 | Why can't the client see this? | the portal tier + the tier sync helper + the portal query | the CRM view; staff and client surfaces differ by design |
 | Is this money right? | the four money worlds — know which one owns the number | assuming one invoice concept |
 | Is this safe to run? | the hooks/guardrails doc — which layer actually covers this path | assuming a guard covers MCP calls; it does not |
+| How does outgoing email get its identity/signature? | `lib/email/signature.ts` (the ONE definition since 2026-08-05) + the "Outgoing email signatures" section of the inbox system doc | `lib/gmail.ts` (transport only, no MIME builder); any of the old hand-rolled shells — they are gone |
 
 **Always say which environment a fact came from.** The Counselor's tools read **production**. Sandbox state is a different question and goes back to the coordinator.
 
