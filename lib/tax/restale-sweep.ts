@@ -111,14 +111,38 @@ export function restaleIsDryRun(env: Record<string, string | undefined>): boolea
   return env.TAX_RESTALE_SWEEP_DRY_RUN !== "false"
 }
 
+/**
+ * TIME BUDGET, not just an account cap.
+ *
+ * The runaway guard counts ACCOUNTS, but the ceiling that actually bites is
+ * wall-clock: the route has 300s and the work is one UPDATE round-trip per
+ * changed row. Killed mid-loop, rows are already rewritten and the team post —
+ * which happens only after the loop — never runs, breaking this job's own
+ * promise to never re-sort in silence. Worse, the ordering is a fixed sort with
+ * no cursor, so every later run re-sweeps the same leading accounts and the
+ * tail starves: exactly the bug the account cap was raised to fix, returning
+ * through the time door.
+ *
+ * Pure so it can be tested without a clock.
+ */
+export const RESTALE_TIME_BUDGET_MS = 240_000
+
+export function sweepBudgetExhausted(startedMs: number, nowMs: number): boolean {
+  return nowMs - startedMs >= RESTALE_TIME_BUDGET_MS
+}
+
 /** One line per account-year, for the run log and the team alert. */
 export function describeRestaleResult(r: {
   company: string
   taxYear: number
   scanned: number
   changed: number
+  marks?: number
   dryRun: boolean
 }): string {
   const verb = r.dryRun ? "would change" : "changed"
-  return `${r.company} ${r.taxYear}: ${verb} ${r.changed} of ${r.scanned}`
+  const marks = r.marks
+    ? ` · ${r.marks} owner question${r.marks === 1 ? "" : "s"} ${r.dryRun ? "would be raised/cleared" : "raised/cleared"}`
+    : ""
+  return `${r.company} ${r.taxYear}: ${verb} ${r.changed} of ${r.scanned}${marks}`
 }

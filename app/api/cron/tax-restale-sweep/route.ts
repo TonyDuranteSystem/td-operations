@@ -37,6 +37,7 @@ import {
   decideRestale,
   describeRestaleResult,
   restaleIsDryRun,
+  sweepBudgetExhausted,
   RESTALE_MAX_ACCOUNTS_PER_RUN,
   type RestaleCandidate,
 } from "@/lib/tax/restale-sweep"
@@ -144,8 +145,18 @@ export async function GET(request: NextRequest) {
     const { recategorizeAccountYear } = await import("@/lib/tax/categorization-engine")
     const changedLines: string[] = []
     let totalChanged = 0
+    let totalMarks = 0
+    let stoppedForTime = 0
 
     for (const c of eligible) {
+      // Stop BEFORE the platform kills us mid-write. A killed run leaves rows
+      // rewritten with no announcement at all — the one thing this job promises
+      // never to do — and restarts from the same alphabetical head every time,
+      // starving the tail.
+      if (sweepBudgetExhausted(started, Date.now())) {
+        stoppedForTime = eligible.length - eligible.indexOf(c)
+        break
+      }
       const { data: acct } = await db.from("accounts").select("company_name").eq("id", c.account_id).maybeSingle()
       const company = (acct?.company_name as string) ?? c.account_id
       try {
@@ -153,10 +164,16 @@ export async function GET(request: NextRequest) {
         // categoryChanged, NOT recategorized — the latter counts note-only
         // rewrites (849 rows book-wide re-stamp their note every run), which
         // would drown a real correction in permanent noise.
-        if (res.categoryChanged > 0) {
+        // Announce a MARK-ONLY run too. The suspected-owner mark never moves a
+        // category, so gating the post on categoryChanged meant the very case
+        // this sweep exists for — a member linked in the CRM after ingest —
+        // raised new owner questions on a client's portal and told nobody.
+        if (res.categoryChanged > 0 || res.marksChanged > 0) {
           totalChanged += res.categoryChanged
+          totalMarks += res.marksChanged
           changedLines.push(describeRestaleResult({
-            company, taxYear: c.tax_year, scanned: res.scanned, changed: res.categoryChanged, dryRun,
+            company, taxYear: c.tax_year, scanned: res.scanned,
+            changed: res.categoryChanged, marks: res.marksChanged, dryRun,
           }))
         }
       } catch (e) {
@@ -175,9 +192,8 @@ export async function GET(request: NextRequest) {
       const head = dryRun
         ? "🔎 Stale-classification sweep (REPORT ONLY — nothing was written):"
         : "♻️ Stale-classification sweep — transactions re-sorted after client details changed:"
-      const overflow = skippedForCap > 0
-        ? `\n⚠️ ${skippedForCap} more account-year(s) were NOT reached this run — the book has outgrown one pass and needs a swept-at marker.`
-        : ""
+      const overflow = (skippedForCap > 0 ? `\n⚠️ ${skippedForCap} more account-year(s) were NOT reached this run — the book has outgrown one pass and needs a swept-at marker.` : "")
+        + (stoppedForTime > 0 ? `\n⏱️ Stopped on the time budget with ${stoppedForTime} account-year(s) unreached — they are picked up next run.` : "")
       try {
         await postTeamMessage({
           channel: "td-taxreturn",
@@ -195,7 +211,9 @@ export async function GET(request: NextRequest) {
       eligible: eligible.length,
       accountsWithChanges: changedLines.length,
       skippedForCap,
+      stoppedForTime,
       transactionsChanged: totalChanged,
+      ownerQuestionsChanged: totalMarks,
       details: changedLines,
       ms: Date.now() - started,
     }

@@ -125,6 +125,16 @@ export interface RecategorizeResult {
    * category, and a quiet run reads as quiet.
    */
   categoryChanged: number
+  /**
+   * Rows whose suspected-owner MARK was added or removed (2026-08-04).
+   *
+   * The mark never moves a category by design, so it is invisible to
+   * `categoryChanged` — and the sweep gates its team post on that number. The
+   * result was that the exact scenario the sweep exists for (a member linked in
+   * the CRM after ingest) raised new owner questions on a client's portal and
+   * announced NOTHING, reading as "0 changes" while it was working.
+   */
+  marksChanged: number
   transferPairs: number
   aiCategorized: number
   aiErrors: string[]
@@ -200,7 +210,7 @@ export function computeRecategorizationUpdates(
   // the review card / human answer decides the booking. NEVER feed these into
   // ownNames/nameVariants (that would auto-book conversion — reviewer F2).
   relatedEntities: string[] = [],
-): { updates: Map<string, RecatUpdate>; transferPairs: number } {
+): { updates: Map<string, RecatUpdate>; transferPairs: number; markChangedIds: Set<string> } {
   // Pass 1: rules. (ai_lean/ai_bucket are ADVISORY review hints — #2 — written
   // for residual rows even when their category stays uncategorized.)
   const updates = new Map<string, RecatUpdate>()
@@ -300,6 +310,7 @@ export function computeRecategorizationUpdates(
   // stored one — including when it must be CLEARED (member removed from the
   // CRM, payee re-identified, a rule now explains the row). Without the clear
   // path a stale mark would tell the client something false for ever.
+  const markChangedIds = new Set<string>()
   for (const row of rows) {
     const stored = (row.notes ?? "")
     // Human answers and AI/auto provenance own the note outright.
@@ -320,12 +331,13 @@ export function computeRecategorizationUpdates(
     const want = computed.length ? `${ASK_CLIENT_NOTE} ${computed.join(SUSPECTED_SEP)}` : ""
     const has = stored.startsWith(ASK_CLIENT_NOTE) ? stored : ""
     if (want === has) continue
+    markChangedIds.add(row.id as string)
     // Note-only when nothing else about the row changed; merged into the
     // existing update otherwise. The persist step already accepts both.
     updates.set(row.id as string, { ...(u ?? {}), notes: want })
   }
 
-  return { updates, transferPairs: pairs.length }
+  return { updates, transferPairs: pairs.length, markChangedIds }
 }
 
 /**
@@ -393,7 +405,7 @@ export async function recategorizeAccountYear(
     taxYear,
     "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, account_ref, category, subcategory, is_related_party, notes, ai_lean, ai_bucket, loc_code, loc_source, loc_confidence",
   )
-  if (rows.length === 0) return { scanned: 0, recategorized: 0, categoryChanged: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0, aiStats: EMPTY_AI_STATS() }
+  if (rows.length === 0) return { scanned: 0, recategorized: 0, categoryChanged: 0, marksChanged: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0, aiStats: EMPTY_AI_STATS() }
 
   const rules = await getCategorizationRules(accountId)
 
@@ -426,7 +438,7 @@ export async function recategorizeAccountYear(
   // pure deterministic core, extracted so the standalone P&L workspace tool
   // categorizes IDENTICALLY to this client path (no divergence — parity
   // guarantee). See computeRecategorizationUpdates above.
-  const { updates, transferPairs } = computeRecategorizationUpdates(rows, rules, memberNames, companyName, relatedEntities)
+  const { updates, transferPairs, markChangedIds } = computeRecategorizationUpdates(rows, rules, memberNames, companyName, relatedEntities)
 
   // Pass 3 (optional, Slice 5b): AI assist on what's STILL uncategorized after
   // the deterministic passes. Only high-confidence suggestions are applied,
@@ -441,6 +453,7 @@ export async function recategorizeAccountYear(
   // Counted separately from `recategorized` — see RecategorizeResult. A row
   // whose note is merely re-stamped is NOT a change a human needs to see.
   let categoryChanged = 0
+  let marksChanged = 0
   for (const [id, u] of Array.from(updates.entries())) {
     const orig = rows.find(r => r.id === id)
     if (!orig) continue
@@ -455,7 +468,7 @@ export async function recategorizeAccountYear(
     if (!catChanged && !notesChanged) continue
     // Report-only: count it and move on. Counted the same way a real run counts
     // it, so "would change N" and "changed N" are the same number.
-    if (dryRun) { recategorized++; if (catChanged) categoryChanged++; continue }
+    if (dryRun) { recategorized++; if (catChanged) categoryChanged++; if (markChangedIds.has(id)) marksChanged++; continue }
     const payload: Record<string, unknown> = { category: nextCategory, subcategory: nextSub }
     if (u.notes !== undefined) payload.notes = u.notes
 
@@ -497,12 +510,13 @@ export async function recategorizeAccountYear(
     // work to the team channel that never happened and hide non-convergence.
     if ((written ?? []).length === 0) continue
     if (catChanged) categoryChanged++
+    if (markChangedIds.has(id)) marksChanged++
     recategorized++
   }
   // A preview stops here: the AI pass costs money and writes per batch.
   if (dryRun) {
     return {
-      scanned: rows.length, recategorized, categoryChanged, transferPairs,
+      scanned: rows.length, recategorized, categoryChanged, marksChanged, transferPairs,
       aiCategorized: 0, aiErrors: [], aiStats: EMPTY_AI_STATS(),
       uncategorizedRemaining: rows.filter(r =>
         (updates.get(r.id as string)?.category ?? (r.category as string)) === "uncategorized").length,
@@ -638,5 +652,5 @@ export async function recategorizeAccountYear(
     if (locErr) throw new Error(`Failed to stamp location on transaction ${r.id}: ${locErr.message}`)
   }
 
-  return { scanned: rows.length, recategorized, categoryChanged, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining, aiStats, ...(aiNoCandidates ? { aiNoCandidates } : {}) }
+  return { scanned: rows.length, recategorized, categoryChanged, marksChanged, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining, aiStats, ...(aiNoCandidates ? { aiNoCandidates } : {}) }
 }
