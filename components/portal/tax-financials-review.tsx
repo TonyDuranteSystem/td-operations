@@ -404,6 +404,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       await load()
     } catch (e) {
       setCardError({ keys: [g.group_key], message: e instanceof Error ? e.message : 'Could not save your answer.' })
+      // The usual failure here is a STALE CARD (the overnight re-sort cleared
+      // or answered the question while the tab sat open) — the server 409s and
+      // tells the client to refresh. Do it for them: without this they sit on a
+      // card that re-fails on every tap until they find the reload button.
+      void load()
     } finally {
       setBusy(null)
     }
@@ -456,6 +461,8 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       await load()
     } catch (e) {
       setCardError({ keys: [g.group_key], message: e instanceof Error ? e.message : 'Could not change your answer.' })
+      // Same stale-card refresh as the first answer above.
+      void load()
     } finally {
       setBusy(null)
     }

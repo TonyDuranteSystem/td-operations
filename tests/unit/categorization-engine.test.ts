@@ -547,3 +547,38 @@ describe('markChangedIds counts a mark consumed by another pass', () => {
     expect(markChangedIds.has('x')).toBe(false)
   })
 })
+
+/**
+ * A STALE MARK ON A ROW THAT BECOMES A MEMBER PAYMENT MUST BE CLEARED.
+ * Without this, the review showed a false open question over settled money —
+ * and one tap of "No — a supplier" would un-book a genuine member draw into a
+ * deducted expense under a frozen human note. The trigger is the feature's own
+ * target population: a row near-miss-marked for one member's surname, then the
+ * roster gains a member whose FULL name matches the row (shared surnames +
+ * post-ingest roster fixes).
+ */
+describe('a stale ask-mark is cleared when the row books as a member payment', () => {
+  const members = ['Donato Renato Berini', 'Sofia Marinoni']
+  const staleMarked = {
+    id: 'sm', transaction_date: '2025-06-01', description: 'Sent money to Sofia Marinoni', counterparty: '',
+    amount: -700, currency: 'USD', balance_after: null, transaction_ref: 'r', bank_name: 'Wise', account_type: 'USD',
+    category: 'expense', subcategory: 'vendor_payment', is_related_party: false,
+    notes: 'ask: possible payment to member Donato Renato Berini', ai_lean: null, ai_bucket: null,
+  }
+
+  it('books the distribution AND clears the mark, and counts it', () => {
+    const { updates, markChangedIds } = computeRecategorizationUpdates([staleMarked], [], members, '')
+    const u = updates.get('sm')
+    expect(u?.category).toBe('distribution')
+    expect(u?.notes).toBe('')
+    expect(markChangedIds.has('sm')).toBe(true)
+  })
+
+  it('a member-booked row with no stale mark is left alone', () => {
+    const clean = { ...staleMarked, id: 'cl', notes: '' }
+    const { updates, markChangedIds } = computeRecategorizationUpdates([clean], [], members, '')
+    expect(updates.get('cl')?.category).toBe('distribution')
+    expect(updates.get('cl')?.notes).toBeUndefined()
+    expect(markChangedIds.has('cl')).toBe(false)
+  })
+})
