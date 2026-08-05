@@ -54,9 +54,17 @@ export async function POST(request: NextRequest) {
     const isSuspectedAnswer = body.suspected === true
     const suspectedMember = typeof body.member === 'string' ? body.member.trim().slice(0, 120) : ''
 
+    // Candidates the mark originally named — captured during verification below
+    // and written back onto the answer, so the change buttons can still offer
+    // the OTHER owner after the mark is consumed (two owners sharing a surname
+    // is the card's normal case, and without this a mis-tap was uncorrectable).
+    let ownerCandidates: string[] = []
     const buildAnswerNote = () => {
       const base = isBulk ? `manual: bulk client answer (${answer})` : `manual: client answer (${answer})`
-      return isSuspectedAnswer && suspectedMember ? `${base} | Member: ${suspectedMember}` : base
+      if (!(isSuspectedAnswer && suspectedMember)) return base
+      const others = ownerCandidates.filter(c => c !== suspectedMember)
+      const of = others.length > 0 ? ` | Of: ${ownerCandidates.join('; ')}` : ''
+      return `${base} | Member: ${suspectedMember}${of}`
     }
 
     if (!accountId || !Number.isInteger(taxYear) || transactionIds.length === 0 || !answer) {
@@ -106,20 +114,28 @@ export async function POST(request: NextRequest) {
     const isReanswer = body.reanswer === true
     let ownerAnswerIds: string[] = transactionIds
     if (isSuspectedAnswer) {
-      const { ASK_CLIENT_NOTE: MARK, CONFIRMED_MEMBER_SEP } = await import('@/lib/tax/member-names')
+      const { ASK_CLIENT_NOTE: MARK, CONFIRMED_MEMBER_SEP, suspectedMembersFromNotes, candidatesFromNote } = await import('@/lib/tax/member-names')
       const requiredPrefix = isReanswer ? null : `${MARK}%`
       const marked: string[] = []
+      const candidateSet = new Set<string>()
       for (let i = 0; i < transactionIds.length; i += 200) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { data } = await (supabaseAdmin as any)
           .from('bank_transactions')
-          .select('id')
+          .select('id, notes')
           .eq('account_id', accountId)
           .eq('tax_year', taxYear)
           .in('id', transactionIds.slice(i, i + 200))
           .like('notes', requiredPrefix ?? `%${CONFIRMED_MEMBER_SEP}%`)
-        marked.push(...((data ?? []) as Array<{ id: string }>).map(r => r.id))
+        for (const r of ((data ?? []) as Array<{ id: string; notes: string | null }>)) {
+          marked.push(r.id)
+          // First answer: the mark itself names the candidates. Re-answer: the
+          // previous answer's breadcrumb carries them forward.
+          for (const c of suspectedMembersFromNotes(r.notes)) candidateSet.add(c)
+          for (const c of candidatesFromNote(r.notes)) candidateSet.add(c)
+        }
       }
+      ownerCandidates = Array.from(candidateSet).sort()
       if (marked.length === 0) {
         return NextResponse.json({
           error: isReanswer
@@ -145,19 +161,25 @@ export async function POST(request: NextRequest) {
        * to be fixed first, instead of writing an answer we cannot honour.
        */
       if (suspectedMember && mapped.category === 'distribution') {
-        const { resolveOwnership } = await import('@/lib/tax/ownership-resolution')
-        const { sameName } = await import('@/lib/tax/ownership-resolution')
+        const { resolveOwnership, sameName } = await import('@/lib/tax/ownership-resolution')
+        // THE CANONICAL WIZARD READER, not a hand-rolled one. The wizard writes
+        // FLAT keys (member_0_member_first_name, …, member_count) — the first
+        // cut of this guard read `submitted_data.members` as an array, a shape
+        // ZERO of the 95 production submissions have, so the whole check was
+        // dead code and every un-creditable owner sailed through to be spread
+        // across the other partners' K-1s. Same lesson as the roster: never a
+        // second definition of "who are the members".
+        const { extractWizardMembers } = await import('@/lib/tax/financials-orchestration')
+        // COMPLETED submissions only — the same resolver rule the draft uses.
+        // "Newest of any status" is the exact trap resolveEditability exists to
+        // close: an unfilled pending form would outrank the real answers.
         const { data: subRow } = await supabaseAdmin
           .from('tax_return_submissions')
           .select('submitted_data')
           .eq('account_id', accountId).eq('tax_year', taxYear)
+          .eq('status', 'completed')
           .order('created_at', { ascending: false }).limit(1).maybeSingle()
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const sd = (subRow?.submitted_data ?? {}) as any
-        const wizardMembers = Array.isArray(sd?.members)
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          ? sd.members.map((m: any) => ({ name: String(m?.full_name ?? m?.name ?? ''), pct: Number(m?.ownership_pct ?? m?.pct ?? 0) })).filter((m: { name: string }) => m.name)
-          : []
+        const wizardMembers = extractWizardMembers((subRow?.submitted_data as Record<string, unknown> | null) ?? {})
         if (wizardMembers.length > 0) {
           const creditable = resolveOwnership({ priorK1s: [], wizardMembers, accountContacts: [] })
             .members.filter(m => m.pct !== null)

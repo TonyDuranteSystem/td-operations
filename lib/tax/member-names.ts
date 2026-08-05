@@ -397,3 +397,24 @@ export function confirmedMemberFromNote(notes: string | null | undefined): strin
   const name = n.slice(at + CONFIRMED_MEMBER_SEP.length).split(" | ")[0].trim()
   return name.length > 0 ? name : null
 }
+
+/**
+ * Marker carrying the ORIGINAL candidate owners on an answered row.
+ *
+ * When two owners share a surname, answering "Yes — Gabriele" consumes the
+ * mark on rows that were flagged for BOTH brothers. Without remembering who
+ * else was in the running, the change buttons could only offer "No — a
+ * supplier": a client who mis-tapped had no way to say it was Matthew, in the
+ * exact scenario the card exists for. The answer note therefore keeps the
+ * candidate list, and the change buttons are rebuilt from it.
+ */
+export const CANDIDATES_SEP = " | Of: "
+
+/** The original candidate owners recorded on an answered row, or []. */
+export function candidatesFromNote(notes: string | null | undefined): string[] {
+  const n = (notes ?? "")
+  const at = n.indexOf(CANDIDATES_SEP)
+  if (at === -1) return []
+  const tail = n.slice(at + CANDIDATES_SEP.length).split(" | ")[0]
+  return tail.split(SUSPECTED_SEP).map(x => x.trim()).filter(Boolean)
+}

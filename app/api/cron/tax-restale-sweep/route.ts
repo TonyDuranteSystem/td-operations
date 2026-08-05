@@ -187,17 +187,23 @@ export async function GET(request: NextRequest) {
     }
 
     // Announce, never re-sort in silence. The whole point of this job is that
-    // money moving between categories should be visible to a human.
-    if (changedLines.length > 0) {
+    // money moving between categories should be visible to a human — and so
+    // must NOT-REACHING accounts. A time-stop or cap overflow with zero changed
+    // lines used to post nothing at all: the run would stall on the same
+    // alphabetical head every tick (no cursor), the tail would starve for ever,
+    // and the only trace was a JSON field nobody reads. That is precisely the
+    // starvation this job's own comments promise to report.
+    const overflow = (skippedForCap > 0 ? `\n⚠️ ${skippedForCap} more account-year(s) were NOT reached this run — the book has outgrown one pass and needs a swept-at marker.` : "")
+      + (stoppedForTime > 0 ? `\n⏱️ Stopped on the time budget with ${stoppedForTime} account-year(s) unreached — they are picked up next run.` : "")
+    if (changedLines.length > 0 || overflow) {
       const head = dryRun
         ? "🔎 Stale-classification sweep (REPORT ONLY — nothing was written):"
         : "♻️ Stale-classification sweep — transactions re-sorted after client details changed:"
-      const overflow = (skippedForCap > 0 ? `\n⚠️ ${skippedForCap} more account-year(s) were NOT reached this run — the book has outgrown one pass and needs a swept-at marker.` : "")
-        + (stoppedForTime > 0 ? `\n⏱️ Stopped on the time budget with ${stoppedForTime} account-year(s) unreached — they are picked up next run.` : "")
+      const body = changedLines.length > 0 ? `\n${changedLines.map(l => `• ${l}`).join("\n")}` : "\n(no category or owner-question changes this run)"
       try {
         await postTeamMessage({
           channel: "td-taxreturn",
-          message: `${head}\n${changedLines.map(l => `• ${l}`).join("\n")}${overflow}`,
+          message: `${head}${body}${overflow}`,
         })
       } catch (e) {
         console.error("[tax-restale-sweep] team post failed (sweep result stands):", e)

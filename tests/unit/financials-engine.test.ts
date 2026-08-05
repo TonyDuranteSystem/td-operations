@@ -547,3 +547,34 @@ describe("confirmed owner attribution (2026-08-04)", () => {
     expect(d.members.find(m => m.name === "Gabriele Finelli")!.distributions).toBe(20000)
   })
 })
+
+/**
+ * THE K-1 READER MUST SURVIVE TRAILERS AFTER THE MEMBER NAME. The answer note
+ * carries a candidate breadcrumb ("| Of: A; B") after "| Member: X". Reading
+ * to end-of-string swallowed the trailer into the name, the match failed, and
+ * the confirmed draw silently fell back to being spread across every partner —
+ * undoing the exact fix the reader exists for.
+ */
+describe("confirmed owner attribution survives note trailers", () => {
+  const members = [
+    { name: "Gabriele Finelli", pct: 50, source: "wizard" as const },
+    { name: "Matthew Finelli", pct: 50, source: "wizard" as const },
+  ]
+  it("credits the right owner when the note carries the candidate breadcrumb", () => {
+    // MATTHEW deliberately — the SECOND member in the array. Reading the name
+    // to end-of-string swallows the breadcrumb, and because name matching is
+    // token-subset based, the polluted string then matches BOTH brothers — so
+    // find() silently returns whoever is FIRST in the array, not who the
+    // client confirmed. Confirming the second member is what exposes it.
+    const d = buildFinancialDraft({
+      taxYear: 2025, members, priorReturn: null,
+      transactions: [tx({
+        id: "d1", description: "Sent money to M. Finelli", counterparty: "M. FINELLI",
+        amount: -40000, category: "distribution", subcategory: "member_distribution",
+        notes: "manual: client answer (owner_draw) | Member: Matthew Finelli | Of: Gabriele Finelli; Matthew Finelli",
+      })],
+    })
+    expect(d.members.find(m => m.name === "Matthew Finelli")!.distributions).toBe(40000)
+    expect(d.members.find(m => m.name === "Gabriele Finelli")!.distributions).toBe(0)
+  })
+})

@@ -512,3 +512,38 @@ describe('zero-amount booking (v4, review F5)', () => {
     expect(updates.has('z2')).toBe(false)
   })
 })
+
+/**
+ * A CONSUMED QUESTION IS STILL A CHANGE. When a later pass explains a marked
+ * row, its note overwrites the mark — an open client question disappears from
+ * the portal. The announce-everything counter must include exactly that, or a
+ * mark-only sweep posts "0 owner questions raised/cleared" while one vanished.
+ */
+describe('markChangedIds counts a mark consumed by another pass', () => {
+  const members = ['Donato Renato Berini', 'Sofia Marinoni']
+  const mrow = (over: Record<string, unknown>) => ({
+    id: 'row-x', transaction_date: '2025-06-01', description: 'GENERIC PMT 001', counterparty: '',
+    amount: -100, currency: 'USD', balance_after: null, transaction_ref: 'ref-x',
+    bank_name: 'Slash', account_type: 'USD', category: 'uncategorized', subcategory: null,
+    is_related_party: false, notes: null, ai_lean: null, ai_bucket: null, ...over,
+  })
+
+  it('an own-entity explanation of a marked row is counted', () => {
+    const row = mrow({
+      id: 'oe', description: 'Sent money to Dynamiq SR LLC', amount: -900,
+      category: 'expense', subcategory: 'vendor_payment',
+      notes: 'ask: possible payment to member Donato Renato Berini',
+    })
+    const { updates, markChangedIds } = computeRecategorizationUpdates([row], [], members, 'Dynamiq SR LLC')
+    // the pass explains it as an internal transfer…
+    expect(updates.get('oe')?.category).toBe('conversion')
+    // …and that consumption is announced, not silent
+    expect(markChangedIds.has('oe')).toBe(true)
+  })
+
+  it('an unmarked row explained the same way is NOT counted as a mark change', () => {
+    const row = mrow({ id: 'x', description: 'Sent money to Dynamiq SR LLC', amount: -900, category: 'expense', subcategory: 'vendor_payment' })
+    const { markChangedIds } = computeRecategorizationUpdates([row], [], members, 'Dynamiq SR LLC')
+    expect(markChangedIds.has('x')).toBe(false)
+  })
+})

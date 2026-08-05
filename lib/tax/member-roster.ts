@@ -198,7 +198,14 @@ function reportRosterProblem(accountId: string, message: string, context: Record
   void import("@/lib/system-errors")
     .then(({ reportSystemError }) => reportSystemError({
       source: "server",
-      route: "lib/tax/member-roster",
+      // The account id lives in the ROUTE, deliberately. The dedup fingerprint
+      // normalizes UUIDs out of the MESSAGE but uses the route verbatim — with
+      // a bare route, three different companies' roster problems merged into
+      // ONE feed entry pinned to whichever company was reported first, so staff
+      // fixed that company and the entry kept re-occurring under the fixed
+      // company's name for ever. Per-account routes give each company its own
+      // entry and its own resolve lifecycle.
+      route: `lib/tax/member-roster:${accountId}`,
       message: `${message} (account ${accountId})`,
       context: { account_id: accountId, ...context },
     }))

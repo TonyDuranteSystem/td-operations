@@ -27,6 +27,7 @@ import {
   matchMemberName, findNearMissMember, normalizeForMatch, nameParts, payeePart, looksLikeCompany,
   MIN_NAME_PART_LENGTH, MIN_NAME_PARTS, MIN_SURNAME_LENGTH, MIN_FULL_NAME_LENGTH,
   findNearMissMembers, suspectedMembersFromNotes, ASK_CLIENT_NOTE, SUSPECTED_SEP,
+  candidatesFromNote, confirmedMemberFromNote,
 } from '@/lib/tax/member-names'
 
 describe('isUsableMemberName — the single predicate', () => {
@@ -402,5 +403,27 @@ describe('name shapes that were being missed', () => {
     for (const n of ['Nexo Agency LLC', 'Indaco LTD', 'Something GmbH', 'Foo Technologies', 'Bar Media', 'Baz SL']) {
       expect(looksLikeCompany(n)).toBe(true)
     }
+  })
+})
+
+/**
+ * THE CANDIDATE BREADCRUMB. Answering "Yes — Gabriele" consumes the mark on
+ * rows flagged for BOTH brothers, so without remembering who else was in the
+ * running, the change buttons could only offer "a supplier" — a client who
+ * mis-tapped had no way to say it was Matthew, in the exact shared-surname
+ * case the card exists for.
+ */
+describe('candidatesFromNote — the answer remembers who was in the running', () => {
+  it('round-trips the candidate list through an answered note', () => {
+    const note = 'manual: client answer (owner_draw) | Member: Gabriele Finelli | Of: Gabriele Finelli; Matthew Finelli'
+    expect(candidatesFromNote(note)).toEqual(['Gabriele Finelli', 'Matthew Finelli'])
+    // and the confirmed-member reader is NOT confused by the trailer
+    expect(confirmedMemberFromNote(note)).toBe('Gabriele Finelli')
+  })
+
+  it('is empty on notes without the breadcrumb', () => {
+    expect(candidatesFromNote('manual: client answer (owner_draw) | Member: Gabriele Finelli')).toEqual([])
+    expect(candidatesFromNote('ask: possible payment to member Gabriele Finelli')).toEqual([])
+    expect(candidatesFromNote('')).toEqual([])
   })
 })

@@ -309,3 +309,31 @@ describe("groupUncategorized — what the client already confirmed", () => {
     expect(g.confirmed_by_member).toBeUndefined()
   })
 })
+
+/**
+ * THE CHANGE BUTTONS MUST STILL OFFER THE OTHER OWNER. Answering "Yes —
+ * Gabriele" consumes the mark on rows flagged for both brothers, so the open
+ * suspects list empties — the recorded candidates are what keep "No — it was
+ * Matthew" available.
+ */
+describe("groupUncategorized — confirmed answers keep their candidates", () => {
+  it("carries the recorded alternatives", () => {
+    const [g] = groupUncategorized([{
+      id: 'a', description: 'Sent money to M. Finelli', counterparty: null, amount: -18000,
+      transaction_date: '2025-06-01', bank_name: 'Wise', category: 'distribution',
+      notes: 'manual: client answer (owner_draw) | Member: Gabriele Finelli | Of: Gabriele Finelli; Matthew Finelli',
+    }])
+    expect(g.confirmed_by_member).toEqual({ 'Gabriele Finelli': ['a'] })
+    expect(g.confirmed_alternatives).toEqual(['Gabriele Finelli', 'Matthew Finelli'])
+  })
+
+  it("has no alternatives when none were recorded (single-candidate answer)", () => {
+    const [g] = groupUncategorized([{
+      id: 'a', description: 'Sent money to Berini', counterparty: null, amount: -500,
+      transaction_date: '2025-06-01', bank_name: 'Wise', category: 'distribution',
+      notes: 'manual: client answer (owner_draw) | Member: Donato Renato Berini',
+    }])
+    expect(g.confirmed_by_member).toEqual({ 'Donato Renato Berini': ['a'] })
+    expect(g.confirmed_alternatives).toBeUndefined()
+  })
+})

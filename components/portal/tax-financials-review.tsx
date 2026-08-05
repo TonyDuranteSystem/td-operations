@@ -35,7 +35,7 @@ function ProgressCard({ title, detail, eta }: { title: string; detail: string; e
 
 interface Gate { id: number; title: string; status: 'pass' | 'na' | 'fail'; detail: string; blocking: boolean }
 interface Member { name: string; pct: number; beginning_capital: number; contributions: number; distributions: number; income_share: number; ending_capital: number }
-interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string; suspected_members?: string[]; suspected_count?: number; suspected_ids?: string[]; suspected_by_member?: Record<string, string[]>; confirmed_by_member?: Record<string, string[]> }
+interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string; suspected_members?: string[]; suspected_count?: number; suspected_ids?: string[]; suspected_by_member?: Record<string, string[]>; confirmed_by_member?: Record<string, string[]>; confirmed_alternatives?: string[] }
 interface Bucket { slug: string; label: string }
 interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
 interface AccountOnFile { account_ref: string; bank: string; acct: string; count: number }
@@ -766,7 +766,17 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 : `You said ${ids.length === 1 ? 'this payment went' : `${ids.length} of these payments went`} to ${who}.`}
             </div>
             <div className="flex flex-wrap gap-1.5">
-              {(g.suspected_members ?? Object.keys(g.confirmed_by_member ?? {}))
+              {/* Alternatives = every owner the payment could have gone to:
+                  still-open suspects, the recorded original candidates, and
+                  anyone else confirmed on the card. Without the recorded
+                  candidates, answering "Yes — Gabriele" left NO way to say
+                  "it was Matthew" when both were flagged on the same rows —
+                  the exact shared-surname case the card exists for. */}
+              {Array.from(new Set([
+                ...(g.suspected_members ?? []),
+                ...(g.confirmed_alternatives ?? []),
+                ...Object.keys(g.confirmed_by_member ?? {}),
+              ]))
                 .filter(m => m !== who)
                 .map(m => (
                   <button
@@ -780,7 +790,18 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 ))}
               <button
                 disabled={busyOrLocked}
-                onClick={() => void changeOwnerAnswer(g, who, 'business_expense')}
+                onClick={() => {
+                  // ONE-WAY DOOR, so it asks first. Answering "a supplier"
+                  // removes the owner question for good — the note loses its
+                  // member trail and nothing re-raises it. On a phone this
+                  // button sits next to the others; a mis-tap here was the one
+                  // answer the client could never take back.
+                  const msg = it
+                    ? 'Confermi che NON è un pagamento a un socio? Dopo questa scelta la domanda non verrà più mostrata.'
+                    : 'Confirm this was NOT a payment to an owner? After this, the question will no longer be shown.'
+                  if (!window.confirm(msg)) return
+                  void changeOwnerAnswer(g, who, 'business_expense')
+                }}
                 className="rounded-full border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-50"
               >
                 {it ? 'No — un fornitore' : 'No — a supplier'}

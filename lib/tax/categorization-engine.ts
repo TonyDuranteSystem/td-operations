@@ -318,8 +318,15 @@ export function computeRecategorizationUpdates(
     const u = updates.get(row.id as string)
     const finalCategory = u?.category ?? (row.category as string)
     // A row the later passes explained is not an open question. Their note is
-    // the correct one and must stand.
-    if (u?.notes && !u.notes.startsWith(ASK_CLIENT_NOTE)) continue
+    // the correct one and must stand — but if it OVERWRITES a stored mark, that
+    // is an open client question disappearing from the portal, and the
+    // announce-everything counter must say so. Without this, a transfer-pair
+    // explaining a marked row read as "0 owner questions raised/cleared" while
+    // one had just vanished from the client's screen.
+    if (u?.notes && !u.notes.startsWith(ASK_CLIENT_NOTE)) {
+      if (stored.startsWith(ASK_CLIENT_NOTE)) markChangedIds.add(row.id as string)
+      continue
+    }
     if (finalCategory === "conversion" || finalCategory === "distribution" || finalCategory === "contribution") continue
 
     const computed = Number(row.amount) < 0

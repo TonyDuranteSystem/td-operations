@@ -12,7 +12,7 @@
  */
 
 import { rowRootKey } from "./row-root"
-import { suspectedMembersFromNotes, confirmedMemberFromNote } from "./member-names"
+import { suspectedMembersFromNotes, confirmedMemberFromNote, candidatesFromNote } from "./member-names"
 
 export interface UncategorizedRow {
   id: string
@@ -109,6 +109,16 @@ export interface QuestionGroup {
    * corrupted twenty other payments.
    */
   confirmed_by_member?: Record<string, string[]>
+  /**
+   * The ORIGINAL candidate owners recorded when the question was answered.
+   *
+   * Answering "Yes — Gabriele" consumes the mark on rows flagged for BOTH
+   * brothers, so the open-question list empties — and the change buttons then
+   * had nobody to offer except "a supplier". A client who mis-tapped Gabriele
+   * could not say Matthew, in the exact scenario the card exists for. The
+   * answer note keeps the candidates, and the change buttons are rebuilt here.
+   */
+  confirmed_alternatives?: string[]
 }
 
 /** Most-frequent non-empty value in a list (ties → first seen). */
@@ -200,9 +210,13 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
       const suspected_count = markedRows.length
       const suspected_ids = markedRows.map(r => r.id)
       const confirmed_by_member: Record<string, string[]> = {}
+      const confirmedAlternatives = new Set<string>()
       for (const r of g.rows) {
         const who = confirmedMemberFromNote(r.notes)
-        if (who) (confirmed_by_member[who] ??= []).push(r.id)
+        if (who) {
+          (confirmed_by_member[who] ??= []).push(r.id)
+          for (const c of candidatesFromNote(r.notes)) confirmedAlternatives.add(c)
+        }
       }
       const suspected_by_member: Record<string, string[]> = {}
       for (const r of markedRows) {
@@ -224,7 +238,7 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
         ...(current_category ? { current_category } : {}),
         ...(current_subcategory ? { current_subcategory } : {}),
         ...(suspected_members.length ? { suspected_members, suspected_count, suspected_ids, suspected_by_member } : {}),
-        ...(Object.keys(confirmed_by_member).length ? { confirmed_by_member } : {}),
+        ...(Object.keys(confirmed_by_member).length ? { confirmed_by_member, ...(confirmedAlternatives.size ? { confirmed_alternatives: Array.from(confirmedAlternatives).sort() } : {}) } : {}),
       }
     })
     .sort((a, b) => b.count - a.count)

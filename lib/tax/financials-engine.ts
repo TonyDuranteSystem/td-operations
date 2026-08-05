@@ -160,7 +160,12 @@ export interface BuildDraftInput {
 export function confirmedMemberFromNotes(notes: string | null | undefined, members: ResolvedMember[]): ResolvedMember | null {
   const at = (notes ?? "").indexOf("| Member: ")
   if (at === -1) return null
-  const name = (notes ?? "").slice(at + "| Member: ".length).trim()
+  // Cut at the NEXT " | " — the answer note may carry further trailers after
+  // the member (the "| Of: A; B" candidate breadcrumb that keeps the change
+  // buttons honest). Reading to end-of-string swallowed that trailer into the
+  // name, sameName failed, and the confirmed draw silently fell back to being
+  // spread across every partner — undoing the exact fix this reader exists for.
+  const name = (notes ?? "").slice(at + "| Member: ".length).split(" | ")[0].trim()
   if (!name) return null
   return members.find(m => sameName(m.name, name)) ?? null
 }
