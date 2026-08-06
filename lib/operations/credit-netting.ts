@@ -13,6 +13,96 @@ export interface CreditApplication {
 }
 
 /**
+ * WS-A: the scope a credit lives in. EXACTLY ONE key — the query filters on one
+ * scope column, so account credits can never surface for a contact-scoped
+ * invoice or vice versa (pinned by regression tests T5/T6).
+ */
+export type CreditScope = { accountId: string; contactId?: never } | { contactId: string; accountId?: never }
+
+/**
+ * Atomically CLAIM credits for an invoice-to-be (WS-A, dev job c0a61e44).
+ *
+ * Two concurrent signings both READ the same available credit (proven by test
+ * T9) — so the guard must live in the write. Each claim is a conditional
+ * UPDATE on `credit_consumed_by IS NULL`, rowcount-checked: of two racers
+ * exactly one wins a given credit; the loser gets nothing for that credit and
+ * its caller must not apply it.
+ *
+ * ORDER (uniform for BOTH scopes): claim → create the invoice → confirm
+ * (decrement remaining). If the invoice creation fails, the caller calls
+ * `unwindCreditClaims` so the credits become available again.
+ *
+ * @returns the subset of `application.credits` this caller actually won.
+ */
+export async function claimCredits(
+  application: CreditApplication,
+  claimToken: string,
+  supabase: SupabaseClient,
+): Promise<CreditApplication> {
+  const won: Array<{ id: string; applyAmount: number }> = []
+  for (const c of application.credits) {
+    const { data, error } = await supabase
+      .from("payments")
+      .update({ credit_consumed_by: claimToken })
+      .eq("id", c.id)
+      .is("credit_consumed_by", null)
+      .select("id")
+    if (error) {
+      console.error(`[claimCredits] claim failed for credit ${c.id}:`, error.message)
+      continue
+    }
+    // rowcount 1 = we won this credit; 0 = a concurrent claimer got there first.
+    if (Array.isArray(data) && data.length === 1) won.push(c)
+  }
+  const appliedTotal = Math.round(won.reduce((s, a) => s + a.applyAmount, 0) * 100) / 100
+  return { appliedTotal, credits: won }
+}
+
+/**
+ * CONFIRM step (third of claim → create → confirm): re-stamp the claim from the
+ * temporary token to the real invoice id, so the column reads "claimed BY this
+ * invoice" for audit. Lives here (not at the call site) so the credit-claim
+ * writes stay in one module — and so the supabase generic depth stays bounded.
+ */
+export async function confirmCreditClaims(
+  application: CreditApplication,
+  invoiceId: string,
+  claimToken: string,
+  supabase: SupabaseClient,
+): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberate: bounds TS2589 on the chained update; column is newer than generated types
+  const untyped = supabase as unknown as { from: (t: string) => any }
+  for (const c of application.credits) {
+    const { error } = await untyped
+      .from("payments")
+      .update({ credit_consumed_by: invoiceId })
+      .eq("id", c.id)
+      .eq("credit_consumed_by", claimToken)
+    if (error) console.error(`[confirmCreditClaims] restamp failed for credit ${c.id}:`, error.message)
+  }
+}
+
+/**
+ * Release claims taken by `claimCredits` when the invoice creation that they
+ * were claimed FOR did not happen. Scoped to this caller's claim token so a
+ * concurrent winner's claim is never released by someone else's failure.
+ */
+export async function unwindCreditClaims(
+  application: CreditApplication,
+  claimToken: string,
+  supabase: SupabaseClient,
+): Promise<void> {
+  for (const c of application.credits) {
+    const { error } = await supabase
+      .from("payments")
+      .update({ credit_consumed_by: null })
+      .eq("id", c.id)
+      .eq("credit_consumed_by", claimToken)
+    if (error) console.error(`[unwindCreditClaims] release failed for credit ${c.id}:`, error.message)
+  }
+}
+
+/**
  * Compute how much of an account's outstanding credit notes to apply against an
  * invoice of `amount`. Same-currency only, oldest-first, capped at the invoice
  * amount. Pure read — does NOT mutate. The caller creates the offsetting invoice
@@ -20,19 +110,33 @@ export interface CreditApplication {
  * consumeCredits() to decrement the credits. Leftover credit carries forward.
  */
 export async function computeCreditApplication(
-  params: { accountId: string; amount: number; currency: string },
+  params: ({ accountId: string; contactId?: string } | { contactId: string; accountId?: string }) & {
+    amount: number
+    currency: string
+  },
   supabase: SupabaseClient
 ): Promise<CreditApplication> {
-  const { accountId, amount, currency } = params
+  const { amount, currency } = params
+  const accountId = (params as { accountId?: string }).accountId
+  const contactId = (params as { contactId?: string }).contactId
   if (amount <= 0) return { appliedTotal: 0, credits: [] }
+  // EXACTLY ONE scope column filters the query (WS-A). Account scope wins when
+  // both are somehow supplied — an account-linked invoice is account money.
+  // Cross-scope credits can never surface: there is no OR here, by design
+  // (pinned by regression tests T5/T6; mutation-proven).
+  if (!accountId && !contactId) return { appliedTotal: 0, credits: [] }
+
+  const scopeColumn = accountId ? "account_id" : "contact_id"
+  const scopeValue = accountId ?? (contactId as string)
 
   const { data: credits } = await supabase
     .from("payments")
     .select("id, credit_remaining")
-    .eq("account_id", accountId)
+    .eq(scopeColumn, scopeValue)
     .eq("invoice_status", "Credit")
     .eq("amount_currency", currency)
     .gt("credit_remaining", 0)
+    .is("credit_consumed_by", null) // unclaimed only — a claimed credit is spoken for
     .order("created_at", { ascending: true }) // oldest-first
 
   let remainingNeed = amount

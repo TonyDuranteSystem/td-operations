@@ -30,6 +30,7 @@ function makeClient() {
         select: () => chain,
         eq: (col: string, val: unknown) => { filters[col] = val; return chain },
         gt: (col: string, val: unknown) => { filters[`${col}>`] = val; return chain },
+        is: (col: string, val: unknown) => { filters[`${col} IS`] = val; return chain },
         neq: (col: string, val: unknown) => { filters[`${col}!=`] = val; return chain },
         order: () => chain,
         then: (res: (v: unknown) => unknown) => {
@@ -85,14 +86,28 @@ describe("T3 — new account invoice + available account credit nets at creation
   })
 })
 
-describe("T4 — contact-scoped invoice + contact credit (THE GATE CHANGE)", () => {
-  it("PRE-GATE (current behavior): a contact-only invoice nets NOTHING", () => {
-    // createTDInvoice's gate today: grossTotal > 0 && !mark_as_paid && account_id.
-    // With no account_id the netting block is skipped entirely — pinned here so
-    // the widening is a deliberate, visible change to THIS assertion.
-    const gateOpensToday = (accountId?: string) => Boolean(accountId)
-    expect(gateOpensToday(undefined)).toBe(false)
-    expect(gateOpensToday("acct-1")).toBe(true)
+describe("T4 — contact-scoped invoice + contact credit (THE GATE CHANGE — NOW OPEN)", () => {
+  it("POST-GATE: the gate opens for EITHER scope (this assertion changed deliberately)", () => {
+    // createTDInvoice's gate: grossTotal > 0 && !mark_as_paid &&
+    // (account_id || contact_id) && !skip_credit_netting.
+    const gateOpens = (accountId?: string, contactId?: string) => Boolean(accountId || contactId)
+    expect(gateOpens(undefined, undefined)).toBe(false)
+    expect(gateOpens("acct-1", undefined)).toBe(true)
+    expect(gateOpens(undefined, "contact-1")).toBe(true) // WAS false pre-gate
+  })
+
+  it("a contact-scoped application filters on contact_id — never account_id", async () => {
+    scenario.credits = [{ id: "cr", credit_remaining: 257 }]
+    const res = await computeCreditApplication({ contactId: "contact-1", amount: 4000, currency: "EUR" }, client())
+    expect(res.appliedTotal).toBe(257)
+    expect(scenario.queries[0].filters.contact_id).toBe("contact-1")
+    expect("account_id" in scenario.queries[0].filters).toBe(false)
+  })
+
+  it("neither scope supplied → no read, no application (defensive)", async () => {
+    const res = await computeCreditApplication({ amount: 100, currency: "EUR" } as never, client())
+    expect(res).toEqual({ appliedTotal: 0, credits: [] })
+    expect(scenario.queries.length).toBe(0)
   })
 })
 
@@ -103,6 +118,8 @@ describe("T5 — cross-scope isolation", () => {
     expect(res.appliedTotal).toBe(0)
     expect(scenario.queries[0].filters.account_id).toBe("acct-1")
     expect("contact_id" in scenario.queries[0].filters).toBe(false)
+    // WS-A: claimed credits are excluded at the read as well as guarded at the write
+    expect(scenario.queries[0].filters["credit_consumed_by IS"]).toBe(null)
   })
 })
 
@@ -204,5 +221,77 @@ describe("T12 — FULLY-COVERED INVOICE MUST STILL ACTIVATE (architect non-negot
     expect(fullyCovered(4000, 0)).toBe(true)
     expect(fullyCovered(0, 0)).toBe(false)
     expect(fullyCovered(257, 3743)).toBe(false)
+  })
+})
+
+// ─── T13/T14: the ATOMIC CLAIM (the write-side guard T9 proved is required) ───
+
+interface ClaimCall { id: string; set: unknown; whereNull: boolean; whereToken?: string }
+const claimState: { winners: Set<string>; calls: ClaimCall[] } = { winners: new Set(), calls: [] }
+
+function claimClient() {
+  return {
+    from() {
+      let pendingSet: unknown = null
+      let id = ""
+      let whereNull = false
+      let whereToken: string | undefined
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test double
+      const chain: any = {
+        update: (vals: Record<string, unknown>) => { pendingSet = vals.credit_consumed_by; return chain },
+        eq: (col: string, val: string) => {
+          if (col === "id") id = val
+          if (col === "credit_consumed_by") whereToken = val
+          return chain
+        },
+        is: () => { whereNull = true; return chain },
+        select: () => {
+          claimState.calls.push({ id, set: pendingSet, whereNull, whereToken })
+          // Conditional claim: only the FIRST claimer of an id wins.
+          const alreadyClaimed = claimState.winners.has(id)
+          if (whereNull && alreadyClaimed) return Promise.resolve({ data: [], error: null })
+          if (whereNull) claimState.winners.add(id)
+          return Promise.resolve({ data: [{ id }], error: null })
+        },
+        then: (res: (v: unknown) => unknown) => {
+          claimState.calls.push({ id, set: pendingSet, whereNull, whereToken })
+          if (whereToken) claimState.winners.delete(id) // unwind
+          return Promise.resolve({ error: null }).then(res)
+        },
+      }
+      return chain
+    },
+  }
+}
+
+describe("T13 — the claim is atomic: of two racers exactly one wins", () => {
+  it("second claimer of the same credit gets nothing (rowcount 0)", async () => {
+    const { claimCredits } = await import("@/lib/operations/credit-netting")
+    claimState.winners.clear(); claimState.calls.length = 0
+    const application = { appliedTotal: 257, credits: [{ id: "cr-257", applyAmount: 257 }] }
+    const first = await claimCredits(application, "invoice-A", claimClient() as never)
+    const second = await claimCredits(application, "invoice-B", claimClient() as never)
+    expect(first.appliedTotal).toBe(257)
+    expect(first.credits).toEqual([{ id: "cr-257", applyAmount: 257 }])
+    expect(second.appliedTotal).toBe(0)
+    expect(second.credits).toEqual([])
+    // Every claim carried the IS NULL condition — never a blind overwrite.
+    expect(claimState.calls.every(c => c.whereNull || c.whereToken)).toBe(true)
+  })
+})
+
+describe("T14 — unwind releases only THIS caller's claims", () => {
+  it("a failed invoice creation frees the credit for the next claimer", async () => {
+    const { claimCredits, unwindCreditClaims } = await import("@/lib/operations/credit-netting")
+    claimState.winners.clear(); claimState.calls.length = 0
+    const application = { appliedTotal: 100, credits: [{ id: "cr-100", applyAmount: 100 }] }
+    const won = await claimCredits(application, "invoice-X", claimClient() as never)
+    expect(won.appliedTotal).toBe(100)
+    await unwindCreditClaims(won, "invoice-X", claimClient() as never)
+    // Released → the next caller can claim it.
+    const after = await claimCredits(application, "invoice-Y", claimClient() as never)
+    expect(after.appliedTotal).toBe(100)
+    // The release was scoped to the claim token, never a blanket null-out.
+    expect(claimState.calls.some(c => c.whereToken === "invoice-X")).toBe(true)
   })
 })
