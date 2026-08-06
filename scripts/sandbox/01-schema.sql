@@ -430,7 +430,9 @@ CREATE TABLE IF NOT EXISTS public.billing_entities (
 
 CREATE TABLE IF NOT EXISTS public.call_summaries (
   id uuid DEFAULT gen_random_uuid(),
-  circleback_id text,
+  -- UNIQUE matches production (call_summaries_circleback_id_key) — the webhook
+  -- upserts ON CONFLICT (circleback_id); without this the upsert errors (WS-D).
+  circleback_id text UNIQUE,
   meeting_name text,
   duration_seconds integer,
   meeting_url text,
@@ -444,6 +446,7 @@ CREATE TABLE IF NOT EXISTS public.call_summaries (
   lead_id uuid,
   account_id uuid,
   raw_payload jsonb,
+  link_review text,
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now(),
   contact_id uuid,
