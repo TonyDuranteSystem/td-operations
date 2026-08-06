@@ -154,3 +154,20 @@ describe("computeNetOfCredits — locked decision D3 (same-currency only)", () =
     ).toMatchObject({ appliedCredits: 257, net: 743 })
   })
 })
+
+describe("countedServiceNames — checkout charge labels", () => {
+  it("lists exactly the counted lines (skips recurring/included/deselected/zero)", () => {
+    const t = computeOfferTotals({
+      services: [
+        { name: "Company Formation", price: "$3,000" },
+        { name: "ITIN", price: "$1,000", optional: true },
+        { name: "Annual", price: "$500/year" },
+        { name: "RA", price: "included" },
+        { name: "Freebie", price: "TBD" },
+      ],
+      cost_summary: [{ total: "$3,000" }],
+      selected_services: [],
+    })
+    expect(t.countedServiceNames).toEqual(["Company Formation"])
+  })
+})

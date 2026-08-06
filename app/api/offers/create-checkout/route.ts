@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { resolveBillableSelection } from "@/lib/payments/billable-selection"
+import { computeOfferTotals } from "@/lib/offers/compute-offer-totals"
 import { computeCardTotal } from "@/lib/payments/card-fee"
 import { resolveChargeRate } from "@/lib/payments/card-fee-config"
 
@@ -54,65 +55,25 @@ export async function POST(req: NextRequest) {
       requestedSelection: body.selected_services,
     })
 
-    // Calculate total from selected services
-    const services = Array.isArray(offer.services) ? offer.services : []
-    let total = 0
-    let currency: "usd" | "eur" = "eur"
-    const selectedNames: string[] = []
-
-    for (const svc of services) {
-      const name = svc.name || ""
-      const isOptional = !!svc.optional
-      const isSelected = !isOptional || selectedServices.includes(name)
-
-      if (!isSelected) continue
-
-      // Parse price (e.g. "EUR2,500", "$500", "Included")
-      const priceStr = String(svc.price || "0")
-
-      // Skip recurring/informational prices -- not one-time charges
-      if (/\/(year|anno|month|mese)/i.test(priceStr)) continue
-      if (/includ|inclus/i.test(priceStr)) continue
-
-      const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ""))
-
-      if (!isNaN(priceNum) && priceNum > 0) {
-        total += priceNum
-        selectedNames.push(name)
-        // Detect currency from one-time service prices
-        if (/\$|usd/i.test(priceStr)) currency = "usd"
-        else if (/EUR|euro/i.test(priceStr)) currency = "eur"
-      }
-    }
-
-    // If currency wasn't detected from service prices, check cost_summary totals
-    if (currency === "eur" && total > 0) {
-      for (const group of (Array.isArray(offer.cost_summary) ? offer.cost_summary : [])) {
-        const groupTotal = String((group as Record<string, unknown>)?.total || "")
-        if (/\$|usd/i.test(groupTotal)) { currency = "usd"; break }
-        for (const item of ((group as Record<string, unknown[]>)?.items || []) as Array<Record<string, unknown>>) {
-          if (/\$|usd/i.test(String(item?.price || ""))) { currency = "usd"; break }
-        }
-      }
-    }
-
-    // Include pre-conditions from cost_summary (e.g. unpaid taxes, filing fees)
-    const costSummary = Array.isArray(offer.cost_summary) ? offer.cost_summary : []
-    for (const group of costSummary) {
-      if (!/pre.?condition/i.test(group.label || "")) continue
-      for (const item of (group.items || [])) {
-        const priceStr = String(item.price || "0")
-        const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ""))
-        if (!isNaN(priceNum) && priceNum > 0) total += priceNum
-      }
-    }
-
-    // Fallback: if no parseable prices, use cost_summary[0].total
-    if (total === 0 && costSummary.length > 0) {
-      const firstTotal = String(costSummary[0]?.total || "0")
-      total = parseFloat(firstTotal.replace(/[^0-9.]/g, ""))
-      if (/\$|usd/i.test(firstTotal)) currency = "usd"
-    }
+    // WS-A3 site #2 (dev job c0a61e44): the CHARGE amount comes from THE offer
+    // amount engine — the same math the signing webhook records, so what the
+    // card bills always equals the invoice of record. The engine's semantics
+    // are pinned by tests/unit/compute-offer-totals.test.ts.
+    //
+    // Open-offer REPLAY (77 production offers, this session): identical amounts
+    // everywhere; exactly ONE currency divergence — an all-EUR offer whose
+    // recurring "$2,000/year" line flipped the OLD group-scan to USD (a latent
+    // $-for-€ mischarge). The engine's header-based detection is correct there.
+    // Engine EU-fallback handling also fixes the old plain-parse fallback
+    // ("€1.500" would have charged €1.50).
+    const totals = computeOfferTotals({
+      services: offer.services,
+      cost_summary: offer.cost_summary,
+      selected_services: selectedServices,
+    })
+    const total = totals.gross
+    const currency: "usd" | "eur" = totals.currency === "EUR" ? "eur" : "usd"
+    const selectedNames: string[] = totals.countedServiceNames
 
     if (total <= 0) {
       return NextResponse.json({ error: "Could not determine payment amount" }, { status: 400 })

@@ -34,6 +34,8 @@ export interface OfferLikeForTotals {
 export interface OfferTotals {
   /** Sum of selected one-time service lines (webhook parser semantics). */
   servicesTotal: number
+  /** Names of the service lines actually counted (checkout labels charges with them). */
+  countedServiceNames: string[]
   /** Sum of pre-condition group items from cost_summary. */
   preconditionsTotal: number
   /** servicesTotal + preconditionsTotal, or the cost_summary[0] fallback when 0. */
@@ -82,6 +84,7 @@ export function computeOfferTotals(offer: OfferLikeForTotals): OfferTotals {
   const summary = summaryArray(offer.cost_summary)
 
   let servicesTotal = 0
+  const countedServiceNames: string[] = []
   for (const svc of services) {
     const name = (svc.name as string) || ""
     const isOptional = !!svc.optional
@@ -91,7 +94,10 @@ export function computeOfferTotals(offer: OfferLikeForTotals): OfferTotals {
     if (RECURRING_RE.test(priceStr)) continue
     if (INCLUDED_RE.test(priceStr)) continue
     const n = parsePriceQuirk(priceStr)
-    if (n > 0) servicesTotal += n
+    if (n > 0) {
+      servicesTotal += n
+      countedServiceNames.push(name)
+    }
   }
 
   let preconditionsTotal = 0
@@ -123,7 +129,7 @@ export function computeOfferTotals(offer: OfferLikeForTotals): OfferTotals {
   const currency: "EUR" | "USD" =
     headerRaw.includes("€") || headerRaw.toUpperCase().includes("EUR") ? "EUR" : "USD"
 
-  return { servicesTotal, preconditionsTotal, gross, currency, source }
+  return { servicesTotal, countedServiceNames, preconditionsTotal, gross, currency, source }
 }
 
 export interface AppliedCreditInput {
