@@ -3,6 +3,8 @@ import {
   deriveLearnedRules,
   deriveEvictionPatterns,
   deactivateConversionRulesForRows,
+  promotionWouldResurrectClientEviction,
+  CLIENT_OWN_TRANSFER_EVICTION_NOTE,
   upsertLearnedMerchantRules,
   MIN_LEARN_PATTERN_LENGTH,
   LEARN_PATTERN_STOPLIST,
@@ -340,5 +342,38 @@ describe('deactivateConversionRulesForRows', () => {
     const n = await deactivateConversionRulesForRows(db, 'acct-1', [{ description: null, counterparty: 'X', amount: 1 }])
     expect(n).toBe(0)
     expect(fromCalled).toBe(false)
+  })
+})
+
+/**
+ * RULE-RESURRECTION GUARD (bug-hunter major, 2026-08-06): a client's
+ * own_transfer correction deactivates the merchant rule with a marker note;
+ * a later staff Save-to-client used to find that rule (findRule ignores
+ * active) and flip it back to active conversion — silently undoing the
+ * client's decision. Promotion now skips exactly those rules.
+ */
+describe('promotionWouldResurrectClientEviction', () => {
+  it('skips a rule the client eviction killed', () => {
+    expect(promotionWouldResurrectClientEviction({ active: false, notes: CLIENT_OWN_TRANSFER_EVICTION_NOTE })).toBe(true)
+  })
+  it('does not skip active rules, other-reason-inactive rules, or absent rules', () => {
+    expect(promotionWouldResurrectClientEviction({ active: true, notes: CLIENT_OWN_TRANSFER_EVICTION_NOTE })).toBe(false)
+    expect(promotionWouldResurrectClientEviction({ active: false, notes: 'deactivated: superseded by a newer answer with a different direction' })).toBe(false)
+    expect(promotionWouldResurrectClientEviction({ active: false, notes: null })).toBe(false)
+    expect(promotionWouldResurrectClientEviction(null)).toBe(false)
+  })
+})
+
+describe('deactivateConversionRulesForRows — note contract', () => {
+  it('stamps the exported eviction note the promotion guard keys on', async () => {
+    let captured: Record<string, unknown> | null = null
+    const chain = {
+      update(patch: Record<string, unknown>) { captured = patch; return chain },
+      eq() { return chain }, is() { return chain }, in() { return chain },
+      select() { return Promise.resolve({ data: [{ id: 'r1' }], error: null }) },
+    }
+    await deactivateConversionRulesForRows({ from: () => chain }, 'acct-1', [{ description: 'ACME HOLDING', counterparty: null, amount: -10 }])
+    expect(captured!.notes).toBe(CLIENT_OWN_TRANSFER_EVICTION_NOTE)
+    expect(captured!.active).toBe(false)
   })
 })

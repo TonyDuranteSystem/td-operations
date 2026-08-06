@@ -33,6 +33,10 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
   // "visible while focused" would snap the controls away mid-choice.
   // Resets on send (below) and on thread switch (key= remount).
   const [composing, setComposing] = useState(false)
+  // Preview closed by default — its content is one click away and the space
+  // matters more while a thread is open above (Antonio's QA, 2026-08-05).
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [draftNotice, setDraftNotice] = useState<string | null>(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [attachNotice, setAttachNotice] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -97,6 +101,8 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
       // Back to reading mode: fold the signature controls away and drop any
       // per-reply variant override so the next reply starts at the default.
       setComposing(false)
+      setPreviewOpen(false)
+      setDraftNotice(null)
       setSignatureVariant(DEFAULT_REPLY_SIGNATURE_VARIANT)
       const refetch = () => {
         queryClient.invalidateQueries({
@@ -110,6 +116,40 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
       refetch()
       setTimeout(refetch, 4000)
       setTimeout(refetch, 12000)
+    },
+  })
+
+  // Save the typed reply as a REAL Gmail draft, threaded, signature baked in
+  // (it may be finished in Gmail's own UI where our send path never runs).
+  const draftMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const res = await fetch('/api/inbox/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: conversation.id,
+          message: text,
+          mailbox,
+          signature_variant: signatureVariant,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Could not save the draft — please try again.')
+      }
+      return res.json()
+    },
+    onSuccess: () => {
+      setMessage('')
+      setComposing(false)
+      setPreviewOpen(false)
+      setSignatureVariant(DEFAULT_REPLY_SIGNATURE_VARIANT)
+      setDraftNotice('Draft saved — find it in Drafts (here and in Gmail).')
+    },
+    onError: (err) => {
+      setDraftNotice(
+        err instanceof Error && err.message ? err.message : 'Could not save the draft.'
+      )
     },
   })
 
@@ -178,7 +218,22 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
   }
 
   const composer = (
-    <div className="border-t bg-white px-4 py-3">
+    <div
+      className="border-t bg-white px-4 py-3"
+      // The way BACK to reading (Antonio's QA, 2026-08-05): clicking anywhere
+      // outside the composer with an EMPTY draft folds the signature area
+      // away again. Checked against the whole container, not the textarea —
+      // a blur caused by touching the picker or a button inside stays open.
+      // A draft with text never auto-folds: typed words must not vanish.
+      onBlur={(e) => {
+        if (
+          !e.currentTarget.contains(e.relatedTarget as Node | null) &&
+          !message.trim()
+        ) {
+          setComposing(false)
+        }
+      }}
+    >
       {sendMutation.isError && (
         <p className="text-xs text-red-500 mb-2">
           Failed to send: {sendMutation.error.message}
@@ -186,6 +241,9 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
       )}
       {attachNotice && (
         <p className="text-xs text-amber-600 mb-2">{attachNotice}</p>
+      )}
+      {draftNotice && (
+        <p className="text-xs text-emerald-700 mb-2">{draftNotice}</p>
       )}
       {isEmail && (
         <div className="mb-2 empty:hidden">
@@ -200,16 +258,30 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
           once the reader starts replying, never while just reading. */}
       {isEmail && composing && (
         <div className="mb-2 space-y-2">
-          <SignatureControls
-            sender={mailbox === 'antonio' ? 'antonio' : 'support'}
-            variant={signatureVariant}
-            onVariantChange={setSignatureVariant}
-            disabled={sendMutation.isPending}
-          />
-          <SignaturePreview
-            sender={mailbox === 'antonio' ? 'antonio' : 'support'}
-            variant={signatureVariant}
-          />
+          <div className="flex items-center gap-2 flex-wrap">
+            <SignatureControls
+              sender={mailbox === 'antonio' ? 'antonio' : 'support'}
+              variant={signatureVariant}
+              onVariantChange={setSignatureVariant}
+              disabled={sendMutation.isPending}
+            />
+            {/* The full preview is one click away, not always open — even
+                mid-draft the signature area costs one small row, so reading
+                the thread above stays comfortable. */}
+            <button
+              type="button"
+              onClick={() => setPreviewOpen((v) => !v)}
+              className="text-xs text-zinc-500 hover:text-zinc-700 underline decoration-dotted"
+            >
+              {previewOpen ? 'Hide preview' : 'Preview'}
+            </button>
+          </div>
+          {previewOpen && (
+            <SignaturePreview
+              sender={mailbox === 'antonio' ? 'antonio' : 'support'}
+              variant={signatureVariant}
+            />
+          )}
         </div>
       )}
 
@@ -217,7 +289,10 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          onFocus={() => setComposing(true)}
+          onFocus={() => {
+            setComposing(true)
+            setDraftNotice(null)
+          }}
           onKeyDown={handleKeyDown}
           onPaste={isEmail ? attachments.onPaste : undefined}
           placeholder={
@@ -270,6 +345,30 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
               )}
             </button>
           </>
+        )}
+
+        {/* Save draft — email only, needs text, refuses while files are
+            staged: drafts are text-only for now and silently dropping a
+            staged passport would be worse than a disabled button. */}
+        {isEmail && composing && message.trim() && (
+          <button
+            onClick={() => draftMutation.mutate(message)}
+            disabled={
+              draftMutation.isPending ||
+              sendMutation.isPending ||
+              attachments.files.length > 0
+            }
+            title={
+              attachments.files.length > 0
+                ? 'Drafts cannot carry attachments yet — send directly, or remove the files first.'
+                : 'Save as a Gmail draft (threaded to this conversation)'
+            }
+            className="shrink-0 px-3 py-2.5 rounded-xl bg-zinc-100 text-zinc-600 text-xs font-medium
+              hover:bg-zinc-200 hover:text-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed
+              transition-colors"
+          >
+            {draftMutation.isPending ? 'Saving…' : 'Save draft'}
+          </button>
         )}
 
         <button

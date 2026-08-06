@@ -13,6 +13,7 @@ import { resolveAttachmentType, shouldOpenInTab } from '@/lib/inbox/attachment-o
 import { EmailHtmlFrame } from './email-html-frame'
 import { NoteQuickCreate } from '@/components/dashboard/note-quick-create'
 import { Link2 } from 'lucide-react'
+import { trackOpenMarkRead } from '@/lib/inbox/pending-mark-read'
 
 type ThreadAttachment = NonNullable<InboxMessage['attachments']>[number]
 
@@ -226,8 +227,8 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
 
   // Mark as read when opening a conversation with unread messages
   const markReadMutation = useMutation({
-    mutationFn: () =>
-      fetch('/api/inbox/mark-read', {
+    mutationFn: () => {
+      const call = fetch('/api/inbox/mark-read', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -235,7 +236,14 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
           channel: conversation.channel,
           mailbox,
         }),
-      }),
+      })
+      // Recorded so the header's "Mark unread" can WAIT for this to settle:
+      // this call is slow (thread fetch + one modify per message) and, raced,
+      // it lands after the user's mark-unread and silently undoes it
+      // (Antonio's production QA, 2026-08-05).
+      trackOpenMarkRead(conversation.id, call)
+      return call
+    },
     onSuccess: () => {
       // Delay refetch significantly — Gmail's index takes 30-60s to reflect label changes
       // The optimistic update in the useEffect below handles immediate UI

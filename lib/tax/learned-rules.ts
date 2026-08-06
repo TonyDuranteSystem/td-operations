@@ -124,9 +124,28 @@ export function deriveLearnedRules(
  *  Save-to-client). Mutually exclusive — enforced by the DB CHECK. */
 export type LearnScope = { account_id: string; workspace_id?: undefined } | { workspace_id: string; account_id?: undefined }
 
+/** The note stamped on a conversion rule when the CLIENT's own correction
+ *  killed it (own_transfer change). Promotion must never resurrect a rule
+ *  carrying this note — a staff workspace save would otherwise silently undo
+ *  the client's decision (bug-hunter major, 2026-08-06). */
+export const CLIENT_OWN_TRANSFER_EVICTION_NOTE =
+  "deactivated: the client changed their own_transfer answer for this merchant"
+
+/** PURE: should Save-to-client rule promotion SKIP this existing account rule?
+ *  True exactly when the rule is inactive because the CLIENT's own correction
+ *  killed it — the stale workspace copy must not resurrect that decision.
+ *  A rule inactive for any OTHER reason (direction-conflict deactivation)
+ *  stays promotable: those are bookkeeping mechanics, not client decisions. */
+export function promotionWouldResurrectClientEviction(
+  existing: { active?: boolean; notes?: string | null } | null,
+): boolean {
+  return !!existing && existing.active === false
+    && (existing.notes ?? "").startsWith(CLIENT_OWN_TRANSFER_EVICTION_NOTE)
+}
+
 /** Minimal DB surface this helper needs — lets tests inject a fake. */
 export interface RuleStore {
-  findRule(scope: LearnScope, pattern: string, direction: string): Promise<{ id: string } | null>
+  findRule(scope: LearnScope, pattern: string, direction: string): Promise<{ id: string; active?: boolean; notes?: string | null } | null>
   insertRule(row: Record<string, unknown>): Promise<void>
   updateRule(id: string, patch: Record<string, unknown>): Promise<void>
   /** Phase 0.2 (2026-07-03): active rules for the same (scope, pattern) whose
@@ -147,16 +166,20 @@ export interface RuleStore {
 export function makeSupabaseRuleStore(db: { from: (table: string) => any }): RuleStore { // eslint-disable-line @typescript-eslint/no-explicit-any
   return {
     findRule: async (scope, pattern, direction) => {
+      // active + notes travel with the id so callers can tell a routinely
+      // inactive rule from one the CLIENT's correction deliberately killed
+      // (see CLIENT_OWN_TRANSFER_EVICTION_NOTE) — promotion must not
+      // resurrect the latter.
       let q = db
         .from("bank_categorization_rules")
-        .select("id")
+        .select("id, active, notes")
         .eq("pattern", pattern)
         .eq("direction", direction)
       q = scope.account_id
         ? q.eq("account_id", scope.account_id).is("workspace_id", null)
         : q.eq("workspace_id", scope.workspace_id)
       const { data } = await q.limit(1).maybeSingle()
-      return data ? { id: data.id as string } : null
+      return data ? { id: data.id as string, active: data.active as boolean, notes: (data.notes as string | null) ?? null } : null
     },
     insertRule: async (row) => {
       await db.from("bank_categorization_rules").insert(row)
@@ -288,7 +311,7 @@ export async function deactivateConversionRulesForRows(
     .from("bank_categorization_rules")
     .update({
       active: false,
-      notes: "deactivated: the client changed their own_transfer answer for this merchant",
+      notes: CLIENT_OWN_TRANSFER_EVICTION_NOTE,
       updated_at: new Date().toISOString(),
     })
     .eq("account_id", accountId)

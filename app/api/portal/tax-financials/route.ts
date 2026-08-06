@@ -116,9 +116,36 @@ export async function GET(request: NextRequest) {
     })
     const answeredOwnTransfers = conversionRows.filter(r => isHumanOwnTransferNote((r.notes as string | null) ?? null))
     if (answeredOwnTransfers.length > 0) {
-      const { GROUP_KEY_SEP } = await import('@/lib/tax/question-groups')
+      const { GROUP_KEY_SEP, transferPairNoteFor } = await import('@/lib/tax/question-groups')
+      // Which of these human-answered rows have an AUTO-matched partner leg?
+      // The partner carries the exact note `transfer-pair → <this row's id>`
+      // and is NEVER in the review feed — so without this server-side lookup
+      // the "check the other side too" warning is blind to the most common
+      // real shape (one leg auto-paired, one leg human-answered), and a
+      // client flipping just the human leg to "Business income" manufactures
+      // revenue silently (bug-hunter major, 2026-08-06). Exact note-equality
+      // lookup, chunked ×100 to respect URL limits.
+      const answeredIds = answeredOwnTransfers.map(r => String(r.id))
+      const pairedIds = new Set<string>()
+      for (let i = 0; i < answeredIds.length; i += 100) {
+        const chunk = answeredIds.slice(i, i + 100)
+        const { data: partners, error: pairErr } = await db
+          .from('bank_transactions')
+          .select('notes')
+          .eq('account_id', accountId)
+          .eq('tax_year', taxYear)
+          .eq('category', 'conversion')
+          .in('notes', chunk.map(id => transferPairNoteFor(id)))
+        if (pairErr) { console.error('[tax-financials] paired-leg lookup failed (warning degraded):', pairErr.message); break }
+        for (const p of ((partners ?? []) as Array<{ notes: string | null }>)) {
+          const note = p.notes ?? ''
+          const id = note.startsWith('transfer-pair → ') ? note.slice('transfer-pair → '.length) : ''
+          if (id) pairedIds.add(id)
+        }
+      }
       for (const g of groupUncategorized(answeredOwnTransfers.map(toQuestionRow))) {
-        questions.push({ ...g, group_key: g.group_key + GROUP_KEY_SEP + 'own_transfer_answered' })
+        const hasPairedLeg = g.transaction_ids.some(id => pairedIds.has(id))
+        questions.push({ ...g, group_key: g.group_key + GROUP_KEY_SEP + 'own_transfer_answered', ...(hasPairedLeg ? { has_auto_paired_leg: true } : {}) })
       }
     }
 

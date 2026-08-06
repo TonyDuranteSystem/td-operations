@@ -279,11 +279,21 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
       .eq("workspace_id", workspaceId)
       .eq("active", true) as { data: Array<{ pattern: string; match_type: string; category: string; subcategory: string; direction: string; created_by: string | null }> | null }
     if (wsRules && wsRules.length > 0) {
-      const { makeSupabaseRuleStore } = await import("./learned-rules")
+      const { makeSupabaseRuleStore, promotionWouldResurrectClientEviction } = await import("./learned-rules")
       const store = makeSupabaseRuleStore(supabaseAdmin as never)
       for (const r of wsRules) {
         const existing = await store.findRule({ account_id: targetAccountId }, r.pattern, r.direction)
         if (existing) {
+          // NEVER resurrect a rule the CLIENT's own correction killed
+          // (bug-hunter major, 2026-08-06): the workspace copy predates the
+          // client's decision, and re-activating it as 'conversion' would
+          // silently pull every future deposit of that merchant back out of
+          // the books — with no card re-including them (the note isn't a
+          // human answer note). The client's correction outranks the stale
+          // workspace memory; staff can always re-answer deliberately.
+          if (promotionWouldResurrectClientEviction(existing)) {
+            continue
+          }
           await store.updateRule(existing.id, {
             category: r.category, subcategory: r.subcategory, active: true, source: "learned",
             updated_at: new Date().toISOString(),

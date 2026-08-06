@@ -606,6 +606,28 @@ Function.
   contacts on multiple accounts; 30s polling refetches up to ~200 threads +
   the whole `account_contacts` table.
 
+## Row action icons — instant hover labels (2026-08-05)
+
+The desktop row-hover quick actions (color mark, file to folder, mark
+read/unread, snooze, restore, erase, delete) carry the instant `HoverHint`
+legend, the same one the header toolbar uses — the browser-native `title`
+tooltip alone appears only after a long still hover and reads as "no label"
+in practice. The mobile inline bar keeps native titles on purpose: it is
+touch, hover does not exist there. Any NEW row action must be wrapped the
+same way.
+
+## Mark-unread vs the open-time auto-mark-read (2026-08-05)
+
+Opening a conversation fires a background mark-read against Gmail (slow: thread
+fetch + one modify per message). The header's "Mark unread" is a single thread
+modify — raced, the stale auto-read used to land LAST and silently undo the
+user's choice ("works only after I go back and reopen", Antonio's production
+QA). `lib/inbox/pending-mark-read.ts` serializes them: the thread view records
+its in-flight call, the header action awaits it before writing. Module-level on
+purpose — the two components sit in different trees (the thread view is also
+mounted by portal-chats). A failed auto-read settles the wait rather than
+wedging the button.
+
 ## Outgoing email signatures (dev job fb7629ea — 2026-08-05)
 
 **The one definition:** `lib/email/signature.ts`. Every outgoing-email identity fact
@@ -654,7 +676,15 @@ narrowest row — browser-measured); explicit width/height on every image.
 in-app images load from the serving deployment. In the REPLY composer both appear
 only once the reply box gains focus (focus-LATCHED, since touching the picker blurs
 the textarea) and fold away after a send — while reading a thread they were eating
-the reading space (Antonio's production QA, 2026-08-05). Compose resets to support+default on
+the reading space (Antonio's production QA, 2026-08-05). Folding back: clicking
+outside the composer with an EMPTY draft collapses the area (checked against the
+container, so using the picker doesn't collapse it); a draft WITH text never
+auto-folds. The full preview sits behind a Preview toggle, closed by default.
+**Save draft** (same QA): `/api/inbox/draft` saves the typed reply as a REAL Gmail
+draft, threaded, same mailbox gates as reply, signature BAKED IN (a draft may be
+sent from Gmail's own UI where our send path never runs), no quoted history (Gmail
+adds its own when the draft is opened). TEXT-ONLY by design — the UI disables Save
+draft while upload files are staged rather than silently dropping them. Compose resets to support+default on
 every close (sticky-sender bug). Assets: `public/images/signature-antonio-{gala,hat}.jpg`
 (hat frame Antonio-approved), `signature-td-mark.png` (derived from the app icon —
 regenerate from `public/portal-icons/icon-512.png` if the brand mark ever changes),
