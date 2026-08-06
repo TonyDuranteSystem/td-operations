@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { merchantRoot, groupUncategorized, categoryForAnswer, groupKeyRoot, rowDirection, GROUP_KEY_SEP, isHumanOwnTransferNote, type UncategorizedRow } from "@/lib/tax/question-groups"
+import { merchantRoot, groupUncategorized, categoryForAnswer, groupKeyRoot, rowDirection, GROUP_KEY_SEP, isHumanOwnTransferNote, transferPairNoteFor, type UncategorizedRow } from "@/lib/tax/question-groups"
 
 function row(id: string, description: string, amount: number, date = "2025-06-01"): UncategorizedRow {
   return { id, description, counterparty: null, amount, transaction_date: date, bank_name: "Mercury" }
@@ -368,5 +368,20 @@ describe('isHumanOwnTransferNote', () => {
     expect(isHumanOwnTransferNote('')).toBe(false)
     expect(isHumanOwnTransferNote(null)).toBe(false)
     expect(isHumanOwnTransferNote(undefined)).toBe(false)
+  })
+})
+
+/**
+ * PAIRED-LEG NOTE FORMAT (bug-hunter major, 2026-08-06): the feed detects a
+ * hidden auto-matched partner leg by EXACT equality with this note — the
+ * engine writes it via the same helper, so the two can never drift. This test
+ * freezes the byte format: production rows already carry it.
+ */
+describe('transferPairNoteFor', () => {
+  it('produces the exact note the transfer-pair pass writes', () => {
+    expect(transferPairNoteFor('1de1e605-f5de-4d1d-9114-fdb1293f4264')).toBe('transfer-pair → 1de1e605-f5de-4d1d-9114-fdb1293f4264')
+  })
+  it('never matches the human-answer predicate', () => {
+    expect(isHumanOwnTransferNote(transferPairNoteFor('abc'))).toBe(false)
   })
 })

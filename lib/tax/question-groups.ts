@@ -55,6 +55,13 @@ export interface QuestionGroup {
   direction: "in" | "out"
   transaction_ids: string[]
   sample: string
+  /** TRUE when at least one row of this (human-answered own_transfer) group has
+   *  an AUTO-matched partner leg elsewhere (a row whose note is
+   *  `transferPairNoteFor(<this row's id>)`). Server-computed by the feed —
+   *  the partner leg itself is never in the review, so the client-side
+   *  same-root check alone can't see it. Drives the "check the other side
+   *  too" warning (bug-hunter major, 2026-08-06). */
+  has_auto_paired_leg?: boolean
   /** Advisory AI hints for this merchant (#2): the dominant lean + bucket across
    *  the group's rows. Used to pre-tag + group the review; the client confirms. */
   ai_lean?: "business" | "personal" | "unsure"
@@ -312,4 +319,15 @@ export const HUMAN_OWN_TRANSFER_NOTE_PREFIXES = [
 export function isHumanOwnTransferNote(notes: string | null | undefined): boolean {
   const n = notes ?? ""
   return HUMAN_OWN_TRANSFER_NOTE_PREFIXES.some(p => n.startsWith(p))
+}
+
+/** The exact note the transfer-pair pass writes on a matched leg, pointing at
+ *  its partner row. MUST stay byte-identical to the engine's writer (asserted
+ *  by a unit test) — the feed uses it to detect that a human-answered transfer
+ *  has a hidden AUTO-matched opposite leg, so the "check the other side too"
+ *  warning can fire even though the auto leg never enters the review feed
+ *  (bug-hunter major, 2026-08-06: without this, re-answering one leg of a real
+ *  transfer manufactures income with no warning shown). */
+export function transferPairNoteFor(partnerId: string): string {
+  return `transfer-pair → ${partnerId}`
 }
