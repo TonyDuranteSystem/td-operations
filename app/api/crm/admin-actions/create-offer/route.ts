@@ -29,6 +29,7 @@ export async function POST(req: NextRequest) {
       contact_id: body.contact_id ?? null,
       contract_type: body.contract_type,
       entity_type: body.entity_type ?? null,
+      formation_state: body.formation_state ?? null,
       payment_type: body.payment_type || "bank_transfer",
       payment_gateway: body.payment_gateway,
       bank_preference: body.bank_preference,

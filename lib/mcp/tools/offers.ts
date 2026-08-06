@@ -16,6 +16,7 @@ import { getGreeting } from "@/lib/greeting"
 import { APP_BASE_URL } from "@/lib/config"
 import { publishOffer, resendOfferEmail } from "@/lib/offers/publish"
 import { createOffer, type OfferContractType, type OfferPaymentType, type OfferPaymentGateway } from "@/lib/operations/offers"
+import { FORMATION_STATE_CODES } from "@/lib/formation/states"
 
 // ─── Gmail Draft Helper ─────────────────────────────────────
 
@@ -400,6 +401,8 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
       contract_type: z.enum(["formation", "onboarding", "tax_return", "itin", "closure"]).optional().describe("Contract type: 'formation' (default, LLC to create — full MSA+SOW with formation timeline), 'onboarding' (LLC already exists, client new or existing — MSA+SOW without formation timeline), 'tax_return' (standalone tax filing — lightweight agreement), 'itin' (standalone ITIN application — lightweight agreement), 'closure' (company dissolution — 3-step closure: Secretary of State filing, IRS EIN closure, registered agent cancellation + closure document delivery). Annual renewal agreements are managed separately via annual_agreements table."),
       // Entity type — drives downstream formation form shape, SS-4 content, OA members, tax routing
       entity_type: z.enum(["SMLLC", "MMLLC", "Corp"]).optional().describe("Entity type: 'SMLLC' (single-member LLC — default behavior for formation offers), 'MMLLC' (multi-member LLC — client fills multiple members + per-member passports in formation form), 'Corp' (C-Corp). Set explicitly for any multi-member offer so downstream automation (formation form, SS-4, OA, tax) knows the entity shape. If omitted, downstream code falls back to legacy derivation (service-name string match)."),
+      // Formation state — pinned on the offer, shown to the client, and used as the downstream default (WS-B)
+      formation_state: z.enum(FORMATION_STATE_CODES).optional().describe("State of formation decided on the call (NM=New Mexico, WY=Wyoming, FL=Florida, DE=Delaware). Only meaningful for formation offers. Shown on the offer page + contract Key Terms, copied to the activation at signing, and used as the formation flow's default (admin override at Articles upload still wins). Omit when undecided — downstream falls back to NM."),
       // Linking — use lead_id for new leads, account_id for existing CRM clients, or neither for standalone offers
       lead_id: z.string().optional().describe("Link to lead UUID (for new leads)"),
       account_id: z.string().optional().describe("Link to CRM account UUID (for existing clients — use this instead of lead_id when client is already in the CRM)"),
@@ -428,6 +431,7 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
         offer_date: params.offer_date,
         contract_type: params.contract_type as OfferContractType | undefined,
         entity_type: params.entity_type,
+        formation_state: params.formation_state,
         payment_type: params.payment_type as OfferPaymentType,
         payment_gateway: params.payment_gateway as OfferPaymentGateway | undefined,
         bank_preference: params.bank_preference,

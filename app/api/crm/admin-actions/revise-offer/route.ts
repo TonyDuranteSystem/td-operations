@@ -117,6 +117,23 @@ export async function POST(request: Request) {
         currency: original.currency,
         referrer_name: original.referrer_name,
         referrer_type: original.referrer_type,
+        // ─── WS-B copy-list triage (dev job c0a61e44, architect-approved) ───
+        // This insert is an EXPLICIT field list: anything not named here is
+        // silently DROPPED on revision. Every field below was added after a
+        // per-field keep-or-drop decision; when adding a NEW offers column,
+        // decide its fate here in the same change or it vanishes on v2.
+        // COPIED (facts of the deal that must survive a revision):
+        contact_id: original.contact_id,          // identity link — losing it orphans existing-client offers
+        entity_type: original.entity_type,        // deal fact; downstream (form/SS-4/OA/tax) derives from it
+        formation_state: (original as { formation_state?: string | null }).formation_state ?? null, // WS-B pinned state
+        card_fee_rate: (original as { card_fee_rate?: number | null }).card_fee_rate ?? null, // pinned fee — dropping re-priced waived deals (confirmed money-loser)
+        referrer_contact_id: (original as { referrer_contact_id?: string | null }).referrer_contact_id ?? null, // pinned referrer — dropping broke the pay→credit chain (confirmed money-loser)
+        // DELIBERATELY NOT COPIED (recorded decisions, not omissions):
+        //   selected_services  — the client re-selects on the new version; inheriting a stale selection could bill v2 for v1's choices
+        //   payment_links      — regenerated at publish for the new version's totals
+        //   expires_at         — a new version gets a fresh expiry
+        //   view_count/viewed_at — reset by design (v2 starts unviewed)
+        //   partner_* + referrer_commission_* — changing partner economics on a revision needs its own reviewed pass; flagged, out of WS-B scope
         view_count: 0,
         version: newVersion,
       })

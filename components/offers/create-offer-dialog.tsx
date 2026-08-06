@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote, ExternalLink, CheckCircle2, BookOpen, Phone, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { ReferrerPicker, type ReferrerValue } from './referrer-picker'
+import { FORMATION_STATE_CODES, FORMATION_STATE_NAMES, type FormationStateCode } from '@/lib/formation/states'
 
 // ── Service catalog: loaded from DB ──
 interface CatalogService {
@@ -237,6 +238,9 @@ export function CreateOfferDialog({
   // SS-4 content, OA members, tax routing. Only meaningful when contract_type='formation'.
   // Empty string = not set → consumers fall back to legacy derivation.
   const [entityType, setEntityType] = useState<'' | 'SMLLC' | 'MMLLC' | 'Corp'>('')
+  // Formation state pinned on the offer (WS-B). '' = not decided yet — stored
+  // as NULL; downstream falls back through wizard → submission → offer → NM.
+  const [formationState, setFormationState] = useState<'' | FormationStateCode>('')
 
   // Subject of the offer — does it attach to an EXISTING company, or is it a
   // NEW company / standalone (no account)? Previously inferred silently from the
@@ -771,6 +775,7 @@ export function CreateOfferDialog({
             language,
             contract_type: derivedContractType,
             entity_type: entityType || null,
+            formation_state: formationState || null,
             payment_type: paymentType === 'both' ? 'checkout' : paymentType,
             payment_gateway: paymentGateway,
             bank_preference: bankPreference,
@@ -1219,6 +1224,45 @@ export function CreateOfferDialog({
               {!entityType && (
                 <p className="text-xs text-amber-600 mt-1">
                   Not set — pick explicitly for multi-member offers so the formation wizard, SS-4, and OA use the right shape.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Formation State — formation offers only (WS-B, dev job c0a61e44) */}
+          {derivedContractType === 'formation' && (
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                State of Formation
+                <span className="text-xs font-normal text-muted-foreground ml-2">
+                  (shown to the client on the offer + contract; formation flow default)
+                </span>
+              </label>
+              <div className="flex gap-2">
+                {FORMATION_STATE_CODES.map(code => (
+                  <label
+                    key={code}
+                    className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm border rounded-md cursor-pointer transition-colors ${
+                      formationState === code
+                        ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium'
+                        : 'border-zinc-200 hover:border-zinc-400'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="formation_state"
+                      value={code}
+                      checked={formationState === code}
+                      onChange={() => setFormationState(code)}
+                      className="sr-only"
+                    />
+                    {FORMATION_STATE_NAMES[code]}
+                  </label>
+                ))}
+              </div>
+              {!formationState && (
+                <p className="text-xs text-amber-600 mt-1">
+                  Not set — the formation flow will default to New Mexico unless overridden later.
                 </p>
               )}
             </div>

@@ -23,6 +23,8 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { formationStateFromWizardData, resolveFormationStateCode } from "@/lib/formation/states"
+import { formationStateForClient } from "@/lib/formation/state-lookup"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
@@ -689,9 +691,13 @@ export async function advanceServiceDelivery(
       // materialization here.
       const confirmedName = filedName((ncRow?.name_checks as NameCheck[] | null) ?? null)
       {
-        // Resolve the formation state CODE (wizard data → default NM). The
-        // formation wizard rarely captures the formation state, so NM (the
-        // primary filing state) is the documented default.
+        // Resolve the formation state CODE (WS-B, dev job c0a61e44) through the
+        // full authority chain: the client's wizard answer → the formation-form
+        // submission value → the SIGNED offer's pinned state → the documented
+        // NM default. Before WS-B this site consulted only the wizard (which
+        // rarely captures state) and silently defaulted a Wyoming deal to NM —
+        // the exact cross-surface legal mismatch the offer field exists to fix.
+        // All spelling/normalization lives in lib/formation/states.ts.
         const { data: wp } = await supabaseAdmin
           .from("wizard_progress")
           .select("data")
@@ -701,11 +707,20 @@ export async function advanceServiceDelivery(
           .limit(1)
           .maybeSingle()
         const wd = (wp?.data ?? {}) as Record<string, unknown>
-        const rawState = String(wd.formation_state || wd.state_of_formation || wd.state_of_incorporation || "").toUpperCase().trim()
-        const stateCode: "NM" | "WY" | "FL" | "DE" =
-          rawState === "WY" || rawState.includes("WYOMING") ? "WY" :
-          rawState === "FL" || rawState.includes("FLORIDA") ? "FL" :
-          rawState === "DE" || rawState.includes("DELAWARE") ? "DE" : "NM"
+        const { data: subRow } = await supabaseAdmin
+          .from("formation_submissions")
+          .select("state")
+          .eq("contact_id", delivery.contact_id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        const offerState = await formationStateForClient({ contactId: delivery.contact_id })
+        const stateResolution = resolveFormationStateCode({
+          wizardState: formationStateFromWizardData(wd),
+          submissionState: (subRow as { state?: string | null } | null)?.state,
+          offerState,
+        })
+        const stateCode = stateResolution.code
 
         const { materializeFormationCompany } = await import("@/lib/operations/formation-materialize")
         const mat = await materializeFormationCompany({
