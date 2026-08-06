@@ -83,8 +83,14 @@ export function decideCallLinks(
   // Group candidate rows by normalized email → identities. A lead and a
   // contact on the same email are one identity.
   const byEmail = new Map<string, { leadIds: Set<string>; contactIds: Set<string> }>()
+  // Defense-in-depth (hunter finding 3): a candidate row counts ONLY when its
+  // own email EXACTLY equals an attendee email after normalization. The DB
+  // fetch uses ILIKE, whose `_`/`%` metacharacters could otherwise pull a
+  // near-collision row (anna_rossi vs anna.rossi) into the bucket.
+  const externalSet = new Set(externalEmails)
   const bucket = (email: string) => {
     const key = email.toLowerCase().trim()
+    if (!externalSet.has(key)) return null
     let b = byEmail.get(key)
     if (!b) {
       b = { leadIds: new Set(), contactIds: new Set() }
@@ -92,8 +98,8 @@ export function decideCallLinks(
     }
     return b
   }
-  for (const l of candidates.leads) bucket(l.email).leadIds.add(l.id)
-  for (const c of candidates.contacts) bucket(c.email).contactIds.add(c.id)
+  for (const l of candidates.leads) bucket(l.email)?.leadIds.add(l.id)
+  for (const c of candidates.contacts) bucket(c.email)?.contactIds.add(c.id)
 
   const identities = Array.from(byEmail.entries()).filter(
     ([, b]) => b.leadIds.size > 0 || b.contactIds.size > 0,

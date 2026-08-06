@@ -91,14 +91,26 @@ export async function POST(req: NextRequest) {
 
     let leadRows: Array<{ id: string; email: string }> = []
     let contactRows: Array<{ id: string; email: string }> = []
+    let candidateFetchError: string | null = null
     if (externalEmails.length > 0) {
-      const orExpr = externalEmails.map((e) => `email.ilike.${e}`).join(',')
-      const [{ data: lr }, { data: cr }] = await Promise.all([
+      // ILIKE metacharacters escaped (hunter finding 3): an underscore in a real
+      // email must not pattern-match a near-collision row. decideCallLinks also
+      // exact-intersects candidate emails as defense-in-depth.
+      const orExpr = externalEmails
+        .map((e) => `email.ilike.${e.replace(/([%_])/g, '\\$1')}`)
+        .join(',')
+      const [leadRes, contactRes] = await Promise.all([
         db.from('leads').select('id, email').or(orExpr),
         db.from('contacts').select('id, email').or(orExpr),
       ])
-      leadRows = (lr ?? []) as Array<{ id: string; email: string }>
-      contactRows = (cr ?? []) as Array<{ id: string; email: string }>
+      // A lookup failure must NOT read as "no match" (hunter finding 4): the
+      // call would be stored silently unlinked with no marker. Record it.
+      if (leadRes.error || contactRes.error) {
+        candidateFetchError = leadRes.error?.message || contactRes.error?.message || 'unknown'
+        console.error('[circleback] candidate lookup failed:', candidateFetchError)
+      }
+      leadRows = (leadRes.data ?? []) as Array<{ id: string; email: string }>
+      contactRows = (contactRes.data ?? []) as Array<{ id: string; email: string }>
     }
 
     const decision = decideCallLinks(attendees as Array<{ email?: string | null }>, {
@@ -133,10 +145,14 @@ export async function POST(req: NextRequest) {
     const finalLeadId = ex?.lead_id ?? decision.lead_id
     const finalContactId = ex?.contact_id ?? decision.contact_id
     const finalAccountId = ex?.account_id ?? account_id
-    // Review marker: pointless once any link exists; otherwise keep/set the reason.
+    // Review marker: pointless once any link exists; otherwise keep/set the
+    // reason — and a failed candidate lookup is its own reason (finding 4),
+    // never indistinguishable from a genuine no-match.
     const finalReview = finalLeadId || finalContactId || finalAccountId
       ? null
-      : (ex?.link_review ?? decision.review)
+      : (ex?.link_review
+          ?? decision.review
+          ?? (candidateFetchError ? `auto-link deferred: candidate lookup failed (${candidateFetchError}) — link manually` : null))
 
     const lead_id = finalLeadId
 

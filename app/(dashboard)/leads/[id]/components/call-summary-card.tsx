@@ -40,7 +40,7 @@ export function CallSummaryCard({ leadId, leadEmail, initialCall, callNotes }: C
       if (result.success && result.call) {
         setCall(result.call as CallData)
         toast.success(result.multiple
-          ? 'Found multiple calls — linked the most recent one'
+          ? `Linked ${result.linkedCount ?? 'all matching'} calls`
           : 'Call found and linked')
       } else {
         if (result.error?.includes('No matching call')) {
@@ -86,7 +86,7 @@ export function CallSummaryCard({ leadId, leadEmail, initialCall, callNotes }: C
 
   const handleUnlink = () => {
     startTransition(async () => {
-      const result = await unlinkCallFromLead(leadId)
+      const result = await unlinkCallFromLead(leadId, call?.id)
       if (result.success) {
         setCall(null)
         toast.success('Call unlinked')

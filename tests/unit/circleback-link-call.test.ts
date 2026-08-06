@@ -99,3 +99,14 @@ describe("circleback link decision (WS-D, dev job c0a61e44)", () => {
     })
   })
 })
+
+describe("ILIKE near-collision defense (hunter finding 3)", () => {
+  it("a candidate whose own email is NOT exactly an attendee email is dropped (anna_rossi vs anna.rossi)", () => {
+    const d = decideCallLinks([{ email: "anna_rossi@gmail.com" }], {
+      leads: [{ id: "L-wrong", email: "anna.rossi@gmail.com" }],
+      contacts: [],
+    })
+    expect(d.lead_id).toBe(null)
+    expect(d.review).toBe(null) // no identity — plain no-match, not ambiguity
+  })
+})

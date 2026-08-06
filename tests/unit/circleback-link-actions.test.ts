@@ -30,7 +30,7 @@ vi.mock("@/lib/supabase-admin", () => ({
   },
 }))
 
-import { linkCallToLead } from "@/app/(dashboard)/leads/[id]/actions"
+import { linkCallToLead, unlinkCallFromLead } from "@/app/(dashboard)/leads/[id]/actions"
 
 beforeEach(() => {
   state.lead = { circleback_call_id: null }
@@ -56,5 +56,42 @@ describe("cell 6 — manual linking is additive with a primary pointer", () => {
       lead_id: "lead-1",
       link_review: null,
     })
+  })
+})
+
+// ─── Hunter re-attack additions (findings 1, 2, 8) ───
+
+describe("cell 6 — unlink targets a specific call (hunter finding 2)", () => {
+  it("unlinking the POINTER call clears both the pointer and the call row", async () => {
+    state.lead = { circleback_call_id: "call-A" }
+    const r = await unlinkCallFromLead("lead-1", "call-A")
+    expect(r.success).toBe(true)
+    expect(state.updates.find(u => u.table === "leads")?.values).toMatchObject({ circleback_call_id: null })
+    expect(state.updates.find(u => u.table === "call_summaries")?.values).toMatchObject({ lead_id: null })
+  })
+
+  it("unlinking a NON-pointer call clears only that call — the pointer survives (was a dead-end)", async () => {
+    state.lead = { circleback_call_id: "call-A" }
+    const r = await unlinkCallFromLead("lead-1", "call-B")
+    expect(r.success).toBe(true)
+    expect(state.updates.find(u => u.table === "leads")).toBeUndefined()
+    expect(state.updates.find(u => u.table === "call_summaries")?.values).toMatchObject({ lead_id: null })
+  })
+
+  it("legacy no-param call falls back to the pointer; nothing linked → honest error", async () => {
+    state.lead = { circleback_call_id: null }
+    const r = await unlinkCallFromLead("lead-1")
+    expect(r.success).toBe(false)
+    expect(r.error).toBe("No call linked")
+  })
+
+  it("unlink → relink cycle: relink after unlink re-sets the pointer (was empty again)", async () => {
+    state.lead = { circleback_call_id: "call-A" }
+    await unlinkCallFromLead("lead-1", "call-A")
+    state.lead = { circleback_call_id: null }
+    const r = await linkCallToLead("lead-1", "call-A")
+    expect(r.success).toBe(true)
+    const leadWrites = state.updates.filter(u => u.table === "leads")
+    expect(leadWrites[leadWrites.length - 1]?.values).toMatchObject({ circleback_call_id: "call-A" })
   })
 })
