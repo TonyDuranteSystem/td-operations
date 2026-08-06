@@ -20,6 +20,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
+import { buildRevisedOfferInsert } from "@/lib/offers/revise-copy"
 import type { Json } from "@/lib/database.types"
 
 export async function POST(request: Request) {
@@ -92,34 +93,20 @@ export async function POST(request: Request) {
       currency
     )
 
-    // Create new draft as copy of original
+    // Create new draft as copy of original. The copy DECISION (what carries to
+    // v2 vs what is deliberately dropped) lives in the pure, unit-tested
+    // buildRevisedOfferInsert — lib/offers/revise-copy.ts. When adding a NEW
+    // offers column, decide its fate THERE in the same change or it silently
+    // vanishes on revision (WS-B triage, dev job c0a61e44).
+    const insertPayload = buildRevisedOfferInsert(original as unknown as Record<string, unknown>, {
+      finalToken,
+      newVersion,
+      offerDate: new Date().toISOString().split("T")[0],
+      bankDetails: bankDetails as unknown as Json,
+    })
     const { error: insertErr } = await supabaseAdmin
       .from("offers")
-      .insert({
-        token: finalToken,
-        client_name: original.client_name,
-        client_email: original.client_email,
-        language: original.language,
-        offer_date: new Date().toISOString().split("T")[0],
-        status: "draft",
-        payment_type: original.payment_type,
-        contract_type: original.contract_type,
-        services: original.services,
-        cost_summary: original.cost_summary,
-        recurring_costs: original.recurring_costs,
-        bundled_pipelines: original.bundled_pipelines,
-        bank_details: bankDetails as unknown as Json,
-        lead_id: original.lead_id,
-        account_id: original.account_id,
-        required_documents: original.required_documents,
-        issues: original.issues,
-        admin_notes: original.admin_notes,
-        currency: original.currency,
-        referrer_name: original.referrer_name,
-        referrer_type: original.referrer_type,
-        view_count: 0,
-        version: newVersion,
-      })
+      .insert(insertPayload as never)
       .select("token, access_code, status, version")
       .single()
 

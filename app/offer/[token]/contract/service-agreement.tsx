@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
+import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import type { Offer } from '@/lib/types/offer'
 import { SERVICE_CONTENT } from './standalone-service-agreement'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
@@ -270,6 +271,8 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
   // formation contracts cover new LLC formation. Fee label and several legal
   // clauses differ between the two.
   const isOnboarding = offer.contract_type === 'onboarding'
+  // WS-B: the offer's pinned formation state (null on pre-WS-B offers → row hidden)
+  const contractFormationState = normalizeFormationState((offer as { formation_state?: string | null }).formation_state)
   const feeLabel = isOnboarding ? 'Onboarding Fee' : 'Setup Fee'
 
   // Payment schedule text for Key Terms
@@ -567,6 +570,11 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
           <tbody>
             <tr><th>Contract Year</th><td>{year} (January 1 - December 31)</td></tr>
             <tr><th>LLC Type</th><td>{llcType}</td></tr>
+            {/* WS-B: pinned formation state on the legal document — formation contracts only
+                (an onboarding client's company already exists; its state is not ours to state). */}
+            {!isOnboarding && contractFormationState && (
+              <tr><th>State of Formation</th><td>{FORMATION_STATE_NAMES[contractFormationState]}</td></tr>
+            )}
             <tr><th>{feeLabel}</th><td>{fee} {isOnboarding ? '(one-time onboarding fee; annual maintenance billed separately starting the following year)' : '(one-time, covers all services for the first contract year)'}</td></tr>
             <tr><th>Payment Schedule</th><td>{feeLabel} due upon signing. From the following year: {paymentScheduleText}</td></tr>
             <tr><th>Cancellation Deadline</th><td>Written notice must be received no later than November 1 of the current Contract Year to prevent automatic renewal.</td></tr>
@@ -635,6 +643,9 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
           <tbody>
             <tr><th>Contract Year</th><td>{year} (January 1 - December 31)</td></tr>
             <tr><th>LLC Type</th><td>{llcType}</td></tr>
+            {!isOnboarding && contractFormationState && (
+              <tr><th>State of Formation</th><td>{FORMATION_STATE_NAMES[contractFormationState]}</td></tr>
+            )}
             <tr><th>{feeLabel}</th><td>{fee}</td></tr>
           </tbody>
         </table>

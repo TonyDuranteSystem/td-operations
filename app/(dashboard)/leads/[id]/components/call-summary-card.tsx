@@ -15,6 +15,8 @@ interface CallData {
   action_items: unknown[] | null
   recording_url: string | null
   created_at: string
+  /** WS-D: why auto-linking was refused (ambiguity) — badge in the pick list. */
+  link_review?: string | null
 }
 
 interface CallSummaryCardProps {
@@ -38,7 +40,7 @@ export function CallSummaryCard({ leadId, leadEmail, initialCall, callNotes }: C
       if (result.success && result.call) {
         setCall(result.call as CallData)
         toast.success(result.multiple
-          ? 'Found multiple calls — linked the most recent one'
+          ? `Linked ${result.linkedCount ?? 'all matching'} calls`
           : 'Call found and linked')
       } else {
         if (result.error?.includes('No matching call')) {
@@ -84,7 +86,7 @@ export function CallSummaryCard({ leadId, leadEmail, initialCall, callNotes }: C
 
   const handleUnlink = () => {
     startTransition(async () => {
-      const result = await unlinkCallFromLead(leadId)
+      const result = await unlinkCallFromLead(leadId, call?.id)
       if (result.success) {
         setCall(null)
         toast.success('Call unlinked')
@@ -277,7 +279,14 @@ export function CallSummaryCard({ leadId, leadEmail, initialCall, callNotes }: C
                 return (
                   <div key={c.id} className="flex items-center justify-between p-2 rounded-md bg-zinc-50 hover:bg-zinc-100">
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium truncate">{c.meeting_name || 'Untitled'}</p>
+                      <p className="text-sm font-medium truncate">
+                        {c.meeting_name || 'Untitled'}
+                        {c.link_review && (
+                          <span className="ml-2 inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-amber-100 text-amber-800 align-middle" title={c.link_review}>
+                            needs review
+                          </span>
+                        )}
+                      </p>
                       <p className="text-xs text-muted-foreground">
                         {formatDate(c.created_at)} &middot; {formatDuration(c.duration_seconds)}
                         {nonHost.length > 0 && ` &middot; ${nonHost.map(a => a.name || a.email).join(', ')}`}

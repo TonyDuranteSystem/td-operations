@@ -23,6 +23,8 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { formationStateFromWizardData, resolveFormationStateCode } from "@/lib/formation/states"
+import { formationStateForClient } from "@/lib/formation/state-lookup"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
@@ -689,9 +691,13 @@ export async function advanceServiceDelivery(
       // materialization here.
       const confirmedName = filedName((ncRow?.name_checks as NameCheck[] | null) ?? null)
       {
-        // Resolve the formation state CODE (wizard data → default NM). The
-        // formation wizard rarely captures the formation state, so NM (the
-        // primary filing state) is the documented default.
+        // Resolve the formation state CODE (WS-B, dev job c0a61e44) through the
+        // full authority chain: the client's wizard answer → the formation-form
+        // submission value → the SIGNED offer's pinned state → the documented
+        // NM default. Before WS-B this site consulted only the wizard (which
+        // rarely captures state) and silently defaulted a Wyoming deal to NM —
+        // the exact cross-surface legal mismatch the offer field exists to fix.
+        // All spelling/normalization lives in lib/formation/states.ts.
         const { data: wp } = await supabaseAdmin
           .from("wizard_progress")
           .select("data")
@@ -701,17 +707,39 @@ export async function advanceServiceDelivery(
           .limit(1)
           .maybeSingle()
         const wd = (wp?.data ?? {}) as Record<string, unknown>
-        const rawState = String(wd.formation_state || wd.state_of_formation || wd.state_of_incorporation || "").toUpperCase().trim()
-        const stateCode: "NM" | "WY" | "FL" | "DE" =
-          rawState === "WY" || rawState.includes("WYOMING") ? "WY" :
-          rawState === "FL" || rawState.includes("FLORIDA") ? "FL" :
-          rawState === "DE" || rawState.includes("DELAWARE") ? "DE" : "NM"
+        const { data: subRow, error: subErr } = await supabaseAdmin
+          .from("formation_submissions")
+          .select("state")
+          .eq("contact_id", delivery.contact_id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        const offerState = await formationStateForClient({ contactId: delivery.contact_id })
+        const stateResolution = resolveFormationStateCode({
+          wizardState: formationStateFromWizardData(wd),
+          submissionState: (subRow as { state?: string | null } | null)?.state,
+          offerState,
+        })
+        const stateCode = stateResolution.code
+        // A lookup failure must be VISIBLE, not silently identical to "no state
+        // captured" — the fallback target is a legal filing state (adversarial
+        // QA finding 5). The resolution SOURCE is recorded in auto_triggers so
+        // staff can see which tier decided the state.
+        if (subErr) {
+          autoTriggers.push(`⚠ formation state: submission lookup failed (${subErr.message}) — resolved from ${stateResolution.source} (${stateCode})`)
+          console.error(`[flow-advance] formation_submissions state lookup failed for contact ${delivery.contact_id}:`, subErr.message)
+        }
 
         const { materializeFormationCompany } = await import("@/lib/operations/formation-materialize")
         const mat = await materializeFormationCompany({
           contact_id: delivery.contact_id,
           chosen_name: confirmedName ?? undefined,
-          formation_state: stateCode,
+          // WS-B amendment (hunter re-attack finding 2): pass a state only when
+          // some tier actually DECIDED it. Passing the NM fallback here would
+          // masquerade as admin input and defeat materialize's "a human must
+          // supply an undecided legal filing state" gate — undecided deals now
+          // error loudly at Articles-Received instead of silently filing NM.
+          formation_state: stateResolution.source !== "default" ? stateCode : undefined,
           // Staff-confirmed filing date (OCR-prefilled in the workspace). When
           // omitted the materializer still falls back to today — but the
           // workspace requires it before this transition, so that's a safety net
@@ -724,7 +752,7 @@ export async function advanceServiceDelivery(
         })
         if (mat.success && mat.account_id) {
           delivery.account_id = mat.account_id
-          autoTriggers.push(`Account materialized: ${confirmedName ?? "(name from wizard data)"} (${stateCode}) → ${mat.account_id} [${mat.outcome}]`)
+          autoTriggers.push(`Account materialized: ${confirmedName ?? "(name from wizard data)"} (${stateCode}, state from ${stateResolution.source}) → ${mat.account_id} [${mat.outcome}]`)
           materialization = { attempted: true, outcome: mat.outcome, account_id: mat.account_id }
         } else {
           autoTriggers.push(`Account materialization failed (${mat.outcome}): ${mat.error ?? "unknown"}`)

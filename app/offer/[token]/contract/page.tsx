@@ -8,6 +8,7 @@ import StandaloneServiceAgreement, { SERVICE_CONTENT } from './standalone-servic
 import RenewalAgreement from './renewal-agreement'
 import ServiceAgreement from './service-agreement'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
+import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
 import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 
@@ -920,6 +921,8 @@ export default function ContractPage() {
   }
 
   const { fee, llcType, installments, annualFee, year } = getContractData()
+  // WS-B: the offer's pinned formation state (null on pre-WS-B offers → row hidden)
+  const contractFormationState = normalizeFormationState((offer as { formation_state?: string | null } | null)?.formation_state)
   const effDate = today()
   const phoneInvalid = form.phone && !isValidPhone(form.phone)
   const zipInvalid = form.zip && !isValidZip(form.zip)
@@ -1000,6 +1003,10 @@ export default function ContractPage() {
           <tbody>
             <tr><th>Contract Year</th><td>{year} (January 1 - December 31)</td></tr>
             <tr><th>LLC Type</th><td>{llcType}</td></tr>
+            {/* WS-B: pinned formation state on the legal document (formation MSA) */}
+            {contractFormationState && (
+              <tr><th>State of Formation</th><td>{FORMATION_STATE_NAMES[contractFormationState]}</td></tr>
+            )}
             <tr><th>Setup Fee</th><td>{fee} -- one-time, due upon signing. Covers all selected services for the first contract year.</td></tr>
             {annualFee && <tr><th>Annual Maintenance (from {year + 1})</th><td>{annualFee} -- {installments}</td></tr>}
             <tr><th>Cancellation Deadline</th><td>Written notice must be received no later than November 1 of the current Contract Year to prevent automatic renewal.</td></tr>
@@ -1078,6 +1085,9 @@ export default function ContractPage() {
           <tbody>
             <tr><th>Contract Year</th><td>{year} (January 1 - December 31)</td></tr>
             <tr><th>LLC Type</th><td>{llcType}</td></tr>
+            {contractFormationState && (
+              <tr><th>State of Formation</th><td>{FORMATION_STATE_NAMES[contractFormationState]}</td></tr>
+            )}
             <tr><th>Setup Fee</th><td>{fee}</td></tr>
           </tbody>
         </table>

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import { openCheckoutTab, deliverCheckout, closeCheckoutTab } from '@/lib/payments/checkout-redirect'
+import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import type { Offer } from '@/lib/types/offer'
 
 // ─── Bilingual Labels ───────────────────────────────────────
@@ -14,6 +15,7 @@ const LABELS = {
     subtitle: 'Business Consulting',
     preparedFor: 'Prepared for',
     date: 'Date',
+    formationState: 'State of Formation',
     issues: 'Issues Identified',
     issuesIntro: 'During our consultation, the following situations emerged that require priority attention:',
     immediateActions: 'Recommended Immediate Actions',
@@ -73,6 +75,7 @@ const LABELS = {
     subtitle: 'Business Consulting',
     preparedFor: 'Preparata per',
     date: 'Data',
+    formationState: 'Stato di costituzione',
     issues: 'Criticità Identificate',
     issuesIntro: 'Durante la nostra call sono emerse alcune situazioni da risolvere con priorità:',
     immediateActions: 'Azioni Immediate Consigliate',
@@ -473,6 +476,10 @@ export default function OfferPageWithCode() {
           <div className="offer-hero-meta">
             <div><div className="offer-hero-meta-item">{L.preparedFor}</div><div className="offer-hero-meta-value">{o.client_name || ''}</div></div>
             <div><div className="offer-hero-meta-item">{L.date}</div><div className="offer-hero-meta-value">{formatDate(o.offer_date, lang)}</div></div>
+            {/* WS-B: the pinned formation state, shown only when the offer carries one */}
+            {o.contract_type === 'formation' && normalizeFormationState((o as { formation_state?: string | null }).formation_state) && (
+              <div><div className="offer-hero-meta-item">{L.formationState}</div><div className="offer-hero-meta-value">{FORMATION_STATE_NAMES[normalizeFormationState((o as { formation_state?: string | null }).formation_state)!]}</div></div>
+            )}
           </div>
           <div className="offer-hero-line" />
         </div>

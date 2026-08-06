@@ -14,6 +14,7 @@ import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { decideInvoiceAtSigning, getInvoiceDescription } from "@/lib/portal/offer-invoice-policy"
 import { pinnedRateForInheritance } from "@/lib/payments/card-fee-config"
 import { emitOfferSignedEvent } from "@/lib/portal/chat-events"
+import { normalizeFormationState } from "@/lib/formation/states"
 import { verifyInternalWebhookSecret } from "@/lib/webhook-internal-auth"
 
 export async function POST(req: NextRequest) {
@@ -140,6 +141,12 @@ export async function POST(req: NextRequest) {
         payment_method: paymentMethod,
         status: "awaiting_payment",
         signed_at: new Date().toISOString(),
+        // WS-B: carry the offer's pinned formation state onto the activation so
+        // the formation flow can consume it as the offer-tier default. Validated
+        // through the single source of truth; junk/legacy values store NULL.
+        formation_state: normalizeFormationState(
+          (offer as { formation_state?: string | null }).formation_state,
+        ),
       })
       .select()
       .single()

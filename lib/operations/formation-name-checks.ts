@@ -7,6 +7,8 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isItalian } from '@/lib/locale'
+import { FORMATION_STATE_NAMES, formationStateFromWizardData, normalizeFormationState, resolveFormationStateCode } from '@/lib/formation/states'
+import { formationStateForClient } from '@/lib/formation/state-lookup'
 import {
   initNameChecksFromWizard,
   parseProposedNames,
@@ -59,8 +61,11 @@ async function writeNameChecks(sdId: string, checks: NameCheck[]): Promise<void>
 }
 
 /**
- * Resolve the formation state of an in-flight SD: the account's state, else the
- * latest formation wizard's state, else "New Mexico".
+ * Resolve the formation state of an in-flight SD for the CLIENT-FACING
+ * availability message: the account's state, else the wizard → form submission →
+ * signed offer chain (WS-B scope amendment — before it, a signed-Wyoming deal
+ * told the client "available in New Mexico" here), else "New Mexico".
+ * Returns the display NAME ("Wyoming"), normalizing code-shaped values.
  */
 async function resolveState(row: SdRow): Promise<string> {
   if (row.account_id) {
@@ -69,7 +74,12 @@ async function resolveState(row: SdRow): Promise<string> {
       .select('state_of_formation')
       .eq('id', row.account_id)
       .maybeSingle()
-    if (acct?.state_of_formation) return acct.state_of_formation as string
+    if (acct?.state_of_formation) {
+      // Accounts hold both full names ("Wyoming") and code forms ("WY") —
+      // normalize to the display name; unknown values pass through verbatim.
+      const code = normalizeFormationState(acct.state_of_formation)
+      return code ? FORMATION_STATE_NAMES[code] : (acct.state_of_formation as string)
+    }
   }
   if (row.contact_id) {
     const { data: wp } = await supabaseAdmin
@@ -80,9 +90,19 @@ async function resolveState(row: SdRow): Promise<string> {
       .order('updated_at', { ascending: false })
       .limit(1)
       .maybeSingle()
-    const d = (wp?.data ?? null) as Record<string, unknown> | null
-    const s = d?.state_of_formation ?? d?.state_of_incorporation
-    if (typeof s === 'string' && s.trim()) return s.trim()
+    const { data: subRow } = await supabaseAdmin
+      .from('formation_submissions')
+      .select('state')
+      .eq('contact_id', row.contact_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const resolution = resolveFormationStateCode({
+      wizardState: formationStateFromWizardData((wp?.data ?? null) as Record<string, unknown> | null),
+      submissionState: (subRow as { state?: string | null } | null)?.state,
+      offerState: await formationStateForClient({ contactId: row.contact_id }),
+    })
+    if (resolution.source !== 'default') return FORMATION_STATE_NAMES[resolution.code]
   }
   return 'New Mexico'
 }

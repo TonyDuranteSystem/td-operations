@@ -21,6 +21,7 @@ import { APP_BASE_URL } from "@/lib/config"
 import { getConfiguredCardFeeRate } from "@/lib/payments/card-fee-config"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { accountIdForOffer } from "@/lib/operations/offer-scope"
+import { normalizeFormationState } from "@/lib/formation/states"
 import type { Json } from "@/lib/database.types"
 
 // ─── JSONB validation ───────────────────────────────────────
@@ -149,6 +150,11 @@ export interface CreateOfferParams {
   // insert. Nullable — older offer flows that don't know the entity type
   // leave it NULL and consumers fall back to legacy derivation.
   entity_type?: "SMLLC" | "MMLLC" | "Corp" | "Single Member LLC" | "Multi Member LLC" | "C-Corp Elected" | null
+  // Formation state pinned at offer creation (WS-B, dev job c0a61e44).
+  // Validated via the single source of truth (lib/formation/states.ts);
+  // anything unrecognized stores NULL so consumers fall back down the
+  // resolution chain (wizard → submission → offer → NM default).
+  formation_state?: string | null
 
   // Content (JSONB fields)
   services: unknown
@@ -526,6 +532,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         installment_currency: params.installment_currency ?? null,
         bundled_pipelines: params.bundled_pipelines ?? [],
         entity_type: normalizeEntityType(params.entity_type),
+        formation_state: normalizeFormationState(params.formation_state),
         bank_details: bank_details as unknown as Json,
         payment_links: (params.payment_links ?? null) as Json,
         effective_date: params.effective_date ?? null,
@@ -600,6 +607,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         account_id: effectiveAccountId,
         contract_type: params.contract_type,
         entity_type: normalizeEntityType(params.entity_type),
+        formation_state: normalizeFormationState(params.formation_state),
         payment_type: params.payment_type,
         payment_gateway: params.payment_gateway,
         bank_preference: params.bank_preference,

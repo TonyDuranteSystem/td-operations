@@ -137,6 +137,22 @@ export async function GET(req: NextRequest) {
         reason: result.success ? undefined : result.error,
       })
 
+      // WS-B amendment: an undecided formation state now FAILS materialization
+      // (instead of silently inheriting a baked NM). This cron retries hourly,
+      // so a failure here would repeat forever inside truncated cron details —
+      // surface it to the error auto-audit so a human sees it once, deduped.
+      if (!result.success) {
+        try {
+          const { reportSystemError } = await import("@/lib/system-errors")
+          await reportSystemError({
+            source: "server",
+            route: "/api/cron/articles-detector",
+            message: `Materialization failed for contact ${contact.id}: ${result.error ?? result.outcome}`,
+            context: { contact_id: contact.id, outcome: result.outcome },
+          })
+        } catch { /* best-effort — never block the scan loop */ }
+      }
+
       if (result.success && result.outcome === "materialized") materialized++
     }
 

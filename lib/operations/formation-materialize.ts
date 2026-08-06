@@ -35,6 +35,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { formationStateForClient } from "@/lib/formation/state-lookup"
 import { reanchorLeadConversations } from "@/lib/team/reanchor-conversations"
 import { logAction } from "@/lib/mcp/action-log"
 import { ensureCompanyFolder, migrateContactToCompany } from "@/lib/drive-folder-utils"
@@ -410,13 +411,26 @@ export async function materializeFormationCompany(
     }
 
     // 4. State + entity_type.
-    // Admin-supplied state wins (it's the only source of truth at upload time
-    // — wizard_progress never captures formation state, and formation_submissions
-    // is often null in this column). Falls back to the submission row's state
-    // when no admin value was provided.
-    const resolvedStateRaw = params.formation_state
+    // Admin-supplied state wins. When no admin value was provided the internal
+    // chain is: submission row's state → the contact's SIGNED offer's pinned
+    // state (WS-B scope amendment — before it, callers with no param, e.g. the
+    // articles-detector cron, could only see the submission) → error. NM never
+    // silently self-applies here: materialization records a LEGAL filing fact,
+    // so with nothing decided anywhere a human must supply the state.
+    let resolvedStateRaw = params.formation_state
       ? params.formation_state
       : String(submissionState || "").toUpperCase().trim()
+    if (!VALID_STATE_CODES.has(resolvedStateRaw) && !params.formation_state) {
+      const offerState = await formationStateForClient({ contactId: params.contact_id })
+      if (offerState) {
+        resolvedStateRaw = offerState
+        steps.push({
+          step: "state_from_offer",
+          status: "ok",
+          detail: `No admin/submission state — using the signed offer's pinned state ${offerState}.`,
+        })
+      }
+    }
     if (!VALID_STATE_CODES.has(resolvedStateRaw)) {
       return {
         success: false,
@@ -424,7 +438,7 @@ export async function materializeFormationCompany(
         steps,
         error: params.formation_state
           ? `Invalid formation_state "${params.formation_state}". Expected one of NM/WY/FL/DE.`
-          : `No formation state available. ${resolverSource === "wizard_progress" ? "Wizard data does not capture formation state — admin must pass formation_state at upload time (NM/WY/FL/DE)." : `formation_submissions.state is "${submissionState}", which is not NM/WY/FL/DE — admin must pass formation_state to override.`}`,
+          : `No formation state available (submission: "${submissionState ?? "—"}", no signed offer carries one, resolver source: ${resolverSource}). Admin must pass formation_state at upload time (NM/WY/FL/DE).`,
       }
     }
     const stateName = STATE_NAME_FROM_CODE[resolvedStateRaw]

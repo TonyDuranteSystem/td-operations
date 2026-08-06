@@ -7,6 +7,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
+import { FORMATION_STATE_CODES, normalizeFormationState } from "@/lib/formation/states"
+import { formationStateForClient } from "@/lib/formation/state-lookup"
 import type { Json } from "@/lib/database.types"
 
 export function registerFormationTools(server: McpServer) {
@@ -20,7 +22,7 @@ export function registerFormationTools(server: McpServer) {
     {
       lead_id: z.string().uuid().describe("Lead UUID — the client who paid for formation"),
       entity_type: z.enum(["SMLLC", "MMLLC"]).optional().default("SMLLC").describe("Entity type decided during call (default: SMLLC)"),
-      state: z.string().optional().default("NM").describe("State of formation decided during call (default: NM)"),
+      state: z.enum(FORMATION_STATE_CODES).optional().describe("State of formation decided during call (NM|WY|FL|DE). Omit to default from the lead's SIGNED offer's pinned state (WS-B), else NM."),
       language: z.enum(["en", "it"]).optional().describe("Form language (auto-detected from lead.language if omitted)"),
     },
     async ({ lead_id, entity_type, state, language }) => {
@@ -83,6 +85,18 @@ export function registerFormationTools(server: McpServer) {
         // 6. Determine language
         const formLang = language || (lead.language === "Italian" || lead.language === "it" ? "it" : "en")
 
+        // 6b. Resolve state (WS-B): explicit param → the lead's signed offer's
+        // pinned state → NM default. The offer tier is what makes "Wyoming
+        // decided on the call" survive into the formation flow without a human
+        // re-typing it.
+        // WS-B scope amendment: store NULL when nothing DECIDED the state —
+        // never bake the NM default into the submission row. A baked default is
+        // indistinguishable from a real decision and would permanently outrank
+        // a later/corrected offer state in the resolution chain.
+        const resolvedState = state
+          || (await formationStateForClient({ leadId: lead_id }))
+          || null
+
         // 7. Insert
         const { data: submission, error: insErr } = await supabaseAdmin
           .from("formation_submissions")
@@ -91,7 +105,7 @@ export function registerFormationTools(server: McpServer) {
             lead_id,
             contact_id: contactId,
             entity_type: entity_type || "SMLLC",
-            state: state || "NM",
+            state: resolvedState,
             language: formLang,
             prefilled_data: prefilled as unknown as Json,
             status: "pending",
@@ -107,7 +121,7 @@ export function registerFormationTools(server: McpServer) {
             type: "text" as const,
             text: [
               `✅ Formation form created for ${lead.full_name}`,
-              `   Entity: ${entity_type || "SMLLC"} | State: ${state || "NM"} | Lang: ${formLang}`,
+              `   Entity: ${entity_type || "SMLLC"} | State: ${resolvedState ?? "undecided"}${!state && resolvedState ? " (from signed offer)" : ""} | Lang: ${formLang}`,
               `   Lead: ${lead.full_name} (${lead.email})`,
               `   Token: ${token}`,
               `   ID: ${submission.id}`,
@@ -166,7 +180,7 @@ export function registerFormationTools(server: McpServer) {
         const lines = [
           `📋 Formation Form: ${data.token}`,
           `   Lead: ${leadName}`,
-          `   Entity: ${data.entity_type} | State: ${data.state} | Lang: ${data.language}`,
+          `   Entity: ${data.entity_type} | State: ${data.state ?? "undecided"} | Lang: ${data.language}`,
           `   Status: ${data.status}`,
           "",
           `   Created: ${data.created_at}`,
@@ -247,7 +261,7 @@ export function registerFormationTools(server: McpServer) {
         const lines = [
           `═══════════════════════════════════════`,
           `  📋 FORMATION FORM REVIEW: ${leadName}`,
-          `  ${sub.entity_type} | ${sub.state} | ${sub.language}`,
+          `  ${sub.entity_type} | ${sub.state ?? "undecided"} | ${sub.language}`,
           `═══════════════════════════════════════`,
           "",
         ]
@@ -526,7 +540,12 @@ Note: Steps are now auto-executed at payment. This tool is for manual recovery o
                   lead_id: params.lead_id,
                   contact_id: contactId,
                   entity_type: params.entity_type || "SMLLC",
-                  state: params.state || "NM",
+                  // WS-B: prepared-step state → the activation's stamped state
+                  // (copied from the signed offer at signing) → NULL when nothing
+                  // decided (never bake the default into the row).
+                  state: normalizeFormationState(params.state)
+                    || normalizeFormationState((activation as { formation_state?: string | null }).formation_state)
+                    || null,
                   language: params.language || "en",
                   prefilled_data: {
                     owner_first_name: firstName,
