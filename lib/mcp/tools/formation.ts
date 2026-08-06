@@ -117,7 +117,7 @@ export function registerFormationTools(server: McpServer) {
             type: "text" as const,
             text: [
               `✅ Formation form created for ${lead.full_name}`,
-              `   Entity: ${entity_type || "SMLLC"} | State: ${state || "NM"} | Lang: ${formLang}`,
+              `   Entity: ${entity_type || "SMLLC"} | State: ${resolvedState}${!state && resolvedState !== DEFAULT_FORMATION_STATE ? " (from signed offer)" : ""} | Lang: ${formLang}`,
               `   Lead: ${lead.full_name} (${lead.email})`,
               `   Token: ${token}`,
               `   ID: ${submission.id}`,

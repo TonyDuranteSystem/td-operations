@@ -16,7 +16,7 @@ import { getGreeting } from "@/lib/greeting"
 import { APP_BASE_URL } from "@/lib/config"
 import { publishOffer, resendOfferEmail } from "@/lib/offers/publish"
 import { createOffer, type OfferContractType, type OfferPaymentType, type OfferPaymentGateway } from "@/lib/operations/offers"
-import { FORMATION_STATE_CODES } from "@/lib/formation/states"
+import { FORMATION_STATE_CODES, normalizeFormationState } from "@/lib/formation/states"
 
 // ─── Gmail Draft Helper ─────────────────────────────────────
 
@@ -507,6 +507,22 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
     },
     async ({ token, updates }) => {
       try {
+        // WS-B guard: formation_state is validated at EVERY entry point (adversarial
+        // QA found this free-form passthrough stored raw invalid values). Valid
+        // input (any spelling) is normalized to its code; null clears; anything
+        // unrecognized is rejected loudly rather than stored inert.
+        if ("formation_state" in updates) {
+          const raw = updates.formation_state
+          if (raw === null || raw === "") {
+            updates.formation_state = null
+          } else {
+            const norm = normalizeFormationState(raw)
+            if (!norm) {
+              return { content: [{ type: "text" as const, text: `❌ offer_update error: invalid formation_state "${String(raw)}" — expected one of ${FORMATION_STATE_CODES.join("|")} (or null to clear).` }] }
+            }
+            updates.formation_state = norm
+          }
+        }
         const { data, error } = await supabaseAdmin
           .from("offers")
           .update(updates)
