@@ -2,6 +2,8 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { FORMATION_STATE_NAMES, formationStateFromWizardData, resolveFormationStateCode } from '@/lib/formation/states'
+import { formationStateForClient } from '@/lib/formation/state-lookup'
 import { parseStageLayout } from '@/lib/flows/stage-layout'
 import { deriveFlowYear } from '@/lib/flows/resolve-flows'
 import { StageStepper, type StepperStage } from '@/components/flows/stage-stepper'
@@ -102,6 +104,10 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
   // it so the SoS external_link resolves the right state (defaults to NM).
   let formationState: string | null = null
   if (sd.service_type === 'Company Formation' && !sd.account_id && sd.contact_id) {
+    // WS-B scope amendment: the SOS filing links in this workspace used to see
+    // only the wizard (which rarely captures state) and silently pointed staff
+    // at New Mexico on a signed-Wyoming deal. Resolve the full chain:
+    // wizard → form submission → signed offer; null when nothing decided.
     const { data: wp } = await supabaseAdmin
       .from('wizard_progress')
       .select('data')
@@ -110,9 +116,19 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
       .order('updated_at', { ascending: false })
       .limit(1)
       .maybeSingle()
-    const wpData = (wp?.data ?? null) as Record<string, unknown> | null
-    const s = wpData?.state_of_formation ?? wpData?.state_of_incorporation
-    formationState = typeof s === 'string' && s.trim() ? s.trim() : null
+    const { data: subRow } = await supabaseAdmin
+      .from('formation_submissions')
+      .select('state')
+      .eq('contact_id', sd.contact_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const resolution = resolveFormationStateCode({
+      wizardState: formationStateFromWizardData((wp?.data ?? null) as Record<string, unknown> | null),
+      submissionState: (subRow as { state?: string | null } | null)?.state,
+      offerState: await formationStateForClient({ contactId: sd.contact_id }),
+    })
+    formationState = resolution.source !== 'default' ? FORMATION_STATE_NAMES[resolution.code] : null
   }
 
   // Load the client's name for ANY contact-linked SD to surface as a separate

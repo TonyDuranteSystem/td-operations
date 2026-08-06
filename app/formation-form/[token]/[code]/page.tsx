@@ -580,7 +580,7 @@ export default function FormationFormCodePage() {
               <div><strong>{L.llc_name_2}:</strong> {String(formData.llc_name_2 || '—')}</div>
               <div><strong>{L.llc_name_3}:</strong> {String(formData.llc_name_3 || '—')}</div>
               <div><strong>{lang === 'en' ? 'Entity Type' : 'Tipo'}:</strong> {submission.entity_type}</div>
-              <div><strong>{lang === 'en' ? 'State' : 'Stato'}:</strong> {submission.state}</div>
+              <div><strong>{lang === 'en' ? 'State' : 'Stato'}:</strong> {submission.state || '—'}</div>
             </div>
           </div>
 
@@ -732,7 +732,7 @@ export default function FormationFormCodePage() {
 
         {/* Hero */}
         <div className="tf-hero">
-          <div className="tf-hero-label">{submission.entity_type} — {submission.state}</div>
+          <div className="tf-hero-label">{submission.entity_type}{submission.state ? ` — ${submission.state}` : ''}</div>
           <h1>{L.title}</h1>
           <p className="tf-hero-sub">{L.subtitle}</p>
         </div>
