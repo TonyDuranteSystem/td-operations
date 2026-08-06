@@ -171,7 +171,7 @@ export async function searchCallsByName(
   try {
     const { data } = await supabaseAdmin
       .from('call_summaries')
-      .select('id, meeting_name, duration_seconds, attendees, notes, action_items, recording_url, created_at')
+      .select('id, meeting_name, duration_seconds, attendees, notes, action_items, recording_url, created_at, link_review')
       .ilike('meeting_name', `%${query}%`)
       .order('created_at', { ascending: false })
       .limit(10)
