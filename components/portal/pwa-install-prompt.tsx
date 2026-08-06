@@ -3,36 +3,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import { X, Download, Share } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
+// Copy lives in the shared install-copy module (single source across the
+// floating prompt and the /portal/install page — dev job 8f38add1).
+import { PROMPT_COPY as COPY } from '@/lib/portal/install-copy'
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
 }
-
-const COPY = {
-  en: {
-    title: 'Install the Portal app',
-    androidSub: 'Quick access from your home screen',
-    install: 'Install',
-    iosIntro: 'For one-tap access, like an app:',
-    iosStep1Before: 'Tap the',
-    iosStep1Bold: 'Share',
-    iosStep1After: 'button in the Safari bar below',
-    iosStep2Before: 'Choose',
-    iosStep2Bold: '"Add to Home Screen"',
-  },
-  it: {
-    title: "Installa l'app del Portale",
-    androidSub: 'Accesso rapido dalla schermata Home',
-    install: 'Installa',
-    iosIntro: "Per accedere in un tocco, come un'app:",
-    iosStep1Before: 'Tocca il pulsante',
-    iosStep1Bold: 'Condividi',
-    iosStep1After: 'qui sotto nella barra di Safari',
-    iosStep2Before: 'Scegli',
-    iosStep2Bold: '"Aggiungi alla schermata Home"',
-  },
-} as const
 
 const DISMISS_KEY = 'pwa-install-dismissed'
 const DISMISS_DAYS = 30

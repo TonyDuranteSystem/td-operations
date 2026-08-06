@@ -129,6 +129,11 @@ const PUBLIC_PREFIXES = [
   // PWA manifests — must be public for Chrome installability
   '/manifest.webmanifest',
   '/portal/manifest.webmanifest',
+  // Public PWA install page (QR/link landing) — scanned by logged-OUT phones,
+  // carries no client data. ⚠️ startsWith match: any future sibling route
+  // beginning with '/portal/install' would silently become public — don't
+  // create one (dev job 8f38add1).
+  '/portal/install',
   // Service workers — the browser refetches these on its own schedule (and
   // use-sw-update polls reg.update() every 60s). Without a live session
   // cookie the fetch would 307 to /login and the update silently fails,
