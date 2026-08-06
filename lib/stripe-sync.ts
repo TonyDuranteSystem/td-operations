@@ -91,6 +91,38 @@ export async function isChargeRefundedNow(chargeId: string): Promise<ChargeRefun
 }
 
 /**
+ * Resolve a CHARGE id to its PaymentIntent id (WS-A, dev job c0a61e44).
+ *
+ * Calendly's paid-booking payload carries the charge id (`ch_…`), but the
+ * bank-feed matcher's certain-link tier compares PaymentIntent ids (`pi_…`)
+ * against `payments.stripe_payment_id`. Without this resolution the paid-call
+ * invoice and its bank-feed row could never link automatically — the ids are
+ * equal in identity but not in format, and nothing in the codebase compares
+ * charge ids.
+ *
+ * Returns null when the key is unset, the charge is unknown, the call fails, or
+ * the charge genuinely has no PaymentIntent — every one of which is a
+ * "stamp nothing" outcome, never a guess.
+ */
+export async function paymentIntentIdForCharge(chargeId: string): Promise<string | null> {
+  const stripe = getStripe()
+  if (!stripe) {
+    console.warn("[stripe-sync] STRIPE_SECRET_KEY not set — cannot resolve charge → payment intent.")
+    return null
+  }
+  try {
+    const charge = await stripe.charges.retrieve(chargeId)
+    const pi = charge.payment_intent
+    if (typeof pi === "string" && pi.startsWith("pi_")) return pi
+    if (pi && typeof pi === "object" && typeof pi.id === "string" && pi.id.startsWith("pi_")) return pi.id
+    return null
+  } catch (err) {
+    console.error(`[stripe-sync] charge → payment intent resolution failed for ${chargeId}:`, err)
+    return null
+  }
+}
+
+/**
  * Sync historical Stripe charges into td_bank_feeds.
  * @param options.daysBack How many days of history to fetch (default 90)
  */

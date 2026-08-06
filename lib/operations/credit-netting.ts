@@ -327,16 +327,22 @@ export interface ApplyCreditToInvoiceResult {
 }
 
 /**
- * Click-to-apply credit application (2026-06-03). Applies the account's AVAILABLE
- * credit to THE GIVEN invoice (the one staff clicked Regenerate on), capped at what
- * the invoice still owes, shows it as a "Credit applied −$X" line, drops amount_due,
- * and consumes the credit (stamping credit_for_payment_id = this invoice). amount_paid
- * tracks REAL cash only — credit is represented purely as the line. Idempotent: a
- * re-call with no remaining available credit re-renders the same document.
+ * Click-to-apply credit application (2026-06-03; WS-A: contact scope added).
+ * Applies the client's AVAILABLE credit to THE GIVEN invoice (the one staff
+ * clicked Regenerate on), capped at what the invoice still owes, shows it as a
+ * "Credit applied −$X" line, drops amount_due, and consumes the credit.
+ * amount_paid tracks REAL cash only — credit is represented purely as the line.
+ * Idempotent: a re-call with no remaining available credit re-renders the same
+ * document.
  *
- * Throws on invalid targets (missing, credit note, cancelled, accountless). Pure math
- * lives in invoice-regenerate.ts; this function is the DB orchestration, shared by the
- * regenerateInvoice server action and the sandbox integration test.
+ * SCOPE (WS-A): an account-scoped invoice draws on ACCOUNT credits; a
+ * contact-only invoice (e.g. the signing invoice before the company exists)
+ * draws on that CONTACT's credits. Exactly one scope per call — the pools never
+ * mix. An invoice with neither is rejected.
+ *
+ * Throws on invalid targets (missing, credit note, cancelled, scopeless). Pure
+ * math lives in invoice-regenerate.ts; this function is the DB orchestration,
+ * shared by the regenerateInvoice server action and the sandbox integration test.
  */
 export async function applyAvailableCreditToInvoice(
   paymentId: string,
@@ -344,11 +350,13 @@ export async function applyAvailableCreditToInvoice(
 ): Promise<ApplyCreditToInvoiceResult> {
   const { data: inv } = await supabase
     .from("payments")
-    .select("id, account_id, invoice_number, invoice_status, status, amount_due, amount_paid, amount_currency")
+    .select("id, account_id, contact_id, invoice_number, invoice_status, status, amount_due, amount_paid, amount_currency")
     .eq("id", paymentId)
     .single()
   if (!inv) throw new Error("Invoice not found")
-  if (!inv.account_id) throw new Error("Regenerate needs an account-scoped invoice (credits are account-scoped).")
+  if (!inv.account_id && !(inv as { contact_id?: string | null }).contact_id) {
+    throw new Error("Regenerate needs an invoice linked to a client (account or contact).")
+  }
   if (inv.invoice_status === "Credit") throw new Error("A credit note cannot be regenerated.")
   if (inv.invoice_status === "Cancelled" || inv.status === "Cancelled") throw new Error("A cancelled invoice cannot be regenerated.")
 
@@ -376,8 +384,13 @@ export async function applyAvailableCreditToInvoice(
   // Pull the account's AVAILABLE credit (oldest-first, same currency), capped at
   // this invoice's remaining room. Both reads and selects which rows to consume.
   const headroom = Math.max(Math.round((gross - cashPaid - existingCredit) * 100) / 100, 0)
+  // WS-A: same one-scope-per-call rule as auto-netting. Account wins when both
+  // are present (an account-linked invoice is account money).
+  const invScope = (inv as { account_id: string | null }).account_id
+    ? { accountId: (inv as { account_id: string }).account_id }
+    : { contactId: (inv as { contact_id: string }).contact_id }
   const application = await computeCreditApplication(
-    { accountId: (inv as { account_id: string }).account_id, amount: headroom, currency: (inv as { amount_currency: string }).amount_currency },
+    { ...invScope, amount: headroom, currency: (inv as { amount_currency: string }).amount_currency },
     supabase,
   )
   const calc = computeClickToApplyCredit({ gross, cashPaid, existingCredit, available: application.appliedTotal })
