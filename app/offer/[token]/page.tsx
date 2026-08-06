@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
+import { computeOfferTotals } from '@/lib/offers/compute-offer-totals'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import type { Offer } from '@/lib/types/offer'
 
@@ -174,55 +175,30 @@ export default function OfferPage() {
 
   const L = LABELS[lang]
 
-  // Dynamic total based on selected optional services + pre-conditions
+  // Dynamic total based on selected optional services + pre-conditions.
+  // WS-A3 display site: THE offer amount engine computes it — the page shows
+  // exactly what the webhook records and the card charges. Page-replay over all
+  // 77 open production offers: every divergence from the old inline math was a
+  // renewal-offer display DEFECT (EUR shown on USD renewals; one rendered no
+  // total at all) — the engine corrects all of them, non-renewals unchanged.
   const dynamicTotal = useMemo(() => {
     if (!offer || !offer.services) return null
-    const services = Array.isArray(offer.services) ? offer.services : []
-    let servicesTotal = 0
-    let preconditionsTotal = 0
-    let currency = 'EUR'
-    for (const svc of services) {
-      const isOpt = !!(svc as any).optional
-      const isSelected = !isOpt || selectedOptional.has(svc.name)
-      if (!isSelected) continue
-      const priceStr = String(svc.price || '0')
-      // Skip recurring/informational prices -- not one-time charges
-      if (/\/(year|anno|month|mese)/i.test(priceStr)) continue
-      if (/includ|inclus/i.test(priceStr)) continue
-      const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ''))
-      if (!isNaN(priceNum) && priceNum > 0) {
-        servicesTotal += priceNum
-        if (/\$|usd/i.test(priceStr)) currency = '$'
-        else if (/EUR/i.test(priceStr)) currency = 'EUR'
-      }
-    }
-    // Include pre-conditions from cost_summary (e.g. unpaid taxes)
-    // These are non-service one-time charges the client must pay upfront
-    const costSummary = Array.isArray(offer.cost_summary) ? offer.cost_summary : []
-    for (const group of costSummary) {
-      // Skip the first group (setup fees) — already counted from services
-      // Pre-condition groups have labels like "Pre-conditions (to be resolved)"
-      if (!/pre.?condition/i.test(group.label || '')) continue
-      for (const item of (group.items || [])) {
-        const priceStr = String(item.price || '0')
-        const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ''))
-        if (!isNaN(priceNum) && priceNum > 0) {
-          preconditionsTotal += priceNum
-        }
-      }
-    }
-    const total = servicesTotal + preconditionsTotal
-    if (total <= 0) return null
-    const symbol = currency === '$' ? '$' : 'EUR'
+    const t = computeOfferTotals({
+      services: offer.services,
+      cost_summary: offer.cost_summary,
+      selected_services: Array.from(selectedOptional),
+    })
+    if (t.gross <= 0) return null
+    const symbol = t.currency === 'EUR' ? 'EUR' : '$'
     return {
-      total,
-      servicesTotal,
-      preconditionsTotal,
+      total: t.gross,
+      servicesTotal: t.servicesTotal,
+      preconditionsTotal: t.preconditionsTotal,
       // servicesFormatted is for the Setup Fee line in cost summary
-      servicesFormatted: `${symbol}${servicesTotal.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      servicesFormatted: `${symbol}${t.servicesTotal.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
       // formatted/cardFormatted include everything (services + pre-conditions) for the payment section
-      formatted: `${symbol}${total.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
-      cardFormatted: `${symbol}${Math.round(total * 1.05).toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      formatted: `${symbol}${t.gross.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      cardFormatted: `${symbol}${Math.round(t.gross * 1.05).toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
     }
   }, [offer, selectedOptional])
 
