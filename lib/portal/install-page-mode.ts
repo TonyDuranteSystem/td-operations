@@ -65,10 +65,14 @@ export function detectDevice(
   touch?: { platform?: string; maxTouchPoints?: number },
 ): InstallDevice {
   if (/iPad|iPhone|iPod/.test(userAgent)) return 'ios'
+  // An explicit Android UA always wins — checked BEFORE the iPadOS heuristic,
+  // because emulators/DevTools pair an Android UA with the host's MacIntel
+  // platform and multi-touch, which would misroute Android to the iOS guide
+  // (caught in browser QA, 2026-08-06).
+  if (/Android/i.test(userAgent)) return 'android'
   // iPadOS 13+ default "Request Desktop Website": Macintosh UA, but Macs have
   // no multi-touch — maxTouchPoints > 1 is the documented tell.
   if (touch?.platform === 'MacIntel' && (touch.maxTouchPoints ?? 0) > 1) return 'ios'
-  if (/Android/i.test(userAgent)) return 'android'
   return 'desktop'
 }
 

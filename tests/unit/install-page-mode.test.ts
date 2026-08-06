@@ -53,6 +53,9 @@ describe('detectDevice', () => {
   it('a real Mac (no touch) stays desktop', () => {
     expect(detectDevice(UA.macSafari, { platform: 'MacIntel', maxTouchPoints: 0 })).toBe('desktop')
   })
+  it('explicit Android UA beats the iPadOS heuristic (emulators report MacIntel + touch)', () => {
+    expect(detectDevice(UA.androidChrome, { platform: 'MacIntel', maxTouchPoints: 5 })).toBe('android')
+  })
 })
 
 describe('isInAppBrowser', () => {
