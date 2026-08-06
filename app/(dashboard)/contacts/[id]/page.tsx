@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { notFound } from 'next/navigation'
 import { ContactDetail } from '@/components/contacts/contact-detail'
+import { ContactCallsSection } from '@/components/contacts/contact-calls-section'
 import { resolveFlowsByContact } from '@/lib/flows/resolve-flows'
 import { FormationWorkspaceBanner } from '@/components/flows/formation-workspace-banner'
 import { ItinWorkspaceBanner } from '@/components/flows/itin-workspace-banner'
@@ -257,6 +258,10 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
         </Link>
         {canViewAs && <ViewAsClientButton contactId={contact.id} />}
       </div>
+      {/* WS-D: all Circleback calls for this person — linked directly to the
+          contact (post-conversion) or to their pre-conversion lead(s). A call
+          with an existing client never surfaced anywhere before. */}
+      <ContactCallsSection contactId={params.id} />
       {formationFlow?.service_delivery_id && (
         <FormationWorkspaceBanner
           serviceDeliveryId={formationFlow.service_delivery_id}

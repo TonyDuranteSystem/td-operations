@@ -33,10 +33,9 @@ export async function findAndLinkCall(
       return { success: false, error: 'Lead not found' }
     }
 
-    if (lead.circleback_call_id) {
-      return { success: false, error: 'Call already linked' }
-    }
-
+    // WS-D: linking is ADDITIVE — a lead can have many calls, so an existing
+    // link is no longer a refusal. We look for calls matching the lead's email
+    // that aren't linked to this lead yet.
     if (!lead.email) {
       return { success: false, error: 'Lead has no email — use manual link' }
     }
@@ -47,11 +46,12 @@ export async function findAndLinkCall(
     // (Supabase client can't filter inside JSONB arrays)
     const { data: recentCalls } = await supabaseAdmin
       .from('call_summaries')
-      .select('id, meeting_name, duration_seconds, attendees, notes, action_items, recording_url, created_at')
+      .select('id, meeting_name, duration_seconds, attendees, notes, action_items, recording_url, created_at, lead_id')
       .order('created_at', { ascending: false })
       .limit(200)
 
     const callMatches = (recentCalls || []).filter(call => {
+      if ((call as { lead_id?: string | null }).lead_id === leadId) return false // already linked to this lead
       const attendees = call.attendees as Array<{ name?: string; email?: string }> | null
       if (!Array.isArray(attendees)) return false
       return attendees.some(a => a.email?.toLowerCase() === email)
@@ -84,23 +84,37 @@ export async function linkCallToLead(
   callSummaryId: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Update leads.circleback_call_id
-    const { error: leadErr } = await supabaseAdmin
+    // WS-D: leads.circleback_call_id is the PRIMARY-call pointer — set it only
+    // when empty; a deliberate earlier choice is never overwritten by a later
+    // link. The call row itself is always linked (additive model).
+    const { data: leadRow, error: leadReadErr } = await supabaseAdmin
       .from('leads')
-      .update({
-        circleback_call_id: callSummaryId,
-        updated_at: new Date().toISOString(),
-      })
+      .select('circleback_call_id')
       .eq('id', leadId)
+      .single()
 
-    if (leadErr) {
-      return { success: false, error: `Failed to update lead: ${leadErr.message}` }
+    if (leadReadErr) {
+      return { success: false, error: `Failed to read lead: ${leadReadErr.message}` }
     }
 
-    // Update call_summaries.lead_id
+    if (!leadRow.circleback_call_id) {
+      const { error: leadErr } = await supabaseAdmin
+        .from('leads')
+        .update({
+          circleback_call_id: callSummaryId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', leadId)
+
+      if (leadErr) {
+        return { success: false, error: `Failed to update lead: ${leadErr.message}` }
+      }
+    }
+
+    // Link the call row + clear any ambiguity marker — a human just decided.
     const { error: callErr } = await supabaseAdmin
       .from('call_summaries')
-      .update({ lead_id: leadId, updated_at: new Date().toISOString() })
+      .update({ lead_id: leadId, link_review: null, updated_at: new Date().toISOString() })
       .eq('id', callSummaryId)
 
     if (callErr) {

@@ -102,16 +102,28 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     .limit(1)
     .maybeSingle()
 
-  // Fetch linked Circleback call summary
-  let callSummary = null
-  if (lead.circleback_call_id) {
-    const { data } = await supabaseAdmin
+  // WS-D: fetch ALL linked Circleback calls (a lead can have many — the second
+  // call was invisible before). The primary-pointer row leads the card; every
+  // other call renders in the list below it.
+  const { data: linkedCalls } = await supabaseAdmin
+    .from('call_summaries')
+    .select('id, meeting_name, duration_seconds, attendees, notes, action_items, recording_url, created_at')
+    .eq('lead_id', params.id)
+    .order('created_at', { ascending: false })
+  let allCalls = linkedCalls ?? []
+  // Legacy edge: pointer set but the call row was never back-linked by lead_id.
+  if (lead.circleback_call_id && !allCalls.some(c => c.id === lead.circleback_call_id)) {
+    const { data: pointerRow } = await supabaseAdmin
       .from('call_summaries')
       .select('id, meeting_name, duration_seconds, attendees, notes, action_items, recording_url, created_at')
       .eq('id', lead.circleback_call_id)
-      .single()
-    callSummary = data
+      .maybeSingle()
+    if (pointerRow) allCalls = [pointerRow, ...allCalls]
   }
+  const callSummary =
+    (lead.circleback_call_id && allCalls.find(c => c.id === lead.circleback_call_id)) ||
+    allCalls[0] ||
+    null
 
   // Fetch timeline data: email tracking + contracts (for signed_at)
   const offerTokens = (allOffers ?? []).map(o => o.token)
@@ -579,9 +591,36 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
         <CallSummaryCard
           leadId={lead.id}
           leadEmail={lead.email}
-          initialCall={callSummary}
+          initialCall={callSummary as Parameters<typeof CallSummaryCard>[0]['initialCall']}
           callNotes={lead.call_notes ?? null}
         />
+
+        {/* WS-D: every linked call, newest first — the second call used to be
+            invisible (Antonio pasted transcripts into the first one by hand). */}
+        {allCalls.length > 1 && (
+          <div className="bg-white rounded-lg border p-5">
+            <h3 className="text-sm font-semibold mb-3">All calls ({allCalls.length})</h3>
+            <ul className="space-y-2">
+              {allCalls.map(c => (
+                <li key={c.id} className="flex items-center justify-between gap-3 text-sm border-b last:border-b-0 pb-2">
+                  <div className="min-w-0">
+                    <div className="font-medium truncate">{c.meeting_name || 'Call'}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {c.created_at ? new Date(c.created_at).toLocaleString() : ''}
+                      {c.duration_seconds ? ` · ${Math.round(c.duration_seconds / 60)} min` : ''}
+                      {callSummary && c.id === callSummary.id ? ' · primary' : ''}
+                    </div>
+                  </div>
+                  {c.recording_url && (
+                    <a href={c.recording_url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline shrink-0">
+                      Recording
+                    </a>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* Notes (editable) */}
         <LeadNotesEditor leadId={lead.id} notes={lead.notes ?? ''} />
