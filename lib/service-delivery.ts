@@ -707,7 +707,7 @@ export async function advanceServiceDelivery(
           .limit(1)
           .maybeSingle()
         const wd = (wp?.data ?? {}) as Record<string, unknown>
-        const { data: subRow } = await supabaseAdmin
+        const { data: subRow, error: subErr } = await supabaseAdmin
           .from("formation_submissions")
           .select("state")
           .eq("contact_id", delivery.contact_id)
@@ -721,6 +721,14 @@ export async function advanceServiceDelivery(
           offerState,
         })
         const stateCode = stateResolution.code
+        // A lookup failure must be VISIBLE, not silently identical to "no state
+        // captured" — the fallback target is a legal filing state (adversarial
+        // QA finding 5). The resolution SOURCE is recorded in auto_triggers so
+        // staff can see which tier decided the state.
+        if (subErr) {
+          autoTriggers.push(`⚠ formation state: submission lookup failed (${subErr.message}) — resolved from ${stateResolution.source} (${stateCode})`)
+          console.error(`[flow-advance] formation_submissions state lookup failed for contact ${delivery.contact_id}:`, subErr.message)
+        }
 
         const { materializeFormationCompany } = await import("@/lib/operations/formation-materialize")
         const mat = await materializeFormationCompany({
@@ -739,7 +747,7 @@ export async function advanceServiceDelivery(
         })
         if (mat.success && mat.account_id) {
           delivery.account_id = mat.account_id
-          autoTriggers.push(`Account materialized: ${confirmedName ?? "(name from wizard data)"} (${stateCode}) → ${mat.account_id} [${mat.outcome}]`)
+          autoTriggers.push(`Account materialized: ${confirmedName ?? "(name from wizard data)"} (${stateCode}, state from ${stateResolution.source}) → ${mat.account_id} [${mat.outcome}]`)
           materialization = { attempted: true, outcome: mat.outcome, account_id: mat.account_id }
         } else {
           autoTriggers.push(`Account materialization failed (${mat.outcome}): ${mat.error ?? "unknown"}`)

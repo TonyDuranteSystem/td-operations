@@ -775,7 +775,11 @@ export function CreateOfferDialog({
             language,
             contract_type: derivedContractType,
             entity_type: entityType || null,
-            formation_state: formationState || null,
+            // Gated on the DERIVED type: a state picked while the offer looked like a
+            // formation must not ride along if service edits turned it into onboarding
+            // (adversarial QA finding — the hidden value would become the client's
+            // future formation default via the activation copy).
+            formation_state: derivedContractType === 'formation' ? (formationState || null) : null,
             payment_type: paymentType === 'both' ? 'checkout' : paymentType,
             payment_gateway: paymentGateway,
             bank_preference: bankPreference,

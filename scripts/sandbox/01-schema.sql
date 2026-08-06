@@ -1599,6 +1599,7 @@ CREATE TABLE IF NOT EXISTS public.offers (
   token character varying NOT NULL,
   client_name text NOT NULL,
   client_email text,
+  formation_state text,
   offer_date date NOT NULL DEFAULT CURRENT_DATE,
   intro_en text,
   intro_it text,
@@ -1831,6 +1832,7 @@ CREATE TABLE IF NOT EXISTS public.pending_activations (
   version integer NOT NULL DEFAULT 1,
   portal_invoice_id uuid,
   resolved_context jsonb,
+  formation_state text,
   CONSTRAINT pending_activations_pkey PRIMARY KEY (id)
 );
 
