@@ -734,7 +734,12 @@ export async function advanceServiceDelivery(
         const mat = await materializeFormationCompany({
           contact_id: delivery.contact_id,
           chosen_name: confirmedName ?? undefined,
-          formation_state: stateCode,
+          // WS-B amendment (hunter re-attack finding 2): pass a state only when
+          // some tier actually DECIDED it. Passing the NM fallback here would
+          // masquerade as admin input and defeat materialize's "a human must
+          // supply an undecided legal filing state" gate — undecided deals now
+          // error loudly at Articles-Received instead of silently filing NM.
+          formation_state: stateResolution.source !== "default" ? stateCode : undefined,
           // Staff-confirmed filing date (OCR-prefilled in the workspace). When
           // omitted the materializer still falls back to today — but the
           // workspace requires it before this transition, so that's a safety net

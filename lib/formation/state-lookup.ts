@@ -37,7 +37,13 @@ export async function formationStateForClient(opts: {
   if (leadIds.length) ors.push(`lead_id.in.(${leadIds.join(",")})`)
   if (!ors.length) return null
 
-  const { data, error } = await supabaseAdmin
+  // The doubled .in() filter pushes supabase-js generic inference past TS's
+  // instantiation-depth limit (TS2589, broke the next build). Query on an
+  // untyped handle — the result row is cast on read regardless (the column is
+  // newer than the generated types).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberate: breaks TS2589 on the doubled .in(); column newer than generated types
+  const untyped = supabaseAdmin as unknown as { from: (t: string) => any }
+  const { data, error } = await untyped
     .from("offers")
     .select("formation_state, created_at")
     .in("status", ["signed", "completed"])

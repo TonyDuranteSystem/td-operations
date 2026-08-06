@@ -7,7 +7,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isItalian } from '@/lib/locale'
-import { FORMATION_STATE_NAMES, formationStateFromWizardData, resolveFormationStateCode } from '@/lib/formation/states'
+import { FORMATION_STATE_NAMES, formationStateFromWizardData, normalizeFormationState, resolveFormationStateCode } from '@/lib/formation/states'
 import { formationStateForClient } from '@/lib/formation/state-lookup'
 import {
   initNameChecksFromWizard,
@@ -74,7 +74,12 @@ async function resolveState(row: SdRow): Promise<string> {
       .select('state_of_formation')
       .eq('id', row.account_id)
       .maybeSingle()
-    if (acct?.state_of_formation) return acct.state_of_formation as string
+    if (acct?.state_of_formation) {
+      // Accounts hold both full names ("Wyoming") and code forms ("WY") —
+      // normalize to the display name; unknown values pass through verbatim.
+      const code = normalizeFormationState(acct.state_of_formation)
+      return code ? FORMATION_STATE_NAMES[code] : (acct.state_of_formation as string)
+    }
   }
   if (row.contact_id) {
     const { data: wp } = await supabaseAdmin

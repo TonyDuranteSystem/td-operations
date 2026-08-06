@@ -26,6 +26,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { createSD } from "@/lib/operations/service-delivery"
+import { formationStateForClient } from "@/lib/formation/state-lookup"
 import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
@@ -92,6 +93,7 @@ export async function POST(req: NextRequest) {
         // AUTO-CREATE contact from lead data
         try {
           const newContact = await dbWrite(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, predates WS-B; extract to lib/operations/ per dev_task 98484283
             supabaseAdmin
               .from("contacts")
               .insert({
@@ -173,6 +175,7 @@ export async function POST(req: NextRequest) {
         if (Object.keys(updates).length > 0) {
           updates.updated_at = new Date().toISOString()
           await dbWrite(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, predates WS-B; extract to lib/operations/ per dev_task 98484283
             supabaseAdmin
               .from("contacts")
               .update(updates)
@@ -277,6 +280,7 @@ export async function POST(req: NextRequest) {
         if (refCompanyName) {
           // Create task for Antonio to approve credit note
           const task = await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, predates WS-B; extract to lib/operations/ per dev_task 98484283
             supabaseAdmin
               .from("tasks")
               .insert({
@@ -333,7 +337,13 @@ export async function POST(req: NextRequest) {
       const llcName1 = submittedData.llc_name_1 || submittedData.preferred_name_1 || "N/A"
       const llcName2 = submittedData.llc_name_2 || submittedData.preferred_name_2 || "N/A"
       const llcName3 = submittedData.llc_name_3 || submittedData.preferred_name_3 || "N/A"
-      const state = sub.state || "NM"
+      // WS-B amendment: never present an undecided state to staff as a decided
+      // NM filing. Resolve submission → signed offer; when nothing decided,
+      // say so loudly instead of pointing Luca at the wrong SOS portal.
+      const resolvedFormState = sub.state
+        || (await formationStateForClient({ leadId: sub.lead_id ?? null, contactId: sub.contact_id ?? null }))
+        || null
+      const state = resolvedFormState ?? "⚠ TO BE CONFIRMED (no state decided — check the offer / ask Antonio)"
       const entityType = sub.entity_type || "SMLLC"
 
       const emailBody = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a">
@@ -402,11 +412,12 @@ ${!hasPassport ? `<li style="color:#dc2626"><strong>REQUEST PASSPORT from client
       // deliveryId already resolved in Step 1B above
 
       const task = await dbWrite(
+        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, predates WS-B; extract to lib/operations/ per dev_task 98484283
         supabaseAdmin
           .from("tasks")
           .insert({
             task_title: `Verify data + check LLC name: ${leadName} - ${llcName1}`,
-            description: `Formation form completed for ${leadName}.\n\nLLC 1st choice: ${llcName1}\nState: ${sub.state || "NM"}\nEntity: ${sub.entity_type || "SMLLC"}\n${!hasPassport ? "\n** PASSPORT MISSING - request from client **\n" : ""}\nSteps:\n1. Verify data is correct\n2. Check "${llcName1}" availability on ${sub.state || "NM"} SOS portal\n3. If available, confirm with client\n4. Mark this task as Done to advance pipeline`,
+            description: `Formation form completed for ${leadName}.\n\nLLC 1st choice: ${llcName1}\nState: ${resolvedFormState ?? "TO BE CONFIRMED"}\nEntity: ${sub.entity_type || "SMLLC"}\n${!hasPassport ? "\n** PASSPORT MISSING - request from client **\n" : ""}\nSteps:\n1. Verify data is correct\n2. Check "${llcName1}" availability on ${resolvedFormState ?? "TO BE CONFIRMED"} SOS portal\n3. If available, confirm with client\n4. Mark this task as Done to advance pipeline`,
             assigned_to: "Luca",
             priority: "High",
             category: "Formation",
@@ -426,6 +437,7 @@ ${!hasPassport ? `<li style="color:#dc2626"><strong>REQUEST PASSPORT from client
       // Also create passport request task if missing
       if (!hasPassport) {
         await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, predates WS-B; extract to lib/operations/ per dev_task 98484283
           supabaseAdmin
             .from("tasks")
             .insert({
@@ -461,6 +473,7 @@ ${!hasPassport ? `<li style="color:#dc2626"><strong>REQUEST PASSPORT from client
         if (sd) {
           const currentNotes = sd.notes || ""
           await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, predates WS-B; extract to lib/operations/ per dev_task 98484283
             supabaseAdmin
               .from("service_deliveries")
               .update({
