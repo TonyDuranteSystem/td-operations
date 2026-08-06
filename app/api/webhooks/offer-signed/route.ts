@@ -12,6 +12,7 @@ import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { decideInvoiceAtSigning, getInvoiceDescription } from "@/lib/portal/offer-invoice-policy"
+import { computeOfferTotals } from "@/lib/offers/compute-offer-totals"
 import { pinnedRateForInheritance } from "@/lib/payments/card-fee-config"
 import { emitOfferSignedEvent } from "@/lib/portal/chat-events"
 import { normalizeFormationState } from "@/lib/formation/states"
@@ -74,54 +75,14 @@ export async function POST(req: NextRequest) {
       : null
     const paymentMethod = hasCheckoutLink ? gatewayType : hasBank ? "bank_transfer" : "unknown"
 
-    // Parse cost_summary for currency detection and fallback amount
-    const summaryArr = Array.isArray(offer.cost_summary)
-      ? offer.cost_summary
-      : typeof offer.cost_summary === "string"
-        ? (() => { try { return JSON.parse(offer.cost_summary) } catch { return [] } })()
-        : []
-
-    // Calculate total from selected_services (respects client's service selection)
-    let totalAmount = 0
-    const services = Array.isArray(offer.services) ? offer.services : []
+    // WS-A3 (dev job c0a61e44): ALL amount math delegates to THE offer amount
+    // engine — semantics identical (pinned by the 17-test characterization
+    // suite in tests/unit/compute-offer-totals.test.ts; this block previously
+    // held the reference implementation those tests were derived from).
+    const totals = computeOfferTotals(offer)
+    const totalAmount = totals.gross
+    const offerCurrency = totals.currency
     const selectedServices: string[] = Array.isArray(offer.selected_services) ? offer.selected_services as unknown as string[] : []
-
-    for (const svc of services) {
-      const name = (svc as Record<string, unknown>).name as string || ""
-      const isOptional = !!(svc as Record<string, unknown>).optional
-      const isSelected = !isOptional || selectedServices.includes(name)
-      if (!isSelected) continue
-
-      const priceStr = String((svc as Record<string, unknown>).price || "0")
-      if (/\/(year|anno|month|mese)/i.test(priceStr)) continue
-      if (/includ|inclus/i.test(priceStr)) continue
-
-      const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ""))
-      if (!isNaN(priceNum) && priceNum > 0) totalAmount += priceNum
-    }
-
-    // Include pre-conditions from cost_summary (e.g. unpaid taxes, filing fees)
-    for (const group of summaryArr) {
-      if (!/pre.?condition/i.test(group.label || "")) continue
-      for (const item of (group.items || [])) {
-        const priceStr = String(item.price || "0")
-        const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ""))
-        if (!isNaN(priceNum) && priceNum > 0) totalAmount += priceNum
-      }
-    }
-
-    // Fallback: if no parseable prices from services, use cost_summary[0].total
-    if (totalAmount === 0 && summaryArr.length > 0) {
-      const raw = summaryArr[0].total || summaryArr[0].total_label || ""
-      const numStr = raw.replace(/[^0-9.,]/g, "").trim()
-      if (numStr) {
-        if (/\.\d{3}$/.test(numStr) && !numStr.includes(",")) {
-          totalAmount = parseFloat(numStr.replace(/\./g, ""))
-        } else {
-          totalAmount = parseFloat(numStr.replace(",", ""))
-        }
-      }
-    }
 
     // Create pending_activation
     const { data: activation, error: actErr } = await supabase
@@ -132,12 +93,7 @@ export async function POST(req: NextRequest) {
         client_name: offer.client_name,
         client_email: offer.client_email,
         amount: totalAmount || null,
-        currency: (() => {
-          // Detect from cost_summary first section
-          const raw = summaryArr[0]?.total || summaryArr[0]?.total_label || ""
-          if (raw.includes("€") || raw.toUpperCase().includes("EUR")) return "EUR"
-          return "USD"
-        })(),
+        currency: offerCurrency,
         payment_method: paymentMethod,
         status: "awaiting_payment",
         signed_at: new Date().toISOString(),
@@ -274,11 +230,8 @@ export async function POST(req: NextRequest) {
         total_amount: totalAmount,
       })
       if (invoiceDecision.create) {
-        const currency = (() => {
-          const raw = summaryArr[0]?.total || summaryArr[0]?.total_label || ""
-          if (raw.includes("€") || raw.toUpperCase().includes("EUR")) return "EUR" as const
-          return "USD" as const
-        })()
+        // Same engine-detected currency as the activation (one source, no drift).
+        const currency = offerCurrency
 
         const invoiceResult = await createTDInvoice({
           contact_id: contactId,
@@ -365,7 +318,7 @@ export async function POST(req: NextRequest) {
       action_type: "offer_signed",
       table_name: "pending_activations",
       record_id: activation.id,
-      summary: `Contract signed: ${offer.client_name} (${offer_token}) — ${paymentMethod}, ${totalAmount} ${(() => { const raw = summaryArr[0]?.total || ""; return raw.includes("€") || raw.toUpperCase().includes("EUR") ? "EUR" : "USD" })()}`,
+      summary: `Contract signed: ${offer.client_name} (${offer_token}) — ${paymentMethod}, ${totalAmount} ${offerCurrency}`,
       details: {
         offer_token,
         client_name: offer.client_name,
@@ -380,7 +333,7 @@ export async function POST(req: NextRequest) {
     // is the permanent center. Idempotent on the offer id (a webhook retry never
     // double-posts). Non-fatal: a notification failure must not break activation.
     try {
-      const sigCurrency = (() => { const raw = summaryArr[0]?.total || ""; return raw.includes("€") || raw.toUpperCase().includes("EUR") ? "EUR" : "USD" })()
+      const sigCurrency = offerCurrency
       await emitOfferSignedEvent({
         offer_id: offer.id,
         contact_id: contactId,
