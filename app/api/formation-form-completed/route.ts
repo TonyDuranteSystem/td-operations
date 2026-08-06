@@ -330,6 +330,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // WS-B amendment: never present an undecided state to staff as a decided
+    // NM filing. Resolve submission → signed offer; when nothing decided, the
+    // email (step 6) and the task (step 7) both say so loudly instead of
+    // pointing Luca at the wrong SOS portal. Hoisted here — BOTH steps read it.
+    const resolvedFormState = (sub.state as string | null)
+      || (await formationStateForClient({ leadId: leadId ?? null, contactId: contactId ?? null }))
+      || null
+
     // ─── STEP 6: Send Luca detailed email with next steps ───
     try {
       const { gmailPost } = await import("@/lib/gmail")
@@ -337,12 +345,6 @@ export async function POST(req: NextRequest) {
       const llcName1 = submittedData.llc_name_1 || submittedData.preferred_name_1 || "N/A"
       const llcName2 = submittedData.llc_name_2 || submittedData.preferred_name_2 || "N/A"
       const llcName3 = submittedData.llc_name_3 || submittedData.preferred_name_3 || "N/A"
-      // WS-B amendment: never present an undecided state to staff as a decided
-      // NM filing. Resolve submission → signed offer; when nothing decided,
-      // say so loudly instead of pointing Luca at the wrong SOS portal.
-      const resolvedFormState = sub.state
-        || (await formationStateForClient({ leadId: sub.lead_id ?? null, contactId: sub.contact_id ?? null }))
-        || null
       const state = resolvedFormState ?? "⚠ TO BE CONFIRMED (no state decided — check the offer / ask Antonio)"
       const entityType = sub.entity_type || "SMLLC"
 
