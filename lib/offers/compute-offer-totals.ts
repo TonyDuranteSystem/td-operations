@@ -31,6 +31,29 @@ export interface OfferLikeForTotals {
   selected_services?: unknown
 }
 
+export interface ComputeOptions {
+  /**
+   * Multi-contract offers (e.g. formation + a standalone ITIN agreement) render
+   * ONE agreement per contract type. When set, only service lines whose own
+   * `contract_type` matches (or is absent) are counted — the contract-page
+   * semantics. Omitted = count every selected line (offer-page / webhook /
+   * checkout semantics: the client pays the whole offer).
+   */
+  filterContractType?: string
+  /**
+   * When the offer carries an explicit `currency` column, pass it: the contract
+   * pages trust that column over header sniffing ("no symbol-sniffing" is their
+   * stated rule). Omitted = header-based detection (money-of-record variant).
+   */
+  currencyOverride?: "EUR" | "USD" | null
+  /**
+   * Contract-page variant: when no stored selection exists, count all
+   * non-optional lines (same as default). When a stored selection EXISTS, the
+   * contract pages honour it exactly — identical to the default path, kept
+   * explicit so the difference is documented rather than assumed.
+   */
+}
+
 export interface OfferTotals {
   /** Sum of selected one-time service lines (webhook parser semantics). */
   servicesTotal: number
@@ -76,7 +99,10 @@ function summaryArray(cost_summary: unknown): SummaryGroup[] {
   return []
 }
 
-export function computeOfferTotals(offer: OfferLikeForTotals): OfferTotals {
+export function computeOfferTotals(
+  offer: OfferLikeForTotals,
+  options: ComputeOptions = {},
+): OfferTotals {
   const services = Array.isArray(offer.services) ? (offer.services as Array<Record<string, unknown>>) : []
   const selected: string[] = Array.isArray(offer.selected_services)
     ? (offer.selected_services as unknown as string[])
@@ -90,6 +116,11 @@ export function computeOfferTotals(offer: OfferLikeForTotals): OfferTotals {
     const isOptional = !!svc.optional
     const isSelected = !isOptional || selected.includes(name)
     if (!isSelected) continue
+    // Multi-contract filter (contract-page semantics only — see ComputeOptions).
+    if (options.filterContractType) {
+      const svcType = svc.contract_type as string | undefined
+      if (svcType && svcType !== options.filterContractType) continue
+    }
     const priceStr = String(svc.price || "0")
     if (RECURRING_RE.test(priceStr)) continue
     if (INCLUDED_RE.test(priceStr)) continue
@@ -127,7 +158,11 @@ export function computeOfferTotals(offer: OfferLikeForTotals): OfferTotals {
 
   const headerRaw = String(summary[0]?.total || summary[0]?.total_label || "")
   const currency: "EUR" | "USD" =
-    headerRaw.includes("€") || headerRaw.toUpperCase().includes("EUR") ? "EUR" : "USD"
+    options.currencyOverride
+      ? options.currencyOverride
+      : headerRaw.includes("€") || headerRaw.toUpperCase().includes("EUR")
+        ? "EUR"
+        : "USD"
 
   return { servicesTotal, countedServiceNames, preconditionsTotal, gross, currency, source }
 }

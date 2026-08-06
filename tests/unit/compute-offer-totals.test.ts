@@ -171,3 +171,32 @@ describe("countedServiceNames — checkout charge labels", () => {
     expect(t.countedServiceNames).toEqual(["Company Formation"])
   })
 })
+
+describe("ComputeOptions — contract-page semantics (WS-A3 sites #5-6)", () => {
+  const multiContract = {
+    services: [
+      { name: "Company Formation", price: "€3,000", contract_type: "formation" },
+      { name: "ITIN Application", price: "€1,000", contract_type: "itin" },
+      { name: "Notary", price: "€200" }, // no contract_type → belongs to the main contract
+    ],
+    cost_summary: [{ label: "Setup Fee", total: "€4,200" }],
+    selected_services: [],
+  }
+
+  it("filterContractType counts only the main contract's lines (+ untyped ones)", () => {
+    expect(computeOfferTotals(multiContract, { filterContractType: "formation" }).gross).toBe(3200)
+    expect(computeOfferTotals(multiContract, { filterContractType: "itin" }).gross).toBe(1200)
+  })
+
+  it("without the filter, EVERY selected line counts (offer page / webhook / checkout)", () => {
+    expect(computeOfferTotals(multiContract).gross).toBe(4200)
+  })
+
+  it("currencyOverride wins over header sniffing (the contract pages' explicit-column rule)", () => {
+    const eurHeader = { services: [{ name: "X", price: "1000" }], cost_summary: [{ total: "€1,000" }] }
+    expect(computeOfferTotals(eurHeader).currency).toBe("EUR")
+    expect(computeOfferTotals(eurHeader, { currencyOverride: "USD" }).currency).toBe("USD")
+    // null/undefined override falls back to header detection
+    expect(computeOfferTotals(eurHeader, { currencyOverride: null }).currency).toBe("EUR")
+  })
+})
