@@ -7,12 +7,14 @@
  */
 
 import { describe, it, expect } from 'vitest'
+// WS-A3: these helpers mirror create-offer-dialog logic. They now call the REAL
+// shared parser so this pin can't drift from the code it claims to pin.
+import { parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
 
 // ── Helpers extracted from create-offer-dialog logic ──────────────────────
 
 function computeServiceLineTotal(unitPrice: string, quantity: number): number {
-  const n = parseFloat(unitPrice.replace(/[^0-9.]/g, ''))
-  return isNaN(n) ? 0 : n * Math.max(1, quantity)
+  return parsePriceQuirk(unitPrice) * Math.max(1, quantity)
 }
 
 function buildServicesJson(
@@ -59,10 +61,7 @@ function buildCostItems(
 function computeServicesTotal(
   selected: Array<{ price: string; quantity: number }>
 ): number {
-  return selected.reduce((sum, s) => {
-    const n = parseFloat(s.price.replace(/[^0-9.]/g, ''))
-    return sum + (isNaN(n) ? 0 : n * (s.quantity ?? 1))
-  }, 0)
+  return selected.reduce((sum, s) => sum + parsePriceQuirk(s.price) * (s.quantity ?? 1), 0)
 }
 
 // ── pipelineQuantity extraction (mirrors activate-service logic) ──────────

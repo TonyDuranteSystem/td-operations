@@ -6,6 +6,7 @@ import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote, ExternalLink, 
 import { toast } from 'sonner'
 import { ReferrerPicker, type ReferrerValue } from './referrer-picker'
 import { FORMATION_STATE_CODES, FORMATION_STATE_NAMES, type FormationStateCode } from '@/lib/formation/states'
+import { parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
 
 // ── Service catalog: loaded from DB ──
 interface CatalogService {
@@ -570,14 +571,15 @@ export function CreateOfferDialog({
     return null
   }, [bankPreference, currency])
 
+  // WS-A3: the PARSER is shared (one regex in the engine); the aggregation is
+  // the dialog's own — draft form state with a per-line quantity multiplier the
+  // stored-offer engine deliberately has no concept of.
   const servicesTotalAmount = selected.reduce((sum, s) => {
-    const n = parseFloat(s.price.replace(/[^0-9.]/g, ''))
-    return sum + (isNaN(n) ? 0 : n * (s.quantity ?? 1))
+    return sum + parsePriceQuirk(s.price) * (s.quantity ?? 1)
   }, 0)
 
   const preconditionsTotalAmount = preconditions.reduce((sum, p) => {
-    const n = parseFloat(p.price.replace(/[^0-9.]/g, ''))
-    return sum + (isNaN(n) ? 0 : n)
+    return sum + parsePriceQuirk(p.price)
   }, 0)
 
   const totalAmount = servicesTotalAmount + preconditionsTotalAmount
@@ -1729,8 +1731,8 @@ function ServiceRow({
   onQuantityChange: (quantity: number) => void
   onContextChange: (ctx: 'individual' | 'business' | 'ask') => void
 }) {
-  const unitPrice = parseFloat(price.replace(/[^0-9.]/g, ''))
-  const lineTotal = !isNaN(unitPrice) && quantity > 1
+  const unitPrice = parsePriceQuirk(price)
+  const lineTotal = unitPrice > 0 && quantity > 1
     ? `= ${currencySymbol}${(unitPrice * quantity).toLocaleString('en-US')}`
     : null
 

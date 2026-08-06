@@ -22,6 +22,7 @@ import { getConfiguredCardFeeRate } from "@/lib/payments/card-fee-config"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { accountIdForOffer } from "@/lib/operations/offer-scope"
 import { normalizeFormationState } from "@/lib/formation/states"
+import { parsePriceQuirk } from "@/lib/offers/compute-offer-totals"
 import type { Json } from "@/lib/database.types"
 
 // ─── JSONB validation ───────────────────────────────────────
@@ -287,7 +288,10 @@ async function tryCreateWhopPlan(params: {
     const { createWhopPlan } = await import("@/lib/whop-auto-plan")
     const costArr = Array.isArray(params.cost_summary) ? params.cost_summary : []
     const firstTotal = (costArr[0] as Record<string, unknown>)?.total as string || ""
-    const totalNum = parseFloat(firstTotal.replace(/[^0-9.]/g, ""))
+    // WS-A3: shared parser primitive. Whop plans are priced off the FIRST
+    // cost_summary header only (the plan's headline price), not the engine's
+    // full billable gross — aggregation intentionally unchanged.
+    const totalNum = parsePriceQuirk(firstTotal)
     if (!(totalNum > 0)) return null
     const servArr = Array.isArray(params.services) ? params.services : []
     const primaryService = (servArr[0] as Record<string, unknown>)?.name as string | undefined
