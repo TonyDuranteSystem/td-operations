@@ -24,6 +24,7 @@ import { PullToRefresh } from '@/components/portal/pull-to-refresh'
 import { PortalSwRegister } from '@/components/portal/portal-sw-register'
 import { PortalWakeRefresh } from '@/components/portal/portal-wake-refresh'
 import { PwaInstallPrompt } from '@/components/portal/pwa-install-prompt'
+import { PwaEventsTracker } from '@/components/portal/pwa-events-tracker'
 import { DashboardInstallBanner } from '@/components/portal/dashboard-install-banner'
 import { EnablePushCard } from '@/components/portal/enable-push-card'
 import { PasswordGate } from '@/components/portal/password-gate'
@@ -98,6 +99,7 @@ export default async function PortalLayout({
             catch up on wake too. Mounting only in the branch below would have
             silently excluded them (caught in review). */}
         <PortalWakeRefresh />
+        <PwaEventsTracker />
         <LocaleProvider locale={tmLocale}>
           <div className="flex h-screen bg-gradient-to-br from-slate-50 to-blue-50/30">
             <PortalSidebar
@@ -250,6 +252,10 @@ export default async function PortalLayout({
       {viewAsMarker && <ViewAsBanner clientName={viewAsName} />}
       <PortalSwRegister locale={locale} />
       <PortalWakeRefresh />
+      {/* Install-funnel telemetry (installed / first standalone / first
+          authenticated standalone). Staff + view-as sessions are dropped
+          SERVER-side in the events route. */}
+      <PwaEventsTracker />
       <LocaleProvider locale={locale}>
         <PasswordGate mustChangePassword={mustChangePassword} />
         {showOnboarding && <OnboardingWrapper showOnboarding={true} userName={userName} />}

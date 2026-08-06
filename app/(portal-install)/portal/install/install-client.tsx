@@ -30,6 +30,7 @@ import {
   type InstallSrc,
 } from '@/lib/portal/install-page-mode'
 import { INSTALL_PAGE_COPY } from '@/lib/portal/install-copy'
+import { postPwaEvent, postPwaEventOnce, PWA_DEDUP_KEYS } from '@/lib/portal/pwa-events'
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>
@@ -73,12 +74,29 @@ export function InstallPageClient({
 
     const ua = navigator.userAgent
     // Client-side refinement: catches iPadOS reporting a Macintosh UA.
-    setDevice(detectDevice(ua, {
+    const refinedDevice = detectDevice(ua, {
       platform: navigator.platform,
       maxTouchPoints: navigator.maxTouchPoints,
-    }))
+    })
+    setDevice(refinedDevice)
     setInApp(isInAppBrowser(ua))
     setStandalone(isStandalone())
+
+    // Funnel: one page_view per pageload (src carries the channel — this is
+    // the visit-level attribution that survives even where installs can't be
+    // attributed, D6c). React StrictMode double-mount is dev-only.
+    postPwaEvent({ event: 'page_view', ...(src ? { src } : {}), device: refinedDevice })
+
+    // Android fires appinstalled on this very page when the native prompt is
+    // accepted — log it with the channel, once per device.
+    const onInstalled = () => {
+      postPwaEventOnce(PWA_DEDUP_KEYS.installed, {
+        event: 'installed',
+        device: refinedDevice,
+        ...(src ? { src } : {}),
+      })
+    }
+    window.addEventListener('appinstalled', onInstalled)
 
     const handler = (e: Event) => {
       e.preventDefault()
@@ -92,6 +110,7 @@ export function InstallPageClient({
     }, PROMPT_TIMEOUT_MS)
     return () => {
       window.removeEventListener('beforeinstallprompt', handler)
+      window.removeEventListener('appinstalled', onInstalled)
       clearTimeout(timer)
     }
   }, [src])

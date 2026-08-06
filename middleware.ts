@@ -134,6 +134,11 @@ const PUBLIC_PREFIXES = [
   // beginning with '/portal/install' would silently become public — don't
   // create one (dev job 8f38add1).
   '/portal/install',
+  // Install-funnel event sink — POSTed by the (anonymous) install page, so it
+  // must be public or the middleware 401s it before the handler runs (same
+  // class as /api/portal/password-reset above). Service-role-only writes,
+  // strict enum validation, staff/view-as dropped inside the route.
+  '/api/portal/pwa-events',
   // Service workers — the browser refetches these on its own schedule (and
   // use-sw-update polls reg.update() every 60s). Without a live session
   // cookie the fetch would 307 to /login and the update silently fails,

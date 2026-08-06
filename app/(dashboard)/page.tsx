@@ -11,6 +11,7 @@ import { UnreadMessagesCard } from '@/components/dashboard/cards/unread-messages
 import { UpcomingDeadlinesCard } from '@/components/dashboard/cards/upcoming-deadlines'
 import { PendingFormsCard } from '@/components/dashboard/cards/pending-forms'
 import { RecentPaymentsCard } from '@/components/dashboard/cards/recent-payments'
+import { AppAdoptionCard } from '@/components/dashboard/cards/app-adoption'
 import { DevToolsPanel } from '@/components/dashboard/dev-tools-panel'
 import { OperationsPipelineCard } from '@/components/dashboard/cards/operations-pipeline'
 import { ActiveOnboardingsCard } from '@/components/dashboard/cards/active-onboardings'
@@ -109,6 +110,13 @@ export default async function DashboardPage() {
             </Suspense>
           </CardErrorBoundary>
         )}
+
+        {/* Row 5: Portal app adoption funnel (install → push) */}
+        <CardErrorBoundary fallbackTitle="Portal App Adoption">
+          <Suspense fallback={<CardSkeleton title="Portal App Adoption" />}>
+            <AppAdoptionCard />
+          </Suspense>
+        </CardErrorBoundary>
 
         {/* Dev Tools (admin only) */}
         {admin && <DevToolsPanel />}

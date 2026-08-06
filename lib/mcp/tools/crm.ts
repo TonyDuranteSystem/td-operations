@@ -36,6 +36,7 @@ export function validateStatusField(table: string, updates: Record<string, unkno
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { getPwaAdoptionStats } from "@/lib/portal/pwa-stats"
 
 // ─── Auto-advance pipeline when all stage tasks are Done ─────
 async function checkAndAutoAdvance(taskId: string): Promise<string | null> {
@@ -851,6 +852,20 @@ export function registerCrmTools(server: McpServer) {
           Object.keys(refByType).length > 0 ? `By type: ${sortDesc(refByType).map(([k, v]) => `${k}: ${v}`).join(" | ")}` : "",
           referrals.length > 0 ? `Active referrers: ${activeReferrers} | Pending commission (EUR): €${pendingCommissionEUR.toLocaleString()} | Paid out (EUR): €${totalCommissionPaidEUR.toLocaleString()}` : "",
         ]
+
+        // ── Portal app adoption (Phase 2, dev job 8f38add1) ──
+        // Truth source: push_subscriptions (live), pwa_events (30d funnel).
+        // Never blocks the snapshot if the query fails.
+        try {
+          const pwa = await getPwaAdoptionStats()
+          lines.push(
+            "",
+            "══ 📱 Portal App Adoption ══",
+            `Receiving push: ${pwa.pushCoveragePct}% of active accounts (${pwa.accountsWithPush}/${pwa.activeAccounts})`,
+            `30d funnel: ${pwa.funnel30d.pageViews} install-page visits | ${pwa.funnel30d.installsAndroid} Android installs | ${pwa.funnel30d.standaloneLaunches} first app launches (${pwa.funnel30d.standaloneAuthenticated} logged in)`,
+            "Note: iPhone installs carry no channel attribution (no appinstalled event on iOS).",
+          )
+        } catch { /* stats are additive — snapshot still valid without them */ }
 
         return { content: [{ type: "text" as const, text: lines.filter(Boolean).join("\n") }] }
       } catch (error) {
