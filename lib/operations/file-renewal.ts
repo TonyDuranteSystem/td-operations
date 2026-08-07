@@ -41,6 +41,13 @@ export interface FileRenewalParams {
    *  last year's report). Drives the receipt filename, the deadlines sync,
    *  the notification, and the completion roll (filed-year+1 semantics). */
   filing_for_year?: number | null
+  /** Staff note recorded with the filing (account log + completion notes).
+   *  REQUIRED by the dialog when overriding an unpaid hold. */
+  note?: string | null
+  /** Filing performed despite unpaid invoices (Antonio 2026-08-07: staff
+   *  must be able to file anyway, with a note) — changes the audit wording
+   *  only; the hold was always advisory at this layer. */
+  override_unpaid?: boolean
   receipt: {
     /** Original upload name — used only for audit; written file uses SOP filename. */
     file_name: string
@@ -91,9 +98,12 @@ export function buildAccountNoteEntry(
   filedDate: string,
   driveLink: string,
   currentNotes: string | null,
+  opts?: { note?: string | null; overrideUnpaid?: boolean },
 ): string {
   const label = kind === "ra" ? "RA Renewal" : "Annual Report"
-  const entry = `${filedDate}: ${label} ${year} filed → ${driveLink}`
+  let entry = `${filedDate}: ${label} ${year} filed → ${driveLink}`
+  if (opts?.overrideUnpaid) entry += ` [FILED DESPITE UNPAID INVOICES]`
+  if (opts?.note) entry += ` — note: ${opts.note}`
   return currentNotes ? `${currentNotes}\n${entry}` : entry
 }
 
@@ -199,26 +209,47 @@ export async function fileRenewal(
       )) as { id: string; name: string }
       const driveLink = `https://drive.google.com/file/d/${upload.id}/view`
 
-      // 4. Insert documents row (audit + portal sync)
-      const { data: docRow, error: docErr } = await supabaseAdmin
+      // 4. Record the documents row — UPSERT by drive_file_id. The Drive
+      // upload upserts by filename and returns the SAME file id when the
+      // receipt was stored by an earlier filing, so a plain insert hit the
+      // unique constraint and failed the whole action AFTER the upload
+      // (prod error on DeP Consulting, 2026-08-07). Refresh the existing
+      // row instead.
+      const docFields = {
+        file_name: targetFilename,
+        mime_type: params.receipt.mime_type || "application/pdf",
+        drive_link: driveLink,
+        drive_parent_folder_id: complianceFolderId,
+        document_type_name: DOC_TYPE_NAME_BY_KIND[params.kind],
+        category_name: "Compliance",
+        account_id: account.id,
+        portal_visible: true,
+        status: "processed",
+        processed_at: new Date().toISOString(),
+      }
+      const { data: existingDoc } = await supabaseAdmin
         .from("documents")
-        .insert({
-          drive_file_id: upload.id,
-          file_name: targetFilename,
-          mime_type: params.receipt.mime_type || "application/pdf",
-          drive_link: driveLink,
-          drive_parent_folder_id: complianceFolderId,
-          document_type_name: DOC_TYPE_NAME_BY_KIND[params.kind],
-          category_name: "Compliance",
-          account_id: account.id,
-          portal_visible: true,
-          status: "processed",
-          processed_at: new Date().toISOString(),
-        })
         .select("id")
-        .single()
-      if (docErr || !docRow) {
-        throw new Error(`Failed to insert documents row: ${docErr?.message ?? "unknown"}`)
+        .eq("drive_file_id", upload.id)
+        .maybeSingle()
+      let docRowId: string
+      if (existingDoc) {
+        const { error: updErr } = await supabaseAdmin
+          .from("documents")
+          .update(docFields)
+          .eq("id", existingDoc.id)
+        if (updErr) throw new Error(`Failed to update documents row: ${updErr.message}`)
+        docRowId = existingDoc.id
+      } else {
+        const { data: docRow, error: docErr } = await supabaseAdmin
+          .from("documents")
+          .insert({ drive_file_id: upload.id, ...docFields })
+          .select("id")
+          .single()
+        if (docErr || !docRow) {
+          throw new Error(`Failed to insert documents row: ${docErr?.message ?? "unknown"}`)
+        }
+        docRowId = docRow.id
       }
 
       // 5. Resolve / create the SD, then complete it.
@@ -255,7 +286,9 @@ export async function fileRenewal(
       const completion = await completeSD({
         delivery_id: deliveryId,
         actor: "dashboard:calendar",
-        notes: `Filed ${params.filed_date} — receipt: ${driveLink}`,
+        notes: `Filed ${params.filed_date} — receipt: ${driveLink}${
+          params.override_unpaid ? " [FILED DESPITE UNPAID INVOICES]" : ""
+        }${params.note ? ` — note: ${params.note}` : ""}`,
         renewal_filing_for_year: year,
       })
       if (!completion.success) {
@@ -307,6 +340,7 @@ export async function fileRenewal(
         params.filed_date,
         driveLink,
         account.notes,
+        { note: params.note, overrideUnpaid: params.override_unpaid },
       )
       // eslint-disable-next-line no-restricted-syntax -- per-feature dashboard write; safeAction wraps audit
       await supabaseAdmin
@@ -354,7 +388,7 @@ export async function fileRenewal(
         delivery_id: deliveryId,
         drive_file_id: upload.id,
         drive_link: driveLink,
-        document_id: docRow.id as string,
+        document_id: docRowId as string,
       }
     },
     {
