@@ -102,6 +102,27 @@ export function computeRollForward(storedDate: string, filingForYear: number): R
   return { action: "roll", next }
 }
 
+/**
+ * Which cycle year a renewal completion is FOR (council blocker, 2026-08-06):
+ * explicit caller value (Mark Filed dialog) → the SD's own due-date year
+ * (the cron stamps due_date with the account date, so completing that SD is
+ * filing FOR that cycle) → the completion year only as a last resort.
+ * "Today's year" alone over-rolled a December cycle completed in January by
+ * a full year, and absorbed owed years when completing a stale cron SD.
+ */
+export function resolveFilingForYear(
+  explicit: number | undefined,
+  sdDueDate: string | null | undefined,
+  fallbackYear: number,
+): number {
+  if (explicit != null) return explicit
+  if (sdDueDate) {
+    const y = parseInt(String(sdDueDate).slice(0, 4), 10)
+    if (!Number.isNaN(y)) return y
+  }
+  return fallbackYear
+}
+
 /** Pure derivation. Returns ONLY the columns that are null and derivable. */
 export function deriveRenewalDates(input: RenewalDeriveInput): RenewalDateFills {
   const fills: RenewalDateFills = {}
@@ -216,7 +237,11 @@ export async function mirrorDeadlineDate(
     .select("id, due_date")
     .eq("account_id", accountId)
     .eq("deadline_type", deadlineType)
-    .neq("status", "Completed")
+    // Completed AND Filed rows are history — repurposing a Filed row to a
+    // new cycle kept its Filed status + old receipt on the client portal
+    // (senior-engineer major, council 2026-08-06). A new cycle gets a
+    // fresh Pending row instead.
+    .not("status", "in", '("Completed","Filed")')
     .or(yearFilter)
     .order("due_date", { ascending: false })
     .limit(1)

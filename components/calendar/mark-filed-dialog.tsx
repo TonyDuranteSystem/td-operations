@@ -23,8 +23,14 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
   const [filedDate, setFiledDate] = useState<string>(() => new Date().toISOString().split('T')[0])
   // The cycle year this filing is FOR. Defaults to the DUE date's year (the
   // cycle being satisfied), not the filed date — a stuck 2025 row marked
-  // filed today is usually the 2025 filing. Staff can override.
-  const [filingForYear, setFilingForYear] = useState<string>(() => row.due_date.slice(0, 4))
+  // filed today is usually the 2025 filing. Clamped to what the server
+  // accepts (at most next year) so a far-future row can't default to a
+  // value the API would reject. Staff can override.
+  const [filingForYear, setFilingForYear] = useState<string>(() => {
+    const due = parseInt(row.due_date.slice(0, 4), 10)
+    const cap = new Date().getFullYear() + 1
+    return String(Number.isNaN(due) ? cap - 1 : Math.min(due, cap))
+  })
   const [file, setFile] = useState<File | null>(null)
   const [dragActive, setDragActive] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -32,11 +38,19 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
   const isRA = row.kind === 'ra'
   const portal = !isRA && row.state_of_formation ? STATE_PORTALS[row.state_of_formation] : null
   const year = filingForYear
+  // Continuous range — a record years behind must be able to name any owed
+  // year (the old sparse set had holes, e.g. a 2022-due row offered no 2024).
+  // Capped to what the server accepts relative to the filed date
+  // (filedYear-10 … filedYear+1), so the default can never 400.
   const yearOptions = (() => {
     const current = new Date().getFullYear()
+    const filedYear = parseInt(filedDate.slice(0, 4), 10) || current
     const dueYear = parseInt(row.due_date.slice(0, 4), 10)
-    const years = new Set<number>([dueYear - 1, dueYear, current - 1, current, current + 1])
-    return Array.from(years).sort()
+    const lo = Math.max(filedYear - 10, Math.min(dueYear - 1, current - 1))
+    const hi = Math.min(filedYear + 1, Math.max(dueYear, current + 1))
+    const years: number[] = []
+    for (let y = lo; y <= hi; y++) years.push(y)
+    return years
   })()
 
   const canSubmit = !!file && !!filedDate && !submitting

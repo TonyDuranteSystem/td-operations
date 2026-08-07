@@ -594,10 +594,20 @@ export async function advanceServiceDelivery(
       if (!stored) {
         autoTriggers.push(`${label} date NOT rolled: account has no ${column} — fix the record (calendar problems rail)`)
       } else {
-        // Filing-for year: explicit from the caller (Mark Filed dialog),
-        // else the year the completion happens — NOT the stored year, so a
-        // stale record completed today still rolls to a future cycle.
-        const filingForYear = params.renewal_filing_for_year ?? new Date().getFullYear()
+        // Filing-for year precedence: explicit from the caller (Mark Filed
+        // dialog) → the SD's OWN cycle year (the cron stamps due_date with
+        // the account date, so completing that SD means filing FOR that
+        // cycle) → only then the completion year. Defaulting to "today's
+        // year" alone was a council blocker: a December cycle completed in
+        // January over-rolled the record a full year (2026-12-15 done
+        // 2027-01 → 2028), and completing a stale cron SD absorbed owed
+        // years — both silent-green failures this project exists to kill.
+        const { resolveFilingForYear } = await import("@/lib/operations/renewal-dates")
+        const filingForYear = resolveFilingForYear(
+          params.renewal_filing_for_year,
+          delivery.due_date,
+          new Date().getFullYear(),
+        )
         const decision = computeRollForward(stored, filingForYear)
         if (decision.action === "already_current") {
           autoTriggers.push(`${label} date already current (${stored}) for a ${filingForYear} filing — not moved`)

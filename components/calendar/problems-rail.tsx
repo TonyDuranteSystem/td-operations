@@ -49,6 +49,15 @@ function ProblemCard({ proposal }: { proposal: RenewalFixProposal }) {
 
   async function applyFix() {
     if (!proposal.autoFix || applying) return
+    // The 'confirm' tier promises a judgment step — enforce it in the UI,
+    // not just in prose (architect finding): staff must re-read the card's
+    // reasoning and explicitly confirm before the write happens.
+    if (proposal.tier === 'confirm') {
+      const ok = window.confirm(
+        `${proposal.companyName}\n\n${proposal.details}\n\nApply this fix?`,
+      )
+      if (!ok) return
+    }
     setApplying(true)
     try {
       const res = await fetch('/api/calendar/fix-renewal-problem', {

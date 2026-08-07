@@ -111,8 +111,10 @@ const DEFAULT_UPCOMING_DAYS = 30
 // ── Helpers ──────────────────────────────────────────────────────
 
 function addDays(iso: string, days: number): string {
-  const d = new Date(iso)
-  d.setDate(d.getDate() + days)
+  // UTC math — local-time setDate drifts a day across DST transitions on
+  // non-UTC machines (same bug class as the fixed setFullYear drift).
+  const d = new Date(`${iso}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
   return d.toISOString().split("T")[0]
 }
 
@@ -139,7 +141,9 @@ function hasCompletedSdForCycle(
 }
 
 function money(p: RenewalStatusInput["overduePayments"][number]): string {
-  return `${p.currency || "USD"} ${p.amount}${p.due_date ? ` (due ${p.due_date})` : ""}`
+  const n = Number(p.amount)
+  const shown = Number.isFinite(n) ? (n % 1 === 0 ? String(n) : n.toFixed(2)) : String(p.amount)
+  return `${p.currency || "USD"} ${shown}${p.due_date ? ` (due ${p.due_date})` : ""}`
 }
 
 // ── Engine ───────────────────────────────────────────────────────

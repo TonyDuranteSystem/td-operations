@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { deriveRenewalDates, plusOneYear, normalizeStateCode, anniversaryForYear, computeRollForward } from "@/lib/operations/renewal-dates"
+import { deriveRenewalDates, plusOneYear, normalizeStateCode, anniversaryForYear, computeRollForward, resolveFilingForYear } from "@/lib/operations/renewal-dates"
 
 const EMPTY = { ra_renewal_date: null, annual_report_due_date: null, cmra_renewal_date: null }
 
@@ -202,5 +202,30 @@ describe("computeRollForward — filed-year+1 semantics (plan 89c951a7)", () => 
     expect(plusOneYear("2026-11-07")).toBe("2027-11-07")
     expect(plusOneYear("2027-03-14")).toBe("2028-03-14")
     expect(anniversaryForYear("2026-11-07", 2027)).toBe("2027-11-07")
+  })
+})
+
+describe("resolveFilingForYear — council blocker: non-dialog completions must not guess from today", () => {
+  it("explicit caller year always wins", () => {
+    expect(resolveFilingForYear(2025, "2026-12-15", 2027)).toBe(2025)
+  })
+
+  it("December cycle completed in January: SD due-date year wins over the completion year", () => {
+    // Old behavior rolled 2026-12-15 → 2028 when completed in Jan 2027.
+    expect(resolveFilingForYear(undefined, "2026-12-15", 2027)).toBe(2026)
+    expect(computeRollForward("2026-12-15", resolveFilingForYear(undefined, "2026-12-15", 2027)))
+      .toEqual({ action: "roll", next: "2027-12-15" })
+  })
+
+  it("stale cron SD completed years later: files FOR its own cycle, owed years stay visible", () => {
+    // SD due 2025-11-07 completed in 2027 → filing FOR 2025 → record moves to 2026 (still owed), not 2028.
+    expect(resolveFilingForYear(undefined, "2025-11-07", 2027)).toBe(2025)
+    expect(computeRollForward("2025-11-07", 2025)).toEqual({ action: "roll", next: "2026-11-07" })
+  })
+
+  it("SD without a due date falls back to the completion year; garbage dates too", () => {
+    expect(resolveFilingForYear(undefined, null, 2027)).toBe(2027)
+    expect(resolveFilingForYear(undefined, undefined, 2027)).toBe(2027)
+    expect(resolveFilingForYear(undefined, "not-a-date", 2027)).toBe(2027)
   })
 })

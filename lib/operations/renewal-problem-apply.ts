@@ -90,7 +90,7 @@ export async function applyRenewalAutoFix(req: ApplyAutoFixRequest): Promise<App
   } catch {
     // mirror is best-effort; the account date above is the source of truth
   }
-  await supabaseAdmin.from("action_log").insert({
+  const { error: auditErr } = await supabaseAdmin.from("action_log").insert({
     actor: req.actor,
     action_type: "renewal_record_fix",
     table_name: "accounts",
@@ -108,6 +108,9 @@ export async function applyRenewalAutoFix(req: ApplyAutoFixRequest): Promise<App
       applied_by: req.actor,
     },
   })
+  if (auditErr) {
+    console.error(`renewal_record_fix audit insert failed for ${req.accountId}: ${auditErr.message}`)
+  }
 
   // 4. The flag clears only if a clean recompute says so.
   const after = await loadRenewalStatuses(supabaseAdmin, { accountIds: [req.accountId] })

@@ -185,54 +185,23 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // ── Renewal-date watchdog (plan c2d97552 B3) ──────────────────────────
-    // The calendar + this cron only see dates in-window; a NULL or past date
-    // makes an account silently invisible (the 17-company incident class).
-    // Report-only: offenders land in the daily staff email + cron log. Excludes
-    // test accounts and deliberate discontinuations (service_deactivate clears
-    // the date AND cancels the SD — those NULLs are intentional).
+    // ── Renewal-status watchdog (plan 89c951a7 — ONE truth) ──────────────
+    // The daily email now reports EXACTLY what the calendar's problems rail
+    // shows, computed by the same status engine + proposal layer. The old
+    // hand-rolled date checks judged with different exclusion rules and
+    // could disagree with the rail (architect blocker, council 2026-08-06).
     const watchdog: { company: string; problem: string }[] = []
     try {
-      const todayStr = today.toISOString().split("T")[0]
-      const { data: candidates } = await supabaseAdmin
-        .from("accounts")
-        .select("id, company_name, state_of_formation, ra_renewal_date, annual_report_due_date, is_test")
-        .eq("status", "Active")
-        .eq("account_type", "Client")
-        .or("is_test.is.null,is_test.eq.false")
-        .or(`ra_renewal_date.is.null,ra_renewal_date.lt.${todayStr},annual_report_due_date.is.null,annual_report_due_date.lt.${todayStr}`)
-
-      if (candidates?.length) {
-        const ids = candidates.map(c => c.id)
-        const { data: cancelledSDs } = await supabaseAdmin
-          .from("service_deliveries")
-          .select("account_id, service_type")
-          .in("account_id", ids)
-          .in("service_type", ["State RA Renewal", "State Annual Report"])
-          .eq("status", "cancelled")
-        const cancelledRA = new Set((cancelledSDs || []).filter(s => s.service_type === "State RA Renewal").map(s => s.account_id))
-        const cancelledAR = new Set((cancelledSDs || []).filter(s => s.service_type === "State Annual Report").map(s => s.account_id))
-
-        for (const c of candidates) {
-          const problems: string[] = []
-          const noNMReport = (c.state_of_formation || "").toUpperCase().trim().replace("NEW MEXICO", "NM") === "NM"
-          if (c.ra_renewal_date == null) {
-            if (!cancelledRA.has(c.id)) problems.push("RA renewal date missing")
-          } else if (c.ra_renewal_date < todayStr) {
-            problems.push(`RA renewal date in the past (${c.ra_renewal_date})`)
-          }
-          if (!noNMReport) {
-            if (c.annual_report_due_date == null) {
-              if (!cancelledAR.has(c.id)) problems.push("Annual report date missing")
-            } else if (c.annual_report_due_date < todayStr) {
-              problems.push(`Annual report date in the past (${c.annual_report_due_date})`)
-            }
-          }
-          if (problems.length) watchdog.push({ company: c.company_name, problem: problems.join("; ") })
+      const { loadRenewalStatuses } = await import("@/lib/operations/renewal-status-loader")
+      const { proposeRenewalFixes } = await import("@/lib/operations/renewal-problem-proposals")
+      const loaded = await loadRenewalStatuses(supabaseAdmin)
+      for (const l of loaded) {
+        for (const p of proposeRenewalFixes(l)) {
+          watchdog.push({ company: p.companyName, problem: `${p.summary} — ${p.status}` })
         }
       }
     } catch (wdErr) {
-      console.error("Renewal-date watchdog failed:", wdErr)
+      console.error("Renewal-status watchdog failed:", wdErr)
     }
 
     logCron({

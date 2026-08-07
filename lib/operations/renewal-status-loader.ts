@@ -3,9 +3,9 @@
  *
  * Loads the FULL active roster in a fixed number of queries (never N+1),
  * builds one RenewalStatusInput per account, and runs computeRenewalStatus.
- * Consumers: the calendar page (full-roster inversion), the problems rail,
- * the daily cron report, and the replay QA script — all read THIS loader so
- * they can never disagree.
+ * Consumers: the calendar page (full-roster inversion, which feeds the
+ * problems rail), the one-click apply revalidation, and the daily RA cron's
+ * watchdog — all read THIS loader so they cannot disagree.
  *
  * Query-shape rules:
  *  - Child tables (SDs, payments, tax returns) are fetched by TYPE/STATUS
@@ -127,14 +127,18 @@ export async function loadRenewalStatuses(
   const accountIdSet = new Set(accounts.map(a => a.id))
 
   // ── 2. All relevant SDs, joined in code ──────────────────────────
-  const sds = await fetchAllPages<SdRow>((from, to) =>
-    supabase
+  const sds = await fetchAllPages<SdRow>((from, to) => {
+    let q = supabase
       .from("service_deliveries")
       .select("id, account_id, service_type, status, stage, stage_order, due_date")
       .in("service_type", [...RENEWAL_TYPES, ...CLOSURE_TYPES, FORMATION_TYPE])
       .order("id")
-      .range(from, to),
-  )
+      .range(from, to)
+    // Single-account recomputes (the apply path) must not scan every table
+    // (architect finding); the URL-length concern only applies full-roster.
+    if (opts.accountIds?.length) q = q.in("account_id", opts.accountIds)
+    return q
+  })
   const renewalSDsByAccount = new Map<string, RenewalStatusInput["renewalSDs"]>()
   const formationSDByAccount = new Map<string, SdRow>()
   const closureAccounts = new Set<string>()
@@ -159,24 +163,30 @@ export async function loadRenewalStatuses(
     id: string
     account_id: string | null
     amount: number | string
+    amount_due: number | string | null
     amount_currency: string | null
     status: string
     due_date: string | null
-  }>((from, to) =>
-    supabase
+  }>((from, to) => {
+    let q = supabase
       .from("payments")
-      .select("id, account_id, amount, amount_currency, status, due_date")
+      .select("id, account_id, amount, amount_due, amount_currency, status, due_date")
       .in("status", [...OVERDUE_PAYMENT_STATUSES])
       // NOT (is_test IS TRUE) — .neq would silently drop the NULL majority
       .not("is_test", "is", true)
       .order("id")
-      .range(from, to),
-  )
+      .range(from, to)
+    if (opts.accountIds?.length) q = q.in("account_id", opts.accountIds)
+    return q
+  })
   const overdueByAccount = new Map<string, RenewalStatusInput["overduePayments"]>()
   for (const p of payments) {
     if (!p.account_id || !accountIdSet.has(p.account_id)) continue
     const list = overdueByAccount.get(p.account_id) ?? []
-    list.push({ id: p.id, amount: p.amount, currency: p.amount_currency, status: p.status, due_date: p.due_date })
+    // amount_due reflects partial payments — the codebase's canonical rollup
+    // (lib/billing/overdue.ts) prefers it; the face amount overstates what
+    // the client still owes on a Partial invoice (finance-auditor major).
+    list.push({ id: p.id, amount: p.amount_due ?? p.amount, currency: p.amount_currency, status: p.status, due_date: p.due_date })
     overdueByAccount.set(p.account_id, list)
   }
 
@@ -188,14 +198,17 @@ export async function loadRenewalStatuses(
     status: string
     extension_filed: boolean | null
     first_year_skip: boolean | null
-  }>((from, to) =>
-    supabase
+  }>((from, to) => {
+    let q = supabase
       .from("tax_returns")
       .select("account_id, tax_year, status, extension_filed, first_year_skip")
       .order("tax_year", { ascending: false })
       .order("account_id")
-      .range(from, to),
-  )
+      .order("id") // unique tie-break — non-unique sort can skip/dup across page boundaries
+      .range(from, to)
+    if (opts.accountIds?.length) q = q.in("account_id", opts.accountIds)
+    return q
+  })
   const taxReturnByAccount = new Map<string, (typeof taxReturns)[number]>()
   for (const t of taxReturns) {
     if (!t.account_id || !accountIdSet.has(t.account_id)) continue

@@ -226,6 +226,7 @@ export function AnnualCalendar({ rows, year, today }: AnnualCalendarProps) {
                   return (
                     <div
                       key={i}
+                      title={(row as RenewalRow).engine_cause || undefined}
                       className={cn(
                         'flex items-center gap-3 py-2 px-2 border rounded-md text-sm transition-colors',
                         actionable && 'border-red-200 bg-red-50/50 hover:bg-red-50 cursor-pointer',

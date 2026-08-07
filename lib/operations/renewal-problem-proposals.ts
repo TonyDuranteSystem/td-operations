@@ -137,7 +137,11 @@ function proposeForVerdict(
             action: "derive_missing_date",
             tier: "confirm",
             summary: `${label} date missing — can be derived`,
-            details: `${verdict.cause} Derived ${derived} from the ${loaded.intake === "formation" ? "formation anniversary" : "onboarding RA-switch date"} per the standard rules. Confirm to set it — the company becomes visible to reminders again.${closingNote(loaded)}`,
+            details: `${verdict.cause} Derived ${derived} from the ${loaded.intake === "formation" ? "formation anniversary" : "onboarding RA-switch date"} per the standard rules. Confirm to set it — the company becomes visible to reminders again.${
+              kind === "annual_report"
+                ? " ⚠ Before confirming: check whether THIS year's report was actually filed — the derived date is next year's cycle, and confirming it marks the company current (compliance-auditor, council 2026-08-06)."
+                : ""
+            }${closingNote(loaded)}`,
             autoFix: { column: COLUMN[kind], from: null, to: derived },
           }
         }
@@ -146,8 +150,8 @@ function proposeForVerdict(
         ...base,
         action: "fix_account_fields",
         tier: "confirm",
-        summary: `${label} date missing — account data incomplete`,
-        details: `${verdict.cause} The date cannot be derived automatically (missing formation/onboarding dates or state on the account). Fix the account fields, then the date can be derived.${closingNote(loaded)}`,
+        summary: `${label} needs account data fixed`,
+        details: `${verdict.cause} This cannot be fixed automatically — the account is missing the fields the rules derive from (formation/onboarding dates or the state). Fix the account fields, then the date can be derived.${closingNote(loaded)}`,
         autoFix: null,
       }
     }
