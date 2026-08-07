@@ -133,6 +133,9 @@ export interface CompleteSDParams {
   delivery_id: string
   actor?: string
   notes?: string
+  /** Renewal filings: the cycle year this filing is FOR (drives the
+   *  completion roll — see AdvanceStageParams.renewal_filing_for_year). */
+  renewal_filing_for_year?: number
 }
 
 // ─── Internal: stage resolution ────────────────────────
@@ -694,6 +697,7 @@ export async function completeSD(
     target_stage: finalStage,
     actor: params.actor,
     notes: params.notes,
+    renewal_filing_for_year: params.renewal_filing_for_year,
   })
 }
 

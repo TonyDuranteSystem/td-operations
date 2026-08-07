@@ -35,6 +35,11 @@ export interface FileRenewalParams {
   kind: RenewalKind
   /** ISO date string YYYY-MM-DD. */
   filed_date: string
+  /** The cycle year this filing is FOR (Mark Filed dialog). Defaults to the
+   *  filed_date's year; differs for early/late filings (a January filing for
+   *  last year's report). Drives the receipt filename, the deadlines sync,
+   *  the notification, and the completion roll (filed-year+1 semantics). */
+  filing_for_year?: number | null
   receipt: {
     /** Original upload name — used only for audit; written file uses SOP filename. */
     file_name: string
@@ -139,7 +144,7 @@ export async function fileRenewal(
 ): Promise<ActionResult<FileRenewalResult>> {
   return safeAction<FileRenewalResult>(
     async () => {
-      const year = yearFromFiledDate(params.filed_date)
+      const year = params.filing_for_year ?? yearFromFiledDate(params.filed_date)
 
       // 1. Load account
       const { data: account, error: acctErr } = await supabaseAdmin
@@ -216,6 +221,7 @@ export async function fileRenewal(
         delivery_id: deliveryId,
         actor: "dashboard:calendar",
         notes: `Filed ${params.filed_date} — receipt: ${driveLink}`,
+        renewal_filing_for_year: year,
       })
       if (!completion.success) {
         throw new Error(`completeSD failed: ${completion.error ?? "unknown"}`)
@@ -247,7 +253,7 @@ export async function fileRenewal(
           .eq("account_id", account.id)
           .eq("deadline_type", DEADLINE_TYPE_BY_KIND[params.kind])
           .is("year", null)
-          .in("status", ["Pending", "Not Started"])
+          .in("status", ["Pending", "Not Started", "Overdue"])
       }
 
       // 7. Append accounts.notes entry (CRM Update Rule)

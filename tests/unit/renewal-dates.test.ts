@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { deriveRenewalDates, plusOneYear, normalizeStateCode } from "@/lib/operations/renewal-dates"
+import { deriveRenewalDates, plusOneYear, normalizeStateCode, anniversaryForYear, computeRollForward } from "@/lib/operations/renewal-dates"
 
 const EMPTY = { ra_renewal_date: null, annual_report_due_date: null, cmra_renewal_date: null }
 
@@ -158,4 +158,49 @@ describe("deriveRenewalDates — the 9 approved backfills (plan c2d97552 A1)", (
       expect(fills.ra_renewal_date).toBe(c.expected)
     })
   }
+})
+
+describe("computeRollForward — filed-year+1 semantics (plan 89c951a7)", () => {
+  it("normal cycle: 2026 filing on a 2026-11-07 record → 2027-11-07", () => {
+    expect(computeRollForward("2026-11-07", 2026)).toEqual({ action: "roll", next: "2027-11-07" })
+  })
+
+  it("TITAN class: stuck 2025-11-07 record, filing FOR 2025 → 2026-11-07 (not absorbed to 2027)", () => {
+    expect(computeRollForward("2025-11-07", 2025)).toEqual({ action: "roll", next: "2026-11-07" })
+  })
+
+  it("stuck record completed today without explicit year: filing FOR 2026 → future date, no cron resurrection", () => {
+    const d = computeRollForward("2025-11-07", 2026)
+    expect(d).toEqual({ action: "roll", next: "2027-11-07" })
+    expect(d.next > "2026-08-06").toBe(true)
+  })
+
+  it("record already rolled (repair ran first): 2027 record, 2026 filing → already_current, never moves backwards", () => {
+    expect(computeRollForward("2027-11-07", 2026)).toEqual({ action: "already_current", next: "2027-11-07" })
+  })
+
+  it("double completion of the same cycle → second roll is a no-op (idempotent)", () => {
+    const first = computeRollForward("2026-11-07", 2026)
+    expect(first.action).toBe("roll")
+    expect(computeRollForward(first.next, 2026)).toEqual({ action: "already_current", next: first.next })
+  })
+
+  it("record MORE than a year behind stays behind after one filing — each owed year needs its own filing", () => {
+    const d = computeRollForward("2023-05-01", 2023)
+    expect(d).toEqual({ action: "roll", next: "2024-05-01" })
+  })
+
+  it("Feb 29 anniversary lands on Mar 1 in a non-leap year", () => {
+    expect(anniversaryForYear("2024-02-29", 2025)).toBe("2025-03-01")
+    expect(anniversaryForYear("2024-02-29", 2028)).toBe("2028-02-29")
+    expect(computeRollForward("2024-02-29", 2024)).toEqual({ action: "roll", next: "2025-03-01" })
+  })
+
+  it("REGRESSION: dates in the DST-transition window never drift a day (old setFullYear bug)", () => {
+    // new Date("2026-11-07").setFullYear(2027) → 2027-11-06 on a US-timezone
+    // machine because Nov 6 2027 is still DST while Nov 6 2026 is not.
+    expect(plusOneYear("2026-11-07")).toBe("2027-11-07")
+    expect(plusOneYear("2027-03-14")).toBe("2028-03-14")
+    expect(anniversaryForYear("2026-11-07", 2027)).toBe("2027-11-07")
+  })
 })
