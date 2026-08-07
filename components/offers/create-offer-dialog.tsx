@@ -834,6 +834,12 @@ export function CreateOfferDialog({
         const data = await res.json()
 
         toast.success(`Draft offer created — opening preview`)
+        // WS-A: the client holds credit this offer could not show. Said here, at
+        // the moment the offer is written, because a card found on the health
+        // screen tomorrow is too late to stop it being sent at full price.
+        for (const w of (data.warnings ?? []) as string[]) {
+          toast.warning(w, { duration: 30000 })
+        }
         setCreatedOfferUrl(data.offer_url)
         // Auto-open the real offer page for preview
         window.open(`${data.offer_url}?preview=td`, '_blank')

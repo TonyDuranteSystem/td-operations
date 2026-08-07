@@ -221,6 +221,47 @@ export async function availableCreditForDisplay(
 }
 
 /**
+ * Everything a client still has, in every currency (WS-A rider 2).
+ *
+ * Used to answer "do they hold credit we FAILED to show?" — so it must not
+ * filter by currency at all. Deliberately its own read rather than a call to
+ * `computeCreditApplication` with a sentinel currency: that column is a database
+ * ENUM, so an invented value raises a type error, the query returns nothing, and
+ * the warning built on it would have been permanently silent. Exactly the
+ * dead-code failure the credit line itself already had once.
+ */
+export async function unspentCreditByCurrency(
+  scope: CreditScope,
+  supabase: SupabaseClient,
+): Promise<Array<{ amount: number; currency: string }>> {
+  const accountId = (scope as { accountId?: string }).accountId
+  const contactId = (scope as { contactId?: string }).contactId
+  if (!accountId && !contactId) return []
+
+  const { data, error } = await supabase
+    .from("payments")
+    .select("credit_remaining, amount_currency")
+    .eq(accountId ? "account_id" : "contact_id", accountId ?? (contactId as string))
+    .eq("invoice_status", "Credit")
+    .gt("credit_remaining", 0)
+  if (error) {
+    console.error("[unspentCreditByCurrency] lookup failed:", error.message)
+    return []
+  }
+
+  const byCurrency = new Map<string, number>()
+  for (const r of (data ?? []) as Array<{ credit_remaining: number | null; amount_currency: string }>) {
+    const amt = Number(r.credit_remaining) || 0
+    if (amt <= 0) continue
+    byCurrency.set(r.amount_currency, (byCurrency.get(r.amount_currency) ?? 0) + amt)
+  }
+  return Array.from(byCurrency.entries()).map(([currency, amount]) => ({
+    amount: Math.round(amount * 100) / 100,
+    currency,
+  }))
+}
+
+/**
  * Decrement credit_remaining for each applied credit after the offsetting invoice
  * is created. Re-reads each row to avoid clobbering a concurrent decrement, and
  * stamps credit_for_payment_id with the invoice it most recently offset (audit).

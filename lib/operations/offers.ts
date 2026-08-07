@@ -22,7 +22,8 @@ import { getConfiguredCardFeeRate } from "@/lib/payments/card-fee-config"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { accountIdForOffer } from "@/lib/operations/offer-scope"
 import { normalizeFormationState } from "@/lib/formation/states"
-import { availableCreditForDisplay } from "@/lib/operations/credit-netting"
+import { availableCreditForDisplay, unspentCreditByCurrency } from "@/lib/operations/credit-netting"
+import { resolveCreditSubject, subjectForDisplay, type CreditSubject } from "@/lib/operations/credit-subject"
 import { parsePriceQuirk } from "@/lib/offers/compute-offer-totals"
 import type { Json } from "@/lib/database.types"
 
@@ -117,6 +118,60 @@ export function validateOfferJsonb(params: Record<string, unknown>): string | nu
     }
   }
   return null
+}
+
+
+/**
+ * RIDER 2 — say so when a client HAS credit and the offer could not show it.
+ *
+ * Silence here is the dangerous outcome: an offer with no credit line looks
+ * identical whether the client has none, holds it in another currency, or is one
+ * of two people sharing an address. Staff would send full price to someone who
+ * had already paid, and nothing anywhere would have flagged it. Only fires when
+ * a real unspent balance exists — a client with no credit produces no noise.
+ */
+async function warnIfCreditWentUnattached(input: {
+  reason: "ambiguous_email" | "currency"
+  contactIds: string[]
+  currency: string
+  clientName: string
+  email: string | null
+}): Promise<string | null> {
+  try {
+    const held: Array<{ contactId: string; amount: number; currency: string }> = []
+    for (const contactId of input.contactIds) {
+      for (const c of await unspentCreditByCurrency({ contactId }, supabaseAdmin)) {
+        held.push({ contactId, amount: c.amount, currency: c.currency })
+      }
+    }
+    if (held.length === 0) return null
+
+    const summary = held.map((h) => `${h.amount} ${h.currency}`).join(", ")
+    const detail =
+      input.reason === "ambiguous_email"
+        ? `${input.contactIds.length} contacts share the email ${input.email}, so the offer for ${input.clientName} could not safely show a credit — showing one person another's balance is worse than showing none. Unspent credit on those contacts: ${summary}. Fix the duplicate contacts, then revise the offer.`
+        : `${input.clientName} holds unspent credit (${summary}) but this offer is priced in ${input.currency}, so nothing was shown and nothing will be deducted at signing — credit never converts between currencies. Either price the offer in their currency or tell them explicitly.`
+
+    const { reportSystemError } = await import("@/lib/system-errors")
+    await reportSystemError({
+      source: "server",
+      route: "/api/crm/admin-actions/create-offer",
+      message: `Offer created without showing a credit the client actually holds — ${detail}`,
+      context: {
+        reason: input.reason,
+        client_name: input.clientName,
+        email: input.email,
+        offer_currency: input.currency,
+        contact_ids: input.contactIds,
+        unattached_credit: held,
+      },
+    })
+    return detail
+  } catch (err) {
+    // A warning must never take an offer down with it.
+    console.error("[createOffer] unattached-credit warning failed:", err)
+    return null
+  }
 }
 
 // ─── Types ────────────────────────────────────────────────────
@@ -220,6 +275,13 @@ export interface CreateOfferResult {
   offer_url?: string
   whop_checkout_url?: string | null
   referrer_auto_filled?: boolean
+  /**
+   * Plain-English notices for the person who just created the offer — today,
+   * "this client holds credit and the offer could not show it". A durable card
+   * is also written for the system-health screen, but a card found later is not
+   * the same as being told while the offer is still on screen.
+   */
+  warnings?: string[]
   duplicate?: { token: string; status: string }
   error?: string
 }
@@ -513,19 +575,57 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     // knows is wrong. Display only — the netting engine at invoice time is the
     // money of record. Person-scoped: the paid strategy-call credit belongs to
     // the human who paid it, not to a company they happen to own.
+    // AUTO-PROPOSE. The offer rarely carries a contact id: offers are written from
+    // the LEAD page, and a lead is only linked to a contact when the client SIGNS
+    // (measured on production: every lead in the pre-offer statuses had no link).
+    // So gating the snapshot on contact_id made the feature dead in its own
+    // headline case. We resolve the person the SAME way the signing webhook does
+    // — by email — so the line the client reads and the deduction the invoice
+    // applies target the same person by construction.
+    //
+    // DISPLAY ONLY: the offer's own linkage is untouched. It drives the
+    // duplicate-offer check and portal tier, and changing it from inside a
+    // display feature would be real blast radius for no benefit.
     let creditAmount: number | null = null
     let creditPaymentId: string | null = null
-    if (params.contact_id) {
-      try {
-        const held = await availableCreditForDisplay({ contactId: params.contact_id }, currency, supabaseAdmin)
+    const creditWarnings: string[] = []
+    try {
+      const subject = params.contact_id
+        ? ({ kind: "resolved", contactId: params.contact_id, email: "" } as CreditSubject)
+        : await resolveCreditSubject(params.client_email, supabaseAdmin)
+      const displayContactId = subjectForDisplay(subject)
+
+      if (displayContactId) {
+        const held = await availableCreditForDisplay({ contactId: displayContactId }, currency, supabaseAdmin)
         if (held.amount > 0) {
           creditAmount = held.amount
           creditPaymentId = held.creditId
+        } else {
+          // Resolved the person but showed nothing — tell staff if that is
+          // because their credit is in another currency, which is invisible
+          // on the page and looks exactly like having no credit at all.
+          const w = await warnIfCreditWentUnattached({
+            reason: "currency",
+            contactIds: [displayContactId],
+            currency,
+            clientName: params.client_name,
+            email: params.client_email ?? null,
+          })
+          if (w) creditWarnings.push(w)
         }
-      } catch (err) {
-        // Never block an offer over a display line.
-        console.error("[createOffer] credit snapshot failed:", err)
+      } else if (subject.kind === "ambiguous") {
+        const w = await warnIfCreditWentUnattached({
+          reason: "ambiguous_email",
+          contactIds: subject.contacts.map((c) => c.id),
+          currency,
+          clientName: params.client_name,
+          email: subject.email,
+        })
+        if (w) creditWarnings.push(w)
       }
+    } catch (err) {
+      // Never block an offer over a display line.
+      console.error("[createOffer] credit snapshot failed:", err)
     }
 
     // 8. Insert offer
@@ -654,6 +754,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
       offer_url,
       whop_checkout_url: whopUrl,
       referrer_auto_filled: referralAutoFilled,
+      ...(creditWarnings.length ? { warnings: creditWarnings } : {}),
     }
   } catch (err) {
     return {

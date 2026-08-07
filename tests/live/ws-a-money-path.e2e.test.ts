@@ -1,52 +1,47 @@
 /**
- * WS-A MONEY-PATH MATRIX — LIVE against the sandbox database (dev job c0a61e44).
+ * WS-A MONEY-PATH E2E — LIVE against the cloud sandbox (dev job c0a61e44).
  *
- * This is NOT a unit test. It drives the REAL exported functions against the real
- * sandbox Supabase, then re-reads every row it claims. Mocks prove logic; this
- * proves the logic survives contact with Postgres — conditional UPDATE rowcounts,
- * enum coercion, the mirror trigger path, oldest-first ordering under real
- * timestamps. The bugs this workstream fixed were all of that second kind.
+ * This is NOT a unit test. It drives the REAL exported functions against real
+ * Postgres and re-reads every row it claims. Mocks prove logic; this proves the
+ * logic survives contact with the database — conditional-UPDATE rowcounts,
+ * oldest-first ordering under real timestamps, the PostgREST filter semantics,
+ * the expense-mirror path, and the bank-feed matcher's identity tier.
  *
- * Run: npx vitest run --config vitest.qa.config.ts
- * It is outside the default include glob, so `npm run test:unit` never touches a DB.
+ *   npx vitest run --config vitest.ws-a-e2e.config.ts
  *
- * SAFETY: refuses to run unless the URL is the sandbox ref. Every row it creates
- * is prefixed QAMTX and deleted in afterAll.
+ * Environment and the sandbox-only guarantee come from the shared live-test
+ * setup (tests/live/_env-ws-a.ts) — deliberately NOT a private loader, which is
+ * how this file started and how it came to lack the email-blocking the shared
+ * one enforces.
+ *
+ * Every row it creates is tagged QAMTX and swept in afterAll, which ASSERTS the
+ * fixture count reaches zero.
  */
 /* eslint-disable no-restricted-syntax -- P2.4 routes production writes through
    lib/operations. This file is the opposite of production code: it SEEDS and
    TEARS DOWN fixtures in a sandbox database, and going through the operations
-   helpers would mean testing the code under test with itself. The safety that
-   matters here is the sandbox-ref gate above, not the write-path rule. */
+   helpers would mean testing the code under test with itself. */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
-import { readFileSync } from "node:fs"
 import { createClient, type SupabaseClient } from "@supabase/supabase-js"
 
-const SANDBOX_REF = "xjcxlmlpeywtwkhstjlw"
-const PROD_REF = "ydzipybqeebtpcvsbtvs"
-const ENV_FILE = process.env.QA_ENV_FILE || ""
-
-// ─── env load + hard safety gate ───────────────────────────────────────────
-for (const line of readFileSync(ENV_FILE, "utf8").split("\n")) {
-  const m = line.match(/^([A-Z0-9_]+)="?(.*?)"?$/)
-  if (m && !process.env[m[1]]) process.env[m[1]] = m[2]
-}
-const URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ""
-if (URL.includes(PROD_REF)) throw new Error("⛔ REFUSING: this points at PRODUCTION.")
-if (!URL.includes(SANDBOX_REF)) throw new Error(`⛔ REFUSING: not the sandbox ref (${URL})`)
-
-const db: SupabaseClient = createClient(URL, process.env.SUPABASE_SERVICE_ROLE_KEY!)
-
-// Real modules, imported AFTER env is set (supabaseAdmin is a lazy proxy).
-const { recordPaidCall } = await import("@/lib/operations/paid-call-credit")
-const { extractPaidBooking, paidCallIdempotencyKey } = await import("@/lib/calendly/paid-booking")
-const { createTDInvoice } = await import("@/lib/portal/td-invoice")
-const { handleChargeReversal } = await import("@/lib/operations/credit-reversal")
-const {
+import { recordPaidCall } from "@/lib/operations/paid-call-credit"
+import { extractPaidBooking, paidCallIdempotencyKey } from "@/lib/calendly/paid-booking"
+import { createTDInvoice } from "@/lib/portal/td-invoice"
+import { handleChargeReversal } from "@/lib/operations/credit-reversal"
+import { matchAndReconcile } from "@/lib/bank-feed-matcher"
+import { ensureMinimalAccount } from "@/lib/portal/auto-create"
+import { createOffer } from "@/lib/operations/offers"
+import { resolveCreditSubject, subjectForDisplay } from "@/lib/operations/credit-subject"
+import {
   computeCreditApplication, claimCredits, confirmCreditClaims, unwindCreditClaims,
-  availableCreditForDisplay,
-} = await import("@/lib/operations/credit-netting")
+  availableCreditForDisplay, unspentCreditByCurrency,
+} from "@/lib/operations/credit-netting"
+
+const db: SupabaseClient = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+)
 
 // ─── fixtures ──────────────────────────────────────────────────────────────
 const TAG = `QAMTX-${Date.now()}`
@@ -156,7 +151,9 @@ async function sweep(): Promise<string[]> {
     await step("payments", () => db.from("payments").delete().in("id", payIds))
   }
   if (contacts.length) {
-    await step("offers", () => db.from("offers").delete().in("contact_id", contacts))
+    await step("offers(contact)", () => db.from("offers").delete().in("contact_id", contacts))
+  await step("offers(tag)", () => db.from("offers").delete().like("client_name", `${TAG}%`))
+  await step("system_errors", () => db.from("system_errors").delete().like("context->>client_name", `${TAG}%`))
     await step("account_contacts(contact)", () => db.from("account_contacts").delete().in("contact_id", contacts))
   }
   if (accounts.length) {
@@ -629,7 +626,6 @@ describe("CELL 6 — account creation must not sweep a live personal credit", ()
     // the paid-call invoice rows are ordinary invoices with a NULL account
     await db.from("payments").update({ account_id: null }).in("id", [live.invoiceId, spent.invoiceId])
 
-    const { ensureMinimalAccount } = await import("@/lib/portal/auto-create")
     const acct = await ensureMinimalAccount({
       contactId: p.id,
       clientName: `${TAG} Backfill Co`,
@@ -758,7 +754,6 @@ describe("CELL 2b — the charge row links to the born-paid invoice WITHOUT movi
     const feedId = (feedRow as { id: string }).id
     feeds.push(feedId)
 
-    const { matchAndReconcile } = await import("@/lib/bank-feed-matcher")
     const res = await matchAndReconcile(feedId)
 
     // Linked, certainly, and explicitly WITHOUT money.
@@ -807,7 +802,6 @@ describe("CELL 2b — the charge row links to the born-paid invoice WITHOUT movi
     const feedId = (feedRow as { id: string }).id
     feeds.push(feedId)
 
-    const { matchAndReconcile } = await import("@/lib/bank-feed-matcher")
     const res = await matchAndReconcile(feedId)
 
     // Two rows now share the intent, so the matcher must NOT silently pick one.
@@ -847,7 +841,6 @@ describe("CELL 2d — the batched bank payout must not touch the born-paid invoi
     const feedId = (feedRow as { id: string }).id
     feeds.push(feedId)
 
-    const { matchAndReconcile } = await import("@/lib/bank-feed-matcher")
     const res = await matchAndReconcile(feedId)
 
     // It must never SETTLE the call invoice: that invoice is already Paid, so any
@@ -860,5 +853,192 @@ describe("CELL 2d — the batched bank payout must not touch the born-paid invoi
     // And the client's credit is not touched by a payout either.
     const cr = await payment(call.creditId!)
     expect(Number(cr!.credit_remaining)).toBe(257)
+  })
+})
+
+// ══ CELL 11 — THE LEAD PATH (rider 3) ════════════════════════════════════
+//
+// The path that actually happens, and the one the first version of this feature
+// was blind to. Offers are written from the LEAD page, and a lead is not linked
+// to a contact until the client SIGNS — measured on production, every lead in the
+// pre-offer statuses had no contact link. So an offer created the normal way
+// carries no contact id, and a credit snapshot gated on one showed nothing.
+//
+// Auto-propose resolves the person by EMAIL, the same key the signing webhook
+// uses when it creates the invoice, so display and money target the same person.
+
+describe("CELL 11 — an offer created the way staff actually create one", () => {
+  it("11a a lead-shaped offer (no contact id, email only) still shows the credit", async () => {
+    const p = await freshPerson("leadpath")
+    await recordPaidCall({
+      payment: booking(newCharge("leadpath"), 257, "EUR"),
+      inviteeEmail: p.email, callDate: "2026-08-06",
+    })
+
+    const token = `${TAG}-leadpath`.toLowerCase()
+    const res = await createOffer({
+      client_name: `${TAG} Lead Path`,
+      client_email: p.email,          // the ONLY link to the person
+      language: "it",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Costituzione LLC", price: "€1500" }],
+      cost_summary: [{ label: "Totale", total: "€1500" }],
+      currency: "EUR",
+      token,
+      // deliberately NO contact_id — this is the lead page's shape
+    })
+    expect(res.success).toBe(true)
+
+    const { data: offer } = await db.from("offers")
+      .select("credit_amount, credit_payment_id, contact_id").eq("token", token).maybeSingle()
+    const o = offer as Record<string, unknown>
+    expect(Number(o.credit_amount)).toBe(257)
+    expect(o.credit_payment_id).toBeTruthy()
+    // linkage untouched — the snapshot is display only
+    expect(o.contact_id).toBeNull()
+  })
+
+  it("11b the SAME email resolves to the SAME person for crediting and for display", async () => {
+    const p = await freshPerson("sameperson")
+    const call = await recordPaidCall({
+      payment: booking(newCharge("sameperson"), 257, "EUR"),
+      inviteeEmail: p.email, callDate: "2026-08-06",
+    })
+    // one resolver, so these cannot drift
+    const subject = await resolveCreditSubject(p.email, db)
+    expect(subjectForDisplay(subject)).toBe(call.contactId)
+    // and case/whitespace differences do not create a second answer
+    const messy = await resolveCreditSubject(`  ${p.email.toUpperCase()}  `, db)
+    expect(subjectForDisplay(messy)).toBe(call.contactId)
+  })
+
+  it("11c an email nobody holds shows nothing and warns nobody", async () => {
+    const token = `${TAG}-noperson`.toLowerCase()
+    await createOffer({
+      client_name: `${TAG} Unknown Person`,
+      client_email: `${TAG.toLowerCase()}-nobody@example.com`,
+      language: "en", payment_type: "bank_transfer", contract_type: "formation",
+      services: [{ name: "Company Formation", price: "$1500" }],
+      cost_summary: [{ label: "Total", total: "$1500" }],
+      currency: "USD", token,
+    })
+    const { data: offer } = await db.from("offers").select("credit_amount").eq("token", token).maybeSingle()
+    expect((offer as Record<string, unknown>).credit_amount).toBeNull()
+  })
+
+  it("11d TWO people on one email: no credit shown, and staff ARE told (rider 2)", async () => {
+    const shared = `${TAG.toLowerCase()}-shared@example.com`
+    const { data: a } = await db.from("contacts")
+      .insert({ full_name: `${TAG} Twin One`, email: shared, status: "active" }).select("id").single()
+    const { data: b } = await db.from("contacts")
+      .insert({ full_name: `${TAG} Twin Two`, email: shared, status: "active" }).select("id").single()
+    extraContacts.push((a as { id: string }).id, (b as { id: string }).id)
+
+    // give one of them real, unspent credit
+    await recordPaidCall({
+      payment: booking(newCharge("twin"), 257, "EUR"),
+      inviteeEmail: shared, callDate: "2026-08-06",
+    })
+
+    const before = await db.from("system_errors").select("id", { count: "exact", head: true })
+      .ilike("message", "%without showing a credit%")
+    const beforeCount = before.count ?? 0
+
+    const token = `${TAG}-twins`.toLowerCase()
+    await createOffer({
+      client_name: `${TAG} Twin One`,
+      client_email: shared,
+      language: "it", payment_type: "bank_transfer", contract_type: "formation",
+      services: [{ name: "Costituzione LLC", price: "€1500" }],
+      cost_summary: [{ label: "Totale", total: "€1500" }],
+      currency: "EUR", token,
+    })
+
+    // The offer must NOT guess whose money it is.
+    const { data: offer } = await db.from("offers").select("credit_amount").eq("token", token).maybeSingle()
+    expect((offer as Record<string, unknown>).credit_amount).toBeNull()
+
+    // But silence would be the dangerous outcome — staff get a card.
+    const after = await db.from("system_errors").select("id", { count: "exact", head: true })
+      .ilike("message", "%without showing a credit%")
+    expect((after.count ?? 0)).toBeGreaterThan(beforeCount)
+  })
+
+  it("11e credit in ANOTHER currency: nothing shown, and staff are told why", async () => {
+    const p = await freshPerson("wrongccy")
+    await recordPaidCall({
+      payment: booking(newCharge("wrongccy"), 257, "EUR"),
+      inviteeEmail: p.email, callDate: "2026-08-06",
+    })
+    // sanity: they really do hold something, just not in USD
+    const holds = await unspentCreditByCurrency({ contactId: p.id }, db)
+    expect(holds.some(h => h.currency === "EUR" && h.amount === 257)).toBe(true)
+
+    const before = await db.from("system_errors").select("id", { count: "exact", head: true })
+      .ilike("message", "%priced in USD%")
+    const beforeCount = before.count ?? 0
+
+    const token = `${TAG}-wrongccy`.toLowerCase()
+    await createOffer({
+      client_name: `${TAG} Wrong Currency`,
+      client_email: p.email,
+      language: "en", payment_type: "bank_transfer", contract_type: "formation",
+      services: [{ name: "Company Formation", price: "$1500" }],
+      cost_summary: [{ label: "Total", total: "$1500" }],
+      currency: "USD", token,
+    })
+    const { data: offer } = await db.from("offers").select("credit_amount").eq("token", token).maybeSingle()
+    expect((offer as Record<string, unknown>).credit_amount).toBeNull()
+
+    const after = await db.from("system_errors").select("id", { count: "exact", head: true })
+      .ilike("message", "%priced in USD%")
+    expect((after.count ?? 0)).toBeGreaterThan(beforeCount)
+  })
+})
+
+// ══ CELL 12 — DRESS REHEARSAL, THROUGH THE LEAD PATH (rider 3) ═══════════
+
+describe("CELL 12 — Alessandro-shaped chain, created the way staff create it", () => {
+  it("paid call → lead-path offer shows the credit → signing invoice nets it", async () => {
+    const email = `${TAG.toLowerCase()}-dress2@example.com`
+
+    // 1. He books and pays for the strategy call. A contact appears for him.
+    const call = await recordPaidCall({
+      payment: booking(newCharge("dress2"), 257, "EUR"),
+      inviteeEmail: email, inviteeName: `${TAG} Dress Two`, callDate: "2026-08-06",
+    })
+    expect(call.contactCreated).toBe(true)
+    extraContacts.push(call.contactId)
+
+    // 2. Antonio opens the LEAD and writes the offer — no contact id anywhere.
+    const token = `${TAG}-dress2`.toLowerCase()
+    await createOffer({
+      client_name: `${TAG} Dress Two`,
+      client_email: email,
+      language: "it", payment_type: "bank_transfer", contract_type: "formation",
+      services: [{ name: "Costituzione LLC", price: "€1500" }],
+      cost_summary: [{ label: "Totale", total: "€1500" }],
+      currency: "EUR", token,
+    })
+    const { data: offer } = await db.from("offers")
+      .select("credit_amount, credit_payment_id").eq("token", token).maybeSingle()
+    const o = offer as Record<string, unknown>
+    expect(Number(o.credit_amount)).toBe(257)         // the client SEES it
+    expect(o.credit_payment_id).toBe(call.creditId)
+
+    // 3. He signs. The webhook resolves the person by email and bills them.
+    const inv = await createTDInvoice({
+      contact_id: call.contactId,
+      line_items: [{ description: `${TAG} Costituzione LLC`, unit_price: 1500, quantity: 1 }],
+      currency: "EUR", idempotency_key: `${TAG}-dress2-invoice`,
+    })
+
+    // 4. What he was shown is what he is billed.
+    const invRow = await payment(inv.paymentId)
+    expect(Number(invRow!.total)).toBe(1500 - Number(o.credit_amount))
+    const cr = await payment(call.creditId!)
+    expect(Number(cr!.credit_remaining)).toBe(0)
+    expect(cr!.credit_consumed_by).toBe(inv.paymentId)
   })
 })

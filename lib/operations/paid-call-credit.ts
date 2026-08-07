@@ -19,10 +19,13 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { paidCallIdempotencyKey, paidCallDescription, type CalendlyPayment } from "@/lib/calendly/paid-booking"
 import { paymentIntentIdForCharge } from "@/lib/stripe-sync"
+import { resolveCreditSubject, subjectForRecording } from "@/lib/operations/credit-subject"
 
 export interface PaidCallResult {
   contactId: string
   contactCreated: boolean
+  /** Several contacts share the booker's email — the credit went to the oldest. */
+  contactAmbiguous: boolean
   invoiceId: string
   invoiceNumber: string
   creditId: string | null
@@ -36,14 +39,14 @@ export interface PaidCallResult {
  * the credit is a payments row and payments require a contact or an account, so
  * without this the fee simply cannot be recorded).
  */
-async function resolveContact(email: string, name: string | null): Promise<{ id: string; created: boolean }> {
-  const { data: existing } = await supabaseAdmin
-    .from("contacts")
-    .select("id")
-    .ilike("email", email)
-    .limit(1)
-    .maybeSingle()
-  if (existing) return { id: (existing as { id: string }).id, created: false }
+async function resolveContact(email: string, name: string | null): Promise<{ id: string; created: boolean; ambiguous: boolean }> {
+  // ONE resolver, shared with offer creation, so the person we CREDIT and the
+  // person the offer SHOWS a balance for can never diverge. This used to be a
+  // local lookup taking the first row of an unordered query — on a duplicated
+  // address that was a coin toss, and the offer would then disagree with it.
+  const subject = await resolveCreditSubject(email, supabaseAdmin)
+  const { contactId, ambiguous } = subjectForRecording(subject)
+  if (contactId) return { id: contactId, created: false, ambiguous }
 
   // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; same sanctioned path as offer-signed's lead→contact conversion (dev_task 98484283)
   const { data: created, error } = await supabaseAdmin
@@ -52,7 +55,7 @@ async function resolveContact(email: string, name: string | null): Promise<{ id:
     .select("id")
     .single()
   if (error || !created) throw new Error(`paid-call: contact creation failed for ${email}: ${error?.message}`)
-  return { id: (created as { id: string }).id, created: true }
+  return { id: (created as { id: string }).id, created: true, ambiguous: false }
 }
 
 /** The contact's sole account, when they have exactly one (never guess between two). */
@@ -151,6 +154,7 @@ export async function recordPaidCall(params: {
   return {
     contactId: contact.id,
     contactCreated: contact.created,
+    contactAmbiguous: contact.ambiguous,
     invoiceId: invoice.paymentId,
     invoiceNumber: invoice.invoiceNumber,
     creditId: credit.paymentId,
