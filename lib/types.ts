@@ -538,6 +538,9 @@ export interface InboxConversation {
    *  false → the row renders an "Archived" chip in folder / all-mail-search
    *  views, where an archived row deliberately stays visible. */
   inInbox?: boolean
+  /** Payload-derived: any live message starred. Pin == the Gmail star (syncs
+   *  both ways with the Gmail app). Absent on payloads that don't compute it. */
+  starred?: boolean
 }
 
 export interface InboxAttachment {

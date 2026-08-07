@@ -675,6 +675,23 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         toast.success(variables.labelName ? `Filed to ${variables.labelName}` : 'Filed to folder')
         return
       }
+      if (variables.action === 'star' || variables.action === 'unstar') {
+        // PIN toggle (pin == Gmail star). The old one-way Star gave no feedback
+        // at all — the exact "the star doesn't work" report (Antonio 2026-08-07).
+        const starred = variables.action === 'star'
+        if (acted) {
+          queryClient.setQueriesData<{ conversations: InboxConversation[]; total: number }>(
+            { queryKey: ['inbox-conversations'] },
+            (old) => old
+              ? { ...old, conversations: (old.conversations ?? []).map(c => c.id === acted.id ? { ...c, starred } : c) }
+              : old
+          )
+          setSelected(prev => prev && prev.id === acted.id ? { ...prev, starred } : prev)
+        }
+        toast.success(starred ? 'Pinned — it will stay at the top of your inbox' : 'Unpinned')
+        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+        return
+      }
       if (variables.action === 'snooze') {
         // Hide with the 'snooze' action — each view decides for itself
         // (leaves the Inbox, stays in folders), same machinery as delete.
@@ -1520,13 +1537,13 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                             <Archive className="h-4 w-4" />
                           </button>
                         </HoverHint>
-                        <HoverHint label="Star">
+                        <HoverHint label={selected.starred ? 'Unpin' : 'Pin — keep at the top to work on'}>
                           <button
-                            onClick={() => emailActionMutation.mutate({ action: 'star', conv: selected })}
+                            onClick={() => emailActionMutation.mutate({ action: selected.starred ? 'unstar' : 'star', conv: selected })}
                             disabled={emailActionMutation.isPending}
                             className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-amber-500 transition-colors"
                           >
-                            <Star className="h-4 w-4" />
+                            <Star className={cn('h-4 w-4', selected.starred && 'fill-amber-400 text-amber-400')} />
                           </button>
                         </HoverHint>
                         <div className="relative">

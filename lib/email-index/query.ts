@@ -156,6 +156,9 @@ export function groupRowsToConversations(
       // and all-mail-search views. NEVER derive that chip from client memory of
       // a click; a refetch would contradict it (council, 2026-08-07).
       inInbox: live.some((r) => r.label_ids.includes("INBOX")),
+      // Pin == Gmail star (thread-level). Powers the pin toggles + the
+      // pinned-first ordering's visual marker (dev job 76b521ea).
+      starred: live.some((r) => r.label_ids.includes("STARRED")),
       ...(opts.linkedThreadIds?.has(threadId) ? { linked: true } : {}),
     })
   })

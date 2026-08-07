@@ -65,6 +65,27 @@ describe('groupRowsToConversations', () => {
     expect(c.preview).toBe('latest')
     expect(c.unread).toBe(1)
     expect(c.direction).toBe('received')
+    expect(c.inInbox).toBe(true)
+    expect(c.starred).toBe(false)
+  })
+
+  it('derives inInbox and starred at THREAD level (any live message counts)', () => {
+    // A replied-to thread: our sent reply carries neither INBOX nor STARRED —
+    // the thread is still in the inbox and still pinned. Per-row logic here is
+    // the class of bug that floods the Archived view (council, 2026-08-07).
+    const convs = groupRowsToConversations([
+      row({ message_id: 'a1', label_ids: ['INBOX', 'STARRED'] }),
+      row({ message_id: 'a2', label_ids: ['SENT'], from_email: 'support@tonydurante.us', internal_date: '2026-07-03T10:00:00Z' }),
+    ])
+    expect(convs[0].inInbox).toBe(true)
+    expect(convs[0].starred).toBe(true)
+    // Fully archived, unpinned thread: both false — the row renders the
+    // "Archived" chip in folder/all-mail-search views from exactly this field.
+    const archived = groupRowsToConversations([
+      row({ message_id: 'b1', thread_id: 't2', label_ids: ['CATEGORY_UPDATES'] }),
+    ])
+    expect(archived[0].inInbox).toBe(false)
+    expect(archived[0].starred).toBe(false)
   })
 
   it('marks sent direction when the last message is ours', () => {

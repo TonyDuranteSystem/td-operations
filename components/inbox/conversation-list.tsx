@@ -3,7 +3,7 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useMemo, useRef, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, Archive, ArchiveRestore, Palette, FolderInput, Ban, AlarmClock, FlameKindling } from 'lucide-react'
+import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, Archive, ArchiveRestore, Palette, FolderInput, Ban, AlarmClock, FlameKindling, Star } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { markByKey, COLOR_MARKS, MARK_LABEL_PREFIX } from '@/lib/inbox/color-marks'
@@ -389,6 +389,43 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     },
   })
 
+  // PIN == the Gmail star (dev job 76b521ea — "pin an email that I need to
+  // work on"). Toggle; syncs both ways with the Gmail app. Optimistic repaint
+  // for instant feedback, then a refetch that already agrees (write-through).
+  const pinMutation = useMutation({
+    mutationFn: async (conv: InboxConversation) => {
+      if (conv.channel !== 'gmail') return
+      const res = await fetch('/api/inbox/email-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threadId: conv.id.replace('gmail:', ''), action: conv.starred ? 'unstar' : 'star', mailbox }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Could not update the pin.')
+      }
+      return res.json().catch(() => ({}))
+    },
+    onMutate: async (conv) => {
+      await queryClient.cancelQueries({ queryKey: ['inbox-conversations'] })
+      const starred = !conv.starred
+      queryClient.setQueriesData<{ conversations: InboxConversation[] }>(
+        { queryKey: ['inbox-conversations'] },
+        (old) => old
+          ? { ...old, conversations: (old.conversations ?? []).map(c => c.id === conv.id ? { ...c, starred } : c) }
+          : old
+      )
+    },
+    onSuccess: (_d, conv) => {
+      toast.success(conv.starred ? 'Unpinned' : 'Pinned — it will stay at the top of your inbox')
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not update the pin.')
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+    },
+  })
+
   const isWhatsApp = activeChannel === 'whatsapp'
 
   const { data, isLoading, isFetching, dataUpdatedAt } = useQuery<ConversationsPayload & { total?: number; origin?: PayloadOrigin; allScopeTotal?: number | null; archivedUnavailable?: boolean }>({
@@ -703,6 +740,9 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                   {conv.preview}
                 </p>
                 <div className="flex items-center gap-1 shrink-0 ml-2">
+                  {conv.starred && (
+                    <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
+                  )}
                   {mark && (
                     <span
                       className="h-2.5 w-2.5 rounded-full shrink-0"
@@ -764,6 +804,18 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                   </>
                 ) : (
                   <>
+                    {/* Pin — phone parity with the hover bar's pin. */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        pinMutation.mutate(conv)
+                      }}
+                      disabled={pinMutation.isPending}
+                      className="p-1.5 rounded hover:bg-amber-50 text-zinc-400 hover:text-amber-500 transition-colors"
+                      title={conv.starred ? 'Unpin' : 'Pin'}
+                    >
+                      <Star className={cn('h-4 w-4', conv.starred && 'fill-amber-400 text-amber-400')} />
+                    </button>
                     {/* Archive — the phone's first row-level archive control
                         (rows offered Delete ONLY; the hover bar never appears
                         on touch). Hidden on an already-archived row: a repeat
@@ -810,6 +862,20 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                 )}
               >
                 <div className="flex items-center gap-0.5 bg-white border border-zinc-200 rounded-lg shadow-md px-1 py-0.5">
+                {/* Pin — first in the bar (Antonio 2026-08-07: "I want pin also
+                    in the menu"). Filled amber when pinned. */}
+                <HoverHint label={conv.starred ? 'Unpin' : 'Pin — keep at the top to work on'}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      pinMutation.mutate(conv)
+                    }}
+                    disabled={pinMutation.isPending}
+                    className="p-1.5 rounded hover:bg-amber-50 text-zinc-400 hover:text-amber-500 transition-colors"
+                  >
+                    <Star className={cn('h-4 w-4', conv.starred && 'fill-amber-400 text-amber-400')} />
+                  </button>
+                </HoverHint>
                 {onSetColor && (
                   <div className="relative">
                     <HoverHint label="Mark with a color"><button
