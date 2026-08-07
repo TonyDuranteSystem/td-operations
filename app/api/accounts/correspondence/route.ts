@@ -15,6 +15,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isAdmin } from '@/lib/auth'
 import { uploadBinaryToDrive, createFolder, listFolder } from '@/lib/google-drive'
 import { createPortalNotification } from '@/lib/portal/notifications'
+import { isContactLinkedToAccount } from '@/lib/portal/admin-send-scope'
 
 export async function POST(req: NextRequest) {
   const supabase = createClient()
@@ -31,6 +32,20 @@ export async function POST(req: NextRequest) {
 
   if (!file) return NextResponse.json({ error: 'file required' }, { status: 400 })
   if (!accountId && !contactId) return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
+
+  // Send-scope invariant (2026-08-07 leak, dev job 4bad3094): correspondence
+  // tagged with BOTH a person and a company must have the person actually in
+  // that company — the chat notification below is company-visible. Checked
+  // BEFORE the Drive upload so a mismatch leaves no partial state.
+  if (accountId && contactId) {
+    const linked = await isContactLinkedToAccount(accountId, contactId)
+    if (!linked) {
+      return NextResponse.json(
+        { error: "The contact is not a member of that account — the correspondence notice would land in the wrong company's chat." },
+        { status: 400 },
+      )
+    }
+  }
 
   // Read file buffer
   const arrayBuffer = await file.arrayBuffer()

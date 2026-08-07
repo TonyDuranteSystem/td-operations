@@ -211,12 +211,24 @@ export default function PortalChatsPage() {
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const didScrollToTargetRef = useRef(false)
   const deepLinkPagesRef = useRef(0) // bounded back-paging when the target is older than the live window
-  // Unified thread state: which company the admin is sending as, and all companies for badge lookup
+  // Unified thread state: which company the admin is sending as, and all companies for badge lookup.
+  // selectedCompanyId is the EXPLICIT send target only — null by default on person
+  // threads (2026-08-07 leak fix, dev job 4bad3094: the old auto-selected first
+  // company silently stamped person-thread replies into a company-visible thread).
+  // Read-only side panels that just need "which company is this person about"
+  // use panelCompanyId below, which still auto-derives — so a null send target
+  // never degrades the AI assistant / Issues / To-Do / notes panels.
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
   const [selectedThreadCompanies, setSelectedThreadCompanies] = useState<{ id: string; name: string; overdue?: OverdueSummary | null; closed?: boolean }[]>([])
   /** Non-empty when selected thread is an account-level (multi-member LLC) thread */
   const [selectedThreadMembers, setSelectedThreadMembers] = useState<{ id: string; name: string }[]>([])
   const [selectedName, setSelectedName] = useState<{ company: string; contact?: string } | null>(null)
+  // Company CONTEXT for read-only side panels (AI assistant, Issues, To-Do
+  // cards, notes, the solo-company realtime arm): the explicit chip selection
+  // when staff picked one, else the person's first open company — the same
+  // derivation the send target used before the 2026-08-07 leak fix. Never a
+  // SEND target: sends use selectedCompanyId (explicit only).
+  const panelCompanyId = selectedCompanyId ?? selectedThreadCompanies.find(c => !c.closed)?.id ?? null
   const [replyText, setReplyText] = useState('')
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [aiSuggestion, setAiSuggestion] = useState('')
@@ -295,9 +307,11 @@ export default function PortalChatsPage() {
       setSelectedThreadContactId(t.contact_id)
       setSelectedThreadMembers(isAccountThread ? members : [])
       setSelectedThreadCompanies(isAccountThread ? [] : companies)
-      // Same closed-account guard as the click path: never default the send
-      // target to a closed company the client can no longer see.
-      setSelectedCompanyId(isAccountThread ? null : (companies.find(c => !c.closed)?.id ?? null))
+      // Person threads default to PERSONAL scope — no auto-selected company.
+      // The old first-open-company default is how the 2026-08-07 cross-company
+      // leak happened (dev job 4bad3094). Company sends now require an explicit
+      // chip click; panels derive their own context via panelCompanyId.
+      setSelectedCompanyId(null)
     },
   )
   const [internalReplyText, setInternalReplyText] = useState('')
@@ -794,17 +808,20 @@ export default function PortalChatsPage() {
       channel = channel
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'portal_messages', filter: `contact_id=eq.${selectedThreadContactId}` }, handleInsert)
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `contact_id=eq.${selectedThreadContactId}` }, handleUpdate)
-    } else if (selectedContactId && selectedCompanyId) {
+    } else if (selectedContactId && panelCompanyId) {
+      // panelCompanyId (not the explicit send target): solo-company rows must
+      // keep arriving live in the person thread even when the send default is
+      // personal — the view scope never followed the send scope.
       channel = channel
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'portal_messages', filter: `account_id=eq.${selectedCompanyId}` }, handleInsert)
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `account_id=eq.${selectedCompanyId}` }, handleUpdate)
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'portal_messages', filter: `account_id=eq.${panelCompanyId}` }, handleInsert)
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `account_id=eq.${panelCompanyId}` }, handleUpdate)
     }
 
     channel.subscribe()
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [selectedAccountId, selectedContactId, selectedThreadContactId, selectedCompanyId, queryClient])
+  }, [selectedAccountId, selectedContactId, selectedThreadContactId, panelCompanyId, queryClient])
 
   // Realtime subscription — global portal_messages INSERT → invalidate thread list
   // so the sidebar sees new last-message previews and unread badges immediately.
@@ -982,7 +999,7 @@ export default function PortalChatsPage() {
           contact_id: selectedContactId || null,
           // Contact-scoped threads still belong to a company (single-owner LLC);
           // attach it so the card surfaces on the company's Account page too.
-          account_id: selectedAccountId || selectedCompanyId || null,
+          account_id: selectedAccountId || panelCompanyId || null,
           action_type: actionType,
         }),
       })
@@ -1013,7 +1030,7 @@ export default function PortalChatsPage() {
           contact_id: selectedContactId || null,
           // Contact-scoped threads still belong to a company (single-owner LLC);
           // attach it so the To-Do surfaces on the company's Account page too.
-          account_id: selectedAccountId || selectedCompanyId || null,
+          account_id: selectedAccountId || panelCompanyId || null,
           action_type: 'action_needed',
           label: label.slice(0, 200) || null,
         }),
@@ -1173,7 +1190,7 @@ export default function PortalChatsPage() {
     // scoped messages (same resolution the send mutation uses). Some messages are
     // stored under account_id, some under contact_id only — sending one misses half.
     const suggestBody: { account_id?: string; contact_id?: string } = {}
-    const suggestAccountId = selectedAccountId || selectedCompanyId
+    const suggestAccountId = selectedAccountId || panelCompanyId
     const suggestContactId = selectedContactId || selectedThreadContactId
     if (suggestAccountId) suggestBody.account_id = suggestAccountId
     if (suggestContactId) suggestBody.contact_id = suggestContactId
@@ -1370,7 +1387,7 @@ export default function PortalChatsPage() {
     setAiPanelMessages(prev => [...prev, { role: 'user', text: question }])
     setAiPanelLoading(true)
     try {
-      const accountId = selectedCompanyId || selectedAccountId || (selectedThreadId ? internalMessages?.thread?.account_id : null)
+      const accountId = panelCompanyId || selectedAccountId || (selectedThreadId ? internalMessages?.thread?.account_id : null)
       if (!accountId) { toast.error('No client context'); return }
       const res = await fetch('/api/internal/ai-assist', {
         method: 'POST',
@@ -1464,7 +1481,13 @@ export default function PortalChatsPage() {
             ? { account_id: selectedAccountId }
             : {
                 contact_id: selectedContactId,
-                ...(selectedCompanyId ? { account_id: selectedCompanyId } : {}),
+                // Person-thread sends declare their scope explicitly (2026-08-07
+                // leak fix): 'company' ONLY when staff clicked a chip — the server
+                // rejects an undeclared contact+account pair and verifies the
+                // membership. 'person' otherwise, so the reply stays private.
+                ...(selectedCompanyId
+                  ? { account_id: selectedCompanyId, sender_context: 'company' }
+                  : { sender_context: 'person' }),
               }
           ),
           message, reply_to_id, attachments,
@@ -1586,6 +1609,23 @@ export default function PortalChatsPage() {
   const currentThreadForGuard = threads?.find(t =>
     selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId,
   )
+  // Audience of the current SEND target: linked members + active chat-capable
+  // portal teammates. Warns staff before a company-tagged send whenever more
+  // than the one person will see it — including a SOLO company with teammates
+  // (2026-08-07 leak review, dev job 4bad3094). Person-scope sends (no chip,
+  // no account thread) have no target here and show no warning.
+  const audienceTargetId = selectedAccountId || selectedCompanyId
+  const { data: sendAudience } = useQuery<{ contact_count: number; chat_teammate_count: number }>({
+    queryKey: ['portal-chat-audience', audienceTargetId],
+    queryFn: () => fetch(`/api/portal/chat/audience?account_id=${audienceTargetId}`).then(r => r.json()),
+    enabled: !!audienceTargetId,
+    staleTime: 5 * 60_000,
+  })
+  const audienceTotal = (sendAudience?.contact_count ?? 0) + (sendAudience?.chat_teammate_count ?? 0)
+  const audienceTargetName = selectedAccountId
+    ? (selectedName?.company ?? 'this company')
+    : (selectedThreadCompanies.find(c => c.id === selectedCompanyId)?.name ?? 'this company')
+
   const selectedClosedCompany = selectedThreadCompanies.find(c => c.id === selectedCompanyId && c.closed)
   const sendingToClosedAccount = selectedAccountId
     ? !!currentThreadForGuard?.account_closed
@@ -1597,7 +1637,7 @@ export default function PortalChatsPage() {
   const handleSend = async () => {
     if ((!replyText.trim() && pendingAdminFiles.length === 0) || (!selectedAccountId && !selectedContactId) || sendMutation.isPending || uploadingAdminFile) return
     if (sendingToClosedAccount) {
-      toast.error(`${closedTargetName} is closed — the client can't see messages here. Pick an active company or "No tag".`)
+      toast.error(`${closedTargetName} is closed — the client can't see messages here. Pick an active company or "Personal".`)
       return
     }
     if (isRecording) stopRecording()
@@ -1629,7 +1669,7 @@ export default function PortalChatsPage() {
     setPolishing(true)
     try {
       const polishIds: { account_id?: string; contact_id?: string } = {}
-      const polishAccountId = selectedAccountId || selectedCompanyId
+      const polishAccountId = selectedAccountId || panelCompanyId
       const polishContactId = selectedContactId || selectedThreadContactId
       if (polishAccountId) polishIds.account_id = polishAccountId
       if (polishContactId) polishIds.contact_id = polishContactId
@@ -1903,13 +1943,14 @@ export default function PortalChatsPage() {
                     setSelectedThreadContactId(thread.contact_id)
                     setSelectedThreadMembers([])
                     setSelectedThreadCompanies(companies)
-                    // Default the send target to the first ACTIVE company. A closed
-                    // account is hidden from the client portal, so defaulting to it
-                    // (e.g. when it sorts first alphabetically) would silently send
-                    // into a thread the client can't see. If every company is closed,
-                    // default to null ("No tag") — an untagged message still reaches
-                    // the client's personal view.
-                    setSelectedCompanyId(companies.find(c => !c.closed)?.id ?? null)
+                    // Person threads default to PERSONAL scope — no auto-selected
+                    // company. The old first-open-company default is how the
+                    // 2026-08-07 cross-company leak happened (dev job 4bad3094):
+                    // replies meant for the person landed in a company-visible
+                    // thread. Sending as a company now requires an explicit chip
+                    // click; read-only panels keep their company context via
+                    // panelCompanyId.
+                    setSelectedCompanyId(null)
                   }
                   setSidebarView('chats')
                 }}
@@ -2907,13 +2948,13 @@ export default function PortalChatsPage() {
               </div>
             )}
 
-            {chatViewMode === 'whatsnew' && (selectedAccountId || selectedContactId || selectedCompanyId) ? (
+            {chatViewMode === 'whatsnew' && (selectedAccountId || selectedContactId || panelCompanyId) ? (
               <ThreadWhatsNewPanel
                 accountId={selectedAccountId}
                 contactId={selectedContactId}
-                cardAccountId={selectedAccountId || selectedCompanyId}
+                cardAccountId={selectedAccountId || panelCompanyId}
                 onOpenCard={({ noteId, label }) => {
-                  const acctId = selectedAccountId || selectedCompanyId
+                  const acctId = selectedAccountId || panelCompanyId
                   setCardPreset({
                     accountId: acctId ?? null,
                     contactId: acctId ? null : selectedContactId,
@@ -2926,15 +2967,15 @@ export default function PortalChatsPage() {
                   })
                 }}
               />
-            ) : chatViewMode === 'issues' && (selectedAccountId || selectedCompanyId) ? (
-              <ThreadIssuesPanel accountId={selectedAccountId || selectedCompanyId} />
-            ) : chatViewMode === 'todo' && (selectedAccountId || selectedContactId || selectedCompanyId) ? (
-              <ThreadTodoPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
-            ) : chatViewMode === 'email' && (selectedAccountId || selectedContactId || selectedCompanyId) ? (
-              <ThreadEmailPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
-            ) : chatViewMode === 'worker' && (selectedAccountId || selectedContactId || selectedCompanyId) ? (
+            ) : chatViewMode === 'issues' && (selectedAccountId || panelCompanyId) ? (
+              <ThreadIssuesPanel accountId={selectedAccountId || panelCompanyId} />
+            ) : chatViewMode === 'todo' && (selectedAccountId || selectedContactId || panelCompanyId) ? (
+              <ThreadTodoPanel accountId={selectedAccountId || panelCompanyId} contactId={selectedContactId} />
+            ) : chatViewMode === 'email' && (selectedAccountId || selectedContactId || panelCompanyId) ? (
+              <ThreadEmailPanel accountId={selectedAccountId || panelCompanyId} contactId={selectedContactId} />
+            ) : chatViewMode === 'worker' && (selectedAccountId || selectedContactId || panelCompanyId) ? (
               <ThreadWorkerPanel
-                accountId={selectedAccountId || selectedCompanyId}
+                accountId={selectedAccountId || panelCompanyId}
                 contactId={selectedContactId}
                 clientName={selectedName?.company || selectedName?.contact || 'this client'}
               />
@@ -3107,7 +3148,7 @@ export default function PortalChatsPage() {
                           </DropdownMenu.Item>
                           <DropdownMenu.Item
                             className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
-                            onSelect={() => { const acctId = selectedCompanyId || selectedAccountId; if (acctId) createInternalThread(acctId, msg.id, msg.message) }}
+                            onSelect={() => { const acctId = panelCompanyId || selectedAccountId; if (acctId) createInternalThread(acctId, msg.id, msg.message) }}
                           >
                             <Users className="h-3.5 w-3.5 text-zinc-400" /> Discuss with Team
                           </DropdownMenu.Item>
@@ -3142,7 +3183,7 @@ export default function PortalChatsPage() {
                           <DropdownMenu.Item
                             className="flex items-center gap-2.5 px-3 py-2 text-amber-700 hover:bg-amber-50 cursor-pointer outline-none"
                             onSelect={() => setNoteSeed({
-                              accountId: selectedCompanyId || selectedAccountId || null,
+                              accountId: panelCompanyId || selectedAccountId || null,
                               contactId: selectedContactId || selectedThreadContactId || null,
                               prefill: msg.message,
                               // RELATIVE path (safeOriginPath rejects absolute URLs) anchored
@@ -3687,10 +3728,30 @@ export default function PortalChatsPage() {
                         ? 'bg-zinc-900 text-white'
                         : 'bg-white border text-zinc-600 hover:bg-zinc-100'
                     )}
+                    title="Only this person (and staff) can see the reply — no company thread."
                   >
-                    No tag
+                    Personal
                   </button>
                 </div>
+              </div>
+            )}
+
+            {/* Audience warning — the selected send target is a company whose
+                thread MORE people than this one person can read (other members
+                and/or chat-capable portal teammates). Informational, not
+                blocking: staff chose the company explicitly; this makes the
+                audience visible before they hit send (2026-08-07 leak fix). */}
+            {!sendingToClosedAccount && !!audienceTargetId && audienceTotal > 1 && (
+              <div className="px-3 py-2 border-t bg-amber-50 flex items-start gap-2 shrink-0">
+                <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                <p className="text-[12px] text-amber-800 leading-snug">
+                  Visible to everyone in <span className="font-semibold">{audienceTargetName}</span>:{' '}
+                  {sendAudience?.contact_count ?? 0} member{(sendAudience?.contact_count ?? 0) === 1 ? '' : 's'}
+                  {(sendAudience?.chat_teammate_count ?? 0) > 0 && (
+                    <> + {sendAudience?.chat_teammate_count} portal teammate{(sendAudience?.chat_teammate_count ?? 0) === 1 ? '' : 's'}</>
+                  )}
+                  . Don&apos;t send anything meant only for one person{selectedAccountId ? '' : ' — use “Personal” for that'}.
+                </p>
               </div>
             )}
 
@@ -3704,7 +3765,7 @@ export default function PortalChatsPage() {
                   can&apos;t see messages sent here.{' '}
                   {selectedAccountId
                     ? 'This conversation is archived.'
-                    : 'Pick an active company above, or “No tag”, to reach the client.'}
+                    : 'Pick an active company above, or “Personal”, to reach the client.'}
                 </p>
               </div>
             )}
