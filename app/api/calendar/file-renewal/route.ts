@@ -63,6 +63,22 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // Optional: the cycle year this filing is FOR (early/late filings).
+    const filingForYearRaw = fd.get('filing_for_year')
+    let filing_for_year: number | null = null
+    if (typeof filingForYearRaw === 'string' && filingForYearRaw !== '') {
+      filing_for_year = parseInt(filingForYearRaw, 10)
+      const filedYear = parseInt(filed_date.slice(0, 4), 10)
+      // Stale records can be YEARS behind (the exact population this dialog
+      // serves) — allow up to 10 years back; only 1 year forward (typo guard).
+      if (Number.isNaN(filing_for_year) || filing_for_year > filedYear + 1 || filing_for_year < filedYear - 10) {
+        return NextResponse.json(
+          { error: 'filing_for_year must be between 10 years before and 1 year after the filed date' },
+          { status: 400 },
+        )
+      }
+    }
+
     const buffer = Buffer.from(await receipt.arrayBuffer())
 
     const result = await fileRenewal({
@@ -70,6 +86,7 @@ export async function POST(req: NextRequest) {
       delivery_id: typeof delivery_id === 'string' && delivery_id ? delivery_id : null,
       kind: kind as RenewalKind,
       filed_date,
+      filing_for_year,
       receipt: {
         file_name: receipt.name || 'receipt.pdf',
         mime_type: receipt.type || 'application/pdf',

@@ -21,13 +21,37 @@ interface Props {
 
 export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
   const [filedDate, setFiledDate] = useState<string>(() => new Date().toISOString().split('T')[0])
+  // The cycle year this filing is FOR. Defaults to the DUE date's year (the
+  // cycle being satisfied), not the filed date — a stuck 2025 row marked
+  // filed today is usually the 2025 filing. Clamped to what the server
+  // accepts (at most next year) so a far-future row can't default to a
+  // value the API would reject. Staff can override.
+  const [filingForYear, setFilingForYear] = useState<string>(() => {
+    const due = parseInt(row.due_date.slice(0, 4), 10)
+    const cap = new Date().getFullYear() + 1
+    return String(Number.isNaN(due) ? cap - 1 : Math.min(due, cap))
+  })
   const [file, setFile] = useState<File | null>(null)
   const [dragActive, setDragActive] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
   const isRA = row.kind === 'ra'
   const portal = !isRA && row.state_of_formation ? STATE_PORTALS[row.state_of_formation] : null
-  const year = filedDate.slice(0, 4)
+  const year = filingForYear
+  // Continuous range — a record years behind must be able to name any owed
+  // year (the old sparse set had holes, e.g. a 2022-due row offered no 2024).
+  // Capped to what the server accepts relative to the filed date
+  // (filedYear-10 … filedYear+1), so the default can never 400.
+  const yearOptions = (() => {
+    const current = new Date().getFullYear()
+    const filedYear = parseInt(filedDate.slice(0, 4), 10) || current
+    const dueYear = parseInt(row.due_date.slice(0, 4), 10)
+    const lo = Math.max(filedYear - 10, Math.min(dueYear - 1, current - 1))
+    const hi = Math.min(filedYear + 1, Math.max(dueYear, current + 1))
+    const years: number[] = []
+    for (let y = lo; y <= hi; y++) years.push(y)
+    return years
+  })()
 
   const canSubmit = !!file && !!filedDate && !submitting
 
@@ -70,6 +94,7 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
       fd.append('account_id', row.account_id)
       fd.append('kind', row.kind)
       fd.append('filed_date', filedDate)
+      fd.append('filing_for_year', filingForYear)
       if (row.delivery_id) fd.append('delivery_id', row.delivery_id)
       fd.append('receipt', file)
 
@@ -190,6 +215,25 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
                 onChange={e => setFiledDate(e.target.value)}
                 className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+            </div>
+
+            <div>
+              <label htmlFor="filing-for-year" className="block text-xs font-medium text-zinc-600 mb-1">
+                Filing for year <span className="text-red-500">*</span>
+              </label>
+              <select
+                id="filing-for-year"
+                value={filingForYear}
+                onChange={e => setFilingForYear(e.target.value)}
+                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {yearOptions.map(y => (
+                  <option key={y} value={String(y)}>{y}</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-zinc-400 mt-1">
+                The compliance year this filing satisfies. The next due date becomes this year + 1.
+              </p>
             </div>
 
             <div>
