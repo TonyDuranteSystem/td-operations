@@ -1,7 +1,7 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { useMemo, useRef, useEffect, useState } from 'react'
+import { Fragment, useMemo, useRef, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, Archive, ArchiveRestore, Palette, FolderInput, Ban, AlarmClock, FlameKindling, Star } from 'lucide-react'
 import { toast } from 'sonner'
@@ -630,6 +630,20 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   const selectableIds = conversations.filter(c => c.channel === 'gmail').map(c => c.id)
   const allSelected = selectableIds.length > 0 && selectableIds.every(id => selectedIds.has(id))
 
+  // TWO-SECTION VIEW (Antonio 2026-08-07: "the page view divided in two parts —
+  // on the top pinned, and all email following"). Payload-derived like inTrash:
+  // only in the views whose ordering bands pinned first (inbox / folders), and
+  // only when at least one pinned row exists. Rows are already contiguous
+  // (server + reconcile order pinned-first), so headers are pure rendering.
+  const pinBandView = data?.origin?.view.kind === 'inbox' || data?.origin?.view.kind === 'label'
+  const pinnedCount = pinBandView ? conversations.filter(c => c.starred === true).length : 0
+  const sectionHeader = (label: string, icon: 'pin' | 'mail') => (
+    <div className="flex items-center gap-1.5 px-4 py-1.5 bg-zinc-50 border-b text-[11px] font-semibold uppercase tracking-wider text-zinc-400 select-none">
+      {icon === 'pin' ? <Star className="h-3 w-3 fill-amber-400 text-amber-400" /> : <Mail className="h-3 w-3" />}
+      {label}
+    </div>
+  )
+
   return (
     <div className="flex-1 overflow-y-auto">
       {/* Select all — ticks every RENDERED Gmail row on this page (the filtered
@@ -650,16 +664,27 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
           {allSelected ? 'Clear selection' : `Select all on this page (${selectableIds.length})`}
         </button>
       )}
-      {conversations.map((conv) => {
+      {conversations.map((conv, rowIdx) => {
         const Icon = channelIcons[conv.channel]
         const isSelected = selectedId === conv.id
         const isChecked = selectedIds.has(conv.id)
         const showCheckbox = !isWhatsApp && (bulkMode || conv.channel === 'gmail')
         const mark = markByKey(conv.colorMark)
 
+        // Section headers: "Pinned (N)" above the pinned band, "All email"
+        // where the ordinary flow resumes. Only when both bands exist.
+        const headerBefore =
+          pinnedCount > 0
+            ? rowIdx === 0 && conv.starred
+              ? sectionHeader(`Pinned (${pinnedCount})`, 'pin')
+              : conv.starred !== true && (rowIdx === 0 || conversations[rowIdx - 1]?.starred === true)
+                ? sectionHeader('All email', 'mail')
+                : null
+            : null
         return (
+          <Fragment key={conv.id}>
+          {headerBefore}
           <div
-            key={conv.id}
             // Marked rows are tinted with the mark color across the WHOLE row
             // (Antonio 2026-07-08: "the chat in the picker colored, not just
             // the dot"). Selection state wins over the tint; the colored left
@@ -1066,6 +1091,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
               </div>
             )}
           </div>
+          </Fragment>
         )
       })}
 
