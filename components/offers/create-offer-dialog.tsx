@@ -304,6 +304,16 @@ export function CreateOfferDialog({
   const [notesLoading, setNotesLoading] = useState(false)
   // WS-A: credit this client already paid, shown while the offer is being built.
   const [heldCredit, setHeldCredit] = useState<Array<{ amount: number; currency: string }>>([])
+  // WS-A: warnings raised WHILE creating the offer (a credit that could not be
+  // attached, a mis-typed price). These HOLD the screen — see the note below.
+  const [postCreateWarnings, setPostCreateWarnings] = useState<string[]>([])
+  const [createdUrl, setCreatedUrl] = useState<string | null>(null)
+
+  const dismissWarnings = () => {
+    setPostCreateWarnings([])
+    setCreatedUrl(null)
+    onClose()
+  }
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set())
   const [notesExpanded, setNotesExpanded] = useState(true)
   const [expandedNoteIds, setExpandedNoteIds] = useState<Set<string>>(new Set())
@@ -836,15 +846,22 @@ export function CreateOfferDialog({
 
         const data = await res.json()
 
-        toast.success(`Draft offer created — opening preview`)
-        // WS-A: the client holds credit this offer could not show. Said here, at
-        // the moment the offer is written, because a card found on the health
-        // screen tomorrow is too late to stop it being sent at full price.
-        for (const w of (data.warnings ?? []) as string[]) {
-          toast.warning(w, { duration: 30000 })
-        }
+        const warnings = (data.warnings ?? []) as string[]
         setCreatedOfferUrl(data.offer_url)
-        // Auto-open the real offer page for preview
+
+        // WS-A: a warning must HOLD THE SCREEN, not be a toast.
+        // This previously toasted and then immediately opened the offer in a new
+        // tab — which took focus, so the warning was raised on a screen the user
+        // was instantly navigated away from and never saw. Antonio hit exactly
+        // that. When something is wrong, the preview waits until he has read it.
+        if (warnings.length > 0) {
+          setPostCreateWarnings(warnings)
+          setCreatedUrl(data.offer_url)
+          router.refresh()
+          return
+        }
+
+        toast.success(`Draft offer created — opening preview`)
         window.open(`${data.offer_url}?preview=td`, '_blank')
         router.refresh()
       } catch (err) {
@@ -859,6 +876,46 @@ export function CreateOfferDialog({
   const standaloneServices = catalog.filter(s => s.category === 'standalone')
   const addonServices = catalog.filter(s => s.category === 'addon')
   const _sourceLabel = accountId ? 'account' : 'lead'
+
+  // WS-A: the offer was created, but something needs reading BEFORE it is sent.
+  // A full screen, not a toast — the previous version raised this and then
+  // opened the offer in a new tab in the same breath, so it was never seen.
+  if (postCreateWarnings.length > 0) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
+          <h2 className="text-lg font-semibold mb-1">Offer created — read this before sending</h2>
+          <p className="text-sm text-zinc-500 mb-4">The draft is saved. Nothing has gone to the client.</p>
+          <div className="space-y-3 mb-5">
+            {postCreateWarnings.map((w, i) => (
+              <div key={i} className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+                {w}
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={dismissWarnings}
+              className="px-3 py-1.5 text-sm rounded-md border hover:bg-zinc-50"
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (createdUrl) window.open(`${createdUrl}?preview=td`, '_blank')
+                dismissWarnings()
+              }}
+              className="px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700"
+            >
+              Open the offer anyway
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
