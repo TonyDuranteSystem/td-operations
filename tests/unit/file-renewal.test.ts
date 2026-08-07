@@ -115,3 +115,20 @@ describe('buildNotificationContent — Annual Report', () => {
     expect(fl.title).not.toBe(de.title)
   })
 })
+
+describe("buildAccountNoteEntry — note + unpaid override (Antonio 2026-08-07)", () => {
+  it("appends the staff note", () => {
+    const r = buildAccountNoteEntry("ar", 2026, "2026-08-07", "https://drive/x", null, { note: "client asked us to file early" })
+    expect(r).toBe("2026-08-07: Annual Report 2026 filed → https://drive/x — note: client asked us to file early")
+  })
+
+  it("records the unpaid override loudly, before the note", () => {
+    const r = buildAccountNoteEntry("ra", 2026, "2026-08-07", "https://drive/x", "old", { note: "Antonio approved", overrideUnpaid: true })
+    expect(r).toBe("old\n2026-08-07: RA Renewal 2026 filed → https://drive/x [FILED DESPITE UNPAID INVOICES] — note: Antonio approved")
+  })
+
+  it("unchanged without opts (backwards compatible)", () => {
+    const r = buildAccountNoteEntry("ra", 2027, "2027-03-09", "https://drive/x", null)
+    expect(r).toBe("2027-03-09: RA Renewal 2027 filed → https://drive/x")
+  })
+})

@@ -220,7 +220,10 @@ export function AnnualCalendar({ rows, year, today }: AnnualCalendarProps) {
                 .map((row, i) => {
                   const u = urgencyFor(row, today)
                   const renewal = isRenewal(row) ? row : null
-                  const actionable = renewal && (u === 'red' || u === 'overdue') && renewal.status !== 'offboarding' && renewal.status !== 'blocked' && renewal.status !== 'filed'
+                  // Blocked rows ARE clickable (Antonio 2026-08-07): the
+                  // dialog shows the unpaid warning and requires a note to
+                  // file anyway — the hold is visible, not a dead end.
+                  const actionable = renewal && (u === 'red' || u === 'overdue') && renewal.status !== 'offboarding' && renewal.status !== 'filed'
                   const blocked = renewal?.status === 'blocked'
                   const offb = renewal?.status === 'offboarding'
 
