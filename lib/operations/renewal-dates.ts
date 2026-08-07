@@ -138,45 +138,66 @@ export async function applyRenewalDateFills(
     ]
     for (const m of mirrors) {
       if (!m.due) continue
-      const year = new Date(m.due).getFullYear()
-      // Match the current OPEN row for this obligation: same year OR the
-      // year-NULL legacy import rows (the majority of the table — file-renewal
-      // carries the same fallback). Completed rows are history — never updated;
-      // a completed prior cycle correctly gets a NEW row for the new cycle.
-      // limit(1) tolerates duplicate rows instead of erroring into an insert.
-      const { data: existingRows } = await supabaseAdmin
-        .from("deadlines")
-        .select("id, due_date")
-        .eq("account_id", accountId)
-        .eq("deadline_type", m.type)
-        .neq("status", "Completed")
-        .or(`year.eq.${year},year.is.null`)
-        .order("due_date", { ascending: false })
-        .limit(1)
-      const existing = existingRows?.[0] ?? null
-      if (existing) {
-        if (existing.due_date !== m.due) {
-          await supabaseAdmin
-            .from("deadlines")
-            .update({ due_date: m.due, updated_at: new Date().toISOString() })
-            .eq("id", existing.id)
-        }
-      } else {
-        await supabaseAdmin.from("deadlines").insert({
-          account_id: accountId,
-          deadline_type: m.type,
-          due_date: m.due,
-          status: "Pending",
-          state: opts?.state || null,
-          year,
-          assigned_to: "Luca",
-          notes: `Auto-derived at intake (${opts?.actor || "renewal-dates"})`,
-        })
-      }
+      await mirrorDeadlineDate(accountId, m.type, m.due, {
+        state: opts?.state,
+        note: `Auto-derived at intake (${opts?.actor || "renewal-dates"})`,
+      })
     }
   } catch {
     // mirror is best-effort by design
   }
 
   return applied
+}
+
+/**
+ * Keep ONE `deadlines` row in sync with an account renewal date — the client
+ * portal's Deadlines page and the dashboard cards read that table, so a date
+ * repair that skips the mirror shows clients a different truth than the
+ * calendar. Shared by the intake fills above and the calendar's one-click
+ * record repairs.
+ *
+ * Matching rule: the current OPEN row for this obligation — same year OR the
+ * year-NULL legacy import rows (the majority of the table — file-renewal
+ * carries the same fallback). Completed rows are history — never updated;
+ * a completed prior cycle correctly gets a NEW row for the new cycle.
+ * limit(1) tolerates duplicate rows instead of erroring into an insert.
+ */
+export async function mirrorDeadlineDate(
+  accountId: string,
+  deadlineType: "RA Renewal" | "Annual Report",
+  due: string,
+  opts?: { state?: string | null; note?: string; matchYear?: number },
+): Promise<void> {
+  const year = new Date(due).getFullYear()
+  const lookupYear = opts?.matchYear ?? year
+  const { data: existingRows } = await supabaseAdmin
+    .from("deadlines")
+    .select("id, due_date")
+    .eq("account_id", accountId)
+    .eq("deadline_type", deadlineType)
+    .neq("status", "Completed")
+    .or(`year.eq.${lookupYear},year.is.null`)
+    .order("due_date", { ascending: false })
+    .limit(1)
+  const existing = existingRows?.[0] ?? null
+  if (existing) {
+    if (existing.due_date !== due) {
+      await supabaseAdmin
+        .from("deadlines")
+        .update({ due_date: due, year, updated_at: new Date().toISOString() })
+        .eq("id", existing.id)
+    }
+  } else {
+    await supabaseAdmin.from("deadlines").insert({
+      account_id: accountId,
+      deadline_type: deadlineType,
+      due_date: due,
+      status: "Pending",
+      state: opts?.state || null,
+      year,
+      assigned_to: "Luca",
+      notes: opts?.note || null,
+    })
+  }
 }

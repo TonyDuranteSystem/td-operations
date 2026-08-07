@@ -62,6 +62,9 @@ export interface LoadedRenewalAccount {
   /** How this company entered TD — decides which anniversary rule a missing
    *  date would be derived from. null = ambiguous, never guess (R093). */
   intake: "formation" | "onboarding" | null
+  /** The renewal SDs the verdicts were computed from (calendar rows need
+   *  the active SD id for the Mark-Filed dialog — no re-query). */
+  renewalSDs: RenewalStatusInput["renewalSDs"]
 }
 
 interface SdRow {
@@ -248,6 +251,6 @@ export async function loadRenewalStatuses(
       : a.ra_switch_date || a.client_since
         ? "onboarding"
         : null
-    return { account: a, status, intake }
+    return { account: a, status, intake, renewalSDs: renewalSDsByAccount.get(a.id) ?? [] }
   })
 }

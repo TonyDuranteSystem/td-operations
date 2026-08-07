@@ -39,7 +39,7 @@ function loaded(
     portal_tier: "active",
     ...accountOver,
   }
-  const status = computeRenewalStatus({
+  const input: RenewalStatusInput = {
     account,
     classification: { category: "active_client" },
     renewalSDs: [],
@@ -47,8 +47,9 @@ function loaded(
     hasActiveClosure: false,
     today: TODAY,
     ...inputOver,
-  })
-  return { account, status, intake }
+  }
+  const status = computeRenewalStatus(input)
+  return { account, status, intake, renewalSDs: input.renewalSDs }
 }
 
 describe("proposeRenewalFixes", () => {
