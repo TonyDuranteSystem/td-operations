@@ -103,3 +103,17 @@ describe("buildRevisedOfferInsert — WS-B copy-list triage (dev job c0a61e44)",
     expect(out.bank_details).toEqual({ beneficiary: "Tony Durante LLC" })
   })
 })
+
+describe("WS-A: credit display scalars carry to v2", () => {
+  it("a revised offer keeps showing the client's already-paid credit", () => {
+    const orig = { ...fullOriginal(), credit_amount: 257, credit_payment_id: "cn-1" }
+    const out = buildRevisedOfferInsert(orig, seed)
+    expect(out.credit_amount).toBe(257)
+    expect(out.credit_payment_id).toBe("cn-1")
+  })
+  it("an offer with no credit revises to nulls, not undefined", () => {
+    const out = buildRevisedOfferInsert(fullOriginal(), seed)
+    expect(out.credit_amount).toBe(null)
+    expect(out.credit_payment_id).toBe(null)
+  })
+})

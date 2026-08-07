@@ -323,6 +323,32 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     // claim column reads as "claimed BY this invoice" from here on.
     await consumeCredits(appliedCredit, paymentId, supabaseAdmin)
     await confirmCreditClaims(appliedCredit, paymentId, claimToken, supabaseAdmin)
+
+    // WS-A: staff alert when an OLD credit reduces a bill. Credits never expire
+    // (locked decision), so a months-old credit can cut a renewal invoice and
+    // read as a billing bug to whoever sees it. Non-fatal.
+    try {
+      const { emitAgedCreditAppliedEvent } = await import('@/lib/portal/chat-events')
+      for (const c of appliedCredit.credits) {
+        const { data: creditRow } = await supabaseAdmin
+          .from('payments')
+          .select('created_at')
+          .eq('id', c.id)
+          .maybeSingle()
+        const createdAt = (creditRow as { created_at?: string | null } | null)?.created_at
+        if (createdAt) {
+          await emitAgedCreditAppliedEvent({
+            invoice_id: paymentId,
+            credit_id: c.id,
+            amount: c.applyAmount,
+            currency,
+            credit_created_at: createdAt,
+          })
+        }
+      }
+    } catch (err) {
+      console.warn('[td-invoice] aged-credit notice failed (non-fatal):', err instanceof Error ? err.message : String(err))
+    }
   }
 
   // 3. Create payment_items
@@ -357,6 +383,16 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   const internalRef = `EXP-${String(expSeq).padStart(6, '0')}`
 
   // 5. Create client_expenses record (MIRROR — client sees as incoming expense)
+  //
+  // WS-A (Finance-Auditor defect): a CREDIT NOTE gets NO mirror row. The client's
+  // expense view would otherwise count the credit twice — once as a negative
+  // expense of its own, and again inside the "Credit applied −X" line on the
+  // invoice it reduces — leaving their totals short by exactly the credit. The
+  // credit is visible where it belongs: on the invoice it reduced.
+  if (isCreditNote) {
+    return { paymentId, expenseId: '', invoiceNumber, total, status: invoiceStatus }
+  }
+
   const { data: expense, error: expErr } = await dbWriteSafe(
     supabaseAdmin
       .from('client_expenses')

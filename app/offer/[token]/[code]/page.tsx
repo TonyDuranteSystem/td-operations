@@ -67,6 +67,7 @@ const LABELS = {
     payByCard: 'Pay by Card',
     payByTransfer: 'Bank Transfer',
     totalDueToday: 'Total Due Today',
+    creditApplied: 'Already paid — Strategy Call',
     paymentReceived: 'Payment received — thank you!',
     paymentReceivedMessage: 'We will begin working on your service right away. You can track progress in your portal.',
     goToPortal: 'Go to Portal',
@@ -127,6 +128,7 @@ const LABELS = {
     payByCard: 'Paga con Carta',
     payByTransfer: 'Bonifico Bancario',
     totalDueToday: 'Totale Dovuto Oggi',
+    creditApplied: 'Già pagato — Call Strategica',
     paymentReceived: 'Pagamento ricevuto — grazie!',
     paymentReceivedMessage: 'Inizieremo subito a lavorare sul tuo servizio. Puoi seguire i progressi nel tuo portale.',
     goToPortal: 'Vai al Portale',
@@ -199,6 +201,22 @@ export default function OfferPageWithCode() {
       cardFormatted: `${symbol}${Math.round(t.gross * 1.05).toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
     }
   }, [offer, selectedOptional])
+
+  // WS-A: display-only credit row. Reads the offer's scalar (never cost_summary)
+  // and applies the SAME same-currency rule the money engine uses, so the page
+  // can never promise a deduction the ledger would refuse.
+  const creditDisplay = useMemo(() => {
+    if (!offer || !dynamicTotal) return null
+    const amount = Number((offer as { credit_amount?: number | null }).credit_amount ?? 0)
+    if (!Number.isFinite(amount) || amount <= 0) return null
+    const symbol = dynamicTotal.formatted.startsWith('$') ? '$' : 'EUR'
+    const net = Math.max(dynamicTotal.total - amount, 0)
+    return {
+      amount,
+      formatted: `${symbol}${amount.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      netFormatted: `${symbol}${net.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+    }
+  }, [offer, dynamicTotal])
 
   const loadOffer = useCallback(async () => {
     try {
@@ -622,7 +640,21 @@ export default function OfferPageWithCode() {
                   )
                 })}
                 {/* Grand total when pre-conditions add to the payment */}
-                {dynamicTotal && dynamicTotal.preconditionsTotal > 0 && (
+                {/* WS-A: paid-call credit — display only (money lives in the
+                    credit-note ledger; never written into cost_summary). */}
+                {creditDisplay && (
+                  <div style={{ marginTop: 16, paddingTop: 12, borderTop: '2px solid var(--offer-blue)' }}>
+                    <div className="offer-riepilogo-row" style={{ color: 'var(--offer-blue)' }}>
+                      <span>{L.creditApplied}</span>
+                      <span className="offer-riepilogo-price">−{creditDisplay.formatted}</span>
+                    </div>
+                    <div className="offer-riepilogo-total" style={{ fontSize: 16 }}>
+                      <span style={{ fontWeight: 700 }}>{L.totalDueToday}</span>
+                      <span style={{ fontWeight: 700 }}>{creditDisplay.netFormatted}</span>
+                    </div>
+                  </div>
+                )}
+                {!creditDisplay && dynamicTotal && dynamicTotal.preconditionsTotal > 0 && (
                   <div style={{ marginTop: 16, paddingTop: 12, borderTop: '2px solid var(--offer-blue)' }}>
                     <div className="offer-riepilogo-total" style={{ fontSize: 16 }}>
                       <span style={{ fontWeight: 700 }}>{L.totalDueToday}</span>
