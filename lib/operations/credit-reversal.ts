@@ -50,7 +50,33 @@ export async function handleChargeReversal(
     credit_consumed_by: string | null
   }
   const remaining = Number(row.credit_remaining ?? 0)
-  const spent = !!row.credit_consumed_by || remaining <= 0
+  // SPENT means the money actually moved — the balance is gone. A credit that is
+  // merely CLAIMED (lock held by an in-flight invoice creation) is NOT spent:
+  // that creation may still fail and unwind (hunter major 3). Calling it spent
+  // produced a review card telling staff to true-up an invoice that never
+  // existed.
+  const spent = remaining <= 0
+  const inFlight = remaining > 0 && !!row.credit_consumed_by
+
+  if (inFlight) {
+    const reason =
+      `Paid-call charge ${chargeId} was ${eventType === "charge.dispute.created" ? "disputed" : "refunded"} ` +
+      `WHILE an invoice was being created against its credit. The credit was NOT voided (the in-flight ` +
+      `invoice holds the lock). Re-check this credit once the signing settles: if the invoice exists, ` +
+      `true-up as for a spent credit; if it failed, void the credit manually.`
+    try {
+      const { reportSystemError } = await import("@/lib/system-errors")
+      await reportSystemError({
+        source: "server",
+        route: "/api/webhooks/stripe",
+        message: reason,
+        context: { charge_id: chargeId, credit_id: row.id, event_type: eventType, state: "in_flight" },
+      })
+    } catch (err) {
+      console.error("[credit-reversal] review card failed:", err)
+    }
+    return { outcome: "needs_review", chargeId, creditId: row.id, reason }
+  }
 
   if (spent) {
     const reason =
@@ -73,7 +99,13 @@ export async function handleChargeReversal(
     return { outcome: "needs_review", chargeId, creditId: row.id, reason }
   }
 
-  const { error } = await db
+  // ROWCOUNT-CHECKED (hunter blocker 2): supabase-js returns {data:null,error:null}
+  // for an update that matched NOTHING. Without .select() + a length check, a
+  // signing that claimed the credit microseconds earlier made this report
+  // "voided" while the client kept refunded money as spendable credit — and no
+  // review card was raised. The claim path already had this discipline; this
+  // path did not.
+  const { data: voided, error } = await db
     .from("payments")
     .update({
       credit_remaining: 0,
@@ -82,12 +114,31 @@ export async function handleChargeReversal(
       notes: `Voided: charge ${chargeId} ${eventType === "charge.dispute.created" ? "disputed" : "refunded"}.`,
     })
     .eq("id", row.id)
-    // Only void while still unspent — a concurrent signing may have claimed it.
+    // Only void while still unclaimed — a concurrent signing may hold the lock.
     .is("credit_consumed_by", null)
+    .select("id")
 
   if (error) {
     console.error(`[credit-reversal] void failed for credit ${row.id}:`, error.message)
     return { outcome: "needs_review", chargeId, creditId: row.id, reason: `Void failed: ${error.message}` }
+  }
+
+  if (!Array.isArray(voided) || voided.length !== 1) {
+    const reason =
+      `Paid-call charge ${chargeId} was reversed but the credit could NOT be voided — a concurrent ` +
+      `invoice claimed it between the read and the write. The client may hold spendable credit for ` +
+      `money that was returned. Re-check credit ${row.id} and void or true-up by hand.`
+    try {
+      const { reportSystemError } = await import("@/lib/system-errors")
+      await reportSystemError({
+        source: "server",
+        route: "/api/webhooks/stripe",
+        message: reason,
+        context: { charge_id: chargeId, credit_id: row.id, event_type: eventType, state: "lost_race" },
+      })
+    } catch { /* best-effort */ }
+    console.error(`[credit-reversal] void matched 0 rows (lost race) for credit ${row.id}`)
+    return { outcome: "needs_review", chargeId, creditId: row.id, reason }
   }
 
   console.warn(`[credit-reversal] voided unspent paid-call credit ${row.id} (charge ${chargeId})`)

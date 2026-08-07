@@ -76,9 +76,16 @@ export async function recordPaidCall(params: {
   const description = paidCallDescription(callDate ?? null)
 
   const contact = await resolveContact(inviteeEmail, inviteeName ?? null)
-  // An EXISTING client's credit is stamped with their company at creation, so it
-  // is visible to account-scoped invoices immediately (a later backfill would
-  // not reach an already-created credit).
+  // The INVOICE may carry the client's sole company (it is revenue for that
+  // relationship), but the CREDIT stays person-scoped — deliberately.
+  //
+  // REVERSED after adversarial review (hunter major 5): stamping the sole
+  // account on the credit reintroduced the very leak `auto-create`'s backfill
+  // guard exists to prevent. A returning client of company A who books a call to
+  // discuss company B would have had A's next renewal silently eat the fee,
+  // because the annual cron nets account-scoped invoices. Person-scoped credit
+  // reaches the signing invoice (contact-scoped) — which is where the deduction
+  // was promised — and never touches another company's bill.
   const accountId = await soleAccountFor(contact.id)
 
   // 1. The revenue row — Paid, because the money is already collected.
@@ -115,7 +122,7 @@ export async function recordPaidCall(params: {
   //    invoice helper mints a CN- number and this row becomes available credit.
   const credit = await createTDInvoice({
     contact_id: contact.id,
-    ...(accountId ? { account_id: accountId } : {}),
+    // NO account_id here on purpose — see the note above.
     line_items: [{ description: `Credit — ${description}`, unit_price: -payment.amount, quantity: 1 }],
     currency: payment.currency,
     notes: `Deductible from the client's next service purchase (paid call, charge ${payment.chargeId}).`,
@@ -124,11 +131,21 @@ export async function recordPaidCall(params: {
   })
 
   // Mark it as live credit: available balance + Credit status.
+  //
+  // SELF-HEALING (hunter major 6): the credit row is created Draft and only
+  // becomes spendable here. If this update failed — or the process died between
+  // the two — the row sat as an inert negative Draft that no query treats as
+  // credit, and the webhook's 200 meant Calendly never retried. The activation
+  // is therefore IDEMPOTENT and re-asserted on every delivery: the row is found
+  // by its idempotency key on re-delivery, and this update runs again. It only
+  // ever re-asserts a NOT-yet-activated row, so a partially consumed credit is
+  // never reset to full.
   // eslint-disable-next-line no-restricted-syntax -- credit-note bookkeeping on the row just created (same sanctioned class as issueReferralCreditNote).
   const { error: creditErr } = await supabaseAdmin
     .from("payments")
     .update({ invoice_status: "Credit", credit_remaining: payment.amount })
     .eq("id", credit.paymentId)
+    .neq("invoice_status", "Credit")
   if (creditErr) throw new Error(`paid-call: credit note activation failed: ${creditErr.message}`)
 
   return {

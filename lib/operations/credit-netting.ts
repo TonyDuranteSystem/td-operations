@@ -10,6 +10,10 @@ import { syncTDInvoiceMirror } from "@/lib/portal/td-invoice-mirror"
 export interface CreditApplication {
   appliedTotal: number
   credits: Array<{ id: string; applyAmount: number }>
+  /** Credits this client holds in a DIFFERENT currency — never applied (no FX),
+   *  but reported so staff can be told rather than the client silently billed
+   *  full price after being promised a deduction (hunter major 4). */
+  strandedByCurrency?: Array<{ amount: number; currency: string }>
 }
 
 /**
@@ -73,12 +77,24 @@ export async function confirmCreditClaims(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberate: bounds TS2589 on the chained update; column is newer than generated types
   const untyped = supabase as unknown as { from: (t: string) => any }
   for (const c of application.credits) {
+    // THE CLAIM IS A TRANSIENT LOCK, NOT A TOMBSTONE (hunter blocker 1).
+    // A partially-used credit MUST return to the pool: the read filters on
+    // `credit_consumed_by IS NULL`, so leaving the stamp on a credit that still
+    // has a balance would strand that balance forever — invisible to both
+    // auto-netting and click-to-apply. Re-read the remaining balance and
+    // release the lock unless the credit is now exhausted.
+    const { data: row } = await untyped
+      .from("payments")
+      .select("credit_remaining")
+      .eq("id", c.id)
+      .maybeSingle()
+    const remaining = Number((row as { credit_remaining?: number | null } | null)?.credit_remaining ?? 0)
     const { error } = await untyped
       .from("payments")
-      .update({ credit_consumed_by: invoiceId })
+      .update({ credit_consumed_by: remaining > 0 ? null : invoiceId })
       .eq("id", c.id)
       .eq("credit_consumed_by", claimToken)
-    if (error) console.error(`[confirmCreditClaims] restamp failed for credit ${c.id}:`, error.message)
+    if (error) console.error(`[confirmCreditClaims] claim settle failed for credit ${c.id}:`, error.message)
   }
 }
 
@@ -151,7 +167,24 @@ export async function computeCreditApplication(
   }
 
   const appliedTotal = Math.round(applied.reduce((s, a) => s + a.applyAmount, 0) * 100) / 100
-  return { appliedTotal, credits: applied }
+
+  // CROSS-CURRENCY VISIBILITY (hunter major 4): a €257 call credit against a USD
+  // offer applies NOTHING — correct (no silent FX), but the client was told the
+  // fee is deductible, so silence is the wrong answer. Report it; the caller
+  // raises the staff notice. A pure read: nothing here mutates.
+  const { data: otherCurrency } = await supabase
+    .from("payments")
+    .select("id, credit_remaining, amount_currency")
+    .eq(scopeColumn, scopeValue)
+    .eq("invoice_status", "Credit")
+    .neq("amount_currency", currency)
+    .gt("credit_remaining", 0)
+    .is("credit_consumed_by", null)
+  const strandedByCurrency = ((otherCurrency ?? []) as Array<{ credit_remaining: number | null; amount_currency: string }>)
+    .map((r) => ({ amount: Number(r.credit_remaining) || 0, currency: r.amount_currency }))
+    .filter((r) => r.amount > 0)
+
+  return { appliedTotal, credits: applied, ...(strandedByCurrency.length ? { strandedByCurrency } : {}) }
 }
 
 /**

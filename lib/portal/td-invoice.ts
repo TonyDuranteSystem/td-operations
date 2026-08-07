@@ -389,7 +389,9 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   // expense of its own, and again inside the "Credit applied −X" line on the
   // invoice it reduces — leaving their totals short by exactly the credit. The
   // credit is visible where it belongs: on the invoice it reduced.
-  if (isCreditNote) {
+  // Only a REAL credit note (negative gross) skips the mirror. A zero-total
+  // invoice is still a document the client should see (hunter minor 9).
+  if (grossTotal < 0) {
     return { paymentId, expenseId: '', invoiceNumber, total, status: invoiceStatus }
   }
 

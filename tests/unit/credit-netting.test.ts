@@ -6,7 +6,7 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 // Thenable chainable builder; the credit query ends on .order() which is awaited.
 function supaWithCredits(rows: Array<{ id: string; credit_remaining: number }>) {
   const b: Record<string, unknown> = {
-    select: () => b, eq: () => b, gt: () => b, is: () => b,
+    select: () => b, eq: () => b, gt: () => b, is: () => b, neq: () => b,
     order: () => Promise.resolve({ data: rows }),
     then: (res: (v: unknown) => void) => res({ data: rows }),
   }

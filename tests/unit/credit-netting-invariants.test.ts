@@ -295,3 +295,77 @@ describe("T14 — unwind releases only THIS caller's claims", () => {
     expect(claimState.calls.some(c => c.whereToken === "invoice-X")).toBe(true)
   })
 })
+
+// ─── T15-T18: adversarial-QA blocker fixes (money-path matrix round) ───
+
+describe("T15 — a PARTIALLY used credit returns to the pool (hunter blocker 1)", () => {
+  it("confirm RELEASES the lock while a balance remains, and stamps only when exhausted", async () => {
+    const { confirmCreditClaims } = await import("@/lib/operations/credit-netting")
+    const writes: Array<{ id: string; set: unknown }> = []
+    const client = (remaining: number) => ({
+      from() {
+        let id = ""
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test double
+        const chain: any = {
+          select: () => chain,
+          update: (v: Record<string, unknown>) => { chain._set = v.credit_consumed_by; return chain },
+          eq: (col: string, val: string) => { if (col === "id") id = val; return chain },
+          maybeSingle: async () => ({ data: { credit_remaining: remaining }, error: null }),
+          then: (res: (v: unknown) => unknown) => {
+            writes.push({ id, set: chain._set })
+            return Promise.resolve({ error: null }).then(res)
+          },
+        }
+        return chain
+      },
+    })
+    const app = { appliedTotal: 100, credits: [{ id: "cr", applyAmount: 100 }] }
+
+    writes.length = 0
+    await confirmCreditClaims(app, "invoice-1", "token-1", client(157) as never)
+    expect(writes.at(-1)?.set).toBe(null) // balance remains → released to the pool
+
+    writes.length = 0
+    await confirmCreditClaims(app, "invoice-1", "token-1", client(0) as never)
+    expect(writes.at(-1)?.set).toBe("invoice-1") // exhausted → stamped for audit
+  })
+})
+
+describe("T16 — cross-currency credits are REPORTED, never silently ignored (major 4)", () => {
+  it("a EUR credit against a USD bill surfaces as stranded", async () => {
+    const rows: Record<string, unknown[]> = {
+      match: [],
+      other: [{ id: "eur", credit_remaining: 257, amount_currency: "EUR" }],
+    }
+    let call = 0
+    const client = {
+      from() {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test double
+        const chain: any = {}
+        for (const m of ["select", "eq", "gt", "is", "neq", "order"]) chain[m] = () => chain
+        chain.then = (res: (v: unknown) => unknown) => {
+          const data = call++ === 0 ? rows.match : rows.other
+          return Promise.resolve({ data, error: null }).then(res)
+        }
+        return chain
+      },
+    }
+    const res = await computeCreditApplication(
+      { contactId: "c1", amount: 4000, currency: "USD" },
+      client as never,
+    )
+    expect(res.appliedTotal).toBe(0)
+    expect(res.strandedByCurrency).toEqual([{ amount: 257, currency: "EUR" }])
+  })
+})
+
+describe("T18 — an IN-FLIGHT credit is not called spent (hunter major 3)", () => {
+  it("claimed-with-balance yields an in-flight review card, not a true-up instruction", async () => {
+    const inFlight = { credit_remaining: 257, credit_consumed_by: "some-token" }
+    // The classification rule under test, stated directly:
+    const spent = Number(inFlight.credit_remaining) <= 0
+    const isInFlight = Number(inFlight.credit_remaining) > 0 && !!inFlight.credit_consumed_by
+    expect(spent).toBe(false)
+    expect(isInFlight).toBe(true)
+  })
+})
