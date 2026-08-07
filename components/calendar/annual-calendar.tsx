@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, Building2, AlertTriangle, CheckCircle2, Lock
 import { cn } from '@/lib/utils'
 import { parseISO, differenceInCalendarDays } from 'date-fns'
 import { MarkFiledDialog } from '@/components/calendar/mark-filed-dialog'
+import { renewalActionLink } from '@/lib/renewal-links'
 import type { CalendarRow, RenewalRow, InfoRow } from '@/app/(dashboard)/calendar/page'
 
 const MONTHS = [
@@ -264,7 +265,26 @@ export function AnnualCalendar({ rows, year, today }: AnnualCalendarProps) {
                           {renewal.provider}
                         </span>
                       )}
-                      {renewal?.drive_folder_url && (
+                      {/* Action rows link to the FILING venue (Harbor for RA,
+                          the state SOS for AR — Antonio 2026-08-07); filed
+                          history rows keep Drive, the only path to the stored
+                          receipt from the grid. */}
+                      {renewal && renewal.status !== 'filed' && (() => {
+                        const link = renewalActionLink(renewal.kind, renewal.state_of_formation)
+                        return link ? (
+                          <a
+                            href={link.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="hidden md:inline-flex items-center gap-0.5 text-xs text-blue-600 hover:underline shrink-0"
+                            aria-label={`Open ${link.label}`}
+                          >
+                            {link.label} <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ) : null
+                      })()}
+                      {renewal?.status === 'filed' && renewal.drive_folder_url && (
                         <a
                           href={renewal.drive_folder_url}
                           target="_blank"
