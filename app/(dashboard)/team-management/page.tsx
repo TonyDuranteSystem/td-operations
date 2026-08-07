@@ -115,6 +115,22 @@ export default function TeamManagementPage() {
     }
   }
 
+  const handleResetMfa = async (userId: string, name: string) => {
+    if (!confirm(`Reset MFA for ${name}? Their authenticator and backup codes are removed, all their sessions are signed out, and they set up a new authenticator at next login.`)) return
+    try {
+      const res = await fetch('/api/mfa/admin-reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Reset failed')
+      toast.success(`MFA reset for ${name} — they'll re-enroll at next login`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Reset failed')
+    }
+  }
+
   const handleUpdateRole = async (userId: string, role: 'admin' | 'team') => {
     try {
       const res = await fetch('/api/team-management', {
@@ -365,6 +381,17 @@ export default function TeamManagementPage() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
+                      {/* MFA reset (dev job de4564ee): deletes the member's
+                          authenticator + backup codes and revokes trusted
+                          devices — they re-enroll at next login. The server
+                          route refuses to target protected admin accounts. */}
+                      <button
+                        onClick={() => handleResetMfa(u.id, u.full_name)}
+                        className="p-1.5 text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded-md"
+                        title="Reset MFA (forces re-enrollment)"
+                      >
+                        <ShieldOff className="h-3.5 w-3.5" />
+                      </button>
                       {/* Can't edit own account */}
                       {!isSelf(u.email) && (
                         <>
