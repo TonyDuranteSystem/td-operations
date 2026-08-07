@@ -42,19 +42,10 @@ export interface EmailIndexRow {
   label_ids: string[]
 }
 
-/**
- * True when the search box content is a plain-word query the local index can
- * answer. Gmail operator syntax (from:, has:attachment, in:sent, …) keeps
- * the full live-Gmail behavior.
- */
-export function isInstantSearchQuery(q: string): boolean {
-  const trimmed = q.trim()
-  if (!trimmed) return false
-  if (/[{}()]/.test(trimmed)) return false // grouped Gmail syntax
-  return !/(^|\s)-?(from|to|cc|bcc|subject|has|in|is|label|filename|after|before|newer_than|older_than|deliveredto|list|rfc822msgid|larger|smaller|category):/i.test(
-    trimmed
-  )
-}
+// Moved to lib/inbox/view-query.ts (client-safe) so the browser can share the
+// instant-vs-live judgment for live-as-you-type search; re-exported here so
+// every existing server import keeps working unchanged.
+export { isInstantSearchQuery } from "@/lib/inbox/view-query"
 
 /**
  * Pure: group index rows (any order) into InboxConversation[] with the SAME
