@@ -363,7 +363,19 @@ export function computeVisibleList(input: ReconcileInput): InboxConversation[] {
     }
   }
 
-  visible.sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime())
+  // PINNED (starred) first in folder views — the client-side mirror of
+  // inbox_thread_page's ORDER BY (dev job 76b521ea). Without this the merge
+  // re-sorted purely by date and un-floated what the server just floated.
+  // Search / archived / trash stay chronological BY DESIGN (a pin is a
+  // work-queue marker for the lists you triage, not a global re-ordering).
+  const pinBand = input.origin.view.kind === "inbox" || input.origin.view.kind === "label"
+  visible.sort((a, b) => {
+    if (pinBand) {
+      const s = (b.starred ? 1 : 0) - (a.starred ? 1 : 0)
+      if (s !== 0) return s
+    }
+    return new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime()
+  })
 
   return visible
 }

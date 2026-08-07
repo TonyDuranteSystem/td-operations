@@ -1,9 +1,9 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { useMemo, useRef, useEffect, useState } from 'react'
+import { Fragment, useMemo, useRef, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, ArchiveRestore, Palette, FolderInput, Ban, AlarmClock, FlameKindling } from 'lucide-react'
+import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, Archive, ArchiveRestore, Palette, FolderInput, Ban, AlarmClock, FlameKindling, Star } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { markByKey, COLOR_MARKS, MARK_LABEL_PREFIX } from '@/lib/inbox/color-marks'
@@ -30,9 +30,11 @@ interface ConversationListProps {
   activeChannel: InboxChannel | null
   selectedId: string | null
   onSelect: (conversation: InboxConversation) => void
-  /** `action` tells the parent HOW the row went away: 'trash' (recoverable)
-   *  or 'erase' (delete forever — gone from every view). Defaults to 'trash'. */
-  onDeleted?: (conv: InboxConversation, action?: 'trash' | 'erase') => void
+  /** `action` tells the parent HOW the row went away: 'trash' (recoverable),
+   *  'archive' (out of the Inbox only), or 'erase' (delete forever — gone from
+   *  every view). Defaults to 'trash'. The parent's hide machinery decides
+   *  per-view whether the action actually removes the row here. */
+  onDeleted?: (conv: InboxConversation, action?: 'trash' | 'erase' | 'archive') => void
   /** Undo of a delete — moves the row out of Trash and back to the list it was
    *  deleted from, both optimistically, so neither waits on Gmail. */
   onRestored?: (id: string) => void
@@ -63,6 +65,17 @@ interface ConversationListProps {
   // Gmail filters
   labelFilter?: string | null
   searchQuery?: string
+  /** Search scope (chip state, parent-owned): 'inbox' (default) or 'all'.
+   *  Part of the list's IDENTITY — it joins the queryKey, the viewSig and the
+   *  payload-origin stamp, or the toggle serves a stale cached list and hides
+   *  get judged by the wrong scope's payload (council, 2026-08-07). */
+  searchScope?: 'inbox' | 'all'
+  /** Zero-hit inbox-scoped search: flip the chip to all-mail (the "N matches
+   *  in archived mail — show them" bridge). */
+  onWidenScope?: () => void
+  /** Select-all: hands the parent every RENDERED Gmail row id on this page —
+   *  the filtered list the user actually sees, never the raw payload. */
+  onSelectMany?: (ids: string[]) => void
   /** Row-level quick actions (Antonio 2026-07-28): color-mark and file-to-folder
    *  straight from the list, without opening the email. Wired to the parent's
    *  single-email action mutation; absent → the buttons don't render. */
@@ -101,7 +114,7 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, onRestored, onRestoredTo, onRestoreFailed, overrides, unread, onUnreadOverride, onReconciled, onPayloadOrigin, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter, userLabels, onSetColor, onMoveToLabel, onSnooze }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
+export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, onRestored, onRestoredTo, onRestoreFailed, overrides, unread, onUnreadOverride, onReconciled, onPayloadOrigin, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, searchScope, onWidenScope, onSelectMany, mailbox, unreadFilter, userLabels, onSetColor, onMoveToLabel, onSnooze }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
   const queryClient = useQueryClient()
 
   // Which row's quick-action popover (color palette / folder list / snooze
@@ -128,8 +141,12 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     router.replace(`?${next.toString()}`, { scroll: false })
   }
 
-  // Switching mailbox / folder / search is a NEW list — start at page 1.
-  const viewSig = `${activeChannel ?? ''}|${labelFilter ?? ''}|${searchQuery ?? ''}|${mailbox ?? ''}`
+  // The search chip's scope is part of the list identity ONLY while a search is
+  // active — folding it in otherwise would split the cache for identical lists.
+  const effScope = searchQuery ? (searchScope ?? 'inbox') : ''
+
+  // Switching mailbox / folder / search / search-scope is a NEW list — page 1.
+  const viewSig = `${activeChannel ?? ''}|${labelFilter ?? ''}|${searchQuery ?? ''}|${effScope}|${mailbox ?? ''}`
   const prevViewSig = useRef(viewSig)
   useEffect(() => {
     if (prevViewSig.current !== viewSig) {
@@ -330,10 +347,89 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     },
   })
 
+  // Row-level Archive (dev job 21844d01) — the phone's first archive control:
+  // mobile rows previously offered Delete ONLY, and the hover bar never appears
+  // on touch. NOT a clone of deleteMutation: its Undo posts `untrash` (wrong
+  // for a non-trashed thread) and its toasts say "deleted" (bug-hunter).
+  // Whether the row visibly leaves is the parent hide machinery's per-view
+  // decision (inbox / inbox-scoped search: yes; folder / all-mail search: the
+  // row stays and shows its payload-derived "Archived" chip on refetch).
+  const archiveMutation = useMutation({
+    mutationFn: async (conv: InboxConversation) => {
+      if (conv.channel !== 'gmail') return
+      const res = await fetch('/api/inbox/email-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threadId: conv.id.replace('gmail:', ''), action: 'archive', mailbox }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Failed to archive email.')
+      }
+      return res.json().catch(() => ({}))
+    },
+    onMutate: async (conv) => {
+      await queryClient.cancelQueries({ queryKey: ['inbox-conversations'] })
+      onDeleted?.(conv, 'archive')
+    },
+    onSuccess: () => {
+      toast.success('Email archived')
+      // Safe to refetch NOW: the server write-through re-indexed the thread
+      // before responding, so the list comes back already agreeing with the
+      // action (no Gmail-lag race — that race is why older actions don't
+      // refetch; this one can and should, it also lights the "Archived" chip).
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+    },
+    onError: (err, conv) => {
+      // Drop the optimistic hide — the email is NOT archived.
+      onRestoreFailed?.(conv.id)
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to archive email.')
+    },
+  })
+
+  // PIN == the Gmail star (dev job 76b521ea — "pin an email that I need to
+  // work on"). Toggle; syncs both ways with the Gmail app. Optimistic repaint
+  // for instant feedback, then a refetch that already agrees (write-through).
+  const pinMutation = useMutation({
+    mutationFn: async (conv: InboxConversation) => {
+      if (conv.channel !== 'gmail') return
+      const res = await fetch('/api/inbox/email-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threadId: conv.id.replace('gmail:', ''), action: conv.starred ? 'unstar' : 'star', mailbox }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Could not update the pin.')
+      }
+      return res.json().catch(() => ({}))
+    },
+    onMutate: async (conv) => {
+      await queryClient.cancelQueries({ queryKey: ['inbox-conversations'] })
+      const starred = !conv.starred
+      queryClient.setQueriesData<{ conversations: InboxConversation[] }>(
+        { queryKey: ['inbox-conversations'] },
+        (old) => old
+          ? { ...old, conversations: (old.conversations ?? []).map(c => c.id === conv.id ? { ...c, starred } : c) }
+          : old
+      )
+    },
+    onSuccess: (_d, conv) => {
+      toast.success(conv.starred ? 'Unpinned' : 'Pinned — it will stay at the top of your inbox')
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not update the pin.')
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+    },
+  })
+
   const isWhatsApp = activeChannel === 'whatsapp'
 
-  const { data, isLoading, isFetching, dataUpdatedAt } = useQuery<ConversationsPayload & { total?: number; origin?: PayloadOrigin }>({
-    queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery, mailbox, page],
+  const { data, isLoading, isFetching, dataUpdatedAt } = useQuery<ConversationsPayload & { total?: number; origin?: PayloadOrigin; allScopeTotal?: number | null; archivedUnavailable?: boolean }>({
+    queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery, effScope, mailbox, page],
     queryFn: async () => {
       // Throw on non-2xx (R099): a failed refetch must NOT replace the list
       // with emptiness — react-query keeps the previous data on error, so a
@@ -346,6 +442,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
             if (activeChannel) params.set('channel', activeChannel)
             if (labelFilter) params.set('label', labelFilter)
             if (searchQuery) params.set('q', searchQuery)
+            if (searchQuery && effScope) params.set('scope', effScope)
             if (mailbox) params.set('mailbox', mailbox)
             params.set('limit', String(PAGE_SIZE))
             params.set('page', String(page))
@@ -366,7 +463,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
       // bulk-deleted emails came back (council, 2026-07-16).
       // ⚠️ A new dimension in the queryKey MUST be added here too.
       const origin: PayloadOrigin = {
-        view: toInboxView({ label: labelFilter ?? null, search: searchQuery ?? null }),
+        view: toInboxView({ label: labelFilter ?? null, search: searchQuery ?? null, searchScope: searchScope ?? 'inbox' }),
         scope: { mailbox: mailbox ?? 'support', channel: activeChannel },
       }
       return { ...json, origin }
@@ -386,6 +483,9 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   // from the selection: during a view switch the rows shown are still the old
   // list's, and a Restore button over Inbox rows would be a Restore that deletes.
   const inTrash = data?.origin?.view.kind === 'trash'
+  /** Payload-derived like `inTrash`: is the list ON SCREEN the Archived view?
+   *  (Row Archive is a no-op there; the chip would be noise on every row.) */
+  const inArchived = data?.origin?.view.kind === 'archived'
 
   const ov = overrides ?? EMPTY_OVERRIDES
   const un = unread ?? EMPTY_UNREAD
@@ -495,6 +595,31 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   }
 
   if (conversations.length === 0) {
+    // Archived view before the index is ready: say WHY it's empty — an
+    // "empty archive" that is actually "index not built" is a lie.
+    if (inArchived && data?.archivedUnavailable) {
+      return (
+        <div className="flex-1 flex flex-col items-center justify-center text-zinc-400 text-sm gap-1 px-6 text-center">
+          <span>The Archived view isn&apos;t ready yet.</span>
+          <span className="text-xs">The email index is still being built — check back shortly.</span>
+        </div>
+      )
+    }
+    // Inbox-scoped search with 0 hits but matches in ALL mail: the bridge that
+    // keeps a year-old (archived) email from reading as nonexistent.
+    if (searchQuery && effScope === 'inbox' && (data?.allScopeTotal ?? 0) > 0) {
+      return (
+        <div className="flex-1 flex flex-col items-center justify-center text-zinc-500 text-sm gap-2 px-6 text-center">
+          <span>No matches in your inbox.</span>
+          <button
+            onClick={() => onWidenScope?.()}
+            className="px-3 py-1.5 rounded-md bg-blue-50 text-blue-700 text-sm font-medium hover:bg-blue-100 transition-colors"
+          >
+            Show {data?.allScopeTotal} match{(data?.allScopeTotal ?? 0) === 1 ? '' : 'es'} from all mail
+          </button>
+        </div>
+      )
+    }
     return (
       <div className="flex-1 flex items-center justify-center text-zinc-400 text-sm">
         No conversations
@@ -502,18 +627,64 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     )
   }
 
+  const selectableIds = conversations.filter(c => c.channel === 'gmail').map(c => c.id)
+  const allSelected = selectableIds.length > 0 && selectableIds.every(id => selectedIds.has(id))
+
+  // TWO-SECTION VIEW (Antonio 2026-08-07: "the page view divided in two parts —
+  // on the top pinned, and all email following"). Payload-derived like inTrash:
+  // only in the views whose ordering bands pinned first (inbox / folders), and
+  // only when at least one pinned row exists. Rows are already contiguous
+  // (server + reconcile order pinned-first), so headers are pure rendering.
+  const pinBandView = data?.origin?.view.kind === 'inbox' || data?.origin?.view.kind === 'label'
+  const pinnedCount = pinBandView ? conversations.filter(c => c.starred === true).length : 0
+  const sectionHeader = (label: string, icon: 'pin' | 'mail') => (
+    <div className="flex items-center gap-1.5 px-4 py-1.5 bg-zinc-50 border-b text-[11px] font-semibold uppercase tracking-wider text-zinc-400 select-none">
+      {icon === 'pin' ? <Star className="h-3 w-3 fill-amber-400 text-amber-400" /> : <Mail className="h-3 w-3" />}
+      {label}
+    </div>
+  )
+
   return (
     <div className="flex-1 overflow-y-auto">
-      {conversations.map((conv) => {
+      {/* Select all — ticks every RENDERED Gmail row on this page (the filtered
+          list the user actually sees, never the raw payload: an unread-filtered
+          select-all must not archive read emails invisibly). Page-scoped by
+          design: whole-mailbox bulk actions would re-create the 2026-08-02
+          Gmail quota incident. */}
+      {!isWhatsApp && !inTrash && onSelectMany && selectableIds.length > 0 && (
+        <button
+          onClick={() => onSelectMany(allSelected ? [] : selectableIds)}
+          className="flex items-center gap-2 w-full px-4 py-2 border-b bg-zinc-50/60 text-xs font-medium text-zinc-500 hover:bg-zinc-100 transition-colors"
+        >
+          {allSelected ? (
+            <CheckSquare className="h-4 w-4 text-blue-500" />
+          ) : (
+            <Square className="h-4 w-4 text-zinc-400" />
+          )}
+          {allSelected ? 'Clear selection' : `Select all on this page (${selectableIds.length})`}
+        </button>
+      )}
+      {conversations.map((conv, rowIdx) => {
         const Icon = channelIcons[conv.channel]
         const isSelected = selectedId === conv.id
         const isChecked = selectedIds.has(conv.id)
         const showCheckbox = !isWhatsApp && (bulkMode || conv.channel === 'gmail')
         const mark = markByKey(conv.colorMark)
 
+        // Section headers: "Pinned (N)" above the pinned band, "All email"
+        // where the ordinary flow resumes. Only when both bands exist.
+        const headerBefore =
+          pinnedCount > 0
+            ? rowIdx === 0 && conv.starred
+              ? sectionHeader(`Pinned (${pinnedCount})`, 'pin')
+              : conv.starred !== true && (rowIdx === 0 || conversations[rowIdx - 1]?.starred === true)
+                ? sectionHeader('All email', 'mail')
+                : null
+            : null
         return (
+          <Fragment key={conv.id}>
+          {headerBefore}
           <div
-            key={conv.id}
             // Marked rows are tinted with the mark color across the WHOLE row
             // (Antonio 2026-07-08: "the chat in the picker colored, not just
             // the dot"). Selection state wins over the tint; the colored left
@@ -566,6 +737,17 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                   >
                     {conv.name}
                   </span>
+                  {/* PAYLOAD-derived "Archived" chip: shows in the views where
+                      an archived row deliberately stays (folders, all-mail
+                      search) so the Archive click always has a visible result.
+                      Never client-memory — a refetch must agree with it.
+                      Suppressed in Trash (not meaningful) and in the Archived
+                      view itself (every row would carry it). */}
+                  {conv.channel === 'gmail' && conv.inInbox === false && !inTrash && !inArchived && (
+                    <span className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-500 border border-zinc-200">
+                      Archived
+                    </span>
+                  )}
                 </div>
                 <span className="text-xs text-zinc-400 shrink-0 ml-2">
                   {formatTime(conv.lastMessageAt)}
@@ -583,6 +765,9 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                   {conv.preview}
                 </p>
                 <div className="flex items-center gap-1 shrink-0 ml-2">
+                  {conv.starred && (
+                    <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
+                  )}
                   {mark && (
                     <span
                       className="h-2.5 w-2.5 rounded-full shrink-0"
@@ -643,17 +828,48 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                     </button>
                   </>
                 ) : (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      deleteMutation.mutate(conv)
-                    }}
-                    disabled={deleteMutation.isPending}
-                    className="p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
-                    title="Delete"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  <>
+                    {/* Pin — phone parity with the hover bar's pin. */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        pinMutation.mutate(conv)
+                      }}
+                      disabled={pinMutation.isPending}
+                      className="p-1.5 rounded hover:bg-amber-50 text-zinc-400 hover:text-amber-500 transition-colors"
+                      title={conv.starred ? 'Unpin' : 'Pin'}
+                    >
+                      <Star className={cn('h-4 w-4', conv.starred && 'fill-amber-400 text-amber-400')} />
+                    </button>
+                    {/* Archive — the phone's first row-level archive control
+                        (rows offered Delete ONLY; the hover bar never appears
+                        on touch). Hidden on an already-archived row: a repeat
+                        archive is a Gmail no-op that only pretends to work. */}
+                    {!inArchived && conv.inInbox !== false && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          archiveMutation.mutate(conv)
+                        }}
+                        disabled={archiveMutation.isPending}
+                        className="p-1.5 rounded hover:bg-zinc-200 text-zinc-400 hover:text-zinc-700 transition-colors"
+                        title="Archive"
+                      >
+                        <Archive className="h-4 w-4" />
+                      </button>
+                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        deleteMutation.mutate(conv)
+                      }}
+                      disabled={deleteMutation.isPending}
+                      className="p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
+                      title="Delete"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </>
                 )}
               </div>
             )}
@@ -671,6 +887,20 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                 )}
               >
                 <div className="flex items-center gap-0.5 bg-white border border-zinc-200 rounded-lg shadow-md px-1 py-0.5">
+                {/* Pin — first in the bar (Antonio 2026-08-07: "I want pin also
+                    in the menu"). Filled amber when pinned. */}
+                <HoverHint label={conv.starred ? 'Unpin' : 'Pin — keep at the top to work on'}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      pinMutation.mutate(conv)
+                    }}
+                    disabled={pinMutation.isPending}
+                    className="p-1.5 rounded hover:bg-amber-50 text-zinc-400 hover:text-amber-500 transition-colors"
+                  >
+                    <Star className={cn('h-4 w-4', conv.starred && 'fill-amber-400 text-amber-400')} />
+                  </button>
+                </HoverHint>
                 {onSetColor && (
                   <div className="relative">
                     <HoverHint label="Mark with a color"><button
@@ -861,6 +1091,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
               </div>
             )}
           </div>
+          </Fragment>
         )
       })}
 

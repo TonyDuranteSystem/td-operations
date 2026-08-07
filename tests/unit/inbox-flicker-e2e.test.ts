@@ -574,7 +574,9 @@ describe("E2E: the open email is stamped with the list it was OPENED from", () =
     // A is an archived email — findable by an all-mail search, not in the Inbox.
     const A = conv("A"), B = conv("B")
     const c = new InboxClient()
-    const searchView: InboxView = { kind: "search", query: "invoice" }
+    // An ALL-MAIL search: the archived email A matches it (an inbox-scoped
+    // search would not return A at all — its rows leave with the scope).
+    const searchView: InboxView = { kind: "search-all", query: "invoice" }
     c.viewing(searchView).fetch(payload([A]))
     const openedFrom = viewKey(searchView, SCOPE) // captured when Luca opens A
 
