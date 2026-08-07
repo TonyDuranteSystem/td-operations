@@ -22,6 +22,7 @@ import { getConfiguredCardFeeRate } from "@/lib/payments/card-fee-config"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { accountIdForOffer } from "@/lib/operations/offer-scope"
 import { normalizeFormationState } from "@/lib/formation/states"
+import { availableCreditForDisplay } from "@/lib/operations/credit-netting"
 import { parsePriceQuirk } from "@/lib/offers/compute-offer-totals"
 import type { Json } from "@/lib/database.types"
 
@@ -507,6 +508,26 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     // rate later never re-prices a deal already signed at the old rate.
     const pinnedCardFeeRate = await getConfiguredCardFeeRate()
 
+    // 7b. WS-A: snapshot any credit this client already holds in THIS currency,
+    // so the offer can show "already paid" instead of quoting a price the client
+    // knows is wrong. Display only — the netting engine at invoice time is the
+    // money of record. Person-scoped: the paid strategy-call credit belongs to
+    // the human who paid it, not to a company they happen to own.
+    let creditAmount: number | null = null
+    let creditPaymentId: string | null = null
+    if (params.contact_id) {
+      try {
+        const held = await availableCreditForDisplay({ contactId: params.contact_id }, currency, supabaseAdmin)
+        if (held.amount > 0) {
+          creditAmount = held.amount
+          creditPaymentId = held.creditId
+        }
+      } catch (err) {
+        // Never block an offer over a display line.
+        console.error("[createOffer] credit snapshot failed:", err)
+      }
+    }
+
     // 8. Insert offer
     const { data: offer, error: offerErr } = await supabaseAdmin
       .from("offers")
@@ -518,6 +539,8 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         offer_date: params.offer_date || new Date().toISOString().split("T")[0],
         status: "draft",
         card_fee_rate: pinnedCardFeeRate,
+        credit_amount: creditAmount,
+        credit_payment_id: creditPaymentId,
         payment_type: params.payment_type,
         contract_type: params.contract_type || "formation",
         services: params.services as Json,

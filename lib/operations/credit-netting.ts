@@ -188,6 +188,39 @@ export async function computeCreditApplication(
 }
 
 /**
+ * What an offer may TELL a client they already have (WS-A display, hunter minor 10).
+ *
+ * Deliberately a thin wrapper over `computeCreditApplication` rather than its own
+ * query: the offer page's "− €257 already paid" line and the invoice that
+ * actually deducts it then answer to ONE definition of available credit. A
+ * separate SELECT here would be free to drift — promising a deduction the ledger
+ * refuses is precisely the failure this whole workstream exists to prevent.
+ *
+ * Same-currency by construction (the engine filters on it), so a client holding
+ * EUR credit is never shown a phantom discount on a USD offer.
+ *
+ * SNAPSHOT, not a live balance: pinned when the offer is written. If the client
+ * spends the credit elsewhere before signing, the offer over-states — but the
+ * netting engine at invoice time is the money of record and applies only what is
+ * really there, so the BILL is right either way. Display can be stale; money cannot.
+ */
+export async function availableCreditForDisplay(
+  scope: CreditScope,
+  currency: string,
+  supabase: SupabaseClient,
+): Promise<{ amount: number; creditId: string | null }> {
+  const application = await computeCreditApplication(
+    { ...(scope as { accountId?: string; contactId?: string }), amount: Number.MAX_SAFE_INTEGER, currency } as Parameters<typeof computeCreditApplication>[0],
+    supabase,
+  )
+  return {
+    amount: application.appliedTotal,
+    // oldest-first ordering upstream ⇒ [0] is the credit staff would look at first
+    creditId: application.credits[0]?.id ?? null,
+  }
+}
+
+/**
  * Decrement credit_remaining for each applied credit after the offsetting invoice
  * is created. Re-reads each row to avoid clobbering a concurrent decrement, and
  * stamps credit_for_payment_id with the invoice it most recently offset (audit).

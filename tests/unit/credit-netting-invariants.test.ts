@@ -11,7 +11,7 @@
  * by an explicit staff click.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { computeCreditApplication, allocateCredits } from "@/lib/operations/credit-netting"
+import { computeCreditApplication, allocateCredits, availableCreditForDisplay } from "@/lib/operations/credit-netting"
 
 // ─── Minimal supabase double: records queries, returns scenario rows ───
 interface CreditRow { id: string; credit_remaining: number | null }
@@ -367,5 +367,49 @@ describe("T18 — an IN-FLIGHT credit is not called spent (hunter major 3)", () 
     const isInFlight = Number(inFlight.credit_remaining) > 0 && !!inFlight.credit_consumed_by
     expect(spent).toBe(false)
     expect(isInFlight).toBe(true)
+  })
+})
+
+// ─── T19: the offer's "already paid" line answers to the SAME engine ───
+
+describe("T19 — what the offer SHOWS comes from the money engine (hunter minor 10)", () => {
+  it("reports the client's whole same-currency balance and the oldest credit's id", async () => {
+    scenario.credits = [
+      { id: "oldest", credit_remaining: 257 },
+      { id: "newer", credit_remaining: 100 },
+    ]
+    const held = await availableCreditForDisplay({ contactId: "c-1" }, "EUR", client())
+    expect(held.amount).toBe(357)
+    expect(held.creditId).toBe("oldest")
+  })
+
+  it("filters on the SAME scope + currency + unclaimed rules as the deduction itself", async () => {
+    scenario.credits = [{ id: "cr", credit_remaining: 257 }]
+    await availableCreditForDisplay({ contactId: "c-2" }, "EUR", client())
+    const q = scenario.queries[0]
+    // one scope column, never an OR — the display can't surface another party's credit
+    expect(q.filters.contact_id).toBe("c-2")
+    expect(q.filters.account_id).toBeUndefined()
+    expect(q.filters.invoice_status).toBe("Credit")
+    expect(q.filters.amount_currency).toBe("EUR")
+    expect(q.filters["credit_consumed_by IS"]).toBe(null)
+  })
+
+  it("a client with NO credit gets no line at all — never a zero-value promise", async () => {
+    scenario.credits = []
+    const held = await availableCreditForDisplay({ contactId: "c-3" }, "USD", client())
+    expect(held.amount).toBe(0)
+    expect(held.creditId).toBe(null)
+  })
+
+  it("EUR credit against a USD offer shows NOTHING — the currency trap the page cannot catch itself", async () => {
+    // The engine filters amount_currency server-side; a EUR-only holder asking
+    // about USD gets no rows, so credit_amount stays null and the offer page's
+    // display block (which only checks amount > 0) never renders a phantom "$257 off".
+    scenario.credits = []
+    const held = await availableCreditForDisplay({ contactId: "c-4" }, "USD", client())
+    expect(held.amount).toBe(0)
+    const q = scenario.queries[0]
+    expect(q.filters.amount_currency).toBe("USD")
   })
 })
