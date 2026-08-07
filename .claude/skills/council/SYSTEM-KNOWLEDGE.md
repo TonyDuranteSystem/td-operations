@@ -1,5 +1,5 @@
 # SYSTEM-KNOWLEDGE — the System Counselor's index to the live business and system
-_Last verified: 2026-08-02 — Claude (rebuilt after Antonio's correction: the Counselor now has live read access to the production database, CRM, knowledge base, SOPs, catalog and code, so this file stopped being a summary of the business and became the INDEX to it.)_
+_Last verified: 2026-08-07 — Claude (added the inbox email-state playbook row — reads from our own index, writes through Gmail — the missing pointer the Counselor flagged on the 2026-08-07 inbox council pass. Prior note: rebuilt 2026-08-02 after Antonio's correction: the Counselor has live read access to the production database, CRM, knowledge base, SOPs, catalog and code, so this file is the INDEX to the live system, never a copy of it.)_
 
 ## Read this first
 
@@ -53,6 +53,7 @@ What lives here instead:
 | Is this money right? | the four money worlds — know which one owns the number | assuming one invoice concept |
 | Is this safe to run? | the hooks/guardrails doc — which layer actually covers this path | assuming a guard covers MCP calls; it does not |
 | How does outgoing email get its identity/signature? | `lib/email/signature.ts` (the ONE definition since 2026-08-05) + the "Outgoing email signatures" section of the inbox system doc | `lib/gmail.ts` (transport only, no MIME builder); any of the old hand-rolled shells — they are gone |
+| Where does the CRM inbox's email state live? | READS come from our own `email_index` (browse/search/Archived, since 2026-08-07 kept fresh by write-through + the cursor-disciplined sync); WRITES (archive/star/read/snooze) go to Gmail first, Gmail stays source of truth | assuming the inbox reads live Gmail (it stopped 2026-08-02); patching index labels directly (one writer: `indexThread`) |
 
 **Always say which environment a fact came from.** The Counselor's tools read **production**. Sandbox state is a different question and goes back to the coordinator.
 
