@@ -171,6 +171,40 @@ describe("SD cycle corroboration is bounded (date-primary — counselor blocker)
     expect(r.ra.evidence.completedSdForCurrentCycle).toBe(false)
   })
 
+  it("BLOCKER REGRESSION: LAST year's filing (due exactly the previous anniversary) never corroborates THIS year's missed one", () => {
+    // Correctly-rolled record goes overdue; the prior cycle's completed SD
+    // sits at exactly the previous anniversary — the cron's default shape.
+    // Corroborating it would launder a missed filing into a "record repair".
+    const r = computeRenewalStatus(base({ ra_renewal_date: "2026-11-07" }, {
+      today: "2026-11-08",
+      renewalSDs: [{ id: "sd-prev", service_type: "State RA Renewal", status: "completed", due_date: "2025-11-07" }],
+    }))
+    expect(r.ra.evidence.completedSdForCurrentCycle).toBe(false)
+    expect(r.ra.status).toBe("overdue")
+    expect(r.ra.cause).toContain("verify")
+  })
+
+  it("corroborated stale record + unrelated overdue invoice → still the record-repair verdict, NOT an unpaid hold", () => {
+    // Nothing is being withheld — the renewal was already performed; a €150
+    // stray invoice must not gate the pure record fix behind a money decision.
+    const r = computeRenewalStatus(base({ ra_renewal_date: "2025-11-07" }, {
+      renewalSDs: [{ id: "sd-1", service_type: "State RA Renewal", status: "completed", due_date: "2025-11-07" }],
+      overduePayments: [{ id: "p-x", amount: 150, currency: "EUR", status: "Overdue", due_date: "2026-06-01" }],
+    }))
+    expect(r.ra.status).toBe("overdue")
+    expect(r.ra.cause).toContain("never rolled")
+  })
+
+  it("historical cancelled SD does NOT silence a re-engaged service (active SD present, date NULL → missing_data)", () => {
+    const r = computeRenewalStatus(base({ ra_renewal_date: null }, {
+      renewalSDs: [
+        { id: "sd-old", service_type: "State RA Renewal", status: "cancelled", due_date: null },
+        { id: "sd-new", service_type: "State RA Renewal", status: "active", due_date: null },
+      ],
+    }))
+    expect(r.ra.status).toBe("missing_data")
+  })
+
   it("completed SD with NULL due_date never corroborates (attribution requires a date)", () => {
     const r = computeRenewalStatus(base({ ra_renewal_date: "2025-11-07" }, {
       renewalSDs: [{ id: "sd-n", service_type: "State RA Renewal", status: "completed", due_date: null }],

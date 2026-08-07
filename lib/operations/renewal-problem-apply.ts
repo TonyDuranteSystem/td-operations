@@ -85,7 +85,7 @@ export async function applyRenewalAutoFix(req: ApplyAutoFixRequest): Promise<App
       state: loaded.account.state_of_formation,
       note: `Calendar one-click fix (${req.action}) by ${req.actor}`,
       // A rolled record's open deadline row still carries the OLD cycle's year.
-      matchYear: fresh.from ? new Date(fresh.from).getFullYear() : undefined,
+      matchYear: fresh.from ? parseInt(fresh.from.slice(0, 4), 10) : undefined,
     })
   } catch {
     // mirror is best-effort; the account date above is the source of truth

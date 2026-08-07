@@ -69,9 +69,11 @@ export async function POST(req: NextRequest) {
     if (typeof filingForYearRaw === 'string' && filingForYearRaw !== '') {
       filing_for_year = parseInt(filingForYearRaw, 10)
       const filedYear = parseInt(filed_date.slice(0, 4), 10)
-      if (Number.isNaN(filing_for_year) || Math.abs(filing_for_year - filedYear) > 3) {
+      // Stale records can be YEARS behind (the exact population this dialog
+      // serves) — allow up to 10 years back; only 1 year forward (typo guard).
+      if (Number.isNaN(filing_for_year) || filing_for_year > filedYear + 1 || filing_for_year < filedYear - 10) {
         return NextResponse.json(
-          { error: 'filing_for_year must be a year within 3 years of the filed date' },
+          { error: 'filing_for_year must be between 10 years before and 1 year after the filed date' },
           { status: 400 },
         )
       }

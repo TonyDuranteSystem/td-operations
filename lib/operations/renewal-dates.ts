@@ -203,7 +203,7 @@ export async function mirrorDeadlineDate(
   due: string,
   opts?: { state?: string | null; note?: string; matchYear?: number; includeNullYear?: boolean },
 ): Promise<void> {
-  const year = new Date(due).getFullYear()
+  const year = parseInt(due.slice(0, 4), 10) // string math — never local-time Date parsing
   const lookupYear = opts?.matchYear ?? year
   // includeNullYear=false: only exact-year rows match — used by the roll
   // forward's "ensure a NEW cycle row exists" so it can never steal the OLD

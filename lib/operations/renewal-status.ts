@@ -22,7 +22,7 @@
  *  - Pure function, `today` injectable — exhaustively unit-tested.
  */
 
-import { normalizeStateCode, plusOneYear } from "@/lib/operations/renewal-dates"
+import { normalizeStateCode, anniversaryForYear } from "@/lib/operations/renewal-dates"
 import type { AccountClassification } from "@/lib/account-classification"
 
 // ── Input ────────────────────────────────────────────────────────
@@ -116,18 +116,24 @@ function addDays(iso: string, days: number): string {
   return d.toISOString().split("T")[0]
 }
 
-/** Completed SD corroborating the CURRENT cycle: due within ±1yr of the cycle
- *  date (date-primary; SDs are corroboration only — counselor blocker #2). */
+/** Completed SD corroborating the CURRENT cycle: due AFTER the previous
+ *  anniversary and at/before the cycle date. The previous anniversary itself
+ *  is STRICTLY excluded — last year's filing (whose SD carries exactly that
+ *  due date, the shape the cron writes) must never "corroborate" this year's
+ *  missed filing, or the safe one-click roll would retire a real unfiled
+ *  renewal (bug-hunter blocker, 2026-08-06). Date-primary; SDs are
+ *  corroboration only — counselor blocker #2. */
 function hasCompletedSdForCycle(
   sds: RenewalStatusInput["renewalSDs"],
   type: string,
   cycleDate: string | null,
 ): { yes: boolean; ids: string[] } {
   if (!cycleDate) return { yes: false, ids: [] }
-  const prevCycle = plusOneYear(cycleDate).length ? addDays(cycleDate, -366) : cycleDate
+  const cycleYear = parseInt(cycleDate.slice(0, 4), 10)
+  const prevAnniversary = anniversaryForYear(cycleDate, cycleYear - 1)
   const ids = sds
     .filter(s => s.service_type === type && s.status === "completed" && s.due_date
-      && s.due_date <= cycleDate && s.due_date > prevCycle)
+      && s.due_date <= cycleDate && s.due_date > prevAnniversary)
     .map(s => s.id)
   return { yes: ids.length > 0, ids }
 }
@@ -151,7 +157,12 @@ export function computeRenewalStatus(input: RenewalStatusInput): CompanyRenewalS
     const date = kind === "ra_renewal" ? a.ra_renewal_date : a.annual_report_due_date
     const label = kind === "ra_renewal" ? "Registered Agent renewal" : "Annual report"
     const sdsOfType = input.renewalSDs.filter(s => s.service_type === type)
-    const cancelled = sdsOfType.some(s => s.status === "cancelled")
+    // A recorded discontinuation only counts while NO live SD of the type
+    // exists — a churn-and-return client's old cancelled SD must not silence
+    // the re-engaged service forever (bug-hunter minor #8).
+    const cancelled =
+      sdsOfType.some(s => s.status === "cancelled") &&
+      !sdsOfType.some(s => s.status === "active" || s.status === "blocked")
     const corroboration = hasCompletedSdForCycle(input.renewalSDs, type, date)
     const base = {
       obligation: kind,
@@ -188,8 +199,20 @@ export function computeRenewalStatus(input: RenewalStatusInput): CompanyRenewalS
       return { ...base, status: "renewed", cause: `Next ${label.toLowerCase()} due ${date}.` }
     }
 
-    // 4. Due (within window) or past → money gate first (SOP v7.1: hold is
-    //    automatic and shown; unlocking is a human decision — Antonio (a)).
+    // 4a. Past date WITH a completed renewal for the cycle = pure RECORD
+    //     staleness — nothing is being withheld, so the money gate must not
+    //     convert a proven-already-filed repair into an "on hold" card
+    //     (bug-hunter major #4). The record repair stays a safe one-click.
+    if (date < input.today && corroboration.yes) {
+      return {
+        ...base,
+        status: "overdue",
+        cause: `${label} date ${date} is in the past but a completed renewal exists for this cycle — the record was never rolled forward. Fix the record (no client work needed).`,
+      }
+    }
+
+    // 4b. Due (within window) or past → money gate (SOP v7.1: hold is
+    //     automatic and shown; unlocking is a human decision — Antonio (a)).
     if (input.overduePayments.length > 0) {
       const ids = input.overduePayments.map(p => p.id)
       const detail = input.overduePayments.map(money).join(", ")
@@ -201,14 +224,12 @@ export function computeRenewalStatus(input: RenewalStatusInput): CompanyRenewalS
       }
     }
 
-    // 5. overdue vs upcoming.
+    // 5. overdue vs upcoming (corroborated-past already returned at 4a).
     if (date < input.today) {
       return {
         ...base,
         status: "overdue",
-        cause: corroboration.yes
-          ? `${label} date ${date} is in the past but a completed renewal exists for this cycle — the record was never rolled forward. Fix the record (no client work needed).`
-          : `${label} was due ${date} and no completed renewal is recorded — verify whether it was actually done.`,
+        cause: `${label} was due ${date} and no completed renewal is recorded — verify whether it was actually done.`,
       }
     }
     return { ...base, status: "upcoming", cause: `${label} due ${date} — within the ${window}-day window.` }

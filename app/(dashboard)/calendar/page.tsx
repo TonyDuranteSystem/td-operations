@@ -116,8 +116,11 @@ export default async function CalendarPage({
   }
 
   // ─── 3. Completed SDs in this year — 🟢 filed history ──────────────
+  // Paged (silent 1000-row cap), and filtered to the same roster rules as
+  // the rest of the calendar: One-Time / test / internal never render here
+  // either (ruling b — a QA Mark-Filed run must not paint a green row).
   const filedSDs: { account_id: string; service_type: string; due_date: string }[] = []
-  {
+  for (let from = 0; ; from += 1000) {
     const { data: completed } = await supabase
       .from('service_deliveries')
       .select('id, account_id, service_type, status, due_date')
@@ -125,21 +128,25 @@ export default async function CalendarPage({
       .eq('status', 'completed')
       .gte('due_date', yearStart)
       .lte('due_date', yearEnd)
+      .order('id')
+      .range(from, from + 999)
     for (const sd of completed ?? []) {
       if (sd.account_id) {
         filedSDs.push({ account_id: sd.account_id, service_type: sd.service_type, due_date: sd.due_date! })
       }
     }
+    if ((completed ?? []).length < 1000) break
   }
   const loadedById = new Map(loaded.map(l => [l.account.id, l]))
   const filedAccountIds = Array.from(new Set(filedSDs.map(s => s.account_id).filter(id => !loadedById.has(id))))
   const filedAccountMap: Record<string, { company_name: string; state_of_formation: string | null; drive_folder_url: string | null }> = {}
-  if (filedAccountIds.length > 0) {
+  for (const ids of chunk(filedAccountIds, 100)) {
     const { data: extra } = await supabase
       .from('accounts')
-      .select('id, company_name, state_of_formation, gdrive_folder_url, drive_folder_id')
-      .in('id', filedAccountIds)
+      .select('id, company_name, state_of_formation, gdrive_folder_url, drive_folder_id, account_type, is_test, is_internal')
+      .in('id', ids)
     for (const a of extra ?? []) {
+      if (a.is_test || a.is_internal || a.account_type === 'One-Time') continue
       filedAccountMap[a.id] = {
         company_name: a.company_name,
         state_of_formation: a.state_of_formation,
@@ -147,6 +154,13 @@ export default async function CalendarPage({
       }
     }
   }
+  // Roster rule for filed rows: on-calendar loader accounts, or (for
+  // no-longer-active accounts) the non-test non-One-Time survivors above.
+  const visibleFiledSDs = filedSDs.filter(f => {
+    const l = loadedById.get(f.account_id)
+    if (l) return l.status.onCalendar
+    return !!filedAccountMap[f.account_id]
+  })
 
   // ─── 4. Grid rows from engine verdicts ─────────────────────────────
   const renewalRows: RenewalRow[] = []
@@ -168,11 +182,16 @@ export default async function CalendarPage({
       if (!verdict.date) continue // missing dates live in the problems rail
       if (verdict.date < yearStart || verdict.date > yearEnd) continue
       const sd = l.renewalSDs.find(s => s.service_type === sdType && (s.status === 'active' || s.status === 'blocked'))
+      // Status comes from the LIVE engine verdict only. The stored SD
+      // 'blocked' stamp is deliberately ignored — it goes stale when the
+      // client pays (nothing flips it back) and would lock Mark Filed
+      // forever (bug-hunter major #2). A blocked SD with clean payments
+      // renders as a normal working row.
       const status: RenewalStatus = has_offboarding
         ? 'offboarding'
-        : verdict.status === 'on_hold_unpaid' || sd?.status === 'blocked'
+        : verdict.status === 'on_hold_unpaid'
           ? 'blocked'
-          : sd?.status === 'active'
+          : sd
             ? 'active'
             : 'upcoming'
       renewalRows.push({
@@ -196,7 +215,7 @@ export default async function CalendarPage({
   }
 
   // ─── 5. Filed-history rows ─────────────────────────────────────────
-  for (const f of filedSDs) {
+  for (const f of visibleFiledSDs) {
     const fromLoader = loadedById.get(f.account_id)
     const fromExtra = filedAccountMap[f.account_id]
     const company_name = fromLoader?.account.company_name ?? fromExtra?.company_name ?? '—'

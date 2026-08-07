@@ -22,6 +22,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { ensureDrivePath, uploadBinaryToDriveUpsert } from "@/lib/google-drive"
 import { completeSD, createSD } from "@/lib/operations/service-delivery"
+import { anniversaryForYear } from "@/lib/operations/renewal-dates"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { safeAction, type ActionResult } from "@/lib/server-action"
 import { PORTAL_BASE_URL } from "@/lib/config"
@@ -149,7 +150,7 @@ export async function fileRenewal(
       // 1. Load account
       const { data: account, error: acctErr } = await supabaseAdmin
         .from("accounts")
-        .select("id, company_name, state_of_formation, drive_folder_id, portal_tier, notes")
+        .select("id, company_name, state_of_formation, drive_folder_id, portal_tier, notes, ra_renewal_date, annual_report_due_date")
         .eq("id", params.account_id)
         .maybeSingle()
       if (acctErr || !account) {
@@ -207,12 +208,24 @@ export async function fileRenewal(
       // (lib/service-delivery.ts:270-341).
       let deliveryId = params.delivery_id
       if (!deliveryId) {
+        // The created SD must carry the CYCLE's due date: a completed
+        // renewal SD with NULL due_date never corroborates the cycle and
+        // never renders as filed history (bug-hunter major #3). The cycle
+        // date is the obligation's anniversary in the filing-for year,
+        // derived from the account's stored date; filed_date is the
+        // fallback when the record has no date at all.
+        const storedDate =
+          params.kind === "ra" ? account.ra_renewal_date : account.annual_report_due_date
+        const cycleDueDate = storedDate
+          ? anniversaryForYear(storedDate, year)
+          : params.filed_date
         const sd = await createSD({
           service_type: SERVICE_TYPE_BY_KIND[params.kind],
           account_id: account.id,
           assigned_to: "Antonio",
           notes: `Filed via Calendar Mark Filed on ${params.filed_date}`,
           status: "active",
+          due_date: cycleDueDate,
         })
         deliveryId = sd.id
       }
