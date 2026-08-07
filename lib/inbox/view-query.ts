@@ -141,6 +141,24 @@ export function queryCarriesScopeOperator(query: string): boolean {
   return /(^|\s)(in|label):/i.test(query)
 }
 
+/**
+ * True when the search box content is a plain-word query the local index can
+ * answer. Gmail operator syntax (from:, has:attachment, in:sent, …) keeps the
+ * full live-Gmail behavior. Lives HERE (client-safe, dependency-free) because
+ * the browser needs the same judgment for LIVE-as-you-type search: plain words
+ * auto-filter on a debounce (a cheap DB query), operator queries wait for
+ * Enter — firing live Gmail per keystroke is the 2026-08-02 quota incident.
+ * The server query layer re-exports it, so both sides share one definition.
+ */
+export function isInstantSearchQuery(q: string): boolean {
+  const trimmed = q.trim()
+  if (!trimmed) return false
+  if (/[{}()]/.test(trimmed)) return false // grouped Gmail syntax
+  return !/(^|\s)-?(from|to|cc|bcc|subject|has|in|is|label|filename|after|before|newer_than|older_than|deliveredto|list|rfc822msgid|larger|smaller|category):/i.test(
+    trimmed
+  )
+}
+
 export function buildGmailQueryParams(view: InboxView): { labelIds?: string; q?: string; indexOnly?: true } {
   switch (view.kind) {
     case "trash":
