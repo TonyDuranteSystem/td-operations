@@ -1,6 +1,8 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
 
-_Last verified against code: 2026-08-07c — Claude (**LIVE SEARCH-AS-YOU-TYPE. dev job 21844d01 follow-up; Antonio: "if I write anthropic I want all emails filtered to show up" — like Gmail, no Enter.** A 350ms-debounced effect in the shell activates the search for PLAIN-WORD queries of ≥2 chars; emptying the box auto-clears back to the inbox. Operator queries (`from:`, `in:`, …) DELIBERATELY still wait for Enter — they take the LIVE-Gmail path, and firing one per keystroke is the 2026-08-02 quota incident's shape; plain words are safe because they answer from our own index (<100ms DB query). `isInstantSearchQuery` MOVED to `lib/inbox/view-query.ts` (client-safe, dependency-free) so the browser and the route share ONE instant-vs-live judgment; `lib/email-index/query.ts` re-exports it, so no import or test changed. Enter still works everywhere and remains the only trigger for operator searches.)_
+_Last verified against code: 2026-08-07d — Claude (**SIGNATURE PICK ON THE WORKER CONFIRM CARD + COMPANY FULL-SIGNATURE REDESIGN. dev job cee229dd; Luca's Team Chat review ("Signature in Inbox"), Antonio approved.** (1) The Worker's email Confirm card now carries the SAME per-email signature chooser as compose/reply (`SignatureControls` + a scrolling `SignaturePreview`, `authorWritesClosing:false` because the worker's signature keeps the sign-off). The pick rides the Confirm click (`signature_variant` in the confirm-send POST), is narrowed by `parseSignatureVariant` in the route, and lands as the new 4th arg of `confirmWorkerEmailSend` — applied at DISPATCH time exactly like the mailbox override; absent = full default (pre-picker behavior). Since 2026-07-29 EVERY worker email (text-only AND attachment) freezes through `prepareWorkerEmailSend` and dispatches only in `confirmWorkerEmailSend`, so this ONE plumbing point covers every worker send — the module's old header claiming text-only sends bypass it was stale and is fixed. On `none` the blocks are OMITTED, not appended empty (hasSignature rule). Card resets the pick to default on every fresh card. (2) COMPANY (support) full variants redesigned: the avatar cell is now `signature-td-lockup.png` (TD mark + "TONY DURANTE" stacked, NO tagline, 120x84) and the strip below is `signature-badges.png` (ONLY the three certification badges, 260x80, centered) — the TD logo appears ONCE, fixing Luca's "logo twice" report. ANTONIO's full variants are UNCHANGED (portrait + the original 300px `tony-logos.png` banner — it is the only TD logo on his mail, per his 2026-08-05 logo-everywhere rule). Compact/none untouched. Both new assets cropped from `tony-logos.png`, canvases exact multiples of render size, flattened white. Tests updated across `email-signature`, `worker-email-confirm` (pick honored incl. mailbox-override interplay), `operations-email` (brand shell now expects lockup+badges).)_
+
+_Previous entry: 2026-08-07c — Claude (**LIVE SEARCH-AS-YOU-TYPE. dev job 21844d01 follow-up; Antonio: "if I write anthropic I want all emails filtered to show up" — like Gmail, no Enter.** A 350ms-debounced effect in the shell activates the search for PLAIN-WORD queries of ≥2 chars; emptying the box auto-clears back to the inbox. Operator queries (`from:`, `in:`, …) DELIBERATELY still wait for Enter — they take the LIVE-Gmail path, and firing one per keystroke is the 2026-08-02 quota incident's shape; plain words are safe because they answer from our own index (<100ms DB query). `isInstantSearchQuery` MOVED to `lib/inbox/view-query.ts` (client-safe, dependency-free) so the browser and the route share ONE instant-vs-live judgment; `lib/email-index/query.ts` re-exports it, so no import or test changed. Enter still works everywhere and remains the only trigger for operator searches.)_
 
 _Previous entry: 2026-08-07b — Claude (**PIN AN EMAIL TO WORK ON — pin == the Gmail STAR. dev job 76b521ea; Antonio: "I want to pin an email that I need to work on" + "I want pin also in the menu" [the row hover bar].** Pin is the Gmail star underneath — DELIBERATELY: it syncs both ways with the Gmail app on his phone, needs no new storage, and the existing Starred sidebar view becomes the complete pinned list for free. What shipped: (1) `starred` joins the conversation payload (thread-level `bool_or` over live rows in `groupRowsToConversations`, same pattern + same council rule as `inInbox` — per-row logic floods views); (2) PIN TOGGLES: first button in the row hover bar (his explicit ask), in the mobile `sm:hidden` row cluster, and the open-email header's old one-way Star button is now a real toggle — it used to fire `star` with NO toast, NO unstar and NO state, i.e. his exact "the star doesn't work" report; all three show a filled amber star when pinned, toast Pinned/Unpinned, optimistic repaint then invalidate (write-through makes the refetch agree); (3) PINNED-FIRST ordering in folder views: migration `20260807-0300` re-orders `inbox_thread_page` by `bool_or('STARRED'…) DESC, max(internal_date) DESC` — same signature, CREATE OR REPLACE only (no drop, no PostgREST overload hazard), applied to sandbox; search + Archived stay chronological BY DESIGN (a pin is a work-queue marker for triage lists); (4) rows show a small filled star marker. Prod DDL: run `20260807-0300` with the `20260807-0100` migration, before the code deploy. Tests: thread-level starred/inInbox cases in `email-index-query.test.ts` (mutation-relevant: a replied thread's SENT row must not unpin/unarchive it).)_
 
@@ -655,6 +657,14 @@ email) · `none` (truly nothing — no block, no sign-off, no separator; call si
 branch on `hasSignature()`, never concatenate an empty string, or the blank-line
 separator survives).
 
+**Full-variant artwork differs per sender (2026-08-07, Luca's review, Antonio's
+approval):** SUPPORT full = the LOCKUP (`signature-td-lockup.png`, TD mark +
+"TONY DURANTE" stacked, no tagline, 120x84) beside the block, and ONLY the three
+certification badges below (`signature-badges.png`, 260x80, centered) — the TD logo
+appears exactly once. ANTONIO full = his portrait beside the block and the ORIGINAL
+300px `tony-logos.png` banner below (his only TD logo; do not remove it without his
+word — the 2026-08-05 rule is the TD logo on every signed email).
+
 **Four send sites, one rule each:**
 - Compose (`/api/inbox/compose` → `sendEmail` + `wrapEmailWithBrandShell`): signature
   at the BOTTOM (the old top banner + nameless footer are gone), `includeSignoff:false`
@@ -666,9 +676,18 @@ separator survives).
 - Reply (`/api/inbox/reply` → `buildReplyMime`): signature between the typed reply and
   the quoted history, both MIME halves, `includeSignoff:false`. Omitting the signature
   keeps the historical MIME byte-for-byte (test-pinned).
-- Worker text + worker attachment sends: sign-off ON (the model writes no closing),
-  BOTH halves signed; the text path now ships a real text/plain part (it used to
-  declare multipart/alternative with only an html part).
+- Worker sends (text-only AND attachment — since 2026-07-29 both freeze via
+  `prepareWorkerEmailSend` and dispatch only in `confirmWorkerEmailSend`): sign-off ON
+  (the model writes no closing), BOTH halves signed. The staff member picks the
+  signature ON THE INBOX PANEL'S CONFIRM CARD (2026-08-07, Luca's request; the other
+  confirm-card surfaces — Team Chat, dashboard sidebar, Portal Chats' email card —
+  don't render the picker yet and send the full default; the route already accepts
+  the field, so adding it there is pure JSX): `SignatureControls` +
+  preview beside the From dropdown, `signature_variant` rides the confirm POST,
+  `parseSignatureVariant` narrows it in the route, `confirmWorkerEmailSend` applies
+  it at dispatch (4th arg; omitted = full default). `none` omits the block entirely
+  on both halves. The pick resets to default on every fresh card, and the model
+  never chooses — the variant is deliberately NOT a tool param.
 
 **Hard rules the tests enforce:** ASCII only (the compose-path sanitizer rewrites
 smart punctuation — a typographic signature would differ between paths); every fact
@@ -694,7 +713,10 @@ draft while upload files are staged rather than silently dropping them. Compose 
 every close (sticky-sender bug). Assets: `public/images/signature-antonio-{gala,hat}.jpg`
 (hat frame Antonio-approved), `signature-td-mark.png` (derived from the app icon —
 regenerate from `public/portal-icons/icon-512.png` if the brand mark ever changes),
-`tony-logos.png` (banner, carries "Your Way to Freedom" + the three certifications).
+`tony-logos.png` (Antonio's banner, carries "Your Way to Freedom" + the three
+certifications), `signature-td-lockup.png` + `signature-badges.png` (the 2026-08-07
+company full-variant pieces, both cropped from `tony-logos.png` — recrop from it if
+the artwork ever changes).
 
 ## How to verify current state
 

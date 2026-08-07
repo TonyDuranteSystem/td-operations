@@ -31,6 +31,14 @@ export async function POST(req: NextRequest) {
   // else is ignored and the frozen row's own mailbox stands.
   const mailboxChoice: "support" | "antonio" | undefined =
     body.mailbox === "antonio" ? "antonio" : body.mailbox === "support" ? "support" : undefined
+  // The signature the staff member picked on the card (full / compact / none).
+  // Narrowed like every untrusted body field. ABSENT stays undefined — the
+  // default lives in ONE place (the dispatcher), so a surface that posts no
+  // pick (Team Chat, sidebar, Portal Chats' email card, older bundles) tracks
+  // whatever the dispatch-side default is rather than pinning today's.
+  const { parseSignatureVariant } = await import("@/lib/email/signature")
+  const signatureVariant =
+    body.signature_variant === undefined ? undefined : parseSignatureVariant(body.signature_variant)
   if (!preparedId) return NextResponse.json({ error: "prepared_id required" }, { status: 400 })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -98,7 +106,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, cancelled: true })
   }
 
-  const result = await confirmWorkerEmailSend(preparedId, user.email ?? "unknown", mailboxChoice)
+  const result = await confirmWorkerEmailSend(preparedId, user.email ?? "unknown", mailboxChoice, signatureVariant)
   if (result.ok === false) {
     return NextResponse.json({ error: result.reason }, { status: 400 })
   }

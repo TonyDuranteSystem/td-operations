@@ -143,9 +143,22 @@ describe("buildSignatureHtml", () => {
     }
   })
 
-  it("still brands support with the logo", () => {
+  // The 2026-08-07 redesign (Luca's review, Antonio's approval): company mail
+  // shows the TD logo ONCE — the lockup beside the block — and the strip below
+  // carries only the three certification badges. The old layout repeated the
+  // logo in the banner.
+  it("brands support with the lockup and badges, and never the old banner", () => {
     const html = buildSignatureHtml({ sender: "support", variant: "gala", baseUrl: BASE })
+    expect(html).toContain(`${BASE}/images/signature-td-lockup.png`)
+    expect(html).toContain(`${BASE}/images/signature-badges.png`)
+    expect(html).not.toContain("tony-logos.png")
+  })
+
+  it("keeps the original banner on Antonio's mail — his only TD logo", () => {
+    const html = buildSignatureHtml({ sender: "antonio", variant: "gala", baseUrl: BASE })
     expect(html).toContain("tony-logos.png")
+    expect(html).not.toContain("signature-badges.png")
+    expect(html).not.toContain("signature-td-lockup.png")
   })
 
   // Compact ("text") carries the small TD mark and NOTHING else - no
@@ -282,27 +295,28 @@ describe('the "none" variant — no signature at all', () => {
   })
 })
 
-describe("the TD mark on the company block", () => {
-  // The mark is the app's own icon — the shape people already recognise. It
-  // gives mail from the shared mailbox a face the way Antonio's portrait
-  // gives his (Antonio, 2026-08-05).
-  it("sits beside the support block on image variants", () => {
+describe("the TD branding on the company block", () => {
+  // The 2026-08-07 lockup (TD mark + "TONY DURANTE", no tagline) is the ONE
+  // TD logo on company full-variant mail — the strip below is badges only,
+  // so the logo never repeats (Luca's review).
+  it("puts the lockup beside the support block on image variants", () => {
     for (const variant of ["gala", "hat"] as const) {
       const html = buildSignatureHtml({ sender: "support", variant, baseUrl: BASE })
-      expect(html).toContain(`${BASE}/images/signature-td-mark.png`)
+      expect(html).toContain(`${BASE}/images/signature-td-lockup.png`)
       expect(html).toContain('alt="Tony Durante LLC"')
+      expect(html).not.toContain("signature-td-mark.png")
     }
   })
 
   it("yields to Antonio's portrait on his photo variants", () => {
     for (const v of ["gala", "hat"] as const) {
-      expect(
-        buildSignatureHtml({ sender: "antonio", variant: v, baseUrl: BASE })
-      ).not.toContain("signature-td-mark")
+      const html = buildSignatureHtml({ sender: "antonio", variant: v, baseUrl: BASE })
+      expect(html).not.toContain("signature-td-mark")
+      expect(html).not.toContain("signature-td-lockup")
     }
   })
 
-  it("appears small on compact for BOTH senders - the logo is on every signed email", () => {
+  it("keeps the small mark on compact for BOTH senders - the logo is on every signed email", () => {
     for (const sender of ["antonio", "support"] as const) {
       expect(
         buildSignatureHtml({ sender, variant: "text", baseUrl: BASE })
@@ -312,30 +326,49 @@ describe("the TD mark on the company block", () => {
 
   it("stays off 'none' - the only way to send with no logo at all", () => {
     for (const sender of ["antonio", "support"] as const) {
-      expect(
-        buildSignatureHtml({ sender, variant: "none", baseUrl: BASE })
-      ).not.toContain("signature-td-mark")
+      const html = buildSignatureHtml({ sender, variant: "none", baseUrl: BASE })
+      expect(html).not.toContain("signature-td-mark")
+      expect(html).not.toContain("signature-td-lockup")
     }
   })
 
-  it("is explicitly sized like every other image", () => {
+  it("sizes the lockup explicitly like every other image", () => {
     const html = buildSignatureHtml({ sender: "support", variant: "gala", baseUrl: BASE })
-    expect(html).toMatch(/signature-td-mark\.png" width="64" height="64"/)
+    expect(html).toMatch(/signature-td-lockup\.png" width="120" height="84"/)
   })
 })
 
-describe("banner width", () => {
-  // Inside an auto-layout table a shrinkable image loses the width
-  // negotiation to the narrowest row: the banner rendered 242px on the
-  // company block while rendering 300px on Antonio's (browser-measured
-  // 2026-08-05). Fixed width is the guard.
-  it("is pinned at 300px with no shrink-to-fit escape hatch", () => {
-    for (const sender of ["antonio", "support"] as const) {
-      const html = buildSignatureHtml({ sender, variant: "gala", baseUrl: BASE })
-      const banner = html.match(/<img[^>]*tony-logos[^>]*>/)?.[0] ?? ""
-      expect(banner).toContain('width="300"')
-      expect(banner).not.toContain("max-width")
-    }
+describe("the strip under the block", () => {
+  // Fixed px widths, NOT max-width:100%: inside an auto-layout table a
+  // shrinkable image loses the width negotiation to the narrowest row
+  // (browser-measured 2026-08-05). Fixed width is the guard on both strips.
+  it("pins Antonio's banner at 300px with no shrink-to-fit escape hatch", () => {
+    const html = buildSignatureHtml({ sender: "antonio", variant: "gala", baseUrl: BASE })
+    const banner = html.match(/<img[^>]*tony-logos[^>]*>/)?.[0] ?? ""
+    expect(banner).toContain('width="300"')
+    expect(banner).not.toContain("max-width")
+  })
+
+  it("pins the support badges at 260x80, centered", () => {
+    const html = buildSignatureHtml({ sender: "support", variant: "gala", baseUrl: BASE })
+    const badges = html.match(/<img[^>]*signature-badges[^>]*>/)?.[0] ?? ""
+    expect(badges).toContain('width="260"')
+    expect(badges).toContain('height="80"')
+    expect(badges).not.toContain("max-width")
+    expect(html).toContain('align="center"')
+  })
+
+  // A blocked-images reader must still learn what the badges say.
+  it("names the three certifications in the badges alt text", () => {
+    const html = buildSignatureHtml({ sender: "support", variant: "gala", baseUrl: BASE })
+    expect(html).toContain(
+      'alt="IRS Certified Acceptance Agents - Public Notary - Professional Tax Preparer"'
+    )
+  })
+
+  it("support full carries exactly two images: lockup and badges", () => {
+    const html = buildSignatureHtml({ sender: "support", variant: "gala", baseUrl: BASE })
+    expect(html.match(/<img/g)).toHaveLength(2)
   })
 })
 
@@ -348,5 +381,8 @@ describe("relative base URL (in-app preview)", () => {
     expect(html).toContain('src="/images/signature-antonio-gala.jpg"')
     expect(html).toContain('src="/images/tony-logos.png"')
     expect(html).not.toContain('src="https://')
+    const support = buildSignatureHtml({ sender: "support", variant: "gala", baseUrl: "" })
+    expect(support).toContain('src="/images/signature-td-lockup.png"')
+    expect(support).toContain('src="/images/signature-badges.png"')
   })
 })
