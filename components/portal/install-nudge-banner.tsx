@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Bell, Loader2, Smartphone } from 'lucide-react'
+import { Bell, BellOff, Loader2, Smartphone } from 'lucide-react'
 import { toast } from 'sonner'
 import { useLocale } from '@/lib/portal/use-locale'
 import { resolveInstallNudge, type InstallNudge } from '@/lib/portal/install-state'
@@ -84,9 +84,9 @@ export function InstallNudgeBanner({ accountId }: { accountId: string }) {
     }
     if (result.reason === 'denied') {
       toast.error(c.pushDenied)
-      // Permission denied is only reversible in OS settings — hide rather
-      // than leave a button that always fails.
-      setNudge('none')
+      // Permission denied is only fixable in OS settings → switch to the
+      // hard-denied NAG stage (Antonio 2026-08-07), not silence.
+      setNudge('blocked')
       return
     }
     toast.error(result.message || c.pushFailed)
@@ -107,6 +107,14 @@ export function InstallNudgeBanner({ accountId }: { accountId: string }) {
             >
               {c.installCta}
             </Link>
+          </>
+        ) : nudge === 'blocked' ? (
+          <>
+            {/* Hard-denied stage (Antonio 2026-08-07: NAG, not silence).
+                No button — the permission is only fixable in OS settings, so
+                the line IS the instruction. Non-dismissible like the rest. */}
+            <BellOff className="h-4 w-4 text-red-600 shrink-0" />
+            <p className="flex-1 min-w-0 text-xs text-red-900">{c.blockedLine}</p>
           </>
         ) : (
           <>

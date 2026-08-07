@@ -46,6 +46,10 @@ export interface CommEnrollmentDetail extends CommEnrollment {
    *  values are private-bucket paths — see brief-uploads.ts). A `url` of '' means
    *  the file couldn't be signed (deleted / bad path) → render as unavailable. */
   uploads: BriefUpload[]
+  /** Raw private-bucket storage paths behind `uploads`, same order — used by the
+   *  partner access log to record each file grant explicitly (job 5f534ed9).
+   *  Never render these; they are not fetchable without signing. */
+  upload_paths: string[]
   /** Cached AI Brand Profile (metadata.ai_brand_profile), or null if never generated. */
   ai_brand_profile: CachedBrandProfile | null
   /** True when the cached profile's source_hash no longer matches the current
@@ -69,6 +73,7 @@ function shapeRow(row: any): CommEnrollmentRow {
     contact_id: row.contact_id ?? null,
     lead_id: row.lead_id ?? null,
     partner_id: row.partner_id ?? null,
+    worker_partner_id: row.worker_partner_id ?? null,
     service_delivery_id: row.service_delivery_id ?? null,
     client_type: row.client_type ?? null,
     package_slug: row.package_slug ?? null,
@@ -103,13 +108,32 @@ function withDerived(row: CommEnrollmentRow, subject: CommEnrollment['subject'])
   }
 }
 
-/** All enrollments (newest first), subject resolved in a single batched pass. */
+/** All enrollments (newest first), subject resolved in a single batched pass.
+ *  STAFF-ONLY view — partner surfaces must use listEnrollmentsForWorkerPartner
+ *  (Antonio 2026-08-07: the earlier "partner sees the full pipeline" decision
+ *  is REVERSED; a partner sees only enrollments assigned to them). */
 export async function listEnrollments(): Promise<CommEnrollment[]> {
-  const { data, error } = await db
+  return listEnrollmentsInternal(null)
+}
+
+/** Enrollments assigned to ONE worker partner (their /collab view). Rows with
+ *  no assignment yet are deliberately invisible to partners. */
+export async function listEnrollmentsForWorkerPartner(
+  workerPartnerId: string,
+): Promise<CommEnrollment[]> {
+  return listEnrollmentsInternal(workerPartnerId)
+}
+
+async function listEnrollmentsInternal(
+  workerPartnerId: string | null,
+): Promise<CommEnrollment[]> {
+  let query = db
     .from('td_comm_enrollments')
     .select(ENROLLMENT_COLUMNS)
     .order('created_at', { ascending: false })
     .limit(500)
+  if (workerPartnerId) query = query.eq('worker_partner_id', workerPartnerId)
+  const { data, error } = await query
   if (error) throw new Error(error.message)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rows = (data ?? []).map((r: any) => shapeRow(r))
@@ -187,6 +211,7 @@ export async function getEnrollment(id: string): Promise<CommEnrollmentDetail | 
     sd,
     timeline: buildTimeline(row, sd),
     uploads,
+    upload_paths: rawUploads.map(u => u.url),
     ai_brand_profile: cached,
     ai_brand_profile_stale: aiBrandProfileStale,
     logo_geometry: readGeometry(row.metadata),

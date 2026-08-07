@@ -16,7 +16,7 @@
  * Pure function so the rules are unit-testable without a browser.
  */
 
-export type InstallNudge = 'install' | 'push' | 'none'
+export type InstallNudge = 'install' | 'push' | 'blocked' | 'none'
 
 export interface InstallNudgeEnv {
   /** Viewport/UA says phone or tablet (the install nudge is mobile-only —
@@ -39,10 +39,11 @@ export function resolveInstallNudge(env: InstallNudgeEnv): InstallNudge {
   // (standalone desktop installs exist too; the ask is identical).
   if (env.standalone) {
     if (!env.pushSupported) return 'none'
-    // 'denied' is only reversible in OS settings — a button that always
-    // fails is worse than nothing (rule inherited from the retired
-    // push-card-visibility gate).
-    if (env.permission === 'denied') return 'none'
+    // 'denied' is only reversible in OS settings — no button, but Antonio's
+    // explicit decision (2026-08-07, replacing the earlier keep-silent
+    // default): NAG with settings instructions until it's unblocked. Same
+    // non-dismissible contract as the other stages.
+    if (env.permission === 'denied') return 'blocked'
     return 'push'
   }
 

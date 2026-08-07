@@ -20,8 +20,8 @@ describe('isAdmin', () => {
     expect(isAdmin(makeUser({ app_metadata: { role: 'admin' } }))).toBe(true)
   })
 
-  it('returns true for user_metadata role=admin', () => {
-    expect(isAdmin(makeUser({ user_metadata: { role: 'admin' } }))).toBe(true)
+  it('IGNORES user_metadata role=admin — self-writable, was a privilege escalation (fixed 2026-08-07)', () => {
+    expect(isAdmin(makeUser({ user_metadata: { role: 'admin' } }))).toBe(false)
   })
 
   it('returns false for team user', () => {

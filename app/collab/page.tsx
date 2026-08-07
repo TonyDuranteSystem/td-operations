@@ -6,7 +6,8 @@ import {
   listConversationsForPartner,
   createConversation,
 } from '@/lib/td-communication/queries'
-import { listEnrollments } from '@/lib/td-communication/pipeline-queries'
+import { listEnrollmentsForWorkerPartner } from '@/lib/td-communication/pipeline-queries'
+import { logPartnerAccess } from '@/lib/td-communication/partner-access-log'
 import { postOverdueAlerts } from '@/lib/td-communication/sla'
 import { CollabDashboard } from '@/components/td-communication/collab-dashboard'
 import type { CommEnrollment, CommParticipant } from '@/lib/td-communication/types'
@@ -61,10 +62,20 @@ export default async function PartnerCommunicationPage() {
 
   let initialProjects: CommEnrollment[] = []
   try {
-    initialProjects = await listEnrollments()
+    // Scoped to THIS partner's assigned projects only (Antonio 2026-08-07,
+    // reversing the earlier full-pipeline visibility): the pipeline holds
+    // every client's subject data, which a partner has no business seeing.
+    initialProjects = await listEnrollmentsForWorkerPartner(partner.id)
   } catch {
     initialProjects = []
   }
+  logPartnerAccess({
+    partnerId: partner.id,
+    surface: 'collab_page',
+    method: 'GET',
+    path: '/collab',
+    detail: { projects: initialProjects.length },
+  })
 
   // Phase 10: post a one-time overdue notice in the chat for any project past
   // its deadline that hasn't been alerted yet (no cron — checked on render).

@@ -2,16 +2,21 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { resolveCommParticipant } from '@/lib/td-communication/queries'
 import { getEnrollment, setEnrollmentStatus } from '@/lib/td-communication/pipeline-queries'
+import { logPartnerAccess, logPartnerFileGrants } from '@/lib/td-communication/partner-access-log'
 
 export const dynamic = 'force-dynamic'
 
 /**
  * GET /api/td-communication/projects/[id] — creative-brief detail for one
- * enrollment (resolved subject, linked SD snapshot, timeline). Staff or scoped
- * partner.
+ * enrollment (resolved subject, linked SD snapshot, timeline, SIGNED document
+ * urls). Staff see any; a PARTNER only their assigned enrollments
+ * (worker_partner_id — Antonio 2026-08-07; before this check any partner could
+ * open ANY brief by id, including passport/ID document links). Unassigned or
+ * foreign ids answer 404 so existence is not leaked. Partner opens are audit-
+ * logged, with one explicit row per signed document (job 5f534ed9).
  */
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: { id: string } },
 ): Promise<NextResponse> {
   const supabase = createClient()
@@ -25,6 +30,20 @@ export async function GET(
     const project = await getEnrollment(params.id)
     if (!project) {
       return NextResponse.json({ error: 'Project not found.' }, { status: 404 })
+    }
+    if (participant.type === 'partner') {
+      if (project.worker_partner_id !== participant.id) {
+        return NextResponse.json({ error: 'Project not found.' }, { status: 404 })
+      }
+      logPartnerAccess({
+        partnerId: participant.id,
+        surface: 'project_brief',
+        method: 'GET',
+        path: `/api/td-communication/projects/${params.id}`,
+        detail: { enrollment_id: params.id, files: project.upload_paths.length },
+        req,
+      })
+      logPartnerFileGrants(participant.id, params.id, project.upload_paths, req)
     }
     return NextResponse.json({ project })
   } catch (err) {
@@ -61,6 +80,22 @@ export async function PATCH(
   }
 
   try {
+    // Same partner scoping as GET: a partner may only move THEIR enrollments
+    // (and the attempt is audit-logged either way).
+    if (participant.type === 'partner') {
+      const project = await getEnrollment(params.id)
+      if (!project || project.worker_partner_id !== participant.id) {
+        return NextResponse.json({ error: 'Project not found.' }, { status: 404 })
+      }
+      logPartnerAccess({
+        partnerId: participant.id,
+        surface: 'project_status_change',
+        method: 'PATCH',
+        path: `/api/td-communication/projects/${params.id}`,
+        detail: { enrollment_id: params.id, new_status: status },
+        req,
+      })
+    }
     const result = await setEnrollmentStatus(params.id, status)
     return NextResponse.json(result)
   } catch (err) {

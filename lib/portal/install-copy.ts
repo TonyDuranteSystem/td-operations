@@ -24,6 +24,7 @@ export const INSTALL_NUDGE_COPY: Record<InstallLanguage, {
   pushEnabled: string
   pushDenied: string
   pushFailed: string
+  blockedLine: string
   sidebarGetApp: string
 }> = {
   en: {
@@ -34,6 +35,7 @@ export const INSTALL_NUDGE_COPY: Record<InstallLanguage, {
     pushEnabled: 'Notifications enabled — you’re all set',
     pushDenied: 'Notification permission denied',
     pushFailed: 'Could not enable notifications',
+    blockedLine: 'Notifications are blocked on this phone — open Settings → Notifications → TD Portal and allow them.',
     sidebarGetApp: 'Get the app',
   },
   it: {
@@ -44,6 +46,7 @@ export const INSTALL_NUDGE_COPY: Record<InstallLanguage, {
     pushEnabled: 'Notifiche attivate — tutto pronto',
     pushDenied: 'Permesso per le notifiche negato',
     pushFailed: 'Impossibile attivare le notifiche',
+    blockedLine: 'Le notifiche sono bloccate su questo telefono — apri Impostazioni → Notifiche → TD Portal e consentile.',
     sidebarGetApp: 'Scarica l’app',
   },
 }

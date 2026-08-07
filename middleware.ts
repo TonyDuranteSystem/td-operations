@@ -428,7 +428,8 @@ export async function middleware(request: NextRequest) {
     // Admin-only paths: team users redirected to home
     const ADMIN_ONLY_PATHS = ['/dev-tools', '/team-management']
     const isAdminEmail = user.email && ['antonio.durante@tonydurante.us'].includes(user.email)
-    const isAdminRole = user.app_metadata?.role === 'admin' || user.user_metadata?.role === 'admin'
+    // app_metadata ONLY — user_metadata is self-writable (see lib/auth.ts isAdmin).
+    const isAdminRole = user.app_metadata?.role === 'admin'
     if (ADMIN_ONLY_PATHS.some(p => pathname === p || pathname.startsWith(p + '/')) && !isAdminEmail && !isAdminRole) {
       const url = request.nextUrl.clone()
       url.pathname = '/'

@@ -12,24 +12,21 @@ export type CrmRole = 'admin' | 'team'
  * - Client: portal only (handled separately by isClient)
  */
 export function isAdmin(user: User | null): boolean {
-  if (!user) return false
-  if (ADMIN_EMAILS.includes(user.email ?? "")) return true
-  return user.app_metadata?.role === "admin" || user.user_metadata?.role === "admin"
-}
-
-/**
- * TAMPER-PROOF admin check for security-sensitive endpoints (MFA reset, and
- * anything else where a false positive is an escalation). Unlike isAdmin(),
- * this NEVER consults user_metadata — that object is self-writable by the
- * account holder via supabase.auth.updateUser, so trusting it lets any
- * logged-in user grant themselves admin (found in the staff-MFA council
- * pass, dev job de4564ee; fixing isAdmin itself is a separate flagged job).
- * app_metadata is service-role-writable only; ADMIN_EMAILS is code.
- */
-export function isSecureAdmin(user: User | null): boolean {
+  // NEVER consult user_metadata here: that object is SELF-WRITABLE by the
+  // account holder via supabase.auth.updateUser, so trusting its role let any
+  // logged-in user grant themselves admin (found in the staff-MFA council
+  // pass; fixed 2026-08-07 on Antonio's green light — production verified
+  // first: nobody's admin standing depended on user_metadata alone).
+  // app_metadata is service-role-writable only; ADMIN_EMAILS is code.
   if (!user) return false
   if (ADMIN_EMAILS.includes(user.email ?? "")) return true
   return user.app_metadata?.role === "admin"
+}
+
+/** Alias kept for the MFA endpoints that adopted the tamper-proof check
+ *  before isAdmin itself was fixed — now identical to isAdmin. */
+export function isSecureAdmin(user: User | null): boolean {
+  return isAdmin(user)
 }
 
 /** Accounts that may never be MFA-reset by anyone but themselves. */

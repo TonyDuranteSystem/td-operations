@@ -1,15 +1,17 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { resolveCommParticipant } from '@/lib/td-communication/queries'
-import { listEnrollments } from '@/lib/td-communication/pipeline-queries'
+import { listEnrollments, listEnrollmentsForWorkerPartner } from '@/lib/td-communication/pipeline-queries'
+import { logPartnerAccess } from '@/lib/td-communication/partner-access-log'
 
 export const dynamic = 'force-dynamic'
 
 /**
- * GET /api/td-communication/projects — list all TD Communication enrollments
- * for the pipeline board. Open to staff and to any partner with the
- * td_communication scope (resolveCommParticipant gates both). Cris sees the
- * full pipeline; visibility is role-based, independent of an enrollment's subject.
+ * GET /api/td-communication/projects — the pipeline board data.
+ * Staff see everything. A PARTNER sees ONLY enrollments assigned to them
+ * (worker_partner_id) — Antonio 2026-08-07, REVERSING the earlier
+ * "Cris sees the full pipeline" decision: the unscoped list resolved every
+ * client/account/lead subject in the system to a partner login.
  */
 export async function GET(): Promise<NextResponse> {
   const supabase = createClient()
@@ -20,7 +22,19 @@ export async function GET(): Promise<NextResponse> {
   }
 
   try {
-    const projects = await listEnrollments()
+    let projects
+    if (participant.type === 'partner') {
+      projects = await listEnrollmentsForWorkerPartner(participant.id)
+      logPartnerAccess({
+        partnerId: participant.id,
+        surface: 'projects_list',
+        method: 'GET',
+        path: '/api/td-communication/projects',
+        detail: { count: projects.length },
+      })
+    } else {
+      projects = await listEnrollments()
+    }
     return NextResponse.json({ projects })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to load projects.'

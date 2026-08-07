@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { resolveCommParticipant, participantCanAccess } from '@/lib/td-communication/queries'
+import { logPartnerAccess } from '@/lib/td-communication/partner-access-log'
 import { randomUUID } from 'crypto'
 
 export const dynamic = 'force-dynamic'
@@ -40,6 +41,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Could not start the upload. Please try again.' }, { status: 500 })
   }
   const { data: urlData } = supabaseAdmin.storage.from('assets').getPublicUrl(storagePath)
+
+  if (participant.type === 'partner') {
+    logPartnerAccess({
+      partnerId: participant.id,
+      surface: 'chat_upload',
+      method: 'POST',
+      path: '/api/conversations/upload-url',
+      resource: storagePath,
+      detail: { conversation_id: conversationId, file_name: fileName.slice(0, 120) },
+      req,
+    })
+  }
 
   return NextResponse.json({ signedUrl: data.signedUrl, token: data.token, path: storagePath, publicUrl: urlData.publicUrl })
 }

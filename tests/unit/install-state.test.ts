@@ -31,8 +31,12 @@ describe('resolveInstallNudge — THE one nudge decision (non-dismissible by spe
     expect(resolveInstallNudge({ ...base, isMobile: false, standalone: true })).toBe('push')
   })
 
-  it('push permission denied → nothing (only fixable in OS settings)', () => {
-    expect(resolveInstallNudge({ ...base, standalone: true, permission: 'denied' })).toBe('none')
+  it('push permission hard-denied → blocked NAG stage (Antonio 2026-08-07, replacing silence)', () => {
+    expect(resolveInstallNudge({ ...base, standalone: true, permission: 'denied' })).toBe('blocked')
+  })
+
+  it('blocked stage requires standalone — a mobile browser with denied permission still gets install', () => {
+    expect(resolveInstallNudge({ ...base, permission: 'denied' })).toBe('install')
   })
 
   it('standalone without push support → nothing to ask', () => {

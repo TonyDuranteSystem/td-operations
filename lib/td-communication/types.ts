@@ -119,6 +119,9 @@ export interface CommEnrollmentRow {
   metadata: Record<string, unknown>
   /** Automatic SLA deadline = base + package.delivery_days (Phase 10). Null until set. */
   deadline_at: string | null
+  /** The partner ASSIGNED to do the work — the scoping key for every partner
+   *  surface (Antonio 2026-08-07: partners see only their own enrollments). */
+  worker_partner_id: string | null
   created_at: string
   updated_at: string
 }

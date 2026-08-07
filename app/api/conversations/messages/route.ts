@@ -10,6 +10,7 @@ import {
   markMessagesRead,
 } from '@/lib/td-communication/queries'
 import { validateMessageBody } from '@/lib/td-communication/helpers'
+import { logPartnerAccess } from '@/lib/td-communication/partner-access-log'
 import type { CommAttachment } from '@/lib/td-communication/types'
 
 export const dynamic = 'force-dynamic'
@@ -44,6 +45,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const messages = await listMessages(conversationId, participant.type)
     await markConversationRead(conversationId, participant)
     await markMessagesRead(conversationId, participant)
+    if (participant.type === 'partner') {
+      logPartnerAccess({
+        partnerId: participant.id,
+        surface: 'chat_read',
+        method: 'GET',
+        path: '/api/conversations/messages',
+        detail: { conversation_id: conversationId, messages: messages.length },
+        req,
+      })
+    }
     return NextResponse.json({ messages })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to load messages.'
@@ -99,6 +110,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       attachments,
       replyToId,
     })
+    if (participant.type === 'partner') {
+      logPartnerAccess({
+        partnerId: participant.id,
+        surface: 'chat_send',
+        method: 'POST',
+        path: '/api/conversations/messages',
+        detail: { conversation_id: conversationId, attachments: attachments.length },
+        req,
+      })
+    }
     return NextResponse.json({ message }, { status: 201 })
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Failed to send message.'
