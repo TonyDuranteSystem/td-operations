@@ -45,6 +45,8 @@ export interface RenewalAccountRow {
   is_internal: boolean | null
   ein_number: string | null
   entity_type: string | null
+  ra_switch_date: string | null
+  client_since: string | null
   // Presentation extras for the calendar (RA registry + Drive)
   registered_agent_id: string | null
   registered_agent_provider: string | null
@@ -57,6 +59,9 @@ export interface RenewalAccountRow {
 export interface LoadedRenewalAccount {
   account: RenewalAccountRow
   status: CompanyRenewalStatus
+  /** How this company entered TD — decides which anniversary rule a missing
+   *  date would be derived from. null = ambiguous, never guess (R093). */
+  intake: "formation" | "onboarding" | null
 }
 
 interface SdRow {
@@ -106,7 +111,7 @@ export async function loadRenewalStatuses(
     let q = supabase
       .from("accounts")
       .select(
-        "id, company_name, account_type, status, state_of_formation, formation_date, ra_renewal_date, annual_report_due_date, is_test, is_internal, ein_number, entity_type, registered_agent_id, registered_agent_provider, registered_agent_address, gdrive_folder_url, drive_folder_id, portal_tier",
+        "id, company_name, account_type, status, state_of_formation, formation_date, ra_renewal_date, annual_report_due_date, is_test, is_internal, ein_number, entity_type, ra_switch_date, client_since, registered_agent_id, registered_agent_provider, registered_agent_address, gdrive_folder_url, drive_folder_id, portal_tier",
       )
       .eq("status", "Active")
       .in("account_type", ["Client", "One-Time"])
@@ -235,6 +240,14 @@ export async function loadRenewalStatuses(
       today,
       upcomingWindowDays: opts.upcomingWindowDays,
     })
-    return { account: a, status }
+    // Intake: a Company Formation SD (any status) proves TD formed the
+    // company; otherwise a recorded RA-switch/client-since points to
+    // onboarding. Neither → null, and proposals stay manual.
+    const intake: LoadedRenewalAccount["intake"] = formationSD
+      ? "formation"
+      : a.ra_switch_date || a.client_since
+        ? "onboarding"
+        : null
+    return { account: a, status, intake }
   })
 }
