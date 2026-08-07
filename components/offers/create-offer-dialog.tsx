@@ -302,13 +302,15 @@ export function CreateOfferDialog({
   // Notes context for offer creation
   const [notesContext, setNotesContext] = useState<NoteSource[]>([])
   const [notesLoading, setNotesLoading] = useState(false)
+  // WS-A: credit this client already paid, shown while the offer is being built.
+  const [heldCredit, setHeldCredit] = useState<Array<{ amount: number; currency: string }>>([])
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set())
   const [notesExpanded, setNotesExpanded] = useState(true)
   const [expandedNoteIds, setExpandedNoteIds] = useState<Set<string>>(new Set())
 
   // Fetch notes context when dialog opens
   useEffect(() => {
-    if (!open) return
+    if (!open) { setHeldCredit([]); return }
     if (!leadId && !contactId && !accountId) return
 
     setNotesLoading(true)
@@ -322,6 +324,7 @@ export function CreateOfferDialog({
       .then(d => {
         const sources = (d.sources ?? []) as NoteSource[]
         setNotesContext(sources)
+        setHeldCredit((d.held_credit ?? []) as Array<{ amount: number; currency: string }>)
         // Select all by default
         setSelectedNoteIds(new Set(sources.map(s => s.id)))
       })
@@ -887,6 +890,24 @@ export function CreateOfferDialog({
               />
             </div>
             <p className="text-sm text-zinc-600">{clientEmail}</p>
+            {/* WS-A: what this client has ALREADY PAID. Shown here, while the
+                services are still being chosen, because learning it after the
+                offer is written is too late to price the deal. */}
+            {heldCredit.length > 0 && (
+              <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2">
+                <p className="text-sm font-medium text-emerald-900">
+                  💳 Already paid:{' '}
+                  {heldCredit
+                    .map(c => `${c.currency === 'EUR' ? '€' : '$'}${c.amount.toLocaleString('en-US')}`)
+                    .join(' + ')}{' '}
+                  unused credit
+                </p>
+                <p className="mt-0.5 text-xs text-emerald-800">
+                  It is deducted automatically on an offer in the same currency. A credit in
+                  another currency is never converted — price this offer to match it.
+                </p>
+              </div>
+            )}
             <div className="pt-1">
               <ReferrerPicker value={referrer} onChange={setReferrer} />
             </div>
