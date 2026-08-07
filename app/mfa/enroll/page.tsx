@@ -28,8 +28,13 @@ import { createClient } from '@/lib/supabase/client'
 
 type Step = 'loading' | 'intro' | 'scan' | 'codes' | 'blocked'
 
+// The Supabase browser client is created ON DEMAND (inside effects and
+// handlers), NEVER in the render path: this page is statically prerendered at
+// build time, and createBrowserClient throws when the public URL/anon key are
+// absent — which is exactly a preview build. Creating it during render broke
+// every preview build of the repo (2026-08-07). Same pattern as app/login.
+
 export default function MfaEnrollPage() {
-  const supabase = createClient()
   const [step, setStep] = useState<Step>('loading')
   const [factorId, setFactorId] = useState<string | null>(null)
   const [qrSvg, setQrSvg] = useState<string | null>(null)
@@ -43,10 +48,10 @@ export default function MfaEnrollPage() {
 
   useEffect(() => {
     ;(async () => {
-      const { data: factors } = await supabase.auth.mfa.listFactors()
+      const { data: factors } = await createClient().auth.mfa.listFactors()
       const totp = factors?.totp ?? []
       const verified = totp.filter(f => (f as { status?: string }).status === 'verified')
-      const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+      const { data: aal } = await createClient().auth.mfa.getAuthenticatorAssuranceLevel()
       if (verified.length > 0 && aal?.currentLevel !== 'aal2') {
         // Enrolled but unverified session: adding another factor at aal1 is
         // exactly what a stolen password would do. Go verify instead.
@@ -54,10 +59,10 @@ export default function MfaEnrollPage() {
         return
       }
       // Clean abandoned enrollments so re-enroll never 422s.
-      const { data: all } = await supabase.auth.mfa.listFactors()
+      const { data: all } = await createClient().auth.mfa.listFactors()
       for (const f of all?.all ?? []) {
         if ((f as { status?: string }).status === 'unverified') {
-          await supabase.auth.mfa.unenroll({ factorId: f.id }).catch(() => {})
+          await createClient().auth.mfa.unenroll({ factorId: f.id }).catch(() => {})
         }
       }
       setStep('intro')
@@ -69,7 +74,7 @@ export default function MfaEnrollPage() {
     setBusy(true)
     setError(null)
     try {
-      const { data, error: enrollErr } = await supabase.auth.mfa.enroll({
+      const { data, error: enrollErr } = await createClient().auth.mfa.enroll({
         factorType: 'totp',
         issuer: 'TD Operations',
         friendlyName: `staff-${Date.now()}`,
@@ -85,16 +90,16 @@ export default function MfaEnrollPage() {
     } finally {
       setBusy(false)
     }
-  }, [supabase])
+  }, [])
 
   const handleActivate = useCallback(async () => {
     if (!factorId || code.length !== 6) return
     setBusy(true)
     setError(null)
     try {
-      const { data: challenge, error: chErr } = await supabase.auth.mfa.challenge({ factorId })
+      const { data: challenge, error: chErr } = await createClient().auth.mfa.challenge({ factorId })
       if (chErr || !challenge) throw new Error(chErr?.message || 'Challenge failed')
-      const { error: vErr } = await supabase.auth.mfa.verify({
+      const { error: vErr } = await createClient().auth.mfa.verify({
         factorId,
         challengeId: challenge.id,
         code,
@@ -111,7 +116,7 @@ export default function MfaEnrollPage() {
     } finally {
       setBusy(false)
     }
-  }, [factorId, code, supabase])
+  }, [factorId, code])
 
   const handleCopySecret = useCallback(async () => {
     if (!secret) return
