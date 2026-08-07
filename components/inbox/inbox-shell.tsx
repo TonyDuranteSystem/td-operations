@@ -28,7 +28,7 @@ import {
   makeUnreadOverride,
   overrideKey,
 } from '@/lib/inbox/conversation-reconcile'
-import { ORIGIN_UNKNOWN, viewKey, type RowAction, type ViewScope } from '@/lib/inbox/view-query'
+import { ORIGIN_UNKNOWN, viewKey, isInstantSearchQuery, type RowAction, type ViewScope } from '@/lib/inbox/view-query'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 import { openMarkReadSettled } from '@/lib/inbox/pending-mark-read'
@@ -1105,6 +1105,32 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     setSearchActive(false)
     queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
   }
+
+  // LIVE search-as-you-type (Antonio 2026-08-07: "if I write anthropic I want
+  // all emails filtered to show up" — like Gmail, no Enter). Debounced 350ms;
+  // PLAIN-WORD queries only: those answer from our own index (a cheap DB
+  // query). Operator queries (from:, in:, …) still wait for Enter — they hit
+  // LIVE Gmail, and firing one per keystroke is the 2026-08-02 quota incident.
+  // Emptying the box auto-clears back to the inbox; Enter still works and is
+  // the only trigger for operator searches.
+  useEffect(() => {
+    const q = searchQuery.trim()
+    if (!q) {
+      if (searchActive) {
+        setSearchActive(false)
+        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      }
+      return
+    }
+    if (q.length < 2 || !isInstantSearchQuery(q)) return
+    const t = setTimeout(() => {
+      setSearchActive(true)
+      setActiveChannel('gmail')
+      setActiveLabel(null)
+    }, 350)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery])
 
   // Antonio 2026-07-08: the inbox assistant is the SLACK WORKER (read-only
   // DB/CRM/KB tools + central memory), not the generic AI Assist panel.
