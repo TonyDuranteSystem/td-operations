@@ -17,7 +17,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
-import { paidCallIdempotencyKey, paidCallDescription, type CalendlyPayment } from "@/lib/calendly/paid-booking"
+import { paidCallIdempotencyKey, manualPaidCallIdempotencyKey, paidCallDescription, type CalendlyPayment } from "@/lib/calendly/paid-booking"
 import { paymentIntentIdForCharge } from "@/lib/stripe-sync"
 import { resolveCreditSubject, subjectForRecording } from "@/lib/operations/credit-subject"
 
@@ -74,9 +74,29 @@ export async function recordPaidCall(params: {
   inviteeEmail: string
   inviteeName?: string | null
   callDate?: string | null
+  /**
+   * Set when a human ATTACHES an unmatched bank-feed row to a person, because
+   * the client paid under an address the system cannot tie to them. Keys the
+   * rows on the FEED instead of the charge so a double-click cannot mint a
+   * second invoice or a second credit.
+   */
+  manual?: {
+    feedId: string
+    /**
+     * "Revenue only, history kept" (Antonio's ruling): the call is recorded and
+     * the credit note is written, but born with nothing left on it. Nothing is
+     * deductible, and six months later the record still shows they paid for a
+     * call — which a bare invoice would not. There is deliberately NO
+     * bare-invoice path.
+     */
+     creditUsedAtCreation?: boolean
+  }
 }): Promise<PaidCallResult> {
-  const { payment, inviteeEmail, inviteeName, callDate } = params
+  const { payment, inviteeEmail, inviteeName, callDate, manual } = params
   const description = paidCallDescription(callDate ?? null)
+  const keyFor = (kind: "invoice" | "credit") =>
+    manual ? manualPaidCallIdempotencyKey(manual.feedId, kind) : paidCallIdempotencyKey(payment.chargeId, kind)
+  const creditBornUsed = manual?.creditUsedAtCreation === true
 
   const contact = await resolveContact(inviteeEmail, inviteeName ?? null)
   // The INVOICE may carry the client's sole company (it is revenue for that
@@ -99,8 +119,10 @@ export async function recordPaidCall(params: {
     currency: payment.currency,
     mark_as_paid: true,
     payment_method: "Stripe",
-    notes: `Paid strategy call (Calendly booking, charge ${payment.chargeId}).`,
-    idempotency_key: paidCallIdempotencyKey(payment.chargeId, "invoice"),
+    notes: manual
+      ? `Paid strategy call — attached by hand from bank transaction ${manual.feedId}.`
+      : `Paid strategy call (Calendly booking, charge ${payment.chargeId}).`,
+    idempotency_key: keyFor("invoice"),
     // A paid row must never absorb credits — it is revenue, not a bill.
     skip_credit_netting: true,
   })
@@ -128,8 +150,12 @@ export async function recordPaidCall(params: {
     // NO account_id here on purpose — see the note above.
     line_items: [{ description: `Credit — ${description}`, unit_price: -payment.amount, quantity: 1 }],
     currency: payment.currency,
-    notes: `Deductible from the client's next service purchase (paid call, charge ${payment.chargeId}).`,
-    idempotency_key: paidCallIdempotencyKey(payment.chargeId, "credit"),
+    notes: creditBornUsed
+      ? `Paid call booked as revenue — not deductible. Recorded so the client's history shows they paid for a call (bank transaction ${manual?.feedId}).`
+      : manual
+        ? `Deductible from the client's next service purchase (paid call attached by hand from bank transaction ${manual.feedId}).`
+        : `Deductible from the client's next service purchase (paid call, charge ${payment.chargeId}).`,
+    idempotency_key: keyFor("credit"),
     skip_credit_netting: true,
   })
 
@@ -146,7 +172,7 @@ export async function recordPaidCall(params: {
   // eslint-disable-next-line no-restricted-syntax -- credit-note bookkeeping on the row just created (same sanctioned class as issueReferralCreditNote).
   const { error: creditErr } = await supabaseAdmin
     .from("payments")
-    .update({ invoice_status: "Credit", credit_remaining: payment.amount })
+    .update({ invoice_status: "Credit", credit_remaining: creditBornUsed ? 0 : payment.amount })
     .eq("id", credit.paymentId)
     .neq("invoice_status", "Credit")
   if (creditErr) throw new Error(`paid-call: credit note activation failed: ${creditErr.message}`)

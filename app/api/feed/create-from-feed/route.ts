@@ -29,6 +29,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { manualMatch } from "@/lib/bank-feed-matcher"
+import { recordPaidCall } from "@/lib/operations/paid-call-credit"
 import {
   createBackfilledSD,
   isValidServiceType,
@@ -47,6 +48,10 @@ interface Body {
   service_name?: string
   /** Branch A — when set, attach payment to this SD instead of creating one. */
   service_delivery_id?: string
+  /** Branch C — this transaction was a PAID STRATEGY CALL. Contact target only. */
+  paid_call?: boolean
+  /** Branch C — "revenue only, history kept": the credit is born already used. */
+  paid_call_revenue_only?: boolean
 }
 
 export async function POST(req: NextRequest) {
@@ -71,6 +76,8 @@ export async function POST(req: NextRequest) {
   const serviceDeliveryId = body.service_delivery_id?.trim()
   const serviceType = body.service_type?.trim()
   const serviceName = (body.service_name?.trim() || serviceType || "").slice(0, 200)
+  const isPaidCall = body.paid_call === true
+  const paidCallRevenueOnly = body.paid_call_revenue_only === true
 
   // ── Validation ──────────────────────────────────────────────────────
   if (!feedId) {
@@ -87,6 +94,79 @@ export async function POST(req: NextRequest) {
       { error: "pass account_id OR contact_id, not both" },
       { status: 400 },
     )
+  }
+
+
+  // ── BRANCH C — PAID STRATEGY CALL (Antonio's ruling) ─────────────────
+  //
+  // A client paid for a call under an address the system cannot tie to them, so
+  // no automatic recognition happened and the transaction sits unmatched. Staff
+  // name the person; we record exactly what the automatic path records.
+  //
+  // A paid call is NOT a service delivery, so this branch deliberately creates
+  // none — that is why it is its own branch rather than another service type.
+  //
+  // TWO OUTCOMES, both keeping the history:
+  //   deductible (default) — a usable person-scoped credit
+  //   revenue only         — the credit is born with nothing left on it, so
+  //                          nothing is deductible but the client's history
+  //                          still shows they paid for a call.
+  if (isPaidCall) {
+    if (!contactId) {
+      return NextResponse.json(
+        { error: "A paid strategy call is recorded against a PERSON — pick a contact, not a company." },
+        { status: 400 },
+      )
+    }
+
+    const { data: feedRow } = await supabaseAdmin
+      .from("td_bank_feeds")
+      .select("amount, currency, transaction_date, status")
+      .eq("id", feedId)
+      .maybeSingle()
+    const feed = feedRow as { amount: number; currency: string; transaction_date: string; status: string } | null
+    if (!feed) return NextResponse.json({ error: "Transaction not found" }, { status: 404 })
+
+    const { data: person } = await supabaseAdmin
+      .from("contacts").select("email, full_name").eq("id", contactId).maybeSingle()
+    const p = person as { email: string | null; full_name: string | null } | null
+    if (!p?.email) {
+      return NextResponse.json(
+        { error: "That contact has no email address, so the credit could never be found again. Add one first." },
+        { status: 400 },
+      )
+    }
+
+    try {
+      const result = await recordPaidCall({
+        payment: {
+          chargeId: `feed:${feedId}`,
+          amount: Number(feed.amount),
+          currency: String(feed.currency).toUpperCase() === "EUR" ? "EUR" : "USD",
+          provider: "manual",
+        },
+        inviteeEmail: p.email,
+        inviteeName: p.full_name,
+        callDate: feed.transaction_date,
+        manual: { feedId, creditUsedAtCreation: paidCallRevenueOnly },
+      })
+
+      const match = await manualMatch(feedId, result.invoiceId)
+      return NextResponse.json({
+        paid_call: true,
+        revenue_only: paidCallRevenueOnly,
+        payment_id: result.invoiceId,
+        invoice_number: result.invoiceNumber,
+        credit_id: result.creditId,
+        credit_number: result.creditNumber,
+        contact_id: result.contactId,
+        sd_id: null,
+        ...(match.matched ? {} : { warning: `Recorded, but the feed link failed: ${match.error}` }),
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return NextResponse.json({ error: `Could not record the paid call: ${msg}` }, { status: 500 })
+    }
   }
 
   const isAttachBranch = !!serviceDeliveryId

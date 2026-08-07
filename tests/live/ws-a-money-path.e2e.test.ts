@@ -1128,3 +1128,155 @@ describe("CELL 13 — one amount, every rail", () => {
     expect(payable.net).toBe(1243)
   })
 })
+
+// ══ CELL 14 — ATTACH AN UNMATCHED PAYMENT BY HAND ════════════════════════
+//
+// A client pays for a call under an address the system cannot tie to them, so
+// nothing is recognised and the transaction sits unmatched in Finance. Staff
+// name the person. Fixtures mirror the real production row still sitting
+// unmatched today: a Stripe row, "[Calendly] TD Strategic Consulting with …".
+//
+// Two outcomes, both keeping the history — there is deliberately no
+// bare-invoice path:
+//   deductible (default) — a usable person-scoped credit
+//   revenue only         — the credit is born with nothing left on it
+
+async function unmatchedCallFeed(label: string, amount: number, currency: string) {
+  const { data, error } = await db.from("td_bank_feeds").insert({
+    source: "stripe",
+    transaction_date: "2026-08-07",
+    amount,
+    currency,
+    sender_name: `[Calendly] TD Strategic Consulting with ${TAG} ${label}`,
+    memo: `[Calendly] TD Strategic Consulting with ${TAG} ${label}`,
+    raw_data: {},
+    status: "unmatched",
+  }).select("id").single()
+  expect(error).toBeNull()
+  const id = (data as { id: string }).id
+  feeds.push(id)
+  return id
+}
+
+describe("CELL 14 — attaching a paid call staff had to identify themselves", () => {
+  it("14a DEDUCTIBLE: revenue booked, credit usable, feed matched, NO service delivery", async () => {
+    const p = await freshPerson("attach")
+    const feedId = await unmatchedCallFeed("Attach", 157, "USD")
+
+    const res = await recordPaidCall({
+      payment: { chargeId: `feed:${feedId}`, amount: 157, currency: "USD", provider: "manual" },
+      inviteeEmail: p.email, inviteeName: `${TAG} attach`, callDate: "2026-08-07",
+      manual: { feedId },
+    })
+
+    const inv = await payment(res.invoiceId)
+    expect(inv!.invoice_status).toBe("Paid")     // revenue is booked
+    expect(Number(inv!.total)).toBe(157)
+    const cr = await payment(res.creditId!)
+    expect(cr!.invoice_status).toBe("Credit")
+    expect(Number(cr!.credit_remaining)).toBe(157)   // and it is SPENDABLE
+    expect(cr!.account_id).toBeNull()                 // person-scoped, always
+
+    // it really reaches an offer
+    const held = await availableCreditForDisplay({ contactId: p.id }, "USD", db)
+    expect(held.amount).toBe(157)
+    expect(held.kind).toBe("paid_call")   // labelled honestly despite the manual route
+
+    // a paid call is not a service — nothing was spawned
+    const { data: sds } = await db.from("service_deliveries").select("id").eq("contact_id", p.id)
+    expect((sds ?? []).length).toBe(0)
+  })
+
+  it("14b REVENUE ONLY: the call is on the record, but nothing is deductible", async () => {
+    const p = await freshPerson("revonly")
+    const feedId = await unmatchedCallFeed("RevOnly", 157, "USD")
+
+    const res = await recordPaidCall({
+      payment: { chargeId: `feed:${feedId}`, amount: 157, currency: "USD", provider: "manual" },
+      inviteeEmail: p.email, inviteeName: `${TAG} revonly`, callDate: "2026-08-07",
+      manual: { feedId, creditUsedAtCreation: true },
+    })
+
+    const inv = await payment(res.invoiceId)
+    expect(inv!.invoice_status).toBe("Paid")
+    expect(Number(inv!.total)).toBe(157)          // revenue identical
+
+    // HISTORY KEPT: the credit note exists and says what happened…
+    const cr = await payment(res.creditId!)
+    expect(cr).toBeTruthy()
+    expect(cr!.invoice_status).toBe("Credit")
+    expect(String(cr!.notes)).toMatch(/booked as revenue/i)
+    // …but nothing is left on it
+    expect(Number(cr!.credit_remaining)).toBe(0)
+
+    // so an offer shows nothing
+    const held = await availableCreditForDisplay({ contactId: p.id }, "USD", db)
+    expect(held.amount).toBe(0)
+  })
+
+  it("14c DOUBLE-CLICK: attaching the same transaction twice changes nothing", async () => {
+    const p = await freshPerson("dbl")
+    const feedId = await unmatchedCallFeed("Double", 157, "USD")
+    const args = {
+      payment: { chargeId: `feed:${feedId}`, amount: 157, currency: "USD" as const, provider: "manual" },
+      inviteeEmail: p.email, inviteeName: `${TAG} dbl`, callDate: "2026-08-07",
+      manual: { feedId },
+    }
+    const first = await recordPaidCall(args)
+    const second = await recordPaidCall(args)
+
+    expect(second.invoiceId).toBe(first.invoiceId)
+    expect(second.creditId).toBe(first.creditId)
+    const rows = await paymentsFor({ contact_id: p.id })
+    expect(rows.filter(r => r.invoice_status === "Credit").length).toBe(1)
+    expect(rows.filter(r => r.invoice_status === "Paid").length).toBe(1)
+    // and the client did not end up with 314 of credit
+    const held = await availableCreditForDisplay({ contactId: p.id }, "USD", db)
+    expect(held.amount).toBe(157)
+  })
+
+  it("14d WRONG PERSON: it is reversible — cancelling the credit removes the deduction", async () => {
+    const wrong = await freshPerson("wrongpick")
+    const feedId = await unmatchedCallFeed("WrongPick", 157, "USD")
+    const res = await recordPaidCall({
+      payment: { chargeId: `feed:${feedId}`, amount: 157, currency: "USD", provider: "manual" },
+      inviteeEmail: wrong.email, inviteeName: `${TAG} wrongpick`, callDate: "2026-08-07",
+      manual: { feedId },
+    })
+    expect((await availableCreditForDisplay({ contactId: wrong.id }, "USD", db)).amount).toBe(157)
+
+    // staff realise it was the wrong person and cancel the credit
+    await db.from("payments")
+      .update({ invoice_status: "Cancelled", credit_remaining: 0 })
+      .eq("id", res.creditId!)
+
+    // the stranger can no longer deduct anything
+    const after = await availableCreditForDisplay({ contactId: wrong.id }, "USD", db)
+    expect(after.amount).toBe(0)
+    // and an offer written for them now shows nothing
+    const token = `${TAG}-wrongpick`.toLowerCase()
+    await createOffer({
+      client_name: `${TAG} wrongpick`, client_email: wrong.email,
+      language: "en", payment_type: "bank_transfer", contract_type: "formation",
+      services: [{ name: "Company Formation", price: "$1500" }],
+      cost_summary: [{ label: "Total", total: "$1500" }],
+      currency: "USD", token,
+    })
+    const { data: offer } = await db.from("offers").select("credit_amount").eq("token", token).maybeSingle()
+    expect((offer as Record<string, unknown>).credit_amount).toBeNull()
+  })
+
+  it("14e a company target is refused — a paid call belongs to a PERSON", async () => {
+    // The credit must never be account-scoped or a renewal cron could eat it.
+    // The route enforces this; here we pin the invariant the route protects.
+    const p = await freshPerson("companytarget")
+    const feedId = await unmatchedCallFeed("CompanyTarget", 157, "USD")
+    const res = await recordPaidCall({
+      payment: { chargeId: `feed:${feedId}`, amount: 157, currency: "USD", provider: "manual" },
+      inviteeEmail: p.email, callDate: "2026-08-07", manual: { feedId },
+    })
+    const cr = await payment(res.creditId!)
+    expect(cr!.account_id).toBeNull()
+    expect(cr!.contact_id).toBe(p.id)
+  })
+})

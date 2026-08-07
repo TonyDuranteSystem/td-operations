@@ -586,6 +586,10 @@ function UnmatchedRow({
   const [targetServices, setTargetServices] = useState<TargetServiceDelivery[]>([])
   const [loadingTargetServices, setLoadingTargetServices] = useState(false)
   const [createSubmitting, setCreateSubmitting] = useState(false)
+  // WS-A: this transaction was a PAID STRATEGY CALL the system could not tie to
+  // anyone (client paid under a different address). Person targets only.
+  const [createPaidCall, setCreatePaidCall] = useState(false)
+  const [paidCallRevenueOnly, setPaidCallRevenueOnly] = useState(false)
 
   // Debounced search — fires when user types 2+ chars
   useEffect(() => {
@@ -681,6 +685,8 @@ function UnmatchedRow({
     setLoadingTargetServices(false)
   }
   const closeCreateModal = () => {
+    setCreatePaidCall(false)
+    setPaidCallRevenueOnly(false)
     if (createSubmitting) return
     setCreateForResult(null)
     setCreateDescription('')
@@ -708,11 +714,12 @@ function UnmatchedRow({
 
   const submitCreate = async () => {
     if (!createForResult) return
-    const isAttach = !!createSelectedSdId
+    const isPaidCall = createPaidCall && createForResult.type === 'contact'
+    const isAttach = !isPaidCall && !!createSelectedSdId
     const description = createDescription.trim()
     const serviceType = createServiceType.trim()
 
-    if (!isAttach) {
+    if (!isPaidCall && !isAttach) {
       if (!serviceType) {
         toast.error('Pick a service type, or attach to an existing service above')
         return
@@ -731,7 +738,10 @@ function UnmatchedRow({
       } else {
         body.contact_id = createForResult.id
       }
-      if (isAttach) {
+      if (isPaidCall) {
+        body.paid_call = 'true'
+        if (paidCallRevenueOnly) body.paid_call_revenue_only = 'true'
+      } else if (isAttach) {
         body.service_delivery_id = createSelectedSdId!
       } else {
         body.service_type = serviceType
@@ -745,6 +755,11 @@ function UnmatchedRow({
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error ?? `Request failed (${res.status})`)
       if (d.warning) toast.warning(d.warning)
+      else if (isPaidCall) toast.success(
+        paidCallRevenueOnly
+          ? `Paid call recorded as revenue — ${d.invoice_number ?? ''}. Nothing is deductible.`
+          : `Paid call recorded — ${d.invoice_number ?? ''}. The credit will appear on their next offer.`,
+      )
       else if (isAttach) toast.success(`Invoice ${d.invoice_number ?? ''} created and attached`)
       else toast.success(`Invoice ${d.invoice_number ?? ''} created and feed matched`)
       closeCreateModal()
@@ -1244,6 +1259,53 @@ function UnmatchedRow({
               </div>
             )}
 
+            {/* Branch C — WS-A: this was a PAID STRATEGY CALL ─────────
+                Only for a PERSON: the credit is person-scoped by design, so a
+                company's renewal can never eat someone's call fee. */}
+            {createForResult?.type === 'contact' && (
+              <div className="border-t pt-3 space-y-2">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={createPaidCall}
+                    onChange={e => setCreatePaidCall(e.target.checked)}
+                    disabled={createSubmitting}
+                    className="mt-0.5"
+                  />
+                  <span className="text-sm text-zinc-800">
+                    This was a <strong>paid strategy call</strong>
+                    <span className="block text-[11px] text-zinc-500">
+                      Records the revenue and gives them a credit toward their next purchase —
+                      the same as when the system recognises the booking itself.
+                    </span>
+                  </span>
+                </label>
+                {createPaidCall && (
+                  <div className="ml-6 space-y-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={paidCallRevenueOnly}
+                        onChange={e => setPaidCallRevenueOnly(e.target.checked)}
+                        disabled={createSubmitting}
+                        className="mt-0.5"
+                      />
+                      <span className="text-xs text-amber-900">
+                        They will <strong>not</strong> be buying — keep it as revenue only
+                        <span className="block text-[11px] text-amber-800">
+                          The call still shows in their history, but nothing is deductible.
+                        </span>
+                      </span>
+                    </label>
+                    <p className="text-[11px] text-amber-800">
+                      You are naming this person yourself — nothing else confirms it. If it is the
+                      wrong person they get credit they did not pay for. Cancel the credit note to undo.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Branch B — create a new backfilled SD ────────────────── */}
             <div className="border-t pt-3 space-y-2">
               <p className="text-xs font-medium text-zinc-700">
@@ -1291,7 +1353,7 @@ function UnmatchedRow({
               <button
                 type="button"
                 onClick={submitCreate}
-                disabled={createSubmitting || (!createSelectedSdId && !createServiceType.trim())}
+                disabled={createSubmitting || (!createPaidCall && !createSelectedSdId && !createServiceType.trim())}
                 className="px-3 py-1.5 text-xs rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1.5"
               >
                 {createSubmitting && <Loader2 className="h-3 w-3 animate-spin" />}

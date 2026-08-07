@@ -6,6 +6,7 @@ import {
   sumLineAmounts,
 } from "@/lib/portal/invoice-regenerate"
 import { syncTDInvoiceMirror } from "@/lib/portal/td-invoice-mirror"
+import { isPaidCallCreditKey } from "@/lib/calendly/paid-booking"
 
 export interface CreditApplication {
   appliedTotal: number
@@ -225,8 +226,7 @@ export async function availableCreditForDisplay(
     .select("id, idempotency_key")
     .in("id", ids)
   const keys = ((rows ?? []) as Array<{ idempotency_key: string | null }>).map((r) => r.idempotency_key ?? "")
-  const allPaidCall =
-    keys.length === ids.length && keys.every((k) => k.startsWith("calendly-call:") && k.endsWith(":credit"))
+  const allPaidCall = keys.length === ids.length && keys.every(isPaidCallCreditKey)
 
   return {
     amount: application.appliedTotal,

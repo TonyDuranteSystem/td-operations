@@ -64,3 +64,27 @@ export function paidCallIdempotencyKey(chargeId: string, kind: "invoice" | "cred
 export function paidCallDescription(date: string | null): string {
   return date ? `Paid Strategy Call — ${date}` : "Paid Strategy Call"
 }
+
+/**
+ * Idempotency key for a paid call ATTACHED BY HAND from an unmatched bank feed
+ * row (a client who paid under an address the system cannot tie to them).
+ * Keyed on the feed row, so clicking the button twice cannot mint a second
+ * invoice or a second credit.
+ */
+export function manualPaidCallIdempotencyKey(feedId: string, kind: "invoice" | "credit"): string {
+  return `paid-call-manual:${feedId}:${kind}`
+}
+
+/**
+ * Is this credit note a PAID STRATEGY CALL?
+ *
+ * The client-facing label depends on it ("Already paid — Strategy Call" vs the
+ * neutral "Credit applied"), and there are now two ways a paid call gets
+ * recorded — the Calendly webhook and a manual attach. One predicate, used by
+ * the writer and the label alike, so a new recording route can never silently
+ * fall out of the wording.
+ */
+export function isPaidCallCreditKey(key: string | null | undefined): boolean {
+  const k = String(key ?? "")
+  return (k.startsWith("calendly-call:") || k.startsWith("paid-call-manual:")) && k.endsWith(":credit")
+}
