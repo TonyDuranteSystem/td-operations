@@ -20,8 +20,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ShieldCheck, KeyRound, Loader2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 
+// The Supabase browser client is created ON DEMAND (inside effects and
+// handlers), NEVER in the render path: this page is statically prerendered at
+// build time, and createBrowserClient throws when the public URL/anon key are
+// absent — which is exactly a preview build. Creating it during render broke
+// every preview build of the repo (2026-08-07). Same pattern as app/login.
+
 export default function MfaVerifyPage() {
-  const supabase = createClient()
   const [code, setCode] = useState('')
   const [remember, setRemember] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -34,7 +39,7 @@ export default function MfaVerifyPage() {
   useEffect(() => {
     // Resolve the verified TOTP factor once. No factor → the gate would have
     // sent 'enroll'; being here without one means a race — go enroll.
-    supabase.auth.mfa.listFactors().then(({ data }) => {
+    createClient().auth.mfa.listFactors().then(({ data }) => {
       const verified = data?.totp?.find(f => (f as { status?: string }).status === 'verified') ?? data?.totp?.[0]
       if (!verified) { window.location.assign('/mfa/enroll'); return }
       factorIdRef.current = verified.id
@@ -47,11 +52,11 @@ export default function MfaVerifyPage() {
     setBusy(true)
     setError(null)
     try {
-      const { data: challenge, error: chErr } = await supabase.auth.mfa.challenge({
+      const { data: challenge, error: chErr } = await createClient().auth.mfa.challenge({
         factorId: factorIdRef.current,
       })
       if (chErr || !challenge) throw new Error(chErr?.message || 'Challenge failed')
-      const { error: vErr } = await supabase.auth.mfa.verify({
+      const { error: vErr } = await createClient().auth.mfa.verify({
         factorId: factorIdRef.current,
         challengeId: challenge.id,
         code,
@@ -66,7 +71,7 @@ export default function MfaVerifyPage() {
       setError(err instanceof Error ? err.message : 'Verification failed')
       setBusy(false)
     }
-  }, [code, remember, supabase])
+  }, [code, remember])
 
   const handleBackup = useCallback(async () => {
     if (!backupCode.trim()) return
