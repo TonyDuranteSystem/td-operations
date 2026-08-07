@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { resolveBillableSelection } from "@/lib/payments/billable-selection"
-import { computeOfferTotals } from "@/lib/offers/compute-offer-totals"
+import { computeOfferPayable } from "@/lib/offers/compute-offer-totals"
 import { computeCardTotal } from "@/lib/payments/card-fee"
 import { resolveChargeRate } from "@/lib/payments/card-fee-config"
 
@@ -66,12 +66,17 @@ export async function POST(req: NextRequest) {
     // $-for-€ mischarge). The engine's header-based detection is correct there.
     // Engine EU-fallback handling also fixes the old plain-parse fallback
     // ("€1.500" would have charged €1.50).
-    const totals = computeOfferTotals({
+    // NET EVERYWHERE (Antonio's ruling): the card charges what the invoice of
+    // record says, never the gross. Before this, a client shown "Total Due Today
+    // €1,243" was charged €1,575 — paying for their strategy call twice.
+    const totals = computeOfferPayable({
       services: offer.services,
       cost_summary: offer.cost_summary,
       selected_services: selectedServices,
+      currency: (offer as { currency?: string | null }).currency,
+      credit_amount: (offer as { credit_amount?: number | null }).credit_amount,
     })
-    const total = totals.gross
+    const total = totals.net
     const currency: "usd" | "eur" = totals.currency === "EUR" ? "eur" : "usd"
     const selectedNames: string[] = totals.countedServiceNames
 

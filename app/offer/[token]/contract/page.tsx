@@ -9,7 +9,7 @@ import RenewalAgreement from './renewal-agreement'
 import ServiceAgreement from './service-agreement'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
-import { computeOfferTotals } from '@/lib/offers/compute-offer-totals'
+import { computeOfferTotals, computeOfferPayable } from '@/lib/offers/compute-offer-totals'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
 import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 
@@ -365,16 +365,30 @@ export default function ContractPage() {
     const setupSymbol = setupCurrency === 'USD' ? '$' : '€'
     // Kept for the legacy LLC-type name scan further down (pre-entity_type offers).
     const services = Array.isArray(o.services) ? o.services : []
-    const contractTotals = computeOfferTotals(
-      { services: o.services, cost_summary: o.cost_summary, selected_services: (o as any).selected_services },
+    const contractTotals = computeOfferPayable(
+      {
+        services: o.services,
+        cost_summary: o.cost_summary,
+        selected_services: (o as any).selected_services,
+        currency: setupCurrency,
+        credit_amount: (o as any).credit_amount,
+      },
       { filterContractType: mainContractType, currencyOverride: setupCurrency === 'USD' ? 'USD' : 'EUR' },
     )
     // Setup fee counts SERVICE lines only here (pre-conditions are presented
     // separately on this page) — unchanged from the previous inline math.
     const totalSetup = contractTotals.servicesTotal
 
+    // NET EVERYWHERE (Antonio's ruling): the document the client SIGNS must state
+    // the same amount every payment rail charges, and must show the arithmetic
+    // openly rather than quoting a gross the client is not asked to pay. Before
+    // this the contract said the gross with no mention of the credit at all.
+    const money = (n: number) => `${setupSymbol}${n.toLocaleString('en-US', { minimumFractionDigits: 0 })}`
+    const creditOnContract = Math.min(contractTotals.credit, totalSetup)
     const fee = totalSetup > 0
-      ? `${setupSymbol}${totalSetup.toLocaleString('en-US', { minimumFractionDigits: 0 })}`
+      ? (creditOnContract > 0
+          ? `${money(totalSetup)} less ${money(creditOnContract)} already paid = ${money(Math.max(totalSetup - creditOnContract, 0))} due upon signing`
+          : money(totalSetup))
       : 'As specified in the offer'
 
     // Derive annual maintenance from recurring_costs

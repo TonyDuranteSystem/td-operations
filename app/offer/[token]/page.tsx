@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
-import { computeOfferTotals } from '@/lib/offers/compute-offer-totals'
+import { computeOfferPayable } from '@/lib/offers/compute-offer-totals'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import type { Offer } from '@/lib/types/offer'
 
@@ -67,6 +67,7 @@ const LABELS = {
     payByTransfer: 'Bank Transfer',
     totalDueToday: 'Total Due Today',
     creditApplied: 'Already paid — Strategy Call',
+    creditAppliedGeneric: 'Credit applied',
   },
   it: {
     title: 'Offerta Consulenziale',
@@ -125,6 +126,7 @@ const LABELS = {
     payByTransfer: 'Bonifico Bancario',
     totalDueToday: 'Totale Dovuto Oggi',
     creditApplied: 'Già pagato — Call Strategica',
+    creditAppliedGeneric: 'Credito applicato',
   },
 }
 
@@ -185,40 +187,53 @@ export default function OfferPage() {
   // total at all) — the engine corrects all of them, non-renewals unchanged.
   const dynamicTotal = useMemo(() => {
     if (!offer || !offer.services) return null
-    const t = computeOfferTotals({
+    const t = computeOfferPayable({
       services: offer.services,
       cost_summary: offer.cost_summary,
       selected_services: Array.from(selectedOptional),
+      currency: (offer as { currency?: string | null }).currency,
+      credit_amount: (offer as { credit_amount?: number | null }).credit_amount,
     })
     if (t.gross <= 0) return null
     const symbol = t.currency === 'EUR' ? 'EUR' : '$'
     return {
-      total: t.gross,
+      // NET EVERYWHERE (Antonio's ruling). `total` IS what the client owes; the
+      // pay buttons and the bank box below read these fields, so they can no
+      // longer quote a different number than the summary above them.
+      total: t.net,
+      gross: t.gross,
+      credit: t.credit,
       servicesTotal: t.servicesTotal,
       preconditionsTotal: t.preconditionsTotal,
       // servicesFormatted is for the Setup Fee line in cost summary
       servicesFormatted: `${symbol}${t.servicesTotal.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
       // formatted/cardFormatted include everything (services + pre-conditions) for the payment section
-      formatted: `${symbol}${t.gross.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
-      cardFormatted: `${symbol}${Math.round(t.gross * 1.05).toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      formatted: `${symbol}${t.net.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      // card fee applies to what is actually charged — the net
+      cardFormatted: `${symbol}${Math.round(t.net * 1.05).toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
     }
   }, [offer, selectedOptional])
 
-  // WS-A: display-only credit row. Reads the offer's scalar (never cost_summary)
-  // and applies the SAME same-currency rule the money engine uses, so the page
-  // can never promise a deduction the ledger would refuse.
+  // WS-A display row. Reads the SINGLE amount authority — it does no arithmetic
+  // of its own, because that is exactly how the summary and the pay buttons came
+  // to quote two different numbers for the same payment.
   const creditDisplay = useMemo(() => {
-    if (!offer || !dynamicTotal) return null
-    const amount = Number((offer as { credit_amount?: number | null }).credit_amount ?? 0)
-    if (!Number.isFinite(amount) || amount <= 0) return null
+    if (!dynamicTotal || dynamicTotal.credit <= 0) return null
     const symbol = dynamicTotal.formatted.startsWith('$') ? '$' : 'EUR'
-    const net = Math.max(dynamicTotal.total - amount, 0)
+    const fmt = (n: number) => `${symbol}${n.toLocaleString('en-US', { minimumFractionDigits: 0 })}`
     return {
-      amount,
-      formatted: `${symbol}${amount.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
-      netFormatted: `${symbol}${net.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      amount: dynamicTotal.credit,
+      formatted: fmt(dynamicTotal.credit),
+      grossFormatted: fmt(dynamicTotal.gross),
+      netFormatted: fmt(dynamicTotal.total),
+      // LABEL HONESTY (architect ruling): only call it a strategy call when it IS
+      // one. The snapshot is the sum of every credit the person holds, so a
+      // referral credit was being described to the client as a paid call.
+      label: (offer as { credit_kind?: string | null })?.credit_kind === 'paid_call'
+        ? L.creditApplied
+        : L.creditAppliedGeneric,
     }
-  }, [offer, dynamicTotal])
+  }, [offer, dynamicTotal, L])
 
   const loadOffer = useCallback(async () => {
     try {
@@ -562,7 +577,7 @@ export default function OfferPage() {
                 {creditDisplay && (
                   <div style={{ marginTop: 16, paddingTop: 12, borderTop: '2px solid var(--offer-blue)' }}>
                     <div className="offer-riepilogo-row" style={{ color: 'var(--offer-blue)' }}>
-                      <span>{L.creditApplied}</span>
+                      <span>{creditDisplay.label}</span>
                       <span className="offer-riepilogo-price">−{creditDisplay.formatted}</span>
                     </div>
                     <div className="offer-riepilogo-total" style={{ fontSize: 16 }}>

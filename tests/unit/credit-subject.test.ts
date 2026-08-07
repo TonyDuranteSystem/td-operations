@@ -91,7 +91,9 @@ describe("a failed lookup is never mistaken for 'they have no credit'", () => {
   it("reports ambiguous rather than unknown, so no surface concludes 'nothing here'", async () => {
     scenario.error = { message: "connection reset" }
     const s = await resolveCreditSubject("a@example.com", client())
-    expect(s.kind).toBe("ambiguous")
+    // its OWN state — folding it into "ambiguous" gave an empty contact list,
+    // which made the warning loop iterate nothing and say nothing at all
+    expect(s.kind).toBe("lookup_failed")
     expect(subjectForDisplay(s)).toBeNull()      // never displays on a failed read
     expect(subjectForRecording(s).contactId).toBeNull()
   })

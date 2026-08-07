@@ -10,7 +10,8 @@ import {
   computeOfferTotals,
   computeNetOfCredits,
   parsePriceQuirk,
-} from "@/lib/offers/compute-offer-totals"
+  computeOfferPayable,
+  resolveOfferCurrency,} from "@/lib/offers/compute-offer-totals"
 
 describe("parsePriceQuirk — the historical parser, verbatim", () => {
   it("parses plain prices with symbols and commas", () => {
@@ -198,5 +199,89 @@ describe("ComputeOptions — contract-page semantics (WS-A3 sites #5-6)", () => 
     expect(computeOfferTotals(eurHeader, { currencyOverride: "USD" }).currency).toBe("USD")
     // null/undefined override falls back to header detection
     expect(computeOfferTotals(eurHeader, { currencyOverride: null }).currency).toBe("EUR")
+  })
+})
+
+// ─── NET EVERYWHERE + one currency rule (blockers 1 & 2) ─────────────────
+
+describe("computeOfferPayable — the single amount authority", () => {
+  it("net = gross − credit, and that is what every rail must charge", () => {
+    const p = computeOfferPayable({
+      services: [{ name: "Formation", price: "€1500" }],
+      cost_summary: [{ label: "Totale", total: "€1500" }],
+      currency: "EUR",
+      credit_amount: 257,
+    })
+    expect(p.gross).toBe(1500)
+    expect(p.credit).toBe(257)
+    expect(p.net).toBe(1243)
+  })
+
+  it("a credit larger than the bill nets to zero, never negative", () => {
+    const p = computeOfferPayable({
+      services: [{ name: "Small", price: "$100" }],
+      cost_summary: [{ label: "Total", total: "$100" }],
+      currency: "USD",
+      credit_amount: 257,
+    })
+    expect(p.net).toBe(0)
+    expect(p.credit).toBe(100)   // capped at what is owed
+  })
+
+  it("no credit leaves the amount exactly as it was — no behaviour change", () => {
+    const p = computeOfferPayable({
+      services: [{ name: "Formation", price: "$1,500" }],
+      cost_summary: [{ label: "Total", total: "$1,500" }],
+    })
+    expect(p.gross).toBe(1500)
+    expect(p.credit).toBe(0)
+    expect(p.net).toBe(1500)
+  })
+
+  it("junk in the credit column cannot corrupt the amount charged", () => {
+    for (const bad of [null, undefined, "abc", -50, NaN]) {
+      const p = computeOfferPayable({
+        services: [{ name: "F", price: "$100" }],
+        cost_summary: [{ label: "Total", total: "$100" }],
+        credit_amount: bad as never,
+      })
+      expect(p.net).toBe(100)
+      expect(p.credit).toBe(0)
+    }
+  })
+})
+
+describe("resolveOfferCurrency — ONE rule for storage, engine and credit", () => {
+  it("an explicit currency on the offer wins over any sniffing", () => {
+    expect(resolveOfferCurrency("EUR", [{ label: "Total", total: "$1,500" }])).toBe("EUR")
+    expect(resolveOfferCurrency("USD", [{ label: "Totale", total: "€1.500" }])).toBe("USD")
+  })
+
+  it("falls back to the header when the offer never recorded one", () => {
+    expect(resolveOfferCurrency(null, [{ label: "Totale", total: "€1.500" }])).toBe("EUR")
+    expect(resolveOfferCurrency(undefined, [{ label: "Total", total: "$1,500" }])).toBe("USD")
+  })
+
+  it("BLOCKER 2: a '$/year' recurring line in the SERVICES can no longer flip a EUR offer", () => {
+    // The old storage detector sniffed the whole services blob; the engine read
+    // the header. That split stored EUR and charged USD.
+    const summary = [{ label: "Totale", total: "€1.500" }]
+    const services = [{ name: "Annual Maintenance", price: "$2,000/year" }]
+    expect(resolveOfferCurrency(null, summary)).toBe("EUR")
+    // the engine agrees, because it now asks the same function
+    expect(computeOfferPayable({ services, cost_summary: summary }).currency).toBe("EUR")
+  })
+
+  it("storage and the money engine cannot disagree — the same input gives the same answer", () => {
+    const cases: Array<[string | null, unknown]> = [
+      ["EUR", [{ label: "Total", total: "$900" }]],
+      [null, [{ label: "Totale", total: "€900" }]],
+      [null, [{ label: "Total", total: "900" }]],
+    ]
+    for (const [explicit, summary] of cases) {
+      const stored = resolveOfferCurrency(explicit, summary)
+      const engine = computeOfferPayable({ services: [], cost_summary: summary, currency: explicit }).currency
+      expect(engine).toBe(stored)
+    }
   })
 })

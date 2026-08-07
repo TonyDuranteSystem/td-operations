@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 import { computeCreditApplication, allocateCredits, availableCreditForDisplay } from "@/lib/operations/credit-netting"
 
 // ─── Minimal supabase double: records queries, returns scenario rows ───
-interface CreditRow { id: string; credit_remaining: number | null }
+interface CreditRow { id: string; credit_remaining: number | null; idempotency_key?: string | null }
 const scenario: {
   credits: CreditRow[]
   queries: Array<{ table: string; filters: Record<string, unknown> }>
@@ -32,6 +32,7 @@ function makeClient() {
         gt: (col: string, val: unknown) => { filters[`${col}>`] = val; return chain },
         is: (col: string, val: unknown) => { filters[`${col} IS`] = val; return chain },
         neq: (col: string, val: unknown) => { filters[`${col}!=`] = val; return chain },
+        in: (col: string, val: unknown) => { filters[`${col} in`] = val; return chain },
         order: () => chain,
         then: (res: (v: unknown) => unknown) => {
           scenario.queries.push(rec)
@@ -375,16 +376,17 @@ describe("T18 — an IN-FLIGHT credit is not called spent (hunter major 3)", () 
 describe("T19 — what the offer SHOWS comes from the money engine (hunter minor 10)", () => {
   it("reports the client's whole same-currency balance and the oldest credit's id", async () => {
     scenario.credits = [
-      { id: "oldest", credit_remaining: 257 },
-      { id: "newer", credit_remaining: 100 },
+      { id: "oldest", credit_remaining: 257, idempotency_key: "calendly-call:ch_1:credit" },
+      { id: "newer", credit_remaining: 100, idempotency_key: "calendly-call:ch_2:credit" },
     ]
     const held = await availableCreditForDisplay({ contactId: "c-1" }, "EUR", client())
     expect(held.amount).toBe(357)
     expect(held.creditId).toBe("oldest")
+    expect(held.kind).toBe("paid_call")
   })
 
   it("filters on the SAME scope + currency + unclaimed rules as the deduction itself", async () => {
-    scenario.credits = [{ id: "cr", credit_remaining: 257 }]
+    scenario.credits = [{ id: "cr", credit_remaining: 257, idempotency_key: "calendly-call:ch:credit" }]
     await availableCreditForDisplay({ contactId: "c-2" }, "EUR", client())
     const q = scenario.queries[0]
     // one scope column, never an OR — the display can't surface another party's credit
@@ -411,5 +413,39 @@ describe("T19 — what the offer SHOWS comes from the money engine (hunter minor
     expect(held.amount).toBe(0)
     const q = scenario.queries[0]
     expect(q.filters.amount_currency).toBe("USD")
+  })
+})
+
+describe("T20 — the client-facing label tells the truth about the credit", () => {
+  it("every contributing credit is a paid call ⇒ it may be called one", async () => {
+    scenario.credits = [{ id: "a", credit_remaining: 257, idempotency_key: "calendly-call:ch_x:credit" }]
+    const held = await availableCreditForDisplay({ contactId: "c" }, "EUR", client())
+    expect(held.kind).toBe("paid_call")
+  })
+
+  it("a REFERRAL credit in the mix ⇒ 'mixed', so the page says 'Credit applied'", async () => {
+    // The snapshot sums every unspent credit the person holds. Calling a
+    // referral credit "Already paid — Strategy Call" told the client something
+    // untrue about their own money.
+    scenario.credits = [
+      { id: "a", credit_remaining: 257, idempotency_key: "calendly-call:ch_x:credit" },
+      { id: "b", credit_remaining: 500, idempotency_key: "referral-credit:acct-1" },
+    ]
+    const held = await availableCreditForDisplay({ contactId: "c" }, "EUR", client())
+    expect(held.amount).toBe(757)
+    expect(held.kind).toBe("mixed")
+  })
+
+  it("a credit with no idempotency key at all is never claimed as a paid call", async () => {
+    scenario.credits = [{ id: "a", credit_remaining: 300, idempotency_key: null }]
+    const held = await availableCreditForDisplay({ contactId: "c" }, "EUR", client())
+    expect(held.kind).toBe("mixed")
+  })
+
+  it("no credit at all ⇒ no kind, so nothing renders", async () => {
+    scenario.credits = []
+    const held = await availableCreditForDisplay({ contactId: "c" }, "EUR", client())
+    expect(held.amount).toBe(0)
+    expect(held.kind).toBeNull()
   })
 })

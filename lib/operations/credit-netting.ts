@@ -208,15 +208,31 @@ export async function availableCreditForDisplay(
   scope: CreditScope,
   currency: string,
   supabase: SupabaseClient,
-): Promise<{ amount: number; creditId: string | null }> {
+): Promise<{ amount: number; creditId: string | null; kind: "paid_call" | "mixed" | null }> {
   const application = await computeCreditApplication(
     { ...(scope as { accountId?: string; contactId?: string }), amount: Number.MAX_SAFE_INTEGER, currency } as Parameters<typeof computeCreditApplication>[0],
     supabase,
   )
+  if (application.credits.length === 0) return { amount: 0, creditId: null, kind: null }
+
+  // LABEL HONESTY (architect ruling): the snapshot is the SUM of every unspent
+  // credit this person holds — a referral credit note counts too. Calling all of
+  // it "Already paid — Strategy Call" told clients something untrue about their
+  // own money. Only claim the paid call when every contributing credit IS one.
+  const ids = application.credits.map((c) => c.id)
+  const { data: rows } = await supabase
+    .from("payments")
+    .select("id, idempotency_key")
+    .in("id", ids)
+  const keys = ((rows ?? []) as Array<{ idempotency_key: string | null }>).map((r) => r.idempotency_key ?? "")
+  const allPaidCall =
+    keys.length === ids.length && keys.every((k) => k.startsWith("calendly-call:") && k.endsWith(":credit"))
+
   return {
     amount: application.appliedTotal,
     // oldest-first ordering upstream ⇒ [0] is the credit staff would look at first
     creditId: application.credits[0]?.id ?? null,
+    kind: allPaidCall ? "paid_call" : "mixed",
   }
 }
 

@@ -29,6 +29,10 @@ export interface OfferLikeForTotals {
   services?: unknown
   cost_summary?: unknown
   selected_services?: unknown
+  /** The currency recorded on the offer. Authoritative when present. */
+  currency?: string | null
+  /** Display-only credit snapshot ("already paid"). */
+  credit_amount?: number | string | null
 }
 
 export interface ComputeOptions {
@@ -99,6 +103,37 @@ function summaryArray(cost_summary: unknown): SummaryGroup[] {
   return []
 }
 
+
+/**
+ * THE currency rule for an offer — storage, engine and credit paths all use this
+ * one (architect ruling, WS-A blocker 2).
+ *
+ * There used to be two. The offer's STORED currency sniffed the header AND the
+ * whole services blob; the money engine sniffed the header alone. An offer with
+ * "€" in a service line but not in the header was therefore stored as EUR and
+ * charged as USD — so a euro credit was looked up, rendered with a dollar sign,
+ * and then never deducted at signing because the invoice was in dollars.
+ *
+ * EXPLICIT WINS. A currency recorded on the offer is a decision someone made;
+ * sniffing is only for the offers that never had one. Verified before adopting:
+ * of 160 open production offers, 130 carry no currency at all and ZERO of the 30
+ * that do disagree with the header — so this changes nothing already live.
+ *
+ * The services blob is deliberately NOT sniffed any more: a EUR offer carrying a
+ * recurring "$2,000/year" line flipped it, which is the real mischarge the
+ * engine's header rule was introduced to fix.
+ */
+export function resolveOfferCurrency(
+  explicit: string | null | undefined,
+  cost_summary: unknown,
+): "EUR" | "USD" {
+  const e = String(explicit ?? "").trim().toUpperCase()
+  if (e === "EUR" || e === "USD") return e
+  const summary = summaryArray(cost_summary)
+  const headerRaw = String(summary[0]?.total || summary[0]?.total_label || "")
+  return headerRaw.includes("€") || headerRaw.toUpperCase().includes("EUR") ? "EUR" : "USD"
+}
+
 export function computeOfferTotals(
   offer: OfferLikeForTotals,
   options: ComputeOptions = {},
@@ -156,15 +191,61 @@ export function computeOfferTotals(
     }
   }
 
-  const headerRaw = String(summary[0]?.total || summary[0]?.total_label || "")
+  // ONE rule, shared with storage and the credit path (blocker 2).
   const currency: "EUR" | "USD" =
-    options.currencyOverride
-      ? options.currencyOverride
-      : headerRaw.includes("€") || headerRaw.toUpperCase().includes("EUR")
-        ? "EUR"
-        : "USD"
+    options.currencyOverride ?? resolveOfferCurrency(offer.currency, offer.cost_summary)
 
   return { servicesTotal, countedServiceNames, preconditionsTotal, gross, currency, source }
+}
+
+
+export interface OfferPayable {
+  /** Full price of what was selected. */
+  gross: number
+  /** Credit already paid, applied against this offer (same currency only). */
+  credit: number
+  /** What the client actually owes — the ONE number every rail must use. */
+  net: number
+  currency: "EUR" | "USD"
+  servicesTotal: number
+  preconditionsTotal: number
+  countedServiceNames: string[]
+}
+
+/**
+ * WHAT THE CLIENT OWES — the single amount authority (Antonio's ruling: NET
+ * EVERYWHERE; every payment rail charges what the invoice of record says).
+ *
+ * Before this, the offer page subtracted the credit in its summary while the pay
+ * buttons, the bank-transfer box, the card checkout and the signed contract all
+ * quoted the GROSS. A client reading "Totale Dovuto Oggi €1,243" was charged
+ * €1,575 on the card — paying for the strategy call a second time — against an
+ * invoice of record that said €1,243.
+ *
+ * No surface may compute its own idea of the amount. Card fee is applied to the
+ * NET, because the fee is a percentage of what is actually being charged.
+ *
+ * The credit here is the offer's own snapshot. It is display-scoped by design:
+ * the netting engine at invoice creation remains the money of record and applies
+ * only credit that genuinely still exists. This function's job is to stop the
+ * rails from contradicting the page and each other.
+ */
+export function computeOfferPayable(
+  offer: OfferLikeForTotals,
+  options: ComputeOptions = {},
+): OfferPayable {
+  const t = computeOfferTotals(offer, options)
+  const raw = Number(offer.credit_amount ?? 0)
+  const credit = Number.isFinite(raw) && raw > 0 ? Math.min(Math.round(raw * 100) / 100, t.gross) : 0
+  return {
+    gross: t.gross,
+    credit,
+    net: Math.max(Math.round((t.gross - credit) * 100) / 100, 0),
+    currency: t.currency,
+    servicesTotal: t.servicesTotal,
+    preconditionsTotal: t.preconditionsTotal,
+    countedServiceNames: t.countedServiceNames,
+  }
 }
 
 export interface AppliedCreditInput {

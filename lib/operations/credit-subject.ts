@@ -44,6 +44,13 @@ export type CreditSubject =
   | { kind: "unknown"; email: string }
   /** No address to resolve from. */
   | { kind: "no_email" }
+  /**
+   * The lookup itself FAILED. Deliberately not folded into "ambiguous" — that
+   * produced an empty contact list, the warning loop iterated nothing, and a
+   * transient database error became total silence: exactly the "no credit
+   * exists" conclusion this type was written to prevent.
+   */
+  | { kind: "lookup_failed"; email: string; error: string }
 
 /**
  * Find everyone on an email address. Case-insensitive, oldest first, so any
@@ -68,7 +75,7 @@ export async function resolveCreditSubject(
     // Treat a failed lookup as "cannot tell", never as "nobody" — a swallowed
     // error must not silently become a decision that no credit exists.
     console.error(`[resolveCreditSubject] lookup failed for ${normalized}:`, error.message)
-    return { kind: "ambiguous", contacts: [], email: normalized }
+    return { kind: "lookup_failed", email: normalized, error: error.message }
   }
 
   const contacts = (data ?? []) as ContactOnEmail[]

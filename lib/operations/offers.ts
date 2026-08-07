@@ -24,7 +24,7 @@ import { accountIdForOffer } from "@/lib/operations/offer-scope"
 import { normalizeFormationState } from "@/lib/formation/states"
 import { availableCreditForDisplay, unspentCreditByCurrency } from "@/lib/operations/credit-netting"
 import { resolveCreditSubject, subjectForDisplay, type CreditSubject } from "@/lib/operations/credit-subject"
-import { parsePriceQuirk } from "@/lib/offers/compute-offer-totals"
+import { parsePriceQuirk, resolveOfferCurrency } from "@/lib/offers/compute-offer-totals"
 import type { Json } from "@/lib/database.types"
 
 // ─── JSONB validation ───────────────────────────────────────
@@ -130,12 +130,30 @@ export function validateOfferJsonb(params: Record<string, unknown>): string | nu
  * had already paid, and nothing anywhere would have flagged it. Only fires when
  * a real unspent balance exists — a client with no credit produces no noise.
  */
+
+/**
+ * The two cases with NO contact to check a balance against — so the warning
+ * cannot be conditional on holding credit. Both were completely silent before:
+ * a client who booked under a different address, and a failed lookup that read
+ * as "they have none".
+ */
+async function warnUnconditional(input: {
+  reason: "unknown_email" | "lookup_failed"
+  clientName: string
+  email: string | null
+  currency: string
+}): Promise<string | null> {
+  return warnIfCreditWentUnattached({ ...input, contactIds: [], force: true })
+}
+
 async function warnIfCreditWentUnattached(input: {
-  reason: "ambiguous_email" | "currency"
+  reason: "ambiguous_email" | "currency" | "unknown_email" | "lookup_failed"
   contactIds: string[]
   currency: string
   clientName: string
   email: string | null
+  /** Warn even though there is no contact whose balance we could check. */
+  force?: boolean
 }): Promise<string | null> {
   try {
     const held: Array<{ contactId: string; amount: number; currency: string }> = []
@@ -144,11 +162,15 @@ async function warnIfCreditWentUnattached(input: {
         held.push({ contactId, amount: c.amount, currency: c.currency })
       }
     }
-    if (held.length === 0) return null
+    if (held.length === 0 && !input.force) return null
 
-    const summary = held.map((h) => `${h.amount} ${h.currency}`).join(", ")
+    const summary = held.length ? held.map((h) => `${h.amount} ${h.currency}`).join(", ") : "unknown"
     const detail =
-      input.reason === "ambiguous_email"
+      input.reason === "unknown_email"
+        ? `No contact exists for ${input.email}, so ${input.clientName}'s offer shows no credit. If they booked a paid call under a DIFFERENT address, they are owed a deduction this offer does not mention — check before sending.`
+      : input.reason === "lookup_failed"
+        ? `Could not check whether ${input.clientName} holds credit (the contact lookup failed). The offer shows no credit line, which is NOT the same as them having none — re-check before sending.`
+      : input.reason === "ambiguous_email"
         ? `${input.contactIds.length} contacts share the email ${input.email}, so the offer for ${input.clientName} could not safely show a credit — showing one person another's balance is worse than showing none. Unspent credit on those contacts: ${summary}. Fix the duplicate contacts, then revise the offer.`
         : `${input.clientName} holds unspent credit (${summary}) but this offer is priced in ${input.currency}, so nothing was shown and nothing will be deducted at signing — credit never converts between currencies. Either price the offer in their currency or tell them explicitly.`
 
@@ -329,14 +351,15 @@ function normalizeEntityType(
 function detectCurrency(
   explicit: "EUR" | "USD" | undefined,
   cost_summary: unknown,
-  services: unknown
+  _services: unknown,
 ): "EUR" | "USD" {
-  if (explicit === "EUR" || explicit === "USD") return explicit
-  const costArr = Array.isArray(cost_summary) ? cost_summary : []
-  const firstTotal = (costArr[0] as Record<string, unknown>)?.total as string || ""
-  const servicesStr = JSON.stringify(services || [])
-  const eurHit = /€|EUR/i.test(firstTotal) || /€|EUR/i.test(servicesStr)
-  return eurHit ? "EUR" : "USD"
+  // COLLAPSED into the one shared rule (blocker 2). This used to ALSO sniff the
+  // whole services blob, so an offer with "€" in a service line but a plain
+  // header was stored EUR while the money engine read the header and charged
+  // USD — the credit was looked up in euros, rendered with a dollar sign, and
+  // never deducted at signing. The services blob is no longer consulted: a EUR
+  // offer carrying a recurring "$2,000/year" line is what flipped it.
+  return resolveOfferCurrency(explicit, cost_summary)
 }
 
 async function tryCreateWhopPlan(params: {
@@ -588,6 +611,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     // display feature would be real blast radius for no benefit.
     let creditAmount: number | null = null
     let creditPaymentId: string | null = null
+    let creditKind: string | null = null
     const creditWarnings: string[] = []
     try {
       const subject = params.contact_id
@@ -600,6 +624,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         if (held.amount > 0) {
           creditAmount = held.amount
           creditPaymentId = held.creditId
+          creditKind = held.kind
         } else {
           // Resolved the person but showed nothing — tell staff if that is
           // because their credit is in another currency, which is invisible
@@ -613,6 +638,27 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
           })
           if (w) creditWarnings.push(w)
         }
+      } else if (subject.kind === "lookup_failed") {
+        // Never silent: a failed read must not read as "they have no credit".
+        const w = await warnUnconditional({
+          reason: "lookup_failed",
+          clientName: params.client_name,
+          email: subject.email,
+          currency,
+        })
+        if (w) creditWarnings.push(w)
+      } else if (subject.kind === "unknown" && params.client_email) {
+        // THE most likely real case (hunter major): the client booked the call
+        // with a personal address and the offer is written to their business
+        // one. Nothing holds credit under this address — but that is exactly
+        // when nobody would otherwise notice they are owed money.
+        const w = await warnUnconditional({
+          reason: "unknown_email",
+          clientName: params.client_name,
+          email: subject.email,
+          currency,
+        })
+        if (w) creditWarnings.push(w)
       } else if (subject.kind === "ambiguous") {
         const w = await warnIfCreditWentUnattached({
           reason: "ambiguous_email",
@@ -641,6 +687,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         card_fee_rate: pinnedCardFeeRate,
         credit_amount: creditAmount,
         credit_payment_id: creditPaymentId,
+        credit_kind: creditKind,
         payment_type: params.payment_type,
         contract_type: params.contract_type || "formation",
         services: params.services as Json,

@@ -32,6 +32,7 @@ import { handleChargeReversal } from "@/lib/operations/credit-reversal"
 import { matchAndReconcile } from "@/lib/bank-feed-matcher"
 import { ensureMinimalAccount } from "@/lib/portal/auto-create"
 import { createOffer } from "@/lib/operations/offers"
+import { computeOfferPayable } from "@/lib/offers/compute-offer-totals"
 import { resolveCreditSubject, subjectForDisplay } from "@/lib/operations/credit-subject"
 import {
   computeCreditApplication, claimCredits, confirmCreditClaims, unwindCreditClaims,
@@ -891,12 +892,14 @@ describe("CELL 11 — an offer created the way staff actually create one", () =>
     expect(res.success).toBe(true)
 
     const { data: offer } = await db.from("offers")
-      .select("credit_amount, credit_payment_id, contact_id").eq("token", token).maybeSingle()
+      .select("credit_amount, credit_payment_id, contact_id, credit_kind").eq("token", token).maybeSingle()
     const o = offer as Record<string, unknown>
     expect(Number(o.credit_amount)).toBe(257)
     expect(o.credit_payment_id).toBeTruthy()
     // linkage untouched — the snapshot is display only
     expect(o.contact_id).toBeNull()
+    // label honesty: this credit IS a paid call, so the page may say so
+    expect(o.credit_kind).toBe("paid_call")
   })
 
   it("11b the SAME email resolves to the SAME person for crediting and for display", async () => {
@@ -1040,5 +1043,88 @@ describe("CELL 12 — Alessandro-shaped chain, created the way staff create it",
     const cr = await payment(call.creditId!)
     expect(Number(cr!.credit_remaining)).toBe(0)
     expect(cr!.credit_consumed_by).toBe(inv.paymentId)
+  })
+})
+
+// ══ CELL 13 — NET EVERYWHERE (Antonio's ruling) ══════════════════════════
+//
+// The invariant: every payment rail charges what the invoice of record says.
+// The bug this replaces: the page's summary subtracted the credit while the pay
+// buttons, the bank box, the card checkout and the SIGNED contract all quoted
+// the gross — a client shown "€1,243 due" was charged €1,575 on the card and
+// paid for their strategy call twice.
+
+describe("CELL 13 — one amount, every rail", () => {
+  it("13a the offer's payable net equals what the signing invoice bills", async () => {
+    const p = await freshPerson("neteverywhere")
+    const call = await recordPaidCall({
+      payment: booking(newCharge("neteverywhere"), 257, "EUR"),
+      inviteeEmail: p.email, callDate: "2026-08-07",
+    })
+
+    const token = `${TAG}-net`.toLowerCase()
+    await createOffer({
+      client_name: `${TAG} Net Everywhere`,
+      client_email: p.email,
+      language: "it", payment_type: "both", contract_type: "formation",
+      services: [{ name: "Costituzione LLC", price: "€1500" }],
+      cost_summary: [{ label: "Totale", total: "€1500" }],
+      currency: "EUR", token,
+    })
+    const { data: row } = await db.from("offers")
+      .select("services, cost_summary, selected_services, currency, credit_amount")
+      .eq("token", token).maybeSingle()
+
+    // What every rail is told to charge.
+    const payable = computeOfferPayable(row as Record<string, unknown>)
+    expect(payable.gross).toBe(1500)
+    expect(payable.credit).toBe(257)
+    expect(payable.net).toBe(1243)
+    expect(payable.currency).toBe("EUR")
+
+    // What the invoice of record actually bills at signing.
+    const inv = await createTDInvoice({
+      contact_id: call.contactId,
+      line_items: [{ description: `${TAG} Costituzione LLC`, unit_price: 1500, quantity: 1 }],
+      currency: "EUR", idempotency_key: `${TAG}-net-invoice`,
+    })
+    const invRow = await payment(inv.paymentId)
+
+    // THE INVARIANT.
+    expect(Number(invRow!.total)).toBe(payable.net)
+  })
+
+  it("13b storage and the money engine agree on the currency (blocker 2)", async () => {
+    const p = await freshPerson("onecurrency")
+    await recordPaidCall({
+      payment: booking(newCharge("onecurrency"), 257, "EUR"),
+      inviteeEmail: p.email, callDate: "2026-08-07",
+    })
+    // A EUR offer whose SERVICES carry a "$2,000/year" recurring line — the exact
+    // shape that used to be stored EUR and charged USD.
+    const token = `${TAG}-ccy`.toLowerCase()
+    await createOffer({
+      client_name: `${TAG} One Currency`,
+      client_email: p.email,
+      language: "it", payment_type: "bank_transfer", contract_type: "formation",
+      services: [
+        { name: "Costituzione LLC", price: "€1500" },
+        { name: "Annual Maintenance", price: "$2,000/year" },
+      ],
+      cost_summary: [{ label: "Totale", total: "€1500" }],
+      token,
+    })
+    const { data: row } = await db.from("offers")
+      .select("services, cost_summary, selected_services, currency, credit_amount")
+      .eq("token", token).maybeSingle()
+    const o = row as Record<string, unknown>
+
+    // stored and computed must be the same answer
+    expect(o.currency).toBe("EUR")
+    const payable = computeOfferPayable(o)
+    expect(payable.currency).toBe("EUR")
+    // and because they agree, the euro credit really is applied
+    expect(payable.credit).toBe(257)
+    expect(payable.net).toBe(1243)
   })
 })
