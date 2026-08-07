@@ -152,6 +152,10 @@ export function groupRowsToConversations(
       accountName: accountMatch?.accountName ?? null,
       hasAttachment: live.some((r) => r.has_attachment),
       colorMark: colorMark?.key ?? null,
+      // Payload-derived Inbox membership — powers the "Archived" chip in folder
+      // and all-mail-search views. NEVER derive that chip from client memory of
+      // a click; a refetch would contradict it (council, 2026-08-07).
+      inInbox: live.some((r) => r.label_ids.includes("INBOX")),
       ...(opts.linkedThreadIds?.has(threadId) ? { linked: true } : {}),
     })
   })
@@ -264,16 +268,20 @@ export async function countIndexThreads(
   return Number(data ?? 0)
 }
 
+import type { SearchScope } from "@/lib/inbox/view-query"
+
 /** ONE PAGE of SEARCH results as conversations (same thread-level paging). */
 export async function pageSearchThreadIds(
   mailbox: "support" | "antonio",
   query: string,
   pageSize: number,
   offset: number,
+  scope: SearchScope = "all",
 ): Promise<string[]> {
   const { data, error } = await db.rpc("inbox_search_thread_page", {
     p_mailbox: mailbox, p_query: query,
     p_limit: Math.max(1, pageSize), p_offset: Math.max(0, offset),
+    p_scope: scope,
   })
   if (error) throw new Error(`inbox_search_thread_page failed: ${error.message}`)
   return ((data ?? []) as Array<{ thread_id: string }>).map((r) => r.thread_id)
@@ -283,9 +291,48 @@ export async function pageSearchThreadIds(
 export async function countSearchThreads(
   mailbox: "support" | "antonio",
   query: string,
+  scope: SearchScope = "all",
 ): Promise<number> {
-  const { data, error } = await db.rpc("inbox_search_thread_count", { p_mailbox: mailbox, p_query: query })
+  const { data, error } = await db.rpc("inbox_search_thread_count", {
+    p_mailbox: mailbox, p_query: query, p_scope: scope,
+  })
   if (error) throw new Error(`inbox_search_thread_count failed: ${error.message}`)
+  return Number(data ?? 0)
+}
+
+/**
+ * ONE PAGE of ARCHIVED conversations: out of the Inbox, not trashed / spam /
+ * snoozed, not pure-sent / pure-draft — judged at THREAD level by the RPC.
+ * Index-only by design: "archived" is a thread-level negation Gmail's query
+ * language cannot express, so this view has NO live-Gmail fallback — callers
+ * must gate on `isBackfillDone` and show an explicit unavailable state.
+ * `excludeLabels`: per-mailbox label ids to treat as not-archived (the
+ * "Snoozed" user label — belt to the email_snoozes braces inside the RPC).
+ */
+export async function pageArchivedThreadIds(
+  mailbox: "support" | "antonio",
+  pageSize: number,
+  offset: number,
+  excludeLabels: string[] = [],
+): Promise<string[]> {
+  const { data, error } = await db.rpc("inbox_archived_thread_page", {
+    p_mailbox: mailbox,
+    p_limit: Math.max(1, pageSize), p_offset: Math.max(0, offset),
+    p_exclude_labels: excludeLabels,
+  })
+  if (error) throw new Error(`inbox_archived_thread_page failed: ${error.message}`)
+  return ((data ?? []) as Array<{ thread_id: string }>).map((r) => r.thread_id)
+}
+
+/** Total archived conversations — the N in "page 1 of N" for Archived. */
+export async function countArchivedThreads(
+  mailbox: "support" | "antonio",
+  excludeLabels: string[] = [],
+): Promise<number> {
+  const { data, error } = await db.rpc("inbox_archived_thread_count", {
+    p_mailbox: mailbox, p_exclude_labels: excludeLabels,
+  })
+  if (error) throw new Error(`inbox_archived_thread_count failed: ${error.message}`)
   return Number(data ?? 0)
 }
 

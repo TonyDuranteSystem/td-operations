@@ -91,6 +91,10 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   // while the box has focus — a stale dropdown over the list is worse than none.
   const [suggestOpen, setSuggestOpen] = useState(false)
   const [searchActive, setSearchActive] = useState(false)
+  // Search scope chip — INBOX-ONLY by default (Antonio 2026-08-07: "when I
+  // search an email I want to search in inbox and if I want to include the
+  // archive I want to have the option"). 'all' = the Include-archived chip.
+  const [searchScope, setSearchScope] = useState<'inbox' | 'all'>('inbox')
   const [moveToOpen, setMoveToOpen] = useState(false)
   const [restoreToOpen, setRestoreToOpen] = useState(false)
   const [colorMenuOpen, setColorMenuOpen] = useState(false)
@@ -774,10 +778,13 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
         queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
       } else if (variables.action === 'trash' || variables.action === 'archive') {
-        // Handled optimistically by the hide override; the Gmail push event +
-        // the poll reconcile the server list. No immediate conversations
-        // refetch — that racing refetch into Gmail's untrash lag is what made
-        // restored emails vanish. Refresh cheap stats/labels only.
+        // The hide override gives the instant feedback; and since 2026-08-07
+        // the server WRITE-THROUGH re-indexes the thread before responding, so
+        // an immediate refetch returns a list that already agrees with the
+        // action (the old Gmail-lag race is gone for the index-served views —
+        // it also lights the payload-derived "Archived" chip where the row
+        // deliberately stays). Cheap: the browse list is a DB query now.
+        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
         queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
         queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
       } else {
@@ -914,7 +921,15 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
           return next
         })
       }
-      if (variables.action === 'move_to_label' || failCount > 0) {
+      if (
+        variables.action === 'move_to_label' ||
+        failCount > 0 ||
+        // Write-through (2026-08-07): the route re-indexed the fulfilled
+        // threads before responding, so a refetch already agrees with the
+        // action — and it lights the "Archived" chip where rows stay.
+        variables.action === 'archive' ||
+        variables.action === 'trash'
+      ) {
         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
       }
       queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
@@ -1203,6 +1218,21 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
               <X className="h-3.5 w-3.5" />
             </button>
           )}
+          {/* Scope chip: search looks in the INBOX by default; this widens it
+              to everything (archived included). Part of the list's identity —
+              flipping it is a different list, new page 1. */}
+          {searchActive && (
+            <button
+              onClick={() => setSearchScope(s => (s === 'inbox' ? 'all' : 'inbox'))}
+              className={cn(
+                'px-2 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap',
+                searchScope === 'all' ? 'bg-amber-100 text-amber-700' : 'text-zinc-400 hover:bg-zinc-100'
+              )}
+              title={searchScope === 'all' ? 'Searching all mail (archived included) — click for inbox only' : 'Searching your inbox only — click to include archived mail'}
+            >
+              {searchScope === 'all' ? 'All mail' : 'Include archived'}
+            </button>
+          )}
           <div className="flex items-center gap-0.5 border-l pl-2 ml-1">
             {(['all', 'unread', 'read'] as const).map(f => (
               <button
@@ -1372,6 +1402,9 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             onToggleSelect={handleToggleSelect}
             labelFilter={activeLabel}
             searchQuery={searchActive ? searchQuery : undefined}
+            searchScope={searchScope}
+            onWidenScope={() => setSearchScope('all')}
+            onSelectMany={(ids) => setSelectedIds(new Set(ids))}
             mailbox={activeMailbox}
             unreadFilter={unreadFilter}
             userLabels={userLabels}
