@@ -39,6 +39,7 @@ import {
   LayoutGrid,
   Radio,
   StickyNote,
+  ShieldCheck,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -63,6 +64,7 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { DashboardPushToggle } from '@/components/dashboard/push-toggle'
 import { GlobalBackButton } from '@/components/dashboard/global-back-button'
+import { MfaSettingsDialog } from '@/components/dashboard/mfa-settings-dialog'
 
 interface NavItem {
   id: string
@@ -298,6 +300,7 @@ export function Sidebar({
   const [editMode, setEditMode] = useState(false)
   const [navOrder, setNavOrder] = useState<string[]>([])
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false)
+  const [mfaDialogOpen, setMfaDialogOpen] = useState(false)
   const [livePortalChats, setLivePortalChats] = useState(badgeCounts?.portalChats ?? 0)
   const [liveTeamChat, setLiveTeamChat] = useState(badgeCounts?.teamChat ?? 0)
   const [liveInbox, setLiveInbox] = useState(badgeCounts?.inbox ?? 0)
@@ -694,6 +697,16 @@ export function Sidebar({
               >
                 <KeyRound className="h-4 w-4" />
               </button>
+              {/* Two-factor self-service: replace authenticator (planned phone
+                  change) + regenerate backup codes. Both require a session
+                  that has just passed a code. */}
+              <button
+                onClick={() => setMfaDialogOpen(true)}
+                className="p-1.5 rounded hover:bg-sidebar-accent"
+                title="Two-factor security"
+              >
+                <ShieldCheck className="h-4 w-4" />
+              </button>
               <button
                 onClick={handleLogout}
                 className="p-1.5 rounded hover:bg-sidebar-accent"
@@ -709,6 +722,11 @@ export function Sidebar({
       {/* Change Password Dialog */}
       {passwordDialogOpen && (
         <ChangePasswordDialog onClose={() => setPasswordDialogOpen(false)} />
+      )}
+
+      {/* Two-factor security (replace authenticator / new backup codes) */}
+      {mfaDialogOpen && (
+        <MfaSettingsDialog onClose={() => setMfaDialogOpen(false)} />
       )}
     </>
   )
