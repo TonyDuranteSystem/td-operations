@@ -732,15 +732,18 @@ function UnmatchedRow({
 
     setCreateSubmitting(true)
     try {
-      const body: Record<string, string> = { feed_id: feed.id }
+      // Typed `unknown`, not `string`: the paid-call flags are BOOLEANS. Sending
+      // them as the text "true" made the server's check fail silently and fall
+      // through to demanding a service type.
+      const body: Record<string, unknown> = { feed_id: feed.id }
       if (createForResult.type === 'account') {
         body.account_id = createForResult.id
       } else {
         body.contact_id = createForResult.id
       }
       if (isPaidCall) {
-        body.paid_call = 'true'
-        if (paidCallRevenueOnly) body.paid_call_revenue_only = 'true'
+        body.paid_call = true
+        body.paid_call_revenue_only = paidCallRevenueOnly
       } else if (isAttach) {
         body.service_delivery_id = createSelectedSdId!
       } else {
@@ -1306,8 +1309,10 @@ function UnmatchedRow({
               </div>
             )}
 
-            {/* Branch B — create a new backfilled SD ────────────────── */}
-            <div className="border-t pt-3 space-y-2">
+            {/* Branch B — create a new backfilled SD ──────────────────
+                Hidden for a paid call: it is not a service, so asking for a
+                service type is both wrong and (as Antonio hit) confusing. */}
+            <div className={`border-t pt-3 space-y-2 ${createPaidCall ? 'hidden' : ''}`}>
               <p className="text-xs font-medium text-zinc-700">
                 {targetServices.length > 0 ? 'Or record a new one-off / past service:' : 'Record service for this payment:'}
               </p>

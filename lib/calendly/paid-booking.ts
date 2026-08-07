@@ -88,3 +88,36 @@ export function isPaidCallCreditKey(key: string | null | undefined): boolean {
   const k = String(key ?? "")
   return (k.startsWith("calendly-call:") || k.startsWith("paid-call-manual:")) && k.endsWith(":credit")
 }
+
+export type PaidCallRequest =
+  | { kind: "not_a_paid_call" }
+  | { kind: "paid_call"; revenueOnly: boolean }
+  | { kind: "invalid"; reason: string }
+
+/**
+ * Read the paid-call flags off a request body — STRICTLY.
+ *
+ * A truthy-but-wrong value (the string "true", 1, "yes") used to fall through as
+ * "not a paid call", and the caller then failed with an unrelated complaint
+ * about a missing service type. That is exactly what happened: the UI sent the
+ * text "true" and the whole feature looked broken for a reason that named the
+ * wrong thing. A malformed flag now says so.
+ */
+export function parsePaidCallRequest(body: Record<string, unknown>): PaidCallRequest {
+  const raw = body.paid_call
+  if (raw === undefined || raw === null || raw === false) return { kind: "not_a_paid_call" }
+  if (raw !== true) {
+    return {
+      kind: "invalid",
+      reason: `paid_call must be a boolean, received ${typeof raw} (${JSON.stringify(raw)}). A string "true" is not a boolean.`,
+    }
+  }
+  const rev = body.paid_call_revenue_only
+  if (rev !== undefined && rev !== null && typeof rev !== "boolean") {
+    return {
+      kind: "invalid",
+      reason: `paid_call_revenue_only must be a boolean, received ${typeof rev} (${JSON.stringify(rev)}).`,
+    }
+  }
+  return { kind: "paid_call", revenueOnly: rev === true }
+}

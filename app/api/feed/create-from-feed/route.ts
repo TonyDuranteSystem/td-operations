@@ -30,6 +30,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { manualMatch } from "@/lib/bank-feed-matcher"
 import { recordPaidCall } from "@/lib/operations/paid-call-credit"
+import { parsePaidCallRequest } from "@/lib/calendly/paid-booking"
 import {
   createBackfilledSD,
   isValidServiceType,
@@ -76,8 +77,14 @@ export async function POST(req: NextRequest) {
   const serviceDeliveryId = body.service_delivery_id?.trim()
   const serviceType = body.service_type?.trim()
   const serviceName = (body.service_name?.trim() || serviceType || "").slice(0, 200)
-  const isPaidCall = body.paid_call === true
-  const paidCallRevenueOnly = body.paid_call_revenue_only === true
+  // Strict: a malformed flag is an ERROR, never a silent "not a paid call"
+  // that then fails complaining about something unrelated.
+  const paidCallReq = parsePaidCallRequest(body as unknown as Record<string, unknown>)
+  if (paidCallReq.kind === "invalid") {
+    return NextResponse.json({ error: paidCallReq.reason }, { status: 400 })
+  }
+  const isPaidCall = paidCallReq.kind === "paid_call"
+  const paidCallRevenueOnly = paidCallReq.kind === "paid_call" && paidCallReq.revenueOnly
 
   // ── Validation ──────────────────────────────────────────────────────
   if (!feedId) {
