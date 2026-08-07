@@ -25,7 +25,7 @@ import type { CommEnrollment, CommEnrollmentRow, EnrollmentStatus } from './type
 const db = supabaseAdmin as any
 
 const ENROLLMENT_COLUMNS =
-  'id, account_id, contact_id, lead_id, partner_id, service_delivery_id, client_type, package_slug, status, form_data, conversation_id, metadata, deadline_at, created_at, updated_at'
+  'id, account_id, contact_id, lead_id, partner_id, worker_partner_id, service_delivery_id, client_type, package_slug, status, form_data, conversation_id, metadata, deadline_at, created_at, updated_at'
 
 export interface TimelineEvent {
   label: string
