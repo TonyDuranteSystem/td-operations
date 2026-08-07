@@ -387,7 +387,7 @@ export default function ContractPage() {
     const creditOnContract = Math.min(contractTotals.credit, totalSetup)
     const fee = totalSetup > 0
       ? (creditOnContract > 0
-          ? `${money(totalSetup)} less ${money(creditOnContract)} already paid = ${money(Math.max(totalSetup - creditOnContract, 0))} due upon signing`
+          ? `${money(totalSetup)} less ${money(creditOnContract)} already paid = ${money(Math.max(totalSetup - creditOnContract, 0))}`
           : money(totalSetup))
       : 'As specified in the offer'
 
