@@ -52,6 +52,7 @@ const {
 const TAG = `QAMTX-${Date.now()}`
 const ids = { contactA: "", contactB: "", accountX: "", accountY: "" }
 const charges: string[] = []
+const feeds: string[] = []
 
 /**
  * A FRESH person per test. The first run of this matrix shared two fixture
@@ -121,6 +122,10 @@ async function sweep(): Promise<string[]> {
     if (error) problems.push(`${label}: ${(error as { message?: string }).message ?? String(error)}`)
   }
 
+  if (feeds.length) {
+    await step("payment_applications", () => db.from("payment_applications").delete().in("feed_id", feeds))
+    await step("td_bank_feeds", () => db.from("td_bank_feeds").delete().in("id", feeds))
+  }
   const { data: cRows } = await db.from("contacts").select("id").like("full_name", `${TAG}%`)
   const { data: aRows } = await db.from("accounts").select("id").like("company_name", `${TAG}%`)
   const contacts = ((cRows ?? []) as Array<{ id: string }>).map(r => r.id)
@@ -692,5 +697,168 @@ describe("CELL 10 — one Alessandro-shaped chain, end to end", () => {
     expect(Number(callInv!.total)).toBe(257)
 
     extraContacts.push(contactId)
+  })
+})
+
+// ══ CELL 2 (second half) — the feed row that carries the identity ════════
+//
+// CORRECTED PREMISE. The matrix asked for "a feed row with that payment-intent
+// linking through, including days-late arrival", which merges two rows that
+// never become one. A card payment produces TWO unrelated feed rows:
+//
+//   1. the STRIPE CHARGE row, synced at charge time, carrying the payment-intent
+//      id — this is the only row that can reach the certain-identity tier, which
+//      is hard-gated to stripe-sourced rows; and
+//   2. days later, a BATCHED BANK PAYOUT ("STRIPE - TRANSFER"), one aggregate
+//      row per transfer, carrying no payment-intent, no invoice number and no
+//      client name — and deliberately routed to the owner's own books rather
+//      than to client invoices.
+//
+// Verified on production: of 514 feed rows, all 82 carrying a payment-intent are
+// stripe-sourced; all 432 bank rows carry none. So the days-late BANK row can
+// never link by identity, by construction — nothing links a payout to its
+// charges yet (the helper exists, uncalled, a known open item).
+//
+// What matters for WS-A is therefore not timing but DOUBLE-COUNTING: the
+// paid-call invoice is born PAID, so when its charge row is reconciled the only
+// correct outcome is an audit link that moves no money.
+
+describe("CELL 2b — the charge row links to the born-paid invoice WITHOUT moving money", () => {
+  it("2b links the charge row to the paid-call invoice as an audit link, zero money applied", async () => {
+    const p = await freshPerson("feedlink")
+    const ch = newCharge("feedlink")
+    const call = await recordPaidCall({
+      payment: booking(ch, 257, "EUR"),
+      inviteeEmail: p.email, callDate: "2026-08-01",
+    })
+
+    // Sandbox has no Stripe key, so recordPaidCall could not resolve the intent
+    // itself (proven in cell 2a). Stamp the id the way a configured environment
+    // would, because what is under test here is the MATCHER tier, not the lookup.
+    const pi = `pi_${TAG}_feedlink`
+    await db.from("payments").update({ stripe_payment_id: pi }).eq("id", call.invoiceId)
+
+    const invBefore = await payment(call.invoiceId)
+    expect(invBefore!.invoice_status).toBe("Paid")   // terminal before the feed arrives
+
+    // The charge row, dated SIX DAYS after the call date, so the reconciliation
+    // is genuinely late relative to the booking — the part of "days-late" that
+    // IS real for this row.
+    const { data: feedRow, error: feedErr } = await db.from("td_bank_feeds").insert({
+      source: "stripe",
+      transaction_date: "2026-08-07",
+      amount: 257,
+      currency: "EUR",
+      sender_name: "STRIPE PAYOUT",
+      memo: `${TAG} Stripe payout`,
+      raw_data: { payment_intent: pi, id: ch },
+      status: "unmatched",
+    }).select("id").single()
+    expect(feedErr).toBeNull()
+    const feedId = (feedRow as { id: string }).id
+    feeds.push(feedId)
+
+    const { matchAndReconcile } = await import("@/lib/bank-feed-matcher")
+    const res = await matchAndReconcile(feedId)
+
+    // Linked, certainly, and explicitly WITHOUT money.
+    expect(res.matched).toBe(true)
+    expect(res.paymentId).toBe(call.invoiceId)
+    expect(res.moneyApplied).toBe(false)
+    expect(res.confidence).toBe("certain_retroactive")
+
+    // The invoice is untouched — this is the assertion that matters.
+    const invAfter = await payment(call.invoiceId)
+    expect(Number(invAfter!.total)).toBe(Number(invBefore!.total))
+    expect(Number(invAfter!.amount_paid ?? 0)).toBe(Number(invBefore!.amount_paid ?? 0))
+    expect(invAfter!.invoice_status).toBe("Paid")
+
+    // The feed itself carries the trail a human can read.
+    const { data: fAfter } = await db.from("td_bank_feeds").select("*").eq("id", feedId).maybeSingle()
+    const f = fAfter as Record<string, unknown>
+    expect(f.status).toBe("matched")
+    expect(f.matched_payment_id).toBe(call.invoiceId)
+    expect(f.match_confidence).toBe("retroactive")
+
+    // And no money-application ledger row was written, because no money moved.
+    const { data: apps } = await db.from("payment_applications").select("id").eq("feed_id", feedId)
+    expect((apps ?? []).length).toBe(0)
+  })
+
+  it("2c the credit note is NOT a match candidate for the payout", async () => {
+    const p = await freshPerson("feedcredit")
+    const ch = newCharge("feedcredit")
+    const call = await recordPaidCall({
+      payment: booking(ch, 257, "EUR"),
+      inviteeEmail: p.email, callDate: "2026-08-01",
+    })
+    // A credit note is a NEGATIVE payments row. If the matcher could ever pick it
+    // as the target of an incoming payout, a client's own credit would be marked
+    // "paid" by their own money.
+    const pi = `pi_${TAG}_feedcredit`
+    await db.from("payments").update({ stripe_payment_id: pi }).eq("id", call.creditId!)
+    await db.from("payments").update({ stripe_payment_id: pi }).eq("id", call.invoiceId)
+
+    const { data: feedRow } = await db.from("td_bank_feeds").insert({
+      source: "stripe", transaction_date: "2026-08-07", amount: 257, currency: "EUR",
+      sender_name: "STRIPE PAYOUT", memo: `${TAG} payout vs credit`,
+      raw_data: { payment_intent: pi }, status: "unmatched",
+    }).select("id").single()
+    const feedId = (feedRow as { id: string }).id
+    feeds.push(feedId)
+
+    const { matchAndReconcile } = await import("@/lib/bank-feed-matcher")
+    const res = await matchAndReconcile(feedId)
+
+    // Two rows now share the intent, so the matcher must NOT silently pick one.
+    // Either it refuses (ambiguous) or it picks the row carrying an invoice
+    // number — never the credit note, and never any money onto the credit.
+    if (res.matched) expect(res.paymentId).toBe(call.invoiceId)
+    const cr = await payment(call.creditId!)
+    expect(Number(cr!.credit_remaining)).toBe(257)   // credit untouched either way
+    expect(cr!.invoice_status).toBe("Credit")
+  })
+})
+
+describe("CELL 2d — the batched bank payout must not touch the born-paid invoice", () => {
+  it("2d a same-amount STRIPE - TRANSFER row does not settle or re-credit the call invoice", async () => {
+    const p = await freshPerson("payout")
+    const ch = newCharge("payout")
+    const call = await recordPaidCall({
+      payment: booking(ch, 257, "EUR"),
+      inviteeEmail: p.email, callDate: "2026-08-01",
+    })
+    const before = await payment(call.invoiceId)
+
+    // Exactly the shape production shows: aggregate, bank-sourced, no identity
+    // at all — and the same amount as the call invoice, which is the coincidence
+    // that puts two such rows in review on production right now.
+    const { data: feedRow, error } = await db.from("td_bank_feeds").insert({
+      source: "relay",
+      transaction_date: "2026-08-07",
+      amount: 257,
+      currency: "EUR",
+      sender_name: "STRIPE - TRANSFER",
+      memo: `${TAG} STRIPE - TRANSFER`,
+      raw_data: {},
+      status: "unmatched",
+    }).select("id").single()
+    expect(error).toBeNull()
+    const feedId = (feedRow as { id: string }).id
+    feeds.push(feedId)
+
+    const { matchAndReconcile } = await import("@/lib/bank-feed-matcher")
+    const res = await matchAndReconcile(feedId)
+
+    // It must never SETTLE the call invoice: that invoice is already Paid, so any
+    // money applied here would be revenue counted twice.
+    expect(res.moneyApplied).not.toBe(true)
+    const after = await payment(call.invoiceId)
+    expect(Number(after!.amount_paid ?? 0)).toBe(Number(before!.amount_paid ?? 0))
+    expect(after!.invoice_status).toBe("Paid")
+
+    // And the client's credit is not touched by a payout either.
+    const cr = await payment(call.creditId!)
+    expect(Number(cr!.credit_remaining)).toBe(257)
   })
 })
