@@ -31,7 +31,7 @@
  * Outlook for Windows, which draws mail with Word and ignores border-radius.
  */
 
-import { APP_BASE_URL } from "@/lib/config"
+import { APP_BASE_URL, PORTAL_BASE_URL } from "@/lib/config"
 
 // ─── Variants ───────────────────────────────────────────────
 
@@ -242,7 +242,22 @@ export interface SignatureOptions {
   includeSignoff?: boolean
   /** Overridable so tests never depend on deployment config. */
   baseUrl?: string
+  /**
+   * Append the portal-app install line (Phase 4, dev job 8f38add1).
+   * DORMANT BY DEFAULT — Antonio's decision (2026-08-06): the line rides on
+   * CLIENT emails only, never on mail to banks, agencies or government
+   * correspondents. No call site passes it yet; enabling a call site is a
+   * per-surface decision with his approval. The link is a plain tappable
+   * URL (rule 2: facts live in text — a QR image would be blocked by
+   * corporate clients, and phones can't scan themselves).
+   */
+  installLink?: boolean
 }
+
+// Install-line copy (ASCII only — rule 1). English on purpose: R016 requires
+// URLs/tokens/slugs in English, and the signature block itself is English.
+const INSTALL_LINE_LABEL = "Get our replies instantly - install the portal app:"
+const INSTALL_LINK_URL = `${PORTAL_BASE_URL}/portal/install?src=email-sig`
 
 // ─── Plain text ─────────────────────────────────────────────
 
@@ -260,6 +275,12 @@ export function buildSignatureText(options: SignatureOptions): string {
   lines.push(id.name)
   if (id.title) lines.push(id.title)
   lines.push(id.address, id.phone, id.email)
+
+  // Dormant install line — see SignatureOptions.installLink. Facts in text
+  // (rule 3): the URL itself is the carrier, exactly as in the HTML half.
+  if (options.installLink) {
+    lines.push("", `${INSTALL_LINE_LABEL} ${INSTALL_LINK_URL}`)
+  }
 
   return lines.join("\n")
 }
@@ -352,12 +373,23 @@ export function buildSignatureHtml(options: SignatureOptions): string {
       `</td></tr>`
     : ""
 
+  // Dormant install line — see SignatureOptions.installLink. A plain link,
+  // no image: rule 2 (facts live in text) and recipients read email on the
+  // very phone that would have to scan a QR.
+  const installRow = options.installLink
+    ? `<tr><td style="font-family:${FONT};font-size:12px;color:${MUTED};padding-top:10px">` +
+      `${INSTALL_LINE_LABEL} ` +
+      `<a href="${INSTALL_LINK_URL}" style="color:${BRAND_RED};text-decoration:underline">${INSTALL_LINK_URL}</a>` +
+      `</td></tr>`
+    : ""
+
   return (
     `<table cellpadding="0" cellspacing="0" border="0" ` +
     `style="font-family:${FONT};font-size:14px;line-height:1.5;color:${INK};margin-top:24px">` +
     signoff +
     `<tr><td>${body}</td></tr>` +
     logo +
+    installRow +
     `</table>`
   )
 }

@@ -355,6 +355,16 @@ export async function notifyClientOfAdminMessage({
       : 'You have a new message from our team. Log in to your portal to read and reply.'
     const ctaLabel = isIt ? 'Vai al Portale' : 'Go to Portal'
     const footerText = isIt ? 'Tony Durante LLC — Portale Clienti' : 'Tony Durante LLC — Client Portal'
+    // Install nudge (Phase 4, dev job 8f38add1): this email exists BECAUSE the
+    // recipient has no push subscription (the hasPush skip above), and it is
+    // read on the exact device that should install — the highest-value
+    // placement in the whole funnel (council/BA finding). Tappable link, no QR:
+    // you can't scan the phone you're holding.
+    const installUrl = `${PORTAL_BASE_URL}/portal/install?src=fallback-email`
+    const installLine = isIt
+      ? 'Preferisci risposte immediate sul telefono? Installa l’app del portale:'
+      : 'Prefer instant replies on your phone? Install the portal app:'
+    const installCta = isIt ? 'Installa l’app' : 'Install the app'
 
     const html = `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
@@ -370,6 +380,10 @@ export async function notifyClientOfAdminMessage({
         <a href="${portalChatUrl}" style="display:inline-block;padding:12px 28px;background:#0A3161;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold;font-family:Georgia,serif;">
           ${ctaLabel}
         </a>
+        <p style="color:#52525b;font-size:13px;margin-top:24px;margin-bottom:0;">
+          ${installLine}
+          <a href="${installUrl}" style="color:#BE1E2D;text-decoration:underline;font-weight:bold;">${installCta}</a>
+        </p>
         <p style="color:#9ca3af;font-size:12px;margin-top:24px;">${footerText}</p>
       </div>
     </div>

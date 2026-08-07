@@ -17,7 +17,7 @@ import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { logAction } from "@/lib/mcp/action-log"
 import { getGreeting } from "@/lib/greeting"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
-import { APP_BASE_URL } from "@/lib/config"
+import { APP_BASE_URL, PORTAL_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
 
 const BASE_URL = APP_BASE_URL
@@ -510,6 +510,12 @@ ${hrStyle}
 
 ${hrStyle}
 
+<p><strong>L'area privata della tua azienda, sul tuo telefono</strong></p>
+<p>Installa l'app del portale sul tuo telefono per ricevere le nostre risposte appena arrivano -- tutto ciò che riguarda la tua azienda in un unico posto, separato dalle chat personali.</p>
+<p><a href="${PORTAL_BASE_URL}/portal/install?src=onboarding" ${linkStyle}>Installa l'app del portale</a></p>
+
+${hrStyle}
+
 <p>Siamo a disposizione.</p>
 <p><strong>Tony Durante LLC</strong><br/>support@tonydurante.us</p>
 </div>`
@@ -561,6 +567,12 @@ ${hrStyle}
 
 <p><strong>Important Rules on IBAN Account Usage</strong></p>
 <p>Your IBAN account (Payset and/or Wise) must be used exclusively to receive payments in euros. Once funds are received, they must be converted to USD and transferred to your US bank account on Relay. Do not use the IBAN account to make outgoing payments to third parties.</p>
+
+${hrStyle}
+
+<p><strong>Your company's private area, on your phone</strong></p>
+<p>Install the portal app on your phone to get our replies the moment they arrive -- everything about your business in one place, separate from your personal chats.</p>
+<p><a href="${PORTAL_BASE_URL}/portal/install?src=onboarding" ${linkStyle}>Install the portal app</a></p>
 
 ${hrStyle}
 

@@ -423,6 +423,7 @@ const ARTICLES_EN: Article[] = [
     keywords: ['install', 'app', 'home screen', 'mobile', 'phone', 'iphone', 'android', 'safari', 'chrome', 'add to home screen', 'pwa', 'installa', 'schermata home', 'telefono', 'cellulare'],
     steps: [
       { text: 'The portal works like an app — install it on your phone for faster, one-tap access from your home screen.' },
+      { text: 'Easiest way: open portal.tonydurante.us/portal/install on your phone.', sub: 'The page detects your device and walks you through the right steps automatically.' },
       { text: 'On iPhone (Safari):', sub: 'Tap the Share button at the bottom of the screen → scroll down and tap "Add to Home Screen" → tap "Add".' },
       { text: 'On Android (Chrome):', sub: 'Tap the ⋮ menu (top right) → tap "Install app" or "Add to Home screen" → confirm.' },
       { text: 'Open the portal from the new icon on your home screen. It runs full-screen like a native app and supports push notifications.' },

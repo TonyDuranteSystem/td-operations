@@ -21,6 +21,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { PORTAL_BASE_URL } from "@/lib/config"
 import { reanchorLeadConversations } from "@/lib/team/reanchor-conversations"
 import { uploadBinaryToDrive, uploadBinaryToDriveUpsert, folderFileNameMap } from "@/lib/google-drive"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
@@ -1347,9 +1348,15 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       if (existingWelcome) {
         result.steps.push(step("portal_welcome_chat", "skipped", "Welcome chat already sent for this account — not duplicating"))
       } else {
+        // Install nudge line (Phase 4, dev job 8f38add1): peak-engagement
+        // placement — the client just finished onboarding. COPY-ONLY change:
+        // the idempotency guard above matches the "Welcome to Tony Durante
+        // LLC! We%" PREFIX, which this append does not touch, and nothing
+        // about job enqueue logic changes (LT runaway-loop guard untouched).
+        const installLine = `\n\nTip: install the portal app on your phone to get our replies the moment they arrive — ${PORTAL_BASE_URL}/portal/install?src=onboarding`
         const welcomeMsg = company_name
-          ? `Welcome to Tony Durante LLC! We've received everything for ${company_name}.\n\nYour Operating Agreement and Lease Agreement are ready for your signature — you'll find them in your portal dashboard. Your Banking setup (Relay USD + Payset EUR) is also available whenever you're ready.\n\nIf you have any questions, just reply here.`
-          : `Welcome to Tony Durante LLC! We've received your onboarding data.\n\nYour Operating Agreement and Lease Agreement are ready for your signature — you'll find them in your portal dashboard. Your Banking setup is also available whenever you're ready.\n\nIf you have any questions, just reply here.`
+          ? `Welcome to Tony Durante LLC! We've received everything for ${company_name}.\n\nYour Operating Agreement and Lease Agreement are ready for your signature — you'll find them in your portal dashboard. Your Banking setup (Relay USD + Payset EUR) is also available whenever you're ready.${installLine}\n\nIf you have any questions, just reply here.`
+          : `Welcome to Tony Durante LLC! We've received your onboarding data.\n\nYour Operating Agreement and Lease Agreement are ready for your signature — you'll find them in your portal dashboard. Your Banking setup is also available whenever you're ready.${installLine}\n\nIf you have any questions, just reply here.`
         const { error: chatErr } = await supabaseAdmin
           .from("portal_messages")
           .insert({

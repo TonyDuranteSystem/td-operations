@@ -350,3 +350,42 @@ describe("relative base URL (in-app preview)", () => {
     expect(html).not.toContain('src="https://')
   })
 })
+
+// ─── Install link (Phase 4, dev job 8f38add1 — DORMANT by default) ─────────
+// Antonio's rule: the line rides on CLIENT emails only, opt-in per call site.
+// The default-off tests are the contract that NO existing email changes.
+describe("installLink option", () => {
+  const opts = { sender: "support" as const, variant: "gala" as const, baseUrl: BASE }
+
+  it("absent flag → output is byte-identical to explicit false (dormant)", () => {
+    expect(buildSignatureHtml(opts)).toBe(buildSignatureHtml({ ...opts, installLink: false }))
+    expect(buildSignatureText(opts)).toBe(buildSignatureText({ ...opts, installLink: false }))
+  })
+
+  it("no install URL leaks into any variant by default", () => {
+    for (const variant of SIGNATURE_VARIANTS) {
+      const { html, text } = buildSignature({ sender: "support", variant, baseUrl: BASE })
+      expect(html).not.toContain("/portal/install")
+      expect(text).not.toContain("/portal/install")
+    }
+  })
+
+  it("flag on → the link lands in BOTH halves (facts live in text)", () => {
+    const { html, text } = buildSignature({ ...opts, installLink: true })
+    expect(html).toContain("/portal/install?src=email-sig")
+    expect(text).toContain("/portal/install?src=email-sig")
+    expect(text).toContain("install the portal app")
+  })
+
+  it("text half stays ASCII with the flag on (rule 1)", () => {
+    const text = buildSignatureText({ ...opts, installLink: true })
+    // eslint-disable-next-line no-control-regex
+    expect(/^[\x00-\x7F]*$/.test(text)).toBe(true)
+  })
+
+  it("variant 'none' stays completely empty even with the flag", () => {
+    const { html, text } = buildSignature({ sender: "support", variant: "none", baseUrl: BASE, installLink: true })
+    expect(html).toBe("")
+    expect(text).toBe("")
+  })
+})

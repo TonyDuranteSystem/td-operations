@@ -113,6 +113,7 @@ vi.mock("@/lib/mcp/action-log", () => ({
 
 vi.mock("@/lib/config", () => ({
   APP_BASE_URL: "https://app.tonydurante.us",
+  PORTAL_BASE_URL: "https://portal.tonydurante.us",
 }))
 
 const driveDownloadCalls: string[] = []

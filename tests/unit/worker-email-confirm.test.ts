@@ -64,7 +64,7 @@ vi.mock("@/lib/gmail", () => ({
   getHeader: () => "",
 }))
 vi.mock("@/lib/operations/email", () => ({ plainTextToParagraphs: (s: string) => s }))
-vi.mock("@/lib/config", () => ({ APP_BASE_URL: "https://app.test" }))
+vi.mock("@/lib/config", () => ({ APP_BASE_URL: "https://app.test", PORTAL_BASE_URL: "https://portal.test" }))
 vi.mock("@/lib/mcp/action-log", () => ({ logAction: vi.fn() }))
 vi.mock("@/lib/inbox/email-recipients", () => ({
   checkRecipientsAllowed: () => ({ ok: true }),
