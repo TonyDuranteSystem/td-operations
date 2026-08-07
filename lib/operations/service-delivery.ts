@@ -81,6 +81,10 @@ export interface CreateSDParams {
   notes?: string
   /** Defaults to today (YYYY-MM-DD). */
   start_date?: string
+  /** Obligation due date (YYYY-MM-DD). Renewal SDs need it — a completed
+   *  renewal SD with NULL due_date can never corroborate a cycle nor render
+   *  as filed history (bug-hunter major #3). */
+  due_date?: string | null
   /** Defaults to "active". */
   status?: string
   /**
@@ -133,6 +137,9 @@ export interface CompleteSDParams {
   delivery_id: string
   actor?: string
   notes?: string
+  /** Renewal filings: the cycle year this filing is FOR (drives the
+   *  completion roll — see AdvanceStageParams.renewal_filing_for_year). */
+  renewal_filing_for_year?: number
 }
 
 // ─── Internal: stage resolution ────────────────────────
@@ -346,6 +353,7 @@ export async function createSD(
         stage_order,
         status: params.status || "active",
         start_date,
+        due_date: params.due_date ?? null,
         assigned_to: params.assigned_to || defaultTaskAssignee(),
         notes: params.notes || null,
         source_offer_token: params.source_offer_token ?? null,
@@ -694,6 +702,7 @@ export async function completeSD(
     target_stage: finalStage,
     actor: params.actor,
     notes: params.notes,
+    renewal_filing_for_year: params.renewal_filing_for_year,
   })
 }
 

@@ -4,7 +4,7 @@ import { gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
 import { MARK_LABEL_PREFIX, markFromLabelNames } from "@/lib/inbox/color-marks"
 import { decodeHtmlEntities, displayNameFromHeader } from "@/lib/inbox/email-html"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
-import { buildGmailQueryParams, toInboxView } from "@/lib/inbox/view-query"
+import { buildGmailQueryParams, toInboxView, ARCHIVED_VIEW_ID, type SearchScope } from "@/lib/inbox/view-query"
 import { allSettledBounded } from "@/lib/inbox/bounded-settled"
 
 /**
@@ -20,6 +20,8 @@ import {
   countIndexThreads,
   pageSearchThreadIds,
   countSearchThreads,
+  pageArchivedThreadIds,
+  countArchivedThreads,
   fetchThreadRows,
   groupRowsToConversations,
 } from "@/lib/email-index/query"
@@ -69,7 +71,14 @@ export async function GET(req: NextRequest) {
   try {
     const channel = req.nextUrl.searchParams.get("channel") // gmail | portal | null (all)
     const searchQuery = req.nextUrl.searchParams.get("q") // Gmail search query
+    // Search scope: INBOX-ONLY unless the "Include archived" chip is on
+    // (Antonio 2026-08-07 — archiving noise from search must make it leave).
+    const searchScope: SearchScope = req.nextUrl.searchParams.get("scope") === "all" ? "all" : "inbox"
     const labelFilter = req.nextUrl.searchParams.get("label") // Gmail label ID filter
+    /** The Archived view is INDEX-ONLY: "no message of the thread carries
+     *  INBOX" is inexpressible in a Gmail q, so there is NO live fallback —
+     *  when the index isn't ready the view says so instead of lying. */
+    const archivedView = labelFilter === ARCHIVED_VIEW_ID
     const pageToken = req.nextUrl.searchParams.get("pageToken") // Gmail pagination
     const mailbox = req.nextUrl.searchParams.get("mailbox") // support | antonio | null (support default)
     if (!(await checkMailboxAccess(mailbox))) {
@@ -111,6 +120,11 @@ export async function GET(req: NextRequest) {
     // search must never be worse than before.
     let servedFromIndex = false
     let gmailDegraded = false
+    /** search-inbox with 0 hits: how many the ALL-mail scope would find — the
+     *  "N matches in archived mail" bridge so a year-old email never reads as
+     *  nonexistent (bug-hunter, 2026-08-07). */
+    let allScopeTotal: number | null = null
+    let archivedUnavailable = false
     if (
       (!channel || channel === "gmail") &&
       searchQuery &&
@@ -125,10 +139,17 @@ export async function GET(req: NextRequest) {
           // "Load older emails") is what search should honour — the cap was
           // hiding year-old mail that is stored and instantly searchable.
           const [threadIds, total] = await Promise.all([
-            pageSearchThreadIds(mailboxKey, searchQuery, limit, pageOffset),
-            countSearchThreads(mailboxKey, searchQuery),
+            pageSearchThreadIds(mailboxKey, searchQuery, limit, pageOffset, searchScope),
+            countSearchThreads(mailboxKey, searchQuery, searchScope),
           ])
           totalConversations = total
+          if (searchScope === "inbox" && total === 0) {
+            try {
+              allScopeTotal = await countSearchThreads(mailboxKey, searchQuery, "all")
+            } catch {
+              // The bridge is a courtesy — never fail the (empty) search over it.
+            }
+          }
           const rows = await fetchThreadRows(mailboxKey, threadIds)
           const markLabelNames = new Map<string, string>()
           try {
@@ -155,6 +176,57 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // ─── Archived view (index-only, NO live fallback) ────
+    // Thread-level: no message carries INBOX, thread not trash/spam/snoozed,
+    // not pure-sent/pure-draft — the RPC owns the predicate. When the index
+    // backfill isn't done we say "unavailable" rather than render a wrong
+    // list from live Gmail (whose query language cannot express this view).
+    if ((!channel || channel === "gmail") && archivedView && !searchQuery) {
+      const mailboxKey = mailbox === "antonio" ? "antonio" : "support"
+      try {
+        if (await isBackfillDone(mailboxKey)) {
+          const gmailUser = mailboxKey === "antonio"
+            ? "antonio.durante@tonydurante.us"
+            : "support@tonydurante.us"
+          // Snoozed-label belt (the email_snoozes braces live in the RPC): a
+          // thread someone filed under "Snoozed" by hand has no snooze row but
+          // must still not read as archived. Mark labels resolved in the same
+          // call. Both cosmetic-fail-open: an error here never blanks the view.
+          const markLabelNames = new Map<string, string>()
+          const excludeLabels: string[] = []
+          try {
+            const labelsRes = (await gmailGet("/labels", {}, gmailUser)) as {
+              labels?: Array<{ id: string; name: string }>
+            }
+            for (const l of labelsRes.labels ?? []) {
+              if (l.name.startsWith(MARK_LABEL_PREFIX)) markLabelNames.set(l.id, l.name)
+              if (l.name === "Snoozed") excludeLabels.push(l.id)
+            }
+          } catch {
+            // email_snoozes exclusion inside the RPC still applies.
+          }
+          const [threadIds, total] = await Promise.all([
+            pageArchivedThreadIds(mailboxKey, limit, pageOffset, excludeLabels),
+            countArchivedThreads(mailboxKey, excludeLabels),
+          ])
+          totalConversations = total
+          const rows = await fetchThreadRows(mailboxKey, threadIds)
+          const emailLookup = await emailLookupPromise
+          conversations.push(
+            ...groupRowsToConversations(rows, { markLabelNames, emailLookup })
+          )
+          servedFromIndex = true
+        } else {
+          archivedUnavailable = true
+          servedFromIndex = true // NEVER fall through to live Gmail for this view
+        }
+      } catch (err) {
+        console.warn("[inbox] archived view failed:", err)
+        archivedUnavailable = true
+        servedFromIndex = true
+      }
+    }
+
     // ─── Browse from our own index (no search) ───────────
     // The plain folder view (Inbox / Sent / a user label) is served from the
     // index instead of ~300 LIVE Gmail thread fetches per page. That fan-out is
@@ -168,7 +240,8 @@ export async function GET(req: NextRequest) {
       (!channel || channel === "gmail") &&
       !searchQuery &&
       !pageToken &&
-      !servedFromIndex
+      !servedFromIndex &&
+      !archivedView
     ) {
       const mailboxKey = mailbox === "antonio" ? "antonio" : "support"
       try {
@@ -196,9 +269,14 @@ export async function GET(req: NextRequest) {
               // Color marks are cosmetic — never fail the list over them
             }
             const emailLookup = await emailLookupPromise
-            conversations.push(
-              ...groupRowsToConversations(rows, { markLabelNames, emailLookup })
-            )
+            // The RPC's order is the VIEW's order — pinned (starred) first,
+            // then newest (dev job 76b521ea). groupRowsToConversations re-sorts
+            // chronologically (right for search/archived, wrong here), so
+            // restore the RPC's thread order after grouping.
+            const rpcOrder = new Map(threadIds.map((t, i) => [`gmail:${t}`, i]))
+            const grouped = groupRowsToConversations(rows, { markLabelNames, emailLookup })
+              .sort((a, b) => (rpcOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rpcOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER))
+            conversations.push(...grouped)
             servedFromIndex = true
           }
         }
@@ -208,7 +286,9 @@ export async function GET(req: NextRequest) {
     }
 
     // ─── Gmail threads ──────────────────────────────────
-    if ((!channel || channel === "gmail") && !servedFromIndex) {
+    // `!archivedView` is load-bearing: the Archived view must NEVER fall back
+    // to live Gmail — no expressible query exists, so any fallback list lies.
+    if ((!channel || channel === "gmail") && !servedFromIndex && !archivedView) {
       try {
         // Gmail threads API returns max ~100 per page. How many pages we walk is
         // driven by the caller's `limit`, so the list can reach FURTHER BACK than
@@ -232,7 +312,7 @@ export async function GET(req: NextRequest) {
         // Label beats search — `toInboxView` encodes that precedence.
         Object.assign(
           gmailParams,
-          buildGmailQueryParams(toInboxView({ label: labelFilter, search: searchQuery }))
+          buildGmailQueryParams(toInboxView({ label: labelFilter, search: searchQuery, searchScope }))
         )
 
         // Pagination
@@ -481,6 +561,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       conversations: conversations.slice(0, limit),
       total: conversations.length,
+      // search-inbox with 0 hits: matches the ALL scope would find (the
+      // "N matches in archived mail — include them" bridge). null otherwise.
+      allScopeTotal,
+      // Archived view only: the index isn't ready, so the view is explicitly
+      // unavailable — the UI must say so, never render an empty "no archived
+      // mail" that is actually "index not built".
+      archivedUnavailable,
       // Real pagination (index-served views only): which page this is, how many
       // conversations exist in total, and therefore how many pages. Absent on
       // the live-Gmail fallback, where a true total isn't knowable.

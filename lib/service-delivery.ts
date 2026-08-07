@@ -61,6 +61,13 @@ export interface AdvanceStageParams {
    * type (the Covelli/DoctorGut case). Ignored for other transitions.
    */
   entity_type?: "SMLLC" | "MMLLC"
+  /**
+   * The cycle year a renewal filing is FOR (Mark Filed dialog). Drives the
+   * completion roll: the record moves to the anniversary in year+1
+   * (computeRollForward). Absent → defaults to the current year. Ignored for
+   * non-renewal service types.
+   */
+  renewal_filing_for_year?: number
 }
 
 export interface AdvanceStageResult {
@@ -558,29 +565,84 @@ export async function advanceServiceDelivery(
     }
   }
 
-  // 10. RA Renewal — update ra_renewal_date +1 year on completion
-  if (delivery.service_type === "State RA Renewal" && isCompleted && delivery.account_id) {
+  // 10+11. RA Renewal / Annual Report — roll the account date forward on
+  // completion. ONE shared block (plan 89c951a7) with filed-year semantics:
+  // a filing FOR year N moves the record to the anniversary in N+1
+  // (computeRollForward). NEVER the old blind stored+1yr — that skipped owed
+  // years, and marking an ancient stuck record filed once used to "absorb"
+  // every missed cycle in a single jump. Errors are SURFACED into
+  // auto_triggers (the old dbWriteSafe result was silently discarded — the
+  // prime suspect for records that never rolled), and the write is CHECKED
+  // (.eq on the value we read) so a concurrent repair can never double-roll.
+  if (
+    (delivery.service_type === "State RA Renewal" || delivery.service_type === "State Annual Report") &&
+    isCompleted &&
+    delivery.account_id
+  ) {
+    const isRA = delivery.service_type === "State RA Renewal"
+    const column = isRA ? "ra_renewal_date" : "annual_report_due_date"
+    const label = isRA ? "RA renewal" : "Annual report"
     try {
+      const { computeRollForward, mirrorDeadlineDate } = await import("@/lib/operations/renewal-dates")
       const { data: acct } = await supabaseAdmin
         .from("accounts")
-        .select("ra_renewal_date")
+        .select("ra_renewal_date, annual_report_due_date, state_of_formation")
         .eq("id", delivery.account_id)
         .single()
+      const stored = isRA ? acct?.ra_renewal_date : acct?.annual_report_due_date
 
-      if (acct?.ra_renewal_date) {
-        const currentDate = new Date(acct.ra_renewal_date)
-        currentDate.setFullYear(currentDate.getFullYear() + 1)
-        const newDate = currentDate.toISOString().split("T")[0]
-
-        await dbWriteSafe(
-          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-          supabaseAdmin
-            .from("accounts")
-            .update({ ra_renewal_date: newDate, updated_at: new Date().toISOString() })
-            .eq("id", delivery.account_id),
-          "accounts.update"
+      if (!stored) {
+        autoTriggers.push(`${label} date NOT rolled: account has no ${column} — fix the record (calendar problems rail)`)
+      } else {
+        // Filing-for year precedence: explicit from the caller (Mark Filed
+        // dialog) → the SD's OWN cycle year (the cron stamps due_date with
+        // the account date, so completing that SD means filing FOR that
+        // cycle) → only then the completion year. Defaulting to "today's
+        // year" alone was a council blocker: a December cycle completed in
+        // January over-rolled the record a full year (2026-12-15 done
+        // 2027-01 → 2028), and completing a stale cron SD absorbed owed
+        // years — both silent-green failures this project exists to kill.
+        const { resolveFilingForYear } = await import("@/lib/operations/renewal-dates")
+        const filingForYear = resolveFilingForYear(
+          params.renewal_filing_for_year,
+          delivery.due_date,
+          new Date().getFullYear(),
         )
-        autoTriggers.push(`RA renewal date updated: ${acct.ra_renewal_date} → ${newDate}`)
+        const decision = computeRollForward(stored, filingForYear)
+        if (decision.action === "already_current") {
+          autoTriggers.push(`${label} date already current (${stored}) for a ${filingForYear} filing — not moved`)
+        } else {
+          const { data: rolled, error: rollErr } = await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+            supabaseAdmin
+              .from("accounts")
+              .update({ [column]: decision.next, updated_at: new Date().toISOString() })
+              .eq("id", delivery.account_id)
+              .eq(column, stored)
+              .select("id"),
+            "accounts.update"
+          )
+          if (rollErr) {
+            autoTriggers.push(`${label} date roll FAILED: ${rollErr} — record still shows ${stored}`)
+          } else if (!rolled?.length) {
+            autoTriggers.push(`${label} date roll skipped: record changed concurrently (was ${stored})`)
+          } else {
+            autoTriggers.push(`${label} date updated: ${stored} → ${decision.next} (filing for ${filingForYear})`)
+            // Ensure a NEW-cycle deadlines row exists for the portal reader.
+            // Exact-year match only — never steals the OLD cycle's year-NULL
+            // legacy row, which file-renewal completes right after this.
+            try {
+              await mirrorDeadlineDate(
+                delivery.account_id,
+                isRA ? "RA Renewal" : "Annual Report",
+                decision.next,
+                { state: acct?.state_of_formation, note: `Rolled on SD completion (${actor})`, includeNullYear: false },
+              )
+            } catch {
+              // mirror is best-effort; the account date above is the truth
+            }
+          }
+        }
       }
 
       // Close related open tasks
@@ -596,63 +658,14 @@ export async function advanceServiceDelivery(
           delivery_id,
           status_in: ["To Do", "In Progress"],
           patch: { status: "Done" },
-          actor: "system:sd-ra-renewal-complete",
-          summary: `Auto-closed ${openTasks.length} task(s) for RA Renewal completion`,
+          actor: isRA ? "system:sd-ra-renewal-complete" : "system:sd-annual-report-complete",
+          summary: `Auto-closed ${openTasks.length} task(s) for ${isRA ? "RA Renewal" : "Annual Report"} completion`,
           account_id: delivery.account_id ?? undefined,
         })
         autoTriggers.push(`Closed ${openTasks.length} related task(s)`)
       }
-    } catch (raErr) {
-      autoTriggers.push(`RA renewal auto-update failed: ${raErr instanceof Error ? raErr.message : String(raErr)}`)
-    }
-  }
-
-  // 11. Annual Report — update annual_report_due_date +1 year on completion
-  if (delivery.service_type === "State Annual Report" && isCompleted && delivery.account_id) {
-    try {
-      const { data: acct } = await supabaseAdmin
-        .from("accounts")
-        .select("annual_report_due_date")
-        .eq("id", delivery.account_id)
-        .single()
-
-      if (acct?.annual_report_due_date) {
-        const currentDate = new Date(acct.annual_report_due_date)
-        currentDate.setFullYear(currentDate.getFullYear() + 1)
-        const newDate = currentDate.toISOString().split("T")[0]
-
-        await dbWriteSafe(
-          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-          supabaseAdmin
-            .from("accounts")
-            .update({ annual_report_due_date: newDate, updated_at: new Date().toISOString() })
-            .eq("id", delivery.account_id),
-          "accounts.update"
-        )
-        autoTriggers.push(`Annual report due date updated: ${acct.annual_report_due_date} → ${newDate}`)
-      }
-
-      // Close related open tasks
-      const { data: arTasks } = await supabaseAdmin
-        .from("tasks")
-        .select("id")
-        .eq("delivery_id", delivery_id)
-        .in("status", ["To Do", "In Progress"])
-
-      if (arTasks?.length) {
-        const { updateTasksBulk } = await import("@/lib/operations/task")
-        await updateTasksBulk({
-          delivery_id,
-          status_in: ["To Do", "In Progress"],
-          patch: { status: "Done" },
-          actor: "system:sd-annual-report-complete",
-          summary: `Auto-closed ${arTasks.length} task(s) for Annual Report completion`,
-          account_id: delivery.account_id ?? undefined,
-        })
-        autoTriggers.push(`Closed ${arTasks.length} related task(s)`)
-      }
-    } catch (arErr) {
-      autoTriggers.push(`Annual report auto-update failed: ${arErr instanceof Error ? arErr.message : String(arErr)}`)
+    } catch (rollCatch) {
+      autoTriggers.push(`${label} auto-update failed: ${rollCatch instanceof Error ? rollCatch.message : String(rollCatch)}`)
     }
   }
 

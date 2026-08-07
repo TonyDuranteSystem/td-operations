@@ -22,6 +22,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { ensureDrivePath, uploadBinaryToDriveUpsert } from "@/lib/google-drive"
 import { completeSD, createSD } from "@/lib/operations/service-delivery"
+import { anniversaryForYear } from "@/lib/operations/renewal-dates"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { safeAction, type ActionResult } from "@/lib/server-action"
 import { PORTAL_BASE_URL } from "@/lib/config"
@@ -35,6 +36,11 @@ export interface FileRenewalParams {
   kind: RenewalKind
   /** ISO date string YYYY-MM-DD. */
   filed_date: string
+  /** The cycle year this filing is FOR (Mark Filed dialog). Defaults to the
+   *  filed_date's year; differs for early/late filings (a January filing for
+   *  last year's report). Drives the receipt filename, the deadlines sync,
+   *  the notification, and the completion roll (filed-year+1 semantics). */
+  filing_for_year?: number | null
   receipt: {
     /** Original upload name — used only for audit; written file uses SOP filename. */
     file_name: string
@@ -139,12 +145,10 @@ export async function fileRenewal(
 ): Promise<ActionResult<FileRenewalResult>> {
   return safeAction<FileRenewalResult>(
     async () => {
-      const year = yearFromFiledDate(params.filed_date)
-
       // 1. Load account
       const { data: account, error: acctErr } = await supabaseAdmin
         .from("accounts")
-        .select("id, company_name, state_of_formation, drive_folder_id, portal_tier, notes")
+        .select("id, company_name, state_of_formation, drive_folder_id, portal_tier, notes, ra_renewal_date, annual_report_due_date")
         .eq("id", params.account_id)
         .maybeSingle()
       if (acctErr || !account) {
@@ -152,6 +156,27 @@ export async function fileRenewal(
           `Account ${params.account_id} not found: ${acctErr?.message ?? "unknown"}`,
         )
       }
+
+      // Cycle year precedence: explicit staff choice (calendar dialog) → the
+      // obligation's OWN stored cycle year → the filed date's year only when
+      // the record has no date at all. Deriving from filed_date alone was a
+      // council BLOCKER: the To-Do card's Mark Done sends no year, so a
+      // December cycle recorded in January became "filed for" the new year —
+      // the roll skipped a compliance year and the receipt/notes/notification
+      // all mislabeled the filing.
+      const storedDate =
+        params.kind === "ra" ? account.ra_renewal_date : account.annual_report_due_date
+      const year =
+        params.filing_for_year ??
+        (storedDate
+          ? parseInt(String(storedDate).slice(0, 4), 10)
+          : yearFromFiledDate(params.filed_date))
+      // The cycle's canonical due date — stamped on the SD (created OR
+      // pre-existing) so corroboration and filed history attribute the
+      // completion to the cycle actually filed, never to a later cycle's SD
+      // (senior-engineer blocker: filing an old year through the next
+      // cycle's cron SD used to leave that SD corroborating the NEXT cycle).
+      const cycleDueDate = storedDate ? anniversaryForYear(storedDate, year) : params.filed_date
       if (!account.drive_folder_id) {
         throw new Error(
           `Account "${account.company_name}" has no Drive folder — cannot save receipt.`,
@@ -202,23 +227,48 @@ export async function fileRenewal(
       // (lib/service-delivery.ts:270-341).
       let deliveryId = params.delivery_id
       if (!deliveryId) {
+        // The created SD carries the CYCLE's due date: a completed renewal
+        // SD with NULL due_date never corroborates the cycle and never
+        // renders as filed history (bug-hunter major #3).
         const sd = await createSD({
           service_type: SERVICE_TYPE_BY_KIND[params.kind],
           account_id: account.id,
           assigned_to: "Antonio",
           notes: `Filed via Calendar Mark Filed on ${params.filed_date}`,
           status: "active",
+          due_date: cycleDueDate,
         })
         deliveryId = sd.id
+      } else if (storedDate) {
+        // Pre-existing SD (usually the cron's, stamped with the CURRENT
+        // account date): re-stamp it to the cycle actually being filed, so
+        // filing an older owed year through it cannot leave a completed SD
+        // "corroborating" a later cycle that was never filed — the
+        // laundering path the corroboration window exists to block
+        // (senior-engineer blocker, council 2026-08-06).
+        await supabaseAdmin
+          .from("service_deliveries")
+          .update({ due_date: cycleDueDate, updated_at: new Date().toISOString() })
+          .eq("id", deliveryId)
       }
 
       const completion = await completeSD({
         delivery_id: deliveryId,
         actor: "dashboard:calendar",
         notes: `Filed ${params.filed_date} — receipt: ${driveLink}`,
+        renewal_filing_for_year: year,
       })
       if (!completion.success) {
         throw new Error(`completeSD failed: ${completion.error ?? "unknown"}`)
+      }
+      // The completion can succeed while the date roll inside it failed or
+      // was skipped (reported only via auto_triggers) — surface it so the
+      // stale record doesn't reappear silently on the next rail load.
+      const rollProblem = (completion.auto_triggers || []).find(
+        t => t.includes("roll FAILED") || t.includes("roll skipped") || t.includes("NOT rolled"),
+      )
+      if (rollProblem) {
+        console.error(`fileRenewal: completion succeeded but the date roll did not: ${rollProblem}`)
       }
 
       // 6. Sync legacy deadlines row → Filed (best-effort, no-op if no row).
@@ -247,7 +297,7 @@ export async function fileRenewal(
           .eq("account_id", account.id)
           .eq("deadline_type", DEADLINE_TYPE_BY_KIND[params.kind])
           .is("year", null)
-          .in("status", ["Pending", "Not Started"])
+          .in("status", ["Pending", "Not Started", "Overdue"])
       }
 
       // 7. Append accounts.notes entry (CRM Update Rule)

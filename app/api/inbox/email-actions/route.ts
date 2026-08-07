@@ -6,6 +6,8 @@ import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { SNOOZE_LABEL_NAME, isValidSnoozeUntil } from "@/lib/inbox/email-snooze"
 import { resolveMailbox } from "@/lib/inbox/mailbox"
+import { allSettledBounded } from "@/lib/inbox/bounded-settled"
+import { reindexThreadsAfterAction } from "@/lib/email-index/sync"
 import {
   captureRestorableLabels,
   sanitizeRestorePayload,
@@ -240,6 +242,11 @@ export async function POST(req: NextRequest) {
     }
 
     const asUser = resolveMailbox(mailbox)
+    /** Key for our own email index ('support' | 'antonio'). Every label
+     *  mutation below re-indexes its thread(s) through this key so the
+     *  index-served list reflects the action immediately (write-through via
+     *  the one writer — council 2026-08-07). */
+    const mailboxKey: "support" | "antonio" = mailbox === "antonio" ? "antonio" : "support"
 
     // Bulk operations
     if (bulk && threadIds?.length) {
@@ -251,8 +258,11 @@ export async function POST(req: NextRequest) {
         ? (restore as Record<string, unknown>)
         : {}
 
-      const results = await Promise.allSettled(
-        threadIds.map(async (tid) => {
+      // BOUNDED fan-out (council blocker, 2026-08-07): a select-all archive of a
+      // full page used to fire one simultaneous Gmail call per thread — the
+      // 2026-08-02 self-rate-limit incident's exact shape, rebuilt behind a new
+      // button. Ceiling matches the conversations route's cap.
+      const results = await allSettledBounded(threadIds, 10, async (tid) => {
           if (action === 'trash') {
             bulkRestore[tid] = await snapshotBeforeTrash(tid, asUser)
             await gmailPost(`/threads/${tid}/modify`, {
@@ -283,8 +293,7 @@ export async function POST(req: NextRequest) {
             // have reported success while doing nothing (council 2026-07-28).
             throw new Error(`Unsupported bulk action: ${action}`)
           }
-        })
-      )
+      })
       const succeeded = results.filter(r => r.status === 'fulfilled').length
       const failed = results.filter(r => r.status === 'rejected').length
       // WHICH ones failed, not just how many. `allSettled` knows the identity and
@@ -296,6 +305,11 @@ export async function POST(req: NextRequest) {
       results.forEach((r, i) => {
         if (r.status === 'rejected') console.warn(`[bulk ${action}] ${threadIds[i]} failed`, r.reason)
       })
+      // Write-through: refresh our index for the threads Gmail ACTUALLY changed
+      // — never the refused ones (re-indexing a failed archive as archived would
+      // falsify the row with no push event to ever correct it).
+      const fulfilledIds = threadIds.filter((_, i) => results[i].status === 'fulfilled')
+      await reindexThreadsAfterAction(mailboxKey, fulfilledIds)
       return NextResponse.json({
         success: true,
         action,
@@ -317,6 +331,7 @@ export async function POST(req: NextRequest) {
     switch (action) {
       case "archive": {
         await gmailPost(`/threads/${threadId}/modify`, { removeLabelIds: ["INBOX"] }, asUser)
+        await reindexThreadsAfterAction(mailboxKey, [threadId])
         return NextResponse.json({ success: true, action: "archived" })
       }
 
@@ -327,6 +342,7 @@ export async function POST(req: NextRequest) {
             gmailPost(`/messages/${m.id}/modify`, { addLabelIds: ["STARRED"] }, asUser)
           )
         )
+        await reindexThreadsAfterAction(mailboxKey, [threadId])
         return NextResponse.json({ success: true, action: "starred" })
       }
 
@@ -337,6 +353,7 @@ export async function POST(req: NextRequest) {
             gmailPost(`/messages/${m.id}/modify`, { removeLabelIds: ["STARRED"] }, asUser)
           )
         )
+        await reindexThreadsAfterAction(mailboxKey, [threadId])
         return NextResponse.json({ success: true, action: "unstarred" })
       }
 
@@ -354,6 +371,7 @@ export async function POST(req: NextRequest) {
 
         // Our copy joins the bin (Gmail side is done; ours is a separate store).
         await binOurCopy(mailbox, [threadId], "delete")
+        await reindexThreadsAfterAction(mailboxKey, [threadId])
 
         // Step 2: Verify by fetching the thread and checking labels
         let verified = false
@@ -401,6 +419,7 @@ export async function POST(req: NextRequest) {
         }
         const filed = await untrashThread(threadId, asUser, sanitizeRestorePayload(restore), destLabelId)
         await binOurCopy(mailbox, [threadId], "restore")
+        await reindexThreadsAfterAction(mailboxKey, [threadId])
         // Report where it ACTUALLY landed — not where we were asked to put it.
         return NextResponse.json({ success: true, action: "untrashed", filedTo: filed.filedTo })
       }
@@ -468,6 +487,7 @@ export async function POST(req: NextRequest) {
             gmailPost(`/messages/${m.id}/modify`, { removeLabelIds: ["UNREAD"] }, asUser)
           )
         )
+        await reindexThreadsAfterAction(mailboxKey, [threadId])
         return NextResponse.json({ success: true, action: "marked_read" })
       }
 
@@ -478,6 +498,7 @@ export async function POST(req: NextRequest) {
             gmailPost(`/messages/${m.id}/modify`, { addLabelIds: ["UNREAD"] }, asUser)
           )
         )
+        await reindexThreadsAfterAction(mailboxKey, [threadId])
         return NextResponse.json({ success: true, action: "marked_unread" })
       }
 
@@ -486,6 +507,7 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: "labelId is required" }, { status: 400 })
         }
         await gmailPost(`/threads/${threadId}/modify`, { addLabelIds: [labelId] }, asUser)
+        await reindexThreadsAfterAction(mailboxKey, [threadId])
         return NextResponse.json({ success: true, action: "labeled" })
       }
 
@@ -544,6 +566,7 @@ export async function POST(req: NextRequest) {
             { status: 502 }
           )
         }
+        await reindexThreadsAfterAction(mailboxKey, [threadId])
         return NextResponse.json({ success: true, action: "snoozed", snoozeUntil })
       }
 
@@ -561,6 +584,7 @@ export async function POST(req: NextRequest) {
           .delete()
           .eq("mailbox", mailbox === "antonio" ? "antonio" : "support")
           .eq("thread_id", threadId)
+        await reindexThreadsAfterAction(mailboxKey, [threadId])
         return NextResponse.json({ success: true, action: "unsnoozed" })
       }
 
@@ -607,6 +631,7 @@ export async function POST(req: NextRequest) {
           ...(removeIds.length > 0 ? { removeLabelIds: removeIds } : {}),
         }, asUser)
 
+        await reindexThreadsAfterAction(mailboxKey, [threadId])
         return NextResponse.json({ success: true, action: "color_set", color: color ?? null })
       }
 

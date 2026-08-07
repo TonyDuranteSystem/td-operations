@@ -1,6 +1,10 @@
 import { createClient } from '@/lib/supabase/server'
 import { AnnualCalendar } from '@/components/calendar/annual-calendar'
+import { ProblemsRail } from '@/components/calendar/problems-rail'
 import { resolveDriveFolderUrl } from '@/lib/drive-folder-url'
+import { loadRenewalStatuses } from '@/lib/operations/renewal-status-loader'
+import { proposeRenewalFixes, type RenewalFixProposal } from '@/lib/operations/renewal-problem-proposals'
+import type { ObligationStatus, ObligationVerdict } from '@/lib/operations/renewal-status'
 
 export type RenewalKind = 'ra' | 'ar'
 export type RenewalStatus = 'upcoming' | 'active' | 'blocked' | 'completed' | 'filed' | 'offboarding'
@@ -21,6 +25,9 @@ export interface RenewalRow {
   ra_county: string | null
   drive_folder_url: string | null
   has_offboarding: boolean
+  /** The status engine's verdict for this obligation (single source of truth). */
+  engine_status?: ObligationStatus
+  engine_cause?: string
 }
 
 /** Informational row — Tax Return / Payment. Not clickable. */
@@ -55,6 +62,12 @@ function formatAddressLine(addr: RawAddress | null): string | null {
   return parts.length ? parts.join(', ') : null
 }
 
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
+
 export default async function CalendarPage({
   searchParams,
 }: {
@@ -66,43 +79,28 @@ export default async function CalendarPage({
   const yearStart = `${year}-01-01`
   const yearEnd = `${year}-12-31`
 
-  // ─── 1. Active Client accounts with renewal dates in this year ─────
-  // Source of truth = accounts.ra_renewal_date / annual_report_due_date.
-  // After completion, lib/service-delivery.ts:270-341 rolls these +1y, so
-  // completed renewals naturally fall out of this query for the next year.
-  const { data: accountsForRenewals } = await supabase
-    .from('accounts')
-    .select(`
-      id,
-      company_name,
-      state_of_formation,
-      ra_renewal_date,
-      annual_report_due_date,
-      registered_agent_id,
-      registered_agent_provider,
-      registered_agent_address,
-      gdrive_folder_url,
-      drive_folder_id,
-      portal_tier
-    `)
-    .eq('status', 'Active')
-    .eq('account_type', 'Client')
-    .or(
-      `and(ra_renewal_date.gte.${yearStart},ra_renewal_date.lte.${yearEnd}),and(annual_report_due_date.gte.${yearStart},annual_report_due_date.lte.${yearEnd})`
-    )
+  // ─── 1. FULL roster + status engine (plan 89c951a7) ────────────────
+  // Every active company is loaded and judged — the year window below only
+  // decides where a dated row lands on the grid. Problems are computed from
+  // the engine verdicts and shown in the rail REGARDLESS of the viewed year,
+  // so a company with a stale 2025 date can never vanish from sight again.
+  const loaded = await loadRenewalStatuses(supabase, { today })
+  const onCalendar = loaded.filter(l => l.status.onCalendar)
 
-  const accountIds = (accountsForRenewals ?? []).map(a => a.id)
+  const proposals: RenewalFixProposal[] = onCalendar.flatMap(l =>
+    proposeRenewalFixes(l, { today }),
+  )
 
-  // ─── 2. RA address registry rows for those accounts ────────────────
-  const raAddressIds = (accountsForRenewals ?? [])
-    .map(a => a.registered_agent_id)
-    .filter((id): id is string => id !== null)
+  // ─── 2. RA address registry rows (chunked — full roster of ids) ────
+  const raAddressIds = Array.from(new Set(
+    onCalendar.map(l => l.account.registered_agent_id).filter((id): id is string => id !== null),
+  ))
   const raAddressMap = new Map<string, RawAddress>()
-  if (raAddressIds.length > 0) {
+  for (const ids of chunk(raAddressIds, 100)) {
     const { data: addrs } = await supabase
       .from('addresses')
       .select('id, provider, agent_name, address_line1, address_line2, city, state, zip, county')
-      .in('id', raAddressIds)
+      .in('id', ids)
     for (const a of addrs ?? []) {
       raAddressMap.set(a.id, {
         provider: a.provider,
@@ -117,24 +115,12 @@ export default async function CalendarPage({
     }
   }
 
-  // ─── 3. SDs for renewals (active/blocked) — gives us delivery_id + stage ─
-  const sdMap = new Map<string, { id: string; service_type: string; status: string; stage: string | null }>()
-  if (accountIds.length > 0) {
-    const { data: sds } = await supabase
-      .from('service_deliveries')
-      .select('id, account_id, service_type, status, stage, due_date')
-      .in('account_id', accountIds)
-      .in('service_type', ['State RA Renewal', 'State Annual Report'])
-      .in('status', ['active', 'blocked'])
-    for (const sd of sds ?? []) {
-      const key = `${sd.account_id}:${sd.service_type}`
-      sdMap.set(key, { id: sd.id, service_type: sd.service_type, status: sd.status, stage: sd.stage })
-    }
-  }
-
-  // ─── 4. Completed SDs in this year — show as 🟢 filed history ──────
+  // ─── 3. Completed SDs in this year — 🟢 filed history ──────────────
+  // Paged (silent 1000-row cap), and filtered to the same roster rules as
+  // the rest of the calendar: One-Time / test / internal never render here
+  // either (ruling b — a QA Mark-Filed run must not paint a green row).
   const filedSDs: { account_id: string; service_type: string; due_date: string }[] = []
-  {
+  for (let from = 0; ; from += 1000) {
     const { data: completed } = await supabase
       .from('service_deliveries')
       .select('id, account_id, service_type, status, due_date')
@@ -142,21 +128,25 @@ export default async function CalendarPage({
       .eq('status', 'completed')
       .gte('due_date', yearStart)
       .lte('due_date', yearEnd)
+      .order('id')
+      .range(from, from + 999)
     for (const sd of completed ?? []) {
       if (sd.account_id) {
         filedSDs.push({ account_id: sd.account_id, service_type: sd.service_type, due_date: sd.due_date! })
       }
     }
+    if ((completed ?? []).length < 1000) break
   }
-  // Need company names for filed SDs whose accounts aren't already loaded
-  const filedAccountIds = Array.from(new Set(filedSDs.map(s => s.account_id).filter(id => !accountIds.includes(id))))
+  const loadedById = new Map(loaded.map(l => [l.account.id, l]))
+  const filedAccountIds = Array.from(new Set(filedSDs.map(s => s.account_id).filter(id => !loadedById.has(id))))
   const filedAccountMap: Record<string, { company_name: string; state_of_formation: string | null; drive_folder_url: string | null }> = {}
-  if (filedAccountIds.length > 0) {
+  for (const ids of chunk(filedAccountIds, 100)) {
     const { data: extra } = await supabase
       .from('accounts')
-      .select('id, company_name, state_of_formation, gdrive_folder_url, drive_folder_id')
-      .in('id', filedAccountIds)
+      .select('id, company_name, state_of_formation, gdrive_folder_url, drive_folder_id, account_type, is_test, is_internal')
+      .in('id', ids)
     for (const a of extra ?? []) {
+      if (a.is_test || a.is_internal || a.account_type === 'One-Time') continue
       filedAccountMap[a.id] = {
         company_name: a.company_name,
         state_of_formation: a.state_of_formation,
@@ -164,52 +154,52 @@ export default async function CalendarPage({
       }
     }
   }
+  // Roster rule for filed rows: on-calendar loader accounts, or (for
+  // no-longer-active accounts) the non-test non-One-Time survivors above.
+  const visibleFiledSDs = filedSDs.filter(f => {
+    const l = loadedById.get(f.account_id)
+    if (l) return l.status.onCalendar
+    return !!filedAccountMap[f.account_id]
+  })
 
-  // ─── 5. Closure / Offboarding flag per account ─────────────────────
-  const offboardingAccounts = new Set<string>()
-  if (accountIds.length > 0) {
-    const { data: closures } = await supabase
-      .from('service_deliveries')
-      .select('account_id')
-      .in('account_id', accountIds)
-      .in('service_type', ['Company Closure', 'Client Offboarding'])
-      .eq('status', 'active')
-    for (const sd of closures ?? []) {
-      if (sd.account_id) offboardingAccounts.add(sd.account_id)
-    }
-  }
-
-  // ─── 6. Build renewal rows from accounts ───────────────────────────
-  // Provider/agent/address resolution prefers the structured FK
-  // (accounts.registered_agent_id → addresses), falls back to the legacy
-  // free-text columns (registered_agent_provider / registered_agent_address)
-  // for accounts not yet migrated to the RA picker. Sandbox 2026-05-06:
-  // 242/243 active Clients still use legacy text columns.
+  // ─── 4. Grid rows from engine verdicts ─────────────────────────────
   const renewalRows: RenewalRow[] = []
-  for (const a of accountsForRenewals ?? []) {
+  for (const l of onCalendar) {
+    const a = l.account
     const addr = a.registered_agent_id ? raAddressMap.get(a.registered_agent_id) ?? null : null
     const provider = addr?.provider ?? a.registered_agent_provider ?? null
     const agent_name = addr?.agent_name ?? null  // legacy text columns don't separate agent from address
     const ra_address_line = formatAddressLine(addr) ?? a.registered_agent_address ?? null
     const ra_county = addr?.county ?? null
-    const has_offboarding = offboardingAccounts.has(a.id)
+    const has_offboarding = l.status.closing
 
-    // RA row (if date in year)
-    if (a.ra_renewal_date && a.ra_renewal_date >= yearStart && a.ra_renewal_date <= yearEnd) {
-      const sd = sdMap.get(`${a.id}:State RA Renewal`)
+    const obligations: Array<{ kind: RenewalKind; verdict: ObligationVerdict; sdType: string }> = [
+      { kind: 'ra', verdict: l.status.ra, sdType: 'State RA Renewal' },
+      { kind: 'ar', verdict: l.status.annualReport, sdType: 'State Annual Report' },
+    ]
+    for (const { kind, verdict, sdType } of obligations) {
+      if (verdict.status === 'not_applicable') continue
+      if (!verdict.date) continue // missing dates live in the problems rail
+      if (verdict.date < yearStart || verdict.date > yearEnd) continue
+      const sd = l.renewalSDs.find(s => s.service_type === sdType && (s.status === 'active' || s.status === 'blocked'))
+      // Status comes from the LIVE engine verdict only. The stored SD
+      // 'blocked' stamp is deliberately ignored — it goes stale when the
+      // client pays (nothing flips it back) and would lock Mark Filed
+      // forever (bug-hunter major #2). A blocked SD with clean payments
+      // renders as a normal working row.
       const status: RenewalStatus = has_offboarding
         ? 'offboarding'
-        : sd?.status === 'blocked'
+        : verdict.status === 'on_hold_unpaid'
           ? 'blocked'
-          : sd?.status === 'active'
+          : sd
             ? 'active'
             : 'upcoming'
       renewalRows.push({
-        kind: 'ra',
+        kind,
         account_id: a.id,
         company_name: a.company_name,
         state_of_formation: a.state_of_formation,
-        due_date: a.ra_renewal_date,
+        due_date: verdict.date,
         status,
         delivery_id: sd?.id ?? null,
         provider,
@@ -218,50 +208,21 @@ export default async function CalendarPage({
         ra_county,
         drive_folder_url: resolveDriveFolderUrl(a.gdrive_folder_url, a.drive_folder_id),
         has_offboarding,
-      })
-    }
-    // AR row (if date in year and state is not NM)
-    if (
-      a.annual_report_due_date &&
-      a.annual_report_due_date >= yearStart &&
-      a.annual_report_due_date <= yearEnd &&
-      a.state_of_formation !== 'New Mexico'
-    ) {
-      const sd = sdMap.get(`${a.id}:State Annual Report`)
-      const status: RenewalStatus = has_offboarding
-        ? 'offboarding'
-        : sd?.status === 'blocked'
-          ? 'blocked'
-          : sd?.status === 'active'
-            ? 'active'
-            : 'upcoming'
-      renewalRows.push({
-        kind: 'ar',
-        account_id: a.id,
-        company_name: a.company_name,
-        state_of_formation: a.state_of_formation,
-        due_date: a.annual_report_due_date,
-        status,
-        delivery_id: sd?.id ?? null,
-        provider,
-        agent_name,
-        ra_address_line,
-        ra_county,
-        drive_folder_url: resolveDriveFolderUrl(a.gdrive_folder_url, a.drive_folder_id),
-        has_offboarding,
+        engine_status: verdict.status,
+        engine_cause: verdict.cause,
       })
     }
   }
 
-  // ─── 7. Add filed-history rows ─────────────────────────────────────
-  for (const f of filedSDs) {
-    const accountFromMain = (accountsForRenewals ?? []).find(a => a.id === f.account_id)
-    const accountFromExtra = filedAccountMap[f.account_id]
-    const company_name = accountFromMain?.company_name ?? accountFromExtra?.company_name ?? '—'
-    const state_of_formation = accountFromMain?.state_of_formation ?? accountFromExtra?.state_of_formation ?? null
-    const drive_folder_url = accountFromMain
-      ? resolveDriveFolderUrl(accountFromMain.gdrive_folder_url, accountFromMain.drive_folder_id)
-      : accountFromExtra?.drive_folder_url ?? null
+  // ─── 5. Filed-history rows ─────────────────────────────────────────
+  for (const f of visibleFiledSDs) {
+    const fromLoader = loadedById.get(f.account_id)
+    const fromExtra = filedAccountMap[f.account_id]
+    const company_name = fromLoader?.account.company_name ?? fromExtra?.company_name ?? '—'
+    const state_of_formation = fromLoader?.account.state_of_formation ?? fromExtra?.state_of_formation ?? null
+    const drive_folder_url = fromLoader
+      ? resolveDriveFolderUrl(fromLoader.account.gdrive_folder_url, fromLoader.account.drive_folder_id)
+      : fromExtra?.drive_folder_url ?? null
     renewalRows.push({
       kind: f.service_type === 'State RA Renewal' ? 'ra' : 'ar',
       account_id: f.account_id,
@@ -279,7 +240,7 @@ export default async function CalendarPage({
     })
   }
 
-  // ─── 8. Tax + payment rows (existing functionality, unchanged) ─────
+  // ─── 6. Tax + payment rows (unchanged) ─────────────────────────────
   const [taxResult, paymentResult] = await Promise.all([
     supabase
       .from('tax_returns')
@@ -298,11 +259,11 @@ export default async function CalendarPage({
     (paymentResult.data ?? []).filter(p => p.account_id).map(p => p.account_id as string),
   ))
   const accountNameMap: Record<string, string> = {}
-  if (payAccountIds.length > 0) {
+  for (const ids of chunk(payAccountIds, 100)) {
     const { data: accts } = await supabase
       .from('accounts')
       .select('id, company_name')
-      .in('id', payAccountIds)
+      .in('id', ids)
     for (const a of accts ?? []) accountNameMap[a.id] = a.company_name
   }
 
@@ -330,8 +291,12 @@ export default async function CalendarPage({
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Annual Calendar {year}</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          {allRows.length} items · {renewalRows.length} renewals · {infoRows.length} other
+          {onCalendar.length} companies tracked · {allRows.length} items in {year} ·{' '}
+          {renewalRows.length} renewals · {infoRows.length} other
         </p>
+      </div>
+      <div className="mb-6">
+        <ProblemsRail proposals={proposals} />
       </div>
       <AnnualCalendar rows={allRows} year={year} today={today} />
     </div>

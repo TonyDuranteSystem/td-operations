@@ -13,12 +13,31 @@
  * ERROR until its hide semantics are declared.
  */
 
+/** Search scope — a decision the user makes with the "Include archived" chip.
+ *  'inbox' is the DEFAULT (Antonio, 2026-08-07: "when I search an email I want
+ *  to search in inbox and if I want to include the archive I want to have the
+ *  option"): archiving noise from an inbox-scoped search makes the row
+ *  genuinely leave the results. */
+export type SearchScope = "inbox" | "all"
+
+/** Sidebar sentinel for the Archived view (not a real Gmail label id — Gmail
+ *  ids never start with '_'; the underscore keeps it out of id-space). */
+export const ARCHIVED_VIEW_ID = "_ARCHIVED_"
+
 /** The Gmail-backed list views the Inbox can show. Precedence matches the route:
- *  a label filter WINS over a search box that still has text in it. */
+ *  a label filter WINS over a search box that still has text in it.
+ *
+ *  The two search SCOPES are two distinct union members ON PURPOSE (architect,
+ *  2026-08-07): a `scope` field on one member would compile silently through
+ *  every switch below, and an override stamped in one scope could be judged by
+ *  the other scope's payload — the foreign-list bug class. Two kinds make every
+ *  switch a compile error until each scope's semantics are declared. */
 export type InboxView =
   | { kind: "trash" }
-  | { kind: "label"; label: string } // any label except TRASH (incl. 'INBOX', STARRED, SENT, user labels)
-  | { kind: "search"; query: string } // search with no label filter → searches ALL mail
+  | { kind: "label"; label: string } // any label except TRASH (incl. STARRED, SENT, user labels)
+  | { kind: "search-inbox"; query: string } // search restricted to threads in the Inbox (default)
+  | { kind: "search-all"; query: string } // search over the whole stored history
+  | { kind: "archived" } // out of the Inbox, not trash/spam/snoozed — INDEX-ONLY
   | { kind: "inbox" } // default: no label, no active search
 
 /**
@@ -37,9 +56,16 @@ export type RowAction = "trash" | "archive" | "untrash" | "snooze" | "unsnooze" 
  * *effective* search (i.e. null unless the search was actually submitted), or the
  * client reasons about a query the server never ran.
  */
-export function toInboxView(state: { label: string | null; search: string | null }): InboxView {
+export function toInboxView(state: {
+  label: string | null
+  search: string | null
+  /** The search chip's scope. Only consulted when `search` is active; callers
+   *  that never search (deep links) may omit it. Default 'inbox'. */
+  searchScope?: SearchScope
+}): InboxView {
   if (state.label) {
     if (state.label === "TRASH") return { kind: "trash" }
+    if (state.label === ARCHIVED_VIEW_ID) return { kind: "archived" }
     // The sidebar's Inbox button sends the label id 'INBOX', and "no label" also
     // means the Inbox — the SAME list. Left as two shapes they produce two view
     // keys, and an override stamped with one is invisible to the other: restore
@@ -48,7 +74,11 @@ export function toInboxView(state: { label: string | null; search: string | null
     if (state.label === "INBOX") return { kind: "inbox" }
     return { kind: "label", label: state.label }
   }
-  if (state.search) return { kind: "search", query: state.search }
+  if (state.search) {
+    return state.searchScope === "all"
+      ? { kind: "search-all", query: state.search }
+      : { kind: "search-inbox", query: state.search }
+  }
   return { kind: "inbox" }
 }
 
@@ -85,8 +115,14 @@ export function viewKey(view: InboxView, scope: ViewScope): string {
       return `${prefix}:trash`
     case "label":
       return `${prefix}:label:${view.label}`
-    case "search":
-      return `${prefix}:search:${view.query}`
+    case "search-inbox":
+      // Scope is part of the list's IDENTITY: the same query text in the other
+      // scope is a DIFFERENT list and must never judge this one's overrides.
+      return `${prefix}:search:inbox:${view.query}`
+    case "search-all":
+      return `${prefix}:search:all:${view.query}`
+    case "archived":
+      return `${prefix}:archived`
     case "inbox":
       return `${prefix}:inbox`
   }
@@ -97,7 +133,33 @@ export function viewKey(view: InboxView, scope: ViewScope): string {
  * the SINGLE source of the view→query semantics (the route still owns
  * `maxResults` / `pageToken`).
  */
-export function buildGmailQueryParams(view: InboxView): { labelIds?: string; q?: string } {
+/** True when the user's own query already pins a place (`in:sent`, `label:x`,
+ *  `is:...` is NOT a place) — appending our default `in:inbox` on top of it
+ *  would AND two scopes into ~zero results ("the email doesn't exist" —
+ *  bug-hunter, 2026-08-07). The user's operator wins. */
+export function queryCarriesScopeOperator(query: string): boolean {
+  return /(^|\s)(in|label):/i.test(query)
+}
+
+/**
+ * True when the search box content is a plain-word query the local index can
+ * answer. Gmail operator syntax (from:, has:attachment, in:sent, …) keeps the
+ * full live-Gmail behavior. Lives HERE (client-safe, dependency-free) because
+ * the browser needs the same judgment for LIVE-as-you-type search: plain words
+ * auto-filter on a debounce (a cheap DB query), operator queries wait for
+ * Enter — firing live Gmail per keystroke is the 2026-08-02 quota incident.
+ * The server query layer re-exports it, so both sides share one definition.
+ */
+export function isInstantSearchQuery(q: string): boolean {
+  const trimmed = q.trim()
+  if (!trimmed) return false
+  if (/[{}()]/.test(trimmed)) return false // grouped Gmail syntax
+  return !/(^|\s)-?(from|to|cc|bcc|subject|has|in|is|label|filename|after|before|newer_than|older_than|deliveredto|list|rfc822msgid|larger|smaller|category):/i.test(
+    trimmed
+  )
+}
+
+export function buildGmailQueryParams(view: InboxView): { labelIds?: string; q?: string; indexOnly?: true } {
   switch (view.kind) {
     case "trash":
       // Viewing Trash: filter directly by label.
@@ -122,9 +184,23 @@ export function buildGmailQueryParams(view: InboxView): { labelIds?: string; q?:
       // that returns 0 rows 100% of the time is not competing with one that lags
       // — and absorbing that lag is exactly what the override layer above does.
       return { labelIds: view.label, q: "-in:trash" }
-    case "search":
-      // Search with no label filter searches ALL mail, not just the inbox.
+    case "search-inbox":
+      // Inbox-scoped search (the default). When the user's own query already
+      // names a place (in:sent, label:x), THEIR operator wins — appending
+      // in:inbox would contradict it into zero results.
+      return queryCarriesScopeOperator(view.query)
+        ? { q: `${view.query} -in:trash -in:spam` }
+        : { q: `${view.query} in:inbox -in:trash -in:spam` }
+    case "search-all":
+      // Explicit all-mail search (the "Include archived" chip).
       return { q: `${view.query} -in:trash -in:spam` }
+    case "archived":
+      // INDEX-ONLY. "Archived" is a thread-level negation (no message of the
+      // thread carries INBOX) that Gmail's query language cannot express — any
+      // live q here would render a WRONG list. The route must never fall back
+      // to live Gmail for this view; it shows an explicit unavailable state
+      // instead (council, 2026-08-07).
+      return { indexOnly: true }
     case "inbox":
       // Default: show INBOX — matches what the Gmail UI shows.
       return { labelIds: "INBOX" }
@@ -210,19 +286,44 @@ export function removesFromView(action: RowAction, view: InboxView): boolean {
         unsnooze: false,
         erase: true, // the index row is deleted → gone from every list
       }[action]
-    case "search":
+    case "search-inbox":
+      // Inbox-scoped search: the query REQUIRES Inbox membership, so anything
+      // that strips INBOX removes the row — this is the semantics Antonio asked
+      // for by name ("archive noise from search and watch it leave").
+      return {
+        trash: true, // strips INBOX (and adds TRASH) → leaves
+        archive: true, // strips INBOX → leaves
+        untrash: false, // re-appears (pin), never a removal
+        snooze: true, // strips INBOX → leaves
+        unsnooze: false, // ADDs INBOX — an appearance, not a removal
+        erase: true, // the index row is deleted → gone from every list
+      }[action]
+    case "search-all":
       // `q = <query> -in:trash -in:spam` over ALL mail.
       return {
         trash: true, // excluded by `-in:trash` → leaves
         // Archive strips only INBOX, which an all-mail search doesn't require →
-        // the row STAYS. (Known, accepted: a search whose text is itself
-        // `in:inbox` IS inbox-scoped, so archive would remove it and we skip the
-        // hide — the row lingers to the next refetch. Rare, and it fails in the
-        // safe direction: a missing hide, never a wrongly-hidden email.)
+        // the row STAYS (and renders its payload-derived "Archived" chip).
+        // (Known, accepted: a query whose own text is `in:inbox` is effectively
+        // inbox-scoped; we skip the hide — safe direction, a missing hide.)
         archive: false,
         untrash: false, // re-admitted to the search, not removed
         snooze: false, // all-mail search doesn't require INBOX → stays
         unsnooze: false,
+        erase: true, // the index row is deleted → gone from every list
+      }[action]
+    case "archived":
+      // Index predicate: NO message carries INBOX, thread not trash/spam/snoozed.
+      return {
+        trash: true, // gains TRASH → leaves Archived
+        archive: false, // already archived — a repeat archive is a no-op
+        // Untrash / unsnooze ADD the thread back to the Inbox → it leaves this
+        // view, but as an appearance elsewhere; the refetch confirms. A hide
+        // here could not be witnessed by any OTHER view, so keep the safe
+        // shape: hide only what THIS view's own refetch will confirm absent.
+        untrash: true,
+        snooze: true, // snoozed threads are excluded from Archived → leaves
+        unsnooze: true, // regains INBOX → excluded from Archived → leaves
         erase: true, // the index row is deleted → gone from every list
       }[action]
   }
