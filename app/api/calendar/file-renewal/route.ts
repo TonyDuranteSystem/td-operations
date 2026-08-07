@@ -79,6 +79,16 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const noteRaw = fd.get('note')
+    const note = typeof noteRaw === 'string' && noteRaw.trim() ? noteRaw.trim().slice(0, 2000) : null
+    const override_unpaid = fd.get('override_unpaid') === 'true'
+    if (override_unpaid && !note) {
+      return NextResponse.json(
+        { error: 'A note explaining why you are filing despite unpaid invoices is required.' },
+        { status: 400 },
+      )
+    }
+
     const buffer = Buffer.from(await receipt.arrayBuffer())
 
     const result = await fileRenewal({
@@ -87,6 +97,8 @@ export async function POST(req: NextRequest) {
       kind: kind as RenewalKind,
       filed_date,
       filing_for_year,
+      note,
+      override_unpaid,
       receipt: {
         file_name: receipt.name || 'receipt.pdf',
         mime_type: receipt.type || 'application/pdf',

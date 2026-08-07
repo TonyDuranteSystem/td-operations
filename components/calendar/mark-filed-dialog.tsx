@@ -32,6 +32,7 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
     return String(Number.isNaN(due) ? cap - 1 : Math.min(due, cap))
   })
   const [file, setFile] = useState<File | null>(null)
+  const [note, setNote] = useState('')
   const [dragActive, setDragActive] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
@@ -53,7 +54,8 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
     return years
   })()
 
-  const canSubmit = !!file && !!filedDate && !submitting
+  const isBlocked = row.status === 'blocked'
+  const canSubmit = !!file && !!filedDate && !submitting && (!isBlocked || !!note.trim())
 
   function acceptFile(f: File | null | undefined) {
     if (!f) return
@@ -95,6 +97,8 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
       fd.append('kind', row.kind)
       fd.append('filed_date', filedDate)
       fd.append('filing_for_year', filingForYear)
+      if (note.trim()) fd.append('note', note.trim())
+      if (isBlocked) fd.append('override_unpaid', 'true')
       if (row.delivery_id) fd.append('delivery_id', row.delivery_id)
       fd.append('receipt', file)
 
@@ -200,6 +204,13 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
                 File on the state portal. Receipt will save to <code className="text-[10px]">Compliance/Annual Report {year}.pdf</code>.
               </p>
             )}
+            {isBlocked && (
+              <p className="text-[11px] font-medium text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mt-2">
+                ⚠ This company has UNPAID invoices — the renewal is on hold. Filing anyway is
+                allowed, but a note explaining why is required and the override is recorded on
+                the account.
+              </p>
+            )}
           </div>
 
           {/* Inputs */}
@@ -234,6 +245,21 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
               <p className="text-[11px] text-zinc-400 mt-1">
                 The compliance year this filing satisfies. The next due date becomes this year + 1.
               </p>
+            </div>
+
+            <div>
+              <label htmlFor="filing-note" className="block text-xs font-medium text-zinc-600 mb-1">
+                Note{isBlocked ? <span className="text-red-500"> * (required — filing despite unpaid invoices)</span> : ' (optional)'}
+              </label>
+              <textarea
+                id="filing-note"
+                value={note}
+                onChange={e => setNote(e.target.value)}
+                rows={2}
+                maxLength={2000}
+                placeholder={isBlocked ? 'Why is this being filed despite the unpaid invoices?' : 'Anything worth recording with this filing…'}
+                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
             </div>
 
             <div>
