@@ -1,6 +1,9 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import { verifyViewAs, VIEW_AS_COOKIE } from '@/lib/portal/view-as'
+import { isStaffAuthRole } from '@/lib/team/workspace'
+import { resolveMfaGate } from '@/lib/auth/mfa-gate'
+import { verifyMfaRememberDevice, MFA_RD_COOKIE } from '@/lib/auth/mfa-remember-device'
 
 // --- Public paths (no auth required) ---
 const PUBLIC_PREFIXES = [
@@ -304,6 +307,71 @@ export async function middleware(request: NextRequest) {
   }
 
   const role = user.app_metadata?.role
+
+  // --- Staff MFA gate (dev job de4564ee) ---
+  // Runs for every STAFF session (deny-list predicate — same symbol the rest
+  // of the system uses, never a mirror) on pages AND /api: a gate that only
+  // covers page navigations leaves the whole API data plane open to a
+  // password-only session (council blocker). Placement is load-bearing:
+  // AFTER the public-path early return (Claude.ai OAuth + webhooks untouched)
+  // and the ban check, BEFORE the partner/portal/dashboard branches.
+  // Clients and partner are outside the predicate entirely.
+  if (isStaffAuthRole(role)) {
+    // Recovery paths must be reachable at aal1 (session still required):
+    // exact matches only — never PUBLIC_PREFIXES (that would strip auth).
+    const mfaExempt =
+      pathname === '/mfa/verify' ||
+      pathname === '/mfa/enroll' ||
+      pathname === '/api/mfa/backup-verify'
+    if (!mfaExempt) {
+      // aal from the SAME cookie session getUser() just validated — a local
+      // JWT decode with no extra network call. The unverified decode is safe
+      // ONLY because a forged token already failed getUser above; anything
+      // undecodable is treated as NOT aal2 (fail closed).
+      const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+      const aal = aalData?.currentLevel === 'aal2' ? 'aal2' as const
+        : aalData?.currentLevel === 'aal1' ? 'aal1' as const : null
+      const hasVerifiedFactor = (user.factors ?? []).some(
+        f => f.factor_type === 'totp' && f.status === 'verified',
+      )
+      // Remember-device: verified against the FRESH user record (userId +
+      // revocation version from app_metadata — getUser is a live auth-server
+      // call, so an admin reset is seen on the very next request).
+      let rememberedDevice = false
+      if (aal !== 'aal2' && hasVerifiedFactor) {
+        rememberedDevice = await verifyMfaRememberDevice(
+          request.cookies.get(MFA_RD_COOKIE)?.value,
+          user.id,
+          (user.app_metadata?.mfa_rd_version as number | undefined) ?? 0,
+        )
+      }
+      const verdict = resolveMfaGate({
+        subject: true,
+        hasVerifiedFactor,
+        aal,
+        rememberedDevice,
+        graceUntilRaw: process.env.MFA_GRACE_UNTIL,
+        now: Date.now(),
+      })
+      if (verdict !== 'allow') {
+        // Background fetches get machine-readable JSON, never redirect HTML
+        // (the SESSION_EXPIRED garbage-toast precedent above).
+        const isNavigation =
+          request.headers.get('sec-fetch-mode') === 'navigate' ||
+          (request.headers.get('accept') || '').includes('text/html')
+        if (pathname.startsWith('/api/') && !isNavigation) {
+          return NextResponse.json(
+            { error: 'Two-factor verification required.', code: 'MFA_REQUIRED' },
+            { status: 401 },
+          )
+        }
+        const url = request.nextUrl.clone()
+        url.pathname = verdict === 'enroll' ? '/mfa/enroll' : '/mfa/verify'
+        url.search = ''
+        return NextResponse.redirect(url)
+      }
+    }
+  }
 
   // --- Partner confinement (external collaborators, e.g. Cris) ---
   // A partner authenticates as role='partner' (NOT 'client'), so without this

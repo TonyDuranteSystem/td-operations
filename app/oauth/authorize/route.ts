@@ -12,6 +12,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { validateClient, authenticateUser, createAuthCode } from "@/lib/oauth"
+import { checkLoginRateLimit, recordLoginFailure, clearLoginFailures } from "@/lib/portal/rate-limit"
 
 // ─── GET: Show authorization page ──────────────────────
 
@@ -95,9 +96,28 @@ export async function POST(req: NextRequest) {
       })
     }
 
+    // Brute-force lockout (staff-MFA council, Security MAJOR 3 — Antonio
+    // accepted the PIN path as a single-factor residual on 2026-08-07 with
+    // the explicit condition that it be rate-limited NOW): failures are
+    // counted per IP+email; 5 failures lock the pair for 15 minutes. The
+    // limiter is per-serverless-instance best-effort by design — a damping
+    // layer against online guessing of the unsalted-PIN login, not a
+    // distributed guarantee.
+    const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+      || req.headers.get('x-real-ip') || 'unknown'
+    const lockKey = `oauth-pin:${ip}:${email.toLowerCase()}`
+    const lock = checkLoginRateLimit(lockKey)
+    if (!lock.allowed) {
+      return new Response(
+        renderError(`Troppi tentativi. Riprova tra ${Math.ceil((lock.retryAfter ?? 900) / 60)} minuti.`),
+        { status: 429, headers: { "Content-Type": "text/html" } }
+      )
+    }
+
     // Authenticate user
     const auth = await authenticateUser(email, pin)
     if (!auth.authenticated || !auth.userId) {
+      recordLoginFailure(lockKey)
       return new Response(
         renderLoginPage({
           clientName: client.client_name || "Unknown",
@@ -112,6 +132,7 @@ export async function POST(req: NextRequest) {
         { status: 401, headers: { "Content-Type": "text/html" } }
       )
     }
+    clearLoginFailures(lockKey)
 
     // Create authorization code
     const code = await createAuthCode({
