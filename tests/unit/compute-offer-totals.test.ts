@@ -11,7 +11,8 @@ import {
   computeNetOfCredits,
   parsePriceQuirk,
   computeOfferPayable,
-  resolveOfferCurrency,} from "@/lib/offers/compute-offer-totals"
+  resolveOfferCurrency,
+  ambiguousDotPrices,} from "@/lib/offers/compute-offer-totals"
 
 describe("parsePriceQuirk — the historical parser, verbatim", () => {
   it("parses plain prices with symbols and commas", () => {
@@ -283,5 +284,50 @@ describe("resolveOfferCurrency — ONE rule for storage, engine and credit", () 
       const engine = computeOfferPayable({ services: [], cost_summary: summary, currency: explicit }).currency
       expect(engine).toBe(stored)
     }
+  })
+})
+
+// ─── the authoring warning for dot-thousands prices (approved rider) ──────
+
+describe("ambiguousDotPrices — catch it while it is still being typed", () => {
+  it("flags the exact shape that mis-prices: dot + three digits", () => {
+    const hits = ambiguousDotPrices([{ name: "Costituzione LLC", price: "€1.500" }])
+    expect(hits.length).toBe(1)
+    expect(hits[0]).toContain("Costituzione LLC")
+    // and it really is the shape that breaks — proven against the parser itself
+    expect(parsePriceQuirk("€1.500")).toBe(1.5)
+  })
+
+  it("flags dollars and bare numbers written the same way", () => {
+    expect(ambiguousDotPrices([{ name: "A", price: "$1.500" }]).length).toBe(1)
+    expect(ambiguousDotPrices([{ name: "B", price: "1.500" }]).length).toBe(1)
+    expect(ambiguousDotPrices([{ name: "C", price: "€12.345" }]).length).toBe(1)
+  })
+
+  it("does NOT flag a genuine decimal — two digits after the dot is money", () => {
+    expect(ambiguousDotPrices([{ name: "A", price: "€1.50" }])).toEqual([])
+    expect(ambiguousDotPrices([{ name: "B", price: "$99.99" }])).toEqual([])
+  })
+
+  it("does NOT flag the formats that parse correctly today", () => {
+    expect(ambiguousDotPrices([{ name: "A", price: "$1,500" }])).toEqual([])
+    expect(ambiguousDotPrices([{ name: "B", price: "€1500" }])).toEqual([])
+    expect(ambiguousDotPrices([{ name: "C", price: "Inclusa" }])).toEqual([])
+    expect(ambiguousDotPrices([{ name: "D", price: "" }])).toEqual([])
+  })
+
+  it("reports every offending line, not just the first", () => {
+    const hits = ambiguousDotPrices([
+      { name: "One", price: "€1.500" },
+      { name: "Two", price: "$1,500" },
+      { name: "Three", price: "€2.500" },
+    ])
+    expect(hits.length).toBe(2)
+  })
+
+  it("survives junk without throwing", () => {
+    expect(ambiguousDotPrices(null)).toEqual([])
+    expect(ambiguousDotPrices("nonsense")).toEqual([])
+    expect(ambiguousDotPrices([{ name: "A" }])).toEqual([])
   })
 })

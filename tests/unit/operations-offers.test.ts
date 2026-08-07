@@ -776,3 +776,36 @@ describe("createOffer — WS-A credit snapshot (hunter minor 10)", () => {
     expect(insert?.credit_amount).toBeNull()
   })
 })
+
+describe("createOffer — the dot-format warning must REACH the author", () => {
+  it("a service priced €1.500 comes back as a warning on the result", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    const res = await createOffer({
+      client_name: "Dot Format",
+      language: "it",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Costituzione LLC", price: "\u20ac1.500" }],
+      cost_summary: [{ label: "Totale", total: "\u20ac1.500" }],
+      token: "test-dot-warning",
+    })
+    expect(res.success).toBe(true)
+    const warned = (res.warnings ?? []).join(" ")
+    expect(warned).toContain("PRICE FORMAT")
+    expect(warned).toContain("Costituzione LLC")
+  })
+
+  it("a correctly written price produces NO warning — no crying wolf", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    const res = await createOffer({
+      client_name: "Clean Price",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Formation", price: "$1,500" }],
+      cost_summary: [{ label: "Total", total: "$1,500" }],
+      token: "test-dot-clean",
+    })
+    expect((res.warnings ?? []).join(" ")).not.toContain("PRICE FORMAT")
+  })
+})

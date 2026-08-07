@@ -230,6 +230,38 @@ export interface OfferPayable {
  * only credit that genuinely still exists. This function's job is to stop the
  * rails from contradicting the page and each other.
  */
+
+/**
+ * Service prices written with a DOT as the thousands separator — "€1.500",
+ * "$1.500", "1.500" — which this engine reads as 1.5, not 1500.
+ *
+ * The parsing is NOT being changed (Antonio's standing ruling): correcting it
+ * would change what real clients are charged, and it is carded separately. So
+ * the defence is to warn whoever is AUTHORING the offer, at the moment they
+ * write it, while it costs nothing to retype.
+ *
+ * Only SERVICE lines are checked. A cost-summary header written the same way is
+ * handled correctly by the fallback path, so flagging it would be noise — and a
+ * warning that cries wolf is a warning people stop reading.
+ *
+ * The pattern is a dot followed by EXACTLY three digits with nothing after: a
+ * genuine decimal ("€1.50") has two, and nobody prices to three decimal places.
+ */
+const DOT_THOUSANDS_RE = /(?:^|[^0-9])\d{1,3}\.\d{3}(?![0-9])/
+
+export function ambiguousDotPrices(services: unknown): string[] {
+  const list = Array.isArray(services) ? (services as Array<Record<string, unknown>>) : []
+  const hits: string[] = []
+  for (const svc of list) {
+    const price = String(svc?.price ?? "")
+    if (!price) continue
+    // A comma anywhere means the writer used comma-decimals, so the dot really
+    // is a thousands separator AND the engine still mis-parses it — flag both.
+    if (DOT_THOUSANDS_RE.test(price)) hits.push(`${String(svc?.name ?? "service")}: ${price}`)
+  }
+  return hits
+}
+
 export function computeOfferPayable(
   offer: OfferLikeForTotals,
   options: ComputeOptions = {},

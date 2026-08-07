@@ -24,7 +24,7 @@ import { accountIdForOffer } from "@/lib/operations/offer-scope"
 import { normalizeFormationState } from "@/lib/formation/states"
 import { availableCreditForDisplay, unspentCreditByCurrency } from "@/lib/operations/credit-netting"
 import { resolveCreditSubject, subjectForDisplay, type CreditSubject } from "@/lib/operations/credit-subject"
-import { parsePriceQuirk, resolveOfferCurrency } from "@/lib/offers/compute-offer-totals"
+import { parsePriceQuirk, resolveOfferCurrency, ambiguousDotPrices } from "@/lib/offers/compute-offer-totals"
 import type { Json } from "@/lib/database.types"
 
 // ─── JSONB validation ───────────────────────────────────────
@@ -613,6 +613,18 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     let creditPaymentId: string | null = null
     let creditKind: string | null = null
     const creditWarnings: string[] = []
+
+    // APPROVED RIDER: warn the AUTHOR about a price written "€1.500", which this
+    // system reads as 1.5. The parser is deliberately NOT being changed (that
+    // would re-price real clients and is carded separately) — so the defence is
+    // to say so while the offer is still being written and retyping is free.
+    const dotPrices = ambiguousDotPrices(params.services)
+    if (dotPrices.length > 0) {
+      creditWarnings.push(
+        `PRICE FORMAT — ${dotPrices.join("; ")}. A dot before three digits is read as a decimal here, ` +
+        `so "1.500" becomes 1.50, not 1,500. Retype it without the dot (1500) before sending this offer.`,
+      )
+    }
     try {
       const subject = params.contact_id
         ? ({ kind: "resolved", contactId: params.contact_id, email: "" } as CreditSubject)
