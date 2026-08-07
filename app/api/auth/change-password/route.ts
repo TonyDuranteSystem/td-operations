@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { createClient as createBareClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
@@ -23,8 +24,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'New password must be at least 8 characters' }, { status: 400 })
   }
 
-  // Verify current password by attempting to sign in
-  const { error: signInError } = await supabase.auth.signInWithPassword({
+  // Verify current password with a THROWAWAY non-cookie client. Doing this on
+  // the cookie-writing server client REPLACED the caller's session with a
+  // fresh aal1 one — silently downgrading an MFA-verified (aal2) staff
+  // session on every password change (staff-MFA council pass, dev job
+  // de4564ee). The bare client holds its session in memory and is discarded.
+  const bare = createBareClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { auth: { persistSession: false, autoRefreshToken: false } },
+  )
+  const { error: signInError } = await bare.auth.signInWithPassword({
     email: user.email!,
     password: currentPassword,
   })

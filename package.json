@@ -103,6 +103,7 @@
     "eslint-config-next": "^14.2.35",
     "husky": "^9.1.7",
     "lint-staged": "^16.4.0",
+    "otplib": "^13.4.1",
     "pg": "^8.20.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",

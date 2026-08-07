@@ -17,6 +17,26 @@ export function isAdmin(user: User | null): boolean {
   return user.app_metadata?.role === "admin" || user.user_metadata?.role === "admin"
 }
 
+/**
+ * TAMPER-PROOF admin check for security-sensitive endpoints (MFA reset, and
+ * anything else where a false positive is an escalation). Unlike isAdmin(),
+ * this NEVER consults user_metadata — that object is self-writable by the
+ * account holder via supabase.auth.updateUser, so trusting it lets any
+ * logged-in user grant themselves admin (found in the staff-MFA council
+ * pass, dev job de4564ee; fixing isAdmin itself is a separate flagged job).
+ * app_metadata is service-role-writable only; ADMIN_EMAILS is code.
+ */
+export function isSecureAdmin(user: User | null): boolean {
+  if (!user) return false
+  if (ADMIN_EMAILS.includes(user.email ?? "")) return true
+  return user.app_metadata?.role === "admin"
+}
+
+/** Accounts that may never be MFA-reset by anyone but themselves. */
+export function isProtectedAdminEmail(email: string | null | undefined): boolean {
+  return ADMIN_EMAILS.includes(email ?? "")
+}
+
 export function isTeam(user: User | null): boolean {
   if (!user) return false
   return !isClient(user) && !isAdmin(user)
