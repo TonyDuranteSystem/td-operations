@@ -269,9 +269,14 @@ export async function GET(req: NextRequest) {
               // Color marks are cosmetic — never fail the list over them
             }
             const emailLookup = await emailLookupPromise
-            conversations.push(
-              ...groupRowsToConversations(rows, { markLabelNames, emailLookup })
-            )
+            // The RPC's order is the VIEW's order — pinned (starred) first,
+            // then newest (dev job 76b521ea). groupRowsToConversations re-sorts
+            // chronologically (right for search/archived, wrong here), so
+            // restore the RPC's thread order after grouping.
+            const rpcOrder = new Map(threadIds.map((t, i) => [`gmail:${t}`, i]))
+            const grouped = groupRowsToConversations(rows, { markLabelNames, emailLookup })
+              .sort((a, b) => (rpcOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rpcOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER))
+            conversations.push(...grouped)
             servedFromIndex = true
           }
         }
