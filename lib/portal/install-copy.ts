@@ -2,10 +2,11 @@
  * Single source of truth for PWA install copy (EN/IT).
  *
  * Consumed by:
- * - components/portal/pwa-install-prompt.tsx (floating in-portal prompt)
  * - app/(portal-install)/portal/install — the public smart install page
- * Phase 3 will point the remaining nudges here too, so the positioning story
- * never drifts between placements (council D7, dev job 8f38add1).
+ * - components/portal/install-nudge-banner.tsx — THE in-portal nudge
+ *   (Phase 3 consolidated the old floating prompt / dashboard banner /
+ *   enable-push card into this one surface)
+ * - components/portal/portal-sidebar.tsx — desktop "Get the app" entry
  *
  * Positioning rule (Antonio, 2026-08-06): sell the private professional
  * channel POSITIVELY — "your company's private area, on your phone". Never
@@ -14,32 +15,38 @@
 
 import type { InstallLanguage } from './install-page-mode'
 
-/** Copy for the floating in-portal prompt (extracted unchanged from
- *  pwa-install-prompt.tsx so it exists exactly once). */
-export const PROMPT_COPY = {
+/** Copy for the fixed in-portal nudge banner + the desktop sidebar entry. */
+export const INSTALL_NUDGE_COPY: Record<InstallLanguage, {
+  installLine: string
+  installCta: string
+  pushLine: string
+  pushCta: string
+  pushEnabled: string
+  pushDenied: string
+  pushFailed: string
+  sidebarGetApp: string
+}> = {
   en: {
-    title: 'Install the Portal app',
-    androidSub: 'Quick access from your home screen',
-    install: 'Install',
-    iosIntro: 'For one-tap access, like an app:',
-    iosStep1Before: 'Tap the',
-    iosStep1Bold: 'Share',
-    iosStep1After: 'button in the Safari bar below',
-    iosStep2Before: 'Choose',
-    iosStep2Bold: '"Add to Home Screen"',
+    installLine: 'Get our replies instantly — put the portal on your phone.',
+    installCta: 'Install',
+    pushLine: 'One step left: turn on notifications to hear from us instantly.',
+    pushCta: 'Turn on',
+    pushEnabled: 'Notifications enabled — you’re all set',
+    pushDenied: 'Notification permission denied',
+    pushFailed: 'Could not enable notifications',
+    sidebarGetApp: 'Get the app',
   },
   it: {
-    title: "Installa l'app del Portale",
-    androidSub: 'Accesso rapido dalla schermata Home',
-    install: 'Installa',
-    iosIntro: "Per accedere in un tocco, come un'app:",
-    iosStep1Before: 'Tocca il pulsante',
-    iosStep1Bold: 'Condividi',
-    iosStep1After: 'qui sotto nella barra di Safari',
-    iosStep2Before: 'Scegli',
-    iosStep2Bold: '"Aggiungi alla schermata Home"',
+    installLine: 'Ricevi le nostre risposte all’istante — porta il portale sul tuo telefono.',
+    installCta: 'Installa',
+    pushLine: 'Ultimo passo: attiva le notifiche per sentirci all’istante.',
+    pushCta: 'Attiva',
+    pushEnabled: 'Notifiche attivate — tutto pronto',
+    pushDenied: 'Permesso per le notifiche negato',
+    pushFailed: 'Impossibile attivare le notifiche',
+    sidebarGetApp: 'Scarica l’app',
   },
-} as const
+}
 
 /** Copy for the public /portal/install smart page. */
 export const INSTALL_PAGE_COPY: Record<InstallLanguage, {

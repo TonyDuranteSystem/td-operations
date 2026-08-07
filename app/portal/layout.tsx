@@ -23,10 +23,8 @@ import { OnboardingWrapper } from '@/components/portal/onboarding-wrapper'
 import { PullToRefresh } from '@/components/portal/pull-to-refresh'
 import { PortalSwRegister } from '@/components/portal/portal-sw-register'
 import { PortalWakeRefresh } from '@/components/portal/portal-wake-refresh'
-import { PwaInstallPrompt } from '@/components/portal/pwa-install-prompt'
 import { PwaEventsTracker } from '@/components/portal/pwa-events-tracker'
-import { DashboardInstallBanner } from '@/components/portal/dashboard-install-banner'
-import { EnablePushCard } from '@/components/portal/enable-push-card'
+import { InstallNudgeBanner } from '@/components/portal/install-nudge-banner'
 import { PasswordGate } from '@/components/portal/password-gate'
 import { SuspendedGuard } from '@/components/portal/suspended-guard'
 import { ViewAsBanner } from '@/components/portal/view-as-banner'
@@ -302,16 +300,15 @@ export default async function PortalLayout({
             </SuspendedGuard>
           ) : (
             <>
-              <DashboardInstallBanner />
-              {/* Installed-app-only: one-tap push opt-in (mobile; desktop has
-                  the header PushToggle). Never shows together with the install
-                  banner — that one hides in standalone mode. */}
-              <EnablePushCard accountId={selectedAccountId || ''} />
+              {/* THE one install/push nudge (Phase 3 consolidation — replaced
+                  the floating prompt, the dashboard install banner and the
+                  enable-push card). Non-dismissible by spec; hides itself only
+                  when this device is installed AND receiving push. */}
+              <InstallNudgeBanner accountId={selectedAccountId || ''} />
               {children}
             </>
           )}
         </main>
-        <PwaInstallPrompt />
         </div>
       </LocaleProvider>
       {/* Iubenda Cookie Consent Banner */}

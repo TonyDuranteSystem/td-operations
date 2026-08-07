@@ -28,6 +28,7 @@ import {
   MapPin,
   Landmark,
   Palette,
+  Smartphone,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
@@ -37,6 +38,7 @@ import { GlobalSearch } from '@/components/shared/global-search'
 import type { PortalAccount } from '@/lib/types'
 import type { PortalNavVisibility, InProgressFormation } from '@/lib/portal/queries'
 import { isTierFeatureVisible, isPartnerPortal } from '@/lib/portal/tier-config'
+import { INSTALL_NUDGE_COPY } from '@/lib/portal/install-copy'
 import { hasCapability, teammateNavCapability, type TeamCapability } from '@/lib/portal/team/capabilities'
 
 interface PortalSidebarProps {
@@ -194,6 +196,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   const [liveUnreadCount, setLiveUnreadCount] = useState(unreadChatCount)
   const pathnameRef = useRef(pathname)
   const { t, locale } = useLocale()
+  const installNudgeCopy = INSTALL_NUDGE_COPY[locale === 'it' ? 'it' : 'en']
 
   // "NEW" badge on the Team nav item — shown to account-admins until they've seen
   // the Team Access announcement. Shares the home banner's localStorage key so the
@@ -655,6 +658,19 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
         {/* Footer — Profile link removed (now in Personal section). Sign Out only. */}
         <div className="px-3 py-4 border-t">
+          {/* Desktop-only "Get the app" (Phase 3, dev job 8f38add1): opens the
+              public install page, whose desktop mode shows the QR to scan —
+              the entry point for the desktop-habit clients this project
+              targets. Mobile users get the fixed banner instead. */}
+          <Link
+            href="/portal/install?src=qr-desktop"
+            target="_blank"
+            rel="noopener"
+            className="hidden lg:flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-zinc-600 hover:bg-zinc-50 hover:text-red-600 transition-colors w-full"
+          >
+            <Smartphone className="h-4 w-4" />
+            {installNudgeCopy.sidebarGetApp}
+          </Link>
           {/* Identity row — small, repeats the contact name as a visual reminder. */}
           <div className="flex items-center gap-3 px-3 py-2 text-sm text-zinc-500">
             <User className="h-4 w-4" />

@@ -1,8 +1,8 @@
 /**
  * Pure mode/language resolver for the public PWA install page
- * (/portal/install). Mirrors the push-card-visibility pattern: all branching
- * lives here, unit-testable without a browser; the page component only feeds
- * the environment in and renders the returned mode.
+ * (/portal/install). All branching lives here, unit-testable without a
+ * browser; the page component only feeds the environment in and renders the
+ * returned mode. (Same pure-gate pattern as lib/portal/install-state.ts.)
  *
  * Council-reviewed decisions baked in (dev job 8f38add1, 2026-08-06):
  * - iPadOS masquerades as a Mac (desktop UA) — only the client can correct it
@@ -33,7 +33,9 @@ export type InstallPageMode =
 
 export type InstallLanguage = 'en' | 'it'
 
-/** Channel tags accepted on ?src= — anything else is dropped, never stored. */
+/** Channel tags accepted on ?src= — anything else is dropped, never stored.
+ *  Keep identical to the pwa_events src CHECK constraint (last synced by
+ *  migration 20260806-2130-pwa-src-portal-nudge.sql). */
 export const INSTALL_SRC_VALUES = [
   'qr-print',
   'qr-desktop',
@@ -43,6 +45,7 @@ export const INSTALL_SRC_VALUES = [
   'onboarding',
   'campaign',
   'guide',
+  'portal-nudge',
 ] as const
 
 export type InstallSrc = (typeof INSTALL_SRC_VALUES)[number]
