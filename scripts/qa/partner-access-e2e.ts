@@ -168,8 +168,10 @@ async function main() {
     for (const r of logRows ?? []) {
       console.log(`  ${r.created_at.slice(11, 19)}  ${r.surface.padEnd(22)} ${r.resource ?? JSON.stringify(r.detail)}`)
     }
-    const surfaces = new Set((logRows ?? []).map((r: { surface: string }) => r.surface))
-    ok("10. log covers page + list + brief + FILE + chat", ["collab_page", "projects_list", "project_brief", "file_signed", "chat_read", "chat_send"].every(s => surfaces.has(s)), `got: ${[...surfaces].join(",")}`)
+    const surfaces: string[] = Array.from(
+      new Set<string>((logRows ?? []).map((r: { surface: string }) => r.surface)),
+    )
+    ok("10. log covers page + list + brief + FILE + chat", ["collab_page", "projects_list", "project_brief", "file_signed", "chat_read", "chat_send"].every(s => surfaces.includes(s)), `got: ${surfaces.join(",")}`)
     const fileRows = (logRows ?? []).filter((r: { surface: string }) => r.surface === "file_signed")
     ok("11. the file grant has its own explicit row with the exact path", fileRows.length === 1 && fileRows[0].resource === filePath)
   } finally {
