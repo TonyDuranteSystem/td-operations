@@ -679,10 +679,15 @@ word — the 2026-08-05 rule is the TD logo on every signed email).
 - Worker sends (text-only AND attachment — since 2026-07-29 both freeze via
   `prepareWorkerEmailSend` and dispatch only in `confirmWorkerEmailSend`): sign-off ON
   (the model writes no closing), BOTH halves signed. The staff member picks the
-  signature ON THE INBOX PANEL'S CONFIRM CARD (2026-08-07, Luca's request; the other
-  confirm-card surfaces — Team Chat, dashboard sidebar, Portal Chats' email card —
-  don't render the picker yet and send the full default; the route already accepts
-  the field, so adding it there is pure JSX): `SignatureControls` +
+  signature ON THE CONFIRM CARD (2026-08-07, Luca's request) — the Inbox panel, the
+  dashboard sidebar (`components/dashboard/ai-agent-panel.tsx`, email only reachable
+  ON a client page: `buildSidebarSendRails` returns no email rail otherwise) and
+  Portal Chats (`components/portal-chats/thread-worker-panel.tsx`). TEAM CHAT's card
+  still posts no variant and therefore sends the full default; the route already
+  accepts the field, so adding it there is pure JSX. **The sidebar's confirm handler
+  is a `useCallback` — `signatureVariant` MUST stay in its dep array or the click
+  sends the pick as it was when the card first rendered, not the one on screen.**
+  Controls used: `SignatureControls` +
   preview beside the From dropdown, `signature_variant` rides the confirm POST,
   `parseSignatureVariant` narrows it in the route, `confirmWorkerEmailSend` applies
   it at dispatch (4th arg; omitted = full default). `none` omits the block entirely
