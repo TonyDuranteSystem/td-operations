@@ -14,7 +14,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { dbWrite, dbWriteSafe } from '@/lib/db'
 import { syncTDInvoiceMirror } from '@/lib/portal/td-invoice-mirror'
 import { generateInvoiceNumber, generateCreditNoteNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
-import { computeCreditApplication, consumeCredits } from '@/lib/operations/credit-netting'
+import { computeCreditApplication, consumeCredits, releaseStaleCreditClaims, claimCredits, confirmCreditClaims, unwindCreditClaims } from '@/lib/operations/credit-netting'
 import { categoryFromInstallmentLabel } from '@/lib/billing/payment-classification'
 import { getConfiguredCardFeeRate } from '@/lib/payments/card-fee-config'
 
@@ -120,6 +120,10 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   // Pin the card fee rate onto this invoice — the source offer's pin when created
   // from an offer, else the current configured rate. Never re-read at charge; this
   // pin IS the authority. (dev_task 6ec6872a)
+  // WS-A: the claim token identifies THIS creation attempt's claims so an unwind
+  // releases only our own (never a concurrent winner's).
+  const claimToken = crypto.randomUUID()
+
   const pinnedCardFeeRate = typeof card_fee_rate === 'number'
     ? card_fee_rate
     : await getConfiguredCardFeeRate()
@@ -162,11 +166,33 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   const grossTotal =
     items.reduce((s, i) => s + i.amount, 0) + items.reduce((s, i) => s + i.tax_amount, 0)
   let appliedCredit: Awaited<ReturnType<typeof computeCreditApplication>> | null = null
-  if (grossTotal > 0 && !mark_as_paid && account_id && !skip_credit_netting) {
-    appliedCredit = await computeCreditApplication(
-      { accountId: account_id, amount: grossTotal, currency },
+  // WS-A: THE GATE. Widened from account-only to (account OR contact) — the
+  // signing invoice is contact-only until the company exists, so a paid-call
+  // credit could never reach it before. Exactly ONE scope is passed, so account
+  // and contact credit pools stay isolated (regression tests T4/T5).
+  if (grossTotal > 0 && !mark_as_paid && (account_id || contact_id) && !skip_credit_netting) {
+    const scope = account_id ? { accountId: account_id } : { contactId: contact_id as string }
+    // SELF-HEAL FIRST. A claim abandoned by a process that died mid-invoice
+    // leaves the credit locked with a balance on it — invisible to every netting
+    // read, so the client is quietly billed full price for money they own.
+    // Releasing stale claims here means the next bill for that client repairs it,
+    // which is exactly the moment it would otherwise do harm.
+    try {
+      await releaseStaleCreditClaims(scope as Parameters<typeof releaseStaleCreditClaims>[0], supabaseAdmin)
+    } catch (err) {
+      console.warn('[td-invoice] stale-claim release failed (non-fatal):', err instanceof Error ? err.message : String(err))
+    }
+    const candidate = await computeCreditApplication(
+      { ...scope, amount: grossTotal, currency },
       supabaseAdmin,
     )
+    // ATOMIC ORDER (uniform, both scopes): claim → create → confirm. Two
+    // concurrent signings both READ the same credit (test T9); the claim is the
+    // conditional write that makes exactly one of them the winner. Anything not
+    // won here is simply not applied. Unwound below if the insert fails.
+    appliedCredit = candidate.appliedTotal > 0
+      ? await claimCredits(candidate, claimToken, supabaseAdmin)
+      : candidate
     if (appliedCredit.appliedTotal > 0) {
       items.push({
         description: 'Credit applied',
@@ -268,16 +294,31 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     // check and this insert. Fetch and return theirs.
     if (idempotency_key && isUniqueViolation(error, 'uq_payments_idempotency_key')) {
       const winner = await findByIdempotencyKey(idempotency_key)
-      if (winner) return winner
+      if (winner) {
+        // WS-A unwind: a concurrent caller's invoice won this idempotency key.
+        // OUR claims were taken for an invoice that will never exist — release
+        // them so the credit stays available (the winner did its own claiming).
+        if (appliedCredit && appliedCredit.appliedTotal > 0) {
+          await unwindCreditClaims(appliedCredit, claimToken, supabaseAdmin)
+        }
+        return winner
+      }
       // Unlikely fall-through: the winning row disappeared before we could read it.
       // Break out and let the caller see the error.
     }
 
-    // Any other error — bubble up.
+    // Any other error — bubble up, releasing our claims first (WS-A unwind).
+    if (appliedCredit && appliedCredit.appliedTotal > 0) {
+      await unwindCreditClaims(appliedCredit, claimToken, supabaseAdmin)
+    }
     throw new Error(`createTDInvoice[payments.insert]: ${error?.message || 'unknown'}`)
   }
 
   if (!paymentId) {
+    // WS-A unwind: no invoice exists, so nothing may hold these claims.
+    if (appliedCredit && appliedCredit.appliedTotal > 0) {
+      await unwindCreditClaims(appliedCredit, claimToken, supabaseAdmin)
+    }
     throw new Error(
       `createTDInvoice: exhausted ${MAX_INSERT_RETRIES} retries on invoice_number generation; last error: ${lastError?.message || 'unknown'}`,
     )
@@ -287,7 +328,37 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   //     invoice). Only reached for a genuinely new row — the idempotency path
   //     returns earlier, so credits are never consumed twice.
   if (appliedCredit && appliedCredit.appliedTotal > 0) {
+    // CONFIRM (third step of claim → create → confirm): decrement remaining and
+    // re-stamp the claim from the temporary token to the real invoice id, so the
+    // claim column reads as "claimed BY this invoice" from here on.
     await consumeCredits(appliedCredit, paymentId, supabaseAdmin)
+    await confirmCreditClaims(appliedCredit, paymentId, claimToken, supabaseAdmin)
+
+    // WS-A: staff alert when an OLD credit reduces a bill. Credits never expire
+    // (locked decision), so a months-old credit can cut a renewal invoice and
+    // read as a billing bug to whoever sees it. Non-fatal.
+    try {
+      const { emitAgedCreditAppliedEvent } = await import('@/lib/portal/chat-events')
+      for (const c of appliedCredit.credits) {
+        const { data: creditRow } = await supabaseAdmin
+          .from('payments')
+          .select('created_at')
+          .eq('id', c.id)
+          .maybeSingle()
+        const createdAt = (creditRow as { created_at?: string | null } | null)?.created_at
+        if (createdAt) {
+          await emitAgedCreditAppliedEvent({
+            invoice_id: paymentId,
+            credit_id: c.id,
+            amount: c.applyAmount,
+            currency,
+            credit_created_at: createdAt,
+          })
+        }
+      }
+    } catch (err) {
+      console.warn('[td-invoice] aged-credit notice failed (non-fatal):', err instanceof Error ? err.message : String(err))
+    }
   }
 
   // 3. Create payment_items
@@ -322,6 +393,18 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   const internalRef = `EXP-${String(expSeq).padStart(6, '0')}`
 
   // 5. Create client_expenses record (MIRROR — client sees as incoming expense)
+  //
+  // WS-A (Finance-Auditor defect): a CREDIT NOTE gets NO mirror row. The client's
+  // expense view would otherwise count the credit twice — once as a negative
+  // expense of its own, and again inside the "Credit applied −X" line on the
+  // invoice it reduces — leaving their totals short by exactly the credit. The
+  // credit is visible where it belongs: on the invoice it reduced.
+  // Only a REAL credit note (negative gross) skips the mirror. A zero-total
+  // invoice is still a document the client should see (hunter minor 9).
+  if (grossTotal < 0) {
+    return { paymentId, expenseId: '', invoiceNumber, total, status: invoiceStatus }
+  }
+
   const { data: expense, error: expErr } = await dbWriteSafe(
     supabaseAdmin
       .from('client_expenses')

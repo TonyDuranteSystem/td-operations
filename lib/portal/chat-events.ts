@@ -42,6 +42,7 @@ export type ChatEventKind =
   | "contact_updated"         // client submitted the contact-request form (add/update contact)
   | "offer_signed"            // client signed the offer/contract (awaiting payment)
   | "decision_responded"      // client answered a client_decision_request (approval/choice/text)
+  | "aged_credit_applied"     // an old credit note reduced a bill (WS-A: credits never expire)
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */
@@ -77,7 +78,7 @@ export interface EmitClientChatEventParams {
 export interface EmitResult {
   emitted: boolean
   message_id?: string
-  reason?: "already_emitted" | "missing_recipient" | "insert_failed"
+  reason?: "already_emitted" | "missing_recipient" | "insert_failed" | "not_applicable"
   error?: string
 }
 
@@ -202,6 +203,66 @@ export async function emitPaymentReceivedEvent(params: {
   } catch (err) {
     console.warn(
       `[emitPaymentReceivedEvent] non-fatal for payment ${params.payment_id}:`,
+      err instanceof Error ? err.message : String(err),
+    )
+    return { emitted: false, reason: "insert_failed", error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * WS-A: an OLD credit just reduced a bill — tell staff (dev job c0a61e44).
+ *
+ * Locked decision: paid-call credits never expire. The cost of "never" is that a
+ * credit earned months ago can quietly cut a renewal invoice, and the invoice
+ * line alone ("Credit applied −€257") reads to staff like a billing bug rather
+ * than a remembered promise. This note gives it a name and a date.
+ *
+ * Only fires above the age threshold: a credit applied days after it was earned
+ * is the normal, expected flow and needs no announcement.
+ *
+ * Non-fatal by construction — a notification failure must never break invoicing.
+ */
+export async function emitAgedCreditAppliedEvent(params: {
+  invoice_id: string
+  credit_id: string
+  amount: number
+  currency: string
+  credit_created_at: string
+  /** Age in days above which staff are told. Default 180 (~6 months). */
+  threshold_days?: number
+}): Promise<EmitResult> {
+  try {
+    const thresholdDays = params.threshold_days ?? 180
+    const ageMs = Date.now() - new Date(params.credit_created_at).getTime()
+    const ageDays = Math.floor(ageMs / 86_400_000)
+    if (!Number.isFinite(ageDays) || ageDays < thresholdDays) {
+      return { emitted: false, reason: "not_applicable" }
+    }
+
+    const { data: invoice } = await supabaseAdmin
+      .from("payments")
+      .select("id, contact_id, account_id, invoice_number")
+      .eq("id", params.invoice_id)
+      .maybeSingle()
+    if (!invoice) return { emitted: false, reason: "insert_failed", error: "invoice row not found" }
+
+    const symbol = params.currency === "EUR" ? "€" : "$"
+    const inv = (invoice.invoice_number as string | null) ?? "invoice"
+    const message =
+      `A credit from ${ageDays} days ago (${symbol}${params.amount}) was applied to ${inv}. ` +
+      `This is the client's own money coming back to them — not a billing error.`
+
+    return await emitClientChatEvent({
+      contact_id: (invoice.contact_id as string | null) ?? null,
+      account_id: (invoice.account_id as string | null) ?? null,
+      topic: "billing",
+      message,
+      source: { table: "payments", id: params.credit_id },
+      event_kind: "aged_credit_applied",
+    })
+  } catch (err) {
+    console.warn(
+      `[emitAgedCreditAppliedEvent] non-fatal for invoice ${params.invoice_id}:`,
       err instanceof Error ? err.message : String(err),
     )
     return { emitted: false, reason: "insert_failed", error: err instanceof Error ? err.message : String(err) }

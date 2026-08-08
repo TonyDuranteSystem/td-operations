@@ -6,6 +6,7 @@ import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote, ExternalLink, 
 import { toast } from 'sonner'
 import { ReferrerPicker, type ReferrerValue } from './referrer-picker'
 import { FORMATION_STATE_CODES, FORMATION_STATE_NAMES, type FormationStateCode } from '@/lib/formation/states'
+import { parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
 
 // ── Service catalog: loaded from DB ──
 interface CatalogService {
@@ -301,13 +302,26 @@ export function CreateOfferDialog({
   // Notes context for offer creation
   const [notesContext, setNotesContext] = useState<NoteSource[]>([])
   const [notesLoading, setNotesLoading] = useState(false)
+  // WS-A: credit this client already paid, shown while the offer is being built.
+  const [heldCredit, setHeldCredit] = useState<Array<{ amount: number; currency: string }>>([])
+  // WS-A: warnings raised WHILE creating the offer (a credit that could not be
+  // attached, a mis-typed price). These HOLD the screen — see the note below.
+  const [creditCheckFailed, setCreditCheckFailed] = useState(false)
+  const [postCreateWarnings, setPostCreateWarnings] = useState<string[]>([])
+  const [createdUrl, setCreatedUrl] = useState<string | null>(null)
+
+  const dismissWarnings = () => {
+    setPostCreateWarnings([])
+    setCreatedUrl(null)
+    onClose()
+  }
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set())
   const [notesExpanded, setNotesExpanded] = useState(true)
   const [expandedNoteIds, setExpandedNoteIds] = useState<Set<string>>(new Set())
 
   // Fetch notes context when dialog opens
   useEffect(() => {
-    if (!open) return
+    if (!open) { setHeldCredit([]); setCreditCheckFailed(false); return }
     if (!leadId && !contactId && !accountId) return
 
     setNotesLoading(true)
@@ -321,10 +335,17 @@ export function CreateOfferDialog({
       .then(d => {
         const sources = (d.sources ?? []) as NoteSource[]
         setNotesContext(sources)
+        setHeldCredit((d.held_credit ?? []) as Array<{ amount: number; currency: string }>)
+        // An absent banner must never be the way we report "we could not check".
+        setCreditCheckFailed(d.credit_check_failed === true)
         // Select all by default
         setSelectedNoteIds(new Set(sources.map(s => s.id)))
       })
-      .catch(() => { /* silently fail — notes are optional */ })
+      .catch(() => {
+        // Notes are optional; the CREDIT check is not. Swallowing this made an
+        // unreachable server indistinguishable from a client who owes nothing.
+        setCreditCheckFailed(true)
+      })
       .finally(() => setNotesLoading(false))
   }, [open, leadId, contactId, accountId])
 
@@ -570,14 +591,15 @@ export function CreateOfferDialog({
     return null
   }, [bankPreference, currency])
 
+  // WS-A3: the PARSER is shared (one regex in the engine); the aggregation is
+  // the dialog's own — draft form state with a per-line quantity multiplier the
+  // stored-offer engine deliberately has no concept of.
   const servicesTotalAmount = selected.reduce((sum, s) => {
-    const n = parseFloat(s.price.replace(/[^0-9.]/g, ''))
-    return sum + (isNaN(n) ? 0 : n * (s.quantity ?? 1))
+    return sum + parsePriceQuirk(s.price) * (s.quantity ?? 1)
   }, 0)
 
   const preconditionsTotalAmount = preconditions.reduce((sum, p) => {
-    const n = parseFloat(p.price.replace(/[^0-9.]/g, ''))
-    return sum + (isNaN(n) ? 0 : n)
+    return sum + parsePriceQuirk(p.price)
   }, 0)
 
   const totalAmount = servicesTotalAmount + preconditionsTotalAmount
@@ -831,9 +853,25 @@ export function CreateOfferDialog({
 
         const data = await res.json()
 
-        toast.success(`Draft offer created — opening preview`)
+        const warnings = (data.warnings ?? []) as string[]
         setCreatedOfferUrl(data.offer_url)
-        // Auto-open the real offer page for preview
+
+        // WS-A: a warning must HOLD THE SCREEN, not be a toast.
+        // This previously toasted and then immediately opened the offer in a new
+        // tab — which took focus, so the warning was raised on a screen the user
+        // was instantly navigated away from and never saw. Antonio hit exactly
+        // that. When something is wrong, the preview waits until he has read it.
+        if (warnings.length > 0) {
+          setPostCreateWarnings(warnings)
+          setCreatedUrl(data.offer_url)
+          // Two channels on purpose. The screen is the one that holds; the toast
+          // is insurance in case anything ever unmounts this component again.
+          for (const w of warnings) toast.warning(w, { duration: 30000 })
+          router.refresh()
+          return
+        }
+
+        toast.success(`Draft offer created — opening preview`)
         window.open(`${data.offer_url}?preview=td`, '_blank')
         router.refresh()
       } catch (err) {
@@ -842,6 +880,54 @@ export function CreateOfferDialog({
     })
   }
 
+  // WS-A: the offer was created, but something needs reading BEFORE it is sent.
+  // A full screen, not a toast — the previous version raised this and then
+  // opened the offer in a new tab in the same breath, so it was never seen.
+  if (postCreateWarnings.length > 0) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
+          <h2 className="text-lg font-semibold mb-1">Offer created — read this before sending</h2>
+          <p className="text-sm text-zinc-500 mb-4">The draft is saved. Nothing has gone to the client.</p>
+          <div className="space-y-3 mb-5">
+            {postCreateWarnings.map((w, i) => (
+              <div key={i} className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+                {w}
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={dismissWarnings}
+              className="px-3 py-1.5 text-sm rounded-md border hover:bg-zinc-50"
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (createdUrl) window.open(`${createdUrl}?preview=td`, '_blank')
+                dismissWarnings()
+              }}
+              className="px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700"
+            >
+              Open the offer anyway
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // DELIBERATELY ABOVE THE `open` GATE.
+  // Creating an offer takes seconds (many sequential writes). If the staffer
+  // closes the dialog while that is in flight, the response still arrives and
+  // sets these warnings — and if this lived below the gate, the component would
+  // return null and the warning would be destroyed. Unrecoverably: once the
+  // offer exists the Create Offer button disappears, so it could never repaint.
+  // That is the sixth defect in this feature where the message was produced and
+  // never reached a human; the warning outliving its own dialog is the fix.
   if (!open) return null
 
   const primaryServices = catalog.filter(s => s.category === 'primary')
@@ -879,6 +965,32 @@ export function CreateOfferDialog({
               />
             </div>
             <p className="text-sm text-zinc-600">{clientEmail}</p>
+            {/* WS-A: what this client has ALREADY PAID. Shown here, while the
+                services are still being chosen, because learning it after the
+                offer is written is too late to price the deal. */}
+            {creditCheckFailed && heldCredit.length === 0 && (
+              <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                <p className="text-sm text-amber-900">
+                  ⚠ Could not check whether this client has unused credit. That is
+                  <strong> not</strong> the same as them having none — check before you price this.
+                </p>
+              </div>
+            )}
+            {heldCredit.length > 0 && (
+              <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2">
+                <p className="text-sm font-medium text-emerald-900">
+                  💳 Already paid:{' '}
+                  {heldCredit
+                    .map(c => `${c.currency === 'EUR' ? '€' : '$'}${c.amount.toLocaleString('en-US')}`)
+                    .join(' + ')}{' '}
+                  unused credit
+                </p>
+                <p className="mt-0.5 text-xs text-emerald-800">
+                  It is deducted automatically on an offer in the same currency. A credit in
+                  another currency is never converted — price this offer to match it.
+                </p>
+              </div>
+            )}
             <div className="pt-1">
               <ReferrerPicker value={referrer} onChange={setReferrer} />
             </div>
@@ -1729,8 +1841,8 @@ function ServiceRow({
   onQuantityChange: (quantity: number) => void
   onContextChange: (ctx: 'individual' | 'business' | 'ask') => void
 }) {
-  const unitPrice = parseFloat(price.replace(/[^0-9.]/g, ''))
-  const lineTotal = !isNaN(unitPrice) && quantity > 1
+  const unitPrice = parsePriceQuirk(price)
+  const lineTotal = unitPrice > 0 && quantity > 1
     ? `= ${currencySymbol}${(unitPrice * quantity).toLocaleString('en-US')}`
     : null
 

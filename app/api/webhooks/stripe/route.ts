@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient, SupabaseClient } from "@supabase/supabase-js"
 import { runActivation } from "@/lib/operations/activate-service"
 import { resolveExternalValue } from "@/lib/catalog/framework"
+import { handleChargeReversal } from "@/lib/operations/credit-reversal"
 
 // Lightweight types for Stripe objects (v22 has different namespace pattern)
 interface StripeEvent {
@@ -508,6 +509,21 @@ export async function POST(req: NextRequest) {
           external_id: (intent.id as string) || "unknown",
           payload: intent,
         })
+        break
+      }
+
+      // WS-A (dev job c0a61e44): money going BACK. Before this, nothing in the
+      // system ever learned that a charge was refunded or disputed after the
+      // fact — the refund check only ran at settlement time and never revisited
+      // a stored row. A paid-call credit whose charge is reversed must not stay
+      // spendable, so these events are now subscribed and routed.
+      case "charge.refunded":
+      case "charge.dispute.created": {
+        const obj = event.data.object as unknown as Record<string, unknown>
+        const chargeId = String(
+          event.type === "charge.refunded" ? obj.id : (obj.charge ?? obj.id),
+        )
+        await handleChargeReversal(chargeId, event.type)
         break
       }
 

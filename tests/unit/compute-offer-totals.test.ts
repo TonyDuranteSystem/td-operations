@@ -10,7 +10,9 @@ import {
   computeOfferTotals,
   computeNetOfCredits,
   parsePriceQuirk,
-} from "@/lib/offers/compute-offer-totals"
+  computeOfferPayable,
+  resolveOfferCurrency,
+  ambiguousDotPrices,} from "@/lib/offers/compute-offer-totals"
 
 describe("parsePriceQuirk — the historical parser, verbatim", () => {
   it("parses plain prices with symbols and commas", () => {
@@ -169,5 +171,163 @@ describe("countedServiceNames — checkout charge labels", () => {
       selected_services: [],
     })
     expect(t.countedServiceNames).toEqual(["Company Formation"])
+  })
+})
+
+describe("ComputeOptions — contract-page semantics (WS-A3 sites #5-6)", () => {
+  const multiContract = {
+    services: [
+      { name: "Company Formation", price: "€3,000", contract_type: "formation" },
+      { name: "ITIN Application", price: "€1,000", contract_type: "itin" },
+      { name: "Notary", price: "€200" }, // no contract_type → belongs to the main contract
+    ],
+    cost_summary: [{ label: "Setup Fee", total: "€4,200" }],
+    selected_services: [],
+  }
+
+  it("filterContractType counts only the main contract's lines (+ untyped ones)", () => {
+    expect(computeOfferTotals(multiContract, { filterContractType: "formation" }).gross).toBe(3200)
+    expect(computeOfferTotals(multiContract, { filterContractType: "itin" }).gross).toBe(1200)
+  })
+
+  it("without the filter, EVERY selected line counts (offer page / webhook / checkout)", () => {
+    expect(computeOfferTotals(multiContract).gross).toBe(4200)
+  })
+
+  it("currencyOverride wins over header sniffing (the contract pages' explicit-column rule)", () => {
+    const eurHeader = { services: [{ name: "X", price: "1000" }], cost_summary: [{ total: "€1,000" }] }
+    expect(computeOfferTotals(eurHeader).currency).toBe("EUR")
+    expect(computeOfferTotals(eurHeader, { currencyOverride: "USD" }).currency).toBe("USD")
+    // null/undefined override falls back to header detection
+    expect(computeOfferTotals(eurHeader, { currencyOverride: null }).currency).toBe("EUR")
+  })
+})
+
+// ─── NET EVERYWHERE + one currency rule (blockers 1 & 2) ─────────────────
+
+describe("computeOfferPayable — the single amount authority", () => {
+  it("net = gross − credit, and that is what every rail must charge", () => {
+    const p = computeOfferPayable({
+      services: [{ name: "Formation", price: "€1500" }],
+      cost_summary: [{ label: "Totale", total: "€1500" }],
+      currency: "EUR",
+      credit_amount: 257,
+    })
+    expect(p.gross).toBe(1500)
+    expect(p.credit).toBe(257)
+    expect(p.net).toBe(1243)
+  })
+
+  it("a credit larger than the bill nets to zero, never negative", () => {
+    const p = computeOfferPayable({
+      services: [{ name: "Small", price: "$100" }],
+      cost_summary: [{ label: "Total", total: "$100" }],
+      currency: "USD",
+      credit_amount: 257,
+    })
+    expect(p.net).toBe(0)
+    expect(p.credit).toBe(100)   // capped at what is owed
+  })
+
+  it("no credit leaves the amount exactly as it was — no behaviour change", () => {
+    const p = computeOfferPayable({
+      services: [{ name: "Formation", price: "$1,500" }],
+      cost_summary: [{ label: "Total", total: "$1,500" }],
+    })
+    expect(p.gross).toBe(1500)
+    expect(p.credit).toBe(0)
+    expect(p.net).toBe(1500)
+  })
+
+  it("junk in the credit column cannot corrupt the amount charged", () => {
+    for (const bad of [null, undefined, "abc", -50, NaN]) {
+      const p = computeOfferPayable({
+        services: [{ name: "F", price: "$100" }],
+        cost_summary: [{ label: "Total", total: "$100" }],
+        credit_amount: bad as never,
+      })
+      expect(p.net).toBe(100)
+      expect(p.credit).toBe(0)
+    }
+  })
+})
+
+describe("resolveOfferCurrency — ONE rule for storage, engine and credit", () => {
+  it("an explicit currency on the offer wins over any sniffing", () => {
+    expect(resolveOfferCurrency("EUR", [{ label: "Total", total: "$1,500" }])).toBe("EUR")
+    expect(resolveOfferCurrency("USD", [{ label: "Totale", total: "€1.500" }])).toBe("USD")
+  })
+
+  it("falls back to the header when the offer never recorded one", () => {
+    expect(resolveOfferCurrency(null, [{ label: "Totale", total: "€1.500" }])).toBe("EUR")
+    expect(resolveOfferCurrency(undefined, [{ label: "Total", total: "$1,500" }])).toBe("USD")
+  })
+
+  it("BLOCKER 2: a '$/year' recurring line in the SERVICES can no longer flip a EUR offer", () => {
+    // The old storage detector sniffed the whole services blob; the engine read
+    // the header. That split stored EUR and charged USD.
+    const summary = [{ label: "Totale", total: "€1.500" }]
+    const services = [{ name: "Annual Maintenance", price: "$2,000/year" }]
+    expect(resolveOfferCurrency(null, summary)).toBe("EUR")
+    // the engine agrees, because it now asks the same function
+    expect(computeOfferPayable({ services, cost_summary: summary }).currency).toBe("EUR")
+  })
+
+  it("storage and the money engine cannot disagree — the same input gives the same answer", () => {
+    const cases: Array<[string | null, unknown]> = [
+      ["EUR", [{ label: "Total", total: "$900" }]],
+      [null, [{ label: "Totale", total: "€900" }]],
+      [null, [{ label: "Total", total: "900" }]],
+    ]
+    for (const [explicit, summary] of cases) {
+      const stored = resolveOfferCurrency(explicit, summary)
+      const engine = computeOfferPayable({ services: [], cost_summary: summary, currency: explicit }).currency
+      expect(engine).toBe(stored)
+    }
+  })
+})
+
+// ─── the authoring warning for dot-thousands prices (approved rider) ──────
+
+describe("ambiguousDotPrices — catch it while it is still being typed", () => {
+  it("flags the exact shape that mis-prices: dot + three digits", () => {
+    const hits = ambiguousDotPrices([{ name: "Costituzione LLC", price: "€1.500" }])
+    expect(hits.length).toBe(1)
+    expect(hits[0]).toContain("Costituzione LLC")
+    // and it really is the shape that breaks — proven against the parser itself
+    expect(parsePriceQuirk("€1.500")).toBe(1.5)
+  })
+
+  it("flags dollars and bare numbers written the same way", () => {
+    expect(ambiguousDotPrices([{ name: "A", price: "$1.500" }]).length).toBe(1)
+    expect(ambiguousDotPrices([{ name: "B", price: "1.500" }]).length).toBe(1)
+    expect(ambiguousDotPrices([{ name: "C", price: "€12.345" }]).length).toBe(1)
+  })
+
+  it("does NOT flag a genuine decimal — two digits after the dot is money", () => {
+    expect(ambiguousDotPrices([{ name: "A", price: "€1.50" }])).toEqual([])
+    expect(ambiguousDotPrices([{ name: "B", price: "$99.99" }])).toEqual([])
+  })
+
+  it("does NOT flag the formats that parse correctly today", () => {
+    expect(ambiguousDotPrices([{ name: "A", price: "$1,500" }])).toEqual([])
+    expect(ambiguousDotPrices([{ name: "B", price: "€1500" }])).toEqual([])
+    expect(ambiguousDotPrices([{ name: "C", price: "Inclusa" }])).toEqual([])
+    expect(ambiguousDotPrices([{ name: "D", price: "" }])).toEqual([])
+  })
+
+  it("reports every offending line, not just the first", () => {
+    const hits = ambiguousDotPrices([
+      { name: "One", price: "€1.500" },
+      { name: "Two", price: "$1,500" },
+      { name: "Three", price: "€2.500" },
+    ])
+    expect(hits.length).toBe(2)
+  })
+
+  it("survives junk without throwing", () => {
+    expect(ambiguousDotPrices(null)).toEqual([])
+    expect(ambiguousDotPrices("nonsense")).toEqual([])
+    expect(ambiguousDotPrices([{ name: "A" }])).toEqual([])
   })
 })

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
+import { resolveCreditSubject, subjectForDisplay } from '@/lib/operations/credit-subject'
+import { unspentCreditByCurrency } from '@/lib/operations/credit-netting'
 
 export const dynamic = 'force-dynamic'
 
@@ -226,7 +228,55 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ sources })
+
+    // ── WS-A: what this client has ALREADY PAID ──────────────────────────
+    //
+    // Shown in the Create Offer dialog while staff are still choosing services,
+    // because knowing it afterwards is too late to price the deal. Resolved by
+    // the SAME resolver the offer itself uses, so the dialog can never promise
+    // something the offer would then not show.
+    //
+    // The lead is usually NOT linked to a contact yet (that only happens at
+    // signing), so the email is the link — exactly as on the offer.
+    let heldCredit: { amount: number; currency: string }[] = []
+    let creditPerson: string | null = null
+    // An empty list must mean "they hold nothing", never "we could not look".
+    // Collapsing those two was how an unreachable database read became a
+    // confident "no credit" on the screen staff price deals from.
+    let creditCheckFailed = false
+    try {
+      let email: string | null = null
+      if (contactId) {
+        const { data: c } = await supabaseAdmin.from('contacts').select('email').eq('id', contactId).maybeSingle()
+        email = (c as { email?: string | null } | null)?.email ?? null
+      }
+      if (!email && leadId) {
+        const { data: l } = await supabaseAdmin.from('leads').select('email').eq('id', leadId).maybeSingle()
+        email = (l as { email?: string | null } | null)?.email ?? null
+      }
+      if (email) {
+        const subject = await resolveCreditSubject(email, supabaseAdmin)
+        if (subject.kind === 'lookup_failed') creditCheckFailed = true
+        const personId = subjectForDisplay(subject)
+        if (personId) {
+          const held = await unspentCreditByCurrency({ contactId: personId }, supabaseAdmin)
+          heldCredit = held.filter((h) => h.amount > 0)
+          creditPerson = personId
+        }
+      }
+    } catch (err) {
+      // Never break the dialog over an advisory line — but never pretend it
+      // succeeded either.
+      creditCheckFailed = true
+      console.error('[offer-notes-context] credit lookup failed:', err)
+    }
+
+    return NextResponse.json({
+      sources,
+      held_credit: heldCredit,
+      credit_contact_id: creditPerson,
+      credit_check_failed: creditCheckFailed,
+    })
   } catch (err) {
     console.error('offer-notes-context error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

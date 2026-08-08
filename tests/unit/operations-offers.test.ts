@@ -184,6 +184,19 @@ vi.mock("@/app/offer/[token]/contract/bank-defaults", () => ({
   }),
 }))
 
+// WS-A: the offer's "already paid" snapshot. Captured so the CURRENCY the
+// offer resolved is asserted, not assumed — an offer priced in USD must never
+// ask for (and show) a EUR balance.
+const creditLookups: Array<{ scope: unknown; currency: string }> = []
+let creditHeld: { amount: number; creditId: string | null } = { amount: 0, creditId: null }
+
+vi.mock("@/lib/operations/credit-netting", () => ({
+  availableCreditForDisplay: vi.fn(async (scope: unknown, currency: string) => {
+    creditLookups.push({ scope, currency })
+    return creditHeld
+  }),
+}))
+
 vi.mock("@/lib/whop-auto-plan", () => ({
   createWhopPlan: vi.fn(async (opts: Record<string, unknown>) => {
     whopCalls.push(opts)
@@ -204,6 +217,8 @@ beforeEach(() => {
   leadUpdates.length = 0
   actionLogCalls.length = 0
   whopCalls.length = 0
+  creditLookups.length = 0
+  creditHeld = { amount: 0, creditId: null }
 })
 
 // ─── Tests ───────────────────────────────────────────────
@@ -687,5 +702,110 @@ describe("createOffer — entity_type normalization (MMLLC build)", () => {
     })
     const insert = offerInserts.find((o) => !o.__update && o.token === "test-bad-entity")
     expect(insert?.entity_type).toBeNull()
+  })
+})
+
+describe("createOffer — WS-A credit snapshot (hunter minor 10)", () => {
+  it("stamps the client's held credit onto the offer so the page can show 'already paid'", async () => {
+    creditHeld = { amount: 257, creditId: "cn-paid-call" }
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "Booked A Call",
+      language: "it",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Formation", price: "EUR1.500" }],
+      cost_summary: [{ label: "Totale", total: "EUR1.500" }],
+      token: "test-credit-shown",
+      contact_id: "contact-paid-call",
+    })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-credit-shown")
+    expect(insert?.credit_amount).toBe(257)
+    expect(insert?.credit_payment_id).toBe("cn-paid-call")
+  })
+
+  it("asks for the balance in the OFFER's OWN currency — the phantom-discount guard", async () => {
+    creditHeld = { amount: 0, creditId: null }
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "Dollar Deal",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Formation", price: "$1,500" }],
+      cost_summary: [{ label: "Total", total: "$1,500" }],
+      token: "test-credit-usd",
+      contact_id: "contact-eur-holder",
+    })
+    expect(creditLookups).toHaveLength(1)
+    expect(creditLookups[0].currency).toBe("USD")
+    expect(creditLookups[0].scope).toEqual({ contactId: "contact-eur-holder" })
+  })
+
+  it("a client with no credit gets NULL, not 0 — no zero-value line on the offer", async () => {
+    creditHeld = { amount: 0, creditId: null }
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "No Credit",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Formation", price: "$1,500" }],
+      cost_summary: [{ label: "Total", total: "$1,500" }],
+      token: "test-credit-none",
+      contact_id: "contact-plain",
+    })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-credit-none")
+    expect(insert?.credit_amount).toBeNull()
+    expect(insert?.credit_payment_id).toBeNull()
+  })
+
+  it("an offer with no contact never looks up credit at all (nothing to scope to)", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "Lead Only",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Formation", price: "$1,500" }],
+      cost_summary: [{ label: "Total", total: "$1,500" }],
+      token: "test-credit-nocontact",
+    })
+    expect(creditLookups).toHaveLength(0)
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-credit-nocontact")
+    expect(insert?.credit_amount).toBeNull()
+  })
+})
+
+describe("createOffer — the dot-format warning must REACH the author", () => {
+  it("a service priced €1.500 comes back as a warning on the result", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    const res = await createOffer({
+      client_name: "Dot Format",
+      language: "it",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Costituzione LLC", price: "\u20ac1.500" }],
+      cost_summary: [{ label: "Totale", total: "\u20ac1.500" }],
+      token: "test-dot-warning",
+    })
+    expect(res.success).toBe(true)
+    const warned = (res.warnings ?? []).join(" ")
+    expect(warned).toContain("PRICE FORMAT")
+    expect(warned).toContain("Costituzione LLC")
+  })
+
+  it("a correctly written price produces NO warning — no crying wolf", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    const res = await createOffer({
+      client_name: "Clean Price",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Formation", price: "$1,500" }],
+      cost_summary: [{ label: "Total", total: "$1,500" }],
+      token: "test-dot-clean",
+    })
+    expect((res.warnings ?? []).join(" ")).not.toContain("PRICE FORMAT")
   })
 })

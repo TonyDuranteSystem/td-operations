@@ -72,6 +72,16 @@ export function buildRevisedOfferInsert(
     entity_type: original.entity_type ?? null,
     formation_state: normalizeFormationState(original.formation_state),
     card_fee_rate: (original.card_fee_rate as number | null | undefined) ?? null,
+    // WS-A display scalars: a revised offer must keep showing the client's
+    // already-paid credit. Display-only — if these were ever dropped the
+    // client's BALANCE would still be right (the ledger holds the money), but
+    // the offer would silently stop mentioning it.
+    credit_amount: (original.credit_amount as number | null | undefined) ?? null,
+    credit_payment_id: (original.credit_payment_id as string | null | undefined) ?? null,
+    // Without this a revised offer silently drops from "Already paid — Strategy
+    // Call" to the neutral "Credit applied" — a wording regression on the one
+    // document the client compares side by side with the previous version.
+    credit_kind: (original.credit_kind as string | null | undefined) ?? null,
     referrer_contact_id: (original.referrer_contact_id as string | null | undefined) ?? null,
     view_count: 0,
     version: seed.newVersion,
