@@ -1280,3 +1280,70 @@ describe("CELL 14 — attaching a paid call staff had to identify themselves", (
     expect(cr!.contact_id).toBe(p.id)
   })
 })
+
+// ══ CELL 15 — the client is billed in a currency their credit cannot reach ══
+//
+// The seventh "produced correctly, never delivered": the engine has always
+// reported credit stranded in another currency, and nothing read it. An Italian
+// client who paid EUR257 for a call gets a USD renewal at full price and nobody
+// is told. Renewals never pass through offer creation, which is the only other
+// place that warns — so invoice creation is the delivery point that matters.
+
+describe("CELL 15 — stranded-currency credit is REPORTED, not silently ignored", () => {
+  it("15a a EUR credit against a USD bill raises a staff notice naming the amount", async () => {
+    const p = await freshPerson("stranded")
+    await recordPaidCall({
+      payment: booking(newCharge("stranded"), 257, "EUR"),
+      inviteeEmail: p.email, callDate: "2026-08-08",
+    })
+
+    const before = await db.from("system_errors").select("id", { count: "exact", head: true })
+      .ilike("message", "%holding unused credit in another currency%")
+    const beforeCount = before.count ?? 0
+
+    // Bill them in USD — the annual-renewal shape.
+    const inv = await createTDInvoice({
+      contact_id: p.id,
+      line_items: [{ description: `${TAG} Annual Management`, unit_price: 2000, quantity: 1 }],
+      currency: "USD",
+      idempotency_key: `${TAG}-stranded-usd`,
+    })
+
+    // The bill is correctly at FULL price — no invented FX.
+    const row = await payment(inv.paymentId)
+    expect(Number(row!.total)).toBe(2000)
+    // The EUR credit is untouched and still theirs.
+    const held = await unspentCreditByCurrency({ contactId: p.id }, db)
+    expect(held.some(h => h.currency === "EUR" && h.amount === 257)).toBe(true)
+
+    // AND SOMEONE WAS TOLD. This is the whole point of the cell.
+    const after = await db.from("system_errors").select("id", { count: "exact", head: true })
+      .ilike("message", "%holding unused credit in another currency%")
+    expect((after.count ?? 0)).toBeGreaterThan(beforeCount)
+  })
+
+  it("15b a SAME-currency bill applies the credit and raises no such notice", async () => {
+    const p = await freshPerson("nostrand")
+    await recordPaidCall({
+      payment: booking(newCharge("nostrand"), 257, "EUR"),
+      inviteeEmail: p.email, callDate: "2026-08-08",
+    })
+    const before = await db.from("system_errors").select("id", { count: "exact", head: true })
+      .ilike("message", "%holding unused credit in another currency%")
+    const beforeCount = before.count ?? 0
+
+    const inv = await createTDInvoice({
+      contact_id: p.id,
+      line_items: [{ description: `${TAG} EUR job`, unit_price: 1000, quantity: 1 }],
+      currency: "EUR",
+      idempotency_key: `${TAG}-nostrand-eur`,
+    })
+    const row = await payment(inv.paymentId)
+    expect(Number(row!.total)).toBe(743)   // credit applied
+
+    // no cry-wolf: nothing was stranded, so nothing was raised
+    const after = await db.from("system_errors").select("id", { count: "exact", head: true })
+      .ilike("message", "%holding unused credit in another currency%")
+    expect((after.count ?? 0)).toBe(beforeCount)
+  })
+})

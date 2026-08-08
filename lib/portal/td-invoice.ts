@@ -190,6 +190,46 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     // concurrent signings both READ the same credit (test T9); the claim is the
     // conditional write that makes exactly one of them the winner. Anything not
     // won here is simply not applied. Unwound below if the insert fails.
+    // THE CLIENT HOLDS CREDIT THIS BILL CANNOT USE.
+    //
+    // Credit never converts between currencies — correct, we do not invent an FX
+    // rate — but silence here is how an Italian client who paid EUR257 for a call
+    // gets a USD renewal at full price with nobody noticing. The engine has always
+    // REPORTED this; nothing read it, so the fact died in a discarded field. That
+    // is the same "produced correctly, never delivered" failure this workstream
+    // has now hit seven times.
+    //
+    // Fires at invoice creation because that is the moment the money is decided,
+    // and it covers the renewal cron, which never passes through offer creation —
+    // the only other place that warns.
+    if ((candidate.strandedByCurrency ?? []).length > 0) {
+      try {
+        const stranded = (candidate.strandedByCurrency ?? [])
+          .map((s) => `${s.amount} ${s.currency}`)
+          .join(', ')
+        const { reportSystemError } = await import('@/lib/system-errors')
+        await reportSystemError({
+          source: 'server',
+          route: 'invoice-creation/credit-stranded-by-currency',
+          message:
+            `A client was invoiced in ${currency} while holding unused credit in another currency (${stranded}), ` +
+            `so none of it was deducted${candidate.appliedTotal > 0 ? ' beyond what matched this currency' : ''}. ` +
+            `Credit never converts between currencies. Either re-issue this bill in their currency, or tell them ` +
+            `plainly that the balance only applies to a purchase priced the same way.`,
+          context: {
+            invoice_currency: currency,
+            invoice_gross: grossTotal,
+            stranded_credit: candidate.strandedByCurrency,
+            applied_in_this_currency: candidate.appliedTotal,
+            account_id: account_id ?? null,
+            contact_id: contact_id ?? null,
+          },
+        })
+      } catch (err) {
+        console.warn('[td-invoice] stranded-credit notice failed (non-fatal):', err instanceof Error ? err.message : String(err))
+      }
+    }
+
     appliedCredit = candidate.appliedTotal > 0
       ? await claimCredits(candidate, claimToken, supabaseAdmin)
       : candidate
