@@ -23,6 +23,20 @@ export type MfaVerdict = 'allow' | 'enroll' | 'verify'
 export interface MfaGateEnv {
   /** Is this session subject to MFA at all (today: staff/admin roles)? */
   subject: boolean
+  /**
+   * This account carries an explicit owner-set exemption (Antonio, 2026-08-07:
+   * "in admin for antonio.durante account I want complete control on
+   * everything"). Set only by the owner, only on his own account, and it is
+   * the ONLY way MFA can be switched OFF and STAY off — removing an
+   * authenticator alone does not, because the gate would push the account
+   * back into enrollment at the next login once grace has passed.
+   *
+   * Stated plainly and permanently: an exempt account is one that reaches
+   * client data with a password alone. That is the owner's decision to make,
+   * not a default, and the panel shows it as an explicit state so it can
+   * never be silently true.
+   */
+  exempt: boolean
   /** Session has a VERIFIED TOTP factor (from the server-validated user). */
   hasVerifiedFactor: boolean
   /** aal claim from the validated access token; null when undecodable. */
@@ -46,6 +60,12 @@ export function isWithinGrace(graceUntilRaw: string | undefined, now: number): b
 
 export function resolveMfaGate(env: MfaGateEnv): MfaVerdict {
   if (!env.subject) return 'allow'
+
+  // An exempt account is never pushed into enrollment. It IS still challenged
+  // when it has a factor — otherwise turning the exemption on would silently
+  // weaken an account that is currently protected, and someone who exempted
+  // themselves and forgot would believe they were covered.
+  if (env.exempt && !env.hasVerifiedFactor) return 'allow'
 
   if (env.hasVerifiedFactor) {
     // Enrolled: the challenge is never grace-exempt — an enrolled user who

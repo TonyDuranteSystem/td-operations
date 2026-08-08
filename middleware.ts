@@ -347,6 +347,11 @@ export async function middleware(request: NextRequest) {
       }
       const verdict = resolveMfaGate({
         subject: true,
+        // Owner-set, own-account-only exemption (see /api/mfa/exemption).
+        // Read from the FRESH getUser result, so switching it off takes
+        // effect on the very next request — same freshness the
+        // remember-device revocation relies on.
+        exempt: user.app_metadata?.mfa_exempt === true,
         hasVerifiedFactor,
         aal,
         rememberedDevice,
