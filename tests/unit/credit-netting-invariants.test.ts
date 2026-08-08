@@ -11,14 +11,15 @@
  * by an explicit staff click.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { computeCreditApplication, allocateCredits, availableCreditForDisplay } from "@/lib/operations/credit-netting"
+import { computeCreditApplication, allocateCredits, availableCreditForDisplay, unspentCreditByCurrency, releaseStaleCreditClaims } from "@/lib/operations/credit-netting"
 
 // ─── Minimal supabase double: records queries, returns scenario rows ───
 interface CreditRow { id: string; credit_remaining: number | null; idempotency_key?: string | null }
 const scenario: {
   credits: CreditRow[]
   queries: Array<{ table: string; filters: Record<string, unknown> }>
-} = { credits: [], queries: [] }
+  forceError: { message: string } | null
+} = { credits: [], queries: [], forceError: null }
 
 function makeClient() {
   return {
@@ -33,10 +34,13 @@ function makeClient() {
         is: (col: string, val: unknown) => { filters[`${col} IS`] = val; return chain },
         neq: (col: string, val: unknown) => { filters[`${col}!=`] = val; return chain },
         in: (col: string, val: unknown) => { filters[`${col} in`] = val; return chain },
+        not: (col: string, op: string, val: unknown) => { filters[`${col} not ${op}`] = val; return chain },
+        lt: (col: string, val: unknown) => { filters[`${col} <`] = val; return chain },
+        update: () => chain,
         order: () => chain,
         then: (res: (v: unknown) => unknown) => {
           scenario.queries.push(rec)
-          return Promise.resolve({ data: scenario.credits, error: null }).then(res)
+          return Promise.resolve({ data: scenario.forceError ? null : scenario.credits, error: scenario.forceError }).then(res)
         },
       }
       return chain
@@ -47,6 +51,7 @@ function makeClient() {
 beforeEach(() => {
   scenario.credits = []
   scenario.queries = []
+  scenario.forceError = null
   vi.restoreAllMocks()
 })
 
@@ -447,5 +452,49 @@ describe("T20 — the client-facing label tells the truth about the credit", () 
     const held = await availableCreditForDisplay({ contactId: "c" }, "EUR", client())
     expect(held.amount).toBe(0)
     expect(held.kind).toBeNull()
+  })
+})
+
+// ─── T21/T22: a STUCK claim must be nameable and must self-heal ───────────
+
+describe("T21 — locked credit is reported apart from available (hunter major)", () => {
+  it("a claimed-but-unspent credit comes back flagged, not merged with the rest", async () => {
+    scenario.credits = [
+      { id: "free", credit_remaining: 100, amount_currency: "EUR", credit_consumed_by: null },
+      { id: "stuck", credit_remaining: 257, amount_currency: "EUR", credit_consumed_by: "some-invoice" },
+    ] as never
+    const rows = await unspentCreditByCurrency({ contactId: "c" }, client())
+    const free = rows.find(r => !r.locked)
+    const stuck = rows.find(r => r.locked)
+    expect(free?.amount).toBe(100)
+    expect(stuck?.amount).toBe(257)
+    // merging these is what made the staff warning blame the CURRENCY for a
+    // credit that was actually stuck mid-use — a self-contradictory message
+    expect(rows.length).toBe(2)
+  })
+
+  it("a read failure THROWS rather than reporting 'they hold nothing'", async () => {
+    scenario.credits = []
+    scenario.forceError = { message: "connection reset" } as never
+    await expect(unspentCreditByCurrency({ contactId: "c" }, client())).rejects.toThrow(/connection reset/)
+    scenario.forceError = null as never
+  })
+})
+
+describe("T22 — abandoned claims are released so the credit comes back", () => {
+  it("targets exactly the stuck state: claimed, still has a balance, and old", async () => {
+    scenario.credits = [{ id: "stuck" }] as never
+    await releaseStaleCreditClaims({ contactId: "c-1" }, client(), 15)
+    const q = scenario.queries[0]
+    expect(q.filters.contact_id).toBe("c-1")
+    expect(q.filters.invoice_status).toBe("Credit")
+    expect(q.filters["credit_remaining>"]).toBe(0)          // still has money on it
+    expect(q.filters["credit_consumed_by not is"]).toBe(null) // and is claimed
+    expect(typeof q.filters["updated_at <"]).toBe("string")   // and is old
+  })
+
+  it("does nothing without a scope — never a global sweep", async () => {
+    const n = await releaseStaleCreditClaims({} as never, client(), 15)
+    expect(n).toBe(0)
   })
 })

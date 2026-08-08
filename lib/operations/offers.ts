@@ -157,21 +157,30 @@ async function warnIfCreditWentUnattached(input: {
 }): Promise<string | null> {
   try {
     const held: Array<{ contactId: string; amount: number; currency: string }> = []
+    const locked: Array<{ amount: number; currency: string }> = []
     let couldNotCheck = false
     for (const contactId of input.contactIds) {
       try {
         for (const c of await unspentCreditByCurrency({ contactId }, supabaseAdmin)) {
-          held.push({ contactId, amount: c.amount, currency: c.currency })
+          if (c.locked) locked.push({ amount: c.amount, currency: c.currency })
+          else held.push({ contactId, amount: c.amount, currency: c.currency })
         }
       } catch {
         // Cannot tell ⇒ warn anyway. Staying quiet here is the failure mode.
         couldNotCheck = true
       }
     }
+    // A STUCK claim is not a currency problem. Saying so was self-contradictory
+    // ("holds 257 EUR but this offer is priced in EUR") and would be dismissed
+    // as a bug rather than acted on.
+    if (locked.length > 0 && held.length === 0) {
+      const stuck = locked.map((l) => `${l.amount} ${l.currency}`).join(", ")
+      return `${input.clientName} holds credit (${stuck}) that is STUCK mid-use — an earlier invoice claimed it and never finished. It was not shown on this offer and will not be deducted at signing. It releases itself on their next invoice; if this offer is going out now, re-create it in a few minutes or apply the credit by hand.`
+    }
     if (couldNotCheck && held.length === 0) {
       return `Could not check whether ${input.clientName} holds credit, so this offer may be missing a deduction they are owed. Re-check before sending.`
     }
-    if (held.length === 0 && !input.force) return null
+    if (held.length === 0 && locked.length === 0 && !input.force) return null
 
     const summary = held.length ? held.map((h) => `${h.amount} ${h.currency}`).join(", ") : "unknown"
     const detail =

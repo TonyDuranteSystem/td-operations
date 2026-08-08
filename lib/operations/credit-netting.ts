@@ -249,18 +249,14 @@ export async function availableCreditForDisplay(
 export async function unspentCreditByCurrency(
   scope: CreditScope,
   supabase: SupabaseClient,
-): Promise<Array<{ amount: number; currency: string }>> {
-  // NOTE: a read failure THROWS from here rather than returning []. Callers use
-  // this to decide whether to warn staff that a client is owed money, and an
-  // empty array is indistinguishable from "they hold nothing" — which silently
-  // suppressed the very warning this function exists to feed.
+): Promise<Array<{ amount: number; currency: string; locked: boolean }>> {
   const accountId = (scope as { accountId?: string }).accountId
   const contactId = (scope as { contactId?: string }).contactId
   if (!accountId && !contactId) return []
 
   const { data, error } = await supabase
     .from("payments")
-    .select("credit_remaining, amount_currency")
+    .select("credit_remaining, amount_currency, credit_consumed_by")
     .eq(accountId ? "account_id" : "contact_id", accountId ?? (contactId as string))
     .eq("invoice_status", "Credit")
     .gt("credit_remaining", 0)
@@ -269,16 +265,66 @@ export async function unspentCreditByCurrency(
     throw new Error(`unspentCreditByCurrency: ${error.message}`)
   }
 
-  const byCurrency = new Map<string, number>()
-  for (const r of (data ?? []) as Array<{ credit_remaining: number | null; amount_currency: string }>) {
+  // LOCKED is reported separately, not merged. The display read excludes claimed
+  // credits and this one does not — merging them made the staff warning blame
+  // the CURRENCY for a credit that was actually stuck mid-claim, which reads as
+  // nonsense and gets dismissed as a bug instead of acted on.
+  const byKey = new Map<string, { amount: number; currency: string; locked: boolean }>()
+  for (const r of (data ?? []) as Array<{ credit_remaining: number | null; amount_currency: string; credit_consumed_by: string | null }>) {
     const amt = Number(r.credit_remaining) || 0
     if (amt <= 0) continue
-    byCurrency.set(r.amount_currency, (byCurrency.get(r.amount_currency) ?? 0) + amt)
+    const locked = !!r.credit_consumed_by
+    const key = `${r.amount_currency}:${locked}`
+    const prev = byKey.get(key)
+    byKey.set(key, { amount: (prev?.amount ?? 0) + amt, currency: r.amount_currency, locked })
   }
-  return Array.from(byCurrency.entries()).map(([currency, amount]) => ({
-    amount: Math.round(amount * 100) / 100,
-    currency,
-  }))
+  return Array.from(byKey.values()).map((v) => ({ ...v, amount: Math.round(v.amount * 100) / 100 }))
+}
+
+/**
+ * Release credit claims that were never settled (WS-A).
+ *
+ * A claim is a transient lock: `confirmCreditClaims` either stamps the invoice
+ * that consumed it or releases it. If the process dies in between — a function
+ * timeout mid-invoice, a redeploy — the credit is left claimed with a balance
+ * still on it, and NOTHING reaped it. It then vanishes from every netting read
+ * while still showing as held on the staff banner: the client is quietly billed
+ * full price for a credit they own.
+ *
+ * The state "claimed AND still has a balance" is exactly the in-flight window,
+ * so age is what separates a live claim from an abandoned one. Fifteen minutes
+ * is far beyond any invoice creation and far below any human noticing.
+ *
+ * Self-healing rather than a cron: it runs on the next billing touch for that
+ * client, which is precisely when a stranded credit would otherwise do harm.
+ */
+export async function releaseStaleCreditClaims(
+  scope: CreditScope,
+  supabase: SupabaseClient,
+  staleMinutes = 15,
+): Promise<number> {
+  const accountId = (scope as { accountId?: string }).accountId
+  const contactId = (scope as { contactId?: string }).contactId
+  if (!accountId && !contactId) return 0
+  const cutoff = new Date(Date.now() - staleMinutes * 60_000).toISOString()
+
+  const untyped = supabase as unknown as { from: (t: string) => any } // eslint-disable-line @typescript-eslint/no-explicit-any
+  const { data, error } = await untyped
+    .from("payments")
+    .update({ credit_consumed_by: null })
+    .eq(accountId ? "account_id" : "contact_id", accountId ?? (contactId as string))
+    .eq("invoice_status", "Credit")
+    .gt("credit_remaining", 0)
+    .not("credit_consumed_by", "is", null)
+    .lt("updated_at", cutoff)
+    .select("id")
+  if (error) {
+    console.error("[releaseStaleCreditClaims] failed:", error.message)
+    return 0
+  }
+  const n = Array.isArray(data) ? data.length : 0
+  if (n > 0) console.warn(`[releaseStaleCreditClaims] released ${n} abandoned claim(s)`)
+  return n
 }
 
 /**

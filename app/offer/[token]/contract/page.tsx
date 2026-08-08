@@ -384,10 +384,22 @@ export default function ContractPage() {
     // openly rather than quoting a gross the client is not asked to pay. Before
     // this the contract said the gross with no mention of the credit at all.
     const money = (n: number) => `${setupSymbol}${n.toLocaleString('en-US', { minimumFractionDigits: 0 })}`
-    const creditOnContract = Math.min(contractTotals.credit, totalSetup)
+    // THE CREDIT IS NOT CAPPED AT THE SETUP FEE.
+    // It used to be, and that made this document disagree with the offer page
+    // whenever the credit exceeded the services line: the offer applied the
+    // credit against the WHOLE deal (pre-conditions included) while the contract
+    // applied only part of it here and stated the pre-conditions separately at
+    // full price. Two client-facing documents quoting different money. The
+    // engine already caps the credit at the deal total, so use its figure.
+    const creditOnContract = contractTotals.credit
+    const feeAfterCredit = Math.max(totalSetup - creditOnContract, 0)
+    const creditBeyondSetup = Math.max(creditOnContract - totalSetup, 0)
     const fee = totalSetup > 0
       ? (creditOnContract > 0
-          ? `${money(totalSetup)} less ${money(creditOnContract)} already paid = ${money(Math.max(totalSetup - creditOnContract, 0))}`
+          ? `${money(totalSetup)} less ${money(Math.min(creditOnContract, totalSetup))} already paid = ${money(feeAfterCredit)}`
+            + (creditBeyondSetup > 0
+                ? ` (a further ${money(creditBeyondSetup)} of credit applies to the amounts below)`
+                : '')
           : money(totalSetup))
       : 'As specified in the offer'
 

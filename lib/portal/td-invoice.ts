@@ -14,7 +14,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { dbWrite, dbWriteSafe } from '@/lib/db'
 import { syncTDInvoiceMirror } from '@/lib/portal/td-invoice-mirror'
 import { generateInvoiceNumber, generateCreditNoteNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
-import { computeCreditApplication, consumeCredits, claimCredits, confirmCreditClaims, unwindCreditClaims } from '@/lib/operations/credit-netting'
+import { computeCreditApplication, consumeCredits, releaseStaleCreditClaims, claimCredits, confirmCreditClaims, unwindCreditClaims } from '@/lib/operations/credit-netting'
 import { categoryFromInstallmentLabel } from '@/lib/billing/payment-classification'
 import { getConfiguredCardFeeRate } from '@/lib/payments/card-fee-config'
 
@@ -172,6 +172,16 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   // and contact credit pools stay isolated (regression tests T4/T5).
   if (grossTotal > 0 && !mark_as_paid && (account_id || contact_id) && !skip_credit_netting) {
     const scope = account_id ? { accountId: account_id } : { contactId: contact_id as string }
+    // SELF-HEAL FIRST. A claim abandoned by a process that died mid-invoice
+    // leaves the credit locked with a balance on it — invisible to every netting
+    // read, so the client is quietly billed full price for money they own.
+    // Releasing stale claims here means the next bill for that client repairs it,
+    // which is exactly the moment it would otherwise do harm.
+    try {
+      await releaseStaleCreditClaims(scope as Parameters<typeof releaseStaleCreditClaims>[0], supabaseAdmin)
+    } catch (err) {
+      console.warn('[td-invoice] stale-claim release failed (non-fatal):', err instanceof Error ? err.message : String(err))
+    }
     const candidate = await computeCreditApplication(
       { ...scope, amount: grossTotal, currency },
       supabaseAdmin,
