@@ -436,11 +436,14 @@ describe("wrapEmailWithBrandShell", () => {
     const out = wrapEmailWithBrandShell("<p>Hi</p>")
     expect(out).toContain("font-family:Arial,Helvetica,sans-serif")
     expect(out).toContain("<p>Hi</p>")
-    // Company block, with the logo now living inside the signature.
+    // Company block. Since 2026-08-07 the company's full signature carries
+    // the lockup (TD mark + wordmark) and the badges strip — never the old
+    // combined banner (Luca's review, Antonio's approval).
     expect(out).toContain("Tony Durante LLC")
     expect(out).toContain("support@tonydurante.us")
     expect(out).toContain("+1 (727) 452-1093")
-    expect(out).toContain("https://app.tonydurante.us/images/tony-logos.png")
+    expect(out).toContain("https://app.tonydurante.us/images/signature-td-lockup.png")
+    expect(out).toContain("https://app.tonydurante.us/images/signature-badges.png")
   })
 
   // The logo used to sit in a banner ABOVE the message; business mail puts
@@ -449,10 +452,11 @@ describe("wrapEmailWithBrandShell", () => {
     const { wrapEmailWithBrandShell } = await import("@/lib/operations/email")
     const out = wrapEmailWithBrandShell("<p>Hi</p>")
     expect(out).not.toContain("logo.jpg")
-    // The logo must appear once, in the signature — not twice.
-    expect(out.match(/tony-logos\.png/g)).toHaveLength(1)
+    // The TD logo must appear once (the lockup) — never repeated in the strip.
+    expect(out.match(/signature-td-lockup\.png/g)).toHaveLength(1)
+    expect(out).not.toContain("tony-logos.png")
     // Body first, branding after.
-    expect(out.indexOf("<p>Hi</p>")).toBeLessThan(out.indexOf("tony-logos.png"))
+    expect(out.indexOf("<p>Hi</p>")).toBeLessThan(out.indexOf("signature-td-lockup.png"))
   })
 
   it("uses Antonio's block, and his photo, when the mail is his", async () => {
@@ -484,7 +488,7 @@ describe("sendEmail — wrap_with_brand", () => {
     expect(decoded).toContain("<p>First paragraph.</p>")
     expect(decoded).toContain("<p>Second paragraph.</p>")
     expect(decoded).toContain("support@tonydurante.us")
-    expect(decoded).toContain("tony-logos.png")
+    expect(decoded).toContain("signature-td-lockup.png")
   })
 
   // The fallback derives text/plain by stripping tags out of the HTML, which

@@ -11,8 +11,9 @@
  *   3. confirmWorkerEmailSend(): an explicit staff click re-validates everything
  *      and dispatches the frozen payload. The human — not the model — is gate 2.
  *
- * Text-only worker sends do NOT come through here; they send immediately with the
- * recipient pin. This path exists only for the file case.
+ * Since 2026-07-29 EVERY worker email — text-only or with files — freezes through
+ * prepareWorkerEmailSend and dispatches only in confirmWorkerEmailSend; the
+ * executor's direct-send path is gone (lib/ai-agent/worker-tools.ts, send_email).
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { TD_MAILBOXES, checkRecipientsAllowed } from "@/lib/inbox/email-recipients"
@@ -23,6 +24,8 @@ import {
   signatureSenderForAddress,
   SIGNATURE_MAILBOX_ADDRESSES,
   DEFAULT_SIGNATURE_VARIANT,
+  hasSignature,
+  type SignatureVariant,
 } from "@/lib/email/signature"
 import { isValidWorkerUploadPath, WORKER_UPLOAD_BUCKET } from "@/lib/ai-agent/attachment-reader"
 import { MAX_EMAIL_ATTACHMENT_FILES } from "@/lib/inbox/email-attachment-staging"
@@ -346,6 +349,14 @@ export async function confirmWorkerEmailSend(
    * (the route does, with the same mailbox gate used to read that inbox).
    */
   mailboxOverride?: "support" | "antonio",
+  /**
+   * The signature the staff member picked on the Confirm card (full / compact /
+   * none). Applied HERE, at confirm time, like the mailbox choice — the human's
+   * pick is what ships. Omitted (older panels, MCP callers) = the full default,
+   * which is what every worker send used before the picker existed (Luca's
+   * Team Chat request, Antonio approved 2026-08-07).
+   */
+  signatureVariant?: SignatureVariant,
 ): Promise<ConfirmResult> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
@@ -432,13 +443,20 @@ export async function confirmWorkerEmailSend(
     // hand-rolled banner + sign-off + footer; both now call the single
     // definition in lib/email/signature.ts. Sign-off stays ON here: the
     // model writes no closing of its own.
-    const signature = buildSignature({
-      sender: signatureSenderForAddress(sender.email),
-      variant: DEFAULT_SIGNATURE_VARIANT,
-    })
+    //
+    // The variant is the staff member's pick from the Confirm card; absent,
+    // the pre-picker default (full) stands. On "none" the blocks are OMITTED,
+    // not appended empty — concatenating "" still leaves stray blank lines
+    // (the hasSignature rule in lib/email/signature.ts).
+    const variant = signatureVariant ?? DEFAULT_SIGNATURE_VARIANT
+    const signature = hasSignature(variant)
+      ? buildSignature({
+          sender: signatureSenderForAddress(sender.email),
+          variant,
+        })
+      : null
     const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;max-width:600px;margin:0 auto;padding:24px">
-${plainTextToParagraphs(claimed.body)}
-${signature.html}
+${plainTextToParagraphs(claimed.body)}${signature ? `\n${signature.html}` : ""}
 </div>`
 
     // Threading headers. Strip CR/LF from the recipient before it enters a raw
@@ -478,7 +496,7 @@ ${signature.html}
       {
         headerLines,
         htmlBody: html,
-        plainText: `${claimed.body}\n\n${signature.text}`,
+        plainText: signature ? `${claimed.body}\n\n${signature.text}` : claimed.body,
         attachments: files,
       },
       { outer: `outer_${stamp}`, alt: `alt_${stamp}` },
@@ -500,7 +518,10 @@ ${signature.html}
         actor: actorEmail,
         action_type: "send",
         table_name: "gmail",
-        summary: `Worker email WITH attachment sent to ${claimed.to_address}: "${String(claimed.subject).slice(0, 80)}" (${files.map((f) => f.filename).join(", ")})`,
+        // The variant is transport-only (never stored on the row), so this line
+        // is the ONLY internal record of which signature the email carried —
+        // without it, "did that go out unsigned?" needs a trip to Gmail Sent.
+        summary: `Worker email sent to ${claimed.to_address}: "${String(claimed.subject).slice(0, 80)}" (signature: ${variant}${files.length ? `; files: ${files.map((f) => f.filename).join(", ")}` : ""})`,
       })
     } catch (bookkeepingErr) {
       // The send SUCCEEDED — never roll back. Just log the bookkeeping miss.

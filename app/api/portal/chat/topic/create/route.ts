@@ -29,6 +29,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isDashboardUser } from "@/lib/auth"
+import { isContactLinkedToAccount } from "@/lib/portal/admin-send-scope"
 
 interface CreateTopicBody {
   topic_name?: unknown
@@ -73,6 +74,19 @@ export async function POST(request: NextRequest) {
       { error: "One of account_id or contact_id is required" },
       { status: 400 },
     )
+  }
+
+  // Send-scope invariant (2026-08-07 leak, dev job 4bad3094): a starter tagged
+  // with BOTH a person and a company must have the person actually in that
+  // company, or the topic thread lands in another client's company view.
+  if (accountId && contactId) {
+    const linked = await isContactLinkedToAccount(accountId, contactId)
+    if (!linked) {
+      return NextResponse.json(
+        { error: "The contact is not a member of that account — the topic would open in the wrong company's thread." },
+        { status: 400 },
+      )
+    }
   }
 
   const starterEn =

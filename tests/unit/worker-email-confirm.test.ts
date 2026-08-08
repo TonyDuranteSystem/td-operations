@@ -69,6 +69,9 @@ vi.mock("@/lib/mcp/action-log", () => ({ logAction: vi.fn() }))
 vi.mock("@/lib/inbox/email-recipients", () => ({
   checkRecipientsAllowed: () => ({ ok: true }),
   collectThreadRecipients: () => ["client@acme.com"],
+  // Real values, not placeholders: the mailbox-override claim writes
+  // TD_MAILBOXES[1] into the row and the sender lookup reads it back.
+  TD_MAILBOXES: ["support@tonydurante.us", "antonio.durante@tonydurante.us"],
 }))
 
 import { confirmWorkerEmailSend } from "@/lib/inbox/worker-email-send"
@@ -147,5 +150,70 @@ describe("confirmWorkerEmailSend", () => {
     expect(r.ok === false && r.reason).toMatch(/too old/)
     expect(state.sendCalls).toBe(0)
     expect(state.row!.status).toBe("cancelled")
+  })
+})
+
+/**
+ * The staff member's signature pick from the Confirm card (Luca's Team Chat
+ * request, Antonio approved 2026-08-07). The raw MIME gmailPost received is
+ * decoded here so the assertions read the HTML that actually leaves.
+ */
+function sentMime(): string {
+  const payload = gmailPost.mock.calls.at(-1)?.[1] as { raw: string }
+  const raw = Buffer.from(payload.raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8")
+  // Decode every base64 body chunk (html + plain parts) back to text so a
+  // marker can be searched regardless of which part carries it.
+  const decoded = raw
+    .split(/\r\n\r\n/)
+    .map((chunk) => {
+      const b64 = chunk.replace(/\r\n/g, "")
+      return /^[A-Za-z0-9+/=]+$/.test(b64) && b64.length > 20
+        ? Buffer.from(b64, "base64").toString("utf-8")
+        : chunk
+    })
+    .join("\n")
+  return decoded
+}
+
+describe("the signature pick on the Confirm card", () => {
+  it("defaults to the full signature when the panel sends no pick (pre-picker behavior)", async () => {
+    const r = await confirmWorkerEmailSend("p1", "luca@tonydurante.us")
+    expect(r.ok).toBe(true)
+    const mime = sentMime()
+    // support full = the lockup + badges redesign
+    expect(mime).toContain("signature-td-lockup.png")
+    expect(mime).toContain("signature-badges.png")
+    expect(mime).toContain("Best regards,")
+  })
+
+  it("honours a compact pick", async () => {
+    const r = await confirmWorkerEmailSend("p1", "luca@tonydurante.us", undefined, "text")
+    expect(r.ok).toBe(true)
+    const mime = sentMime()
+    expect(mime).toContain("signature-td-mark.png")
+    expect(mime).not.toContain("signature-td-lockup.png")
+    expect(mime).not.toContain("signature-badges.png")
+  })
+
+  it("honours 'none': no block, no sign-off, no stray blank lines", async () => {
+    const r = await confirmWorkerEmailSend("p1", "luca@tonydurante.us", undefined, "none")
+    expect(r.ok).toBe(true)
+    const mime = sentMime()
+    expect(mime).not.toContain("signature-td")
+    expect(mime).not.toContain("Best regards")
+    // The identity block never rendered (the From header still carries the
+    // mailbox address, so the address line is the marker, not the email).
+    expect(mime).not.toContain("10225 Ulmerton Rd")
+    expect(mime).toContain("here it is")
+  })
+
+  it("applies the picked signature to the OVERRIDDEN mailbox, not the row's", async () => {
+    const r = await confirmWorkerEmailSend("p1", "luca@tonydurante.us", "antonio", "gala")
+    expect(r.ok).toBe(true)
+    const mime = sentMime()
+    // Antonio's full variant keeps his portrait + the original banner
+    expect(mime).toContain("signature-antonio-gala.jpg")
+    expect(mime).toContain("tony-logos.png")
+    expect(mime).not.toContain("signature-badges.png")
   })
 })

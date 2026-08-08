@@ -25,6 +25,8 @@ import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
 import { useWorkerAttachments, type UploadedAttachment } from '@/components/chat/use-worker-attachments'
 import { ConfirmAttachments } from '@/components/inbox/confirm-attachments'
+import { SignatureControls, SignaturePreview } from '@/components/inbox/signature-controls'
+import { DEFAULT_SIGNATURE_VARIANT, type SignatureVariant } from '@/lib/email/signature'
 
 interface ChatMsg {
   role: 'user' | 'worker'
@@ -74,6 +76,10 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
   // WHICH OF OUR ADDRESSES IT GOES OUT FROM — the staff member chooses on the card
   // (Antonio, 2026-07-29). The server re-checks that they may send as it.
   const [sendAs, setSendAs] = useState<'support' | 'antonio'>('support')
+  // WHICH SIGNATURE goes on the email — the staff member picks on the card.
+  // Defaults to the full signature, i.e. exactly what this surface sent before
+  // the picker existed, so an untouched card behaves as it always did.
+  const [signatureVariant, setSignatureVariant] = useState<SignatureVariant>(DEFAULT_SIGNATURE_VARIANT)
   // Held in a ref so the client-switch effect can drop staged files without
   // taking the whole (re-created every render) attachments object as a dep.
   const clearAttachmentsRef = useRef(attachments.clear)
@@ -89,7 +95,7 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
       const res = await fetch('/api/inbox/worker-chat/confirm-send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prepared_id: preparedSend.id, action, mailbox: sendAs }),
+        body: JSON.stringify({ prepared_id: preparedSend.id, action, mailbox: sendAs, signature_variant: signatureVariant }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Could not complete — please try again.')
@@ -237,7 +243,11 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
       // sends it.
       setPreparedSend(data.preparedSend ?? null)
       // Fresh card → fresh choice; a sticky pick must not leak onto the next email.
-      if (data.preparedSend) setSendAs('support')
+      // Same for the signature: a "no signature" pick must not silently carry over.
+      if (data.preparedSend) {
+        setSendAs('support')
+        setSignatureVariant(DEFAULT_SIGNATURE_VARIANT)
+      }
     } catch (err) {
       setMessages(prev => [
         ...prev,
@@ -362,13 +372,34 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
             <span className="text-zinc-500">From:</span>
             <select
               value={sendAs}
-              onChange={e => setSendAs(e.target.value as 'support' | 'antonio')}
+              onChange={e => {
+                const next = e.target.value as 'support' | 'antonio'
+                setSendAs(next)
+                // Coerce the STATE, not just the display: "hat" isn't offered
+                // for support, so the control would read "Full" while the POST
+                // still carried "hat".
+                if (next === 'support' && signatureVariant === 'hat') setSignatureVariant('gala')
+              }}
               disabled={confirming}
               className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
             >
               <option value="support">support@tonydurante.us</option>
               <option value="antonio">antonio.durante@tonydurante.us</option>
             </select>
+            {/* Same per-email chooser as the Inbox card and manual compose
+                (Antonio, 2026-08-07 — the Inbox-only picker left this surface
+                silently sending the full signature). */}
+            <SignatureControls
+              sender={sendAs}
+              variant={signatureVariant}
+              onVariantChange={setSignatureVariant}
+              disabled={confirming}
+            />
+          </div>
+          {/* The chooser is blind without a preview — the signature is attached
+              server-side. Scrolls so the full variant can't swallow the card. */}
+          <div className="mt-2 max-h-36 overflow-y-auto">
+            <SignaturePreview sender={sendAs} variant={signatureVariant} authorWritesClosing={false} />
           </div>
           <div className="mt-2.5 flex items-center gap-2">
             <button

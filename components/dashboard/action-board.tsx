@@ -432,7 +432,15 @@ export function ActionBoard() {
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: card.account_id, contact_id: card.contact_id, message }),
+        // sender_context declared: follow-up cards deliberately answer into the
+        // card's company thread (visible to that company's members). Required by
+        // the admin send-scope invariant when both ids travel together.
+        body: JSON.stringify({
+          account_id: card.account_id,
+          contact_id: card.contact_id,
+          ...(card.account_id && card.contact_id ? { sender_context: 'company' } : {}),
+          message,
+        }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))

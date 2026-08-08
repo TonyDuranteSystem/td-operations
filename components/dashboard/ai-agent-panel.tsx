@@ -17,6 +17,8 @@ import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 import { ConfirmAttachments } from '@/components/inbox/confirm-attachments'
+import { SignatureControls, SignaturePreview } from '@/components/inbox/signature-controls'
+import { DEFAULT_SIGNATURE_VARIANT, type SignatureVariant } from '@/lib/email/signature'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -85,6 +87,10 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
   const [confirming, setConfirming] = useState(false)
   // WHICH OF OUR ADDRESSES IT GOES OUT FROM — chosen here, re-checked by the server.
   const [sendAs, setSendAs] = useState<'support' | 'antonio'>('support')
+  // WHICH SIGNATURE goes on the email — the staff member picks on the card.
+  // Defaults to the full signature, i.e. exactly what this surface sent before
+  // the picker existed, so an untouched card behaves as it always did.
+  const [signatureVariant, setSignatureVariant] = useState<SignatureVariant>(DEFAULT_SIGNATURE_VARIANT)
   // Live route → per-page client scope for the worker's brain. Read at SEND time
   // (below), never cached, so navigating between clients can't mis-scope.
   const pathname = usePathname()
@@ -338,7 +344,12 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
       // Each card starts from the default sender. Carrying a previous card's
       // "antonio" pick into the next draft is how an email goes out from the
       // wrong address without anyone deciding it should.
-      if (data.preparedSend) setSendAs('support')
+      if (data.preparedSend) {
+        setSendAs('support')
+        // Same reasoning for the signature: a "no signature" pick must not
+        // silently carry onto the next email.
+        setSignatureVariant(DEFAULT_SIGNATURE_VARIANT)
+      }
       const turnId = typeof data.messageId === 'string' ? data.messageId : undefined
       setMessages(prev => {
         const next = [...prev]
@@ -413,7 +424,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
       const res = await fetch('/api/inbox/worker-chat/confirm-send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prepared_id: preparedSend.id, action, mailbox: sendAs }),
+        body: JSON.stringify({ prepared_id: preparedSend.id, action, mailbox: sendAs, signature_variant: signatureVariant }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
@@ -431,7 +442,10 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     } finally {
       setConfirming(false)
     }
-  }, [sendAs, preparedSend])
+    // signatureVariant is LOAD-BEARING here, not lint appeasement: without it the
+    // memoized handler closes over the pick as it was when the card first rendered,
+    // so changing the dropdown and pressing Confirm would send the OLD signature.
+  }, [sendAs, signatureVariant, preparedSend])
 
   const readyFiles = att.files.filter((f) => f.path && !f.error)
   const stillUploading = att.files.some((f) => !f.path && !f.error)
@@ -761,13 +775,34 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
               <span className="text-zinc-500">From:</span>
               <select
                 value={sendAs}
-                onChange={e => setSendAs(e.target.value as 'support' | 'antonio')}
+                onChange={e => {
+                  const next = e.target.value as 'support' | 'antonio'
+                  setSendAs(next)
+                  // Coerce the STATE, not just the display: "hat" isn't offered
+                  // for support, so the control would read "Full" while the POST
+                  // still carried "hat".
+                  if (next === 'support' && signatureVariant === 'hat') setSignatureVariant('gala')
+                }}
                 disabled={confirming}
                 className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
               >
                 <option value="support">support@tonydurante.us</option>
                 <option value="antonio">antonio.durante@tonydurante.us</option>
               </select>
+              {/* Same per-email chooser as the Inbox card and manual compose
+                  (Antonio, 2026-08-07 — the Inbox-only picker left this surface
+                  silently sending the full signature). */}
+              <SignatureControls
+                sender={sendAs}
+                variant={signatureVariant}
+                onVariantChange={setSignatureVariant}
+                disabled={confirming}
+              />
+            </div>
+            {/* The chooser is blind without a preview — the signature is attached
+                server-side. Scrolls so the full variant can't swallow the card. */}
+            <div className="mt-2 max-h-36 overflow-y-auto">
+              <SignaturePreview sender={sendAs} variant={signatureVariant} authorWritesClosing={false} />
             </div>
             <div className="mt-2.5 flex items-center gap-2">
               <button

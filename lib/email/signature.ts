@@ -166,14 +166,39 @@ const LOGO_FILE = "tony-logos.png"
 
 /**
  * The standalone red TD mark — the same file the app uses as its icon, which
- * is the shape people already recognise (Antonio, 2026-08-05). On image
- * variants it sits beside the company block the way Antonio's portrait sits
+ * is the shape people already recognise (Antonio, 2026-08-05). On the compact
+ * variant it sits beside the company block the way Antonio's portrait sits
  * beside his, giving mail from the shared mailbox a recognisable face.
  */
 const TD_MARK_FILE = "signature-td-mark.png"
 
+/**
+ * Company full-variant artwork (Antonio, 2026-08-07, from Luca's Team Chat
+ * review: the old layout showed the TD logo twice — the small mark beside the
+ * block AND again inside the wide banner — and the script tagline read busy):
+ *  - the LOCKUP: TD mark with "TONY DURANTE" under it, no tagline. Replaces
+ *    the small mark beside the company block on full variants.
+ *  - the BADGES strip: ONLY the three certification badges, larger, centered.
+ *    Replaces the wide banner on company mail. Antonio's own mail keeps the
+ *    original banner — his block carries his portrait, so the banner is the
+ *    only TD logo on it and stays.
+ * Both cropped from the same tony-logos.png artwork; canvases are exact
+ * multiples of their render size (480x336 -> 120x84, 520x160 -> 260x80) so
+ * the explicit width/height attributes stay integers.
+ */
+const TD_LOCKUP_FILE = "signature-td-lockup.png"
+const BADGES_FILE = "signature-badges.png"
+
 export function signatureMarkUrl(baseUrl: string = APP_BASE_URL): string {
   return assetUrl(TD_MARK_FILE, baseUrl)
+}
+
+export function signatureLockupUrl(baseUrl: string = APP_BASE_URL): string {
+  return assetUrl(TD_LOCKUP_FILE, baseUrl)
+}
+
+export function signatureBadgesUrl(baseUrl: string = APP_BASE_URL): string {
+  return assetUrl(BADGES_FILE, baseUrl)
 }
 
 interface Identity {
@@ -330,27 +355,47 @@ export function buildSignatureHtml(options: SignatureOptions): string {
       `style="display:block;width:96px;height:96px;border-radius:48px;border:2px solid ${RULE}" />` +
       `</td>`
   } else if (withImages) {
-    avatarCell = markCell(64)
+    // Company full variant: the lockup (TD mark + "TONY DURANTE", no tagline)
+    // beside the block — the only TD logo on the email now that the banner
+    // below carries badges alone (Antonio, 2026-08-07).
+    avatarCell =
+      `<td valign="top" style="padding-right:16px">` +
+      `<img src="${signatureLockupUrl(baseUrl)}" width="120" height="84" alt="${COMPANY_NAME}" ` +
+      `style="display:block;width:120px;height:84px" />` +
+      `</td>`
   } else {
     avatarCell = markCell(40)
   }
 
   const body = `<table cellpadding="0" cellspacing="0" border="0"><tr>${avatarCell}${details}</tr></table>`
 
-  // The wide banner rides with the full variants only. Compact ("text")
-  // keeps its small mark beside the block but nothing below it - the point
-  // of compact is that nothing stacks down a long thread.
-  // Fixed 300px, deliberately NOT max-width:100%: inside an auto-layout
+  // The strip under the block rides with the full variants only. Compact
+  // ("text") keeps its small mark beside the block but nothing below it - the
+  // point of compact is that nothing stacks down a long thread.
+  //
+  // COMPANY mail carries ONLY the three certification badges, larger and
+  // centered — the TD logo lives in the lockup beside the block, so repeating
+  // it here is exactly what Luca flagged and Antonio removed (2026-08-07).
+  // ANTONIO's mail keeps the original wide banner: his block carries his
+  // portrait, so the banner is the only TD logo on it (his 2026-08-05 rule:
+  // the TD logo is on every signed email).
+  //
+  // Fixed px widths, deliberately NOT max-width:100%: inside an auto-layout
   // table a shrinkable image loses the width negotiation to whichever row
   // is narrowest, so the banner rendered 242px on the company block (whose
   // identity row is narrower than Antonio's) while rendering 300px on his.
-  // Browser-measured 2026-08-05. 300px is safe on phone-width mail clients.
-  const logo = withImages
-    ? `<tr><td style="padding-top:16px;border-top:1px solid ${RULE}">` +
-      `<img src="${signatureLogoUrl(baseUrl)}" width="300" alt="${COMPANY_NAME}" ` +
-      `style="display:block;width:300px;height:auto" />` +
-      `</td></tr>`
-    : ""
+  // Browser-measured 2026-08-05. Both widths are safe on phone-width clients.
+  const logo = !withImages
+    ? ""
+    : sender === "antonio"
+      ? `<tr><td style="padding-top:16px;border-top:1px solid ${RULE}">` +
+        `<img src="${signatureLogoUrl(baseUrl)}" width="300" alt="${COMPANY_NAME}" ` +
+        `style="display:block;width:300px;height:auto" />` +
+        `</td></tr>`
+      : `<tr><td align="center" style="padding-top:16px;border-top:1px solid ${RULE}">` +
+        `<img src="${signatureBadgesUrl(baseUrl)}" width="260" height="80" alt="IRS Certified Acceptance Agents - Public Notary - Professional Tax Preparer" ` +
+        `style="display:block;width:260px;height:80px;margin:0 auto" />` +
+        `</td></tr>`
 
   return (
     `<table cellpadding="0" cellspacing="0" border="0" ` +
