@@ -11,6 +11,7 @@ import { isOfficeOpen } from '@/lib/portal/office-hours'
 import { sendOfficeClosedAutoReply } from '@/lib/portal/auto-reply'
 import { buildChatQueryPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
+import { decideAdminSendScope, isContactLinkedToAccount, resolveAdminReplyContact } from '@/lib/portal/admin-send-scope'
 import { contactThreadOrFilter, multiMemberAccountIds } from '@/lib/portal/thread-scope'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -232,6 +233,31 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'sender_context=person must not include account_id' }, { status: 400 })
   }
 
+  // Admin send-scope invariant (2026-08-07 cross-company leak, dev job
+  // 4bad3094): a staff send addressed to a person must NOT carry a company tag
+  // unless company scope is explicitly declared, and a declared company must
+  // actually be one of that person's companies. Client and teammate sends keep
+  // their own gates below — this guard is for staff-originated shapes only.
+  if (user.app_metadata?.role !== 'client') {
+    const scopeDecision = decideAdminSendScope({
+      accountId: account_id || null,
+      contactId: bodyContactId || null,
+      senderContext: sender_context,
+    })
+    if (!scopeDecision.ok) {
+      return NextResponse.json({ error: scopeDecision.error }, { status: 400 })
+    }
+    if (scopeDecision.needsLinkCheck) {
+      const linked = await isContactLinkedToAccount(account_id, bodyContactId)
+      if (!linked) {
+        return NextResponse.json(
+          { error: 'The tagged company is not one of this person\'s companies — the message would be visible to the wrong client. Pick one of their companies or send it as personal.' },
+          { status: 400 },
+        )
+      }
+    }
+  }
+
   // Input validation: max message length
   if (message && message.length > 5000) {
     return NextResponse.json({ error: 'Message too long (max 5000 characters)' }, { status: 400 })
@@ -433,56 +459,6 @@ export async function POST(request: NextRequest) {
   })
 
   return NextResponse.json({ message: responseMsg })
-}
-
-/**
- * Deterministic member tag for an admin reply into an account thread.
- * Order: reply-to author (if a linked member) → last client sender on the
- * account → primary linked contact → first linked contact by contact_id.
- * Returns null only when the account has no linked contacts at all.
- */
-async function resolveAdminReplyContact(
-  accountId: string,
-  replyToId: string | null,
-): Promise<string | null> {
-  const { data: links } = await supabaseAdmin
-    .from('account_contacts')
-    .select('contact_id, is_primary')
-    .eq('account_id', accountId)
-  const linked = (links ?? []) as { contact_id: string; is_primary: boolean | null }[]
-  if (linked.length === 0) return null
-  const linkedIds = new Set(linked.map(l => l.contact_id))
-
-  // 1. Author of the message being replied to.
-  if (replyToId) {
-    const { data: parent } = await supabaseAdmin
-      .from('portal_messages')
-      .select('contact_id, sender_type')
-      .eq('id', replyToId)
-      .maybeSingle()
-    if (parent?.sender_type === 'client' && parent.contact_id && linkedIds.has(parent.contact_id)) {
-      return parent.contact_id
-    }
-  }
-
-  // 2. Last client sender in this account thread.
-  const { data: lastClient } = await supabaseAdmin
-    .from('portal_messages')
-    .select('contact_id')
-    .eq('account_id', accountId)
-    .eq('sender_type', 'client')
-    .not('contact_id', 'is', null)
-    .is('deleted_at', null)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  if (lastClient?.contact_id && linkedIds.has(lastClient.contact_id)) {
-    return lastClient.contact_id
-  }
-
-  // 3. Primary linked contact, else first by contact_id (stable order).
-  const sorted = [...linked].sort((a, b) => a.contact_id.localeCompare(b.contact_id))
-  return sorted.find(l => l.is_primary)?.contact_id ?? sorted[0].contact_id
 }
 
 /**

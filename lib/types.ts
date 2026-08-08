@@ -533,6 +533,14 @@ export interface InboxConversation {
   /** True when the server could not fully load this thread this round (a stub /
    *  carried-forward row) — the UI marks it so it never looks like real data. */
   partial?: boolean
+  /** Payload-derived: does any live message of this thread carry INBOX? Absent
+   *  on payloads that don't compute it (live-Gmail fallback, chat channels).
+   *  false → the row renders an "Archived" chip in folder / all-mail-search
+   *  views, where an archived row deliberately stays visible. */
+  inInbox?: boolean
+  /** Payload-derived: any live message starred. Pin == the Gmail star (syncs
+   *  both ways with the Gmail app). Absent on payloads that don't compute it. */
+  starred?: boolean
 }
 
 export interface InboxAttachment {

@@ -2,9 +2,10 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Inbox, Send, FileText, Star, Trash2, Plus, X, FolderOpen, Loader2, Tag } from 'lucide-react'
+import { Inbox, Send, FileText, Star, Trash2, Plus, X, FolderOpen, Loader2, Tag, Archive } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { ARCHIVED_VIEW_ID } from '@/lib/inbox/view-query'
 
 interface Label {
   id: string
@@ -125,6 +126,21 @@ export function InboxSidebar({ activeLabel, onLabelChange, mailbox }: InboxSideb
           </button>
         )
       })}
+
+      {/* Archived — everything filed out of the Inbox (not trash/spam/snoozed).
+          A computed view over our own email index, not a Gmail label: this is
+          where an archived email can always be FOUND again (dev job 21844d01 —
+          archived mail previously existed in no browsable view at all). */}
+      <button
+        onClick={() => onLabelChange(activeLabel === ARCHIVED_VIEW_ID ? null : ARCHIVED_VIEW_ID)}
+        className={cn(
+          'flex items-center gap-2 px-4 py-1.5 text-sm w-full text-left transition-colors',
+          activeLabel === ARCHIVED_VIEW_ID ? 'bg-blue-50 text-blue-700 font-medium' : 'text-zinc-600 hover:bg-zinc-50'
+        )}
+      >
+        <Archive className="h-4 w-4 shrink-0" />
+        <span className="flex-1 truncate">Archived</span>
+      </button>
 
       {/* Custom folders */}
       <div className="px-2 mt-4 mb-1 flex items-center justify-between">

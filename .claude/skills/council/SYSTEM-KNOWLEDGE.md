@@ -1,5 +1,5 @@
 # SYSTEM-KNOWLEDGE — the System Counselor's index to the live business and system
-_Last verified: 2026-08-02 — Claude (rebuilt after Antonio's correction: the Counselor now has live read access to the production database, CRM, knowledge base, SOPs, catalog and code, so this file stopped being a summary of the business and became the INDEX to it.)_
+_Last verified: 2026-08-07b — Claude (added the portal-chat send-scope era marker — the Conversion Monsters leak fix, dev job 4bad3094. Prior same-day note: added the inbox email-state playbook row — reads from our own index, writes through Gmail — the missing pointer the Counselor flagged on the 2026-08-07 inbox council pass. Prior note: rebuilt 2026-08-02 after Antonio's correction: the Counselor has live read access to the production database, CRM, knowledge base, SOPs, catalog and code, so this file is the INDEX to the live system, never a copy of it.)_
 
 ## Read this first
 
@@ -53,6 +53,7 @@ What lives here instead:
 | Is this money right? | the four money worlds — know which one owns the number | assuming one invoice concept |
 | Is this safe to run? | the hooks/guardrails doc — which layer actually covers this path | assuming a guard covers MCP calls; it does not |
 | How does outgoing email get its identity/signature? | `lib/email/signature.ts` (the ONE definition since 2026-08-05) + the "Outgoing email signatures" section of the inbox system doc | `lib/gmail.ts` (transport only, no MIME builder); any of the old hand-rolled shells — they are gone |
+| Where does the CRM inbox's email state live? | READS come from our own `email_index` (browse/search/Archived, since 2026-08-07 kept fresh by write-through + the cursor-disciplined sync); WRITES (archive/star/read/snooze) go to Gmail first, Gmail stays source of truth | assuming the inbox reads live Gmail (it stopped 2026-08-02); patching index labels directly (one writer: `indexThread`) |
 
 **Always say which environment a fact came from.** The Counselor's tools read **production**. Sandbox state is a different question and goes back to the coordinator.
 
@@ -98,6 +99,7 @@ recurring annual services · one-time setup services · one-time-with-renewal (I
 - **Slack is gone** (surface removed 2026-07-29); Team Workspace replaced it. Two things went with it: Slack was the *staff* surface, **and** it carried client-sourced conversation threads that were archived into our own database. Client conversations now start in Team Chat, which writes the internal-thread tables — **not** the older client-threads list, which has no writer left and is a frozen archive. **Live trap:** the shared worker engine still carries `slack-*` filenames and a `SLACK_WORKER_*` prompt constant, and they are ALIVE — the prompt drives Team Chat with a built-in "you are not in Slack" correction. Deleting by the keyword "slack" breaks working surfaces. A rule that names the "Slack worker" is naming a live thing badly, not pointing at a dead one.
 - **Soft-delete for anything a client has already seen** (R100); **server errors must be surfaced, not swallowed** (R099).
 - **The "SS-4 is internal, never share it with the client" rule is REVERSED** (Antonio, 2026-08-04: *"the SS4 visible to the client is ok"*). Several system docs still carry the old reasoning as history — do not re-derive the rule from them. The worker no longer warns when an SS-4 is attached to an email; the client PORTAL's own visibility is unchanged and is a separate decision.
+- **Portal-chat staff sends are scope-guarded** (2026-08-07, dev job `4bad3094` — the Conversion Monsters cross-company leak). Era history in one line: chat was re-scoped per-company for clients (2026-06-24), "one message, one staff thread" fixed staff-side grouping (2026-07-08), and the send side was only closed 2026-08-07 — before that, person-thread staff replies were silently stamped with the contact's first open company, which is how one member read two months of another company's private formation talk. NOW: person-addressed staff sends stay personal unless company scope is explicitly declared AND the person is verified to be in that company (`lib/portal/admin-send-scope.ts`, wired into every staff send surface). **Wrong-turn guard:** the 2026-07-08c portal.md entry claimed person-thread replies "stay personal" a month before it was true — a doc's claim about send scoping is only as current as this fix.
 
 **For the rest of a subsystem's history:** read the dated header block of its system doc, then the git log for those paths, then the dev board card. Do not guess.
 

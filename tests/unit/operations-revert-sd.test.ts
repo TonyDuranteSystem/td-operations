@@ -50,6 +50,7 @@ interface SDRow {
   contact_id: string | null
   stage_history: unknown[] | null
   end_date: string | null
+  due_date?: string | null
 }
 
 interface StageRow {
@@ -295,6 +296,69 @@ describe("revertServiceDelivery", () => {
     acctRow = { ra_renewal_date: null }
 
     const res = await revertServiceDelivery({ delivery_id: "sd-1" })
+    expect(res.success).toBe(true)
+    expect(updateAccount).not.toHaveBeenCalled()
+    expect(res.renewal_date_reverted).toBeNull()
+  })
+
+  it("AL GROUP REGRESSION: un-rolls on a final stage named 'Completed' (not just 'Closed'), targeting the SD's own cycle date", async () => {
+    // Wrongly-recorded 2026 filing rolled the account to 2027; Luca reverts
+    // the SD. The old guard only fired on stage 'Closed' → date stayed 2027
+    // and the company vanished from the 2026 calendar (2026-08-07).
+    sdRow = {
+      id: "sd-1",
+      service_type: "State Annual Report",
+      service_name: "Annual Report",
+      stage: "Completed",
+      status: "completed",
+      account_id: "acct-1",
+      contact_id: null,
+      stage_history: [],
+      end_date: "2026-07-15",
+      due_date: "2026-12-15",
+    }
+    stagesRows = [
+      { stage_name: "Upcoming", stage_order: 1 },
+      { stage_name: "In Progress", stage_order: 2 },
+      { stage_name: "Completed", stage_order: 3 },
+    ]
+    acctRow = { annual_report_due_date: "2027-12-15" }
+
+    const res = await revertServiceDelivery({ delivery_id: "sd-1" })
+
+    expect(res.success).toBe(true)
+    expect(updateAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acct-1", patch: { annual_report_due_date: "2026-12-15" } }),
+    )
+    expect(res.renewal_date_reverted).toEqual({
+      column: "annual_report_due_date",
+      from: "2027-12-15",
+      to: "2026-12-15",
+    })
+  })
+
+  it("never moves the date FORWARD or when it already matches the reopened cycle", async () => {
+    sdRow = {
+      id: "sd-1",
+      service_type: "State Annual Report",
+      service_name: "Annual Report",
+      stage: "Completed",
+      status: "completed",
+      account_id: "acct-1",
+      contact_id: null,
+      stage_history: [],
+      end_date: "2026-07-15",
+      due_date: "2026-12-15",
+    }
+    stagesRows = [
+      { stage_name: "Upcoming", stage_order: 1 },
+      { stage_name: "Completed", stage_order: 2 },
+    ]
+    // Someone already repaired the date to the reopened cycle — nothing to undo.
+    acctRow = { annual_report_due_date: "2026-12-15" }
+
+    const res = await revertServiceDelivery({ delivery_id: "sd-1" })
+
     expect(res.success).toBe(true)
     expect(updateAccount).not.toHaveBeenCalled()
     expect(res.renewal_date_reverted).toBeNull()

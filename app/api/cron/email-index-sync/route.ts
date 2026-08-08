@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
           .maybeSingle()
         bf.done = st?.backfill_done === true
       }
-      let sync: { threads: number } | null = null
+      let sync: { threads: number; cursorHeld?: boolean; cursorExpired?: boolean } | null = null
       if (bf.done) {
         // Reconcile from the current profile historyId
         const profile = (await import("@/lib/gmail").then(({ gmailGet }) =>
@@ -78,6 +78,28 @@ export async function GET(request: NextRequest) {
         )) as { historyId?: string }
         if (profile.historyId) {
           sync = await syncIncremental(mailbox, String(profile.historyId))
+          // A held or expired cursor here means even the SAFETY-NET pass could
+          // not catch the index up. Held once is routine (a 429 mid-burst);
+          // repeated occurrences mean the index is silently going stale — the
+          // dedup on fingerprint turns repeats into an occurrence count the
+          // error auto-audit surfaces. (Council: a wedged cursor fails silently
+          // and globally; it must have an alarm.)
+          if (sync.cursorHeld || sync.cursorExpired) {
+            try {
+              const { reportSystemError } = await import("@/lib/system-errors")
+              await reportSystemError({
+                source: "server",
+                route: "/api/cron/email-index-sync",
+                method: "GET",
+                message: sync.cursorExpired
+                  ? `email-index cursor EXPIRED for ${mailbox} — reset; label gap needs reconcile`
+                  : `email-index cursor HELD for ${mailbox} — transient sync failure, will retry`,
+                context: { mailbox, threads: sync.threads },
+              })
+            } catch {
+              // Alerting must never fail the sync itself.
+            }
+          }
         }
       }
       results[mailbox] = { backfill: bf, reconcile: sync }

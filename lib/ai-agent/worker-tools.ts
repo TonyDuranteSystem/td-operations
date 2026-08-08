@@ -1624,6 +1624,17 @@ export async function sendPortalMessageFromWorker(input: {
     return "❌ send_portal_message needs a non-empty message."
   }
 
+  // Send-scope invariant (2026-08-07 cross-company leak, dev job 4bad3094):
+  // when BOTH ids are given, the person must actually be in that company —
+  // a mismatched pair posts into another client's company-visible thread.
+  if (accountId && contactId) {
+    const { isContactLinkedToAccount } = await import("@/lib/portal/admin-send-scope")
+    const linked = await isContactLinkedToAccount(accountId, contactId)
+    if (!linked) {
+      return "❌ Not sent: that contact is not a member of that account — the message would appear in the wrong client's company thread. Use one of the contact's own accounts, or contact_id alone for their personal thread."
+    }
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
 

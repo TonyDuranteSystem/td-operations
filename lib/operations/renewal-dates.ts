@@ -61,11 +61,66 @@ export function normalizeStateCode(state: string | null | undefined): string {
     .replace("DELAWARE", "DE")
 }
 
-/** +1 year via setFullYear — matches the SD-completion roll-forward (Feb 29 → Mar 1). */
+function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
+}
+
+/** The obligation's anniversary (month/day of the stored date) in the given
+ *  year; Feb 29 → Mar 1 in non-leap years (the roll-forward convention).
+ *  PURE STRING MATH — `new Date(iso).setFullYear(...)` runs in LOCAL time and
+ *  drifts a day for dates inside the DST-transition window (2026-11-07 + 1yr
+ *  gave 2027-11-06 on a US-timezone machine; Vercel's UTC masked it). */
+export function anniversaryForYear(storedDate: string, year: number): string {
+  const [, month, day] = storedDate.split("-")
+  if (month === "02" && day === "29" && !isLeapYear(year)) return `${year}-03-01`
+  return `${year}-${month}-${day}`
+}
+
+/** +1 year, Feb 29 → Mar 1 — matches the SD-completion roll-forward. */
 export function plusOneYear(isoDate: string): string {
-  const d = new Date(isoDate)
-  d.setFullYear(d.getFullYear() + 1)
-  return d.toISOString().split("T")[0]
+  return anniversaryForYear(isoDate, parseInt(isoDate.slice(0, 4), 10) + 1)
+}
+
+export interface RollForwardDecision {
+  action: "roll" | "already_current"
+  /** The date the record should hold after this filing. */
+  next: string
+}
+
+/**
+ * Filed-year semantics for the SD-completion roll (plan 89c951a7, replaces
+ * the blind stored+1yr): a filing FOR year N moves the record to the
+ * anniversary in year N+1. A record already at/past that date is
+ * "already_current" — completing an old SD twice, or completing after the
+ * record was repaired, must NEVER move the date backwards or double-roll.
+ * A record MORE than a year behind stays behind after one filing (each owed
+ * year needs its own filing) — the calendar's overdue flag reports the rest.
+ */
+export function computeRollForward(storedDate: string, filingForYear: number): RollForwardDecision {
+  const next = anniversaryForYear(storedDate, filingForYear + 1)
+  if (next <= storedDate) return { action: "already_current", next: storedDate }
+  return { action: "roll", next }
+}
+
+/**
+ * Which cycle year a renewal completion is FOR (council blocker, 2026-08-06):
+ * explicit caller value (Mark Filed dialog) → the SD's own due-date year
+ * (the cron stamps due_date with the account date, so completing that SD is
+ * filing FOR that cycle) → the completion year only as a last resort.
+ * "Today's year" alone over-rolled a December cycle completed in January by
+ * a full year, and absorbed owed years when completing a stale cron SD.
+ */
+export function resolveFilingForYear(
+  explicit: number | undefined,
+  sdDueDate: string | null | undefined,
+  fallbackYear: number,
+): number {
+  if (explicit != null) return explicit
+  if (sdDueDate) {
+    const y = parseInt(String(sdDueDate).slice(0, 4), 10)
+    if (!Number.isNaN(y)) return y
+  }
+  return fallbackYear
 }
 
 /** Pure derivation. Returns ONLY the columns that are null and derivable. */
@@ -138,45 +193,76 @@ export async function applyRenewalDateFills(
     ]
     for (const m of mirrors) {
       if (!m.due) continue
-      const year = new Date(m.due).getFullYear()
-      // Match the current OPEN row for this obligation: same year OR the
-      // year-NULL legacy import rows (the majority of the table — file-renewal
-      // carries the same fallback). Completed rows are history — never updated;
-      // a completed prior cycle correctly gets a NEW row for the new cycle.
-      // limit(1) tolerates duplicate rows instead of erroring into an insert.
-      const { data: existingRows } = await supabaseAdmin
-        .from("deadlines")
-        .select("id, due_date")
-        .eq("account_id", accountId)
-        .eq("deadline_type", m.type)
-        .neq("status", "Completed")
-        .or(`year.eq.${year},year.is.null`)
-        .order("due_date", { ascending: false })
-        .limit(1)
-      const existing = existingRows?.[0] ?? null
-      if (existing) {
-        if (existing.due_date !== m.due) {
-          await supabaseAdmin
-            .from("deadlines")
-            .update({ due_date: m.due, updated_at: new Date().toISOString() })
-            .eq("id", existing.id)
-        }
-      } else {
-        await supabaseAdmin.from("deadlines").insert({
-          account_id: accountId,
-          deadline_type: m.type,
-          due_date: m.due,
-          status: "Pending",
-          state: opts?.state || null,
-          year,
-          assigned_to: "Luca",
-          notes: `Auto-derived at intake (${opts?.actor || "renewal-dates"})`,
-        })
-      }
+      await mirrorDeadlineDate(accountId, m.type, m.due, {
+        state: opts?.state,
+        note: `Auto-derived at intake (${opts?.actor || "renewal-dates"})`,
+      })
     }
   } catch {
     // mirror is best-effort by design
   }
 
   return applied
+}
+
+/**
+ * Keep ONE `deadlines` row in sync with an account renewal date — the client
+ * portal's Deadlines page and the dashboard cards read that table, so a date
+ * repair that skips the mirror shows clients a different truth than the
+ * calendar. Shared by the intake fills above and the calendar's one-click
+ * record repairs.
+ *
+ * Matching rule: the current OPEN row for this obligation — same year OR the
+ * year-NULL legacy import rows (the majority of the table — file-renewal
+ * carries the same fallback). Completed rows are history — never updated;
+ * a completed prior cycle correctly gets a NEW row for the new cycle.
+ * limit(1) tolerates duplicate rows instead of erroring into an insert.
+ */
+export async function mirrorDeadlineDate(
+  accountId: string,
+  deadlineType: "RA Renewal" | "Annual Report",
+  due: string,
+  opts?: { state?: string | null; note?: string; matchYear?: number; includeNullYear?: boolean },
+): Promise<void> {
+  const year = parseInt(due.slice(0, 4), 10) // string math — never local-time Date parsing
+  const lookupYear = opts?.matchYear ?? year
+  // includeNullYear=false: only exact-year rows match — used by the roll
+  // forward's "ensure a NEW cycle row exists" so it can never steal the OLD
+  // cycle's year-NULL legacy row out from under file-renewal's completion.
+  const yearFilter = (opts?.includeNullYear ?? true)
+    ? `year.eq.${lookupYear},year.is.null`
+    : `year.eq.${lookupYear}`
+  const { data: existingRows } = await supabaseAdmin
+    .from("deadlines")
+    .select("id, due_date")
+    .eq("account_id", accountId)
+    .eq("deadline_type", deadlineType)
+    // Completed AND Filed rows are history — repurposing a Filed row to a
+    // new cycle kept its Filed status + old receipt on the client portal
+    // (senior-engineer major, council 2026-08-06). A new cycle gets a
+    // fresh Pending row instead.
+    .not("status", "in", '("Completed","Filed")')
+    .or(yearFilter)
+    .order("due_date", { ascending: false })
+    .limit(1)
+  const existing = existingRows?.[0] ?? null
+  if (existing) {
+    if (existing.due_date !== due) {
+      await supabaseAdmin
+        .from("deadlines")
+        .update({ due_date: due, year, updated_at: new Date().toISOString() })
+        .eq("id", existing.id)
+    }
+  } else {
+    await supabaseAdmin.from("deadlines").insert({
+      account_id: accountId,
+      deadline_type: deadlineType,
+      due_date: due,
+      status: "Pending",
+      state: opts?.state || null,
+      year,
+      assigned_to: "Luca",
+      notes: opts?.note || null,
+    })
+  }
 }

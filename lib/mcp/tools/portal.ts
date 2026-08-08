@@ -15,6 +15,7 @@ import type { MailingAddressRow } from "@/lib/addresses"
 import { LLC_MANAGEMENT_BUNDLE_TYPES } from "@/lib/services"
 import { formatMcpChatSenderLabel } from "@/lib/portal/chat-sender-name"
 import { contactThreadOrFilter, multiMemberAccountIds } from "@/lib/portal/thread-scope"
+import { isContactLinkedToAccount, resolveAdminReplyContact } from "@/lib/portal/admin-send-scope"
 
 // Document types allowed to be visible in the client portal Documents tab
 // Document types visible to clients in the portal (by type name)
@@ -1953,18 +1954,30 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
         // Admin sender ID (Antonio's auth user ID)
         const senderId = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
 
-        // Resolve contact_id: if only account_id was provided, look up any linked
-        // contact so the message appears in the client's contact-scoped thread.
-        // Do NOT filter by is_primary — only 1 record has it set across the entire DB.
+        // Send-scope invariant (2026-08-07 cross-company leak, dev job 4bad3094):
+        // when BOTH ids are passed, the account must actually be one of the
+        // contact's companies — a mismatched pair is exactly how private
+        // messages ended up readable by another company's member. Fails closed.
+        if (account_id && contact_id) {
+          const linked = await isContactLinkedToAccount(account_id, contact_id)
+          if (!linked) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: "Error: the contact is not a member of that account — sending would expose the message to the wrong client's company thread. Pass one of the contact's own accounts, or send with contact_id only (personal thread).",
+              }],
+            }
+          }
+        }
+
+        // Resolve contact_id: if only account_id was provided, tag the member
+        // actually being answered — deterministically (reply-author → last
+        // client sender → primary/first), via the same shared helper the chat
+        // route uses. Replaces the old arbitrary `.limit(1)` pick that tagged
+        // the wrong MMLLC member.
         let resolvedContactId = contact_id || null
         if (!resolvedContactId && account_id) {
-          const { data: primary } = await supabaseAdmin
-            .from("account_contacts")
-            .select("contact_id")
-            .eq("account_id", account_id)
-            .limit(1)
-            .maybeSingle()
-          resolvedContactId = primary?.contact_id || null
+          resolvedContactId = await resolveAdminReplyContact(account_id, null)
         }
 
         const { data: msg, error } = await supabaseAdmin
