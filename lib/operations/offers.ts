@@ -157,10 +157,19 @@ async function warnIfCreditWentUnattached(input: {
 }): Promise<string | null> {
   try {
     const held: Array<{ contactId: string; amount: number; currency: string }> = []
+    let couldNotCheck = false
     for (const contactId of input.contactIds) {
-      for (const c of await unspentCreditByCurrency({ contactId }, supabaseAdmin)) {
-        held.push({ contactId, amount: c.amount, currency: c.currency })
+      try {
+        for (const c of await unspentCreditByCurrency({ contactId }, supabaseAdmin)) {
+          held.push({ contactId, amount: c.amount, currency: c.currency })
+        }
+      } catch {
+        // Cannot tell ⇒ warn anyway. Staying quiet here is the failure mode.
+        couldNotCheck = true
       }
+    }
+    if (couldNotCheck && held.length === 0) {
+      return `Could not check whether ${input.clientName} holds credit, so this offer may be missing a deduction they are owed. Re-check before sending.`
     }
     if (held.length === 0 && !input.force) return null
 

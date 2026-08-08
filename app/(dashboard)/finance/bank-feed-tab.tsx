@@ -685,9 +685,12 @@ function UnmatchedRow({
     setLoadingTargetServices(false)
   }
   const closeCreateModal = () => {
+    // The busy guard runs FIRST. Clearing these before it meant a backdrop click
+    // during a failing submit silently unticked "paid strategy call", and the
+    // retry booked a service delivery + invoice instead of revenue + credit.
+    if (createSubmitting) return
     setCreatePaidCall(false)
     setPaidCallRevenueOnly(false)
-    if (createSubmitting) return
     setCreateForResult(null)
     setCreateDescription('')
     setCreateServiceType('')

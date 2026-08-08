@@ -250,6 +250,10 @@ export async function unspentCreditByCurrency(
   scope: CreditScope,
   supabase: SupabaseClient,
 ): Promise<Array<{ amount: number; currency: string }>> {
+  // NOTE: a read failure THROWS from here rather than returning []. Callers use
+  // this to decide whether to warn staff that a client is owed money, and an
+  // empty array is indistinguishable from "they hold nothing" — which silently
+  // suppressed the very warning this function exists to feed.
   const accountId = (scope as { accountId?: string }).accountId
   const contactId = (scope as { contactId?: string }).contactId
   if (!accountId && !contactId) return []
@@ -262,7 +266,7 @@ export async function unspentCreditByCurrency(
     .gt("credit_remaining", 0)
   if (error) {
     console.error("[unspentCreditByCurrency] lookup failed:", error.message)
-    return []
+    throw new Error(`unspentCreditByCurrency: ${error.message}`)
   }
 
   const byCurrency = new Map<string, number>()

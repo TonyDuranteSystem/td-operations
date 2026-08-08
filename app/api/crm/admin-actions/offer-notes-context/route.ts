@@ -240,6 +240,10 @@ export async function GET(req: NextRequest) {
     // signing), so the email is the link — exactly as on the offer.
     let heldCredit: { amount: number; currency: string }[] = []
     let creditPerson: string | null = null
+    // An empty list must mean "they hold nothing", never "we could not look".
+    // Collapsing those two was how an unreachable database read became a
+    // confident "no credit" on the screen staff price deals from.
+    let creditCheckFailed = false
     try {
       let email: string | null = null
       if (contactId) {
@@ -252,6 +256,7 @@ export async function GET(req: NextRequest) {
       }
       if (email) {
         const subject = await resolveCreditSubject(email, supabaseAdmin)
+        if (subject.kind === 'lookup_failed') creditCheckFailed = true
         const personId = subjectForDisplay(subject)
         if (personId) {
           const held = await unspentCreditByCurrency({ contactId: personId }, supabaseAdmin)
@@ -260,11 +265,18 @@ export async function GET(req: NextRequest) {
         }
       }
     } catch (err) {
-      // Never break the dialog over an advisory line.
+      // Never break the dialog over an advisory line — but never pretend it
+      // succeeded either.
+      creditCheckFailed = true
       console.error('[offer-notes-context] credit lookup failed:', err)
     }
 
-    return NextResponse.json({ sources, held_credit: heldCredit, credit_contact_id: creditPerson })
+    return NextResponse.json({
+      sources,
+      held_credit: heldCredit,
+      credit_contact_id: creditPerson,
+      credit_check_failed: creditCheckFailed,
+    })
   } catch (err) {
     console.error('offer-notes-context error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

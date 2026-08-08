@@ -78,6 +78,10 @@ export function buildRevisedOfferInsert(
     // the offer would silently stop mentioning it.
     credit_amount: (original.credit_amount as number | null | undefined) ?? null,
     credit_payment_id: (original.credit_payment_id as string | null | undefined) ?? null,
+    // Without this a revised offer silently drops from "Already paid — Strategy
+    // Call" to the neutral "Credit applied" — a wording regression on the one
+    // document the client compares side by side with the previous version.
+    credit_kind: (original.credit_kind as string | null | undefined) ?? null,
     referrer_contact_id: (original.referrer_contact_id as string | null | undefined) ?? null,
     view_count: 0,
     version: seed.newVersion,

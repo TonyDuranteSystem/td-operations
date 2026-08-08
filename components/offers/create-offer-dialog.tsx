@@ -306,6 +306,7 @@ export function CreateOfferDialog({
   const [heldCredit, setHeldCredit] = useState<Array<{ amount: number; currency: string }>>([])
   // WS-A: warnings raised WHILE creating the offer (a credit that could not be
   // attached, a mis-typed price). These HOLD the screen — see the note below.
+  const [creditCheckFailed, setCreditCheckFailed] = useState(false)
   const [postCreateWarnings, setPostCreateWarnings] = useState<string[]>([])
   const [createdUrl, setCreatedUrl] = useState<string | null>(null)
 
@@ -320,7 +321,7 @@ export function CreateOfferDialog({
 
   // Fetch notes context when dialog opens
   useEffect(() => {
-    if (!open) { setHeldCredit([]); return }
+    if (!open) { setHeldCredit([]); setCreditCheckFailed(false); return }
     if (!leadId && !contactId && !accountId) return
 
     setNotesLoading(true)
@@ -335,10 +336,16 @@ export function CreateOfferDialog({
         const sources = (d.sources ?? []) as NoteSource[]
         setNotesContext(sources)
         setHeldCredit((d.held_credit ?? []) as Array<{ amount: number; currency: string }>)
+        // An absent banner must never be the way we report "we could not check".
+        setCreditCheckFailed(d.credit_check_failed === true)
         // Select all by default
         setSelectedNoteIds(new Set(sources.map(s => s.id)))
       })
-      .catch(() => { /* silently fail — notes are optional */ })
+      .catch(() => {
+        // Notes are optional; the CREDIT check is not. Swallowing this made an
+        // unreachable server indistinguishable from a client who owes nothing.
+        setCreditCheckFailed(true)
+      })
       .finally(() => setNotesLoading(false))
   }, [open, leadId, contactId, accountId])
 
@@ -857,6 +864,9 @@ export function CreateOfferDialog({
         if (warnings.length > 0) {
           setPostCreateWarnings(warnings)
           setCreatedUrl(data.offer_url)
+          // Two channels on purpose. The screen is the one that holds; the toast
+          // is insurance in case anything ever unmounts this component again.
+          for (const w of warnings) toast.warning(w, { duration: 30000 })
           router.refresh()
           return
         }
@@ -869,13 +879,6 @@ export function CreateOfferDialog({
       }
     })
   }
-
-  if (!open) return null
-
-  const primaryServices = catalog.filter(s => s.category === 'primary')
-  const standaloneServices = catalog.filter(s => s.category === 'standalone')
-  const addonServices = catalog.filter(s => s.category === 'addon')
-  const _sourceLabel = accountId ? 'account' : 'lead'
 
   // WS-A: the offer was created, but something needs reading BEFORE it is sent.
   // A full screen, not a toast — the previous version raised this and then
@@ -917,6 +920,21 @@ export function CreateOfferDialog({
     )
   }
 
+  // DELIBERATELY ABOVE THE `open` GATE.
+  // Creating an offer takes seconds (many sequential writes). If the staffer
+  // closes the dialog while that is in flight, the response still arrives and
+  // sets these warnings — and if this lived below the gate, the component would
+  // return null and the warning would be destroyed. Unrecoverably: once the
+  // offer exists the Create Offer button disappears, so it could never repaint.
+  // That is the sixth defect in this feature where the message was produced and
+  // never reached a human; the warning outliving its own dialog is the fix.
+  if (!open) return null
+
+  const primaryServices = catalog.filter(s => s.category === 'primary')
+  const standaloneServices = catalog.filter(s => s.category === 'standalone')
+  const addonServices = catalog.filter(s => s.category === 'addon')
+  const _sourceLabel = accountId ? 'account' : 'lead'
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto mx-4">
@@ -950,6 +968,14 @@ export function CreateOfferDialog({
             {/* WS-A: what this client has ALREADY PAID. Shown here, while the
                 services are still being chosen, because learning it after the
                 offer is written is too late to price the deal. */}
+            {creditCheckFailed && heldCredit.length === 0 && (
+              <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                <p className="text-sm text-amber-900">
+                  ⚠ Could not check whether this client has unused credit. That is
+                  <strong> not</strong> the same as them having none — check before you price this.
+                </p>
+              </div>
+            )}
             {heldCredit.length > 0 && (
               <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2">
                 <p className="text-sm font-medium text-emerald-900">
