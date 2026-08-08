@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
+import { computeOfferTotals } from '@/lib/offers/compute-offer-totals'
 import type { Offer } from '@/lib/types/offer'
 import { SERVICE_CONTENT } from './standalone-service-agreement'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
@@ -189,13 +190,22 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
   const services = Array.isArray(offer.services) ? offer.services : []
   const selectedSet = new Set(Array.isArray((offer as any).selected_services) ? (offer as any).selected_services : [])
   const offerContractType = (offer as any).contract_type || 'onboarding'
-  let totalSetup = 0
+  // WS-A3 site #7: setup fee from THE offer amount engine, multi-contract
+  // filtering preserved (this agreement covers only its own contract type).
+  // The symbol still comes from this component's own price-string sniffing —
+  // deliberately NOT switched to the engine's header detection here, because
+  // that would change what a SIGNED legal document displays; unifying it is a
+  // separate, reviewed decision.
+  const agreementTotals = computeOfferTotals(
+    { services: offer.services, cost_summary: offer.cost_summary, selected_services: Array.from(selectedSet) },
+    { filterContractType: offerContractType },
+  )
+  const totalSetup = agreementTotals.servicesTotal
   let currencySymbol = 'EUR'
   for (const svc of services) {
     const isOpt = !!(svc as any).optional
     const isSelected = selectedSet.size > 0 ? (!isOpt || selectedSet.has(svc.name)) : !isOpt
     if (!isSelected) continue
-    // Multi-contract: only count services belonging to main contract
     const svcCt = (svc as any).contract_type
     if (svcCt && svcCt !== offerContractType) continue
     const priceStr = String(svc.price || '0')
@@ -203,7 +213,6 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
     if (/includ|inclus/i.test(priceStr)) continue
     const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ''))
     if (!isNaN(priceNum) && priceNum > 0) {
-      totalSetup += priceNum
       if (/\$|usd/i.test(priceStr)) currencySymbol = '$'
       else if (/EUR/i.test(priceStr)) currencySymbol = 'EUR'
     }

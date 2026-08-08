@@ -28,8 +28,13 @@ import { createClient } from '@/lib/supabase/client'
 
 type Step = 'loading' | 'intro' | 'scan' | 'codes' | 'blocked'
 
+// The Supabase browser client is created ON DEMAND (inside effects and
+// handlers), NEVER in the render path: this page is statically prerendered at
+// build time, and createBrowserClient throws when the public URL/anon key are
+// absent — which is exactly a preview build. Creating it during render broke
+// every preview build of the repo (2026-08-07). Same pattern as app/login.
+
 export default function MfaEnrollPage() {
-  const supabase = createClient()
   const [step, setStep] = useState<Step>('loading')
   const [factorId, setFactorId] = useState<string | null>(null)
   const [qrSvg, setQrSvg] = useState<string | null>(null)
@@ -43,25 +48,23 @@ export default function MfaEnrollPage() {
 
   useEffect(() => {
     ;(async () => {
-      const { data: factors } = await supabase.auth.mfa.listFactors()
+      const { data: factors } = await createClient().auth.mfa.listFactors()
       const totp = factors?.totp ?? []
       const verified = totp.filter(f => (f as { status?: string }).status === 'verified')
+      // ONE authenticator per account, always. Refused at ANY assurance level
+      // (Antonio, 2026-08-07): at aal1 it is what a stolen password would try;
+      // at aal2 it silently ADDED a second factor, so after a phone change the
+      // OLD phone kept working — the opposite of a replace. Changing phone goes
+      // through the sidebar's Two-factor security panel, which removes first.
       if (verified.length > 0) {
-        // ONE authenticator per account, always. Two reasons this is a hard
-        // refusal rather than the old aal-conditional one (Antonio, 2026-08-07):
-        //  - at aal1 it is exactly what a stolen password would attempt;
-        //  - at aal2 it silently ADDED a second factor, so after a phone
-        //    change the OLD phone kept working — the opposite of a replace.
-        // The replace flow (staff sidebar → Two-factor security) is the only
-        // supported path; it removes the old factor before enrolling.
         setStep('blocked')
         return
       }
       // Clean abandoned enrollments so re-enroll never 422s.
-      const { data: all } = await supabase.auth.mfa.listFactors()
+      const { data: all } = await createClient().auth.mfa.listFactors()
       for (const f of all?.all ?? []) {
         if ((f as { status?: string }).status === 'unverified') {
-          await supabase.auth.mfa.unenroll({ factorId: f.id }).catch(() => {})
+          await createClient().auth.mfa.unenroll({ factorId: f.id }).catch(() => {})
         }
       }
       setStep('intro')
@@ -73,7 +76,7 @@ export default function MfaEnrollPage() {
     setBusy(true)
     setError(null)
     try {
-      const { data, error: enrollErr } = await supabase.auth.mfa.enroll({
+      const { data, error: enrollErr } = await createClient().auth.mfa.enroll({
         factorType: 'totp',
         issuer: 'TD Operations',
         friendlyName: `staff-${Date.now()}`,
@@ -89,16 +92,16 @@ export default function MfaEnrollPage() {
     } finally {
       setBusy(false)
     }
-  }, [supabase])
+  }, [])
 
   const handleActivate = useCallback(async () => {
     if (!factorId || code.length !== 6) return
     setBusy(true)
     setError(null)
     try {
-      const { data: challenge, error: chErr } = await supabase.auth.mfa.challenge({ factorId })
+      const { data: challenge, error: chErr } = await createClient().auth.mfa.challenge({ factorId })
       if (chErr || !challenge) throw new Error(chErr?.message || 'Challenge failed')
-      const { error: vErr } = await supabase.auth.mfa.verify({
+      const { error: vErr } = await createClient().auth.mfa.verify({
         factorId,
         challengeId: challenge.id,
         code,
@@ -115,7 +118,7 @@ export default function MfaEnrollPage() {
     } finally {
       setBusy(false)
     }
-  }, [factorId, code, supabase])
+  }, [factorId, code])
 
   const handleCopySecret = useCallback(async () => {
     if (!secret) return
@@ -151,10 +154,10 @@ export default function MfaEnrollPage() {
           <>
             <h1 className="text-lg font-semibold text-center">Already set up</h1>
             <p className="text-sm text-zinc-600 text-center mt-2">
-              This account already has an authenticator, and an account can only
-              have one. Changing phone? Sign in, then use{' '}
-              <strong>Two-factor security</strong> at the bottom of the sidebar
-              to replace it — that removes the old one first.
+              This account already has an authenticator, and an account can have
+              only one. Changing phone? Open <strong>Two-factor security</strong>
+              at the bottom of the sidebar and use <strong>Replace</strong> —
+              it removes the old one first.
             </p>
             <a href="/" className="block text-center mt-4 px-4 py-2.5 bg-red-600 text-white text-sm font-medium rounded-lg">
               Go to the dashboard

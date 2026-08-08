@@ -263,6 +263,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: result.error || "Offer creation failed" }, { status: 500 })
     }
 
+    // A partner-sourced offer goes to a real end client, so a credit they are
+    // owed matters exactly as much here as on the CRM path. This route used to
+    // discard the warnings — the third consumer of a contract written for two.
+    if ((result.warnings ?? []).length > 0) {
+      try {
+        const { reportSystemError } = await import('@/lib/system-errors')
+        await reportSystemError({
+          source: 'server',
+          route: '/api/portal/partner/create-request-offer',
+          message: `Partner-requested offer created with unresolved credit warnings — ${(result.warnings ?? []).join(' | ')}`,
+          context: { token: result.token, partner_id: partner.id },
+        })
+      } catch { /* a notice must never fail the request */ }
+    }
+
     return NextResponse.json({
       success: true,
       token: result.token,
@@ -270,6 +285,7 @@ export async function POST(req: NextRequest) {
       partner_id: partner.id,
       invoice_target: invoiceTarget,
       payout_model: payoutModel,
+      warnings: result.warnings ?? [],
     })
   } catch (err) {
     console.error("[create-request-offer] Error:", err)

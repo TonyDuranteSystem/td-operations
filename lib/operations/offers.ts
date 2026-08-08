@@ -22,6 +22,9 @@ import { getConfiguredCardFeeRate } from "@/lib/payments/card-fee-config"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { accountIdForOffer } from "@/lib/operations/offer-scope"
 import { normalizeFormationState } from "@/lib/formation/states"
+import { availableCreditForDisplay, unspentCreditByCurrency } from "@/lib/operations/credit-netting"
+import { resolveCreditSubject, subjectForDisplay, type CreditSubject } from "@/lib/operations/credit-subject"
+import { parsePriceQuirk, resolveOfferCurrency, ambiguousDotPrices } from "@/lib/offers/compute-offer-totals"
 import type { Json } from "@/lib/database.types"
 
 // ─── JSONB validation ───────────────────────────────────────
@@ -115,6 +118,100 @@ export function validateOfferJsonb(params: Record<string, unknown>): string | nu
     }
   }
   return null
+}
+
+
+/**
+ * RIDER 2 — say so when a client HAS credit and the offer could not show it.
+ *
+ * Silence here is the dangerous outcome: an offer with no credit line looks
+ * identical whether the client has none, holds it in another currency, or is one
+ * of two people sharing an address. Staff would send full price to someone who
+ * had already paid, and nothing anywhere would have flagged it. Only fires when
+ * a real unspent balance exists — a client with no credit produces no noise.
+ */
+
+/**
+ * The two cases with NO contact to check a balance against — so the warning
+ * cannot be conditional on holding credit. Both were completely silent before:
+ * a client who booked under a different address, and a failed lookup that read
+ * as "they have none".
+ */
+async function warnUnconditional(input: {
+  reason: "unknown_email" | "lookup_failed"
+  clientName: string
+  email: string | null
+  currency: string
+}): Promise<string | null> {
+  return warnIfCreditWentUnattached({ ...input, contactIds: [], force: true })
+}
+
+async function warnIfCreditWentUnattached(input: {
+  reason: "ambiguous_email" | "currency" | "unknown_email" | "lookup_failed"
+  contactIds: string[]
+  currency: string
+  clientName: string
+  email: string | null
+  /** Warn even though there is no contact whose balance we could check. */
+  force?: boolean
+}): Promise<string | null> {
+  try {
+    const held: Array<{ contactId: string; amount: number; currency: string }> = []
+    const locked: Array<{ amount: number; currency: string }> = []
+    let couldNotCheck = false
+    for (const contactId of input.contactIds) {
+      try {
+        for (const c of await unspentCreditByCurrency({ contactId }, supabaseAdmin)) {
+          if (c.locked) locked.push({ amount: c.amount, currency: c.currency })
+          else held.push({ contactId, amount: c.amount, currency: c.currency })
+        }
+      } catch {
+        // Cannot tell ⇒ warn anyway. Staying quiet here is the failure mode.
+        couldNotCheck = true
+      }
+    }
+    // A STUCK claim is not a currency problem. Saying so was self-contradictory
+    // ("holds 257 EUR but this offer is priced in EUR") and would be dismissed
+    // as a bug rather than acted on.
+    if (locked.length > 0 && held.length === 0) {
+      const stuck = locked.map((l) => `${l.amount} ${l.currency}`).join(", ")
+      return `${input.clientName} holds credit (${stuck}) that is STUCK mid-use — an earlier invoice claimed it and never finished. It was not shown on this offer and will not be deducted at signing. It releases itself on their next invoice; if this offer is going out now, re-create it in a few minutes or apply the credit by hand.`
+    }
+    if (couldNotCheck && held.length === 0) {
+      return `Could not check whether ${input.clientName} holds credit, so this offer may be missing a deduction they are owed. Re-check before sending.`
+    }
+    if (held.length === 0 && locked.length === 0 && !input.force) return null
+
+    const summary = held.length ? held.map((h) => `${h.amount} ${h.currency}`).join(", ") : "unknown"
+    const detail =
+      input.reason === "unknown_email"
+        ? `No contact exists for ${input.email}, so ${input.clientName}'s offer shows no credit. If they booked a paid call under a DIFFERENT address, they are owed a deduction this offer does not mention — check before sending.`
+      : input.reason === "lookup_failed"
+        ? `Could not check whether ${input.clientName} holds credit (the contact lookup failed). The offer shows no credit line, which is NOT the same as them having none — re-check before sending.`
+      : input.reason === "ambiguous_email"
+        ? `${input.contactIds.length} contacts share the email ${input.email}, so the offer for ${input.clientName} could not safely show a credit — showing one person another's balance is worse than showing none. Unspent credit on those contacts: ${summary}. Fix the duplicate contacts, then revise the offer.`
+        : `${input.clientName} holds unspent credit (${summary}) but this offer is priced in ${input.currency}, so nothing was shown and nothing will be deducted at signing — credit never converts between currencies. Either price the offer in their currency or tell them explicitly.`
+
+    const { reportSystemError } = await import("@/lib/system-errors")
+    await reportSystemError({
+      source: "server",
+      route: "/api/crm/admin-actions/create-offer",
+      message: `Offer created without showing a credit the client actually holds — ${detail}`,
+      context: {
+        reason: input.reason,
+        client_name: input.clientName,
+        email: input.email,
+        offer_currency: input.currency,
+        contact_ids: input.contactIds,
+        unattached_credit: held,
+      },
+    })
+    return detail
+  } catch (err) {
+    // A warning must never take an offer down with it.
+    console.error("[createOffer] unattached-credit warning failed:", err)
+    return null
+  }
 }
 
 // ─── Types ────────────────────────────────────────────────────
@@ -218,6 +315,13 @@ export interface CreateOfferResult {
   offer_url?: string
   whop_checkout_url?: string | null
   referrer_auto_filled?: boolean
+  /**
+   * Plain-English notices for the person who just created the offer — today,
+   * "this client holds credit and the offer could not show it". A durable card
+   * is also written for the system-health screen, but a card found later is not
+   * the same as being told while the offer is still on screen.
+   */
+  warnings?: string[]
   duplicate?: { token: string; status: string }
   error?: string
 }
@@ -265,14 +369,15 @@ function normalizeEntityType(
 function detectCurrency(
   explicit: "EUR" | "USD" | undefined,
   cost_summary: unknown,
-  services: unknown
+  _services: unknown,
 ): "EUR" | "USD" {
-  if (explicit === "EUR" || explicit === "USD") return explicit
-  const costArr = Array.isArray(cost_summary) ? cost_summary : []
-  const firstTotal = (costArr[0] as Record<string, unknown>)?.total as string || ""
-  const servicesStr = JSON.stringify(services || [])
-  const eurHit = /€|EUR/i.test(firstTotal) || /€|EUR/i.test(servicesStr)
-  return eurHit ? "EUR" : "USD"
+  // COLLAPSED into the one shared rule (blocker 2). This used to ALSO sniff the
+  // whole services blob, so an offer with "€" in a service line but a plain
+  // header was stored EUR while the money engine read the header and charged
+  // USD — the credit was looked up in euros, rendered with a dollar sign, and
+  // never deducted at signing. The services blob is no longer consulted: a EUR
+  // offer carrying a recurring "$2,000/year" line is what flipped it.
+  return resolveOfferCurrency(explicit, cost_summary)
 }
 
 async function tryCreateWhopPlan(params: {
@@ -287,7 +392,10 @@ async function tryCreateWhopPlan(params: {
     const { createWhopPlan } = await import("@/lib/whop-auto-plan")
     const costArr = Array.isArray(params.cost_summary) ? params.cost_summary : []
     const firstTotal = (costArr[0] as Record<string, unknown>)?.total as string || ""
-    const totalNum = parseFloat(firstTotal.replace(/[^0-9.]/g, ""))
+    // WS-A3: shared parser primitive. Whop plans are priced off the FIRST
+    // cost_summary header only (the plan's headline price), not the engine's
+    // full billable gross — aggregation intentionally unchanged.
+    const totalNum = parsePriceQuirk(firstTotal)
     if (!(totalNum > 0)) return null
     const servArr = Array.isArray(params.services) ? params.services : []
     const primaryService = (servArr[0] as Record<string, unknown>)?.name as string | undefined
@@ -503,6 +611,99 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     // rate later never re-prices a deal already signed at the old rate.
     const pinnedCardFeeRate = await getConfiguredCardFeeRate()
 
+    // 7b. WS-A: snapshot any credit this client already holds in THIS currency,
+    // so the offer can show "already paid" instead of quoting a price the client
+    // knows is wrong. Display only — the netting engine at invoice time is the
+    // money of record. Person-scoped: the paid strategy-call credit belongs to
+    // the human who paid it, not to a company they happen to own.
+    // AUTO-PROPOSE. The offer rarely carries a contact id: offers are written from
+    // the LEAD page, and a lead is only linked to a contact when the client SIGNS
+    // (measured on production: every lead in the pre-offer statuses had no link).
+    // So gating the snapshot on contact_id made the feature dead in its own
+    // headline case. We resolve the person the SAME way the signing webhook does
+    // — by email — so the line the client reads and the deduction the invoice
+    // applies target the same person by construction.
+    //
+    // DISPLAY ONLY: the offer's own linkage is untouched. It drives the
+    // duplicate-offer check and portal tier, and changing it from inside a
+    // display feature would be real blast radius for no benefit.
+    let creditAmount: number | null = null
+    let creditPaymentId: string | null = null
+    let creditKind: string | null = null
+    const creditWarnings: string[] = []
+
+    // APPROVED RIDER: warn the AUTHOR about a price written "€1.500", which this
+    // system reads as 1.5. The parser is deliberately NOT being changed (that
+    // would re-price real clients and is carded separately) — so the defence is
+    // to say so while the offer is still being written and retyping is free.
+    const dotPrices = ambiguousDotPrices(params.services)
+    if (dotPrices.length > 0) {
+      creditWarnings.push(
+        `PRICE FORMAT — ${dotPrices.join("; ")}. A dot before three digits is read as a decimal here, ` +
+        `so "1.500" becomes 1.50, not 1,500. Retype it without the dot (1500) before sending this offer.`,
+      )
+    }
+    try {
+      const subject = params.contact_id
+        ? ({ kind: "resolved", contactId: params.contact_id, email: "" } as CreditSubject)
+        : await resolveCreditSubject(params.client_email, supabaseAdmin)
+      const displayContactId = subjectForDisplay(subject)
+
+      if (displayContactId) {
+        const held = await availableCreditForDisplay({ contactId: displayContactId }, currency, supabaseAdmin)
+        if (held.amount > 0) {
+          creditAmount = held.amount
+          creditPaymentId = held.creditId
+          creditKind = held.kind
+        } else {
+          // Resolved the person but showed nothing — tell staff if that is
+          // because their credit is in another currency, which is invisible
+          // on the page and looks exactly like having no credit at all.
+          const w = await warnIfCreditWentUnattached({
+            reason: "currency",
+            contactIds: [displayContactId],
+            currency,
+            clientName: params.client_name,
+            email: params.client_email ?? null,
+          })
+          if (w) creditWarnings.push(w)
+        }
+      } else if (subject.kind === "lookup_failed") {
+        // Never silent: a failed read must not read as "they have no credit".
+        const w = await warnUnconditional({
+          reason: "lookup_failed",
+          clientName: params.client_name,
+          email: subject.email,
+          currency,
+        })
+        if (w) creditWarnings.push(w)
+      } else if (subject.kind === "unknown" && params.client_email) {
+        // THE most likely real case (hunter major): the client booked the call
+        // with a personal address and the offer is written to their business
+        // one. Nothing holds credit under this address — but that is exactly
+        // when nobody would otherwise notice they are owed money.
+        const w = await warnUnconditional({
+          reason: "unknown_email",
+          clientName: params.client_name,
+          email: subject.email,
+          currency,
+        })
+        if (w) creditWarnings.push(w)
+      } else if (subject.kind === "ambiguous") {
+        const w = await warnIfCreditWentUnattached({
+          reason: "ambiguous_email",
+          contactIds: subject.contacts.map((c) => c.id),
+          currency,
+          clientName: params.client_name,
+          email: subject.email,
+        })
+        if (w) creditWarnings.push(w)
+      }
+    } catch (err) {
+      // Never block an offer over a display line.
+      console.error("[createOffer] credit snapshot failed:", err)
+    }
+
     // 8. Insert offer
     const { data: offer, error: offerErr } = await supabaseAdmin
       .from("offers")
@@ -514,6 +715,9 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         offer_date: params.offer_date || new Date().toISOString().split("T")[0],
         status: "draft",
         card_fee_rate: pinnedCardFeeRate,
+        credit_amount: creditAmount,
+        credit_payment_id: creditPaymentId,
+        credit_kind: creditKind,
         payment_type: params.payment_type,
         contract_type: params.contract_type || "formation",
         services: params.services as Json,
@@ -627,6 +831,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
       offer_url,
       whop_checkout_url: whopUrl,
       referrer_auto_filled: referralAutoFilled,
+      ...(creditWarnings.length ? { warnings: creditWarnings } : {}),
     }
   } catch (err) {
     return {

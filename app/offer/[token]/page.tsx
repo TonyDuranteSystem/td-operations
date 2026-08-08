@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
+import { computeOfferPayable } from '@/lib/offers/compute-offer-totals'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import type { Offer } from '@/lib/types/offer'
 
@@ -65,6 +66,8 @@ const LABELS = {
     payByCard: 'Pay by Card',
     payByTransfer: 'Bank Transfer',
     totalDueToday: 'Total Due Today',
+    creditApplied: 'Already paid — Strategy Call',
+    creditAppliedGeneric: 'Credit applied',
   },
   it: {
     title: 'Offerta Consulenziale',
@@ -122,6 +125,8 @@ const LABELS = {
     payByCard: 'Paga con Carta',
     payByTransfer: 'Bonifico Bancario',
     totalDueToday: 'Totale Dovuto Oggi',
+    creditApplied: 'Già pagato — Call Strategica',
+    creditAppliedGeneric: 'Credito applicato',
   },
 }
 
@@ -174,57 +179,61 @@ export default function OfferPage() {
 
   const L = LABELS[lang]
 
-  // Dynamic total based on selected optional services + pre-conditions
+  // Dynamic total based on selected optional services + pre-conditions.
+  // WS-A3 display site: THE offer amount engine computes it — the page shows
+  // exactly what the webhook records and the card charges. Page-replay over all
+  // 77 open production offers: every divergence from the old inline math was a
+  // renewal-offer display DEFECT (EUR shown on USD renewals; one rendered no
+  // total at all) — the engine corrects all of them, non-renewals unchanged.
   const dynamicTotal = useMemo(() => {
     if (!offer || !offer.services) return null
-    const services = Array.isArray(offer.services) ? offer.services : []
-    let servicesTotal = 0
-    let preconditionsTotal = 0
-    let currency = 'EUR'
-    for (const svc of services) {
-      const isOpt = !!(svc as any).optional
-      const isSelected = !isOpt || selectedOptional.has(svc.name)
-      if (!isSelected) continue
-      const priceStr = String(svc.price || '0')
-      // Skip recurring/informational prices -- not one-time charges
-      if (/\/(year|anno|month|mese)/i.test(priceStr)) continue
-      if (/includ|inclus/i.test(priceStr)) continue
-      const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ''))
-      if (!isNaN(priceNum) && priceNum > 0) {
-        servicesTotal += priceNum
-        if (/\$|usd/i.test(priceStr)) currency = '$'
-        else if (/EUR/i.test(priceStr)) currency = 'EUR'
-      }
-    }
-    // Include pre-conditions from cost_summary (e.g. unpaid taxes)
-    // These are non-service one-time charges the client must pay upfront
-    const costSummary = Array.isArray(offer.cost_summary) ? offer.cost_summary : []
-    for (const group of costSummary) {
-      // Skip the first group (setup fees) — already counted from services
-      // Pre-condition groups have labels like "Pre-conditions (to be resolved)"
-      if (!/pre.?condition/i.test(group.label || '')) continue
-      for (const item of (group.items || [])) {
-        const priceStr = String(item.price || '0')
-        const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ''))
-        if (!isNaN(priceNum) && priceNum > 0) {
-          preconditionsTotal += priceNum
-        }
-      }
-    }
-    const total = servicesTotal + preconditionsTotal
-    if (total <= 0) return null
-    const symbol = currency === '$' ? '$' : 'EUR'
+    const t = computeOfferPayable({
+      services: offer.services,
+      cost_summary: offer.cost_summary,
+      selected_services: Array.from(selectedOptional),
+      currency: (offer as { currency?: string | null }).currency,
+      credit_amount: (offer as { credit_amount?: number | null }).credit_amount,
+    })
+    if (t.gross <= 0) return null
+    const symbol = t.currency === 'EUR' ? 'EUR' : '$'
     return {
-      total,
-      servicesTotal,
-      preconditionsTotal,
+      // NET EVERYWHERE (Antonio's ruling). `total` IS what the client owes; the
+      // pay buttons and the bank box below read these fields, so they can no
+      // longer quote a different number than the summary above them.
+      total: t.net,
+      gross: t.gross,
+      credit: t.credit,
+      servicesTotal: t.servicesTotal,
+      preconditionsTotal: t.preconditionsTotal,
       // servicesFormatted is for the Setup Fee line in cost summary
-      servicesFormatted: `${symbol}${servicesTotal.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      servicesFormatted: `${symbol}${t.servicesTotal.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
       // formatted/cardFormatted include everything (services + pre-conditions) for the payment section
-      formatted: `${symbol}${total.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
-      cardFormatted: `${symbol}${Math.round(total * 1.05).toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      formatted: `${symbol}${t.net.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      // card fee applies to what is actually charged — the net
+      cardFormatted: `${symbol}${Math.round(t.net * 1.05).toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
     }
   }, [offer, selectedOptional])
+
+  // WS-A display row. Reads the SINGLE amount authority — it does no arithmetic
+  // of its own, because that is exactly how the summary and the pay buttons came
+  // to quote two different numbers for the same payment.
+  const creditDisplay = useMemo(() => {
+    if (!dynamicTotal || dynamicTotal.credit <= 0) return null
+    const symbol = dynamicTotal.formatted.startsWith('$') ? '$' : 'EUR'
+    const fmt = (n: number) => `${symbol}${n.toLocaleString('en-US', { minimumFractionDigits: 0 })}`
+    return {
+      amount: dynamicTotal.credit,
+      formatted: fmt(dynamicTotal.credit),
+      grossFormatted: fmt(dynamicTotal.gross),
+      netFormatted: fmt(dynamicTotal.total),
+      // LABEL HONESTY (architect ruling): only call it a strategy call when it IS
+      // one. The snapshot is the sum of every credit the person holds, so a
+      // referral credit was being described to the client as a paid call.
+      label: (offer as { credit_kind?: string | null })?.credit_kind === 'paid_call'
+        ? L.creditApplied
+        : L.creditAppliedGeneric,
+    }
+  }, [offer, dynamicTotal, L])
 
   const loadOffer = useCallback(async () => {
     try {
@@ -560,8 +569,25 @@ export default function OfferPage() {
                     </div>
                   </div>
                 ))}
+                {/* WS-A: the paid call already settled — shown as an explicit
+                    credit line + net total. DISPLAY ONLY: the money is applied
+                    by the credit-note engine at invoice creation, and the credit
+                    is deliberately NOT written into cost_summary (two contract
+                    templates read that array positionally). */}
+                {creditDisplay && (
+                  <div style={{ marginTop: 16, paddingTop: 12, borderTop: '2px solid var(--offer-blue)' }}>
+                    <div className="offer-riepilogo-row" style={{ color: 'var(--offer-blue)' }}>
+                      <span>{creditDisplay.label}</span>
+                      <span className="offer-riepilogo-price">−{creditDisplay.formatted}</span>
+                    </div>
+                    <div className="offer-riepilogo-total" style={{ fontSize: 16 }}>
+                      <span style={{ fontWeight: 700 }}>{L.totalDueToday}</span>
+                      <span style={{ fontWeight: 700, transition: 'all 0.3s' }}>{creditDisplay.netFormatted}</span>
+                    </div>
+                  </div>
+                )}
                 {/* Grand total when pre-conditions add to the payment */}
-                {dynamicTotal && dynamicTotal.preconditionsTotal > 0 && (
+                {!creditDisplay && dynamicTotal && dynamicTotal.preconditionsTotal > 0 && (
                   <div style={{ marginTop: 16, paddingTop: 12, borderTop: '2px solid var(--offer-blue)' }}>
                     <div className="offer-riepilogo-total" style={{ fontSize: 16 }}>
                       <span style={{ fontWeight: 700 }}>{L.totalDueToday}</span>

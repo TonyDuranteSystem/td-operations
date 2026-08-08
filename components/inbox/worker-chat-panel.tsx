@@ -22,6 +22,8 @@ import {
   type WorkerArtifactLink,
 } from '@/components/chat/worker-artifacts'
 import { ConfirmAttachments } from '@/components/inbox/confirm-attachments'
+import { SignatureControls, SignaturePreview } from '@/components/inbox/signature-controls'
+import { DEFAULT_SIGNATURE_VARIANT, type SignatureVariant } from '@/lib/email/signature'
 import { WorkerComposer } from '@/components/chat/worker-composer'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
@@ -100,6 +102,11 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
   // team sign-off unless the dropdown was touched every time — a changed sending
   // identity mid-conversation, which the counterparty sees and staff would not.
   const [sendAs, setSendAs] = useState<'support' | 'antonio'>(mailbox === 'antonio' ? 'antonio' : 'support')
+  // WHICH SIGNATURE goes on the email — the staff member picks on the card
+  // (Luca's Team Chat request; Antonio approved 2026-08-07). Same chooser as
+  // manual compose/reply; applied server-side at confirm time. Defaults to the
+  // full signature — exactly what every worker send used before the picker.
+  const [signatureVariant, setSignatureVariant] = useState<SignatureVariant>(DEFAULT_SIGNATURE_VARIANT)
 
   /* ── PORTAL CARD STATE ────────────────────────────────────────────────────
    * Antonio, 2026-07-31: the card asks WHO it goes to and in WHICH language, the
@@ -165,6 +172,10 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
           prepared_id: preparedSend.id,
           action,
           mailbox: sendAs,
+          // The signature pick rides the SAME click as the mailbox pick — the
+          // server applies it to the frozen payload at dispatch. Portal rows
+          // ignore it (portal messages carry no email signature).
+          ...(isPortal ? {} : { signature_variant: signatureVariant }),
           // The RESOLVED target, not the raw pick: choosing a lead sends to that
           // person's contact, which is where their portal login actually lives.
           ...(isPortal && portalTarget
@@ -424,8 +435,13 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
       // stale frozen email stays on screen under a new conversation and Confirm sends it.
       setLocaleRollback(null)
       setPreparedSend(data.preparedSend ?? null)
-      // Fresh card → fresh choice, back to this thread's own mailbox.
-      if (data.preparedSend) setSendAs(mailbox === 'antonio' ? 'antonio' : 'support')
+      // Fresh card → fresh choice, back to this thread's own mailbox — and the
+      // signature back to the default, so one email's "no signature" pick can
+      // never silently carry onto the next.
+      if (data.preparedSend) {
+        setSendAs(mailbox === 'antonio' ? 'antonio' : 'support')
+        setSignatureVariant(DEFAULT_SIGNATURE_VARIANT)
+      }
       // A NEW portal draft means a new decision. Clearing the picked client forces the
       // staff member to choose again rather than inheriting a selection made against
       // wording that has since been rewritten — the "I approved a different message"
@@ -864,17 +880,40 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
             className="mt-1.5 space-y-1.5"
             onChange={files => setPreparedSend(p => (p ? { ...p, attachments: files } : p))}
           />
-          <div className="mt-2 flex items-center gap-2 text-xs">
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
             <span className="text-zinc-500">From:</span>
             <select
               value={sendAs}
-              onChange={e => setSendAs(e.target.value as 'support' | 'antonio')}
+              onChange={e => {
+                const next = e.target.value as 'support' | 'antonio'
+                setSendAs(next)
+                // Coerce the STATE, not just the display: "hat" isn't on offer
+                // for support, and the picker's visual fallback would otherwise
+                // show "Full" while the POST still carries "hat" (harmless today
+                // — support renders both identically — but a lie in waiting).
+                if (next === 'support' && signatureVariant === 'hat') setSignatureVariant('gala')
+              }}
               disabled={confirming}
               className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
             >
               <option value="support">support@tonydurante.us</option>
               <option value="antonio">antonio.durante@tonydurante.us</option>
             </select>
+            {/* Same per-email chooser as manual compose/reply (Luca's request,
+                Antonio approved 2026-08-07). The mailbox stays in the dropdown
+                above, so only the signature select renders here. */}
+            <SignatureControls
+              sender={sendAs}
+              variant={signatureVariant}
+              onVariantChange={setSignatureVariant}
+              disabled={confirming}
+            />
+          </div>
+          {/* The chooser is blind without this — the signature is attached
+              server-side (same reason compose/reply preview it). Scrolls so the
+              full variant can't swallow the card on the phone PWA. */}
+          <div className="mt-2 max-h-36 overflow-y-auto">
+            <SignaturePreview sender={sendAs} variant={signatureVariant} authorWritesClosing={false} />
           </div>
           <div className="mt-2.5 flex items-center gap-2">
             <button

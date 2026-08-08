@@ -9,6 +9,7 @@ import RenewalAgreement from './renewal-agreement'
 import ServiceAgreement from './service-agreement'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
+import { computeOfferTotals, computeOfferPayable } from '@/lib/offers/compute-offer-totals'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
 import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 
@@ -355,36 +356,51 @@ export default function ContractPage() {
     const year = new Date().getFullYear()
     let llcType = '', installments = '', annualFee = ''
 
-    // Calculate setup fee dynamically from MAIN contract services only (excludes addons with different contract_type)
-    const services = Array.isArray(o.services) ? o.services : []
-    const selectedSet = new Set(Array.isArray((o as any).selected_services) ? (o as any).selected_services : [])
+    // WS-A3 site #5: setup fee from THE offer amount engine, with the contract
+    // page's own two semantics preserved EXACTLY as options — multi-contract
+    // filtering (this agreement covers only its own contract type) and the
+    // explicit currency column (this page's stated "no symbol-sniffing" rule).
     const mainContractType = (o as any).contract_type || 'formation'
-    let totalSetup = 0
-    // Use explicit currency fields — fall back to symbol-sniffing only for pre-fix offers
     const setupCurrency = (o as any).currency || 'EUR'
     const setupSymbol = setupCurrency === 'USD' ? '$' : '€'
-    for (const svc of services) {
-      const isOpt = !!(svc as any).optional
-      // If selected_services exists, use it; otherwise include all non-optional
-      const isSelected = selectedSet.size > 0
-        ? (!isOpt || selectedSet.has(svc.name))
-        : !isOpt
-      if (!isSelected) continue
-      // Multi-contract: only count services that belong to the main contract
-      const svcCt = (svc as any).contract_type
-      if (svcCt && svcCt !== mainContractType) continue
-      const priceStr = String(svc.price || '0')
-      // Skip recurring/informational prices
-      if (/\/(year|anno|month|mese)/i.test(priceStr)) continue
-      if (/includ|inclus/i.test(priceStr)) continue
-      const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ''))
-      if (!isNaN(priceNum) && priceNum > 0) {
-        totalSetup += priceNum
-      }
-    }
+    // Kept for the legacy LLC-type name scan further down (pre-entity_type offers).
+    const services = Array.isArray(o.services) ? o.services : []
+    const contractTotals = computeOfferPayable(
+      {
+        services: o.services,
+        cost_summary: o.cost_summary,
+        selected_services: (o as any).selected_services,
+        currency: setupCurrency,
+        credit_amount: (o as any).credit_amount,
+      },
+      { filterContractType: mainContractType, currencyOverride: setupCurrency === 'USD' ? 'USD' : 'EUR' },
+    )
+    // Setup fee counts SERVICE lines only here (pre-conditions are presented
+    // separately on this page) — unchanged from the previous inline math.
+    const totalSetup = contractTotals.servicesTotal
 
+    // NET EVERYWHERE (Antonio's ruling): the document the client SIGNS must state
+    // the same amount every payment rail charges, and must show the arithmetic
+    // openly rather than quoting a gross the client is not asked to pay. Before
+    // this the contract said the gross with no mention of the credit at all.
+    const money = (n: number) => `${setupSymbol}${n.toLocaleString('en-US', { minimumFractionDigits: 0 })}`
+    // THE CREDIT IS NOT CAPPED AT THE SETUP FEE.
+    // It used to be, and that made this document disagree with the offer page
+    // whenever the credit exceeded the services line: the offer applied the
+    // credit against the WHOLE deal (pre-conditions included) while the contract
+    // applied only part of it here and stated the pre-conditions separately at
+    // full price. Two client-facing documents quoting different money. The
+    // engine already caps the credit at the deal total, so use its figure.
+    const creditOnContract = contractTotals.credit
+    const feeAfterCredit = Math.max(totalSetup - creditOnContract, 0)
+    const creditBeyondSetup = Math.max(creditOnContract - totalSetup, 0)
     const fee = totalSetup > 0
-      ? `${setupSymbol}${totalSetup.toLocaleString('en-US', { minimumFractionDigits: 0 })}`
+      ? (creditOnContract > 0
+          ? `${money(totalSetup)} less ${money(Math.min(creditOnContract, totalSetup))} already paid = ${money(feeAfterCredit)}`
+            + (creditBeyondSetup > 0
+                ? ` (a further ${money(creditBeyondSetup)} of credit applies to the amounts below)`
+                : '')
+          : money(totalSetup))
       : 'As specified in the offer'
 
     // Derive annual maintenance from recurring_costs
@@ -594,24 +610,21 @@ export default function ContractPage() {
       }
 
       // Recalculate correct amount from selected_services for bank_details
-      const svcList = Array.isArray(offer.services) ? offer.services : []
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const selSet = new Set(Array.isArray((offer as any).selected_services) ? (offer as any).selected_services as string[] : [])
-      let correctTotal = 0
-      // Use explicit currency field — no symbol-sniffing
+      // WS-A3 site #6: the bank-reference amount recalculated at signing.
+      // NOTE (documented divergence, deliberately preserved): unlike the
+      // displayed setup fee above, this total does NOT filter by contract type
+      // — the wire covers everything the client is signing for across bundled
+      // agreements. Both semantics are intentional; the engine expresses each
+      // explicitly instead of two look-alike inline loops.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const correctCurrency = (offer as any).currency === 'USD' ? '$' : '€'
-      for (const svc of svcList) {
+      const correctTotal = computeOfferTotals(
+        { services: offer.services, cost_summary: offer.cost_summary, selected_services: Array.from(selSet) },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const isOpt = !!(svc as any).optional
-        const isSel = selSet.size > 0 ? (!isOpt || selSet.has(svc.name)) : !isOpt
-        if (!isSel) continue
-        const ps = String(svc.price || '0')
-        if (/\/(year|anno|month|mese)/i.test(ps) || /includ|inclus/i.test(ps)) continue
-        const pn = parseFloat(ps.replace(/[^0-9.]/g, ''))
-        if (!isNaN(pn) && pn > 0) {
-          correctTotal += pn
-        }
-      }
+        { currencyOverride: (offer as any).currency === 'USD' ? 'USD' : 'EUR' },
+      ).servicesTotal
 
       // Update offer status + recalculated bank amount (retry).
       // This submit handler runs only for NEW contracts

@@ -85,6 +85,10 @@ export async function POST(req: NextRequest) {
       token: result.token,
       offer_url: result.offer_url,
       whop_checkout_url: result.whop_checkout_url,
+      // WS-A: notices the dialog shows immediately (e.g. this client holds credit
+      // the offer could not display). Dropping them here would leave the toast
+      // permanently silent — the same dead-wiring the credit line itself had.
+      warnings: result.warnings ?? [],
     })
   } catch (err) {
     console.error("Create offer error:", err)

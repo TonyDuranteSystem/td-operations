@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { NextResponse } from 'next/server'
+import { parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
 
 export const dynamic = 'force-dynamic'
 
@@ -255,8 +256,10 @@ function extractOfferValue(costSummary: unknown): number {
   for (const group of costSummary) {
     const t = (group as Record<string, unknown>)?.total as string
     if (t) {
-      const num = parseFloat(t.replace(/[^0-9.]/g, ''))
-      if (!isNaN(num)) total += num
+      // WS-A3: shared parser primitive; the AGGREGATION stays this route's own —
+      // it sums EVERY cost_summary group for a pipeline-value metric, which is
+      // deliberately different from the offer engine's billable gross.
+      total += parsePriceQuirk(t)
     }
   }
   return total

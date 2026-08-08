@@ -1358,7 +1358,7 @@ export async function revertServiceDelivery(
   const { data: sd, error: sdErr } = await supabaseAdmin
     .from("service_deliveries")
     .select(
-      "id, service_type, service_name, stage, status, account_id, contact_id, stage_history, end_date",
+      "id, service_type, service_name, stage, status, account_id, contact_id, stage_history, end_date, due_date",
     )
     .eq("id", params.delivery_id)
     .maybeSingle()
@@ -1460,10 +1460,19 @@ export async function revertServiceDelivery(
     "service_deliveries.update.revert",
   )
 
-  // 5. Undo the +1-year renewal-date bump when leaving a "Closed" renewal final.
+  // 5. Undo the completion's renewal-date roll when a completed renewal SD
+  // is RE-OPENED — on ANY final stage name, not just "Closed". The old
+  // stage-name guard missed finals named "Completed", so un-doing a wrongly
+  // recorded filing left the account date a year in the future and the
+  // company invisible on the calendar until the next year (AL Group,
+  // Antonio/Luca 2026-08-07). Target = the SD's OWN cycle date (the cycle
+  // being reopened); one anniversary back when the SD has no date. Never
+  // moves the date FORWARD, and skips (with an audit note) when the account
+  // date doesn't sit ahead of the target — someone repaired it already.
   let renewalDateReverted: { column: string; from: string; to: string } | null = null
-  const leavingClosedRenewalFinal = sd.stage === "Closed" && isRenewalServiceType(sd.service_type)
-  if (leavingClosedRenewalFinal && sd.account_id) {
+  const reopeningCompletedRenewal =
+    (statusReset || sd.stage === "Closed") && isRenewalServiceType(sd.service_type)
+  if (reopeningCompletedRenewal && sd.account_id) {
     const column = RENEWAL_DATE_COLUMN[sd.service_type]
     const { data: acct } = await supabaseAdmin
       .from("accounts")
@@ -1472,22 +1481,26 @@ export async function revertServiceDelivery(
       .maybeSingle()
     const currentValue = (acct as Record<string, unknown> | null)?.[column] as string | null | undefined
     if (currentValue) {
-      const d = new Date(currentValue)
-      d.setFullYear(d.getFullYear() - 1)
-      const newValue = d.toISOString().split("T")[0]
-      const acctPatch =
-        column === "ra_renewal_date"
-          ? { ra_renewal_date: newValue }
-          : { annual_report_due_date: newValue }
-      const acctResult = await updateAccount({
-        id: sd.account_id,
-        patch: acctPatch,
-        actor,
-        summary: `Reverted ${column} -1y — ${sd.service_type} reverted from Closed`,
-        details: { column, from: currentValue, to: newValue },
-      })
-      if (acctResult.success) {
-        renewalDateReverted = { column, from: currentValue, to: newValue }
+      const { anniversaryForYear } = await import("@/lib/operations/renewal-dates")
+      const curYear = parseInt(String(currentValue).slice(0, 4), 10)
+      const target = sd.due_date
+        ? String(sd.due_date)
+        : anniversaryForYear(String(currentValue), curYear - 1)
+      if (target < String(currentValue)) {
+        const acctPatch =
+          column === "ra_renewal_date"
+            ? { ra_renewal_date: target }
+            : { annual_report_due_date: target }
+        const acctResult = await updateAccount({
+          id: sd.account_id,
+          patch: acctPatch,
+          actor,
+          summary: `Un-rolled ${column} ${currentValue} → ${target} — ${sd.service_type} completion reverted (cycle reopened)`,
+          details: { column, from: currentValue, to: target, sd_id: sd.id, sd_due_date: sd.due_date ?? null },
+        })
+        if (acctResult.success) {
+          renewalDateReverted = { column, from: String(currentValue), to: target }
+        }
       }
     }
   }

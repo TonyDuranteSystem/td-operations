@@ -25,6 +25,8 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js"
 import { extractInviteeFields, buildLeadNotes } from "@/lib/calendly/parse-invitee"
 import { createPendingReferral } from "@/lib/operations/referral"
 import { notifyReferrerLinked } from "@/lib/operations/referral-notify"
+import { extractPaidBooking } from "@/lib/calendly/paid-booking"
+import { recordPaidCall } from "@/lib/operations/paid-call-credit"
 
 let _supabase: SupabaseClient | null = null
 function getSupabase() {
@@ -248,6 +250,40 @@ export async function POST(req: NextRequest) {
       payload,
       review_status: "auto_created",
     })
+
+    // ─── WS-A: PAID BOOKING → revenue + a deductible credit ───
+    // Detection is structural (a successful payment object), never an event
+    // name or an amount. Idempotent on the Stripe charge, so a re-delivery or a
+    // reschedule can never mint a second credit. Fail-safe: a paid-call failure
+    // must NOT block lead creation — the booking still matters.
+    const paidBooking = extractPaidBooking(payload)
+    if (paidBooking) {
+      try {
+        const result = await recordPaidCall({
+          payment: paidBooking,
+          inviteeEmail: fields.email,
+          inviteeName: fields.name,
+          callDate: fields.callDate,
+        })
+        console.warn(
+          `[calendly-webhook] paid call recorded: ${result.invoiceNumber} + credit ${result.creditNumber} ` +
+          `(${paidBooking.currency} ${paidBooking.amount}) for ${fields.email}` +
+          `${result.contactCreated ? " [contact created]" : ""}` +
+          `${result.paymentIntentStamped ? "" : " [NO payment-intent link — feed match will be manual]"}`,
+        )
+      } catch (err) {
+        console.error("[calendly-webhook] paid-call recording FAILED:", err instanceof Error ? err.message : String(err))
+        try {
+          const { reportSystemError } = await import("@/lib/system-errors")
+          await reportSystemError({
+            source: "server",
+            route: "/api/webhooks/calendly",
+            message: `Paid call NOT recorded for ${fields.email} (charge ${paidBooking.chargeId}): ${err instanceof Error ? err.message : String(err)}`,
+            context: { email: fields.email, charge_id: paidBooking.chargeId, amount: paidBooking.amount, currency: paidBooking.currency },
+          })
+        } catch { /* best-effort */ }
+      }
+    }
 
     if (existingLeads && existingLeads.length > 0) {
       const lead = existingLeads[0]

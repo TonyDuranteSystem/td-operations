@@ -486,10 +486,15 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
         ? "\n📎 Referral auto-filled from lead"
         : ""
 
+      // WS-A: if the client holds credit this offer could not show, say so in
+      // the tool output — this is the surface Antonio creates offers from.
+      const creditWarningLine = (result.warnings ?? []).length
+        ? `\n\n⚠️ ${(result.warnings ?? []).join("\n⚠️ ")}`
+        : ""
       return {
         content: [{
           type: "text" as const,
-          text: `✅ Offer created as DRAFT: ${result.token}\nURL: ${result.offer_url}${referralLine}${autoCheckoutLine}\n\nReview with offer_get, then use offer_send to approve and send.`,
+          text: `✅ Offer created as DRAFT: ${result.token}\nURL: ${result.offer_url}${referralLine}${autoCheckoutLine}${creditWarningLine}\n\nReview with offer_get, then use offer_send to approve and send.`,
         }],
       }
     }

@@ -6,10 +6,117 @@ import {
   sumLineAmounts,
 } from "@/lib/portal/invoice-regenerate"
 import { syncTDInvoiceMirror } from "@/lib/portal/td-invoice-mirror"
+import { isPaidCallCreditKey } from "@/lib/calendly/paid-booking"
 
 export interface CreditApplication {
   appliedTotal: number
   credits: Array<{ id: string; applyAmount: number }>
+  /** Credits this client holds in a DIFFERENT currency — never applied (no FX),
+   *  but reported so staff can be told rather than the client silently billed
+   *  full price after being promised a deduction (hunter major 4). */
+  strandedByCurrency?: Array<{ amount: number; currency: string }>
+}
+
+/**
+ * WS-A: the scope a credit lives in. EXACTLY ONE key — the query filters on one
+ * scope column, so account credits can never surface for a contact-scoped
+ * invoice or vice versa (pinned by regression tests T5/T6).
+ */
+export type CreditScope = { accountId: string; contactId?: never } | { contactId: string; accountId?: never }
+
+/**
+ * Atomically CLAIM credits for an invoice-to-be (WS-A, dev job c0a61e44).
+ *
+ * Two concurrent signings both READ the same available credit (proven by test
+ * T9) — so the guard must live in the write. Each claim is a conditional
+ * UPDATE on `credit_consumed_by IS NULL`, rowcount-checked: of two racers
+ * exactly one wins a given credit; the loser gets nothing for that credit and
+ * its caller must not apply it.
+ *
+ * ORDER (uniform for BOTH scopes): claim → create the invoice → confirm
+ * (decrement remaining). If the invoice creation fails, the caller calls
+ * `unwindCreditClaims` so the credits become available again.
+ *
+ * @returns the subset of `application.credits` this caller actually won.
+ */
+export async function claimCredits(
+  application: CreditApplication,
+  claimToken: string,
+  supabase: SupabaseClient,
+): Promise<CreditApplication> {
+  const won: Array<{ id: string; applyAmount: number }> = []
+  for (const c of application.credits) {
+    const { data, error } = await supabase
+      .from("payments")
+      .update({ credit_consumed_by: claimToken })
+      .eq("id", c.id)
+      .is("credit_consumed_by", null)
+      .select("id")
+    if (error) {
+      console.error(`[claimCredits] claim failed for credit ${c.id}:`, error.message)
+      continue
+    }
+    // rowcount 1 = we won this credit; 0 = a concurrent claimer got there first.
+    if (Array.isArray(data) && data.length === 1) won.push(c)
+  }
+  const appliedTotal = Math.round(won.reduce((s, a) => s + a.applyAmount, 0) * 100) / 100
+  return { appliedTotal, credits: won }
+}
+
+/**
+ * CONFIRM step (third of claim → create → confirm): re-stamp the claim from the
+ * temporary token to the real invoice id, so the column reads "claimed BY this
+ * invoice" for audit. Lives here (not at the call site) so the credit-claim
+ * writes stay in one module — and so the supabase generic depth stays bounded.
+ */
+export async function confirmCreditClaims(
+  application: CreditApplication,
+  invoiceId: string,
+  claimToken: string,
+  supabase: SupabaseClient,
+): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberate: bounds TS2589 on the chained update; column is newer than generated types
+  const untyped = supabase as unknown as { from: (t: string) => any }
+  for (const c of application.credits) {
+    // THE CLAIM IS A TRANSIENT LOCK, NOT A TOMBSTONE (hunter blocker 1).
+    // A partially-used credit MUST return to the pool: the read filters on
+    // `credit_consumed_by IS NULL`, so leaving the stamp on a credit that still
+    // has a balance would strand that balance forever — invisible to both
+    // auto-netting and click-to-apply. Re-read the remaining balance and
+    // release the lock unless the credit is now exhausted.
+    const { data: row } = await untyped
+      .from("payments")
+      .select("credit_remaining")
+      .eq("id", c.id)
+      .maybeSingle()
+    const remaining = Number((row as { credit_remaining?: number | null } | null)?.credit_remaining ?? 0)
+    const { error } = await untyped
+      .from("payments")
+      .update({ credit_consumed_by: remaining > 0 ? null : invoiceId })
+      .eq("id", c.id)
+      .eq("credit_consumed_by", claimToken)
+    if (error) console.error(`[confirmCreditClaims] claim settle failed for credit ${c.id}:`, error.message)
+  }
+}
+
+/**
+ * Release claims taken by `claimCredits` when the invoice creation that they
+ * were claimed FOR did not happen. Scoped to this caller's claim token so a
+ * concurrent winner's claim is never released by someone else's failure.
+ */
+export async function unwindCreditClaims(
+  application: CreditApplication,
+  claimToken: string,
+  supabase: SupabaseClient,
+): Promise<void> {
+  for (const c of application.credits) {
+    const { error } = await supabase
+      .from("payments")
+      .update({ credit_consumed_by: null })
+      .eq("id", c.id)
+      .eq("credit_consumed_by", claimToken)
+    if (error) console.error(`[unwindCreditClaims] release failed for credit ${c.id}:`, error.message)
+  }
 }
 
 /**
@@ -20,19 +127,33 @@ export interface CreditApplication {
  * consumeCredits() to decrement the credits. Leftover credit carries forward.
  */
 export async function computeCreditApplication(
-  params: { accountId: string; amount: number; currency: string },
+  params: ({ accountId: string; contactId?: string } | { contactId: string; accountId?: string }) & {
+    amount: number
+    currency: string
+  },
   supabase: SupabaseClient
 ): Promise<CreditApplication> {
-  const { accountId, amount, currency } = params
+  const { amount, currency } = params
+  const accountId = (params as { accountId?: string }).accountId
+  const contactId = (params as { contactId?: string }).contactId
   if (amount <= 0) return { appliedTotal: 0, credits: [] }
+  // EXACTLY ONE scope column filters the query (WS-A). Account scope wins when
+  // both are somehow supplied — an account-linked invoice is account money.
+  // Cross-scope credits can never surface: there is no OR here, by design
+  // (pinned by regression tests T5/T6; mutation-proven).
+  if (!accountId && !contactId) return { appliedTotal: 0, credits: [] }
+
+  const scopeColumn = accountId ? "account_id" : "contact_id"
+  const scopeValue = accountId ?? (contactId as string)
 
   const { data: credits } = await supabase
     .from("payments")
     .select("id, credit_remaining")
-    .eq("account_id", accountId)
+    .eq(scopeColumn, scopeValue)
     .eq("invoice_status", "Credit")
     .eq("amount_currency", currency)
     .gt("credit_remaining", 0)
+    .is("credit_consumed_by", null) // unclaimed only — a claimed credit is spoken for
     .order("created_at", { ascending: true }) // oldest-first
 
   let remainingNeed = amount
@@ -47,7 +168,163 @@ export async function computeCreditApplication(
   }
 
   const appliedTotal = Math.round(applied.reduce((s, a) => s + a.applyAmount, 0) * 100) / 100
-  return { appliedTotal, credits: applied }
+
+  // CROSS-CURRENCY VISIBILITY (hunter major 4): a €257 call credit against a USD
+  // offer applies NOTHING — correct (no silent FX), but the client was told the
+  // fee is deductible, so silence is the wrong answer. Report it; the caller
+  // raises the staff notice. A pure read: nothing here mutates.
+  const { data: otherCurrency } = await supabase
+    .from("payments")
+    .select("id, credit_remaining, amount_currency")
+    .eq(scopeColumn, scopeValue)
+    .eq("invoice_status", "Credit")
+    .neq("amount_currency", currency)
+    .gt("credit_remaining", 0)
+    .is("credit_consumed_by", null)
+  const strandedByCurrency = ((otherCurrency ?? []) as Array<{ credit_remaining: number | null; amount_currency: string }>)
+    .map((r) => ({ amount: Number(r.credit_remaining) || 0, currency: r.amount_currency }))
+    .filter((r) => r.amount > 0)
+
+  return { appliedTotal, credits: applied, ...(strandedByCurrency.length ? { strandedByCurrency } : {}) }
+}
+
+/**
+ * What an offer may TELL a client they already have (WS-A display, hunter minor 10).
+ *
+ * Deliberately a thin wrapper over `computeCreditApplication` rather than its own
+ * query: the offer page's "− €257 already paid" line and the invoice that
+ * actually deducts it then answer to ONE definition of available credit. A
+ * separate SELECT here would be free to drift — promising a deduction the ledger
+ * refuses is precisely the failure this whole workstream exists to prevent.
+ *
+ * Same-currency by construction (the engine filters on it), so a client holding
+ * EUR credit is never shown a phantom discount on a USD offer.
+ *
+ * SNAPSHOT, not a live balance: pinned when the offer is written. If the client
+ * spends the credit elsewhere before signing, the offer over-states — but the
+ * netting engine at invoice time is the money of record and applies only what is
+ * really there, so the BILL is right either way. Display can be stale; money cannot.
+ */
+export async function availableCreditForDisplay(
+  scope: CreditScope,
+  currency: string,
+  supabase: SupabaseClient,
+): Promise<{ amount: number; creditId: string | null; kind: "paid_call" | "mixed" | null }> {
+  const application = await computeCreditApplication(
+    { ...(scope as { accountId?: string; contactId?: string }), amount: Number.MAX_SAFE_INTEGER, currency } as Parameters<typeof computeCreditApplication>[0],
+    supabase,
+  )
+  if (application.credits.length === 0) return { amount: 0, creditId: null, kind: null }
+
+  // LABEL HONESTY (architect ruling): the snapshot is the SUM of every unspent
+  // credit this person holds — a referral credit note counts too. Calling all of
+  // it "Already paid — Strategy Call" told clients something untrue about their
+  // own money. Only claim the paid call when every contributing credit IS one.
+  const ids = application.credits.map((c) => c.id)
+  const { data: rows } = await supabase
+    .from("payments")
+    .select("id, idempotency_key")
+    .in("id", ids)
+  const keys = ((rows ?? []) as Array<{ idempotency_key: string | null }>).map((r) => r.idempotency_key ?? "")
+  const allPaidCall = keys.length === ids.length && keys.every(isPaidCallCreditKey)
+
+  return {
+    amount: application.appliedTotal,
+    // oldest-first ordering upstream ⇒ [0] is the credit staff would look at first
+    creditId: application.credits[0]?.id ?? null,
+    kind: allPaidCall ? "paid_call" : "mixed",
+  }
+}
+
+/**
+ * Everything a client still has, in every currency (WS-A rider 2).
+ *
+ * Used to answer "do they hold credit we FAILED to show?" — so it must not
+ * filter by currency at all. Deliberately its own read rather than a call to
+ * `computeCreditApplication` with a sentinel currency: that column is a database
+ * ENUM, so an invented value raises a type error, the query returns nothing, and
+ * the warning built on it would have been permanently silent. Exactly the
+ * dead-code failure the credit line itself already had once.
+ */
+export async function unspentCreditByCurrency(
+  scope: CreditScope,
+  supabase: SupabaseClient,
+): Promise<Array<{ amount: number; currency: string; locked: boolean }>> {
+  const accountId = (scope as { accountId?: string }).accountId
+  const contactId = (scope as { contactId?: string }).contactId
+  if (!accountId && !contactId) return []
+
+  const { data, error } = await supabase
+    .from("payments")
+    .select("credit_remaining, amount_currency, credit_consumed_by")
+    .eq(accountId ? "account_id" : "contact_id", accountId ?? (contactId as string))
+    .eq("invoice_status", "Credit")
+    .gt("credit_remaining", 0)
+  if (error) {
+    console.error("[unspentCreditByCurrency] lookup failed:", error.message)
+    throw new Error(`unspentCreditByCurrency: ${error.message}`)
+  }
+
+  // LOCKED is reported separately, not merged. The display read excludes claimed
+  // credits and this one does not — merging them made the staff warning blame
+  // the CURRENCY for a credit that was actually stuck mid-claim, which reads as
+  // nonsense and gets dismissed as a bug instead of acted on.
+  const byKey = new Map<string, { amount: number; currency: string; locked: boolean }>()
+  for (const r of (data ?? []) as Array<{ credit_remaining: number | null; amount_currency: string; credit_consumed_by: string | null }>) {
+    const amt = Number(r.credit_remaining) || 0
+    if (amt <= 0) continue
+    const locked = !!r.credit_consumed_by
+    const key = `${r.amount_currency}:${locked}`
+    const prev = byKey.get(key)
+    byKey.set(key, { amount: (prev?.amount ?? 0) + amt, currency: r.amount_currency, locked })
+  }
+  return Array.from(byKey.values()).map((v) => ({ ...v, amount: Math.round(v.amount * 100) / 100 }))
+}
+
+/**
+ * Release credit claims that were never settled (WS-A).
+ *
+ * A claim is a transient lock: `confirmCreditClaims` either stamps the invoice
+ * that consumed it or releases it. If the process dies in between — a function
+ * timeout mid-invoice, a redeploy — the credit is left claimed with a balance
+ * still on it, and NOTHING reaped it. It then vanishes from every netting read
+ * while still showing as held on the staff banner: the client is quietly billed
+ * full price for a credit they own.
+ *
+ * The state "claimed AND still has a balance" is exactly the in-flight window,
+ * so age is what separates a live claim from an abandoned one. Fifteen minutes
+ * is far beyond any invoice creation and far below any human noticing.
+ *
+ * Self-healing rather than a cron: it runs on the next billing touch for that
+ * client, which is precisely when a stranded credit would otherwise do harm.
+ */
+export async function releaseStaleCreditClaims(
+  scope: CreditScope,
+  supabase: SupabaseClient,
+  staleMinutes = 15,
+): Promise<number> {
+  const accountId = (scope as { accountId?: string }).accountId
+  const contactId = (scope as { contactId?: string }).contactId
+  if (!accountId && !contactId) return 0
+  const cutoff = new Date(Date.now() - staleMinutes * 60_000).toISOString()
+
+  const untyped = supabase as unknown as { from: (t: string) => any } // eslint-disable-line @typescript-eslint/no-explicit-any
+  const { data, error } = await untyped
+    .from("payments")
+    .update({ credit_consumed_by: null })
+    .eq(accountId ? "account_id" : "contact_id", accountId ?? (contactId as string))
+    .eq("invoice_status", "Credit")
+    .gt("credit_remaining", 0)
+    .not("credit_consumed_by", "is", null)
+    .lt("updated_at", cutoff)
+    .select("id")
+  if (error) {
+    console.error("[releaseStaleCreditClaims] failed:", error.message)
+    return 0
+  }
+  const n = Array.isArray(data) ? data.length : 0
+  if (n > 0) console.warn(`[releaseStaleCreditClaims] released ${n} abandoned claim(s)`)
+  return n
 }
 
 /**
@@ -223,16 +500,22 @@ export interface ApplyCreditToInvoiceResult {
 }
 
 /**
- * Click-to-apply credit application (2026-06-03). Applies the account's AVAILABLE
- * credit to THE GIVEN invoice (the one staff clicked Regenerate on), capped at what
- * the invoice still owes, shows it as a "Credit applied −$X" line, drops amount_due,
- * and consumes the credit (stamping credit_for_payment_id = this invoice). amount_paid
- * tracks REAL cash only — credit is represented purely as the line. Idempotent: a
- * re-call with no remaining available credit re-renders the same document.
+ * Click-to-apply credit application (2026-06-03; WS-A: contact scope added).
+ * Applies the client's AVAILABLE credit to THE GIVEN invoice (the one staff
+ * clicked Regenerate on), capped at what the invoice still owes, shows it as a
+ * "Credit applied −$X" line, drops amount_due, and consumes the credit.
+ * amount_paid tracks REAL cash only — credit is represented purely as the line.
+ * Idempotent: a re-call with no remaining available credit re-renders the same
+ * document.
  *
- * Throws on invalid targets (missing, credit note, cancelled, accountless). Pure math
- * lives in invoice-regenerate.ts; this function is the DB orchestration, shared by the
- * regenerateInvoice server action and the sandbox integration test.
+ * SCOPE (WS-A): an account-scoped invoice draws on ACCOUNT credits; a
+ * contact-only invoice (e.g. the signing invoice before the company exists)
+ * draws on that CONTACT's credits. Exactly one scope per call — the pools never
+ * mix. An invoice with neither is rejected.
+ *
+ * Throws on invalid targets (missing, credit note, cancelled, scopeless). Pure
+ * math lives in invoice-regenerate.ts; this function is the DB orchestration,
+ * shared by the regenerateInvoice server action and the sandbox integration test.
  */
 export async function applyAvailableCreditToInvoice(
   paymentId: string,
@@ -240,11 +523,13 @@ export async function applyAvailableCreditToInvoice(
 ): Promise<ApplyCreditToInvoiceResult> {
   const { data: inv } = await supabase
     .from("payments")
-    .select("id, account_id, invoice_number, invoice_status, status, amount_due, amount_paid, amount_currency")
+    .select("id, account_id, contact_id, invoice_number, invoice_status, status, amount_due, amount_paid, amount_currency")
     .eq("id", paymentId)
     .single()
   if (!inv) throw new Error("Invoice not found")
-  if (!inv.account_id) throw new Error("Regenerate needs an account-scoped invoice (credits are account-scoped).")
+  if (!inv.account_id && !(inv as { contact_id?: string | null }).contact_id) {
+    throw new Error("Regenerate needs an invoice linked to a client (account or contact).")
+  }
   if (inv.invoice_status === "Credit") throw new Error("A credit note cannot be regenerated.")
   if (inv.invoice_status === "Cancelled" || inv.status === "Cancelled") throw new Error("A cancelled invoice cannot be regenerated.")
 
@@ -272,8 +557,13 @@ export async function applyAvailableCreditToInvoice(
   // Pull the account's AVAILABLE credit (oldest-first, same currency), capped at
   // this invoice's remaining room. Both reads and selects which rows to consume.
   const headroom = Math.max(Math.round((gross - cashPaid - existingCredit) * 100) / 100, 0)
+  // WS-A: same one-scope-per-call rule as auto-netting. Account wins when both
+  // are present (an account-linked invoice is account money).
+  const invScope = (inv as { account_id: string | null }).account_id
+    ? { accountId: (inv as { account_id: string }).account_id }
+    : { contactId: (inv as { contact_id: string }).contact_id }
   const application = await computeCreditApplication(
-    { accountId: (inv as { account_id: string }).account_id, amount: headroom, currency: (inv as { amount_currency: string }).amount_currency },
+    { ...invScope, amount: headroom, currency: (inv as { amount_currency: string }).amount_currency },
     supabase,
   )
   const calc = computeClickToApplyCredit({ gross, cashPaid, existingCredit, available: application.appliedTotal })

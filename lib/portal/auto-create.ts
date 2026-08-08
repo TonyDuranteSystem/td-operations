@@ -377,6 +377,13 @@ export async function ensureMinimalAccount(params: {
       .update({ account_id: existingLink.account_id, updated_at: new Date().toISOString() })
       .eq("contact_id", contactId)
       .is("account_id", null)
+      // WS-A: an UNSPENT credit is NOT swept onto a company. ~11% of contacts
+      // own more than one company, and this backfill would stamp whichever
+      // account happened to be created next — a credit earned for company B
+      // would then silently reduce company A's next bill. Spent credits
+      // (remaining 0) carry over freely; live ones stay person-scoped until a
+      // human decides. `or` reads as: not a credit note, OR nothing left on it.
+      .or("invoice_status.is.null,invoice_status.neq.Credit,credit_remaining.eq.0")
     return { accountId: existingLink.account_id, created: false }
   }
 
@@ -483,6 +490,8 @@ export async function ensureMinimalAccount(params: {
     .update({ account_id: account.id, updated_at: new Date().toISOString() })
     .eq("contact_id", contactId)
     .is("account_id", null)
+    // WS-A: unspent credits stay person-scoped (see the sibling branch above).
+    .or("invoice_status.is.null,invoice_status.neq.Credit,credit_remaining.eq.0")
 
   // Update lead.converted_to_account_id if lead exists
   if (leadId) {
