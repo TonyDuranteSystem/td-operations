@@ -84,6 +84,8 @@ interface NavItem {
 interface SidebarProps {
   user: { email?: string }
   isAdmin?: boolean
+  /** True only for the code-level owner account (see lib/auth). */
+  isOwner?: boolean
   badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; devBoard?: number }
   enabledFeatures?: string[]
 }
@@ -291,6 +293,7 @@ function TeamNotifDot({ onNavigate }: { onNavigate?: () => void }) {
 export function Sidebar({
   user,
   isAdmin = false,
+  isOwner = false,
   badgeCounts,
   enabledFeatures = [],
 }: SidebarProps) {
@@ -726,7 +729,7 @@ export function Sidebar({
 
       {/* Two-factor security (replace authenticator / new backup codes) */}
       {mfaDialogOpen && (
-        <MfaSettingsDialog onClose={() => setMfaDialogOpen(false)} />
+        <MfaSettingsDialog isOwner={isOwner} onClose={() => setMfaDialogOpen(false)} />
       )}
     </>
   )

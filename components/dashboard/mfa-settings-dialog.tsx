@@ -9,10 +9,13 @@
  *   OFF  (no authenticator) → the toggle turns it ON: QR + manual key inline,
  *        enter the 6-digit code, backup codes shown once with a download.
  *        Works from a normal (aal1) session — there is no factor to prove yet.
- *   ON   (authenticator active) → the toggle is locked ON. Staff MFA is
- *        mandatory (FTC Safeguards / IRS Pub 4557), so self-disabling would
- *        undo the reason it exists. Removing an authenticator is an admin
- *        reset or the documented break-glass. Two actions sit below it:
+ *   ON   (authenticator active) → for STAFF the toggle is locked on: staff
+ *        MFA is mandatory (FTC Safeguards / IRS Pub 4557) and self-disabling
+ *        would undo the reason it exists; theirs is removed from Team
+ *        Management, which forces re-enrollment. For the OWNER the toggle
+ *        switches BOTH ways (Antonio, 2026-08-07: "complete control on
+ *        everything") — off writes the owner exemption, which is the only
+ *        state the gate honours as a durable off. Two actions sit below it:
  *          • Replace — the planned phone change (removes old, sets up new,
  *            issues fresh backup codes). Requires a just-passed code.
  *          • New backup codes — invalidates the old set. Requires the same.
@@ -32,9 +35,10 @@ type Mode = 'loading' | 'menu' | 'scan' | 'codes'
 /** What the current scan flow is for — first setup, or swapping phones. */
 type ScanIntent = 'enroll' | 'replace'
 
-export function MfaSettingsDialog({ onClose }: { onClose: () => void }) {
+export function MfaSettingsDialog({ isOwner = false, onClose }: { isOwner?: boolean; onClose: () => void }) {
   const [mode, setMode] = useState<Mode>('loading')
   const [enabled, setEnabled] = useState(false)
+  const [exempt, setExempt] = useState(false)
   const [verifiedSession, setVerifiedSession] = useState(false)
   const [intent, setIntent] = useState<ScanIntent>('enroll')
   const [busy, setBusy] = useState(false)
@@ -53,6 +57,8 @@ export function MfaSettingsDialog({ onClose }: { onClose: () => void }) {
     const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
     setEnabled((factors?.totp ?? []).some(f => (f as { status?: string }).status === 'verified'))
     setVerifiedSession(aal?.currentLevel === 'aal2')
+    const { data: { user } } = await supabase.auth.getUser()
+    setExempt(user?.app_metadata?.mfa_exempt === true)
     setMode('menu')
   }, [])
 
@@ -73,6 +79,16 @@ export function MfaSettingsDialog({ onClose }: { onClose: () => void }) {
         const { error: unErr } = await supabase.auth.mfa.unenroll({ factorId: f.id })
         if (unErr && why === 'replace') throw new Error(unErr.message)
       }
+      if (isOwner && exempt) {
+        // Clear the exemption first: otherwise the account would hold a factor
+        // while the gate still skips it — protected in appearance only.
+        await fetch('/api/mfa/exemption', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ exempt: false }),
+        }).catch(() => {})
+        setExempt(false)
+      }
       const { data: enrolled, error: enrollErr } = await supabase.auth.mfa.enroll({
         factorType: 'totp',
         issuer: 'TD Operations',
@@ -92,7 +108,7 @@ export function MfaSettingsDialog({ onClose }: { onClose: () => void }) {
     } finally {
       setBusy(false)
     }
-  }, [])
+  }, [isOwner, exempt])
 
   const activate = useCallback(async () => {
     if (!factorId || code.length !== 6) return
@@ -120,6 +136,31 @@ export function MfaSettingsDialog({ onClose }: { onClose: () => void }) {
       setBusy(false)
     }
   }, [factorId, code, intent])
+
+  /** OWNER ONLY: switch the requirement off for this account and keep it off.
+   *  Removing the authenticator alone is not enough — the gate would push the
+   *  account back into setup at the next login once grace has passed. */
+  const turnOff = useCallback(async () => {
+    if (!confirm('Turn two-factor OFF for your account?\n\nYour authenticator and backup codes are removed and sign-in goes back to password only. This account reaches all client data, so leaving it off is a deliberate exception.')) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/mfa/exemption', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ exempt: true }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Could not turn it off')
+      setEnabled(false)
+      setExempt(true)
+      toast.success('Two-factor is off for your account')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not turn it off')
+    } finally {
+      setBusy(false)
+    }
+  }, [])
 
   const regenerate = useCallback(async () => {
     if (!confirm('Generate a new set of backup codes?\n\nYour previous codes stop working immediately.')) return
@@ -185,11 +226,14 @@ export function MfaSettingsDialog({ onClose }: { onClose: () => void }) {
                   role="switch"
                   aria-checked={enabled}
                   aria-label="Two-factor login"
-                  disabled={busy || enabled}
-                  onClick={() => { if (!enabled) startScan('enroll') }}
+                  disabled={busy || (enabled && !isOwner)}
+                  onClick={() => {
+                    if (!enabled) { startScan('enroll'); return }
+                    if (isOwner) turnOff()
+                  }}
                   className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors ${
                     enabled ? 'bg-green-600' : 'bg-zinc-300 hover:bg-zinc-400'
-                  } ${enabled ? 'cursor-default' : 'cursor-pointer'} disabled:opacity-100`}
+                  } ${enabled && !isOwner ? 'cursor-default' : 'cursor-pointer'} disabled:opacity-100`}
                 >
                   <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${enabled ? 'left-[22px]' : 'left-0.5'}`} />
                 </button>
@@ -202,11 +246,24 @@ export function MfaSettingsDialog({ onClose }: { onClose: () => void }) {
                       ? 'Your account asks for a 6-digit code at sign-in.'
                       : 'Turn it on to protect this account with an authenticator app.'}
                   </p>
-                  {enabled && (
+                  {enabled && !isOwner && (
                     <p className="mt-2 flex items-start gap-1.5 text-[11px] text-zinc-500">
                       <Lock className="mt-0.5 h-3 w-3 shrink-0" />
                       Required for staff accounts, so it can&apos;t be switched off here.
                       Changing phone? Use Replace below.
+                    </p>
+                  )}
+                  {enabled && isOwner && (
+                    <p className="mt-2 text-[11px] text-zinc-500">
+                      You can switch this off — you own this system. Changing phone?
+                      Use Replace below instead, which keeps you protected.
+                    </p>
+                  )}
+                  {!enabled && exempt && (
+                    <p className="mt-2 flex items-start gap-1.5 text-[11px] text-amber-700">
+                      <Lock className="mt-0.5 h-3 w-3 shrink-0" />
+                      Off by your own exception — this account signs in with a password
+                      alone and will not be asked to set two-factor up again.
                     </p>
                   )}
                 </div>

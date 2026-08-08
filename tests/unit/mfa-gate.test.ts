@@ -17,6 +17,7 @@ const NOW = 1_800_000_000_000
 describe('resolveMfaGate — the six session states (council-enumerated)', () => {
   const base = {
     subject: true,
+    exempt: false,
     hasVerifiedFactor: false,
     aal: 'aal1' as const,
     rememberedDevice: false,
@@ -55,6 +56,37 @@ describe('resolveMfaGate — the six session states (council-enumerated)', () =>
 
   it('undecodable aal (null) is NOT aal2 — fail closed to verify', () => {
     expect(resolveMfaGate({ ...base, hasVerifiedFactor: true, aal: null })).toBe('verify')
+  })
+})
+
+describe('owner exemption — the only way OFF stays off (Antonio 2026-08-07)', () => {
+  const base = {
+    subject: true,
+    exempt: true,
+    hasVerifiedFactor: false,
+    aal: 'aal1' as const,
+    rememberedDevice: false,
+    graceUntilRaw: undefined,
+    now: NOW,
+  }
+
+  it('exempt + no authenticator → allowed even with grace long expired', () => {
+    expect(resolveMfaGate(base)).toBe('allow')
+  })
+
+  it('exempt does NOT weaken an account that still HAS an authenticator', () => {
+    // Otherwise flipping the exemption would silently drop protection on a
+    // protected account, and the holder would believe they were covered.
+    expect(resolveMfaGate({ ...base, hasVerifiedFactor: true })).toBe('verify')
+    expect(resolveMfaGate({ ...base, hasVerifiedFactor: true, aal: 'aal2' })).toBe('allow')
+  })
+
+  it('exemption is per-account — a non-exempt staff account is unaffected', () => {
+    expect(resolveMfaGate({ ...base, exempt: false })).toBe('enroll')
+  })
+
+  it('exemption never applies to a non-subject session (clients stay out of scope)', () => {
+    expect(resolveMfaGate({ ...base, subject: false })).toBe('allow')
   })
 })
 
