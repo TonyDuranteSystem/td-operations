@@ -387,6 +387,11 @@ async function tryCreateWhopPlan(params: {
   services: unknown
   cost_summary: unknown
   token: string
+  /** Credit already paid. The plan and its label must quote the NET, like every
+   *  other rail — a card link minted at the gross charges a credit-holding
+   *  client for their strategy call a second time, and unlike the Stripe rail
+   *  there is no overage detector on Whop to catch it after the fact. */
+  credit_amount?: number | null
 }): Promise<string | null> {
   try {
     const { createWhopPlan } = await import("@/lib/whop-auto-plan")
@@ -395,8 +400,13 @@ async function tryCreateWhopPlan(params: {
     // WS-A3: shared parser primitive. Whop plans are priced off the FIRST
     // cost_summary header only (the plan's headline price), not the engine's
     // full billable gross — aggregation intentionally unchanged.
-    const totalNum = parsePriceQuirk(firstTotal)
-    if (!(totalNum > 0)) return null
+    const grossNum = parsePriceQuirk(firstTotal)
+    if (!(grossNum > 0)) return null
+    const creditNum = Number(params.credit_amount ?? 0)
+    const totalNum = creditNum > 0
+      ? Math.max(Math.round((grossNum - Math.min(creditNum, grossNum)) * 100) / 100, 0)
+      : grossNum
+    if (!(totalNum > 0)) return null   // fully covered by credit — no card link to mint
     const servArr = Array.isArray(params.services) ? params.services : []
     const primaryService = (servArr[0] as Record<string, unknown>)?.name as string | undefined
     const result = await createWhopPlan({
@@ -796,6 +806,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         services: params.services,
         cost_summary: params.cost_summary,
         token: offer.token,
+        credit_amount: creditAmount,
       })
     }
 

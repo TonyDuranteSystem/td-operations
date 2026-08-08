@@ -9,7 +9,7 @@ import RenewalAgreement from './renewal-agreement'
 import ServiceAgreement from './service-agreement'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
-import { computeOfferTotals, computeOfferPayable } from '@/lib/offers/compute-offer-totals'
+import { computeOfferPayable } from '@/lib/offers/compute-offer-totals'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
 import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 
@@ -620,11 +620,24 @@ export default function ContractPage() {
       // explicitly instead of two look-alike inline loops.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const correctCurrency = (offer as any).currency === 'USD' ? '$' : '€'
-      const correctTotal = computeOfferTotals(
-        { services: offer.services, cost_summary: offer.cost_summary, selected_services: Array.from(selSet) },
+      // NET, not gross. This is the amount the client is TOLD TO WIRE, so it must
+      // equal the invoice of record like every other rail. It previously ignored
+      // the credit entirely, so a credit-holding client was shown one figure on
+      // the offer page and a larger one on the contract's bank panel — and the
+      // overpayment would land nowhere, because settlement caps at the invoice.
+      const correctTotal = computeOfferPayable(
+        {
+          services: offer.services,
+          cost_summary: offer.cost_summary,
+          selected_services: Array.from(selSet),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          currency: (offer as any).currency,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          credit_amount: (offer as any).credit_amount,
+        },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         { currencyOverride: (offer as any).currency === 'USD' ? 'USD' : 'EUR' },
-      ).servicesTotal
+      ).net
 
       // Update offer status + recalculated bank amount (retry).
       // This submit handler runs only for NEW contracts

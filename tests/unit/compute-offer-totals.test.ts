@@ -331,3 +331,44 @@ describe("ambiguousDotPrices — catch it while it is still being typed", () => 
     expect(ambiguousDotPrices([{ name: "A" }])).toEqual([])
   })
 })
+
+// ─── the columns the money rails must actually FETCH ─────────────────────
+// The checkout shipped reading `credit_amount` off a row it never selected.
+// The reads were `as`-cast, so the compiler saw nothing and the card charged
+// the gross — the exact bug this workstream exists to fix, live in production.
+// These pin the contract: a rail that forgets the column gets caught here.
+
+describe("a money rail must SUPPLY the credit, not just read for it", () => {
+  it("an offer row missing credit_amount charges the GROSS — the failure shape", () => {
+    const rowAsFetchedWithoutCredit = {
+      services: [{ name: "Formation", price: "€1,575" }],
+      cost_summary: [{ label: "Totale", total: "€1,575" }],
+      currency: "EUR",
+      // credit_amount deliberately absent, exactly as the broken select returned it
+    }
+    const p = computeOfferPayable(rowAsFetchedWithoutCredit)
+    expect(p.net).toBe(1575)
+    expect(p.credit).toBe(0)
+  })
+
+  it("the same offer WITH the column supplied charges the net", () => {
+    const p = computeOfferPayable({
+      services: [{ name: "Formation", price: "€1,575" }],
+      cost_summary: [{ label: "Totale", total: "€1,575" }],
+      currency: "EUR",
+      credit_amount: 257,
+    })
+    expect(p.credit).toBe(257)
+    expect(p.net).toBe(1318)
+  })
+
+  it("a fully covered offer nets to zero — no card link should be minted for it", () => {
+    const p = computeOfferPayable({
+      services: [{ name: "ITIN", price: "€250" }],
+      cost_summary: [{ label: "Totale", total: "€250" }],
+      currency: "EUR",
+      credit_amount: 257,
+    })
+    expect(p.net).toBe(0)
+  })
+})

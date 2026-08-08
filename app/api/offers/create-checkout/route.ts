@@ -34,7 +34,11 @@ export async function POST(req: NextRequest) {
     // Fetch offer
     const { data: offer, error: oErr } = await supabase
       .from("offers")
-      .select("token, client_name, client_email, services, cost_summary, contract_type, selected_services, language, lead_id, payment_type, status, card_fee_rate")
+      // credit_amount + currency ARE LOAD-BEARING: computeOfferPayable needs them to
+      // charge the net. They were missing, and because the reads below are `as`-cast
+      // the compiler could not see it — the card silently charged the GROSS, which is
+      // the exact bug this workstream shipped to fix.
+      .select("token, client_name, client_email, services, cost_summary, contract_type, selected_services, language, lead_id, payment_type, status, card_fee_rate, currency, credit_amount")
       .eq("token", token)
       .single()
 
@@ -73,8 +77,8 @@ export async function POST(req: NextRequest) {
       services: offer.services,
       cost_summary: offer.cost_summary,
       selected_services: selectedServices,
-      currency: (offer as { currency?: string | null }).currency,
-      credit_amount: (offer as { credit_amount?: number | null }).credit_amount,
+      currency: offer.currency,
+      credit_amount: offer.credit_amount,
     })
     const total = totals.net
     const currency: "usd" | "eur" = totals.currency === "EUR" ? "eur" : "usd"
