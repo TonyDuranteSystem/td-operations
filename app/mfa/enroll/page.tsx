@@ -51,10 +51,12 @@ export default function MfaEnrollPage() {
       const { data: factors } = await createClient().auth.mfa.listFactors()
       const totp = factors?.totp ?? []
       const verified = totp.filter(f => (f as { status?: string }).status === 'verified')
-      const { data: aal } = await createClient().auth.mfa.getAuthenticatorAssuranceLevel()
-      if (verified.length > 0 && aal?.currentLevel !== 'aal2') {
-        // Enrolled but unverified session: adding another factor at aal1 is
-        // exactly what a stolen password would do. Go verify instead.
+      // ONE authenticator per account, always. Refused at ANY assurance level
+      // (Antonio, 2026-08-07): at aal1 it is what a stolen password would try;
+      // at aal2 it silently ADDED a second factor, so after a phone change the
+      // OLD phone kept working — the opposite of a replace. Changing phone goes
+      // through the sidebar's Two-factor security panel, which removes first.
+      if (verified.length > 0) {
         setStep('blocked')
         return
       }
@@ -150,13 +152,15 @@ export default function MfaEnrollPage() {
 
         {step === 'blocked' && (
           <>
-            <h1 className="text-lg font-semibold text-center">Verification required</h1>
+            <h1 className="text-lg font-semibold text-center">Already set up</h1>
             <p className="text-sm text-zinc-600 text-center mt-2">
-              This account already has an authenticator. Verify with it before
-              changing your setup.
+              This account already has an authenticator, and an account can have
+              only one. Changing phone? Open <strong>Two-factor security</strong>
+              at the bottom of the sidebar and use <strong>Replace</strong> —
+              it removes the old one first.
             </p>
-            <a href="/mfa/verify" className="block text-center mt-4 px-4 py-2.5 bg-red-600 text-white text-sm font-medium rounded-lg">
-              Go to verification
+            <a href="/" className="block text-center mt-4 px-4 py-2.5 bg-red-600 text-white text-sm font-medium rounded-lg">
+              Go to the dashboard
             </a>
           </>
         )}

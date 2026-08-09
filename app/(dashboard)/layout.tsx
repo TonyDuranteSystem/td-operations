@@ -7,7 +7,7 @@ import { CommandPalette } from '@/components/dashboard/command-palette'
 import { DashboardHeader } from '@/components/dashboard/dashboard-header'
 import { AiAgentPanel } from '@/components/dashboard/ai-agent-panel'
 import { Providers } from '@/components/providers'
-import { isAdmin, isDashboardUser } from '@/lib/auth'
+import { isAdmin, isDashboardUser, isProtectedAdminEmail } from '@/lib/auth'
 import { countTeamNotifications, type TeamThreadCountRow } from '@/lib/team/workspace'
 import { SwRegister } from '@/components/dashboard/sw-register'
 import { RealtimeNotifications } from '@/components/dashboard/realtime-notifications'
@@ -125,6 +125,9 @@ export default async function DashboardLayout({
   }
 
   const admin = isAdmin(user)
+  // The OWNER allow-list (code-level, not a grantable role) — only this
+  // account may switch its own two-factor requirement off.
+  const owner = isProtectedAdminEmail(user.email)
   const dashboardUser = isDashboardUser(user)
   const badgeCounts = await getBadgeCounts(supabase, user.id)
 
@@ -157,6 +160,7 @@ export default async function DashboardLayout({
         <Sidebar
           user={user}
           isAdmin={admin}
+          isOwner={owner}
           badgeCounts={badgeCounts}
         />
         {/* pt-14 (not a spacer div) compensates for the fixed mobile top bar:
