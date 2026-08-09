@@ -1297,9 +1297,18 @@ describe("CELL 15 — stranded-currency credit is REPORTED, not silently ignored
       inviteeEmail: p.email, callDate: "2026-08-08",
     })
 
-    const before = await db.from("system_errors").select("id", { count: "exact", head: true })
-      .ilike("message", "%holding unused credit in another currency%")
-    const beforeCount = before.count ?? 0
+    // The error system DEDUPLICATES by message shape, so a repeat bumps an
+    // existing row rather than inserting one. Count the OCCURRENCES, not the
+    // rows — asserting the row count grows would pass once and fail forever
+    // after, which is a test that lies the second time you run it.
+    const occurrences = async () => {
+      const { data } = await db.from("system_errors")
+        .select("occurrence_count, last_seen")
+        .ilike("message", "%holding unused credit in another currency%")
+      return ((data ?? []) as Array<{ occurrence_count: number | null }>)
+        .reduce((n, r) => n + (Number(r.occurrence_count) || 1), 0)
+    }
+    const beforeCount = await occurrences()
 
     // Bill them in USD — the annual-renewal shape.
     const inv = await createTDInvoice({
@@ -1317,9 +1326,7 @@ describe("CELL 15 — stranded-currency credit is REPORTED, not silently ignored
     expect(held.some(h => h.currency === "EUR" && h.amount === 257)).toBe(true)
 
     // AND SOMEONE WAS TOLD. This is the whole point of the cell.
-    const after = await db.from("system_errors").select("id", { count: "exact", head: true })
-      .ilike("message", "%holding unused credit in another currency%")
-    expect((after.count ?? 0)).toBeGreaterThan(beforeCount)
+    expect(await occurrences()).toBeGreaterThan(beforeCount)
   })
 
   it("15b a SAME-currency bill applies the credit and raises no such notice", async () => {
@@ -1328,9 +1335,14 @@ describe("CELL 15 — stranded-currency credit is REPORTED, not silently ignored
       payment: booking(newCharge("nostrand"), 257, "EUR"),
       inviteeEmail: p.email, callDate: "2026-08-08",
     })
-    const before = await db.from("system_errors").select("id", { count: "exact", head: true })
-      .ilike("message", "%holding unused credit in another currency%")
-    const beforeCount = before.count ?? 0
+    const occurrences = async () => {
+      const { data } = await db.from("system_errors")
+        .select("occurrence_count")
+        .ilike("message", "%holding unused credit in another currency%")
+      return ((data ?? []) as Array<{ occurrence_count: number | null }>)
+        .reduce((n, r) => n + (Number(r.occurrence_count) || 1), 0)
+    }
+    const beforeCount = await occurrences()
 
     const inv = await createTDInvoice({
       contact_id: p.id,
@@ -1342,8 +1354,6 @@ describe("CELL 15 — stranded-currency credit is REPORTED, not silently ignored
     expect(Number(row!.total)).toBe(743)   // credit applied
 
     // no cry-wolf: nothing was stranded, so nothing was raised
-    const after = await db.from("system_errors").select("id", { count: "exact", head: true })
-      .ilike("message", "%holding unused credit in another currency%")
-    expect((after.count ?? 0)).toBe(beforeCount)
+    expect(await occurrences()).toBe(beforeCount)
   })
 })
