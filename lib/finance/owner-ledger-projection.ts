@@ -28,8 +28,28 @@ import {
   type FeedSignalSource,
 } from "@/lib/finance/feed-signals"
 import { isMatchableInvoice } from "@/lib/finance/invoice-matchability"
-import { updateFeeds } from "@/lib/finance/feed-write"
-import { readRejectedPairs } from "@/lib/finance/feed-vocabulary"
+import { updateFeed, updateFeeds } from "@/lib/finance/feed-write"
+import {
+  isHumanOwnerClaim,
+  ownerRoutingMetadata,
+  readOwnerRouting,
+  readRejectedPairs,
+} from "@/lib/finance/feed-vocabulary"
+import {
+  couldBePartPayment,
+  matchPayerToRoster,
+  matchesExpectedPayment,
+  type ClientRosterEntry,
+  type ExpectedPayment,
+} from "@/lib/finance/client-payer-evidence"
+import {
+  buildTaughtPayerIndex,
+  taughtClientsFor,
+  type TaughtMapping,
+  type TaughtPayerIndex,
+} from "@/lib/finance/payer-learning-rules"
+
+import { reportSystemError } from "@/lib/system-errors"
 
 import { TD_ENTITY_ID } from "@/lib/owner-finance"
 
@@ -108,7 +128,30 @@ export interface OpenInvoiceRef {
  * number, a card payment reference, a payer email, or an amount matching something owed)
  * while "not a client payment" is an absence, and absence can never be proven from wording.
  */
-export function isClientInvoicePayment(feed: ProjectableFeed, openInvoices: OpenInvoiceRef[] = []): boolean {
+/**
+ * Extra evidence the router consults when the caller can supply it.
+ *
+ * Optional on purpose: `isClientInvoicePayment` keeps its original two-argument shape, so every
+ * existing caller and test is unaffected and the new evidence is additive rather than a
+ * rewrite of a rule that guards client money.
+ */
+export interface ClientEvidenceContext {
+  /** Every client name money could plausibly come FROM — companies and people. */
+  roster?: ClientRosterEntry[]
+  /** Amounts a client was told to pay (payment-plan instalments). */
+  expected?: ExpectedPayment[]
+  /**
+   * Payers a human has explicitly taught, indexed for in-memory lookup. Strongest evidence
+   * available for a payer the bank cannot describe usefully — because a person supplied it.
+   */
+  taught?: TaughtPayerIndex
+}
+
+export function isClientInvoicePayment(
+  feed: ProjectableFeed,
+  openInvoices: OpenInvoiceRef[] = [],
+  evidence: ClientEvidenceContext = {},
+): boolean {
   // Money LEAVING the account is never a client paying an invoice.
   if (feed.status === "outgoing") return false
 
@@ -154,15 +197,182 @@ export function isClientInvoicePayment(feed: ProjectableFeed, openInvoices: Open
     }
   }
 
+  // ── THE AMOUNT A CLIENT WAS TOLD TO SEND (dev job `ae8b8bb1`) ──────────────
+  // The band above asks "is this roughly the whole bill?", which a part-payment can never
+  // satisfy: Domenico's €1,250 is 50% away from his €2,500 invoice, and no tolerance that
+  // admits a half-payment could also refuse a stranger's wire. A payment PLAN removes the
+  // guesswork — when the schedule says €1,250 is due, a €1,250 deposit is the expected thing,
+  // matched on a tight band (wire fees, not fuzziness). This is what stops payment plans from
+  // sweeping every first instalment into the owner's books.
+  if (Number.isFinite(amount) && matchesExpectedPayment(amount, feed.currency, evidence.expected ?? [])) {
+    return true
+  }
+
+  // ── A HUMAN HAS TAUGHT US THIS PAYER ──────────────────────────────────────
+  // Sits ABOVE the name rule and below the invoice-number / email / amount evidence, per the
+  // agreed precedence. It is the only evidence that can identify a payer the bank describes
+  // uselessly — "WM International LLC" has no usable words at all, "Oh My Crea" is truncated,
+  // "Relation Box" is reworded, and a call paid on a relative's card carries a name that is
+  // CORRECTLY not the client's. No name rule can ever solve those; a person can, once.
+  //
+  // IDENTIFY, NEVER SETTLE: this keeps the money in Finance and nothing more. It does not pick
+  // an invoice, and it must not — a taught payer legitimately pays for SEVERAL clients (proven
+  // on the real book), so knowing who sent it can never imply which bill it clears.
+  if (evidence.taught && taughtClientsFor(feed, evidence.taught).mappings.length > 0) return true
+
+  // ── THE PAYER NAMES A CLIENT WE KNOW ──────────────────────────────────────
+  // The matcher has always scored names; this router never looked at them, which is why a wire
+  // carrying a real client's name and nothing else was filed as the owner's own money. Money
+  // from a name that identifies a client is not TD's own money under any reading.
+  //
+  // Uses the ONE shared coverage rule (≥60% of the client's significant words), so a surname
+  // or a single generic word is NOT enough — those surface as a hint to a human instead, in
+  // `describeOwnerLedgerConcern`. The owner's own entity is excluded by id inside the matcher:
+  // TD's name is printed on TD's own payout descriptors, and matching it would drag every
+  // Stripe payout back into Finance.
+  //
+  // ⛔ ONLY THE PAYER FIELD. Found by replaying the rule over the real book, twice, and each pass
+  // narrowed it further:
+  //
+  //  - reading the MEMO booked TD's own Mercury referral bonus ("Cash bonus for referring
+  //    <CLIENT> LLC") as that client's payment;
+  //  - reading the REFERENCE did the same thing, because Mercury's API puts that identical
+  //    description in `sender_reference` — so excluding only the memo fixed nothing, and the
+  //    replay caught three bonus rows being newly "recognised" as client money.
+  //
+  // "Who sent this" is `sender_name`. Everything else describes the transaction and may name any
+  // third party — a referred company, an intermediary, TD itself. Measured consequence on the
+  // real book: three rows change hands, all three genuine client payments (the €1,250 half-
+  // payment, a card payment from a closed client, an ACH from another), and zero of TD's own 61
+  // rows move. A client named only in a description is not lost — it surfaces on the triage list.
+  if (evidence.roster?.length) {
+    if (matchPayerToRoster([feed.sender_name], evidence.roster).named) return true
+  }
+
   return false
+}
+
+/**
+ * Why a row that is about to be filed as the owner's money still looks client-shaped — the
+ * SIGNAL, which is a different job from the routing decision above.
+ *
+ * ⛔ THE SILENCE WAS THE REAL DEFECT. Domenico's €1,250 was filed as the owner's money and
+ * nothing told anyone: the sweep reports counts into a cron payload nobody reads, and a row
+ * filed as owner money is hidden from the Bank Feed for every user. Two days passed. Routing
+ * can only ever be as good as its evidence, so the honest answer is not "make the rule
+ * perfect" — it is to say out loud when the rule was unsure.
+ *
+ * Deliberately looser than the routing test, and that asymmetry is the established convention
+ * here: strict rules decide, hints tell people. A partial name hit identifies nobody and must
+ * never move money, but it is exactly what a human needs in order to look.
+ */
+export interface OwnerLedgerConcern {
+  reason:
+    | "named_client_no_amount_fit"
+    | "client_named_in_description"
+    | "partial_name_match"
+    | "amount_fits_open_invoice"
+  /** Plain-English sentence for the notice. */
+  detail: string
+  suspectedClientId?: string
+  suspectedClientName?: string
+}
+
+/**
+ * ALERT vs TRIAGE — two different jobs, deliberately different sensitivities.
+ *
+ * `alert` is a notification nobody asked for, so it must be worth interrupting someone: payer
+ * field only, and a partial match needs at least two words. Measured on the real book, the
+ * generous version fired on 27 of 64 rows, all correctly filed — a channel that behaves like
+ * that gets ignored, and then the one row that mattered gets ignored with it.
+ *
+ * `triage` is a screen a person opens on purpose, with the payer and origin in front of them. It
+ * can afford to be generous: it also reads the reference and the memo, so a client named only in
+ * a description (a wire routed through Wise, an intermediary's descriptor) still shows up as
+ * something to look at. Nothing here acts on its own either way.
+ */
+export type ConcernLens = "alert" | "triage"
+
+export function describeOwnerLedgerConcern(
+  feed: ProjectableFeed,
+  openInvoices: OpenInvoiceRef[] = [],
+  evidence: ClientEvidenceContext = {},
+  lens: ConcernLens = "alert",
+): OwnerLedgerConcern | null {
+  if (feed.status === "outgoing") return null // money leaving is never a client paying
+
+  const amount = Math.abs(typeof feed.amount === "string" ? Number(feed.amount) : feed.amount)
+  const payer = feed.sender_name?.trim() || "an unnamed payer"
+
+  const payerMatch = evidence.roster?.length
+    ? matchPayerToRoster([feed.sender_name], evidence.roster)
+    : null
+  // On the triage screen a client named in the DESCRIPTION is still worth a look — but it must
+  // never be presented as the payer. Replaying the real book produced "possible payment from Cash
+  // Cow Consulting" for a Mercury bonus, purely because the memo begins "Cash bonus". The row is
+  // fine to show; asserting who sent it is not. So the wording carries the uncertainty, the same
+  // way the audit panel labels a partial hit instead of rounding it up to an identification.
+  const descriptionMatch =
+    lens === "triage" && evidence.roster?.length && !payerMatch?.named
+      ? matchPayerToRoster([feed.sender_reference, feed.memo], evidence.roster)
+      : null
+  const match = payerMatch?.named ? payerMatch : (descriptionMatch ?? payerMatch)
+  const matchedInDescription = !payerMatch?.named && !!descriptionMatch?.named
+
+  // A full name match means the router already kept it in Finance, so reaching here with one
+  // can only happen when the caller routed WITHOUT the roster — worth saying rather than
+  // swallowing, because it means the sweep ran without the evidence it should have had.
+  if (match?.named) {
+    const money = `${amount} ${(feed.currency || "USD").toUpperCase()}`
+    return {
+      reason: matchedInDescription ? "client_named_in_description" : "named_client_no_amount_fit",
+      detail: matchedInDescription
+        ? `A deposit of ${money} from "${payer}" was filed as your own money, and its description mentions ` +
+          `${match.named.entry.name}. That is NOT proof they sent it — a bank description also names ` +
+          `intermediaries and referred companies — but it is worth one look before it stays in your books.`
+        : `A deposit of ${money} from "${payer}" was filed as your own money, ` +
+          `but the payer name identifies a client (${match.named.entry.name}). If this is their payment, send it back to ` +
+          `the Bank Feed so it can settle their invoice.`,
+      suspectedClientId: match.named.entry.id,
+      suspectedClientName: match.named.entry.name ?? undefined,
+    }
+  }
+
+  if (match?.weak) {
+    return {
+      reason: "partial_name_match",
+      detail:
+        `A deposit of ${amount} ${(feed.currency || "USD").toUpperCase()} from "${payer}" was filed as your own money. ` +
+        `The name partly matches a client (${match.weak.entry.name}) — too little to decide automatically, ` +
+        `so someone should look: a bank that truncates or reformats a company name looks exactly like this.`,
+      suspectedClientId: match.weak.entry.id,
+      suspectedClientName: match.weak.entry.name ?? undefined,
+    }
+  }
+
+  if (couldBePartPayment(amount, feed.currency, openInvoices)) {
+    return {
+      reason: "amount_fits_open_invoice",
+      detail:
+        `A deposit of ${amount} ${(feed.currency || "USD").toUpperCase()} from "${payer}" was filed as your own money, ` +
+        `but it would fit as a part-payment of an open client invoice in the same currency. Nothing names a client, ` +
+        `so it cannot be routed automatically — check whether a client paid an instalment.`,
+    }
+  }
+
+  return null
 }
 
 /**
  * Does this feed belong in the owner's books? Everything that is not positively a client
  * invoice payment — including anything the system does not recognise.
  */
-export function isOwnerLedgerFeed(feed: ProjectableFeed, openInvoices: OpenInvoiceRef[] = []): boolean {
-  return !isClientInvoicePayment(feed, openInvoices)
+export function isOwnerLedgerFeed(
+  feed: ProjectableFeed,
+  openInvoices: OpenInvoiceRef[] = [],
+  evidence: ClientEvidenceContext = {},
+): boolean {
+  return !isClientInvoicePayment(feed, openInvoices, evidence)
 }
 
 /**
@@ -238,9 +448,142 @@ export async function sendFeedToOwnerLedger(
   if (insErr) return { ok: false, error: `Could not copy it into My Finances: ${insErr.message}` }
 
   // MARK AFTER — and drop any stale candidate pin with it.
-  const res = await updateFeeds([feedId], { status: "owner_ledger", matched_payment_id: null, match_confidence: null }, "owner-ledger-manual-claim")
+  //
+  // Stamped as a HUMAN claim (dev job `ae8b8bb1`): this is Antonio looking at a row and saying
+  // "that is my money". The recovery pass must never quietly reverse that, and before this stamp
+  // existed there was no way for it to tell his decision apart from the rule's guess.
+  const res = await updateFeed(
+    feedId,
+    {
+      status: "owner_ledger",
+      matched_payment_id: null,
+      match_confidence: null,
+      review_metadata: ownerRoutingMetadata(
+        "human",
+        new Date().toISOString(),
+        "claimed by a person from the Bank Feed",
+      ),
+    },
+    "owner-ledger-manual-claim",
+  )
   if (!res.ok) return { ok: false, error: res.error ?? "Copied, but could not update the Bank Feed row." }
   return { ok: true }
+}
+
+/**
+ * Client money that may be sitting in the owner's books — the recovery list.
+ *
+ * READ-ONLY, and that is a deliberate design decision rather than a limitation. It would be
+ * easy to have this return the strong matches to Finance automatically, and tempting, because
+ * one of them is a live client mid-formation. Two reasons not to:
+ *
+ *  1. Antonio's standing rule for this cleanup is one row at a time, payer and origin shown
+ *     before anything happens, never in bulk — five of the seven live credits are partner money
+ *     and this book has already taught us what a well-meaning sweep costs.
+ *  2. Rows filed before provenance existed cannot prove they were not a human's decision. An
+ *     automatic pass over them could silently undo a deliberate claim.
+ *
+ * So the machine finds and explains; a person decides, using the return action that already
+ * exists. Rows a human explicitly claimed are excluded outright.
+ */
+export interface MisroutedCandidate {
+  feedId: string
+  transactionDate: string
+  amount: number
+  currency: string
+  payer: string | null
+  source: string | null
+  reason: OwnerLedgerConcern["reason"]
+  detail: string
+  suspectedClientName?: string
+  suspectedClientId?: string
+  /** Provenance: 'sweep' | 'unknown' — a human claim is never listed. */
+  filedBy: "sweep" | "unknown"
+}
+
+export async function listMisroutedClientPaymentCandidates(): Promise<{
+  ok: boolean
+  candidates: MisroutedCandidate[]
+  considered: number
+  error?: string
+}> {
+  const [openInvoices, roster, taught] = await Promise.all([
+    fetchOpenInvoices(),
+    fetchClientRoster(),
+    fetchTaughtPayerIndex(),
+  ])
+
+  const { data, error } = await supabaseAdmin
+    .from("td_bank_feeds")
+    .select("id, transaction_date, amount, currency, source, sender_name, memo, sender_reference, raw_data, status, external_id, matched_payment_id, review_metadata")
+    .eq("status", "owner_ledger")
+    .order("transaction_date", { ascending: false })
+    .limit(2000)
+
+  if (error) return { ok: false, candidates: [], considered: 0, error: error.message }
+
+  const feeds = (data ?? []) as ProjectableFeed[]
+
+  // ⛔ DIRECTION MUST COME FROM THE BOOKS COPY, NOT THE FEED ROW. Marking a row `owner_ledger`
+  // OVERWRITES `status='outgoing'`, so the feed no longer remembers which way the money went —
+  // and feeds store an unsigned amount. Without this, an outgoing payment whose descriptor
+  // happens to name a client (a real one reads "James - 2024 Tax Returns Sent By Antonio
+  // Durante", and "James" is a contact) would be offered as a client payment to recover. The
+  // signed books amount is the only surviving record of direction.
+  const outgoingIds = new Set<string>()
+  if (feeds.length) {
+    const { data: books } = await supabaseAdmin
+      .from("td_books_transactions")
+      .select("transaction_ref, amount")
+      .eq("entity_id", TD_ENTITY_ID)
+      .in("transaction_ref", feeds.map((f) => `feed:${f.id}`))
+    for (const b of books ?? []) {
+      if (Number(b.amount) < 0) outgoingIds.add(String(b.transaction_ref).replace(/^feed:/, ""))
+    }
+  }
+
+  const candidates: MisroutedCandidate[] = []
+
+  for (const feed of feeds) {
+    // A person already decided this one. Their judgment outranks the rule — full stop.
+    if (isHumanOwnerClaim(feed.review_metadata)) continue
+    if (outgoingIds.has(feed.id)) continue
+
+    const evidence: ClientEvidenceContext = { roster, taught }
+    // Would the rule as it stands TODAY have kept this in Finance? That is the strongest
+    // signal available: the row was filed under a rule that could not see payer names.
+    const nowClientMoney = isClientInvoicePayment(feed, openInvoices, evidence)
+    const concern = describeOwnerLedgerConcern(feed, openInvoices, evidence, "triage")
+    if (!nowClientMoney && !concern) continue
+
+    const named = matchPayerToRoster(
+      [feed.sender_name, feed.sender_reference, feed.memo],
+      roster,
+    ).named
+
+    candidates.push({
+      feedId: feed.id,
+      transactionDate: feed.transaction_date,
+      amount: Math.abs(Number(feed.amount)) || 0,
+      currency: (feed.currency || "USD").toUpperCase(),
+      payer: feed.sender_name ?? null,
+      source: feed.source ?? null,
+      reason: concern?.reason ?? "named_client_no_amount_fit",
+      detail:
+        concern?.detail ??
+        `This deposit would be treated as a client payment by the current rule — the payer name matches ${named?.entry.name ?? "a known client"}.`,
+      ...(named?.entry.name ? { suspectedClientName: named.entry.name } : {}),
+      ...(named?.entry.id ? { suspectedClientId: named.entry.id } : {}),
+      filedBy: readOwnerRoutingBy(feed.review_metadata),
+    })
+  }
+
+  return { ok: true, candidates, considered: feeds.length }
+}
+
+function readOwnerRoutingBy(meta: unknown): "sweep" | "unknown" {
+  const prov = readOwnerRouting(meta)
+  return prov?.by === "sweep" ? "sweep" : "unknown"
 }
 
 /**
@@ -302,6 +645,58 @@ async function fetchOpenInvoices(): Promise<OpenInvoiceRef[]> {
 }
 
 /**
+ * Every name money could plausibly come FROM — the client-name evidence the router was missing.
+ *
+ * Loaded fresh per sweep rather than cached: a client who signed this morning must be
+ * recognised this afternoon. The owner's own entity is filtered out in the matcher (by id — see
+ * `client-payer-evidence.ts` for why a name test cannot be trusted to exclude itself).
+ *
+ * Closed and inactive clients are INCLUDED on purpose: a closed account can still send money —
+ * one of the ten rows found in the 2026-08-09 audit is a $300 deposit from a client whose
+ * account is closed — and forgetting them is how their payment becomes the owner's money.
+ */
+async function fetchClientRoster(): Promise<ClientRosterEntry[]> {
+  const roster: ClientRosterEntry[] = []
+
+  const { data: accounts } = await supabaseAdmin
+    .from("accounts")
+    .select("id, company_name")
+    .order("created_at", { ascending: true })
+
+  for (const a of accounts ?? []) {
+    if (a.company_name) roster.push({ id: a.id, name: a.company_name, kind: "account" })
+  }
+
+  const { data: contacts } = await supabaseAdmin
+    .from("contacts")
+    .select("id, full_name")
+    .order("created_at", { ascending: true })
+
+  for (const c of contacts ?? []) {
+    if (c.full_name) roster.push({ id: c.id, name: c.full_name, kind: "contact" })
+  }
+
+  return roster
+}
+
+/**
+ * Every payer a human has taught, as an in-memory index.
+ *
+ * Loaded once per pass rather than queried per transaction: a sweep walks up to 2,000 rows and
+ * this is advisory evidence, so it must not cost a round-trip each. Live rows only — a removed
+ * mapping is invisible here, which is what makes "unteach" real.
+ */
+async function fetchTaughtPayerIndex(): Promise<TaughtPayerIndex> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- table not in generated types
+  const { data } = await (supabaseAdmin as any)
+    .from("payer_client_map")
+    .select("id, source, key_type, key_value, account_id, contact_id, display_payer, taught_by, taught_at")
+    .is("removed_at", null)
+
+  return buildTaughtPayerIndex((data ?? []) as TaughtMapping[])
+}
+
+/**
  * The scheduled sweep: anything that is not positively a client invoice payment is copied to
  * My Finances and taken out of the Bank Feed. Runs each cycle before the invoice matcher.
  *
@@ -311,6 +706,8 @@ async function fetchOpenInvoices(): Promise<OpenInvoiceRef[]> {
  */
 export async function sweepFeedsToOwnerLedger(): Promise<ProjectionResult> {
   const openInvoices = await fetchOpenInvoices()
+  const roster = await fetchClientRoster()
+  const taught = await fetchTaughtPayerIndex()
 
   const { data, error } = await supabaseAdmin
     .from("td_bank_feeds")
@@ -322,7 +719,12 @@ export async function sweepFeedsToOwnerLedger(): Promise<ProjectionResult> {
   if (error) {
     return { ok: false, considered: 0, projected: 0, skipped: 0, error: error.message }
   }
-  return projectFeedsToOwnerLedger((data ?? []) as ProjectableFeed[], { markFeeds: true, openInvoices })
+  return projectFeedsToOwnerLedger((data ?? []) as ProjectableFeed[], {
+    markFeeds: true,
+    openInvoices,
+    roster,
+    taught,
+  })
 }
 
 export interface ProjectionResult {
@@ -332,6 +734,8 @@ export interface ProjectionResult {
   skipped: number
   /** Feeds marked `owner_ledger` so the Bank Feed stops showing them to staff. */
   marked?: number
+  /** Filed as the owner's money but client-shaped — a notice was raised for each. */
+  flagged?: number
   error?: string
 }
 
@@ -341,15 +745,33 @@ export interface ProjectionResult {
  */
 export async function projectFeedsToOwnerLedger(
   feeds: ProjectableFeed[],
-  opts: { markFeeds?: boolean; openInvoices?: OpenInvoiceRef[] } = {},
+  opts: {
+    markFeeds?: boolean
+    openInvoices?: OpenInvoiceRef[]
+    roster?: ClientRosterEntry[]
+    expected?: ExpectedPayment[]
+    taught?: TaughtPayerIndex
+  } = {},
 ): Promise<ProjectionResult> {
+  const evidence: ClientEvidenceContext = { roster: opts.roster, expected: opts.expected, taught: opts.taught }
   const rows: OwnerLedgerRow[] = []
   const markable: string[] = []
+  /** Rows filed as the owner's money that still look client-shaped — each gets told. */
+  const concerns: Array<{ feed: ProjectableFeed; concern: OwnerLedgerConcern }> = []
   for (const feed of feeds) {
-    if (!isOwnerLedgerFeed(feed, opts.openInvoices ?? [])) continue
+    // ⛔ FORWARD-ONLY. A row that is ALREADY filed is never re-examined here, so improving the
+    // routing rule can never retroactively re-file, re-notify, or re-stamp the existing book.
+    // History moves one row at a time, by a person, through the triage list — never in bulk.
+    //
+    // The sweep's own query already excludes these rows, but a promise about client money must
+    // not rest on a caller remembering to filter. Enforced here so it holds for every caller.
+    if (feed.status === "owner_ledger") continue
+    if (!isOwnerLedgerFeed(feed, opts.openInvoices ?? [], evidence)) continue
     const row = buildOwnerLedgerRow(feed)
     if (!row) continue
     rows.push(row)
+    const concern = describeOwnerLedgerConcern(feed, opts.openInvoices ?? [], evidence)
+    if (concern) concerns.push({ feed, concern })
     // Never re-label a settled feed: `matched` carries the link to the invoice it paid, and
     // the 1-invoice-many-feeds guard keys on it. Copy it to the owner's books, but leave the
     // feed's status alone.
@@ -402,6 +824,64 @@ export async function projectFeedsToOwnerLedger(
       }
     }
     marked = markable.length
+
+    // WHO filed this row — stamped per row, because the bulk writer cannot merge per-row jsonb
+    // (and refuses to try). Written AFTER the status so a failure here leaves a correctly-filed
+    // row with an unknown provenance, never a stamped row that was never filed.
+    //
+    // This stamp is what later lets a recovery pass tell "the rule guessed" apart from "Antonio
+    // decided", which on the row itself were indistinguishable — the write path's context
+    // argument is only a log string.
+    const at = new Date().toISOString()
+    for (const feed of markable) {
+      const reason = concerns.find((c) => c.feed.id === feed)?.concern.reason
+      const res2 = await updateFeed(
+        feed,
+        {
+          review_metadata: ownerRoutingMetadata(
+            "sweep",
+            at,
+            reason
+              ? `filed automatically; flagged as possibly a client's money (${reason})`
+              : "filed automatically: nothing identified a client paying an invoice",
+          ),
+        },
+        "owner-ledger-projection:provenance",
+      )
+      if (!res2.ok) {
+        console.warn(`[owner-ledger] provenance stamp failed for feed ${feed} (non-fatal): ${res2.error}`)
+      }
+    }
+  }
+
+  // ── TELL SOMEONE (dev job `ae8b8bb1`) ────────────────────────────────────────
+  // The silence is what turned one misrouted wire into a two-day outage for a live client.
+  // Non-fatal by construction: a notice that cannot be delivered must never stop the money
+  // from being recorded. One notice per transaction — the error system fingerprints by shape,
+  // so a re-sweep of the same row bumps its count instead of adding noise.
+  for (const { feed, concern } of concerns) {
+    try {
+      await reportSystemError({
+        source: "server",
+        route: "bank-feed/owner-ledger-possible-client-payment",
+        message: concern.detail,
+        context: {
+          feed_id: feed.id,
+          transaction_date: feed.transaction_date,
+          amount: feed.amount,
+          currency: feed.currency ?? null,
+          payer: feed.sender_name ?? null,
+          reason: concern.reason,
+          suspected_client_id: concern.suspectedClientId ?? null,
+          suspected_client_name: concern.suspectedClientName ?? null,
+        },
+      })
+    } catch (err) {
+      console.warn(
+        `[owner-ledger] client-shaped notice failed for feed ${feed.id} (non-fatal):`,
+        err instanceof Error ? err.message : String(err),
+      )
+    }
   }
 
   return {
@@ -410,5 +890,6 @@ export async function projectFeedsToOwnerLedger(
     projected: rows.length,
     skipped: feeds.length - rows.length,
     marked,
+    flagged: concerns.length,
   }
 }

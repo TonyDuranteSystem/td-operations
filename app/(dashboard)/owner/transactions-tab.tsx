@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { toast } from 'sonner'
 import { applyVendorRulesTo, normalizeVendorKey, type VendorRule } from '@/lib/owner-vendor-match'
 import type { OwnerTransaction, OwnerCategory } from '@/lib/owner-finance'
+import { PossibleClientMoney } from './possible-client-money'
 
 const CATEGORIES: OwnerCategory[] = ['income', 'cogs', 'expense', 'distribution', 'contribution', 'transfer', 'fee', 'conversion', 'refund', 'uncategorized']
 
@@ -312,6 +313,11 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
 
   return (
     <div className="space-y-4">
+      {/* Client money that landed here because nothing identified a client (dev job ae8b8bb1).
+          Placed FIRST and above the full list on purpose: the failure this fixes was silence —
+          a real client's payment sat in these books for two days with nobody told. */}
+      <PossibleClientMoney />
+
       {/* Categorize modal */}
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>

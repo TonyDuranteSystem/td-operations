@@ -269,3 +269,59 @@ export function readRejectedPairs(reviewMetadata: unknown): RejectedPair[] {
 export function isRejectedPair(reviewMetadata: unknown, paymentId: string): boolean {
   return readRejectedPairs(reviewMetadata).some((p) => p.payment_id === paymentId)
 }
+
+// ────────────────────────────────────────────────────────────────────────────────────────
+// WHO decided this row belongs in the owner's books — `owner_routing`.
+//
+// ⛔ WHY THIS HAD TO EXIST BEFORE ANYTHING COULD BE RE-EXAMINED (dev job `ae8b8bb1`).
+// Two completely different things produce `status='owner_ledger'`: the automatic sweep, and
+// Antonio pressing "Mine →" on a row he has looked at. On the row itself they were
+// INDISTINGUISHABLE — the write path's `context` argument is only a log/error string, it is
+// never persisted — so any pass that returned mis-swept money to Finance would also have
+// silently undone his deliberate claims (three real ones: the Relay partner payouts of
+// Dec-2025, Jan-2026 and Jun-2026).
+//
+// A human decision must outrank an automatic rule, so the rule has to be able to tell them
+// apart. From now on both paths stamp their provenance. Rows filed BEFORE this shipped carry
+// no stamp, and are treated as unknown — never auto-returned on weak evidence.
+// ────────────────────────────────────────────────────────────────────────────────────────
+
+export interface OwnerRoutingProvenance {
+  /** `sweep` = the automatic rule filed it. `human` = someone claimed it deliberately. */
+  by: "sweep" | "human"
+  at: string
+  /** Plain-English reason, so the row explains itself to whoever reads it next. */
+  reason?: string
+}
+
+export function ownerRoutingMetadata(
+  by: OwnerRoutingProvenance["by"],
+  at: string,
+  reason?: string,
+): { owner_routing: OwnerRoutingProvenance } {
+  return { owner_routing: { by, at, ...(reason ? { reason } : {}) } }
+}
+
+export function readOwnerRouting(reviewMetadata: unknown): OwnerRoutingProvenance | null {
+  if (!reviewMetadata || typeof reviewMetadata !== "object" || Array.isArray(reviewMetadata)) return null
+  const raw = (reviewMetadata as Record<string, unknown>).owner_routing
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null
+  const by = (raw as Record<string, unknown>).by
+  if (by !== "sweep" && by !== "human") return null
+  const at = (raw as Record<string, unknown>).at
+  const reason = (raw as Record<string, unknown>).reason
+  return {
+    by,
+    at: typeof at === "string" ? at : "",
+    ...(typeof reason === "string" && reason ? { reason } : {}),
+  }
+}
+
+/**
+ * Did a HUMAN put this row in the owner's books? Only an explicit stamp counts — an unstamped
+ * row (everything filed before this shipped) is NOT assumed to be human, because assuming a
+ * human decided would freeze the mis-swept client payments this work exists to recover.
+ */
+export function isHumanOwnerClaim(reviewMetadata: unknown): boolean {
+  return readOwnerRouting(reviewMetadata)?.by === "human"
+}
