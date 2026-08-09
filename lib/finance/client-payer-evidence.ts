@@ -130,23 +130,26 @@ export function matchPayerToRoster(
 export const MIN_WEAK_MATCHED_WORDS = 2
 
 /**
- * How many significant words a CLIENT NAME must have before it may identify a payer here.
+ * How many significant words a CLIENT NAME must have before a roster scan may name them.
  *
- * ⛔ MEASURED, AND IT COST A REAL DEFECT TO FIND. A client is called "LT Program LLC". Under the
- * shared name rule that reduces to ONE significant word — "program" — because the initials are
- * too short and "llc" is a stop word. Every Relay partner payout descriptor reads "Relay
- * Financial US Corp - <Month> 2026 Partner Payout Program", which covers that single word 100%.
- * So the router identified TD's own partner payout as that client's payment and kept it in
- * Finance. Not list noise: a routing decision about money.
+ * ⚠️ ITS ROLE CHANGED, AND THE ARCHITECT SHOULD SEE THIS. It was introduced as a ROUTING rule.
+ * Roster-wide name matching has since been removed from routing altogether (see the note in
+ * `owner-ledger-projection.ts`), so nothing here decides where money goes any more. What remains
+ * is a QUALITY FLOOR ON A HUMAN-FACING HINT.
  *
- * The shared rule documents this single-word residual as accepted, and for the MATCHER it is —
- * a tie is never settled there and the candidate pool is already scoped to open invoices. For
- * THIS router there is no such backstop: one word is the whole decision. So a one-word client
- * name cannot identify a payer here. Those clients are still recognised — by being TAUGHT,
- * which is precisely what payer learning exists for.
+ * The instruction was that this constant disappears with the routing rule. It cannot disappear
+ * entirely, and the evidence is the cell-0 inverse: a client is called "LT Program LLC", which
+ * reduces to the single significant word "program", and all six Relay partner-payout descriptors
+ * end "Partner Payout Program" — so without this floor those six rows return to the triage list
+ * as "the payer name identifies LT Program LLC". Surfacing the owner's own money on that screen
+ * is the one thing cell 0's inverse forbids.
  *
- * Deliberately enforced HERE rather than by widening the shared stop-word list, because that
- * list is the matcher's auto-settlement rule and must not be touched from this side.
+ * So it is kept, re-scoped, and flagged rather than quietly retained. If the hint should tolerate
+ * that noise instead, remove this and the inverse cell will fail loudly, which is the right way
+ * for the decision to be made.
+ *
+ * Deliberately enforced HERE rather than by widening the shared stop-word list: that list is the
+ * matcher's auto-settlement rule and must not be touched from this side.
  */
 export const MIN_ROSTER_NAME_WORDS = 2
 

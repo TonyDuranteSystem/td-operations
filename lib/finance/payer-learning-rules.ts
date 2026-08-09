@@ -55,8 +55,14 @@ export const PAYMENT_PROCESSOR_TOKENS: ReadonlySet<string> = new Set([
  * Filler that carries no payer identity: legal suffixes, connectives and the vocabulary banks
  * wrap around a transfer.
  *
- * ⛔ THIS IS DELIBERATELY *NOT* THE NAME RULE'S STOP-WORD LIST, and the reason is the whole
- * point. That list exists to stop generic words identifying a client, so it drops words like
+ * ⛔ THIS IS DELIBERATELY *NOT* THE NAME RULE'S STOP-WORD LIST, AND THE DIVERGENCE IS CORRECT —
+ * ARCHITECT-APPROVED 2026-08-09, DO NOT "FIX" IT. The two lists answer different questions, so the
+ * same word plays opposite roles: "is this descriptor only a payment rail?" treats "International"
+ * as CONTENT, because it is part of "WM International"; "does this text identify this client?"
+ * treats "International" as GENERIC, because it identifies nobody. A test asserts the two lists
+ * differ, precisely so a future tidy-up cannot collapse them.
+ *
+ * The longer form of why it matters here: That list exists to stop generic words identifying a client, so it drops words like
  * "international" and "consulting". Reusing it here inverts the test: "WM International — From
  * WM International LLC via mercury.com" would reduce to nothing and be refused as
  * processor-only — blocking exactly the payer the name rule already cannot see, which is the

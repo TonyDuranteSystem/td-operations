@@ -219,35 +219,30 @@ export function isClientInvoicePayment(
   // on the real book), so knowing who sent it can never imply which bill it clears.
   if (evidence.taught && taughtClientsFor(feed, evidence.taught).mappings.length > 0) return true
 
-  // ── THE PAYER NAMES A CLIENT WE KNOW ──────────────────────────────────────
-  // The matcher has always scored names; this router never looked at them, which is why a wire
-  // carrying a real client's name and nothing else was filed as the owner's own money. Money
-  // from a name that identifies a client is not TD's own money under any reading.
+  // ⛔ NO ROSTER-WIDE NAME MATCHING HERE. REMOVED DELIBERATELY (architect-approved, 2026-08-09)
+  // after it was built, measured, and found to be the wrong mechanism for a MONEY decision.
   //
-  // Uses the ONE shared coverage rule (≥60% of the client's significant words), so a surname
-  // or a single generic word is NOT enough — those surface as a hint to a human instead, in
-  // `describeOwnerLedgerConcern`. The owner's own entity is excluded by id inside the matcher:
-  // TD's name is printed on TD's own payout descriptors, and matching it would drag every
-  // Stripe payout back into Finance.
+  // Three reasons, in the order that matters:
   //
-  // ⛔ ONLY THE PAYER FIELD. Found by replaying the rule over the real book, twice, and each pass
-  // narrowed it further:
+  //  1. IT MADE ROUTING A FUNCTION OF THE LIVE CLIENT ROSTER. The consolidated name rule is
+  //     scoped to ONE invoice's client, which makes it pure, deterministic and replayable. A
+  //     scan across every client is none of those: creating or renaming a client changes how
+  //     money routes, and no test fails. That property is explicitly rejected in the shared
+  //     module's own header, and this code had quietly reintroduced it.
+  //  2. GUESSING IDENTITY FROM NAMES IS THE MECHANISM OF THE 2026-07-22 INCIDENT, where one
+  //     shared word sent a $1,000 wire to another company's invoice.
+  //  3. IT IS FAITHFUL TO THE STANDING DIRECTIVE (Antonio, 2026-07-27): if the system does not
+  //     know, the money goes to My Finances with a button to send it back. A name guess is the
+  //     system pretending to know.
   //
-  //  - reading the MEMO booked TD's own Mercury referral bonus ("Cash bonus for referring
-  //    <CLIENT> LLC") as that client's payment;
-  //  - reading the REFERENCE did the same thing, because Mercury's API puts that identical
-  //    description in `sender_reference` — so excluding only the memo fixed nothing, and the
-  //    replay caught three bonus rows being newly "recognised" as client money.
+  // Identity now comes ONLY from evidence that is pure and explicit: the certain links above,
+  // and a payer a human TAUGHT. The roster still feeds `describeOwnerLedgerConcern`, but there
+  // it is a HINT on a screen a person reads — never an identification, and never routing.
   //
-  // "Who sent this" is `sender_name`. Everything else describes the transaction and may name any
-  // third party — a referred company, an intermediary, TD itself. Measured consequence on the
-  // real book: three rows change hands, all three genuine client payments (the €1,250 half-
-  // payment, a card payment from a closed client, an ACH from another), and zero of TD's own 61
-  // rows move. A client named only in a description is not lost — it surfaces on the triage list.
-  if (evidence.roster?.length) {
-    if (matchPayerToRoster([feed.sender_name], evidence.roster).named) return true
-  }
-
+  // ACCEPTED COST, stated so nobody "restores" this as an optimisation: the first payment from a
+  // clearly-named client is no longer auto-kept in Finance. It lands in the owner's books and
+  // appears in the triage list, where one click teaches the payer. From then on recognition is
+  // deterministic and permanent. Antonio accepted that trade explicitly.
   return false
 }
 

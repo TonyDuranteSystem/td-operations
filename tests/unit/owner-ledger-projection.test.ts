@@ -162,8 +162,19 @@ describe("the half-payment incident", () => {
     expect(isOwnerLedgerFeed(HALF_PAYMENT, OWED_2500)).toBe(true)
   })
 
-  it("keeps it in Finance once the payer's name can be recognised", () => {
-    expect(isClientInvoicePayment(HALF_PAYMENT, OWED_2500, { roster: CLIENT_ROSTER })).toBe(true)
+  it("does NOT keep it in Finance on the payer's name alone — roster routing was removed", () => {
+    // ⚠️ THIS CELL ASSERTED THE OPPOSITE until roster-wide name matching was removed from
+    // routing. Kept and inverted rather than deleted, because the inversion IS the decision:
+    // a name is a hint for a human, never a routing fact. Half of a EUR2,500 bill is also 50%
+    // outside the amount band, so nothing else rescues it either — it goes to My Finances and
+    // appears in triage, which is the accepted cost.
+    expect(isClientInvoicePayment(HALF_PAYMENT, OWED_2500, { roster: CLIENT_ROSTER })).toBe(false)
+    // A taught payer is what keeps it, and that is deterministic rather than roster-dependent.
+    const taught = buildTaughtPayerIndex([{
+      id: "m-half", source: "airwallex_api", key_type: "descriptor",
+      key_value: "domenico pio cristiano", account_id: null, contact_id: "contact-1",
+    }])
+    expect(isClientInvoicePayment(HALF_PAYMENT, OWED_2500, { taught })).toBe(true)
   })
 
   it("keeps it in Finance when a payment plan says that amount is due, even with no name", () => {
@@ -342,6 +353,22 @@ describe("taught payers in the router [UNIT]", () => {
   it("recovers a payer the name rule structurally cannot", () => {
     expect(isClientInvoicePayment(UNNAMEABLE, [], { roster: CLIENT_ROSTER })).toBe(false)
     expect(isClientInvoicePayment(UNNAMEABLE, [], { roster: CLIENT_ROSTER, taught: TAUGHT })).toBe(true)
+  })
+
+  it("⛔ a roster name NEVER routes on its own any more — only a taught payer does", () => {
+    // Roster-wide name matching was removed from routing (architect-approved): it made money
+    // routing a function of the live client list, which is the property the shared name module
+    // explicitly rejects, and name-guessing is the mechanism of the 2026-07-22 wrong-client
+    // incident. A clearly-named client now takes one triage click, then is deterministic.
+    const clearlyNamed: ProjectableFeed = {
+      ...UNNAMEABLE,
+      sender_name: "Domenico Pio Cristiano",
+      memo: null,
+    }
+    expect(isClientInvoicePayment(clearlyNamed, [], { roster: CLIENT_ROSTER })).toBe(false)
+    // ...but the hint still tells a human, which is where a name belongs.
+    expect(describeOwnerLedgerConcern(clearlyNamed, [], { roster: CLIENT_ROSTER })?.suspectedClientName)
+      .toBe("Domenico Cristiano")
   })
 
   it("does not leak to a different bank or a different payer", () => {
