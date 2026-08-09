@@ -851,8 +851,14 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                     {oaCreateStatus === 'sending' ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
                     {oaCreateStatus === 'sending' ? 'Sending...' : (lang === 'it' ? 'Crea e Invia per Firma' : 'Create & Send for Signing')}
                   </button>
+                  {/* Sized to be readable, not decorative. This now carries the
+                      blocking reason when an owner cannot be sent a signature
+                      request (a named member, and what to do about it) — the
+                      rule requires that reason to be VISIBLE to the client, and
+                      a multi-sentence explanation in tiny right-aligned text
+                      beside a button is not visible in any useful sense. */}
                   {oaCreateError && (
-                    <p className="text-xs text-red-600 text-right">{oaCreateError}</p>
+                    <p className="max-w-sm text-sm text-red-600 text-left leading-snug">{oaCreateError}</p>
                   )}
                 </div>
               ) : (

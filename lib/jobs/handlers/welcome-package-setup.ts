@@ -19,7 +19,8 @@ import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
-import { resolveSigningSet, signerDisplayName, type ResolvedSigner } from "@/lib/members/signing-set"
+import { resolveSigningSet, describeSigningBlock, signerDisplayName, type ResolvedSigner, type SigningBlock } from "@/lib/members/signing-set"
+import { reportSystemError } from "@/lib/system-errors"
 
 interface WelcomePackagePayload {
   account_id: string
@@ -195,6 +196,9 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
       // an individual with no email is a member but not a signer; a company
       // member signs through its representative. See lib/members/signing-set.ts.
       let oaSigners: ResolvedSigner[] = []
+      // Set for an MMLLC whose roster contains a member who cannot be sent a
+      // signature request. Blocks the insert below — see the rule note there.
+      let signingBlock: SigningBlock | null = null
       if (isMMLC) {
         // Read from members table: individual rows use full_name, company rows use company_name.
         // For company members, the signer is the representative — use representative_email.
@@ -216,18 +220,34 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
           }))
           const resolved = resolveSigningSet(membersRows)
           oaSigners = resolved.signers
-          if (resolved.nonSigners.length > 0) {
-            result.steps.push(step(
-              "oa_non_signers",
-              "ok",
-              resolved.nonSigners.map(n => `${n.name}: ${n.reason}`).join(" | "),
-            ))
-          }
+          signingBlock = describeSigningBlock(resolved)
         }
       }
 
+      // An agreement is never issued with fewer signers than members (Antonio,
+      // 2026-08-09). The portal path refuses with the reason on screen; here
+      // there is no screen, so the reason has to reach a human by itself —
+      // otherwise this silently produces no agreement and nobody finds out
+      // until the client asks where it is. Recorded as an ERROR step (visible
+      // on the job) AND reported to the error auto-audit.
+      if (signingBlock?.blocked) {
+        result.steps.push(step("oa", "error", signingBlock.staffMessage))
+        await reportSystemError({
+          source: "server",
+          route: "lib/jobs/handlers/welcome-package-setup",
+          message: signingBlock.staffMessage,
+          context: {
+            account_id: p.account_id,
+            company: account.company_name,
+            blocked_by: signingBlock.members.map(m => m.name),
+          },
+        })
+      }
+
       const oaToken = `${companySlug}-oa-${year}`
-      const { data: oa, error: oaErr } = await supabaseAdmin
+      const { data: oa, error: oaErr } = signingBlock?.blocked
+        ? { data: null, error: null }
+        : await supabaseAdmin
         .from("oa_agreements")
         .insert({
           token: oaToken,
@@ -243,9 +263,9 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
           member_address: account.physical_address || null,
           member_email: contact.email || null,
           members: membersJson as unknown as Json,
-          // The SIGNING SET, not the roster — see lib/members/signing-set.ts.
-          // Counting every member left the OA permanently short of its signature
-          // count whenever a member could not be sent a request.
+          // Equals the member count for an MMLLC: the block above prevents this
+          // insert entirely when any member cannot be sent a signature request,
+          // so signers and roster cannot diverge. See lib/members/signing-set.ts.
           total_signers: isMMLC && oaSigners.length > 0 ? oaSigners.length : 1,
           signed_count: 0,
           effective_date: account.formation_date || today,
@@ -263,7 +283,11 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
         .select("id, token")
         .single()
 
-      if (oaErr || !oa) {
+      if (signingBlock?.blocked) {
+        // Already recorded above as an error step + reported. Nothing was
+        // inserted, deliberately — do NOT add a second "insert failed" step
+        // that would read as a database fault instead of a policy stop.
+      } else if (oaErr || !oa) {
         result.steps.push(step("oa", "error", oaErr?.message || "insert failed"))
       } else {
         result.steps.push(step("oa", "ok", `${oa.token} (${entityType})`))

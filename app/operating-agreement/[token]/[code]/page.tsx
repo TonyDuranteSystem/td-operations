@@ -138,7 +138,12 @@ function OperatingAgreementCodeContent() {
   const members: OAMember[] = (isMMLLC && oa?.members) ? oa.members : []
   const managerName = oa?.manager_name || oa?.member_name || ''
   const totalSigners = oa?.total_signers || 1
-  const isMultiSigner = isMMLLC && totalSigners > 1
+  // Keyed on the presence of per-member signature RECORDS, not on the expected
+  // count — see the note in the sign route. With the count, a multi-member
+  // agreement carrying a single expected signature rendered the signature pad
+  // for anyone who cleared the shared access code, skipping the "each member
+  // must use their personal signing link" guard below.
+  const isMultiSigner = isMMLLC && signatures.length > 0
 
   // Current signer's signature record
   const currentSig = isMultiSigner && currentSignerIndex !== null
@@ -212,7 +217,12 @@ function OperatingAgreementCodeContent() {
     setAllSigned(!!(data.status === 'signed' && data.signed_at))
     setVerified(true)
 
-    const isMulti = (normalizeEntityType(data.entity_type) === 'MMLLC') && (data.total_signers || 1) > 1
+    // Load the signature records for EVERY multi-member agreement, then let
+    // their presence decide whether per-member signing applies. Gating this
+    // load on the expected count was the other half of the same defect: with
+    // one expected signature the rows were never fetched, so the page could not
+    // have told who was signing even if it wanted to.
+    const isMulti = normalizeEntityType(data.entity_type) === 'MMLLC'
     if (isMulti) {
       const sigs = (body.signatures ?? []) as OASignature[]
       setSignatures(sigs)

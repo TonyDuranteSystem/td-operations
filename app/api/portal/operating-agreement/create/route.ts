@@ -30,7 +30,7 @@ import { OA_SUPPORTED_STATES, normalizeOAState } from '@/lib/types/oa-templates'
 import { APP_BASE_URL } from '@/lib/config'
 import { notifyClientActionRequired } from '@/lib/portal/action-required'
 import { reportSystemError } from '@/lib/system-errors'
-import { resolveSigningSet, signerDisplayName, type ResolvedSigner } from '@/lib/members/signing-set'
+import { resolveSigningSet, describeSigningBlock, signerDisplayName, type ResolvedSigner } from '@/lib/members/signing-set'
 
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -131,20 +131,41 @@ export async function POST(request: NextRequest) {
     }
 
     // Being a member and being a SIGNER are different things (Antonio,
-    // 2026-08-09). This used to refuse the whole document unless every member
-    // had a contact_id, which conflated the two: an individual with no email is
-    // still a member — named in the agreement, counted in ownership — and a
-    // company member signs through its representative, not through a portal
-    // account of its own. Refuse only when NOBODY can sign.
-    const { signers, nonSigners } = resolveSigningSet(membersRows)
-    oaSigners = signers
-    if (nonSigners.length > 0) {
-      console.warn('[oa-create] members who will NOT be asked to sign:', nonSigners)
-    }
-    if (signers.length === 0) {
-      return NextResponse.json({
-        error: `Cannot create OA — no member can be sent a signature request. ${nonSigners.map(n => `${n.name}: ${n.reason}`).join('; ')}`,
-      }, { status: 422 })
+    // 2026-08-09) — but a member who cannot sign does not get routed around.
+    // "A multi-member operating agreement signed by only one owner must never
+    // exist. It is a legal document and it must contain all members. So an
+    // agreement can never be issued with fewer signers than members."
+    //
+    // This replaces BOTH earlier rules: the original "every member needs a
+    // contact_id or we refuse" (which refused for the wrong reason — a company
+    // member signs through its representative, not a portal account) and the
+    // brief "refuse only when NOBODY can sign" (which let a two-member company
+    // reach exactly one expected signature and silently disabled every
+    // per-member signing gate downstream).
+    //
+    // Failing here CAN leave a client stuck until someone supplies the missing
+    // email. That is the intended failure for a legal document — provided the
+    // reason is visible to them and reaches a human, which is what the
+    // reportSystemError below is for.
+    const signingSet = resolveSigningSet(membersRows)
+    oaSigners = signingSet.signers
+    const block = describeSigningBlock(signingSet)
+    if (block.blocked) {
+      await reportSystemError({
+        source: 'server',
+        route: '/api/portal/operating-agreement/create',
+        method: 'POST',
+        http_status: 422,
+        message: block.staffMessage,
+        context: {
+          account_id,
+          company: account.company_name,
+          members_total: membersRows.length,
+          signers: signingSet.signers.length,
+          blocked_by: block.members.map(m => m.name),
+        },
+      })
+      return NextResponse.json({ error: block.clientMessage }, { status: 422 })
     }
 
     // Ownership must be complete and total 100% — an OA with wrong percentages
@@ -301,11 +322,12 @@ export async function POST(request: NextRequest) {
     const parts = [m.address_street, m.address_city, m.address_state, m.address_zip, m.address_country].filter(Boolean)
     return parts.length > 0 ? parts.join(', ') : null
   }
-  // Counted from the SIGNING SET, not the member roster. Counting every member
-  // meant one member who could never be sent a signature request (no email, or
-  // a company with no representative) left signed_count permanently short of
-  // total_signers — the agreement sat "in progress" forever with nothing anyone
-  // could do about it. The roster below still lists every member.
+  // For an MMLLC this now EQUALS the member count: the gate above refuses to
+  // issue the agreement unless every member can be sent a signature request, so
+  // signers and roster cannot diverge. Kept as the signing-set length rather
+  // than membersRows.length so the two can never disagree if the gate is ever
+  // relaxed — and so this reads as what it means (how many signatures we are
+  // waiting for), not as a coincidence.
   const totalSigners = isMMLC ? oaSigners.length : 1
   const membersJson = isMMLC
     ? membersRows.map((m, i) => ({

@@ -130,7 +130,16 @@ export default async function PortalSignOAPage({ searchParams }: { searchParams?
     )
   }
 
-  const isMultiSigner = normalizeEntityType(oa.entity_type) === 'MMLLC' && (oa.total_signers || 1) > 1
+  // Per-member signing is decided by whether signature RECORDS exist, not by
+  // the expected count — see the note in the sign route. With the count, a
+  // multi-member agreement expecting one signature produced no `?signer=` on
+  // the link, and the document page then accepted a signature from anyone
+  // holding the shared access code.
+  const { count: sigRowCount } = await supabaseAdmin
+    .from('oa_signatures')
+    .select('id', { count: 'exact', head: true })
+    .eq('oa_id', oa.id)
+  const isMultiSigner = normalizeEntityType(oa.entity_type) === 'MMLLC' && (sigRowCount ?? 0) > 0
 
   // For MMLLC: find this user's signature record
   let signerParam = ''
