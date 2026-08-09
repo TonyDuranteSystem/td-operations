@@ -95,8 +95,32 @@ const RELAY_PAYOUT = {
   raw_data: {},
 }
 
-const FEED_IDS = [DOMENICO_FEED.id, STRIPE_PAYOUT.id, RELAY_PAYOUT.id]
+/**
+ * CELL 0b — an INDIVIDUAL client: a person with NO company anywhere.
+ *
+ * First-class in this system, not an edge case. Verified in production: 34 clients hold real
+ * payments with no company attached (43 payments, one of them a credit note) — standalone tax
+ * returns, ITINs and paid strategy calls. Wen-Ting's paid call is this shape, and Domenico was
+ * this shape before his formation. If any of the mapping, the search or the attach assumed a
+ * company id, the path would be broken for exactly the clients paid calls create.
+ */
+const SOLO_FEED = {
+  id: "33333333-3333-4333-8333-333333333333",
+  source: "airwallex_api",
+  status: "owner_ledger",
+  amount: 257,
+  currency: "EUR",
+  sender_name: "Fabrizia Solaro Bertone",
+  memo: "Fabrizia Solaro Bertone — 010F999999999999_1",
+  sender_reference: "010F999999999999_1",
+  transaction_date: "2026-08-08",
+  external_id: "qa-cell0-solo-individual",
+  raw_data: {},
+}
+
+const FEED_IDS = [DOMENICO_FEED.id, STRIPE_PAYOUT.id, RELAY_PAYOUT.id, SOLO_FEED.id]
 let contactId: string | null = null
+let soloContactId: string | null = null
 let paymentId: string | null = null
 
 const cleanup = async () => {
@@ -104,6 +128,11 @@ const cleanup = async () => {
   await db.from("td_bank_feeds").delete().in("id", FEED_IDS)
   if (paymentId) await db.from("payments").delete().eq("id", paymentId)
   if (contactId) await db.from("contacts").delete().eq("id", contactId)
+  if (soloContactId) {
+    await db.from("payer_client_map").delete().eq("contact_id", soloContactId)
+    await db.from("payments").delete().eq("contact_id", soloContactId)
+    await db.from("contacts").delete().eq("id", soloContactId)
+  }
 }
 
 await cleanup() // idempotent re-run
@@ -132,8 +161,23 @@ try {
   if (pErr) throw new Error(`invoice fixture failed: ${pErr.message}`)
   paymentId = pay.id
 
-  // ── The three feed rows, with their books copies (direction of record) ─────
-  for (const feed of [DOMENICO_FEED, STRIPE_PAYOUT, RELAY_PAYOUT]) {
+  // An individual client: a contacts row with NO company, holding a real payment.
+  const { data: solo, error: sErr } = await db
+    .from("contacts")
+    .insert({ full_name: "Fabrizia Solaro Bertone", email: `cell0-solo-${Date.now()}@example.invalid`, status: "active" })
+    .select("id").single()
+  if (sErr) throw new Error(`individual-client fixture failed: ${sErr.message}`)
+  soloContactId = solo.id
+  const { error: spErr } = await db.from("payments").insert({
+    contact_id: soloContactId, account_id: null,
+    description: "Paid Strategy Call — cell 0b individual fixture",
+    total: 257, amount: 257, amount_paid: 257, amount_currency: "EUR",
+    status: "Paid", invoice_status: "Paid", is_test: false,
+  })
+  if (spErr) throw new Error(`individual-client payment fixture failed: ${spErr.message}`)
+
+  // ── The feed rows, with their books copies (direction of record) ───────────
+  for (const feed of [DOMENICO_FEED, STRIPE_PAYOUT, RELAY_PAYOUT, SOLO_FEED]) {
     const { error } = await db.from("td_bank_feeds").insert(feed)
     if (error) throw new Error(`feed fixture ${feed.id} failed: ${error.message}`)
     const { error: bErr } = await db.from("td_books_transactions").insert({
@@ -183,6 +227,16 @@ try {
   }
 
   // ── THE INVERSE ───────────────────────────────────────────────────────────
+  const soloRow = result.candidates.find((c) => c.feedId === SOLO_FEED.id)
+  check("⛔ CELL 0b: an INDIVIDUAL client's payment is selected too (no company anywhere)", !!soloRow)
+  if (soloRow) {
+    check(
+      "...and it names the PERSON, not a company",
+      soloRow.suspectedClientName === "Fabrizia Solaro Bertone" && !!soloRow.suspectedClientId,
+      `named: ${soloRow.suspectedClientName ?? "(none)"}`,
+    )
+  }
+
   const stripe = result.candidates.find((c) => c.feedId === STRIPE_PAYOUT.id)
   const relay = result.candidates.find((c) => c.feedId === RELAY_PAYOUT.id)
   check("a Stripe payout is NOT offered as client money", !stripe, stripe ? `WRONGLY LISTED: ${stripe.detail}` : "")
