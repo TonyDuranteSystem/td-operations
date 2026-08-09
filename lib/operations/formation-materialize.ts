@@ -690,8 +690,55 @@ export async function materializeFormationCompany(
               now,
             })
 
-            if (membContactId) {
+            // ── The ownership row is written UNCONDITIONALLY ──────────────
+            // Membership is a legal fact; portal access is not (Antonio,
+            // 2026-08-09). A member with no email is still a member: on the
+            // filing, in the Operating Agreement, and counted in the ownership
+            // table. They simply get no contact and no login.
+            //
+            // This whole block used to sit inside `if (membContactId)`, and
+            // resolveMemberContactId returns null without an email — so an
+            // email-less member produced NO ownership row at all while their
+            // percentage was still subtracted from the owner's share (that
+            // subtraction, at additionalPctSum above, is correct and stays).
+            // The result was a members table summing to LESS than 100 and a
+            // person missing from the SS-4 and the OA. `members.contact_id` is
+            // nullable precisely for this case. (dev job fc69557f.)
+            const { error: memberRowErr } = await supabaseAdmin.from("members").insert(
+              {
+                account_id: accountId,
+                member_type: "individual",
+                full_name: memberName,
+                email: memberEmail,
+                address_street: m.member_street ?? null,
+                address_city: m.member_city ?? null,
+                address_state: m.member_state_province ?? null,
+                address_zip: m.member_zip ?? null,
+                address_country: m.member_country ?? null,
+                ownership_pct: ownershipPct,
+                is_primary: isPrimary,
+                // Signer selected in the MMLLC formation wizard
+                // (member_{idx}_is_signer). See is_signer note above.
+                is_signer: m.is_signer === true,
+                contact_id: membContactId,
+                updated_at: now,
+              },
+            )
+            // supabase-js RETURNS errors rather than throwing, so the enclosing
+            // try/catch cannot see this one. Unchecked, the step below would
+            // assert "ownership recorded" about a row that was never written —
+            // a false green on a legal fact, which is the whole thing this
+            // change exists to make trustworthy.
+            if (memberRowErr) {
+              steps.push({
+                step: `member_${i + 1}_link`,
+                status: "error",
+                detail: `${memberName} — OWNERSHIP ROW FAILED TO WRITE (${memberRowErr.message}). The ownership table will not total 100 until this is fixed.`,
+              })
+            }
 
+            if (membContactId) {
+              // Portal-facing work — only possible for a member we can identify.
               // eslint-disable-next-line @typescript-eslint/no-explicit-any -- is_primary not in types
               await supabaseAdmin.from("account_contacts").upsert(
                 {
@@ -704,27 +751,6 @@ export async function materializeFormationCompany(
                 { onConflict: "account_id,contact_id" },
               )
 
-              await supabaseAdmin.from("members").insert(
-                {
-                  account_id: accountId,
-                  member_type: "individual",
-                  full_name: memberName,
-                  email: memberEmail,
-                  address_street: m.member_street ?? null,
-                  address_city: m.member_city ?? null,
-                  address_state: m.member_state_province ?? null,
-                  address_zip: m.member_zip ?? null,
-                  address_country: m.member_country ?? null,
-                  ownership_pct: ownershipPct,
-                  is_primary: isPrimary,
-                  // Signer selected in the MMLLC formation wizard
-                  // (member_{idx}_is_signer). See is_signer note above.
-                  is_signer: m.is_signer === true,
-                  contact_id: membContactId,
-                  updated_at: now,
-                },
-              )
-
               steps.push({ step: `member_${i + 1}_link`, status: "ok", detail: `${memberName}${isPrimary ? " [PRIMARY]" : ""}` })
 
               // Copy member passport from Supabase storage to Drive (we'll add to
@@ -733,7 +759,7 @@ export async function materializeFormationCompany(
               // key (member_{i}_member_passport) and the legacy standalone-form
               // key (passport_member_{i}).
               const passportPath = uploadPaths.find(p => p.includes(`member_${i}_member_passport`) || p.includes(`passport_member_${i}`))
-              if (passportPath && membContactId) {
+              if (passportPath) {
                 pendingMemberPassports.push({
                   contact_id: membContactId,
                   contact_name: memberName,
@@ -741,8 +767,24 @@ export async function materializeFormationCompany(
                   index: i + 1,
                 })
               }
-            } else {
-              steps.push({ step: `member_${i + 1}_link`, status: "skipped", detail: "No email — cannot create/find contact" })
+            } else if (!memberRowErr) {
+              // resolveMemberContactId returns null for TWO different reasons —
+              // no email supplied, or the contact insert failed. Reporting both
+              // as "no email" tells staff something false about a member who
+              // did supply one, so they are separated here.
+              if (!memberEmail) {
+                steps.push({
+                  step: `member_${i + 1}_link`,
+                  status: "ok",
+                  detail: `${memberName}${isPrimary ? " [PRIMARY]" : ""} — ownership recorded (${ownershipPct ?? "?"}%); NO EMAIL, so no contact and no portal access for this member`,
+                })
+              } else {
+                steps.push({
+                  step: `member_${i + 1}_link`,
+                  status: "error",
+                  detail: `${memberName} — ownership recorded (${ownershipPct ?? "?"}%) but the CONTACT COULD NOT BE CREATED for ${memberEmail}. Needs a manual contact + link.`,
+                })
+              }
             }
           }
         } catch (membErr) {

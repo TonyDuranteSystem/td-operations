@@ -109,9 +109,32 @@ describe("buildSubmissionRecord — per-table column rules", () => {
     expect(r).toHaveProperty("lead_id")
   })
 
-  it("entity_type falls back to SMLLC when not provided", () => {
-    const r = buildSubmissionRecord("onboarding_submissions", { ...MAXIMAL_INPUT, entity_type: null })
-    expect(r.entity_type).toBe("SMLLC")
+  // Replaces an assertion that entity_type "falls back to SMLLC when not
+  // provided". That fallback was a defect, not a feature: formation
+  // materialization reads this column back as one of its entity-type sources,
+  // so a fabricated 'SMLLC' could later be mistaken for evidence of what the
+  // client actually bought — a guess confirming itself. A multi-member client
+  // whose form rendered single-member had that wrong shape written here.
+  // NULL keeps the source honestly empty so the signed contract decides.
+  // Antonio, 2026-08-09; dev job fc69557f.
+  it("formation: entity_type is written as NULL when not provided — never guessed", () => {
+    const r = buildSubmissionRecord("formation_submissions", { ...MAXIMAL_INPUT, entity_type: null })
+    expect(r.entity_type).toBeNull()
+  })
+
+  // entity_type is NOT NULL on onboarding / tax_return / company_info and
+  // nullable only on formation_submissions. Writing NULL to the others is a
+  // 23502 → false "submission failed" + skipped auto-chain. Omit instead.
+  it("non-formation: entity_type is OMITTED when not provided, never NULL", () => {
+    for (const t of ["onboarding_submissions", "tax_return_submissions", "company_info_submissions"]) {
+      const r = buildSubmissionRecord(t, { ...MAXIMAL_INPUT, entity_type: null })
+      expect(r).not.toHaveProperty("entity_type")
+    }
+  })
+
+  it("entity_type is passed through unchanged when provided", () => {
+    const r = buildSubmissionRecord("formation_submissions", { ...MAXIMAL_INPUT, entity_type: "MMLLC" })
+    expect(r.entity_type).toBe("MMLLC")
   })
 
   it("tax_year is omitted when null even on tax_return", () => {

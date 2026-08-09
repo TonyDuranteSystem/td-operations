@@ -19,6 +19,7 @@ import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
+import { resolveSigningSet, signerDisplayName, type ResolvedSigner } from "@/lib/members/signing-set"
 
 interface WelcomePackagePayload {
   account_id: string
@@ -190,22 +191,38 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
       const isMMLC = entityType === "MMLLC"
 
       let membersJson: Record<string, unknown>[] | null = null
+      // Who can actually be sent a signature request. Distinct from the roster:
+      // an individual with no email is a member but not a signer; a company
+      // member signs through its representative. See lib/members/signing-set.ts.
+      let oaSigners: ResolvedSigner[] = []
       if (isMMLC) {
         // Read from members table: individual rows use full_name, company rows use company_name.
         // For company members, the signer is the representative — use representative_email.
         const { data: membersRows } = await supabaseAdmin
           .from("members")
-          .select("member_type, full_name, company_name, email, representative_email, ownership_pct")
+          .select("member_type, full_name, company_name, email, representative_name, representative_email, contact_id, ownership_pct")
           .eq("account_id", p.account_id)
           .order("is_primary", { ascending: false })
 
         if (membersRows && membersRows.length > 1) {
+          // The roster keeps EVERY member — membership is a legal fact, so a
+          // member with no email is still named in the agreement with their
+          // ownership. Only the signing set below is filtered.
           membersJson = membersRows.map(mr => ({
             name: mr.member_type === "company" ? mr.company_name : mr.full_name,
             email: mr.member_type === "company" ? (mr.representative_email || null) : (mr.email || null),
             ownership_pct: mr.ownership_pct ?? null,
             initial_contribution: "$0 (No initial capital contribution required)",
           }))
+          const resolved = resolveSigningSet(membersRows)
+          oaSigners = resolved.signers
+          if (resolved.nonSigners.length > 0) {
+            result.steps.push(step(
+              "oa_non_signers",
+              "ok",
+              resolved.nonSigners.map(n => `${n.name}: ${n.reason}`).join(" | "),
+            ))
+          }
         }
       }
 
@@ -226,7 +243,10 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
           member_address: account.physical_address || null,
           member_email: contact.email || null,
           members: membersJson as unknown as Json,
-          total_signers: isMMLC && membersJson ? membersJson.length : 1,
+          // The SIGNING SET, not the roster — see lib/members/signing-set.ts.
+          // Counting every member left the OA permanently short of its signature
+          // count whenever a member could not be sent a request.
+          total_signers: isMMLC && oaSigners.length > 0 ? oaSigners.length : 1,
           signed_count: 0,
           effective_date: account.formation_date || today,
           business_purpose: "any and all lawful business activities",
@@ -251,7 +271,10 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
         // ─── CREATE OA_SIGNATURES FOR MMLLC ───
         // Mirror the oa_create MCP tool's signature scaffolding so multi-member
         // MMLLCs auto-formed via welcome-package can be tracked the same way.
-        if (isMMLC && membersJson && membersJson.length > 0) {
+        // One row per SIGNER, not per member. A signature row for someone who
+        // can never be sent a request is unroutable, and it kept signed_count
+        // permanently below total_signers — the agreement stuck in progress.
+        if (isMMLC && oaSigners.length > 0) {
           const { data: allContacts } = await supabaseAdmin
             .from("account_contacts")
             .select("contact_id, contacts(id, full_name, email)")
@@ -265,12 +288,13 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
             if (c?.full_name) contactsByName.set(c.full_name.toLowerCase(), c.id)
           }
 
-          const sigRows = membersJson.map((m, idx) => {
-            const memberEmail = (m.email as string | null) || null
-            const memberName = (m.name as string) || ""
+          const sigRows = oaSigners.map((s, idx) => {
+            const memberEmail = s.email
+            const memberName = signerDisplayName(s)
             const matchedContactId =
+              s.contactId ||
               (memberEmail && contactsByEmail.get(memberEmail.toLowerCase())) ||
-              contactsByName.get(memberName.toLowerCase()) ||
+              contactsByName.get(s.name.toLowerCase()) ||
               null
             return {
               oa_id: oa.id,
