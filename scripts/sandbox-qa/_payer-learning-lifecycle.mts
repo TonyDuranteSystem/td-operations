@@ -215,6 +215,31 @@ try {
   const siblings2 = await listSameOwnerCompanies({ accountId: acctA.id, source: FEED.source, key: KEY })
   check("an already-taught company is marked as done rather than offered again", siblings2[0]?.alreadyTaught === true)
 
+  // ── AN INDIVIDUAL CLIENT (a contacts row with NO company at all) ─────────
+  // First-class in this system, not an edge case: 34 clients pay with no company — standalone
+  // tax returns, ITINs and paid strategy calls. Wen-Ting's paid call and Domenico before his
+  // formation are both this shape, so if any of this assumed a company id the path would be
+  // broken for exactly the clients paid calls create.
+  const soloFeed = { ...FEED, sender_name: "Solo Individual Payer Fixture" }
+  const soloKey = resolvePayerKey(soloFeed)!
+  const soloTeach = await teachPayerClient({ feed: soloFeed, subject: { contactId }, taughtBy: "qa:lifecycle" })
+  check("an INDIVIDUAL client (no company) can be taught", soloTeach.ok && soloTeach.created === true, soloTeach.detail ?? "")
+  const soloLookup = await lookupTaughtClientsForFeed(soloFeed)
+  check(
+    "...and the lookup returns them, keyed to the person and not a company",
+    soloLookup.mappings.length === 1 && soloLookup.mappings[0].contact_id === contactId && soloLookup.mappings[0].account_id === null,
+  )
+  check(
+    "...and the router keeps their payment in Finance",
+    isClientInvoicePayment(soloFeed as never, [], { taught: buildTaughtPayerIndex(soloLookup.mappings as never) }) === true,
+  )
+  const soloSiblings = await listSameOwnerCompanies({ accountId: "", source: soloFeed.source, key: soloKey }).catch(() => "THREW")
+  check(
+    "same-owner extension is a NO-OP for an individual, not an error",
+    Array.isArray(soloSiblings) && soloSiblings.length === 0,
+    soloSiblings === "THREW" ? "it threw" : `returned ${Array.isArray(soloSiblings) ? soloSiblings.length : "?"}`,
+  )
+
   await db.from("payer_client_map").delete().in("account_id", [acctA.id, acctB.id, acctDead.id])
   await db.from("account_contacts").delete().in("account_id", [acctA.id, acctB.id, acctDead.id])
   await db.from("accounts").delete().in("id", [acctA.id, acctB.id, acctDead.id])

@@ -15,6 +15,7 @@
 import { describe, it, expect } from "vitest"
 import {
   EXPECTED_PAYMENT_TOLERANCE_PCT,
+  MIN_ROSTER_NAME_WORDS,
   MIN_WEAK_MATCHED_WORDS,
   couldBePartPayment,
   isOwnEntityRosterEntry,
@@ -92,12 +93,23 @@ describe("matchPayerToRoster — whose money is this", () => {
     expect(res.named?.entry.id).toBe("a-1")
   })
 
-  it("a single-significant-word client IS identified by that one word — documented, accepted", () => {
-    // Not a defect to fix here: the shared rule says so explicitly, and the consequence in THIS
-    // module is the cheap direction (money stays in Finance, one click moves it out) rather than
-    // the expensive one (a client's payment filed as the owner's money).
+  it("⛔ REFUSES to identify a payer from a ONE-WORD client name", () => {
+    // I originally asserted the opposite here and called it accepted, quoting the shared rule's
+    // own note. Cell 0 proved that wrong WITH MONEY: a client called "LT Program LLC" reduces to
+    // the single word "program", every Relay partner payout descriptor ends "Partner Payout
+    // Program", and the router therefore kept TD's OWN payout in Finance as that client's
+    // payment. One word is the whole decision here and there is no backstop, unlike the matcher.
+    // Such clients are still recognised — by being TAUGHT, which is what learning is for.
     const oneWord: ClientRosterEntry = { id: "a-4", name: "Marka LLC", kind: "account" }
-    expect(matchPayerToRoster(["MARKA - wire transfer"], [oneWord]).named?.entry.id).toBe("a-4")
+    expect(matchPayerToRoster(["MARKA - wire transfer"], [oneWord]).named).toBeNull()
+    expect(MIN_ROSTER_NAME_WORDS).toBe(2)
+  })
+
+  it("the real regression: a partner payout is not claimed by a one-word client name", () => {
+    const ltProgram: ClientRosterEntry = { id: "a-6", name: "LT Program LLC", kind: "account" }
+    expect(
+      matchPayerToRoster(["Relay Financial US Corp - May 2026 Partner Payout Program"], [ltProgram]).named,
+    ).toBeNull()
   })
 
   it("returns nothing for an empty roster rather than throwing", () => {

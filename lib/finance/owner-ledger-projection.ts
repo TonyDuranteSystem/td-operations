@@ -36,7 +36,6 @@ import {
   readRejectedPairs,
 } from "@/lib/finance/feed-vocabulary"
 import {
-  couldBePartPayment,
   matchPayerToRoster,
   matchesExpectedPayment,
   type ClientRosterEntry,
@@ -271,7 +270,7 @@ export interface OwnerLedgerConcern {
     | "named_client_no_amount_fit"
     | "client_named_in_description"
     | "partial_name_match"
-    | "amount_fits_open_invoice"
+    | "taught_payer"
   /** Plain-English sentence for the notice. */
   detail: string
   suspectedClientId?: string
@@ -350,16 +349,17 @@ export function describeOwnerLedgerConcern(
     }
   }
 
-  if (couldBePartPayment(amount, feed.currency, openInvoices)) {
-    return {
-      reason: "amount_fits_open_invoice",
-      detail:
-        `A deposit of ${amount} ${(feed.currency || "USD").toUpperCase()} from "${payer}" was filed as your own money, ` +
-        `but it would fit as a part-payment of an open client invoice in the same currency. Nothing names a client, ` +
-        `so it cannot be routed automatically — check whether a client paid an instalment.`,
-    }
-  }
-
+  // ⛔ AMOUNT ALONE NEVER SELECTS A ROW — the branch that once did is GONE, in both lenses.
+  //
+  // It read as a reasonable hint and was not: on a real book with hundreds of open invoices,
+  // almost ANY of TD's own payouts fits one by amount. Proven by the cell-0 inverse, where a
+  // $1,019.25 Stripe payout was offered as possible client money on exactly this basis.
+  // Surfacing the owner's own money on a triage screen is worse than surfacing nothing, because
+  // then the screen is not worth opening.
+  //
+  // My own 96-row replay missed this by running with an EMPTY open-invoice list, so the branch
+  // could never fire — the measurement answered a different question than the one asked. The
+  // amount is still shown on a row selected for a real reason; it is no longer a reason itself.
   return null
 }
 
@@ -550,16 +550,24 @@ export async function listMisroutedClientPaymentCandidates(): Promise<{
     if (outgoingIds.has(feed.id)) continue
 
     const evidence: ClientEvidenceContext = { roster, taught }
-    // Would the rule as it stands TODAY have kept this in Finance? That is the strongest
-    // signal available: the row was filed under a rule that could not see payer names.
-    const nowClientMoney = isClientInvoicePayment(feed, openInvoices, evidence)
-    const concern = describeOwnerLedgerConcern(feed, openInvoices, evidence, "triage")
-    if (!nowClientMoney && !concern) continue
 
-    const named = matchPayerToRoster(
-      [feed.sender_name, feed.sender_reference, feed.memo],
-      roster,
-    ).named
+    // ⛔ IDENTITY ONLY — never "the router would keep this".
+    //
+    // I first asked `isClientInvoicePayment` here, reasoning that "the rule as it stands today
+    // would keep this in Finance" was the strongest available signal. Cell 0 disproved it: that
+    // function also returns true on the PRE-EXISTING amount band (within 20% of any open
+    // invoice, same currency), which is deliberately over-cautious because for ROUTING the
+    // failure is cheap — money stays in Finance and a human moves it. For this LIST the same
+    // band is noise: a $1,019.25 Stripe payout was offered as possible client money purely
+    // because a sandbox invoice sat near that figure, and on a real book most of TD's own
+    // payouts would qualify.
+    //
+    // So a row reaches this list only when something IDENTIFIES a client — a payer a human
+    // taught, or a payer name that names one. Amount never selects; it is only ever context.
+    const taughtHere = taughtClientsFor(feed, taught).mappings
+    const named = matchPayerToRoster([feed.sender_name], roster).named
+    const concern = describeOwnerLedgerConcern(feed, openInvoices, evidence, "triage")
+    if (taughtHere.length === 0 && !named && !concern) continue
 
     candidates.push({
       feedId: feed.id,
@@ -568,10 +576,12 @@ export async function listMisroutedClientPaymentCandidates(): Promise<{
       currency: (feed.currency || "USD").toUpperCase(),
       payer: feed.sender_name ?? null,
       source: feed.source ?? null,
-      reason: concern?.reason ?? "named_client_no_amount_fit",
+      reason: concern?.reason ?? (named ? "named_client_no_amount_fit" : "taught_payer"),
       detail:
         concern?.detail ??
-        `This deposit would be treated as a client payment by the current rule — the payer name matches ${named?.entry.name ?? "a known client"}.`,
+        (named
+          ? `The payer name identifies ${named.entry.name}. If this is their payment, send it back to the Bank Feed so it can settle their invoice.`
+          : `A payer you taught points at this client. If this deposit is theirs, send it back to the Bank Feed.`),
       ...(named?.entry.name ? { suspectedClientName: named.entry.name } : {}),
       ...(named?.entry.id ? { suspectedClientId: named.entry.id } : {}),
       filedBy: readOwnerRoutingBy(feed.review_metadata),

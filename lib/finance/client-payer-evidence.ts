@@ -102,6 +102,9 @@ export function matchPayerToRoster(
 
     const evidence = evaluateNameEvidence(entry.name, feedTexts, threshold)
     if (evidence.words.length === 0) continue
+    // A one-word client name is the whole decision here, with no backstop — see
+    // MIN_ROSTER_NAME_WORDS. Such clients are recognised by being taught instead.
+    if (evidence.words.length < MIN_ROSTER_NAME_WORDS) continue
 
     if (evidence.sufficient) {
       if (!named || evidence.coverage > named.evidence.coverage) named = { entry, evidence }
@@ -125,6 +128,27 @@ export function matchPayerToRoster(
  * truncated company name ("Oh My Crea" for "Oh My Creatives") matches zero words either way.
  */
 export const MIN_WEAK_MATCHED_WORDS = 2
+
+/**
+ * How many significant words a CLIENT NAME must have before it may identify a payer here.
+ *
+ * ⛔ MEASURED, AND IT COST A REAL DEFECT TO FIND. A client is called "LT Program LLC". Under the
+ * shared name rule that reduces to ONE significant word — "program" — because the initials are
+ * too short and "llc" is a stop word. Every Relay partner payout descriptor reads "Relay
+ * Financial US Corp - <Month> 2026 Partner Payout Program", which covers that single word 100%.
+ * So the router identified TD's own partner payout as that client's payment and kept it in
+ * Finance. Not list noise: a routing decision about money.
+ *
+ * The shared rule documents this single-word residual as accepted, and for the MATCHER it is —
+ * a tie is never settled there and the candidate pool is already scoped to open invoices. For
+ * THIS router there is no such backstop: one word is the whole decision. So a one-word client
+ * name cannot identify a payer here. Those clients are still recognised — by being TAUGHT,
+ * which is precisely what payer learning exists for.
+ *
+ * Deliberately enforced HERE rather than by widening the shared stop-word list, because that
+ * list is the matcher's auto-settlement rule and must not be touched from this side.
+ */
+export const MIN_ROSTER_NAME_WORDS = 2
 
 /** An amount the system is already expecting from a client — an instalment on a payment plan. */
 export interface ExpectedPayment {

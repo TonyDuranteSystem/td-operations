@@ -219,11 +219,14 @@ describe("the half-payment incident", () => {
 })
 
 describe("describeOwnerLedgerConcern — saying it out loud", () => {
-  it("flags a part-payment that nothing can attribute", () => {
+  it("⛔ NEVER flags a row on amount alone — not even a perfect part-payment fit", () => {
+    // This cell asserted the opposite until cell 0 disproved it: with real open invoices in play,
+    // a $1,019.25 Stripe payout was offered as possible client money purely because the amount
+    // fitted some invoice. On a real book almost any of TD's own payouts fits one. A triage
+    // screen showing the owner's own money is worse than one showing nothing.
     const anonymous = { ...HALF_PAYMENT, sender_name: "WIRE TRANSFER", memo: null, sender_reference: null }
-    const concern = describeOwnerLedgerConcern(anonymous, OWED_2500)
-    expect(concern?.reason).toBe("amount_fits_open_invoice")
-    expect(concern?.detail).toContain("part-payment")
+    expect(describeOwnerLedgerConcern(anonymous, OWED_2500)).toBeNull()
+    expect(describeOwnerLedgerConcern(anonymous, OWED_2500, {}, "triage")).toBeNull()
   })
 
   it("stays SILENT on a one-word partial match — measured noise, not a judgement call", () => {

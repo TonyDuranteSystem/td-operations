@@ -1,0 +1,43 @@
+-- ============================================================================
+-- SANDBOX/PRODUCTION SCHEMA PARITY — td_bank_feeds.review_metadata
+--
+-- ⚠️ SANDBOX ONLY. Do NOT promote this to production: production is already in
+-- the target state, and running it there would be a no-op at best.
+--
+-- WHY (found 2026-08-09, dev jobs ae8b8bb1 / c0a61e44; the broader diff is its
+-- own job, 46cd3603 — this file fixes ONLY the one column that blocked a truthful
+-- test):
+--
+--   production : review_metadata jsonb NULL,     no default
+--   sandbox    : review_metadata jsonb NOT NULL, DEFAULT '{}'::jsonb
+--
+-- Sandbox is STRICTER than production, and that is the dangerous direction. Real
+-- production rows carry review_metadata = NULL — the row this work exists for,
+-- Domenico's misrouted EUR1,250, is one of them. Sandbox can never produce that
+-- value, so:
+--
+--   1. A faithful fixture of a real production row is IMPOSSIBLE in sandbox. The
+--      insert is rejected outright, which is how this was discovered: filling the
+--      field in to make the test pass would have meant testing a row that does
+--      not exist anywhere.
+--   2. Worse, and the actual reason this matters beyond one test: any code path
+--      that mishandles a NULL review_metadata would pass EVERY sandbox test and
+--      fail in production. That is the same silent-divergence family as the
+--      missing timestamp function, the client_expenses RLS difference, and
+--      sandbox holding 7 of production's 20 storage buckets.
+--
+-- DIRECTION OF THE FIX: bring SANDBOX to production's shape. Production is the
+-- truth; making the rehearsal stricter than the stage teaches nothing.
+--
+-- SAFE ON EXISTING DATA: this only WIDENS what the column accepts. Every existing
+-- sandbox row keeps whatever it holds; no row is rewritten. Readers already cope
+-- with NULL because they must — production has been serving NULLs to them all
+-- along.
+--
+-- The DEFAULT is dropped as well as the NOT NULL, deliberately: leaving the
+-- default in place means new sandbox rows still get '{}' and the NULL path stays
+-- unexercised, which is the situation this file exists to end.
+-- ============================================================================
+
+ALTER TABLE public.td_bank_feeds ALTER COLUMN review_metadata DROP NOT NULL;
+ALTER TABLE public.td_bank_feeds ALTER COLUMN review_metadata DROP DEFAULT;
