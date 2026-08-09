@@ -102,9 +102,9 @@ export function matchPayerToRoster(
 
     const evidence = evaluateNameEvidence(entry.name, feedTexts, threshold)
     if (evidence.words.length === 0) continue
-    // A one-word client name is the whole decision here, with no backstop — see
-    // MIN_ROSTER_NAME_WORDS. Such clients are recognised by being taught instead.
-    if (evidence.words.length < MIN_ROSTER_NAME_WORDS) continue
+    // Noise floor for the human-read hint — see ROSTER_HINT_MIN_NAME_WORDS. A one-word client
+    // name is matched by too much bank boilerplate to be worth showing anyone.
+    if (evidence.words.length < ROSTER_HINT_MIN_NAME_WORDS) continue
 
     if (evidence.sufficient) {
       if (!named || evidence.coverage > named.evidence.coverage) named = { entry, evidence }
@@ -130,28 +130,33 @@ export function matchPayerToRoster(
 export const MIN_WEAK_MATCHED_WORDS = 2
 
 /**
- * How many significant words a CLIENT NAME must have before a roster scan may name them.
+ * ⛔ A NOISE FLOOR FOR A HUMAN-READ HINT. NOT A MATCHING THRESHOLD. NEVER A ROUTING RULE.
  *
- * ⚠️ ITS ROLE CHANGED, AND THE ARCHITECT SHOULD SEE THIS. It was introduced as a ROUTING rule.
- * Roster-wide name matching has since been removed from routing altogether (see the note in
- * `owner-ledger-projection.ts`), so nothing here decides where money goes any more. What remains
- * is a QUALITY FLOOR ON A HUMAN-FACING HINT.
+ * Read this before touching it, and do NOT "restore" it to routing as an optimisation.
  *
- * The instruction was that this constant disappears with the routing rule. It cannot disappear
- * entirely, and the evidence is the cell-0 inverse: a client is called "LT Program LLC", which
- * reduces to the single significant word "program", and all six Relay partner-payout descriptors
- * end "Partner Payout Program" — so without this floor those six rows return to the triage list
- * as "the payer name identifies LT Program LLC". Surfacing the owner's own money on that screen
- * is the one thing cell 0's inverse forbids.
+ * WHAT IT IS: the minimum number of significant words a client's name must have before a roster
+ * scan is allowed to SUGGEST that client on the triage screen. Nothing more. It does not decide
+ * where money goes, it is not a coverage threshold, and it is not part of name matching — the
+ * one name rule lives in `feed-signals.ts` and owns coverage, stop words and word length.
  *
- * So it is kept, re-scoped, and flagged rather than quietly retained. If the hint should tolerate
- * that noise instead, remove this and the inverse cell will fail loudly, which is the right way
- * for the decision to be made.
+ * WHY IT EXISTS: a client is called "LT Program LLC", which reduces to the single significant
+ * word "program", and all six Relay partner-payout descriptors end "Partner Payout Program".
+ * Without this floor those six rows — TD's OWN money — return to the triage list as "the payer
+ * name identifies LT Program LLC". That is precisely what the cell-0 inverse forbids: a triage
+ * screen showing the owner's own money is worse than one showing nothing, because then it is not
+ * worth opening. Remove this and that cell fails loudly, which is the correct way for the
+ * trade-off to be re-decided.
  *
- * Deliberately enforced HERE rather than by widening the shared stop-word list: that list is the
+ * WHY ROSTER-DEPENDENCE IS ACCEPTABLE HERE AND FORBIDDEN IN ROUTING (architect, 2026-08-09):
+ * routing is a money decision taken with NO human in the loop, so a rule that changes when a
+ * client is renamed — with no test failing — is unacceptable there, and roster-wide name
+ * matching was removed from routing for exactly that reason. A hint that a person reads and
+ * judges is not that: roster-dependence costs at worst one row glanced at and dismissed.
+ *
+ * Enforced here rather than by widening the shared stop-word list, because that list is the
  * matcher's auto-settlement rule and must not be touched from this side.
  */
-export const MIN_ROSTER_NAME_WORDS = 2
+export const ROSTER_HINT_MIN_NAME_WORDS = 2
 
 /** An amount the system is already expecting from a client — an instalment on a payment plan. */
 export interface ExpectedPayment {

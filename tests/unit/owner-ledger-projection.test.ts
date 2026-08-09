@@ -380,3 +380,47 @@ describe("taught payers in the router [UNIT]", () => {
     expect(isClientInvoicePayment({ ...UNNAMEABLE, status: "outgoing" }, [], { taught: TAUGHT })).toBe(false)
   })
 })
+
+describe("ISOLATION: routing must never reach the roster scan [UNIT]", () => {
+  /**
+   * ⛔ THIS IS THE GUARD ON A DECISION, NOT A FEATURE TEST.
+   *
+   * Roster-wide name matching was removed from routing because it made a MONEY decision — taken
+   * with no human in the loop — depend on the live client list: rename a client and routing
+   * changes, with nothing failing. The roster survives only as a hint a person reads.
+   *
+   * These cells exist so that wiring it back in cannot pass silently. MUTATION-PROVEN: re-adding
+   * the roster check to isClientInvoicePayment turns them red (verified by doing it).
+   */
+  const PERFECT_MATCH_ROSTER: ClientRosterEntry[] = [
+    { id: "acct-x", name: "Vandenberg Logistics", kind: "account" },
+  ]
+  const NAMES_THE_CLIENT_EXACTLY: ProjectableFeed = {
+    id: "feed-iso",
+    transaction_date: "2026-08-09",
+    amount: 4321,
+    currency: "USD",
+    source: "relay",
+    // Covers 100% of the client's significant words — the strongest possible name evidence.
+    sender_name: "VANDENBERG LOGISTICS",
+    memo: null,
+    status: "unmatched",
+  }
+
+  it("a PERFECT client-name match does not keep money in Finance", () => {
+    expect(isClientInvoicePayment(NAMES_THE_CLIENT_EXACTLY, [], { roster: PERFECT_MATCH_ROSTER })).toBe(false)
+    expect(isOwnerLedgerFeed(NAMES_THE_CLIENT_EXACTLY, [], { roster: PERFECT_MATCH_ROSTER })).toBe(true)
+  })
+
+  it("passing a roster changes NOTHING about the routing answer", () => {
+    const withRoster = isClientInvoicePayment(NAMES_THE_CLIENT_EXACTLY, [], { roster: PERFECT_MATCH_ROSTER })
+    const withoutRoster = isClientInvoicePayment(NAMES_THE_CLIENT_EXACTLY, [])
+    expect(withRoster).toBe(withoutRoster)
+  })
+
+  it("...while the HINT still names that client, which is where a name belongs", () => {
+    expect(
+      describeOwnerLedgerConcern(NAMES_THE_CLIENT_EXACTLY, [], { roster: PERFECT_MATCH_ROSTER })?.suspectedClientName,
+    ).toBe("Vandenberg Logistics")
+  })
+})

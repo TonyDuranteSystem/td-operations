@@ -15,7 +15,7 @@
 import { describe, it, expect } from "vitest"
 import {
   EXPECTED_PAYMENT_TOLERANCE_PCT,
-  MIN_ROSTER_NAME_WORDS,
+  ROSTER_HINT_MIN_NAME_WORDS,
   MIN_WEAK_MATCHED_WORDS,
   couldBePartPayment,
   isOwnEntityRosterEntry,
@@ -93,7 +93,7 @@ describe("matchPayerToRoster — whose money is this", () => {
     expect(res.named?.entry.id).toBe("a-1")
   })
 
-  it("⛔ REFUSES to identify a payer from a ONE-WORD client name", () => {
+  it("⛔ a ONE-WORD client name never produces a suggestion (hint noise floor)", () => {
     // I originally asserted the opposite here and called it accepted, quoting the shared rule's
     // own note. Cell 0 proved that wrong WITH MONEY: a client called "LT Program LLC" reduces to
     // the single word "program", every Relay partner payout descriptor ends "Partner Payout
@@ -102,7 +102,7 @@ describe("matchPayerToRoster — whose money is this", () => {
     // Such clients are still recognised — by being TAUGHT, which is what learning is for.
     const oneWord: ClientRosterEntry = { id: "a-4", name: "Marka LLC", kind: "account" }
     expect(matchPayerToRoster(["MARKA - wire transfer"], [oneWord]).named).toBeNull()
-    expect(MIN_ROSTER_NAME_WORDS).toBe(2)
+    expect(ROSTER_HINT_MIN_NAME_WORDS).toBe(2)
   })
 
   it("the real regression: a partner payout is not claimed by a one-word client name", () => {
