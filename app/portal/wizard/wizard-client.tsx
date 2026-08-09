@@ -55,6 +55,12 @@ function SignerRadio({
 interface WizardClientProps {
   wizardType: string
   entityType: string
+  /** Formation only: the signed contract and the offer both failed to say
+   * whether this is a one-owner or multi-owner company. The wizard asks the
+   * client ONE question before rendering rather than guessing single-member —
+   * guessing is the defect this replaces (dev job fc69557f). The signed
+   * contract still governs what is finally RECORDED; this only shapes the form. */
+  entityUnresolved?: boolean
   prefillData: Record<string, string>
   savedData: Record<string, string>
   savedStep: number
@@ -247,6 +253,7 @@ function PrepareCsvStep({ locale, bankGuides, acknowledged, onAcknowledge }: { l
 export function WizardClient({
   wizardType,
   entityType,
+  entityUnresolved = false,
   prefillData,
   savedData,
   savedStep,
@@ -261,7 +268,18 @@ export function WizardClient({
   bankGuides = [],
   configOverride,
 }: WizardClientProps) {
-  const { steps, fields: baseFields } = configOverride ?? getWizardConfig(wizardType, entityType)
+  // The client's answer to the one-owner/multi-owner question, when the server
+  // could not resolve it. Seeded from saved data so a reload — or the autosave
+  // round-trip — does not re-ask a question already answered.
+  const [entityChoice, setEntityChoice] = useState<'SMLLC' | 'MMLLC' | null>(() => {
+    const saved = savedData?.entity_type
+    return saved === 'SMLLC' || saved === 'MMLLC' ? saved : null
+  })
+  // Everything downstream — the step list, the members repeater, the SS-4
+  // signer rules, the submitted payload — reads THIS, never the raw prop.
+  const effectiveEntityType = entityUnresolved ? (entityChoice ?? '') : entityType
+
+  const { steps, fields: baseFields } = configOverride ?? getWizardConfig(wizardType, effectiveEntityType)
 
   // Inject the per-person "applies for ITIN?" field into the owner step and the
   // members step when the offer bundled ITIN (itinCount > 0). Done here (not in
@@ -293,7 +311,7 @@ export function WizardClient({
   // with no way to answer (Adam Mihaly / LUMA Beauty ITIN, 2026-07-24), and the
   // same trap sat latent on company_info and closure. Inert for SMLLC, ITIN,
   // banking, company_info, closure, and td_communication.
-  const isMMLLC = entityType === 'MMLLC' && wizardCollectsOwnerMembers(wizardType)
+  const isMMLLC = effectiveEntityType === 'MMLLC' && wizardCollectsOwnerMembers(wizardType)
   // Narrower than isMMLLC: the SS-4 signer picker + its "exactly one" rule
   // belong only to the EIN-application wizards, not to tax. See
   // wizardRequiresSs4Signer for why tax was carrying it.
@@ -782,7 +800,11 @@ export function WizardClient({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             wizard_type: wizardType,
-            entity_type: entityType,
+            // The client's answer when the server could not resolve it. This is
+            // a HINT, not the final word: the submit route passes it through
+            // verbatim, and it is formation MATERIALIZATION that re-resolves
+            // from the signed contract and overrules this if they disagree.
+            entity_type: effectiveEntityType,
             data: formData,
             account_id: accountId || null,
             contact_id: contactId || null,
@@ -829,7 +851,7 @@ export function WizardClient({
         ? "Invio non riuscito dopo alcuni tentativi. Aggiorna la pagina: se risulta già inviato, è andato a buon fine."
         : "Submit didn't go through after a few tries. Refresh the page — if it shows as already submitted, it worked."),
     )
-  }, [wizardType, entityType, formData, accountId, contactId, leadId, currentProgressId, raiseStepErrors, locale, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer])
+  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, currentProgressId, raiseStepErrors, locale, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer])
 
   // Auto-save on step change
   const handleStepChange = useCallback((step: number) => {
@@ -866,6 +888,69 @@ export function WizardClient({
     }
   }, [wizardType, formData, accountId, contactId, leadId, currentProgressId, currentStep, raiseStepErrors])
 
+  // ── One-owner / multi-owner question ──────────────────────────────────────
+  // Only reached when the signed contract AND the offer both failed to say what
+  // this company is. Antonio, 2026-08-09: ask the client rather than wall them —
+  // "a hard stop recreates the dead end this whole job exists to fix, and it
+  // would hit returning clients hardest." The answer shapes the FORM only; the
+  // signed contract still governs what is recorded downstream.
+  // Placed after every hook (React requires a stable hook order) and before the
+  // locked/submitted screens, which cannot apply to a form not yet started.
+  if (entityUnresolved && !entityChoice) {
+    const choose = (code: 'SMLLC' | 'MMLLC') => {
+      setEntityChoice(code)
+      // Persisted only for a form still being filled. On an ALREADY-SUBMITTED
+      // formation, routing the answer through handleFieldChange would mark the
+      // form dirty and fire the autosave, rewriting a submitted record's saved
+      // data (and re-populating fields the client deliberately left blank from
+      // prefill) purely because a question was rendered. Local state is enough
+      // there — the client's own edits will persist it if they actually edit.
+      if (initialSubmitStatus !== 'submitted') {
+        handleFieldChange('entity_type', code)
+      }
+    }
+    return (
+      <div className="max-w-lg mx-auto py-12">
+        <h2 className="text-2xl font-bold mb-2 text-zinc-900">
+          {locale === 'it' ? 'Una domanda prima di iniziare' : 'One question before we start'}
+        </h2>
+        <p className="text-sm text-zinc-600 mb-6">
+          {locale === 'it'
+            ? 'Chi saranno i proprietari della nuova società? Puoi cambiare questa risposta parlando con noi in qualsiasi momento.'
+            : 'Who will own the new company? You can change this by talking to us at any time.'}
+        </p>
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={() => choose('SMLLC')}
+            className="w-full text-left rounded-xl border border-zinc-200 bg-white p-4 hover:border-blue-500 hover:bg-blue-50 transition-colors"
+          >
+            <span className="block font-medium text-zinc-900">
+              {locale === 'it' ? 'Solo io' : 'Just me'}
+            </span>
+            <span className="block text-xs text-zinc-500 mt-1">
+              {locale === 'it' ? 'Un solo proprietario' : 'A single owner'}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => choose('MMLLC')}
+            className="w-full text-left rounded-xl border border-zinc-200 bg-white p-4 hover:border-blue-500 hover:bg-blue-50 transition-colors"
+          >
+            <span className="block font-medium text-zinc-900">
+              {locale === 'it' ? 'Io e altri soci' : 'Me and other owners'}
+            </span>
+            <span className="block text-xs text-zinc-500 mt-1">
+              {locale === 'it'
+                ? 'Potrai aggiungere gli altri soci nel modulo'
+                : 'You will add the other owners in the form'}
+            </span>
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   // Locked screen — Antonio has reviewed the data, no more editing
   if (isLocked) {
     return (
@@ -898,7 +983,7 @@ export function WizardClient({
     // MMLLC/Corp tax: the submission's bank CSVs feed the generated P&L +
     // Balance Sheet — the success screen's PRIMARY action is checking them
     // (master plan §3.5; before this the screen never mentioned they exist).
-    const isTaxFinancials = wizardType === 'tax' && (entityType === 'MMLLC' || entityType === 'Corp')
+    const isTaxFinancials = wizardType === 'tax' && (effectiveEntityType === 'MMLLC' || effectiveEntityType === 'Corp')
 
     return (
       <div className="max-w-lg mx-auto text-center py-16">

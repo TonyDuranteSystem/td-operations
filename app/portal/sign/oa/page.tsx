@@ -139,12 +139,30 @@ export default async function PortalSignOAPage({ searchParams }: { searchParams?
   const totalSigners = oa.total_signers || 1
 
   if (isMultiSigner) {
-    const { data: memberSig } = await supabaseAdmin
+    // ONE PERSON CAN HOLD SEVERAL SIGNATURE ROWS on the same agreement, and it
+    // is not a duplicate: Umberto Moretti is both the 1% individual member of
+    // Azarexa LLC and the contact behind its 99% corporate member, so he signs
+    // twice — once for himself, once for the company.
+    //
+    // This used to be `.maybeSingle()`, which supabase-js resolves to an ERROR
+    // (data null) when more than one row matches. The effect was silent and
+    // total: no access code, no signing link, and a member who is legally
+    // required to sign simply could not — the page offered him nothing.
+    //
+    // Ordered by member_index so he is walked through his capacities in the
+    // same order they appear on the agreement, and the first UNSIGNED row is
+    // handed to him; once every one is signed the last row's status drives the
+    // "already signed" screen below.
+    const { data: memberSigs } = await supabaseAdmin
       .from('oa_signatures')
       .select('access_code, status, member_name')
       .eq('oa_id', oa.id)
       .eq('contact_id', contactId)
-      .maybeSingle()
+      .order('member_index')
+
+    const rows = memberSigs ?? []
+    const nextUnsigned = rows.find(r => r.status !== 'signed')
+    const memberSig = nextUnsigned ?? rows[rows.length - 1] ?? null
 
     if (memberSig) {
       signerParam = `&signer=${memberSig.access_code}`

@@ -419,6 +419,108 @@ export default async function WizardPage({
     account = {}
   }
 
+  // ── Formation entity type: the signed CONTRACT decides, never a code default ──
+  // Placement is load-bearing. It sits AFTER wizardType is final (the SD picker
+  // and the offer fallback above can still change it) and AFTER the account is
+  // dropped at :417-420, and it must run BEFORE normalizeEntityType below —
+  // that helper returns 'SMLLC' for any falsy input, which would silently
+  // re-introduce the very default this block removes.
+  //
+  // Why account.entity_type is IGNORED here: a formation is a NEW company. A
+  // returning client who already owns an SMLLC and is now forming an MMLLC had
+  // the OLD company's type decide the NEW company's form (line 182) — the form
+  // rendered single-member, the members step never appeared, and the ITIN
+  // requirement became unsatisfiable. That is the Alessandro Della Bianca /
+  // Alessandro Federici defect (dev job fc69557f); the render-side default has
+  // been present since the wizard's first commit, 2026-03-21.
+  //
+  // Sources, in order:
+  //   1. signed contract  — resolveEntityTypeForFormation (contracts.llc_type).
+  //                         Antonio, 2026-06-11: "The CRM must be set according
+  //                         to the contract that the client signed."
+  //   2. offers.entity_type — what was sold, and the field staff edit to
+  //                         override BEFORE the client opens the form.
+  //   3. UNRESOLVED       — ask the client one plain question in the wizard.
+  //                         NEVER guess (Antonio, 2026-08-09: a hard wall
+  //                         "recreates the dead end this whole job exists to
+  //                         fix, and it would hit returning clients hardest").
+  let entityUnresolved = false
+  if (wizardType === 'formation') {
+    const { resolveEntityTypeForFormation, normalizeEntityCode } = await import(
+      '@/lib/portal/entity-type-from-contract'
+    )
+
+    let code: 'SMLLC' | 'MMLLC' | null = null
+    // A Corporation is neither SMLLC nor MMLLC. There is no Corp branch in the
+    // formation wizard config, so a Corporation has always rendered the
+    // single-owner form and been finished by hand (activate-service routes it
+    // to manual handling). That is unchanged here — but it must NOT reach the
+    // ownership question below, because "just me / me and other owners" is a
+    // nonsense question for a corporation and its answer would be written to
+    // the submission as SMLLC/MMLLC.
+    let isCorporation = false
+    if (contactId) {
+      const resolution = await resolveEntityTypeForFormation({
+        contactId,
+        leadId: formationLeadId,
+      })
+      code = resolution.wizardCode
+      if (resolution.source === 'corporation_manual') {
+        isCorporation = true
+        console.warn('[wizard] formation resolved to Corporation — manual handling', resolution.detail)
+      }
+    }
+
+    // 2. The offer — what was sold. `formationEntityType` is only populated on
+    //    the ?lead= path (:107-126); every other entry point — the formation
+    //    dashboard button, the services page ?type=formation link, the
+    //    post-payment portal notification, the reminder cron — arrives without
+    //    it, which is why this lookup is repeated here rather than reused.
+    //
+    //    NOTE ON PRECEDENCE: this sits BELOW the signed contract, so editing an
+    //    offer does NOT override a contract that already says something else.
+    //    Staff overriding a *wrong* signed contract still has to go through the
+    //    Articles-upload override at materialization time. Flagged to Antonio
+    //    2026-08-09; changing it needs somewhere to store an override that
+    //    outranks a signed contract, which is a schema change.
+    if (!code && !isCorporation) {
+      const offerEmails = new Set<string>()
+      if (user.email) offerEmails.add(user.email.toLowerCase())
+      if (contact.email) offerEmails.add(String(contact.email).toLowerCase())
+      let offerEntity: string | null = normalizeEntityCode(formationEntityType)
+      if (!offerEntity && offerEmails.size > 0) {
+        // contract_type is filtered so a newer tax/renewal offer to the same
+        // address cannot answer a question about the formation. status is
+        // filtered so a superseded draft or an expired offer cannot outrank the
+        // live one — the sibling fallback further up this file guards the same
+        // way, and duplicated/expired offers are normal in this CRM.
+        // Case-INSENSITIVE. offers.client_email is stored verbatim as typed —
+        // nothing normalizes it on the create path — so an `.in()` against
+        // pre-lowercased values silently misses "Mario.Rossi@gmail.com" and the
+        // client gets asked a question their offer already answered. The
+        // sibling lookup earlier in this file compares lowercased on both sides
+        // for the same reason.
+        const emailOr = Array.from(offerEmails)
+          .map(e => `client_email.ilike.${e}`)
+          .join(',')
+        const { data: offerRows } = await supabaseAdmin
+          .from('offers')
+          .select('entity_type, created_at')
+          .or(emailOr)
+          .eq('contract_type', 'formation')
+          .in('status', ['sent', 'viewed', 'signed', 'completed'])
+          .not('entity_type', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(1)
+        offerEntity = normalizeEntityCode(offerRows?.[0]?.entity_type ?? null)
+      }
+      code = offerEntity as 'SMLLC' | 'MMLLC' | null
+    }
+
+    if (code) entityType = code
+    else if (!isCorporation) entityUnresolved = true
+  }
+
   // Load saved progress — include 'submitted' so clients can edit before review
   let savedData: Record<string, unknown> = {}
   let savedStep = 0
@@ -679,7 +781,12 @@ export default async function WizardPage({
   // MMLLC "add members" step only renders for 'MMLLC'; the stored value is
   // "Multi Member LLC" (space), which the old exact-string check missed —
   // breaking member-add for every multi-member client. See normalizeEntityType.
-  entityType = normalizeEntityType(entityType)
+  // Skipped when the formation entity type is genuinely unresolved: this helper
+  // returns 'SMLLC' for any falsy input (lib/portal/entity-type.ts), so calling
+  // it here would convert "we don't know" back into "single member" — the exact
+  // silent default the block above exists to remove. The client is asked
+  // instead; WizardClient renders the question when entityUnresolved is true.
+  if (!entityUnresolved) entityType = normalizeEntityType(entityType)
 
   // TD Communication brand audit: the client_type ('new_brand' | 'rebrand') is
   // chosen by the client's active enrollment. Resolve it by the WHOLE identity
@@ -940,6 +1047,7 @@ export default async function WizardPage({
         <WizardClient
           wizardType={wizardType}
           entityType={entityType}
+          entityUnresolved={entityUnresolved}
           prefillData={prefillData}
           savedData={savedData as Record<string, string>}
           savedStep={savedStep}

@@ -761,7 +761,11 @@ export async function POST(req: NextRequest) {
         lead_id: lead_id || null, // Formation-for-new-company carries its lead for materialization
         company_name: companyName,
         state_of_formation: stateOfFormation,
-        entity_type: entity_type || 'SMLLC',
+        // NULL, never 'SMLLC', when genuinely unknown. The materializer resolves
+        // entity type from the signed contract and treats this only as a
+        // lower-priority hint; a fabricated default here used to let a guess
+        // masquerade as evidence. See lib/portal/submission-record.ts.
+        entity_type: entity_type || null,
         submitted_data: data,
         upload_paths: extractUploadPaths(data),
         // Portal-specific: signals this came from the portal wizard (not MCP review)

@@ -45,7 +45,11 @@ export interface SubmissionRecordInput {
   contact_id: string | null
   account_id: string | null
   lead_id: string | null
-  /** Falls back to 'SMLLC' on tables that carry entity_type. */
+  /** Written as-is on tables that carry entity_type — NULL when genuinely
+   * unknown. It used to fall back to 'SMLLC', which poisoned the downstream
+   * resolver: formation materialization reads this column back as one of its
+   * entity-type sources, so a fabricated 'SMLLC' could confirm itself as
+   * evidence. NULL keeps that source honestly empty. (dev job fc69557f.) */
   entity_type: string | null
   submitted_data: unknown
   upload_paths: string[]
@@ -76,7 +80,17 @@ export function buildSubmissionRecord(
   }
 
   if (TABLES_WITH_ENTITY_TYPE.has(table)) {
-    record.entity_type = input.entity_type || "SMLLC"
+    // NULL only where the column actually allows it. entity_type is NOT NULL on
+    // onboarding / tax_return / company_info submissions and nullable ONLY on
+    // formation_submissions — writing NULL to the others is a 23502, which this
+    // route turns into a false "submission failed" toast AND skips the auto-chain
+    // enqueue (the exact failure class this file's header exists to prevent).
+    // Omitting the key instead lets the column default apply.
+    if (input.entity_type) {
+      record.entity_type = input.entity_type
+    } else if (table === "formation_submissions") {
+      record.entity_type = null
+    }
   }
   if (!TABLES_WITHOUT_LEAD_ID.has(table)) {
     record.lead_id = input.lead_id || null

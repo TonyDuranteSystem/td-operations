@@ -30,6 +30,7 @@ import { OA_SUPPORTED_STATES, normalizeOAState } from '@/lib/types/oa-templates'
 import { APP_BASE_URL } from '@/lib/config'
 import { notifyClientActionRequired } from '@/lib/portal/action-required'
 import { reportSystemError } from '@/lib/system-errors'
+import { resolveSigningSet, signerDisplayName, type ResolvedSigner } from '@/lib/members/signing-set'
 
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -92,6 +93,12 @@ export async function POST(request: NextRequest) {
   const entityType = isMMLC ? 'MMLLC' : 'SMLLC'
 
   // ── 2. FETCH MEMBERS (MMLLC only) ──
+  // Who will actually be sent a signature request. NOT the same as the member
+  // roster: an individual with no email is a member but cannot be asked to
+  // sign, and a company member signs through its representative. Populated in
+  // the MMLLC branch below; empty for a single-member OA, which the caller
+  // signs alone.
+  let oaSigners: ResolvedSigner[] = []
   let membersRows: Array<{
     id: string
     full_name: string | null
@@ -101,6 +108,8 @@ export async function POST(request: NextRequest) {
     is_primary: boolean | null
     contact_id: string | null
     member_type: string
+    representative_name: string | null
+    representative_email: string | null
     address_street: string | null
     address_city: string | null
     address_state: string | null
@@ -111,7 +120,7 @@ export async function POST(request: NextRequest) {
   if (isMMLC) {
     const { data: rows } = await supabaseAdmin
       .from('members')
-      .select('id, full_name, company_name, email, ownership_pct, is_primary, contact_id, member_type, address_street, address_city, address_state, address_zip, address_country')
+      .select('id, full_name, company_name, email, ownership_pct, is_primary, contact_id, member_type, representative_name, representative_email, address_street, address_city, address_state, address_zip, address_country')
       .eq('account_id', account_id)
       .order('is_primary', { ascending: false })
 
@@ -121,11 +130,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No members found for this MMLLC — add members in the CRM first' }, { status: 422 })
     }
 
-    // MMLLC validation: all members must have contact_id to sign
-    const missingPortal = membersRows.filter(m => !m.contact_id).map(m => m.full_name ?? m.company_name ?? 'Unknown')
-    if (missingPortal.length > 0) {
+    // Being a member and being a SIGNER are different things (Antonio,
+    // 2026-08-09). This used to refuse the whole document unless every member
+    // had a contact_id, which conflated the two: an individual with no email is
+    // still a member — named in the agreement, counted in ownership — and a
+    // company member signs through its representative, not through a portal
+    // account of its own. Refuse only when NOBODY can sign.
+    const { signers, nonSigners } = resolveSigningSet(membersRows)
+    oaSigners = signers
+    if (nonSigners.length > 0) {
+      console.warn('[oa-create] members who will NOT be asked to sign:', nonSigners)
+    }
+    if (signers.length === 0) {
       return NextResponse.json({
-        error: `Cannot create OA — ${missingPortal.join(', ')} ${missingPortal.length === 1 ? 'has' : 'have'} no portal account. Contact support to invite them.`,
+        error: `Cannot create OA — no member can be sent a signature request. ${nonSigners.map(n => `${n.name}: ${n.reason}`).join('; ')}`,
       }, { status: 422 })
     }
 
@@ -283,7 +301,12 @@ export async function POST(request: NextRequest) {
     const parts = [m.address_street, m.address_city, m.address_state, m.address_zip, m.address_country].filter(Boolean)
     return parts.length > 0 ? parts.join(', ') : null
   }
-  const totalSigners = isMMLC ? membersRows.length : 1
+  // Counted from the SIGNING SET, not the member roster. Counting every member
+  // meant one member who could never be sent a signature request (no email, or
+  // a company with no representative) left signed_count permanently short of
+  // total_signers — the agreement sat "in progress" forever with nothing anyone
+  // could do about it. The roster below still lists every member.
+  const totalSigners = isMMLC ? oaSigners.length : 1
   const membersJson = isMMLC
     ? membersRows.map((m, i) => ({
         name: m.full_name ?? m.company_name ?? 'Unknown',
@@ -357,12 +380,14 @@ export async function POST(request: NextRequest) {
   let callerCanSign = !isMMLC
 
   if (isMMLC) {
-    const sigRows = membersRows.map((m, idx) => ({
+    // One row per SIGNER, not per member. A company member's row carries its
+    // representative — the human who signs on the company's behalf.
+    const sigRows = oaSigners.map((s, idx) => ({
       oa_id: oa.id,
       member_index: idx,
-      member_name: m.full_name ?? m.company_name ?? 'Unknown',
-      member_email: m.email ?? null,
-      contact_id: m.contact_id,
+      member_name: signerDisplayName(s),
+      member_email: s.email,
+      contact_id: s.contactId,
     }))
 
     const { data: insertedSigs, error: sigErr } = await supabaseAdmin
