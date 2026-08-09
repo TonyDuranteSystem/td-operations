@@ -10,6 +10,32 @@
  *   - A COMPANY member IS a member AND a signer: it signs through its
  *     representative (representative_name / representative_email).
  *
+ * AMENDED THE SAME DAY, AFTER THE FIRST VERSION SHIPPED (Antonio, 2026-08-09):
+ *   "A multi-member operating agreement signed by only one owner must never
+ *    exist. It is a legal document and it must contain all members. So an
+ *    agreement can never be issued with fewer signers than members."
+ *
+ * So the split below is still the right classification — but a non-signer is no
+ * longer something to route around. It is a HARD STOP on issuing the agreement,
+ * with the blocking member named, shown to the client and raised to staff. See
+ * describeSigningBlock(); both call sites must use it so they cannot drift.
+ *
+ * Yes, that can leave a client stuck until someone supplies the missing email.
+ * Antonio's words: that is the correct failure for a legal document, provided
+ * the reason is visible and reaches a human.
+ *
+ * WHY THE FIRST VERSION WAS WRONG, concretely — it let a two-member company end
+ * up with exactly ONE expected signature, and every downstream per-member
+ * signing gate keys off "more than one signer". They all switched off together:
+ * no personal signing link, the shared access code alone could sign, the
+ * submitted signer code was ignored, and the executed agreement recorded the
+ * roster's first member as the signer instead of whoever actually signed. Live
+ * exposure when caught: Full Throttle Media LLC (two owners, one with no email
+ * anywhere, both member rows created in the same millisecond so which name got
+ * printed was a tie-break). It had no agreement yet, so nothing was executed
+ * wrongly. The gate is repaired independently of this file — but this rule is
+ * what stops the state from being reachable at all.
+ *
  * WHY THIS FILE EXISTS: the rule was previously "every member must have a
  * contact_id or we refuse to create the OA". That conflated three different
  * things — being a member, being reachable, and being a signer. It made an
@@ -63,8 +89,12 @@ export interface ResolvedSigner {
 
 export interface ResolvedNonSigner {
   name: string
-  /** Plain-English reason, safe to show staff. */
+  /** Plain-English reason, safe to show staff. Says what to change to fix it. */
   reason: string
+  /** The same fact in the client's own terms. This one reaches a paying client
+   *  on the Generate Documents screen, so it must not read like a stack trace
+   *  and must not blame them. */
+  clientReason: string
 }
 
 export interface SigningSet {
@@ -129,6 +159,7 @@ export function resolveSigningSet(rows: SigningSetMemberRow[]): SigningSet {
         nonSigners.push({
           name: label,
           reason: 'company member with no linked contact and no representative on file — link a contact or add a representative name and email to have it sign',
+          clientReason: `${label} is a company, and we do not have the name and email of the person who signs on its behalf.`,
         })
       }
       continue
@@ -143,9 +174,61 @@ export function resolveSigningSet(rows: SigningSetMemberRow[]): SigningSet {
       nonSigners.push({
         name: label,
         reason: 'individual member with no email — counted in ownership and named in the agreement, but cannot be sent a signature request',
+        clientReason: `We have no email address on file for ${label}.`,
       })
     }
   }
 
   return { signers, nonSigners }
+}
+
+export interface SigningBlock {
+  /** True when the agreement must NOT be issued. */
+  blocked: boolean
+  /** The members standing in the way, in roster order. */
+  members: ResolvedNonSigner[]
+  /** Shown to the client. Names every blocking member and says what unsticks
+   *  it. Empty string when not blocked. */
+  clientMessage: string
+  /** The same for staff, with the actionable detail. Empty when not blocked. */
+  staffMessage: string
+}
+
+/**
+ * The gate on issuing a multi-member Operating Agreement.
+ *
+ * An agreement is never issued with fewer signers than members (Antonio,
+ * 2026-08-09, amending the rule set earlier the same day). Every member who
+ * cannot be sent a signature request blocks it, is named, and the reason is
+ * shown to the client AND raised to staff.
+ *
+ * Deliberately takes the resolved set rather than the raw rows so a caller
+ * cannot check the block against one classification and then sign with another.
+ *
+ * NOTE the empty-roster case: an agreement with no members at all is not this
+ * function's business — the callers reject that earlier with their own message,
+ * because "nobody can sign" and "there are no members" need different fixes.
+ */
+export function describeSigningBlock(set: SigningSet): SigningBlock {
+  if (set.nonSigners.length === 0) {
+    return { blocked: false, members: [], clientMessage: '', staffMessage: '' }
+  }
+
+  const names = set.nonSigners.map(n => n.name)
+  const nameList =
+    names.length === 1
+      ? names[0]
+      : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+
+  const clientMessage = [
+    'The Operating Agreement has to be signed by every owner, so we cannot create it yet.',
+    set.nonSigners.map(n => n.clientReason).join(' '),
+    `Please add contact details for ${nameList} — or send us a message and we will add them for you — then try again.`,
+  ].join(' ')
+
+  const staffMessage = `Operating Agreement blocked: ${set.nonSigners
+    .map(n => `${n.name} — ${n.reason}`)
+    .join('; ')}`
+
+  return { blocked: true, members: set.nonSigners, clientMessage, staffMessage }
 }

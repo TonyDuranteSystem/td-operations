@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { resolveSigningSet, signerDisplayName, type SigningSetMemberRow } from '@/lib/members/signing-set'
+import {
+  resolveSigningSet,
+  describeSigningBlock,
+  signerDisplayName,
+  type SigningSetMemberRow,
+} from '@/lib/members/signing-set'
 
 const individual = (over: Partial<SigningSetMemberRow> = {}): SigningSetMemberRow => ({
   member_type: 'individual',
@@ -175,5 +180,97 @@ describe('resolveSigningSet — membership is not the same as signing', () => {
     ])
     expect(nonSigners).toHaveLength(1)
     expect(nonSigners[0].name).toBe('Unknown member')
+  })
+})
+
+// Antonio, 2026-08-09, amending the rule the same day it shipped: "A
+// multi-member operating agreement signed by only one owner must never exist.
+// It is a legal document and it must contain all members. So an agreement can
+// never be issued with fewer signers than members."
+describe('describeSigningBlock — an agreement is never issued short of signers', () => {
+  it('does not block when every member can sign', () => {
+    const block = describeSigningBlock(resolveSigningSet([individual(), company()]))
+    expect(block.blocked).toBe(false)
+    expect(block.members).toEqual([])
+    expect(block.clientMessage).toBe('')
+    expect(block.staffMessage).toBe('')
+  })
+
+  // The Full Throttle Media shape — the one live company this was caught on:
+  // two owners, one with no email address anywhere in the system.
+  it('blocks when a single member cannot be sent a signature request', () => {
+    const block = describeSigningBlock(
+      resolveSigningSet([
+        individual({ full_name: 'Jayesh Hans', email: null }),
+        individual({ full_name: 'Yogesh Pahuja', email: 'yogesh@example.com' }),
+      ]),
+    )
+    expect(block.blocked).toBe(true)
+    expect(block.members.map(m => m.name)).toEqual(['Jayesh Hans'])
+    // The blocking member is NAMED to the client — a message that just says
+    // "something is missing" leaves them with nothing to act on.
+    expect(block.clientMessage).toContain('Jayesh Hans')
+    expect(block.staffMessage).toContain('Jayesh Hans')
+  })
+
+  it('blocks a company member with no contact and no representative', () => {
+    const block = describeSigningBlock(
+      resolveSigningSet([
+        individual(),
+        company({
+          company_name: 'No Rep LLC',
+          representative_name: null,
+          representative_email: null,
+          contact_id: null,
+        }),
+      ]),
+    )
+    expect(block.blocked).toBe(true)
+    expect(block.clientMessage).toContain('No Rep LLC')
+  })
+
+  it('names every blocking member, not just the first', () => {
+    const block = describeSigningBlock(
+      resolveSigningSet([
+        individual({ full_name: 'Silent One', email: null }),
+        individual({ full_name: 'Silent Two', email: null }),
+        individual({ full_name: 'Reachable', email: 'r@example.com' }),
+      ]),
+    )
+    expect(block.blocked).toBe(true)
+    expect(block.members).toHaveLength(2)
+    expect(block.clientMessage).toContain('Silent One')
+    expect(block.clientMessage).toContain('Silent Two')
+  })
+
+  // The client-facing text goes on the Generate Documents screen of a paying
+  // client, so it must not leak the staff-facing instructions.
+  it('keeps the staff instructions out of the client message', () => {
+    const block = describeSigningBlock(
+      resolveSigningSet([individual({ full_name: 'Jayesh Hans', email: null }), individual()]),
+    )
+    expect(block.clientMessage).not.toContain('link a contact')
+    expect(block.clientMessage).not.toContain('counted in ownership')
+    expect(block.clientMessage).toMatch(/signed by every owner/i)
+  })
+
+  // Azarexa: one person in two capacities is two signers, not a blocked roster.
+  it('does not block the two-capacity signer', () => {
+    const block = describeSigningBlock(
+      resolveSigningSet([
+        company({
+          company_name: 'Advertising Apex LLC',
+          representative_name: null,
+          representative_email: null,
+          contact_id: 'umberto',
+        }),
+        individual({ full_name: 'Umberto Moretti', email: 'u.moretti@proton.me', contact_id: 'umberto' }),
+      ]),
+    )
+    expect(block.blocked).toBe(false)
+  })
+
+  it('reports no block for an empty roster — the callers reject that separately', () => {
+    expect(describeSigningBlock(resolveSigningSet([])).blocked).toBe(false)
   })
 })

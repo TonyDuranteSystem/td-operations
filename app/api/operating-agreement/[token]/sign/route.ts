@@ -150,8 +150,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     return NextResponse.json({ error: "This Operating Agreement is already complete." }, { status: 409 })
   }
 
-  const isMultiSigner =
-    normalizeEntityType(agreement.entity_type) === "MMLLC" && (agreement.total_signers || 1) > 1
   const totalSigners = agreement.total_signers || 1
 
   // Load the signature rows (MMLLC has one per member; SMLLC has none yet).
@@ -162,6 +160,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     .order("member_index")
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const signatures: any[] = sigRows ?? []
+
+  // Per-member signing is decided by whether per-member signature RECORDS
+  // exist, never by counting expected signatures.
+  //
+  // It used to read `total_signers > 1`, which silently collapsed a multi-member
+  // agreement that had only one expected signature into single-signer mode: the
+  // submitted signer code was ignored, anyone holding the shared access code
+  // could sign, and the signature was recorded under the agreement's own
+  // member_name — the FIRST row of the roster — rather than under whoever
+  // actually signed. The issuing rule now prevents that state from being
+  // created (lib/members/signing-set.ts), but agreements created before it, or
+  // by any other path, must still be handled correctly here.
+  //
+  // Safe against existing data: an SMLLC has no signature rows, so it stays
+  // single-signer. Checked on production 2026-08-09 — the only agreements with
+  // one expected signature that carry a signature row are single-member and
+  // already fully signed, so none of them changes behaviour.
+  const isMultiSigner =
+    normalizeEntityType(agreement.entity_type) === "MMLLC" && signatures.length > 0
 
   // Resolve WHICH member is signing — from the per-member access code, never a
   // client-supplied index. SMLLC has a single implicit signer (index 0).
@@ -179,8 +196,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     memberEmail = row?.member_email ?? null
   } else {
     memberIndex = 0
-    memberName = agreement.member_name || "Member"
-    memberEmail = agreement.member_email ?? null
+    // Prefer the signature record's own name over the agreement header. For a
+    // single-member company the two agree; where they ever disagree the record
+    // is the one that describes who is actually signing THIS row, and the
+    // header is a summary written at creation time. The executed document and
+    // the Certificate of Completion are built from this value, so a wrong name
+    // here is a wrong name on a legal instrument.
+    const row = signatures.find(s => s.member_index === 0)
+    memberName = row?.member_name || agreement.member_name || "Member"
+    memberEmail = row?.member_email ?? agreement.member_email ?? null
   }
 
   const now = new Date().toISOString()
