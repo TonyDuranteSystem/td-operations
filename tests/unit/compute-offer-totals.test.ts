@@ -380,7 +380,7 @@ describe("WS-C: dueNow — what a rail charges when the fee is paid in parts", (
     cost_summary: [{ label: "Setup Fee", total: "€2,500" }],
     payment_plan: [
       { seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "signing" } },
-      { seq: 2, amount: 1250, currency: "EUR", trigger: { kind: "event", event: "bank_account_opened" } },
+      { seq: 2, amount: 1250, currency: "EUR", trigger: { kind: "manual", label: "Bank account opened (Relay)" } },
     ],
   }
 

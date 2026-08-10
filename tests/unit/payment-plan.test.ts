@@ -11,7 +11,7 @@
  */
 import { describe, it, expect } from "vitest"
 import {
-  TRANCHE_EVENTS,
+  WIRED_TRANCHE_EVENTS,
   clientFacingPartLabel,
   clientFacingSchedule,
   decideSigningBill,
@@ -32,7 +32,7 @@ const DOMENICO_PLAN = [
     seq: 2,
     amount: 1250,
     currency: "EUR",
-    trigger: { kind: "event", event: "bank_account_opened" },
+    trigger: { kind: "manual", label: "Bank account opened (Relay)" },
     internal_label: "when Relay opens",
   },
 ]
@@ -66,7 +66,7 @@ describe("CONSTRAINT 1 — N parts, not two slots", () => {
   it("accepts a three-part plan with no code change", () => {
     const res = validatePaymentPlan([
       { seq: 1, amount: 1000, currency: "USD", trigger: { kind: "signing" } },
-      { seq: 2, amount: 1000, currency: "USD", trigger: { kind: "event", event: "ein_received" } },
+      { seq: 2, amount: 1000, currency: "USD", trigger: { kind: "manual", label: "EIN issued" } },
       { seq: 3, amount: 500, currency: "USD", trigger: { kind: "manual" } },
     ])
     expect(res.ok).toBe(true)
@@ -85,14 +85,14 @@ describe("CONSTRAINT 1 — N parts, not two slots", () => {
 })
 
 describe("CONSTRAINT 2 — triggers are data, and there is no scheduler", () => {
-  it("stores each of the four trigger kinds", () => {
-    for (const kind of ["signing", "event", "date", "manual"] as const) {
+  it("stores the three trigger kinds that are real today", () => {
+    // 'event' is deliberately NOT among them: nothing dispatches one, so it is refused rather
+    // than stored — see the vocabulary block at the bottom of this file.
+    for (const kind of ["signing", "date", "manual"] as const) {
       const part =
-        kind === "event"
-          ? { seq: 1, amount: 100, currency: "USD", trigger: { kind, event: "bank_account_opened" } }
-          : kind === "date"
-            ? { seq: 1, amount: 100, currency: "USD", trigger: { kind, date: "2026-09-01" } }
-            : { seq: 1, amount: 100, currency: "USD", trigger: { kind } }
+        kind === "date"
+          ? { seq: 1, amount: 100, currency: "USD", trigger: { kind, date: "2026-09-01" } }
+          : { seq: 1, amount: 100, currency: "USD", trigger: { kind } }
       const res = validatePaymentPlan([part, { seq: 2, amount: 100, currency: "USD", trigger: { kind: "manual" } }])
       expect(res.ok).toBe(true)
       expect(res.plan![0].trigger.kind).toBe(kind)
@@ -105,9 +105,10 @@ describe("CONSTRAINT 2 — triggers are data, and there is no scheduler", () => 
       { seq: 2, amount: 100, currency: "USD", trigger: { kind: "event", event: "relay_opens_maybe" } },
     ])
     expect(res.ok).toBe(false)
-    expect(res.errors.join(" ")).toContain("not a known trigger event")
-    // The vocabulary is finite, so a typo is a validation error and not a silent forever-wait.
-    expect(TRANCHE_EVENTS).toContain("bank_account_opened")
+    expect(res.errors.join(" ")).toContain("nothing in the system fires an event yet")
+    // The registry is empty ON PURPOSE, so an event trigger is refused rather than left waiting
+    // for a dispatcher nobody wrote.
+    expect(WIRED_TRANCHE_EVENTS).toHaveLength(0)
   })
 
   it("refuses a date trigger with no date", () => {
@@ -174,12 +175,22 @@ describe("the activation anchor", () => {
   })
 })
 
+/**
+ * The ban, as WHOLE WORDS.
+ *
+ * A plain substring check was wrong and a test caught it: the ordinary Italian word
+ * "separatamente" contains "rata", so the guard fired on innocent copy. Word boundaries keep it
+ * aimed at the renewal contract's vocabulary — "rata", "rate", "rateizzazione", "instalment",
+ * "installment" — without banning every Italian word that happens to contain those letters.
+ */
+const BANNED_WORDS = /\b(rat[ae]|rateizzazion[ei]|instal?lments?)\b/i
+
 describe("⛔ CLIENT-FACING WORDING — never 'instalment'", () => {
   const plan = validatePaymentPlan(DOMENICO_PLAN).plan!
 
   it("says what is due and when, in the client's terms", () => {
     expect(clientFacingPartLabel(plan[0], 2)).toBe("Part 1 of 2, due on signing")
-    expect(clientFacingPartLabel(plan[1], 2)).toBe("Part 2 of 2, due when your bank account is open")
+    expect(clientFacingPartLabel(plan[1], 2)).toBe("Part 2 of 2, due when the agreed step is complete")
   })
 
   it("NEVER uses the renewal contract's vocabulary, in any label or description", () => {
@@ -202,9 +213,12 @@ describe("⛔ CLIENT-FACING WORDING — never 'instalment'", () => {
     )
   })
 
-  it("falls back to neutral wording for an event it has no phrasing for", () => {
-    const odd = { seq: 2, amount: 1, currency: "USD", trigger: { kind: "event" as const, event: "company_formed" } }
-    expect(clientFacingPartLabel(odd, 2)).toContain("when your company is formed")
+  it("never leaks the staff label into the client's sentence", () => {
+    // The label is where a human writes what they are waiting for, sometimes naming an internal
+    // vendor. The client is told the shape of their agreement, not our operational detail.
+    const odd = { seq: 2, amount: 1, currency: "USD", trigger: { kind: "manual" as const, label: "chase Relay rep" } }
+    expect(clientFacingPartLabel(odd, 2)).toBe("Part 2 of 2, due when the agreed step is complete")
+    expect(clientFacingPartLabel(odd, 2)).not.toContain("Relay")
   })
 })
 
@@ -248,7 +262,7 @@ describe("reconciliation against Domenico's hand-executed deal", () => {
     expect(signingPart(plan)!.amount).toBe(1250) // the invoice he actually paid
     expect(laterParts(plan)).toHaveLength(1)
     expect(laterParts(plan)[0].amount).toBe(1250) // what is still outstanding
-    expect(laterParts(plan)[0].trigger.event).toBe("bank_account_opened") // when it falls due
+    expect(laterParts(plan)[0].trigger.label).toBe("Bank account opened (Relay)") // when it falls due
   })
 })
 
@@ -257,7 +271,7 @@ describe("⛔ the Italian register carries the same ban", () => {
 
   it("says what is due and when, in Italian", () => {
     expect(clientFacingPartLabel(plan[0], 2, "it")).toBe("Parte 1 di 2, alla firma")
-    expect(clientFacingPartLabel(plan[1], 2, "it")).toBe("Parte 2 di 2, all'apertura del conto bancario")
+    expect(clientFacingPartLabel(plan[1], 2, "it")).toBe("Parte 2 di 2, al completamento del passaggio concordato")
   })
 
   it("NEVER uses the renewal contract's Italian vocabulary either", () => {
@@ -267,10 +281,7 @@ describe("⛔ the Italian register carries the same ban", () => {
     for (const lang of ["en", "it"] as const) {
       for (const p of plan) {
         const s = clientFacingPartLabel(p, plan.length, lang).toLowerCase()
-        expect(s).not.toContain("rata")
-        expect(s).not.toContain("rateizzazione")
-        expect(s).not.toContain("instalment")
-        expect(s).not.toContain("installment")
+        expect(s).not.toMatch(BANNED_WORDS)
       }
     }
   })
@@ -286,7 +297,7 @@ describe("clientFacingSchedule — one sentence per part, in order", () => {
     const rows = clientFacingSchedule(plan)
     expect(rows).toHaveLength(2)
     expect(rows[0]).toEqual({ seq: 1, amount: 1250, currency: "EUR", label: "Part 1 of 2, due on signing" })
-    expect(rows[1].label).toBe("Part 2 of 2, due when your bank account is open")
+    expect(rows[1].label).toBe("Part 2 of 2, due when the agreed step is complete")
     // Money stays a number: each surface owns its own symbol and locale rules, and a
     // pre-formatted string here would be a fourth place for them to disagree.
     expect(typeof rows[1].amount).toBe("number")
@@ -382,7 +393,7 @@ describe("decideSigningBill — what signing actually asks the client for", () =
       offerGross: 3000,
       rawPlan: [
         { seq: 1, amount: 1000, currency: "USD", trigger: { kind: "signing" } },
-        { seq: 2, amount: 1000, currency: "USD", trigger: { kind: "event", event: "ein_received" } },
+        { seq: 2, amount: 1000, currency: "USD", trigger: { kind: "manual", label: "EIN issued" } },
         { seq: 3, amount: 1000, currency: "USD", trigger: { kind: "manual" } },
       ],
     })
@@ -415,5 +426,54 @@ describe("⛔ THE APPROVED LABELS — Antonio confirmed both, verbatim", () => {
     const plan = validatePaymentPlan(DOMENICO_PLAN).plan!
     expect(trancheInvoiceDescription(plan[1], 2, "LLC Formation")).toContain("Partial Payment")
     expect(trancheInvoiceDescription(plan[1], 2, "LLC Formation")).not.toContain("Pagamento")
+  })
+})
+
+// ─── The trigger vocabulary tells the truth about what fires (architect ruling) ───
+
+describe("⛔ an event trigger cannot promise a mechanism that does not exist", () => {
+  it("refuses ANY event trigger while nothing in the system dispatches one", () => {
+    // The registry is empty on purpose. A stored event name is a promise that something fires it,
+    // and a later session finding one would build on that promise.
+    const res = validatePaymentPlan([
+      { seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "signing" } },
+      { seq: 2, amount: 1250, currency: "EUR", trigger: { kind: "event", event: "bank_account_opened" } },
+    ])
+    expect(res.ok).toBe(false)
+    expect(res.errors.join(" ")).toContain("nothing in the system fires an event yet")
+  })
+
+  it("steers the author to the manual trigger instead of just saying no", () => {
+    const res = validatePaymentPlan([
+      { seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "signing" } },
+      { seq: 2, amount: 1250, currency: "EUR", trigger: { kind: "event", event: "ein_received" } },
+    ])
+    expect(res.errors.join(" ")).toContain("when you say so")
+  })
+
+  it("keeps the human's own words on a manual trigger — the bank-account case", () => {
+    // "When the bank account opens" is Antonio's judgement, not a system state: formation no
+    // longer creates a banking service delivery at all. It is stored as free text for that reason.
+    const res = validatePaymentPlan([
+      { seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "signing" } },
+      { seq: 2, amount: 1250, currency: "EUR", trigger: { kind: "manual", label: "Bank account opened (Relay)" } },
+    ])
+    expect(res.ok).toBe(true)
+    expect(res.plan![1].trigger.label).toBe("Bank account opened (Relay)")
+    expect(res.plan![1].trigger.event).toBeUndefined()
+  })
+
+  it("a manual part tells the client a neutral phrase, never the staff label", () => {
+    // The staff label may name an internal vendor ("Relay"); the client is told only that it
+    // falls due when the agreed step is done.
+    const plan = validatePaymentPlan(DOMENICO_PLAN).plan!
+    const en = clientFacingPartLabel(plan[1], 2, "en")
+    const it = clientFacingPartLabel(plan[1], 2, "it")
+    expect(en).not.toContain("Relay")
+    expect(it).not.toContain("Relay")
+    for (const s of [en, it]) {
+      expect(s.toLowerCase()).not.toContain("instalment")
+      expect(s.toLowerCase()).not.toContain("rata")
+    }
   })
 })

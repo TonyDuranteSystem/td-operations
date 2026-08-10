@@ -33,10 +33,22 @@ export type TrancheTriggerKind = "signing" | "event" | "date" | "manual"
 
 export interface TrancheTrigger {
   kind: TrancheTriggerKind
-  /** For kind='event': a named business event, e.g. "bank_account_opened". */
+  /**
+   * For kind='event': the name of a WIRED business event — one that code actually dispatches.
+   * See `WIRED_TRANCHE_EVENTS`; while that registry is empty this field cannot be stored.
+   */
   event?: string
   /** For kind='date': ISO date. A REMINDER, never a scheduler — see the header. */
   date?: string
+  /**
+   * For kind='manual': what the human is waiting for, in their own words
+   * (e.g. "Bank account opened (Relay)"). Staff-facing.
+   *
+   * This is where "when the bank account opens" belongs, and it is deliberately FREE TEXT rather
+   * than a named event: the system has no idea when a bank account opens, so a name would imply
+   * a mechanism that does not exist.
+   */
+  label?: string
 }
 
 export interface PaymentPlanPart {
@@ -51,9 +63,32 @@ export interface PaymentPlanPart {
 
 export type PaymentPlan = PaymentPlanPart[]
 
-/** Events a tranche may wait on. A vocabulary, so a typo is a validation error not a silent wait. */
-export const TRANCHE_EVENTS = ["bank_account_opened", "ein_received", "company_formed"] as const
-export type TrancheEvent = (typeof TRANCHE_EVENTS)[number]
+/**
+ * ⛔ EVENTS A TRANCHE MAY WAIT ON — AND THE REGISTRY IS DELIBERATELY EMPTY. (Architect ruling,
+ * 2026-08-10.)
+ *
+ * An event name in stored data is a PROMISE THAT SOMETHING FIRES IT. A later session that finds
+ * one will reasonably assume a dispatcher exists and build on top of that assumption — which is
+ * exactly how a feature comes to depend on a mechanism nobody wrote. So a name may only appear
+ * here once code genuinely dispatches on it, and until then an `event` trigger is refused at
+ * save time rather than accepted and left waiting for ever.
+ *
+ * WHAT THIS REPLACED, and why it was wrong: "bank_account_opened", "ein_received" and
+ * "company_formed" were listed here as if interchangeable. They are not. The system has NO
+ * notion of a bank account opening — formation no longer even creates a banking service delivery,
+ * because banking is self-service — so that one is purely Antonio's judgement and now lives as a
+ * `manual` trigger carrying his own words in `label`. The other two DO correspond to real moments
+ * in the system (an EIN being recorded, a formation being confirmed), but nothing dispatches a
+ * tranche raise from either of them yet, so listing them here would have been the same false
+ * promise in a more plausible costume.
+ *
+ * TO WIRE ONE, all three in the same change: add the name here, dispatch it from the real moment,
+ * and add its client-facing wording in BOTH languages below. Copy ready for the two plausible
+ * candidates when someone does the work:
+ *   ein_received   → "when your EIN is issued" / "al rilascio dell'EIN"
+ *   company_formed → "when your company is formed" / "alla costituzione della società"
+ */
+export const WIRED_TRANCHE_EVENTS: readonly string[] = []
 
 export interface PlanValidation {
   ok: boolean
@@ -113,9 +148,17 @@ export function validatePaymentPlan(raw: unknown): PlanValidation {
     }
     if (kind === "event") {
       const event = typeof trigger.event === "string" ? trigger.event : ""
-      if (!(TRANCHE_EVENTS as readonly string[]).includes(event)) {
+      if (!WIRED_TRANCHE_EVENTS.includes(event)) {
+        // Refused rather than stored-and-ignored. A part waiting on an event nothing fires would
+        // sit unbilled indefinitely, and the offer would look complete while a payment silently
+        // never came due.
         errors.push(
-          `${at}: "${event || "(no event)"}" is not a known trigger event. Known: ${TRANCHE_EVENTS.join(", ")}.`,
+          WIRED_TRANCHE_EVENTS.length === 0
+            ? `${at}: nothing in the system fires an event yet, so a part cannot wait on one. ` +
+              `Use "when you say so" and write what you are waiting for (e.g. "when the bank account opens") — ` +
+              `you raise that part yourself when it happens.`
+            : `${at}: "${event || "(no event)"}" is not an event the system fires. ` +
+              `Ones that are: ${WIRED_TRANCHE_EVENTS.join(", ")}.`,
         )
       }
     }
@@ -134,6 +177,9 @@ export function validatePaymentPlan(raw: unknown): PlanValidation {
         kind: (kind ?? "manual") as TrancheTriggerKind,
         ...(typeof trigger.event === "string" && trigger.event ? { event: trigger.event } : {}),
         ...(typeof trigger.date === "string" && trigger.date ? { date: trigger.date } : {}),
+        ...(typeof trigger.label === "string" && trigger.label.trim()
+          ? { label: trigger.label.trim() }
+          : {}),
       },
       ...(typeof p.internal_label === "string" && p.internal_label
         ? { internal_label: p.internal_label }
@@ -194,11 +240,8 @@ export function laterParts(plan: PaymentPlan): PaymentPlanPart[] {
   return plan.filter((p) => p.trigger.kind !== "signing")
 }
 
-const EVENT_WORDING: Record<string, string> = {
-  bank_account_opened: "when your bank account is open",
-  ein_received: "when your EIN is issued",
-  company_formed: "when your company is formed",
-}
+/** Client wording per WIRED event. Empty while the registry is — see `WIRED_TRANCHE_EVENTS`. */
+const EVENT_WORDING: Record<string, string> = {}
 
 /**
  * The Italian register for the same phrasing — the offer and the contract are bilingual.
@@ -213,11 +256,7 @@ const EVENT_WORDING: Record<string, string> = {
  * applied to Italian rather than a new decision — "rata" is the word his renewal contracts use,
  * so it carries exactly the collision in Italian that "instalment" carries in English.
  */
-const EVENT_WORDING_IT: Record<string, string> = {
-  bank_account_opened: "all'apertura del conto bancario",
-  ein_received: "al rilascio dell'EIN",
-  company_formed: "alla costituzione della società",
-}
+const EVENT_WORDING_IT: Record<string, string> = {}
 
 /**
  * What a CLIENT is told about when a part is due.
@@ -243,7 +282,9 @@ export function clientFacingPartLabel(
         return `${posizione}, entro il ${part.trigger.date}`
       case "manual":
       default:
-        return `${posizione}, fatturata separatamente`
+        // Deliberately NOT the staff label — that may name an internal vendor ("Relay") and is
+        // nobody's business but ours. The client is told the shape of the agreement they made.
+        return `${posizione}, al completamento del passaggio concordato`
     }
   }
   const position = `Part ${part.seq} of ${totalParts}`
@@ -256,7 +297,7 @@ export function clientFacingPartLabel(
       return `${position}, due ${part.trigger.date}`
     case "manual":
     default:
-      return `${position}, invoiced separately`
+      return `${position}, due when the agreed step is complete`
   }
 }
 
