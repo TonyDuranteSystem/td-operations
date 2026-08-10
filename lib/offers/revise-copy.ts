@@ -35,7 +35,12 @@ export interface RevisedOfferSeed {
  *
  * DELIBERATELY NOT COPIED (recorded decisions, not omissions):
  *   selected_services   — the client re-selects on the new version
- *   payment_links       — regenerated at publish for the new version's totals
+ *   payment_links       — a stored link priced for v1's totals must not survive
+ *     into v2. NOTE, verified 2026-08-09 and corrected here: publish does NOT
+ *     regenerate them, as this comment used to claim. Links are minted at offer
+ *     CREATION (the Whop path), and the live card rail builds its session on
+ *     demand from the offer — so a revised offer carries no stored link and the
+ *     client goes through the live route, which reads the amount authority.
  *   expires_at          — a new version gets a fresh expiry
  *   view_count/viewed_at — reset by design (v2 starts unviewed)
  *   status              — always 'draft'

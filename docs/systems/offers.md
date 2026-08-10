@@ -35,6 +35,11 @@ The sales artifact a prospect signs to become a client: an offer/contract publis
 - **R037** — Offer send/publish go through `safeSend()` (idempotency → send → status update after).
 - **R012 / R005** — Client-facing offer links use `APP_BASE_URL` (`app.tonydurante.us`); never the internal `td-operations.vercel.app`.
 - **R035** — Never send an offer to a client without testing it first via `?preview=td`.
+- **A SPLIT SETUP FEE IS A "PARTIAL PAYMENT" / "PAGAMENTO PARZIALE" — NEVER AN "INSTALMENT" OR A "RATA"** (Antonio, 2026-08-09; both labels confirmed by him verbatim). This is a rule about client-facing words, and it exists because the collision is real in two places at once:
+  - **In the client's mind.** "Instalment" (and its Italian equivalent "rata", the word the renewal contracts themselves use) is the vocabulary of the ANNUAL management contract and its January/June payments. A formation client splitting a one-off setup fee is not entering that arrangement, and saying so invites them to think they are.
+  - **In the code.** The two are separate machinery on purpose. Paying an invoice categorised `installment_1`/`installment_2` fires `onInstallmentPaid`, which lifts the client's accountant hand-off gate and advances their tax card, and it feeds the June cron and the instalment badge. A split setup fee therefore uses its own category, `setup_tranche` — reusing an instalment category would be a functional bug, not a naming preference.
+  - **Where it is enforced:** `lib/offers/payment-plan.ts` owns the only sanctioned client-facing phrasing (`PARTIAL_PAYMENT_LABEL`, `clientFacingPartLabel`, `clientFacingSchedule`, `trancheInvoiceDescription`). The guard is `tests/unit/payment-plan.test.ts`, which asserts that no label or description contains "instalment", "installment", or "rata", in either language. If you are changing client-facing tranche wording, that test is the thing that will stop you — and the reason is in the module header.
+  - **Invoice descriptions stay English** even for an Italian client, because every other invoice description in the system is English and localising one line would make a single row of their invoice list disagree with the rest.
 
 ## How it's built
 ### Key files

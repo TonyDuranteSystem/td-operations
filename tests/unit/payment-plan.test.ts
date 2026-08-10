@@ -15,6 +15,7 @@ import {
   clientFacingPartLabel,
   clientFacingSchedule,
   decideSigningBill,
+  PARTIAL_PAYMENT_LABEL,
   laterParts,
   planCurrency,
   planTotal,
@@ -267,7 +268,7 @@ describe("⛔ the Italian register carries the same ban", () => {
       for (const p of plan) {
         const s = clientFacingPartLabel(p, plan.length, lang).toLowerCase()
         expect(s).not.toContain("rata")
-        expect(s).not.toContain("rate")
+        expect(s).not.toContain("rateizzazione")
         expect(s).not.toContain("instalment")
         expect(s).not.toContain("installment")
       }
@@ -387,5 +388,32 @@ describe("decideSigningBill — what signing actually asks the client for", () =
     })
     expect(bill.amount).toBe(1000)
     expect(bill.description).toContain("part 1 of 3")
+  })
+})
+
+describe("⛔ THE APPROVED LABELS — Antonio confirmed both, verbatim", () => {
+  it("is 'Partial Payment' in English and 'Pagamento Parziale' in Italian", () => {
+    expect(PARTIAL_PAYMENT_LABEL.en).toBe("Partial Payment")
+    expect(PARTIAL_PAYMENT_LABEL.it).toBe("Pagamento Parziale")
+  })
+
+  it("neither label carries the renewal contract's vocabulary, in either language", () => {
+    // "rata" is the word the ANNUAL contracts use for their Jan/Jun payments, so it collides in
+    // Italian exactly as "instalment" collides in English — the same rule, not a new one.
+    for (const label of Object.values(PARTIAL_PAYMENT_LABEL)) {
+      const s = label.toLowerCase()
+      expect(s).not.toContain("instalment")
+      expect(s).not.toContain("installment")
+      expect(s).not.toContain("rata")
+      expect(s).not.toContain("rateizzazione")
+    }
+  })
+
+  it("the invoice description uses the English label even for an Italian client", () => {
+    // Deliberate: every invoice description in the system is English, and localising this one
+    // line would make a single row of an Italian client's invoice list disagree with the rest.
+    const plan = validatePaymentPlan(DOMENICO_PLAN).plan!
+    expect(trancheInvoiceDescription(plan[1], 2, "LLC Formation")).toContain("Partial Payment")
+    expect(trancheInvoiceDescription(plan[1], 2, "LLC Formation")).not.toContain("Pagamento")
   })
 })

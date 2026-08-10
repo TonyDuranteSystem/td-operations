@@ -203,10 +203,15 @@ const EVENT_WORDING: Record<string, string> = {
 /**
  * The Italian register for the same phrasing — the offer and the contract are bilingual.
  *
- * ⚠️ "Pagamento Parziale" is the direct rendering of Antonio's own English wording. He gave the
- * rule in English only, so this translation is stated for his confirmation rather than assumed
- * settled. Whatever he lands on, the constraint is identical in both languages: never the
- * renewal contract's vocabulary ("rata", "rateizzazione") for a split setup fee.
+ * ⚠️ PLACEHOLDER WORDING, NOT YET APPROVED. Antonio confirmed the INVOICE LABEL — "Pagamento
+ * Parziale", used verbatim in `trancheInvoiceDescription` — and said nothing about these
+ * schedule lines. Silence is not approval. They are draft copy pending his read of the RENDERED
+ * Italian schedule at the click-through gate, where he sees them in context on screen rather
+ * than as a string in a message, and approves or replaces them before any client sees one.
+ *
+ * The BAN, by contrast, is settled: never "rata" or "rateizzazione". That is Antonio's own rule
+ * applied to Italian rather than a new decision — "rata" is the word his renewal contracts use,
+ * so it carries exactly the collision in Italian that "instalment" carries in English.
  */
 const EVENT_WORDING_IT: Record<string, string> = {
   bank_account_opened: "all'apertura del conto bancario",
@@ -347,15 +352,30 @@ export function decideSigningBill(args: {
 }
 
 /**
+ * THE APPROVED NAME for a part of a split setup fee, in both languages.
+ *
+ * Both confirmed by Antonio: "Partial Payment" is his own wording from Domenico's invoice, and
+ * "Pagamento Parziale" is the Italian he confirmed verbatim. Neither may be swapped for the
+ * renewal contract's vocabulary — see the ban above.
+ */
+export const PARTIAL_PAYMENT_LABEL: Record<"en" | "it", string> = {
+  en: "Partial Payment",
+  it: "Pagamento Parziale",
+}
+
+/**
  * The description that goes ON the invoice for a part.
  *
- * Antonio's own wording on Domenico's invoice is "Partial Payment", because it is a partial of the
- * whole setup fee. Kept verbatim as the pattern.
+ * ⛔ DELIBERATELY ENGLISH-ONLY, and not an oversight. Every invoice description in this system is
+ * English regardless of the client's language — an Italian client's other invoices read
+ * "LLC Formation Package - Mario". Localising this one line would make a single row of their
+ * invoice list disagree with the rest of it. The Italian label exists for the surfaces that DO
+ * render Italian: the offer, the contract and the portal schedule.
  */
 export function trancheInvoiceDescription(
   part: PaymentPlanPart,
   totalParts: number,
   serviceLabel: string,
 ): string {
-  return `${serviceLabel} — Partial Payment (part ${part.seq} of ${totalParts})`
+  return `${serviceLabel} — ${PARTIAL_PAYMENT_LABEL.en} (part ${part.seq} of ${totalParts})`
 }
