@@ -275,6 +275,77 @@ export function clientFacingSchedule(
   }))
 }
 
+export interface SigningBill {
+  /** What to invoice NOW. The commitment total when there is no plan. */
+  amount: number
+  /** The invoice line's description. */
+  description: string
+  /** Lineage for the invoice, or null when this is an ordinary single-payment offer. */
+  tranche: { offerToken: string; seq: number } | null
+  /** `setup_tranche` for a part, null for an ordinary invoice (which keeps today's behaviour). */
+  category: "setup_tranche" | null
+  /**
+   * Set when a stored plan could not be used. The signing MUST still proceed — the client has
+   * already signed and the signature is stored — so the caller bills the whole fee and logs
+   * this. Minting nothing would leave a signed deal with no bill at all, which is worse.
+   */
+  planIgnored: string | null
+}
+
+/**
+ * WHAT SIGNING BILLS — extracted from the offer-signed webhook so it is testable.
+ *
+ * The webhook is a route with a database, an activation row, a chat event and a PDF in it; the
+ * decision about how much money to ask a client for should not be reachable only by firing that
+ * whole thing. Same reasoning as `decideInvoiceAtSigning` and the revised-offer copy list: the
+ * rule lives in a pure function, the route imports it, and the two cannot drift.
+ */
+export function decideSigningBill(args: {
+  rawPlan: unknown
+  offerToken: string
+  /** The whole commitment, from the offer amount engine. */
+  offerGross: number
+  /** The description an ordinary offer would use. */
+  baseDescription: string
+}): SigningBill {
+  const ordinary: SigningBill = {
+    amount: args.offerGross,
+    description: args.baseDescription,
+    tranche: null,
+    category: null,
+    planIgnored: null,
+  }
+
+  if (args.rawPlan == null) return ordinary
+
+  const parsed = validatePaymentPlan(args.rawPlan)
+  if (!parsed.ok || !parsed.plan) {
+    return { ...ordinary, planIgnored: parsed.errors.join(" ") }
+  }
+
+  const signing = signingPart(parsed.plan)
+  // A plan where nothing is due on signing is legal — every part is raised by hand later. Zero
+  // is the honest answer and the caller's invoice predicate turns it into "no invoice", where
+  // falling back to the commitment total would bill the client for money not yet due.
+  if (!signing) {
+    return {
+      amount: 0,
+      description: args.baseDescription,
+      tranche: null,
+      category: null,
+      planIgnored: null,
+    }
+  }
+
+  return {
+    amount: signing.amount,
+    description: trancheInvoiceDescription(signing, parsed.plan.length, args.baseDescription),
+    tranche: { offerToken: args.offerToken, seq: signing.seq },
+    category: "setup_tranche",
+    planIgnored: null,
+  }
+}
+
 /**
  * The description that goes ON the invoice for a part.
  *

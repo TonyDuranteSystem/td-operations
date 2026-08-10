@@ -14,6 +14,7 @@ import {
   TRANCHE_EVENTS,
   clientFacingPartLabel,
   clientFacingSchedule,
+  decideSigningBill,
   laterParts,
   planCurrency,
   planTotal,
@@ -296,5 +297,95 @@ describe("clientFacingSchedule — one sentence per part, in order", () => {
       { seq: 1, amount: 100, currency: "USD", trigger: { kind: "signing" } },
     ]).plan!
     expect(clientFacingSchedule(plan).map((r) => r.seq)).toEqual([1, 2])
+  })
+})
+
+describe("decideSigningBill — what signing actually asks the client for", () => {
+  const base = { offerToken: "domenico-cristiano-2026", offerGross: 2500, baseDescription: "LLC Formation - Domenico" }
+
+  it("bills PART ONE at its own value — never the whole fee reduced later", () => {
+    // Domenico's deal was executed by hand the other way round: one EUR2,500 invoice amended
+    // down to EUR1,250. That was the only move available on an already-signed offer, and it is
+    // explicitly NOT the model's behaviour — a part is minted at its own value.
+    const bill = decideSigningBill({ ...base, rawPlan: DOMENICO_PLAN })
+    expect(bill.amount).toBe(1250)
+    expect(bill.tranche).toEqual({ offerToken: "domenico-cristiano-2026", seq: 1 })
+    expect(bill.category).toBe("setup_tranche")
+    expect(bill.planIgnored).toBe(null)
+  })
+
+  it("⛔ NEVER the annual instalment categories — paying one lifts the accountant hand-off gate", () => {
+    const bill = decideSigningBill({ ...base, rawPlan: DOMENICO_PLAN })
+    expect(bill.category).not.toBe("installment_1")
+    expect(bill.category).not.toBe("installment_2")
+  })
+
+  it("describes the part on the invoice in Antonio's own wording", () => {
+    const bill = decideSigningBill({ ...base, rawPlan: DOMENICO_PLAN })
+    expect(bill.description).toBe("LLC Formation - Domenico — Partial Payment (part 1 of 2)")
+    expect(bill.description.toLowerCase()).not.toContain("instalment")
+  })
+
+  it("an ordinary offer is untouched: whole fee, no lineage, no category", () => {
+    const bill = decideSigningBill({ ...base, rawPlan: null })
+    expect(bill.amount).toBe(2500)
+    expect(bill.description).toBe("LLC Formation - Domenico")
+    expect(bill.tranche).toBe(null)
+    expect(bill.category).toBe(null)
+    expect(bill.planIgnored).toBe(null)
+  })
+
+  it("a plan with nothing due on signing bills ZERO, not the commitment", () => {
+    // Zero reaches decideInvoiceAtSigning, which raises no invoice — correct. Falling back to
+    // the total here would bill a client for money that is not yet due.
+    const bill = decideSigningBill({
+      ...base,
+      rawPlan: [
+        { seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "manual" } },
+        { seq: 2, amount: 1250, currency: "EUR", trigger: { kind: "manual" } },
+      ],
+    })
+    expect(bill.amount).toBe(0)
+    expect(bill.tranche).toBe(null)
+  })
+
+  it("⛔ AN UNUSABLE PLAN STILL BILLS — the client has already signed", () => {
+    // The signature is stored by the time this runs. Refusing to raise anything would leave a
+    // signed deal with no bill at all, which is worse than a bill Antonio has to amend. The
+    // fallback is today's exact behaviour, and the reason travels out for the log.
+    const bill = decideSigningBill({
+      ...base,
+      rawPlan: [{ seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "signing" } }],
+    })
+    expect(bill.amount).toBe(2500)
+    expect(bill.tranche).toBe(null)
+    expect(bill.category).toBe(null)
+    expect(bill.planIgnored).toContain("single payment")
+  })
+
+  it("a mixed-currency plan is unusable, and says so rather than picking a part", () => {
+    const bill = decideSigningBill({
+      ...base,
+      rawPlan: [
+        { seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "signing" } },
+        { seq: 2, amount: 1250, currency: "USD", trigger: { kind: "manual" } },
+      ],
+    })
+    expect(bill.amount).toBe(2500)
+    expect(bill.planIgnored).toContain("ONE currency")
+  })
+
+  it("three parts bill only the first, and the description counts them honestly", () => {
+    const bill = decideSigningBill({
+      ...base,
+      offerGross: 3000,
+      rawPlan: [
+        { seq: 1, amount: 1000, currency: "USD", trigger: { kind: "signing" } },
+        { seq: 2, amount: 1000, currency: "USD", trigger: { kind: "event", event: "ein_received" } },
+        { seq: 3, amount: 1000, currency: "USD", trigger: { kind: "manual" } },
+      ],
+    })
+    expect(bill.amount).toBe(1000)
+    expect(bill.description).toContain("part 1 of 3")
   })
 })
