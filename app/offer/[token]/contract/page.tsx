@@ -630,7 +630,7 @@ export default function ContractPage() {
       // wire panel must quote the part that falls due at signing — the client is signing for
       // the full amount but transferring the first part. `dueNow` equals `net` on every offer
       // without a plan, so this is unchanged for all of them.
-      const correctTotal = computeOfferPayable(
+      const correctPayable = computeOfferPayable(
         {
           services: offer.services,
           cost_summary: offer.cost_summary,
@@ -644,16 +644,32 @@ export default function ContractPage() {
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         { currencyOverride: (offer as any).currency === 'USD' ? 'USD' : 'EUR' },
-      ).dueNow
+      )
+      const correctTotal = correctPayable.dueNow
 
       // Update offer status + recalculated bank amount (retry).
       // This submit handler runs only for NEW contracts
       // (formation/onboarding/tax_return/itin). Renewals are rendered by
       // the RenewalAgreement component (page.tsx:837), which has its own
       // submit flow that fires /api/webhooks/agreement-signed instead.
-      const bankUpdate = correctTotal > 0 && offer.bank_details
+      // ⛔ AN UNUSABLE PLAN QUOTES NO WIRE FIGURE AT ALL.
+      //
+      // When the plan cannot be trusted (a revision changed the offer's total so the parts no
+      // longer add up, say) the amount engine falls back to the whole net. Printing that on the
+      // bank panel is the one genuinely harmful option: the client wires the FULL amount, the
+      // invoice of record settles at the FIRST PART, and the surplus floats — and there is no
+      // disposition for a floating surplus yet. That is an overpayment the system cannot resolve,
+      // not a mismatch between two screens.
+      //
+      // So the panel keeps whatever it already said and we quote nothing new. The client asks,
+      // which is recoverable; an unexplained EUR1,250 sitting in the bank is not. The card rail
+      // already refuses such an offer outright, so both rails now decline rather than disagree.
+      const bankUpdate = correctTotal > 0 && offer.bank_details && !correctPayable.planRefusal
         ? { bank_details: { ...offer.bank_details, amount: `${correctCurrency}${correctTotal.toLocaleString('en-US')}` } }
         : {}
+      if (correctPayable.planRefusal) {
+        console.error(`[offer-contract] wire amount NOT quoted — ${correctPayable.planRefusal}`)
+      }
       // This loop used to exit NORMALLY when all three attempts failed, which is
       // worse than an unchecked call because it LOOKS like it handles errors:
       // the client saw "signed", the offer stayed unsigned, and the activation
