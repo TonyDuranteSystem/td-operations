@@ -169,5 +169,74 @@ export async function POST(request: Request) {
     })
   }
 
+  /**
+   * TEACH FROM A MATCH — the same knowledge, captured where staff already work.
+   *
+   * Antonio has been matching payments by hand for months, and every one of those clicks carries
+   * the answer this system is otherwise guessing at. This turns the routine bank-feed match into
+   * a teaching moment: nine training examples become one per session, indefinitely.
+   *
+   * ⛔ THE CLIENT IS RESOLVED SERVER-SIDE FROM THE MATCHED INVOICE, never taken from the browser.
+   * Same discipline as the public checkout route, which once let a request body decide what was
+   * billable: the stored match IS the decision, so the body may name a transaction and nothing
+   * else. It also means the mapping cannot disagree with the invoice it was learned from.
+   */
+  if (body.action === "teach_from_match") {
+    if (!body.feedId) return NextResponse.json({ error: "Which transaction?" }, { status: 400 })
+
+    const feed = await loadFeed(body.feedId)
+    if (!feed) return NextResponse.json({ error: "That transaction no longer exists." }, { status: 404 })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reading the link the matcher wrote
+    const { data: linked } = await (supabaseAdmin as any)
+      .from("td_bank_feeds")
+      .select("matched_payment_id")
+      .eq("id", body.feedId)
+      .maybeSingle()
+
+    const paymentId = linked?.matched_payment_id as string | null
+    if (!paymentId) {
+      return NextResponse.json(
+        { error: "This transaction is not matched to an invoice yet, so there is no client to remember it for." },
+        { status: 400 },
+      )
+    }
+
+    const { data: payment } = await supabaseAdmin
+      .from("payments")
+      .select("account_id, contact_id, invoice_number")
+      .eq("id", paymentId)
+      .maybeSingle()
+
+    if (!payment?.account_id && !payment?.contact_id) {
+      return NextResponse.json(
+        { error: "That invoice is not attached to a client, so there is nothing to remember." },
+        { status: 400 },
+      )
+    }
+
+    const res = await teachPayerClient({
+      feed,
+      // A company when the invoice has one, otherwise the person — an individual client with no
+      // company is first-class here (34 of them hold real payments).
+      subject: payment.account_id
+        ? { accountId: payment.account_id }
+        : { contactId: payment.contact_id },
+      taughtBy: actor,
+      taughtVia: `confirmed from a manual match on ${payment.invoice_number ?? "an invoice"}`,
+    })
+
+    if (!res.ok) {
+      return NextResponse.json({ error: res.detail ?? "Could not remember this payer.", refusal: res.refusal }, { status: 400 })
+    }
+
+    return NextResponse.json({
+      ok: true,
+      created: res.created,
+      mappingId: res.mappingId,
+      taughtFor: await labelMappings(res.alsoTaughtFor ?? []),
+    })
+  }
+
   return NextResponse.json({ error: `Unknown action: ${body.action ?? "(none)"}` }, { status: 400 })
 }

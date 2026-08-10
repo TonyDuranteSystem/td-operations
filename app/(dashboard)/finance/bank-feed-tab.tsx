@@ -13,6 +13,7 @@ import {
   Loader2, ArrowRight, CheckCircle2, AlertCircle, AlertTriangle,
   Search, Building2, User, Trash2, Check, RotateCw, Copy, Undo2,
 } from 'lucide-react'
+import { RememberPayerButton } from './remember-payer-button'
 import { matchBankFeedToInvoices, ignoreBankFeed, deleteDuplicateBankFeed, restoreBankFeed, claimBankFeedForOwner } from './actions'
 import { invoicePartyName } from '@/lib/finance/invoice-party'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
@@ -1436,6 +1437,15 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
         <span className="font-mono text-xs text-blue-600 shrink-0">{payment?.invoice_number ?? '—'}</span>
       )}
       <span className="text-xs truncate">{getCompanyName(payment?.accounts)}</span>
+      {/* Teach the payer from the match staff just made (dev job ae8b8bb1). Renders nothing for
+          outgoing money and nothing until the row is matched — the client comes from the invoice,
+          resolved server-side, never from this component. */}
+      <RememberPayerButton
+        feedId={feed.id}
+        payerName={feed.sender_name}
+        status={feed.status}
+        matched={!!feed.matched_payment_id}
+      />
       <span className={cn(
         'text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0',
         feed.match_confidence === 'exact' ? 'bg-emerald-100 text-emerald-700' :
