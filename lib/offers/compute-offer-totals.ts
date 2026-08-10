@@ -25,6 +25,8 @@
  *    EUR, else USD (the webhook variant — authoritative for money).
  */
 
+import { planCurrency, planTotal, signingPart, validatePaymentPlan } from "@/lib/offers/payment-plan"
+
 export interface OfferLikeForTotals {
   services?: unknown
   cost_summary?: unknown
@@ -33,6 +35,14 @@ export interface OfferLikeForTotals {
   currency?: string | null
   /** Display-only credit snapshot ("already paid"). */
   credit_amount?: number | string | null
+  /**
+   * WS-C: a setup fee split into parts. NULL for every ordinary offer.
+   *
+   * It belongs in THIS engine rather than at each rail because the engine is the declared
+   * single amount authority, and the failure it exists to prevent is precisely a rail
+   * computing its own idea of the amount. See `dueNow` on the result.
+   */
+  payment_plan?: unknown
 }
 
 export interface ComputeOptions {
@@ -210,6 +220,30 @@ export interface OfferPayable {
   servicesTotal: number
   preconditionsTotal: number
   countedServiceNames: string[]
+  /**
+   * WHAT MUST BE COLLECTED NOW — the number a payment rail charges.
+   *
+   * Equals `net` for every ordinary offer, so a rail switching from `net` to `dueNow` changes
+   * nothing for the offers that exist today. When the offer carries a payment plan, this is the
+   * SIGNING part net of credit, while `gross`/`net` keep describing the whole commitment (the
+   * client is still agreeing to the full amount; they are just not paying it all today).
+   *
+   * Without this distinction the card rail charges the whole fee after signing while the invoice
+   * of record says part one — the same class of contradiction between page and rail that the WS-A
+   * fix existed to end, with the sign flipped.
+   */
+  dueNow: number
+  /** True when the offer carries a payment plan at all, so a rail can say so out loud. */
+  hasPaymentPlan: boolean
+  /**
+   * ⛔ NON-NULL MEANS EVERY MONEY RAIL MUST REFUSE — do not fall back.
+   *
+   * A stored plan that contradicts the offer (a different currency, a total that is not the
+   * offer's) describes a document arguing with itself. `dueNow` still holds the pre-plan
+   * behaviour so nothing crashes, but charging it would collect an amount nobody agreed to.
+   * Refusing is recoverable in thirty seconds; a wrong charge to a real client is not.
+   */
+  planRefusal: string | null
 }
 
 /**
@@ -269,15 +303,84 @@ export function computeOfferPayable(
   const t = computeOfferTotals(offer, options)
   const raw = Number(offer.credit_amount ?? 0)
   const credit = Number.isFinite(raw) && raw > 0 ? Math.min(Math.round(raw * 100) / 100, t.gross) : 0
+  const net = Math.max(Math.round((t.gross - credit) * 100) / 100, 0)
+
+  const plan = resolveDueNow(offer.payment_plan, t.gross, t.currency, credit, net)
+
   return {
     gross: t.gross,
     credit,
-    net: Math.max(Math.round((t.gross - credit) * 100) / 100, 0),
+    net,
     currency: t.currency,
     servicesTotal: t.servicesTotal,
     preconditionsTotal: t.preconditionsTotal,
     countedServiceNames: t.countedServiceNames,
+    dueNow: plan.dueNow,
+    hasPaymentPlan: plan.hasPaymentPlan,
+    planRefusal: plan.refusal,
   }
+}
+
+/**
+ * How much of a payment plan falls due at signing — or why the plan cannot be trusted.
+ *
+ * ── CREDIT LANDS ON THE EARLIEST PARTS FIRST ────────────────────────────────────────────
+ * A client with a paid strategy call behind them owes that much less TODAY, not later. Netting
+ * the credit against the whole commitment and still charging part one in full would collect
+ * money the client does not owe — the exact WS-A defect. Any credit larger than part one spills
+ * forward in part order, so it is never lost and never applied twice.
+ *
+ * ── WHY A CONTRADICTION REFUSES INSTEAD OF PICKING A WINNER ─────────────────────────────
+ * The plan and the itemised offer are two statements of the same agreement. When they disagree,
+ * there is no honest way to choose: the plan may be a typo, or the services may have been edited
+ * after the plan was authored. Charging either figure means charging something nobody agreed to.
+ */
+function resolveDueNow(
+  rawPlan: unknown,
+  gross: number,
+  currency: "EUR" | "USD",
+  credit: number,
+  net: number,
+): { dueNow: number; hasPaymentPlan: boolean; refusal: string | null } {
+  if (rawPlan == null) return { dueNow: net, hasPaymentPlan: false, refusal: null }
+
+  const parsed = validatePaymentPlan(rawPlan)
+  if (!parsed.ok || !parsed.plan) {
+    return {
+      dueNow: net,
+      hasPaymentPlan: true,
+      refusal: `This offer's payment plan is not usable: ${parsed.errors.join(" ")}`,
+    }
+  }
+  const plan = parsed.plan
+
+  const planCcy = planCurrency(plan)
+  if (planCcy !== currency) {
+    return {
+      dueNow: net,
+      hasPaymentPlan: true,
+      refusal: `The payment plan is in ${planCcy} but the offer is in ${currency}.`,
+    }
+  }
+
+  const total = planTotal(plan)
+  if (Math.abs(total - gross) > 0.01) {
+    return {
+      dueNow: net,
+      hasPaymentPlan: true,
+      refusal:
+        `The payment plan adds up to ${total} but the offer totals ${gross}. ` +
+        `Fix whichever is wrong before taking payment.`,
+    }
+  }
+
+  const signing = signingPart(plan)
+  // A plan with no signing part is legal — every part is invoiced by hand later — and then
+  // nothing at all is due at signing. Zero is the correct answer, not a fallback to the total.
+  if (!signing) return { dueNow: 0, hasPaymentPlan: true, refusal: null }
+
+  const dueNow = Math.max(Math.round((signing.amount - credit) * 100) / 100, 0)
+  return { dueNow, hasPaymentPlan: true, refusal: null }
 }
 
 export interface AppliedCreditInput {

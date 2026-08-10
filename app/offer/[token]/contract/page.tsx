@@ -625,6 +625,11 @@ export default function ContractPage() {
       // the credit entirely, so a credit-holding client was shown one figure on
       // the offer page and a larger one on the contract's bank panel — and the
       // overpayment would land nowhere, because settlement caps at the invoice.
+      //
+      // WS-C: DUE NOW, not the whole commitment. When the setup fee is paid in parts, the
+      // wire panel must quote the part that falls due at signing — the client is signing for
+      // the full amount but transferring the first part. `dueNow` equals `net` on every offer
+      // without a plan, so this is unchanged for all of them.
       const correctTotal = computeOfferPayable(
         {
           services: offer.services,
@@ -634,10 +639,12 @@ export default function ContractPage() {
           currency: (offer as any).currency,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           credit_amount: (offer as any).credit_amount,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          payment_plan: (offer as any).payment_plan,
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         { currencyOverride: (offer as any).currency === 'USD' ? 'USD' : 'EUR' },
-      ).net
+      ).dueNow
 
       // Update offer status + recalculated bank amount (retry).
       // This submit handler runs only for NEW contracts

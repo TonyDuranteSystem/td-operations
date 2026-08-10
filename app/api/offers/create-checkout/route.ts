@@ -38,7 +38,10 @@ export async function POST(req: NextRequest) {
       // charge the net. They were missing, and because the reads below are `as`-cast
       // the compiler could not see it — the card silently charged the GROSS, which is
       // the exact bug this workstream shipped to fix.
-      .select("token, client_name, client_email, services, cost_summary, contract_type, selected_services, language, lead_id, payment_type, status, card_fee_rate, currency, credit_amount")
+      // payment_plan is LOAD-BEARING for the same reason credit_amount is: without it the
+      // engine cannot know that only part one falls due today, and the card charges the whole
+      // fee against an invoice of record that says part one.
+      .select("token, client_name, client_email, services, cost_summary, contract_type, selected_services, language, lead_id, payment_type, status, card_fee_rate, currency, credit_amount, payment_plan")
       .eq("token", token)
       .single()
 
@@ -79,10 +82,21 @@ export async function POST(req: NextRequest) {
       selected_services: selectedServices,
       currency: offer.currency,
       credit_amount: offer.credit_amount,
+      payment_plan: (offer as { payment_plan?: unknown }).payment_plan,
     })
-    const total = totals.net
+
+    // WS-C: a setup fee paid in parts charges the SIGNING part, not the whole commitment.
+    // `dueNow` equals `net` for every offer without a plan, so this is a no-op for all of them.
+    const total = totals.dueNow
     const currency: "usd" | "eur" = totals.currency === "EUR" ? "eur" : "usd"
     const selectedNames: string[] = totals.countedServiceNames
+
+    // ⛔ A PLAN THAT CONTRADICTS ITS OFFER STOPS THE CHARGE. R099: the engine's own sentence
+    // travels to the client, because "payment failed" would send them to Antonio with nothing
+    // to act on, and this failure is fixed by editing the offer in under a minute.
+    if (totals.planRefusal) {
+      return NextResponse.json({ error: totals.planRefusal }, { status: 400 })
+    }
 
     if (total <= 0) {
       return NextResponse.json({ error: "Could not determine payment amount" }, { status: 400 })

@@ -201,6 +201,20 @@ const EVENT_WORDING: Record<string, string> = {
 }
 
 /**
+ * The Italian register for the same phrasing — the offer and the contract are bilingual.
+ *
+ * ⚠️ "Pagamento Parziale" is the direct rendering of Antonio's own English wording. He gave the
+ * rule in English only, so this translation is stated for his confirmation rather than assumed
+ * settled. Whatever he lands on, the constraint is identical in both languages: never the
+ * renewal contract's vocabulary ("rata", "rateizzazione") for a split setup fee.
+ */
+const EVENT_WORDING_IT: Record<string, string> = {
+  bank_account_opened: "all'apertura del conto bancario",
+  ein_received: "al rilascio dell'EIN",
+  company_formed: "alla costituzione della società",
+}
+
+/**
  * What a CLIENT is told about when a part is due.
  *
  * ⛔ The only sanctioned client-facing phrasing, and it never says "instalment". A client reading
@@ -208,7 +222,25 @@ const EVENT_WORDING: Record<string, string> = {
  * non-negotiable. "Part 2 of 2, due when your bank account is open" answers what they owe and
  * when; "2nd instalment" answers neither and imports the wrong contract.
  */
-export function clientFacingPartLabel(part: PaymentPlanPart, totalParts: number): string {
+export function clientFacingPartLabel(
+  part: PaymentPlanPart,
+  totalParts: number,
+  lang: "en" | "it" = "en",
+): string {
+  if (lang === "it") {
+    const posizione = `Parte ${part.seq} di ${totalParts}`
+    switch (part.trigger.kind) {
+      case "signing":
+        return `${posizione}, alla firma`
+      case "event":
+        return `${posizione}, ${EVENT_WORDING_IT[part.trigger.event ?? ""] ?? "al completamento del passaggio concordato"}`
+      case "date":
+        return `${posizione}, entro il ${part.trigger.date}`
+      case "manual":
+      default:
+        return `${posizione}, fatturata separatamente`
+    }
+  }
   const position = `Part ${part.seq} of ${totalParts}`
   switch (part.trigger.kind) {
     case "signing":
@@ -221,6 +253,26 @@ export function clientFacingPartLabel(part: PaymentPlanPart, totalParts: number)
     default:
       return `${position}, invoiced separately`
   }
+}
+
+/**
+ * The whole plan as lines a CLIENT reads, in order — the schedule's wording, in one place.
+ *
+ * Formatting the money is the caller's job (each surface already owns its own symbol and locale
+ * rules). What is centralised here is the SENTENCE, so the offer page, the signed contract and
+ * the portal cannot describe the same agreement three different ways — and so the ban on the
+ * renewal vocabulary holds everywhere at once instead of per surface.
+ */
+export function clientFacingSchedule(
+  plan: PaymentPlan,
+  lang: "en" | "it" = "en",
+): Array<{ seq: number; amount: number; currency: string; label: string }> {
+  return plan.map((p) => ({
+    seq: p.seq,
+    amount: p.amount,
+    currency: p.currency,
+    label: clientFacingPartLabel(p, plan.length, lang),
+  }))
 }
 
 /**

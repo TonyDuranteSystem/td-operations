@@ -203,7 +203,17 @@ describe("checksumDefs", () => {
     // the one missing entry added. The checksum equality is what makes that byte-equivalent to
     // a real regeneration — and is the only reason it is acceptable. A larger gap than a single
     // constraint should go through the real script, not this route.
-    expect(checksumDefs(prodConstraints())).toBe("29e281e876d0dfeb7239173d0bd1811f")
+    //
+    // Re-pinned 2026-08-09: 207 -> 210, the two WS-C migrations Antonio applied by hand
+    // (the payer→client map's two rules, the tranche pair rule) plus payments' category list
+    // widened with 'setup_tranche'. Same route as its two predecessors and for the same
+    // reason — this worktree has no .env.prod.local, and fetching production credentials to
+    // read a list of allowed strings is precisely the exposure the committed-snapshot design
+    // avoids. Production was made to compute its own digest and the rewritten file was
+    // accepted only BECAUSE it matched; the refresh script REFUSED to write on mismatch, so a
+    // mistyped or invented definition could not have reached this file:
+    //   -> 39916b7ce4711871c2416ae118985559
+    expect(checksumDefs(prodConstraints())).toBe("39916b7ce4711871c2416ae118985559")
   })
 })
 
@@ -231,8 +241,13 @@ describe("the committed production snapshot", () => {
     // exactly the one added, so nothing else had accumulated unrecorded in the two days
     // since the previous refresh — and that fact is WHY this one could be done as a
     // single-entry addition verified by checksum instead of a full regeneration.
-    expect(prodSnapshotMeta().count).toBe(207)
-    expect(Object.keys(prodConstraints())).toHaveLength(207)
+    // 08-09: 207 -> 210, the two WS-C migrations. The count moved by exactly the three added
+    // (payer_client_map's two rules + payments_tranche_pair_check) with one definition widened
+    // rather than added, so a full week of hand-applied production DDL accumulated NOTHING
+    // unrecorded — which is again what made a delta refresh verified by digest legitimate
+    // instead of requiring a full regeneration.
+    expect(prodSnapshotMeta().count).toBe(210)
+    expect(Object.keys(prodConstraints())).toHaveLength(210)
   })
 
   it("PRODUCTION accepts every value the code can write", () => {

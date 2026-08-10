@@ -13,6 +13,7 @@ import { describe, it, expect } from "vitest"
 import {
   TRANCHE_EVENTS,
   clientFacingPartLabel,
+  clientFacingSchedule,
   laterParts,
   planCurrency,
   planTotal,
@@ -246,5 +247,54 @@ describe("reconciliation against Domenico's hand-executed deal", () => {
     expect(laterParts(plan)).toHaveLength(1)
     expect(laterParts(plan)[0].amount).toBe(1250) // what is still outstanding
     expect(laterParts(plan)[0].trigger.event).toBe("bank_account_opened") // when it falls due
+  })
+})
+
+describe("⛔ the Italian register carries the same ban", () => {
+  const plan = validatePaymentPlan(DOMENICO_PLAN).plan!
+
+  it("says what is due and when, in Italian", () => {
+    expect(clientFacingPartLabel(plan[0], 2, "it")).toBe("Parte 1 di 2, alla firma")
+    expect(clientFacingPartLabel(plan[1], 2, "it")).toBe("Parte 2 di 2, all'apertura del conto bancario")
+  })
+
+  it("NEVER uses the renewal contract's Italian vocabulary either", () => {
+    // "rata" / "rateizzazione" is what the ANNUAL contract calls its Jan/Jun payments. A
+    // formation client must not see it, for the same reason the English side must not see
+    // "instalment": it imports the wrong contract and the wrong machinery.
+    for (const lang of ["en", "it"] as const) {
+      for (const p of plan) {
+        const s = clientFacingPartLabel(p, plan.length, lang).toLowerCase()
+        expect(s).not.toContain("rata")
+        expect(s).not.toContain("rate")
+        expect(s).not.toContain("instalment")
+        expect(s).not.toContain("installment")
+      }
+    }
+  })
+
+  it("defaults to English when no language is given, so a missing argument cannot leak Italian", () => {
+    expect(clientFacingPartLabel(plan[0], 2)).toBe(clientFacingPartLabel(plan[0], 2, "en"))
+  })
+})
+
+describe("clientFacingSchedule — one sentence per part, in order", () => {
+  it("describes the whole agreement without formatting the money", () => {
+    const plan = validatePaymentPlan(DOMENICO_PLAN).plan!
+    const rows = clientFacingSchedule(plan)
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toEqual({ seq: 1, amount: 1250, currency: "EUR", label: "Part 1 of 2, due on signing" })
+    expect(rows[1].label).toBe("Part 2 of 2, due when your bank account is open")
+    // Money stays a number: each surface owns its own symbol and locale rules, and a
+    // pre-formatted string here would be a fourth place for them to disagree.
+    expect(typeof rows[1].amount).toBe("number")
+  })
+
+  it("keeps part order regardless of how the plan was authored", () => {
+    const plan = validatePaymentPlan([
+      { seq: 2, amount: 100, currency: "USD", trigger: { kind: "manual" } },
+      { seq: 1, amount: 100, currency: "USD", trigger: { kind: "signing" } },
+    ]).plan!
+    expect(clientFacingSchedule(plan).map((r) => r.seq)).toEqual([1, 2])
   })
 })
