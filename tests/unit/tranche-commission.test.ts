@@ -15,8 +15,10 @@ import {
   commissionForPart,
   commissionDueAtSigning,
   trancheCommissionKey,
+  decideAccrual,
 } from "@/lib/offers/tranche-commission"
 import { validatePaymentPlan, type PaymentPlan } from "@/lib/offers/payment-plan"
+import { DEAD_INVOICE_STATUSES, computePlanStatus } from "@/lib/offers/payment-plan-state"
 
 /**
  * Build a REAL validated plan. It throws on refusal on purpose: the first version used `.plan!`
@@ -187,5 +189,101 @@ describe("⛔ the idempotency key is per PART", () => {
     // A tranche credit must never be mistaken for the pre-plan credit on the same offer.
     expect(trancheCommissionKey("mario-rossi-2026", 1)).not.toContain("referral:")
     expect(trancheCommissionKey("mario-rossi-2026", 1)).toContain("referral-tranche:")
+  })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+//  WHEN a share accrues — the dead-part question, proved with the SAME three dead states
+//  used on the database index, because the two must agree about what "over" means.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+
+describe("⛔ accrual is on PAYMENT, never on raising", () => {
+  it("does not accrue for a part that has only been raised", () => {
+    const d = decideAccrual("credit_note", "raised_unsent")
+    expect(d.accrue).toBe(false)
+    expect(d.refusal).toBe("not_paid_yet")
+  })
+
+  it("does not accrue for a part that is sent and awaiting payment", () => {
+    expect(decideAccrual("credit_note", "awaiting_payment").accrue).toBe(false)
+  })
+
+  it("does not accrue for a PART-paid part", () => {
+    // Some money arrived, not all of it. Crediting a full share here would pay a partner for
+    // money the client still owes.
+    expect(decideAccrual("credit_note", "part_paid").accrue).toBe(false)
+  })
+
+  it("accrues once the part is paid", () => {
+    expect(decideAccrual("percentage", "paid").accrue).toBe(true)
+  })
+
+  it.each(DEAD_INVOICE_STATUSES)(
+    "a %s invoice leaves its part unaccrued — nothing was earned, so nothing needs reversing",
+    (status) => {
+      // The point: a dead invoice makes the part read as never-raised, which is exactly the state
+      // that cannot accrue. Raise, void, raise again, pay once = exactly one share, because only
+      // the payment counted. No special case for dead parts is needed anywhere.
+      const plan2 = plan(1250, 1250)
+      const st = computePlanStatus(plan2, [
+        {
+          id: "dead-1",
+          invoice_number: "INV-000502",
+          invoice_status: status,
+          amount_paid: 0,
+          amount: 1250,
+          tranche_seq: 2,
+          due_date: null,
+        },
+      ])
+      expect(st.parts[1].state).toBe("not_raised")
+      expect(decideAccrual("credit_note", st.parts[1].state).accrue).toBe(false)
+    },
+  )
+
+  it("a re-raised part accrues exactly once — on the payment, not on either raise", () => {
+    const plan2 = plan(1250, 1250)
+    const st = computePlanStatus(plan2, [
+      { id: "dead", invoice_number: "INV-1", invoice_status: "Voided", amount_paid: 0, amount: 1250, tranche_seq: 2, due_date: null },
+      { id: "live", invoice_number: "INV-2", invoice_status: "Paid", amount_paid: 1250, amount: 1250, tranche_seq: 2, due_date: null },
+    ])
+    expect(st.parts[1].state).toBe("paid")
+    expect(decideAccrual("credit_note", st.parts[1].state).accrue).toBe(true)
+    // And the key for that part is stable, so the credit cannot be issued twice for it.
+    expect(trancheCommissionKey("t", 2)).toBe(trancheCommissionKey("t", 2))
+  })
+})
+
+describe("⛔ a price-difference arrangement is REFUSED, not sliced", () => {
+  it("refuses even when the part is paid", () => {
+    // Excluded and loud beats included and wrong. Its commission is the partner's margin over
+    // TD's base cost, and TD pays that cost up front rather than in step with the client's parts.
+    const d = decideAccrual("price_difference", "paid")
+    expect(d.accrue).toBe(false)
+    expect(d.refusal).toBe("not_divisible_by_part")
+  })
+
+  it("explains WHY in words a person can act on", () => {
+    const d = decideAccrual("price_difference", "paid")
+    expect(d.reason).toContain("base cost")
+    expect(d.reason).toContain("by hand")
+  })
+
+  it("does NOT fall through the percentage path and invent a number", () => {
+    // The failure this prevents: a partner silently credited a pro-rata slice of a margin that
+    // was never agreed per part.
+    expect(decideAccrual("price_difference", "paid").accrue).toBe(false)
+  })
+
+  it("the two share-of-fee arrangements DO accrue per part", () => {
+    for (const t of ["percentage", "credit_note"]) {
+      expect(decideAccrual(t, "paid").accrue).toBe(true)
+    }
+  })
+
+  it("an unknown commission type is treated as a share of the fee, like the existing calculator", () => {
+    // Deliberate consistency with the calculator's own default rather than a new refusal: a new
+    // type should be decided where commission is CALCULATED, not silently blocked here.
+    expect(decideAccrual("something_new", "paid").accrue).toBe(true)
   })
 })

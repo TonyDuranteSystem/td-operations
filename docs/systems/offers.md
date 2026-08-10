@@ -65,6 +65,19 @@ The sales artifact a prospect signs to become a client: an offer/contract publis
 - **`POST /api/offers/create-checkout` is PUBLIC — never trust its body for anything billable** (2026-07-14, `ba7bfd8d`). It is token-only with no session. It once let the body override `selected_services`, so a signed client could bill themselves for less than their contract. Once an offer is `signed`/`completed` the STORED selection is the contract and the body is ignored — enforced by `resolveBillableSelection` (`lib/payments/billable-selection.ts`), not by the UI. Disabling checkboxes is cosmetic; the endpoint is callable directly.
 - **The 5% card fee — NOW CHARGED (2026-07-15, dev_task `6ec6872a`, SANDBOX/branch `claude/card-fee-charge-6ec6872a`, NOT yet on prod).** It had regressed when Stripe replaced Whop (~2026-04-03): both Stripe paths handed the BASE amount while every screen advertised "+5%" (no Stripe payment in history ever collected it — Tamás Fazekas 2026-07-14 shown €3,150, charged €3,000). Both checkout routes now charge `base × (1 + rate)`, where `rate` is PINNED on the offer at creation (`offers.card_fee_rate`) so a later config change never re-prices a signed deal, and the Stripe webhook books the fee onto the invoice from the ACTUAL charge before the settle. Full mechanism + the money invariants + the "no auto-refund" assumption live in `billing-invoicing.md`. The earlier reverted attempt (updated only one money column) is why this went through 3 supervisor rounds; the shipped design routes booking through the existing single money-writer and keeps `card_fee_amount` as the authoritative column. **DEFERRED (gated fast-follow, do NOT expose without the other half):** a CRM screen to edit the rate + driving the "+5%" contract wording from the pinned rate — until that ships the rate stays 5% everywhere (display == charge, no drift), and the editor must not be exposed or a 7% charge could sit against a 5% contract.
 
+## ⛔ STANDING WARNING: A GREEN CHECK IS NOT EVIDENCE UNTIL YOU KNOW WHAT IT MEASURED
+
+Six times in the payment-plan workstream alone (2026-08), a check reported on something other than what it claimed. Same shape every time, six different disguises — so treat this as a rule, not an anecdote:
+
+1. **A query on a column that does not exist** returns empty, so an absence test passes vacuously. Always carry a positive control.
+2. **A test mock that ignored the filter it was given** returned every fixture row regardless of what the code asked for, so a "refuses when a paid part exists" test passed for the wrong reason.
+3. **A word ban written as a substring match** fired on the ordinary Italian word *separatamente* (it contains *rata*), so the guard was rejecting innocent copy rather than the banned vocabulary.
+4. **A test fixture asserting its own validity** (`.plan!`) handed `undefined` into the function under test, so a mistake in the FIXTURE surfaced as a crash inside production code and read like a production bug.
+5. **A snapshot refreshed from rows I supplied myself** would have accepted whatever I typed; only comparing a locally-computed digest against the one the database computes over its OWN rows made it evidence.
+6. **A helper that looked like protection but was inert** — a per-part idempotency key passed to an issuer that hardcodes its own key and ignores the argument entirely.
+
+**The test to apply:** before treating a green result as proof, state what would have to be broken for it to go red. If you cannot name that, the check is decoration. Prefer mutation (break the code, watch the specific cells fail) over green, and prefer a positive control over an empty result.
+
 ## ⛔ A DISPLAYED PRICE IS NOT WHAT GETS CHARGED (2026-08-10 — the rule that outranks every "just hide the figure" fix)
 
 Learned while making the contract's payment panel safe for a split setup fee, and it generalises well beyond payment plans.

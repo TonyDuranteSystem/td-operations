@@ -32,6 +32,7 @@
  */
 
 import type { PaymentPlan } from "@/lib/offers/payment-plan"
+import type { PartState } from "@/lib/offers/payment-plan-state"
 
 export interface PartCommission {
   seq: number
@@ -118,4 +119,95 @@ export function commissionDueAtSigning(
  */
 export function trancheCommissionKey(offerToken: string, seq: number): string {
   return `referral-tranche:${offerToken}:${seq}`
+}
+
+/**
+ * ══════════════════════════════════════════════════════════════════════════════════════════
+ *  WHEN A SHARE ACCRUES — and the two things that must change before any of this is wired
+ * ══════════════════════════════════════════════════════════════════════════════════════════
+ *
+ * ── WHAT I VERIFIED IN THE EXISTING CREDIT PATH (not assumed) ──────────────────────────────
+ *
+ * The referral credit-note issuer HARDCODES its own idempotency key — one per REFERRAL — and it
+ * does not accept a key from the caller. It also OVERWRITES the referral's recorded amount rather
+ * than adding to it, and flips the referral's status to credited.
+ *
+ * So the risk is the OPPOSITE of the one worth worrying about. It is not that a partner gets paid
+ * twice for one part: it is that paying part two hits the same key, returns part one's existing
+ * credit note, and the rest of the commission is NEVER PAID — silently, with the referral looking
+ * settled. Under-crediting a partner who is owed money, invisibly.
+ *
+ * `trancheCommissionKey` above is therefore INERT until the issuer accepts a caller key and the
+ * referral row accumulates instead of overwriting. Both are listed on the job as prerequisites.
+ * Nothing here is wired, so nothing is currently wrong in production — but the helper must not be
+ * mistaken for protection it cannot yet provide.
+ *
+ * ── ACCRUAL IS ON PAYMENT, NEVER ON RAISING ────────────────────────────────────────────────
+ *
+ * A share is earned when the money for that part arrives. That single rule answers the dead-part
+ * question without a special case: an invoice that was voided, cancelled or turned into a credit
+ * note leaves its part with no live invoice at all, which is indistinguishable from never raised —
+ * so it never accrued, and there is nothing to reverse. Raise, void, raise again, pay once:
+ * exactly one share, because only the payment counted.
+ *
+ * ── THE GAP THIS DOES NOT CLOSE, STATED RATHER THAN HIDDEN ─────────────────────────────────
+ *
+ * A part that is PAID and only then refunded or credit-noted has ALREADY accrued, and there is no
+ * reversal path anywhere in the referral machinery — the credit note sits on the referrer's account
+ * and nets against their next invoice. Reversing it means editing a document the referrer can see.
+ * That is out of scope here and belongs with whatever handles client refunds, which does not exist
+ * yet either.
+ */
+
+export type AccrualRefusal =
+  /** The arrangement's commission is not a share of the fee, so it cannot be split by part. */
+  | "not_divisible_by_part"
+  /** The money for this part has not arrived. */
+  | "not_paid_yet"
+
+export interface AccrualDecision {
+  accrue: boolean
+  refusal: AccrualRefusal | null
+  /** Plain-English reason, for the staff-facing task when a commission needs a human. */
+  reason: string
+}
+
+/**
+ * Should this part's share be credited now?
+ *
+ * ⛔ A PRICE-DIFFERENCE ARRANGEMENT IS REFUSED OUTRIGHT, and that is deliberate rather than
+ * unfinished. Its commission is not a percentage of the fee — it is the margin between what the
+ * partner charged and TD's own base cost for the work. TD incurs that base cost UP FRONT (the
+ * filing fees at formation), not in step with the client's parts, so slicing the margin pro-rata
+ * would over-credit the partner on part one and could hand them money before TD has covered its
+ * own costs. There is no arithmetic that fixes that, because the question is what the partner
+ * agreed, not how to divide a number.
+ *
+ * Same principle as the empty event registry: excluded and loud beats included and wrong. A plan
+ * sold under a price-difference arrangement goes to a human, who decides the split for that deal.
+ */
+export function decideAccrual(
+  commissionType: string,
+  partState: PartState,
+): AccrualDecision {
+  if (commissionType === "price_difference") {
+    return {
+      accrue: false,
+      refusal: "not_divisible_by_part",
+      reason:
+        "This is a price-difference arrangement: the commission is the partner's margin over TD's " +
+        "base cost, not a share of the fee, and TD pays that base cost up front rather than in " +
+        "step with the client's parts. Decide this partner's split by hand.",
+    }
+  }
+
+  if (partState !== "paid") {
+    return {
+      accrue: false,
+      refusal: "not_paid_yet",
+      reason: "Commission is earned when the money for a part arrives, not when the part is raised.",
+    }
+  }
+
+  return { accrue: true, refusal: null, reason: "This part is paid, so its share is earned." }
 }
