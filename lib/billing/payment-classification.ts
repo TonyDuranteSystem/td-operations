@@ -21,6 +21,13 @@
  *  = add it here + a one-line CHECK migration. */
 export const PAYMENT_CATEGORIES = [
   'setup_fee',
+  // A part of a setup fee paid in parts (WS-C item 2, offer payment plans).
+  // ⛔ DELIBERATELY NOT installment_1/installment_2: paying an invoice categorised as those fires
+  // the paid-installment handler, which lifts a client's ACCOUNTANT HAND-OFF GATE and advances
+  // their tax card, and feeds the June cron and the instalment badge. A formation client paying
+  // part two of a setup fee must trigger none of that. Client-facing wording is "Partial Payment"
+  // — never "instalment", which belongs to the renewal contract.
+  'setup_tranche',
   'installment_1',
   'installment_2',
   'annual_renewal',

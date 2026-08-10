@@ -1,0 +1,250 @@
+/**
+ * Offer payment plans — the shape of a setup fee paid in parts. WS-C item 2, dev job `c0a61e44`.
+ *
+ * The three constraints from the approved design are asserted here, because this module is the
+ * only thing between a typo in a jsonb column and a client being billed the wrong figure:
+ * N parts (not two slots), triggers as data with no scheduler, and ONE currency refused at save.
+ *
+ * Domenico's real plan is the primary fixture: EUR1,250 on signing, EUR1,250 when his bank account
+ * opens. His deal was executed by hand before this model existed, so the model has a reference
+ * implementation to reconcile against rather than a specification to interpret.
+ */
+import { describe, it, expect } from "vitest"
+import {
+  TRANCHE_EVENTS,
+  clientFacingPartLabel,
+  laterParts,
+  planCurrency,
+  planTotal,
+  signingPart,
+  trancheInvoiceDescription,
+  validatePaymentPlan,
+  type PaymentPlan,
+} from "@/lib/offers/payment-plan"
+
+/** Domenico's agreement, as the model should hold it. */
+const DOMENICO_PLAN = [
+  { seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "signing" }, internal_label: "on signing" },
+  {
+    seq: 2,
+    amount: 1250,
+    currency: "EUR",
+    trigger: { kind: "event", event: "bank_account_opened" },
+    internal_label: "when Relay opens",
+  },
+]
+
+describe("validatePaymentPlan — accepts a real plan", () => {
+  it("accepts Domenico's two-part plan and normalises it", () => {
+    const res = validatePaymentPlan(DOMENICO_PLAN)
+    expect(res.ok).toBe(true)
+    expect(res.errors).toEqual([])
+    expect(res.plan).toHaveLength(2)
+    expect(planTotal(res.plan!)).toBe(2500)
+    expect(planCurrency(res.plan!)).toBe("EUR")
+  })
+
+  it("treats no plan as a single payment rather than an error", () => {
+    expect(validatePaymentPlan(null).ok).toBe(true)
+    expect(validatePaymentPlan(null).plan).toBeUndefined()
+  })
+
+  it("uppercases the currency so 'eur' and 'EUR' are not two currencies", () => {
+    const res = validatePaymentPlan([
+      { seq: 1, amount: 100, currency: "eur", trigger: { kind: "signing" } },
+      { seq: 2, amount: 100, currency: "EUR", trigger: { kind: "manual" } },
+    ])
+    expect(res.ok).toBe(true)
+    expect(planCurrency(res.plan!)).toBe("EUR")
+  })
+})
+
+describe("CONSTRAINT 1 — N parts, not two slots", () => {
+  it("accepts a three-part plan with no code change", () => {
+    const res = validatePaymentPlan([
+      { seq: 1, amount: 1000, currency: "USD", trigger: { kind: "signing" } },
+      { seq: 2, amount: 1000, currency: "USD", trigger: { kind: "event", event: "ein_received" } },
+      { seq: 3, amount: 500, currency: "USD", trigger: { kind: "manual" } },
+    ])
+    expect(res.ok).toBe(true)
+    expect(res.plan).toHaveLength(3)
+    expect(planTotal(res.plan!)).toBe(2500)
+  })
+
+  it("refuses gaps or repeats in the part numbers", () => {
+    const gap = validatePaymentPlan([
+      { seq: 1, amount: 100, currency: "USD", trigger: { kind: "signing" } },
+      { seq: 3, amount: 100, currency: "USD", trigger: { kind: "manual" } },
+    ])
+    expect(gap.ok).toBe(false)
+    expect(gap.errors.join(" ")).toContain("numbered 1 to 2")
+  })
+})
+
+describe("CONSTRAINT 2 — triggers are data, and there is no scheduler", () => {
+  it("stores each of the four trigger kinds", () => {
+    for (const kind of ["signing", "event", "date", "manual"] as const) {
+      const part =
+        kind === "event"
+          ? { seq: 1, amount: 100, currency: "USD", trigger: { kind, event: "bank_account_opened" } }
+          : kind === "date"
+            ? { seq: 1, amount: 100, currency: "USD", trigger: { kind, date: "2026-09-01" } }
+            : { seq: 1, amount: 100, currency: "USD", trigger: { kind } }
+      const res = validatePaymentPlan([part, { seq: 2, amount: 100, currency: "USD", trigger: { kind: "manual" } }])
+      expect(res.ok).toBe(true)
+      expect(res.plan![0].trigger.kind).toBe(kind)
+    }
+  })
+
+  it("refuses an unknown event rather than waiting for something that never fires", () => {
+    const res = validatePaymentPlan([
+      { seq: 1, amount: 100, currency: "USD", trigger: { kind: "signing" } },
+      { seq: 2, amount: 100, currency: "USD", trigger: { kind: "event", event: "relay_opens_maybe" } },
+    ])
+    expect(res.ok).toBe(false)
+    expect(res.errors.join(" ")).toContain("not a known trigger event")
+    // The vocabulary is finite, so a typo is a validation error and not a silent forever-wait.
+    expect(TRANCHE_EVENTS).toContain("bank_account_opened")
+  })
+
+  it("refuses a date trigger with no date", () => {
+    const res = validatePaymentPlan([
+      { seq: 1, amount: 100, currency: "USD", trigger: { kind: "signing" } },
+      { seq: 2, amount: 100, currency: "USD", trigger: { kind: "date" } },
+    ])
+    expect(res.ok).toBe(false)
+    expect(res.errors.join(" ")).toContain("needs a date")
+  })
+
+  it("'manual' is always available and needs nothing else", () => {
+    const res = validatePaymentPlan([
+      { seq: 1, amount: 100, currency: "USD", trigger: { kind: "manual" } },
+      { seq: 2, amount: 100, currency: "USD", trigger: { kind: "manual" } },
+    ])
+    expect(res.ok).toBe(true)
+  })
+})
+
+describe("CONSTRAINT 3 — one currency, refused at save", () => {
+  it("⛔ REFUSES a mixed-currency plan, and explains why", () => {
+    const res = validatePaymentPlan([
+      { seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "signing" } },
+      { seq: 2, amount: 1250, currency: "USD", trigger: { kind: "manual" } },
+    ])
+    expect(res.ok).toBe(false)
+    const why = res.errors.join(" ")
+    expect(why).toContain("ONE currency")
+    expect(why).toContain("EUR and USD")
+    // The reason matters: refusing here is the only place the error can be explained, because
+    // credit, bank matching and activation each fail separately and much further down.
+    expect(why).toContain("single-currency")
+  })
+
+  it("does not coerce or pick a winner — it refuses", () => {
+    const res = validatePaymentPlan([
+      { seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "signing" } },
+      { seq: 2, amount: 1250, currency: "USD", trigger: { kind: "manual" } },
+    ])
+    expect(res.plan).toBeUndefined()
+  })
+})
+
+describe("the activation anchor", () => {
+  it("finds the signing part", () => {
+    const plan = validatePaymentPlan(DOMENICO_PLAN).plan!
+    expect(signingPart(plan)?.seq).toBe(1)
+    expect(signingPart(plan)?.amount).toBe(1250)
+  })
+
+  it("refuses two signing parts — two anchors makes 'is this deal live?' ambiguous", () => {
+    const res = validatePaymentPlan([
+      { seq: 1, amount: 100, currency: "USD", trigger: { kind: "signing" } },
+      { seq: 2, amount: 100, currency: "USD", trigger: { kind: "signing" } },
+    ])
+    expect(res.ok).toBe(false)
+    expect(res.errors.join(" ")).toContain("Only one part can be due on signing")
+  })
+
+  it("separates the parts a human mints later", () => {
+    const plan = validatePaymentPlan(DOMENICO_PLAN).plan!
+    expect(laterParts(plan).map((p) => p.seq)).toEqual([2])
+  })
+})
+
+describe("⛔ CLIENT-FACING WORDING — never 'instalment'", () => {
+  const plan = validatePaymentPlan(DOMENICO_PLAN).plan!
+
+  it("says what is due and when, in the client's terms", () => {
+    expect(clientFacingPartLabel(plan[0], 2)).toBe("Part 1 of 2, due on signing")
+    expect(clientFacingPartLabel(plan[1], 2)).toBe("Part 2 of 2, due when your bank account is open")
+  })
+
+  it("NEVER uses the renewal contract's vocabulary, in any label or description", () => {
+    // Antonio's rule, non-negotiable: "instalment" belongs to the renewal contract. A formation
+    // client must not see it — the separation from the annual Jan/Jun machinery holds in the words
+    // as well as in the data.
+    const strings = [
+      ...plan.map((p) => clientFacingPartLabel(p, plan.length)),
+      ...plan.map((p) => trancheInvoiceDescription(p, plan.length, "LLC Formation")),
+    ]
+    for (const s of strings) {
+      expect(s.toLowerCase()).not.toContain("instalment")
+      expect(s.toLowerCase()).not.toContain("installment")
+    }
+  })
+
+  it("uses Antonio's own invoice wording — 'Partial Payment'", () => {
+    expect(trancheInvoiceDescription(plan[1], 2, "LLC Formation")).toBe(
+      "LLC Formation — Partial Payment (part 2 of 2)",
+    )
+  })
+
+  it("falls back to neutral wording for an event it has no phrasing for", () => {
+    const odd = { seq: 2, amount: 1, currency: "USD", trigger: { kind: "event" as const, event: "company_formed" } }
+    expect(clientFacingPartLabel(odd, 2)).toContain("when your company is formed")
+  })
+})
+
+describe("the arithmetic that reaches a contract", () => {
+  it("rounds the total to cents (no floating-point dust in a client's figure)", () => {
+    const plan: PaymentPlan = [
+      { seq: 1, amount: 0.1, currency: "USD", trigger: { kind: "signing" } },
+      { seq: 2, amount: 0.2, currency: "USD", trigger: { kind: "manual" } },
+    ]
+    expect(planTotal(plan)).toBe(0.3)
+  })
+
+  it("refuses a zero or negative part", () => {
+    const res = validatePaymentPlan([
+      { seq: 1, amount: 0, currency: "USD", trigger: { kind: "signing" } },
+      { seq: 2, amount: -50, currency: "USD", trigger: { kind: "manual" } },
+    ])
+    expect(res.ok).toBe(false)
+    expect(res.errors.filter((e) => e.includes("greater than zero"))).toHaveLength(2)
+  })
+
+  it("calls a one-part plan out as pointless rather than accepting it silently", () => {
+    const res = validatePaymentPlan([{ seq: 1, amount: 100, currency: "USD", trigger: { kind: "signing" } }])
+    expect(res.ok).toBe(false)
+    expect(res.errors.join(" ")).toContain("just a single payment")
+  })
+
+  it("refuses something that is not a list at all", () => {
+    expect(validatePaymentPlan("two payments").ok).toBe(false)
+    expect(validatePaymentPlan({ seq: 1 }).ok).toBe(false)
+    expect(validatePaymentPlan([]).ok).toBe(false)
+  })
+})
+
+describe("reconciliation against Domenico's hand-executed deal", () => {
+  it("the model's view of his plan matches what was actually done", () => {
+    // Executed by hand on production 2026-08-09: invoice brought to EUR1,250, settled in full,
+    // activation fired from that payment, EUR1,250 still owed on the Relay trigger.
+    const plan = validatePaymentPlan(DOMENICO_PLAN).plan!
+    expect(planTotal(plan)).toBe(2500) // his signed commitment, unchanged
+    expect(signingPart(plan)!.amount).toBe(1250) // the invoice he actually paid
+    expect(laterParts(plan)).toHaveLength(1)
+    expect(laterParts(plan)[0].amount).toBe(1250) // what is still outstanding
+    expect(laterParts(plan)[0].trigger.event).toBe("bank_account_opened") // when it falls due
+  })
+})
