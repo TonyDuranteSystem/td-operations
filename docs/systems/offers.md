@@ -65,6 +65,25 @@ The sales artifact a prospect signs to become a client: an offer/contract publis
 - **`POST /api/offers/create-checkout` is PUBLIC — never trust its body for anything billable** (2026-07-14, `ba7bfd8d`). It is token-only with no session. It once let the body override `selected_services`, so a signed client could bill themselves for less than their contract. Once an offer is `signed`/`completed` the STORED selection is the contract and the body is ignored — enforced by `resolveBillableSelection` (`lib/payments/billable-selection.ts`), not by the UI. Disabling checkboxes is cosmetic; the endpoint is callable directly.
 - **The 5% card fee — NOW CHARGED (2026-07-15, dev_task `6ec6872a`, SANDBOX/branch `claude/card-fee-charge-6ec6872a`, NOT yet on prod).** It had regressed when Stripe replaced Whop (~2026-04-03): both Stripe paths handed the BASE amount while every screen advertised "+5%" (no Stripe payment in history ever collected it — Tamás Fazekas 2026-07-14 shown €3,150, charged €3,000). Both checkout routes now charge `base × (1 + rate)`, where `rate` is PINNED on the offer at creation (`offers.card_fee_rate`) so a later config change never re-prices a signed deal, and the Stripe webhook books the fee onto the invoice from the ACTUAL charge before the settle. Full mechanism + the money invariants + the "no auto-refund" assumption live in `billing-invoicing.md`. The earlier reverted attempt (updated only one money column) is why this went through 3 supervisor rounds; the shipped design routes booking through the existing single money-writer and keeps `card_fee_amount` as the authoritative column. **DEFERRED (gated fast-follow, do NOT expose without the other half):** a CRM screen to edit the rate + driving the "+5%" contract wording from the pinned rate — until that ships the rate stays 5% everywhere (display == charge, no drift), and the editor must not be exposed or a 7% charge could sit against a 5% contract.
 
+## ⛔ A DISPLAYED PRICE IS NOT WHAT GETS CHARGED (2026-08-10 — the rule that outranks every "just hide the figure" fix)
+
+Learned while making the contract's payment panel safe for a split setup fee, and it generalises well beyond payment plans.
+
+**Every price on the post-signature payment panel is a STORED STRING, not a figure computed at render:**
+- the wire amount is whatever was typed into the offer's bank details when the offer was authored;
+- the card option's price, AND the link it points at, come from the stored payment link — which carries its **own baked-in amount**.
+
+Two consequences that are easy to get wrong:
+
+1. **Declining to UPDATE a figure is not declining to QUOTE it.** A fix that stops recomputing the wire amount leaves the client reading the ORIGINAL stored total and wiring it. Same harm, older date.
+2. **Hiding a price is never a fix — only removing the ability to pay is.** The stored card link charges its baked-in amount **on click**, regardless of what the page displays next to it. A panel showing no price beside a live button is strictly worse than useless: it removes the client's only clue while leaving the charge intact.
+
+**And the same applies to the frozen copy captured into the signed contract, where it matters MORE** — a stale figure baked in there is one the client keeps and can act on indefinitely, long after any screen has been corrected.
+
+**Therefore:** when the system cannot state what is due, it must remove **every** payment control (card and wire) and say so in words. Currently that condition is a payment plan disagreeing with its own offer's total — the amount engine reports it, and both the live React panel and the frozen HTML honour it. Any future "we can't price this reliably" condition must follow the same shape.
+
+**Why the overpayment is not benign:** the client wires the whole total, the invoice of record settles at the first part, and the surplus **floats** — there is no disposition for a floating surplus yet. So "nothing was charged wrongly" is not "no harm done".
+
 ## How to verify current state
 - Read `app/api/webhooks/offer-signed/route.ts` (confirm it links contact but does NOT set `leads.status`), `lib/offers/publish.ts` (publish gate + safeSend), `lib/portal/offer-invoice-policy.ts`.
 - For one offer: `SELECT status, lead_id, account_id FROM offers WHERE token='<t>';` then `SELECT status FROM pending_activations WHERE offer_token='<t>';` and `SELECT status, converted_to_contact_id FROM leads WHERE id='<lead_id>';` — the three states should tell a consistent story.
