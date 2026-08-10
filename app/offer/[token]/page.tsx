@@ -262,7 +262,11 @@ export default function OfferPage() {
       amount: dynamicTotal.credit,
       formatted: fmt(dynamicTotal.credit),
       grossFormatted: fmt(dynamicTotal.gross),
-      netFormatted: fmt(dynamicTotal.total),
+      // ⛔ "Total Due Today" must mean TODAY. With a setup fee paid in parts, that is the SIGNING
+      // PART net of credit — not the whole commitment. Leaving the full figure under that exact
+      // label was the most misleading line on the page: it names the timing explicitly and then
+      // states a number for a different one.
+      netFormatted: fmt(dynamicTotal.hasPlan ? dynamicTotal.dueNow : dynamicTotal.total),
       // LABEL HONESTY (architect ruling): only call it a strategy call when it IS
       // one. The snapshot is the sum of every credit the person holds, so a
       // referral credit was being described to the client as a paid call.
@@ -628,7 +632,7 @@ export default function OfferPage() {
                   <div style={{ marginTop: 16, paddingTop: 12, borderTop: '2px solid var(--offer-blue)' }}>
                     <div className="offer-riepilogo-total" style={{ fontSize: 16 }}>
                       <span style={{ fontWeight: 700 }}>{L.totalDueToday}</span>
-                      <span style={{ fontWeight: 700, transition: 'all 0.3s' }}>{dynamicTotal.formatted}</span>
+                      <span style={{ fontWeight: 700, transition: 'all 0.3s' }}>{dynamicTotal.hasPlan ? dynamicTotal.dueNowFormatted : dynamicTotal.formatted}</span>
                     </div>
                   </div>
                 )}
