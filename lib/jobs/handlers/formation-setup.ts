@@ -24,11 +24,16 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
-import { createSD, OPEN_TASK_STATUSES } from "@/lib/operations/service-delivery"
+import { createSD } from "@/lib/operations/service-delivery"
 import { advanceServiceDelivery } from "@/lib/service-delivery"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateFormationData } from "../validation"
 import { firstUploadPath } from "@/lib/portal/wizard-uploads"
+import {
+  decideFormationRun,
+  type FormationDeliverySnapshot,
+  type FormationRunDecision,
+} from "@/lib/portal/formation-resubmit-gate"
 
 interface FormationPayload {
   token: string
@@ -37,6 +42,36 @@ interface FormationPayload {
   lead_id: string | null
   submitted_data: Record<string, unknown>
   source?: "portal_wizard" | string
+}
+
+/**
+ * Resolve the ORIGINATING OFFER token for this submission (dev job ca788354).
+ *
+ * `p.token` is a SUBMISSION token (`portal-{slug}-{year}-{scope8}`) — NOT an
+ * offer token. Writing it into `source_offer_token` would look like a stamp
+ * while breaking everything that reads that column: materialization matches it
+ * against `offers` to link the new company (a miss leaves the client's portal
+ * saying "Set up your new company" forever), and activation's duplicate check
+ * keys on it (a miss lets a SECOND active formation through, which the partial
+ * unique index cannot catch because the two rows carry different values).
+ *
+ * Returns null when it cannot be resolved. NEVER a fabricated value.
+ */
+async function resolveOfferToken(leadId: string | null): Promise<string | null> {
+  if (!leadId) return null
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("offers")
+      .select("token")
+      .eq("lead_id", leadId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (error || !data?.token) return null
+    return String(data.token)
+  } catch {
+    return null
+  }
 }
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {
@@ -60,7 +95,90 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   }
   result.steps.push(step("validation", "ok", "All checks passed"))
 
+  // ─── 0b. RE-SUBMIT GATE (dev job ca788354) ───
+  // Decide, BEFORE any write, whether this run may create a formation or is a
+  // re-submit of one that is already finished. Keyed on the OFFER, never the
+  // contact — ~11% of contacts own more than one company and a contact-keyed
+  // refusal would strand a repeat client's new formation forever.
+  const offerToken = await resolveOfferToken(p.lead_id)
+  let decision: FormationRunDecision = {
+    action: "create",
+    reason: "first_run",
+    allow: {
+      contactUpdate: true,
+      staffEmail: true,
+      deliveryCreate: true,
+      stageAdvance: true,
+      clientNotification: true,
+      formStatusWrite: true,
+    },
+  }
+
+  if (p.contact_id) {
+    const { data: sdRows, error: sdErr } = await supabaseAdmin
+      .from("service_deliveries")
+      .select("id, stage, status, account_id, source_offer_token")
+      .eq("contact_id", p.contact_id)
+      .eq("service_type", "Company Formation")
+      .limit(50)
+
+    // Fail CLOSED, as the previous duplicate-check did (2026-07-20): a guard we
+    // cannot trust must stop rather than wave a duplicate formation through.
+    if (sdErr) {
+      throw new Error(
+        `formation duplicate-check failed (${sdErr.message}) — not creating, to avoid a duplicate formation`,
+      )
+    }
+
+    const formations: FormationDeliverySnapshot[] = (sdRows ?? []).map((r) => ({
+      id: String(r.id),
+      stage: (r.stage as string | null) ?? null,
+      status: (r.status as string | null) ?? null,
+      hasAccount: r.account_id != null,
+      sourceOfferToken: (r.source_offer_token as string | null) ?? null,
+    }))
+
+    // "Formation data received!" goes out once per formation, ever. A client
+    // submitting twice in three seconds (Patrick Covelli, 2026-06-25) must not
+    // be told twice; a run that died before notifying must still deliver it.
+    let clientAlreadyNotified = false
+    try {
+      const { data: notified } = await supabaseAdmin
+        .from("portal_notifications")
+        .select("id")
+        .eq("contact_id", p.contact_id)
+        .eq("title", "Formation data received!")
+        .limit(1)
+      clientAlreadyNotified = !!notified && notified.length > 0
+    } catch {
+      // Unreadable: prefer a possible duplicate notification over silence.
+      clientAlreadyNotified = false
+    }
+
+    decision = decideFormationRun({ offerToken, formations, clientAlreadyNotified })
+  }
+
+  if (decision.action === "refuse_finished") {
+    result.steps.push(step(
+      "formation_resubmit_refused",
+      "skipped",
+      `Formation ${decision.deliveryId ?? "(unknown)"} is already finished — no delivery, no stage advance, no client notification, form record untouched`,
+    ))
+  } else if (decision.action === "ambiguous") {
+    result.steps.push(step(
+      "formation_resubmit_refused",
+      "skipped",
+      "Could not identify which formation this submission belongs to — withheld all machinery and flagged staff",
+    ))
+  }
+
+  /** Human-readable "old → new" lines for the fields this run changes. */
+  const changedContactFields: string[] = []
+
   // ─── 1. UPDATE CONTACT WITH SUBMITTED DATA ───
+  // Deliberately NOT gated by the re-submit decision: Antonio's ruling is that
+  // a client's correction always reaches their record. Blocking it would mean a
+  // corrected passport or date of birth vanishes behind a success message.
   if (p.contact_id) {
     try {
       const contactUpdates: Record<string, unknown> = {
@@ -98,6 +216,29 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       // array of paths — firstUploadPath handles both; empty array = none).
       if (firstUploadPath(submitted.passport_owner)) {
         contactUpdates.passport_on_file = true
+      }
+
+      // Capture WHICH fields this submission actually changes, so a refused
+      // re-submit's staff email can show the overwrite rather than just
+      // announcing one (Antonio, 2026-08-10). Read before the write; a failed
+      // read must not block the write.
+      try {
+        const { data: before } = await supabaseAdmin
+          .from("contacts")
+          .select("*")
+          .eq("id", p.contact_id)
+          .maybeSingle()
+        if (before) {
+          for (const [k, v] of Object.entries(contactUpdates)) {
+            if (k === "updated_at") continue
+            const prev = (before as Record<string, unknown>)[k]
+            if (String(prev ?? "") !== String(v ?? "")) {
+              changedContactFields.push(`${k}: "${String(prev ?? "")}" → "${String(v ?? "")}"`)
+            }
+          }
+        }
+      } catch {
+        // Diff is a reporting aid, never a gate.
       }
 
       const fieldCount = Object.keys(contactUpdates).filter(k => k !== "updated_at").length
@@ -147,10 +288,6 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   // Phase 1: Create contact-level Drive folder (Contacts/{Name}/)
   // Documents will migrate to company folder when LLC name is selected (Phase 2)
   let contactDriveFolderId: string | null = null
-  /** The formation SD for this run — hoisted so the Luca follow-up task (§5)
-   *  can stamp `delivery_id`. Without it that task is unreachable from
-   *  deactivateSD, which only cancels tasks linked to the service. */
-  let formationSdId: string | null = null
   if (p.contact_id) {
     try {
       const { ensureContactFolder } = await import("@/lib/drive-folder-utils")
@@ -262,35 +399,30 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   try {
     const sdContactId = p.contact_id
     if (sdContactId) {
-      // Check if SD already exists for this contact
-      const { data: existingSd, error: existingSdErr } = await supabaseAdmin
-        .from("service_deliveries")
-        .select("id, stage")
-        .eq("contact_id", sdContactId)
-        .eq("service_type", "Company Formation")
-        .eq("status", "active")
-        .limit(1)
-
-      // Fail CLOSED (2026-07-20). supabase-js returns errors instead of
-      // throwing, so discarding `error` turned any transient PostgREST failure
-      // into "no formation exists" → a DUPLICATE Company Formation on a job
-      // retry. Same class of bug as the ITIN duplicate; a guard we cannot trust
-      // must stop, not wave the creation through. The job retries.
-      if (existingSdErr) {
-        throw new Error(
-          `formation SD duplicate-check failed (${existingSdErr.message}) — not creating, to avoid a duplicate formation`,
-        )
-      }
-
-      // Resolve the SD id + current stage from either branch so the
-      // wizard-submit stage advance below runs uniformly.
+      // The existence question was already answered by the re-submit gate,
+      // keyed on the OFFER (see step 0b). The old lookup here asked only
+      // "any ACTIVE formation for this person", which missed every COMPLETED
+      // one — 178 of 195 in production — and minted the phantom.
       let sdId: string | null = null
       let sdStage: string | null = null
 
-      if (existingSd && existingSd.length > 0) {
-        sdId = existingSd[0].id
-        sdStage = existingSd[0].stage
+      if (!decision.allow.deliveryCreate && decision.deliveryId) {
+        const existing = (await supabaseAdmin
+          .from("service_deliveries")
+          .select("id, stage")
+          .eq("id", decision.deliveryId)
+          .maybeSingle()).data
+        sdId = decision.deliveryId
+        sdStage = (existing?.stage as string | null) ?? null
         result.steps.push(step("service_delivery", "skipped", `Already exists at ${sdStage}: ${sdId}`))
+      } else if (!decision.allow.deliveryCreate) {
+        result.steps.push(step(
+          "service_delivery",
+          "skipped",
+          decision.action === "ambiguous"
+            ? "Formation could not be identified — no delivery created (staff flagged)"
+            : "Formation already finished — no delivery created",
+        ))
       } else {
         // SD is contact-only at wizard submit per Antonio's model. The first
         // candidate LLC name is appended to the SD name purely for human
@@ -312,17 +444,48 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
             target_stage: "Payment Confirmed",
             target_stage_order: 1,
             start_date: now.slice(0, 10),
+            // Traceability AND enforcement. Every other delivery on a client's
+            // record names the offer it came from; the ones this handler made
+            // named nothing, which is what made the Turcanu duplicate look like
+            // a phantom. Stamping also ARMS the partial unique index
+            // uq_formation_sd_active_per_offer, which could never apply while
+            // the column was null. Explicitly null when unresolvable — never a
+            // fabricated value (see resolveOfferToken).
+            source_offer_token: offerToken,
+            notes: `Created by formation_setup job ${job.id} from submission ${p.submission_id ?? "(none)"}.`,
           })
           sdId = sd.id
           sdStage = "Payment Confirmed"
           result.steps.push(step("service_delivery", "ok", `SD created: ${sd.id} (Payment Confirmed, contact-scoped)`))
         } catch (e) {
-          result.steps.push(step("service_delivery", "error", e instanceof Error ? e.message : String(e)))
+          // A unique violation means a concurrent run won the race (two
+          // process-jobs invocations can overlap). Adopt the winner and carry
+          // on to the stage advance — otherwise the race leaves the formation
+          // stuck at "Payment Confirmed" while the job still reports green.
+          const msg = e instanceof Error ? e.message : String(e)
+          const isDuplicate = /duplicate key|23505|uq_formation_sd_active_per_offer/i.test(msg)
+          if (isDuplicate && offerToken) {
+            const { data: winner } = await supabaseAdmin
+              .from("service_deliveries")
+              .select("id, stage")
+              .eq("contact_id", sdContactId)
+              .eq("service_type", "Company Formation")
+              .eq("source_offer_token", offerToken)
+              .eq("status", "active")
+              .limit(1)
+              .maybeSingle()
+            if (winner?.id) {
+              sdId = String(winner.id)
+              sdStage = (winner.stage as string | null) ?? null
+              result.steps.push(step("service_delivery", "skipped", `Concurrent run won — adopted ${sdId} at ${sdStage}`))
+            } else {
+              result.steps.push(step("service_delivery", "error", msg))
+            }
+          } else {
+            result.steps.push(step("service_delivery", "error", msg))
+          }
         }
       }
-
-      // Expose the resolved SD to later sections (the Luca follow-up task).
-      formationSdId = sdId
 
       // ─── 2c-bis. ADVANCE Payment Confirmed → Wizard Submitted ───
       // This handler runs because the formation wizard was submitted, but the
@@ -334,7 +497,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       // idempotent: a re-run finds the SD at "Wizard Submitted" (≠ "Payment
       // Confirmed") and does nothing, and an SD already past this stage is
       // never regressed.
-      if (sdId && sdStage === "Payment Confirmed") {
+      if (decision.allow.stageAdvance && sdId && sdStage === "Payment Confirmed") {
         const { data: submittedWp } = await supabaseAdmin
           .from("wizard_progress")
           .select("id")
@@ -407,7 +570,18 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   await updateJobProgress(job.id, result)
 
   // ─── 3. MARK FORM AS REVIEWED ───
-  if (!p.submission_id) {
+  // A refused re-submit must NEVER reset the reviewed status or re-stamp the
+  // original completion timestamps (Antonio, 2026-08-10). Daniel Janos Pasztor
+  // submitted 2026-06-25 and his record came to read completed AND reviewed
+  // 2026-07-12 — seventeen days adrift — because this ran unconditionally on
+  // every re-run and the stable submission token made it the SAME row.
+  if (!decision.allow.formStatusWrite) {
+    result.steps.push(step(
+      "form_reviewed",
+      "skipped",
+      "Re-submit withheld — original reviewed status and completion timestamps left untouched",
+    ))
+  } else if (!p.submission_id) {
     result.steps.push(step("form_reviewed", "skipped", "No submission_id"))
   } else {
   try {
@@ -445,9 +619,50 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
 
     const { gmailPost } = await import("@/lib/gmail")
 
-    const subject = `Formation Form Completed: ${clientName}`
+    // The staff email is the ONLY channel that reports a withheld re-submit.
+    // Antonio's ruling: the client is told nothing, so this must say plainly
+    // that a finished formation was re-submitted AND show what it changed, so
+    // the overwrite gets human review instead of passing unnoticed.
+    const isRefused = decision.action === "refuse_finished"
+    const isAmbiguous = decision.action === "ambiguous"
+
+    const subject = isRefused
+      ? `Re-submit of a FINISHED formation: ${clientName}`
+      : isAmbiguous
+        ? `Formation re-submit needs a decision: ${clientName}`
+        : `Formation Form Completed: ${clientName}`
+
+    const header = isRefused
+      ? [
+          `${clientName} RE-SUBMITTED the formation wizard for a formation that is already finished.`,
+          ``,
+          `Nothing was created: no new service delivery, no stage change, and the client was NOT notified.`,
+          `Their form record keeps its original reviewed status and completion date.`,
+          `Their contact record HAS been updated with what they submitted — please review the changes below.`,
+        ]
+      : isAmbiguous
+        ? [
+            `${clientName} re-submitted the formation wizard, and we could NOT identify which formation it belongs to.`,
+            ``,
+            `Nothing was created and the client was NOT notified — this needs a human decision.`,
+            `If this is a NEW company, its service delivery must be created by hand.`,
+            `Their contact record HAS been updated with what they submitted — please review the changes below.`,
+          ]
+        : [`Client ${clientName} has completed the formation data collection form.`]
+
+    const changes = (isRefused || isAmbiguous)
+      ? [
+          ``,
+          changedContactFields.length > 0
+            ? `WHAT CHANGED ON THE CONTACT (${changedContactFields.length}):`
+            : `WHAT CHANGED ON THE CONTACT: nothing — the submitted values match what was already on file.`,
+          ...changedContactFields.map((c) => `  • ${c}`),
+        ]
+      : []
+
     const body = [
-      `Client ${clientName} has completed the formation data collection form.`,
+      ...header,
+      ...changes,
       ``,
       `Token: ${p.token}`,
       `Email: ${submitted.owner_email || "N/A"}`,
@@ -475,86 +690,26 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     result.steps.push(step("email_notification", "error", e instanceof Error ? e.message : String(e)))
   }
 
-  // ─── 5. CRM TASK FOR LUCA (WHATSAPP FOLLOW-UP) ───
-  try {
-    const clientName = submitted.owner_first_name
-      ? `${submitted.owner_first_name} ${submitted.owner_last_name || ""}`
-      : p.token
-
-    const taskTitle = `WhatsApp follow-up: ${clientName} (formation form completed)`
-
-    // Idempotency (2026-07-20). A client re-submitting the formation wizard
-    // re-runs this whole handler, and this insert had no guard — Marcell
-    // Bogyora produced a second identical WhatsApp task for Luca 10 days after
-    // the first. Skip when an OPEN one already exists for this person.
-    let alreadyOpen = false
-    if (p.contact_id) {
-      // Key on the PERSON + category, never on the title. The title embeds the
-      // client's own typed name, so a re-submit that corrects a spelling, fills
-      // in a missing surname, or fixes an accent produces a different title and
-      // the guard misses — minting exactly the duplicate it exists to stop.
-      const { data: existingTask, error: existingTaskErr } = await supabaseAdmin
-        .from("tasks")
-        .select("id")
-        .eq("contact_id", p.contact_id)
-        .eq("category", "Formation")
-        .ilike("task_title", "WhatsApp follow-up:%")
-        // Must cover EVERY open state. "Waiting" is the normal state for a
-        // follow-up task Luca has actioned but is awaiting the client on —
-        // omitting it would let a wizard re-submit mint a duplicate, which is
-        // the exact bug this guard exists to stop.
-        .in("status", [...OPEN_TASK_STATUSES])
-        .limit(1)
-      // Fail CLOSED, consistent with the SD guards: an unverifiable check must
-      // not mint a duplicate. A missed follow-up task is recoverable; a
-      // duplicate one wastes Luca's time and confuses the client-contact trail.
-      if (existingTaskErr) {
-        result.steps.push(
-          step("luca_whatsapp_task", "skipped", `duplicate check failed (${existingTaskErr.message}) — not created`),
-        )
-        alreadyOpen = true
-      } else if (existingTask && existingTask.length > 0) {
-        result.steps.push(step("luca_whatsapp_task", "skipped", `Already open: ${existingTask[0].id}`))
-        alreadyOpen = true
-      }
-    }
-
-    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    const { error: taskErr } = alreadyOpen ? { error: null } : await supabaseAdmin.from("tasks").insert({
-      task_title: taskTitle,
-      description: [
-        `Il cliente ${clientName} ha completato il formation form.`,
-        ``,
-        `Email: ${submitted.owner_email || "N/A"}`,
-        `Phone: ${submitted.owner_phone || "N/A"}`,
-        `LLC Name: ${submitted.llc_name_1 || "N/A"}`,
-        ``,
-        `Azione: Contattare via WhatsApp per confermare ricezione e prossimi step.`,
-        `Review form: formation_form_review(token="${p.token}")`,
-      ].join("\n"),
-      assigned_to: "Luca",
-      priority: "High",
-      category: "Formation",
-      status: "To Do",
-      ...(accountId ? { account_id: accountId } : {}),
-      // Link the task to the person AND the service. It carried neither, so it
-      // was invisible to deactivateSD (which cancels by delivery_id) and had to
-      // be cancelled by hand when the duplicate formation run was cleaned up.
-      ...(p.contact_id ? { contact_id: p.contact_id } : {}),
-      ...(formationSdId ? { delivery_id: formationSdId } : {}),
-    })
-
-    if (taskErr) {
-      result.steps.push(step("luca_whatsapp_task", "error", taskErr.message))
-    } else if (!alreadyOpen) {
-      result.steps.push(step("luca_whatsapp_task", "ok", `WhatsApp task created for Luca`))
-    }
-  } catch (e) {
-    result.steps.push(step("luca_whatsapp_task", "error", e instanceof Error ? e.message : String(e)))
-  }
+  // ─── 5. (REMOVED) CRM TASK FOR LUCA — WhatsApp follow-up ───
+  // Retired by Antonio, 2026-08-10 (dev job ca788354). Client contact goes
+  // through portal chat; nothing replaces this step. All 19 tasks it ever
+  // created were cancelled unactioned. The step is deleted rather than guarded
+  // so no path can create one again.
 
   // ─── 6. PORTAL NOTIFICATION TO CONTACT ───
-  if (p.contact_id) {
+  // Once per formation, ever — and never at all for a withheld re-submit. This
+  // fired on every run before: Pasztor and Covelli each received "Formation
+  // data received!" three times, and Turcanu received it for a company formed
+  // six weeks earlier.
+  if (!decision.allow.clientNotification) {
+    result.steps.push(step(
+      "portal_notification",
+      "skipped",
+      decision.action === "create" || decision.action === "use_existing"
+        ? "Client already notified for this formation"
+        : "Re-submit withheld — client not notified",
+    ))
+  } else if (p.contact_id) {
     try {
       const { createPortalNotification } = await import("@/lib/portal/notifications")
       const llcName = String(submitted.llc_name_1 || "your LLC")

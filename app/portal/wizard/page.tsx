@@ -24,6 +24,7 @@ import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { listQuestions } from '@/lib/td-communication/questions-queries'
 import { buildTdCommWizardConfig, type TdCommWizardConfig } from '@/lib/td-communication/question-to-field'
 import { isClientEditable, type ReviewStatus } from '@/lib/tax/review-status'
+import { identifyFormation, isFormationWizardEditable } from '@/lib/portal/formation-resubmit-gate'
 import {
   resolveTaxWizardEligibility,
   taxWizardSurfaceVisible,
@@ -599,6 +600,59 @@ export default async function WizardPage({
       .maybeSingle()
     const rs = (sub?.review_status ?? null) as ReviewStatus | null
     isLocked = rs !== null && !isClientEditable(rs)
+  }
+
+  // For submitted FORMATION wizards: the same idea, keyed on how far the
+  // formation itself has got (dev job ca788354, Antonio's ruling 2026-08-10).
+  // Editable until we begin work — a client fixing a wrong passport or date
+  // before we file is deliberately kept open — and locked from "Filed with
+  // State" onward, once the company has materialized, or once it is finished.
+  //
+  // Until this shipped, `isLocked` was computed for tax ONLY, so a submitted
+  // formation was permanently editable and the portal sent `allow_resubmit` on
+  // every re-submit, bypassing the server's duplicate check entirely. That is
+  // how 8 clients re-ran the setup chain 15 times.
+  //
+  // Identification uses the SAME helper as the background job, so a repeat
+  // client's two formations can never be resolved differently by the two — the
+  // one that would lock company two because company one has been filed.
+  if (wizardSubmitStatus === 'submitted' && wizardType === 'formation' && contactId) {
+    let formationOfferToken: string | null = null
+    if (formationLeadId) {
+      const { data: offerRow } = await supabaseAdmin
+        .from('offers')
+        .select('token')
+        .eq('lead_id', formationLeadId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      formationOfferToken = (offerRow?.token as string | null) ?? null
+    }
+
+    const { data: sdRows, error: sdErr } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('id, stage, status, account_id, source_offer_token')
+      .eq('contact_id', contactId)
+      .eq('service_type', 'Company Formation')
+      .limit(50)
+
+    if (sdErr) {
+      // Cannot prove the formation is still editable — lock rather than risk
+      // an overwrite of live company data. The locked view points to chat.
+      isLocked = true
+    } else {
+      const found = identifyFormation(
+        formationOfferToken,
+        (sdRows ?? []).map((r) => ({
+          id: String(r.id),
+          stage: (r.stage as string | null) ?? null,
+          status: (r.status as string | null) ?? null,
+          hasAccount: r.account_id != null,
+          sourceOfferToken: (r.source_offer_token as string | null) ?? null,
+        })),
+      )
+      isLocked = !isFormationWizardEditable(found.formation, found.ambiguous)
+    }
   }
 
   // ── ITIN applicants (dev_task fcf5e254) ──

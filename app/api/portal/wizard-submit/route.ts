@@ -25,7 +25,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isClient } from '@/lib/auth'
 import { enqueueJob, completeJob, failJob, type Job } from '@/lib/jobs/queue'
 import { getSubmissionTable, getJobType } from '@/lib/portal/wizard-map'
-import { buildSubmissionRecord } from '@/lib/portal/submission-record'
+import { buildSubmissionRecord, preserveReviewedStatus } from '@/lib/portal/submission-record'
 import { buildSubmissionToken } from '@/lib/portal/submission-token'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
 import { validateWizardData } from '@/lib/jobs/validation'
@@ -343,9 +343,25 @@ export async function POST(req: NextRequest) {
           tax_year: taxYear,
         })
 
+        // Never undo a completed review. The upsert keys on `token`, and a
+        // formation token is stable for the same person + lead + calendar year,
+        // so a re-submit lands on the SAME row and would reset its status from
+        // "reviewed" back to "completed" (dev job ca788354). Preserving it here
+        // costs one read and is safe either way: a legitimate continuation is
+        // re-marked "reviewed" by the background handler seconds later.
+        const { data: priorSub } = await supabaseAdmin
+          .from(submissionTable as never)
+          .select('status')
+          .eq('token', submissionToken)
+          .maybeSingle()
+        const recordToWrite = preserveReviewedStatus(
+          submissionRecord,
+          (priorSub as { status?: string | null } | null)?.status ?? null,
+        )
+
         const { data: sub, error: subErr } = await supabaseAdmin
           .from(submissionTable as never)
-          .upsert(submissionRecord as never, { onConflict: 'token' })
+          .upsert(recordToWrite as never, { onConflict: 'token' })
           .select('id')
           .single()
 
