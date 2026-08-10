@@ -114,9 +114,15 @@ export function processorsNamed(descriptor: string | null | undefined): string[]
   return Array.from(new Set(payerTokens(descriptor).filter((t) => PAYMENT_PROCESSOR_TOKENS.has(t))))
 }
 
+/**
+ * How a taught payer is identified. Registered in the code-to-database contract, so this list
+ * and the database rule that enforces it cannot drift apart silently.
+ */
+export const PAYER_KEY_TYPES = ["descriptor", "counterparty_id"] as const
+
 /** The identity a taught mapping is keyed on. */
 export interface PayerKey {
-  key_type: "descriptor" | "counterparty_id"
+  key_type: (typeof PAYER_KEY_TYPES)[number]
   key_value: string
   /** The payer exactly as the bank wrote it — display only, never matched on. */
   display_payer: string | null
