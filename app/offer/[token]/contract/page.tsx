@@ -35,6 +35,11 @@ const CL = {
     choosePayment: 'Choose how you want to pay:',
     payByCard: 'Pay by Card',
     payByTransfer: 'Bank Transfer',
+    // ⚠️ PLACEHOLDER WORDING pending Antonio's read at the click-through gate, like the Italian
+    // schedule lines. It is a SAFETY line, not schedule copy: shown only when the offer's payment
+    // plan disagrees with its own totals, where quoting any figure risks an overpayment we cannot
+    // yet resolve. Saying nothing at all would be worse — the client would just wire the old number.
+    amountUnavailable: 'Your payment schedule needs a correction before you pay. Please contact us and we will send you the exact amount — do not transfer anything yet.',
     cardSurcharge: 'A 5% processing fee applies to card payments.',
     orSeparator: 'OR',
     bankTitle: 'Bank Transfer Details',
@@ -60,6 +65,7 @@ const CL = {
     choosePayment: 'Scegli come pagare:',
     payByCard: 'Paga con Carta',
     payByTransfer: 'Bonifico Bancario',
+    amountUnavailable: 'Il tuo piano di pagamento richiede una correzione prima del pagamento. Contattaci e ti invieremo l\'importo esatto — non effettuare ancora alcun bonifico.',
     cardSurcharge: 'Il pagamento con carta prevede una maggiorazione del 5%.',
     orSeparator: 'OPPURE',
     bankTitle: 'Coordinate Bancarie',
@@ -94,6 +100,36 @@ function CheckoutPreview({ offer: rawOffer, cl, hasCard, hasBank, token }: { off
   }, [rawOffer])
   const [showBank, setShowBank] = useState(false)
   const receiptInputRef = useRef<HTMLInputElement>(null)
+
+  // ⛔ WHEN WE CANNOT SAY WHAT IS DUE, WE SHOW NO FIGURE AND OFFER NO WAY TO PAY.
+  //
+  // Every price on this panel is a STORED STRING — the bank amount typed when the offer was
+  // authored, and the stored card link's own amount. Neither is recomputed at render. So merely
+  // declining to UPDATE the bank amount at signing was not enough: the client would still read
+  // the original full total and wire it, which is the same overpayment with an older date on it.
+  // The invoice of record settles at the first part and the surplus floats, and there is no
+  // disposition for a floating surplus yet.
+  //
+  // A refusal here means the plan disagrees with its own offer (a revision changed the total, say).
+  // Hiding the price but leaving the button would be worse than useless: the stored card link
+  // charges its own baked-in amount on click. So both options go, and the client is told to ask us.
+  const payable = computeOfferPayable(
+    {
+      services: rawOffer.services,
+      cost_summary: rawOffer.cost_summary,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      selected_services: (rawOffer as any).selected_services,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      currency: (rawOffer as any).currency,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      credit_amount: (rawOffer as any).credit_amount,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      payment_plan: (rawOffer as any).payment_plan,
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    { currencyOverride: (rawOffer as any).currency === 'USD' ? 'USD' : 'EUR' },
+  )
+  const amountIsUnstateable = Boolean(payable.planRefusal)
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
   const [uploadStatus, setUploadStatus] = useState<string>('')
   const [uploading, setUploading] = useState(false)
@@ -126,7 +162,15 @@ function CheckoutPreview({ offer: rawOffer, cl, hasCard, hasBank, token }: { off
         <h2 style={{ color: 'var(--c-green)', fontSize: '18pt', marginBottom: 8 }}>{cl.successTitle}</h2>
         <p style={{ fontSize: '12pt', marginBottom: 28, color: 'var(--c-muted)' }}>{cl.choosePayment}</p>
 
-        {!showBank && (
+        {!showBank && amountIsUnstateable && (
+          <div className="post-sign-option">
+            <p style={{ fontSize: '12pt', lineHeight: 1.6, color: 'var(--c-muted)', margin: 0 }}>
+              {cl.amountUnavailable}
+            </p>
+          </div>
+        )}
+
+        {!showBank && !amountIsUnstateable && (
           <div>
             {hasCard && (
               <a href={offer.payment_links![0].url} className="ps-choice-btn ps-choice-card" target="_blank" rel="noopener noreferrer" style={{ marginBottom: hasBank ? 0 : 16 }}>
@@ -152,7 +196,12 @@ function CheckoutPreview({ offer: rawOffer, cl, hasCard, hasBank, token }: { off
         {showBank && hasBank && (
           <div className="post-sign-option">
             <div className="post-sign-option-label">&#127974; {cl.payByTransfer}</div>
-            {offer.bank_details!.amount && <div className="post-sign-bank-amount">{offer.bank_details!.amount}</div>}
+            {/* The stored figure is suppressed, not corrected — see the note above. The bank
+                coordinates stay visible on purpose: a client who has already spoken to us needs
+                them, and they are not an instruction to send a particular amount. */}
+            {amountIsUnstateable
+              ? <div className="post-sign-bank-amount" style={{ fontSize: '12pt', fontWeight: 400 }}>{cl.amountUnavailable}</div>
+              : offer.bank_details!.amount && <div className="post-sign-bank-amount">{offer.bank_details!.amount}</div>}
             <div className="contract-bank-details-box">
               <h3>{cl.bankTitle}</h3>
               {offer.bank_details!.beneficiary && <div className="contract-bank-row"><span className="contract-bank-label">{cl.beneficiary}</span><span className="contract-bank-value">{offer.bank_details!.beneficiary}</span></div>}
@@ -742,8 +791,15 @@ export default function ContractPage() {
         sh += `<p style="font-size:12pt;margin-bottom:28px;">${cl.choosePayment}</p>`
 
         // ── Choice buttons ──
+        // Same rule as the React panel, and it matters MORE here: this HTML is frozen into the
+        // signed document capture, so a stale figure baked in now is a figure the client keeps.
+        // When the plan disagrees with its own offer we emit no price and no way to pay.
+        const cannotStateAmount = Boolean(correctPayable.planRefusal)
         sh += '<div id="payment-choice">'
-        if (hasCard && stripeLink) {
+        if (cannotStateAmount) {
+          sh += `<div class="post-sign-option"><p style="font-size:12pt;line-height:1.6;">${esc(cl.amountUnavailable)}</p></div>`
+        }
+        if (!cannotStateAmount && hasCard && stripeLink) {
           sh += `<a href="${esc(stripeLink.url)}" class="ps-choice-btn ps-choice-card" target="_blank" rel="noopener noreferrer">`
           sh += `<span class="ps-choice-icon">&#128179;</span>`
           sh += `<span class="ps-choice-label">${cl.payByCard}</span>`
@@ -752,11 +808,11 @@ export default function ContractPage() {
           sh += '</a>'
         }
 
-        if (hasCard && hasBank) {
+        if (!cannotStateAmount && hasCard && hasBank) {
           sh += `<div class="post-sign-divider"><span>${cl.orSeparator}</span></div>`
         }
 
-        if (hasBank) {
+        if (!cannotStateAmount && hasBank) {
           sh += `<button id="choose-bank" class="ps-choice-btn ps-choice-bank" type="button">`
           sh += `<span class="ps-choice-icon">&#127974;</span>`
           sh += `<span class="ps-choice-label">${cl.payByTransfer}</span>`
@@ -766,7 +822,7 @@ export default function ContractPage() {
         sh += '</div>'
 
         // ── Bank details panel (hidden until chosen) ──
-        if (hasBank) {
+        if (!cannotStateAmount && hasBank) {
           const b = offer.bank_details!
           sh += '<div id="bank-panel" style="display:none;">'
           sh += `<div class="post-sign-option">`
