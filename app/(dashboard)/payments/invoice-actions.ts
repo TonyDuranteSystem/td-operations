@@ -49,15 +49,27 @@ export async function createInvoice(
   const subtotal = items.reduce((sum, item) => sum + item.amount, 0)
   const total = subtotal - (invoiceData.discount || 0)
 
-  const idempotencyKey = manualInvoiceIdempotencyKey(
-    'manual-crm-invoice',
-    invoiceData.account_id,
-    items,
-    invoiceData.description,
-    total,
-    invoiceData.amount_currency,
-    invoiceData.issue_date,
-  )
+  // ⛔ TWO DIFFERENT NOTIONS OF "THE SAME INVOICE", and a part of a payment plan needs the
+  // second one.
+  //
+  // For an ordinary manual invoice, sameness is the CONTENT — two clicks with identical figures
+  // are one invoice, and changing a figure legitimately makes a different one.
+  //
+  // For a part of a plan, sameness is the PART ITSELF. Keying on content would let part two be
+  // raised twice by editing the amount between clicks, which is precisely the double-bill this
+  // is meant to prevent. The database index is the hard guarantee; this key makes the second
+  // attempt return the FIRST invoice instead of surfacing a constraint error to whoever clicked.
+  const idempotencyKey = invoiceData.tranche
+    ? `offer-tranche:${invoiceData.tranche.offer_token}:${invoiceData.tranche.seq}`
+    : manualInvoiceIdempotencyKey(
+        'manual-crm-invoice',
+        invoiceData.account_id,
+        items,
+        invoiceData.description,
+        total,
+        invoiceData.amount_currency,
+        invoiceData.issue_date,
+      )
 
   return safeAction(async () => {
     const result = await createTDInvoice({
@@ -72,6 +84,16 @@ export async function createInvoice(
       message: invoiceData.message || undefined,
       installment: invoiceData.installment || undefined,
       idempotency_key: idempotencyKey,
+      ...(invoiceData.tranche
+        ? {
+            tranche_offer_token: invoiceData.tranche.offer_token,
+            tranche_seq: invoiceData.tranche.seq,
+            // Its own category, never an instalment one: paying an instalment lifts the
+            // accountant hand-off gate and feeds the June cron. A split setup fee must touch
+            // neither.
+            payment_category: 'setup_tranche',
+          }
+        : {}),
     })
 
     // Override description + billing_entity_id (createTDInvoice sets description
@@ -93,8 +115,15 @@ export async function createInvoice(
     action_type: 'create',
     table_name: 'payments',
     account_id: invoiceData.account_id,
-    summary: `Invoice created (Draft)`,
-    details: { total, currency: invoiceData.amount_currency, items_count: items.length },
+    summary: invoiceData.tranche
+      ? `Invoice created (Draft) — part ${invoiceData.tranche.seq} of a payment plan`
+      : `Invoice created (Draft)`,
+    details: {
+      total,
+      currency: invoiceData.amount_currency,
+      items_count: items.length,
+      ...(invoiceData.tranche ? { tranche: invoiceData.tranche } : {}),
+    },
   })
 }
 

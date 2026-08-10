@@ -39,6 +39,19 @@ export const createInvoiceSchema = z.object({
   items: z.array(invoiceItemSchema).min(1, 'At least one line item required'),
   mark_as_paid: z.boolean().optional(),
   installment: z.enum(INSTALLMENT_TYPES).optional(),
+  /**
+   * WS-C: this invoice is one PART of an offer's payment plan.
+   *
+   * Both fields or neither — the database enforces the pair. Its presence changes how the
+   * invoice is deduplicated: the part's identity becomes the key, rather than a hash of the
+   * amounts, because "part 2 of this offer" is what must exist only once. See the action.
+   */
+  tranche: z
+    .object({
+      offer_token: z.string().min(1),
+      seq: z.number().int().positive(),
+    })
+    .optional(),
 })
 
 export const createCreditNoteSchema = z.object({
