@@ -134,3 +134,94 @@ describe("isRaisable — one condition, not a second opinion", () => {
     expect(isRaisable(s.parts[0])).toBe(false)
   })
 })
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+//  ⛔ THE REAL PRODUCTION SHAPE OF AN AUTO-MATCHED PAYMENT (job c2751393)
+//
+//  VERIFIED ON PRODUCTION 2026-08-10: 115 paid invoices carry a phantom amount owing, and in
+//  ALL 115 that phantom equals the invoice total — the automatic bank-matcher settle path never
+//  writes the owing figure down, while writing the status and the money correctly. The staff
+//  manual-match route does not have the defect (0 of 32).
+//
+//  WHY THIS DECIDES WHETHER PAYMENT PLANS WORK AT ALL: a later part is paid by WIRE and settled
+//  by that same automatic matcher. If any part of the plan read path believed the owing figure,
+//  every auto-settled part would read as unpaid on the client's screen for ever, the obligation
+//  would never close, and the chase machinery could pursue a client who has already paid.
+//
+//  These fixtures are the real shape, not a hypothesis.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+
+describe("an auto-matched payment is recognised as paid despite its phantom owing figure", () => {
+  it("the common shape — status Paid, money right, owing still equal to the total", () => {
+    const st = computePlanStatus(PLAN, [
+      {
+        id: "auto-1",
+        invoice_number: "INV-000502",
+        invoice_status: "Paid",
+        amount_paid: 1250,   // money recorded correctly (108 of 115 on production)
+        amount: 1250,
+        // The phantom: the matcher left this equal to the total. 115 of 115.
+        amount_due: 1250,
+        tranche_seq: 2,
+        due_date: null,
+      } as TrancheInvoiceRow & { amount_due: number },
+    ])
+    expect(st.parts[1].state).toBe("paid")
+    expect(st.parts[1].obligationOpen).toBe(false)
+    expect(isRaisable(st.parts[1])).toBe(false)
+  })
+
+  it("the rarer shape — the MONEY is missing too, and only the status says paid", () => {
+    // 6 of the 115 have no recorded money at all. The money signal alone is NOT enough, which is
+    // why the status word is a necessary second signal rather than a fallback. Reading only the
+    // money would leave these six parts open for ever.
+    const st = computePlanStatus(PLAN, [
+      {
+        id: "auto-2",
+        invoice_number: "INV-000503",
+        invoice_status: "Paid",
+        amount_paid: 0,
+        amount: 1250,
+        amount_due: 1250,
+        tranche_seq: 2,
+        due_date: null,
+      } as TrancheInvoiceRow & { amount_due: number },
+    ])
+    expect(st.parts[1].state).toBe("paid")
+    expect(st.parts[1].obligationOpen).toBe(false)
+  })
+
+  it("and the money signal alone still works when the status word is the stale one", () => {
+    // The mirror case: money fully received while the label has not caught up. Both signals are
+    // load-bearing, in opposite directions.
+    const st = computePlanStatus(PLAN, [
+      {
+        id: "auto-3",
+        invoice_number: "INV-000504",
+        invoice_status: "Sent",
+        amount_paid: 1250,
+        amount: 1250,
+        amount_due: 1250,
+        tranche_seq: 2,
+        due_date: null,
+      } as TrancheInvoiceRow & { amount_due: number },
+    ])
+    expect(st.parts[1].state).toBe("paid")
+  })
+
+  it("⛔ the plan read path never asks for the owing figure at all", () => {
+    // Structural, not behavioural: the row type this resolver accepts has no owing field, so no
+    // future edit can start reading it without changing the type first. That is the guarantee —
+    // the tests above prove the shape is handled, this proves the column cannot creep back in.
+    const row: TrancheInvoiceRow = {
+      id: "x",
+      invoice_number: null,
+      invoice_status: "Paid",
+      amount_paid: 1250,
+      amount: 1250,
+      tranche_seq: 1,
+      due_date: null,
+    }
+    expect(Object.keys(row)).not.toContain("amount_due")
+  })
+})

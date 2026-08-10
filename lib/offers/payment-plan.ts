@@ -215,6 +215,42 @@ export function validatePaymentPlan(raw: unknown): PlanValidation {
   return { ok: true, errors: [], plan: parts.sort((a, b) => a.seq - b.seq) }
 }
 
+/**
+ * ⛔ A PLAN IS REFUSED ON AN OFFER THAT CARRIES A REFERRAL PARTNER (architect ruling, 2026-08-10).
+ *
+ * Not a limitation of taste — a consequence of a defect I found and could not fix here. Activation
+ * credits the WHOLE commission the moment the first payment lands, because the referral credit-note
+ * issuer can only ever key one note per referral. That is correct for every offer without a plan,
+ * and wrong the first time a plan meets a partner: the referrer is paid in full on part one, and if
+ * part two never arrives, TD has paid commission on revenue it never received — recoverable only by
+ * editing a credit note the referrer can already see.
+ *
+ * The interim guard (suppress the automatic credit, raise a card for hand settlement) covers the
+ * case where a plan and a referrer end up on the same deal ANYWAY. This refusal stops that
+ * happening at the point of authoring instead, so the hand-settlement path is a safety net rather
+ * than the normal route. Same pattern as the price-difference refusal and the empty event registry:
+ * excluded and loud beats included and wrong.
+ *
+ * LIFTED BY: the referral-issuer job (a caller-supplied key + an accumulating referral row). When
+ * that lands, delete this check and flip the accrual interlock — in that order, and verify both.
+ *
+ * The message travels to whoever is authoring, in their language, and says what to do rather than
+ * just refusing (R099).
+ */
+export function refusePlanWithReferralPartner(
+  hasReferrer: boolean,
+  lang: "en" | "it" = "en",
+): string | null {
+  if (!hasReferrer) return null
+  return lang === "it"
+    ? "Questa offerta ha un segnalatore, quindi non può essere venduta con un Pagamento Parziale: " +
+      "la provvigione verrebbe accreditata per intero al primo pagamento. Rimuovi il piano, oppure " +
+      "togli il segnalatore e registra la provvigione a mano."
+    : "This offer has a referrer, so it cannot be sold with a Partial Payment: the commission would " +
+      "be credited in full on the first payment. Either drop the plan, or remove the referrer and " +
+      "settle their commission by hand."
+}
+
 /** Total of every part — what the client has actually committed to. */
 export function planTotal(plan: PaymentPlan): number {
   return Math.round(plan.reduce((sum, p) => sum + p.amount, 0) * 100) / 100

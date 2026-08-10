@@ -25,7 +25,7 @@ import { normalizeFormationState } from "@/lib/formation/states"
 import { availableCreditForDisplay, unspentCreditByCurrency } from "@/lib/operations/credit-netting"
 import { resolveCreditSubject, subjectForDisplay, type CreditSubject } from "@/lib/operations/credit-subject"
 import { parsePriceQuirk, resolveOfferCurrency, ambiguousDotPrices } from "@/lib/offers/compute-offer-totals"
-import { signingPart, validatePaymentPlan } from "@/lib/offers/payment-plan"
+import { refusePlanWithReferralPartner, signingPart, validatePaymentPlan } from "@/lib/offers/payment-plan"
 import type { Json } from "@/lib/database.types"
 
 // ─── JSONB validation ───────────────────────────────────────
@@ -487,6 +487,20 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
           outcome: "validation_error",
           error: `Payment plan: ${planCheck.errors.join(" ")}`,
         }
+      }
+
+      // ⛔ A plan and a referrer cannot share an offer until the referral credit path can pay a
+      // commission part by part. Refused HERE, at authoring, so the hand-settlement card stays a
+      // safety net rather than the normal route.
+      const hasReferrer = Boolean(
+        params.referrer_name || params.referrer_contact_id || params.referrer_account_id,
+      )
+      const referrerRefusal = refusePlanWithReferralPartner(
+        hasReferrer,
+        params.language === "it" ? "it" : "en",
+      )
+      if (referrerRefusal) {
+        return { success: false, outcome: "validation_error", error: referrerRefusal }
       }
     }
 

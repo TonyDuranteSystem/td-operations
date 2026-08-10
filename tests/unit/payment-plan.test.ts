@@ -16,6 +16,7 @@ import {
   clientFacingSchedule,
   decideSigningBill,
   PARTIAL_PAYMENT_LABEL,
+  refusePlanWithReferralPartner,
   laterParts,
   planCurrency,
   planTotal,
@@ -475,5 +476,40 @@ describe("⛔ an event trigger cannot promise a mechanism that does not exist", 
       expect(s.toLowerCase()).not.toContain("instalment")
       expect(s.toLowerCase()).not.toContain("rata")
     }
+  })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+//  ⛔ A PLAN AND A REFERRER CANNOT SHARE AN OFFER (architect ruling)
+//
+//  Because activation credits the WHOLE commission on the first payment — the referral credit path
+//  can only key one note per referral — a plan sold to a referred client would pay the partner in
+//  full for money that has not arrived. Refused at authoring so the hand-settlement card stays a
+//  safety net rather than the normal route.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+
+describe("a plan is refused on an offer that carries a referrer", () => {
+  it("refuses when there is a referrer", () => {
+    expect(refusePlanWithReferralPartner(true)).toBeTruthy()
+  })
+
+  it("says nothing at all when there is no referrer — the ordinary case stays silent", () => {
+    expect(refusePlanWithReferralPartner(false)).toBeNull()
+  })
+
+  it("tells the author what to DO, not just that it is refused (R099)", () => {
+    const msg = refusePlanWithReferralPartner(true)!
+    expect(msg).toContain("drop the plan")
+    expect(msg).toContain("by hand")
+  })
+
+  it("names the actual reason — the commission timing, not a vague policy", () => {
+    expect(refusePlanWithReferralPartner(true)).toContain("credited in full on the first payment")
+  })
+
+  it("refuses in Italian too, using the approved label and never the banned words", () => {
+    const it = refusePlanWithReferralPartner(true, "it")!
+    expect(it).toContain("Pagamento Parziale")
+    expect(it.toLowerCase()).not.toMatch(/\b(rat[ae]|rateizzazion[ei]|instal?lments?)\b/)
   })
 })
