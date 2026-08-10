@@ -16,9 +16,11 @@ import {
   commissionDueAtSigning,
   trancheCommissionKey,
   decideAccrual,
+  ISSUER_SUPPORTS_PER_PART_KEY,
 } from "@/lib/offers/tranche-commission"
 import { validatePaymentPlan, type PaymentPlan } from "@/lib/offers/payment-plan"
 import { DEAD_INVOICE_STATUSES, computePlanStatus } from "@/lib/offers/payment-plan-state"
+import { buildCommissionReviewMessage } from "@/lib/offers/tranche-commission-issue"
 
 /**
  * Build a REAL validated plan. It throws on refusal on purpose: the first version used `.plan!`
@@ -214,8 +216,8 @@ describe("⛔ accrual is on PAYMENT, never on raising", () => {
     expect(decideAccrual("credit_note", "part_paid").accrue).toBe(false)
   })
 
-  it("accrues once the part is paid", () => {
-    expect(decideAccrual("percentage", "paid").accrue).toBe(true)
+  it("the share is EARNED once the part is paid (entitlement, proved with the prerequisite met)", () => {
+    expect(decideAccrual("percentage", "paid", { issuerSupportsPerPartKey: true }).accrue).toBe(true)
   })
 
   it.each(DEAD_INVOICE_STATUSES)(
@@ -248,7 +250,7 @@ describe("⛔ accrual is on PAYMENT, never on raising", () => {
       { id: "live", invoice_number: "INV-2", invoice_status: "Paid", amount_paid: 1250, amount: 1250, tranche_seq: 2, due_date: null },
     ])
     expect(st.parts[1].state).toBe("paid")
-    expect(decideAccrual("credit_note", st.parts[1].state).accrue).toBe(true)
+    expect(decideAccrual("credit_note", st.parts[1].state, { issuerSupportsPerPartKey: true }).accrue).toBe(true)
     // And the key for that part is stable, so the credit cannot be issued twice for it.
     expect(trancheCommissionKey("t", 2)).toBe(trancheCommissionKey("t", 2))
   })
@@ -275,15 +277,99 @@ describe("⛔ a price-difference arrangement is REFUSED, not sliced", () => {
     expect(decideAccrual("price_difference", "paid").accrue).toBe(false)
   })
 
-  it("the two share-of-fee arrangements DO accrue per part", () => {
+  it("the two share-of-fee arrangements DO earn per part", () => {
     for (const t of ["percentage", "credit_note"]) {
-      expect(decideAccrual(t, "paid").accrue).toBe(true)
+      expect(decideAccrual(t, "paid", { issuerSupportsPerPartKey: true }).accrue).toBe(true)
     }
   })
 
   it("an unknown commission type is treated as a share of the fee, like the existing calculator", () => {
     // Deliberate consistency with the calculator's own default rather than a new refusal: a new
     // type should be decided where commission is CALCULATED, not silently blocked here.
-    expect(decideAccrual("something_new", "paid").accrue).toBe(true)
+    expect(decideAccrual("something_new", "paid", { issuerSupportsPerPartKey: true }).accrue).toBe(true)
+  })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+//  THE STRUCTURAL INTERLOCK — the previous version of this protection was a comment, and a
+//  comment does not stop anybody.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+
+describe("⛔ nothing can accrue while the credit path cannot key per part", () => {
+  it("the interlock is OFF today", () => {
+    expect(ISSUER_SUPPORTS_PER_PART_KEY).toBe(false)
+  })
+
+  it("refuses an earned share by DEFAULT — no caller can accidentally issue one", () => {
+    // Note the shape: entitlement and ability are separate. The share IS earned; we simply cannot
+    // pay it correctly yet, so the refusal names that rather than pretending nothing is owed.
+    const d = decideAccrual("percentage", "paid")
+    expect(d.accrue).toBe(false)
+    expect(d.refusal).toBe("issuer_cannot_key_per_part")
+    expect(d.reason).toContain("by hand")
+    expect(d.reason).toContain("under-paid")
+  })
+
+  it("refuses for every share-of-fee type, not just one", () => {
+    for (const t of ["percentage", "credit_note", "something_new"]) {
+      expect(decideAccrual(t, "paid").accrue).toBe(false)
+    }
+  })
+
+  it("the price-difference refusal still wins over the interlock", () => {
+    // Order matters for the message a human reads: a price-difference deal needs a different
+    // decision from Antonio, not "wait for a prerequisite".
+    expect(decideAccrual("price_difference", "paid").refusal).toBe("not_divisible_by_part")
+  })
+
+  it("not-paid still reports not-paid rather than the interlock", () => {
+    // Otherwise every unpaid part would blame the prerequisite and hide the real reason.
+    expect(decideAccrual("percentage", "awaiting_payment").refusal).toBe("not_paid_yet")
+  })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+//  THE INTERIM GUARD's card — Antonio's decision: suppress the automatic credit, surface the
+//  deal with everything needed to settle it. A card that only says "do this by hand" sends the
+//  reader back to the database to work out what and how much.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+
+describe("the hand-settlement card carries the amount and the parts", () => {
+  const msg = buildCommissionReviewMessage({
+    clientName: "Mario Rossi",
+    referrerName: "Studio Bianchi",
+    commissionType: "credit_note",
+    totalCommission: 250,
+    currency: "EUR",
+    plan: plan(1250, 1250),
+  })
+
+  it("names the client and the referrer", () => {
+    expect(msg).toContain("Mario Rossi")
+    expect(msg).toContain("Studio Bianchi")
+  })
+
+  it("states the total AND every part's share", () => {
+    expect(msg).toContain("250 EUR")
+    expect(msg).toContain("part 1 of 2")
+    expect(msg).toContain("part 2 of 2")
+    expect(msg.match(/125 EUR/g)?.length).toBe(2)
+  })
+
+  it("says plainly that nothing was credited", () => {
+    // The dangerous misreading is that the card is a receipt rather than a to-do.
+    expect(msg).toContain("Nothing was credited automatically")
+    expect(msg).toContain("nothing has issued")
+  })
+
+  it("explains WHY, so the reader does not 'fix' it by wiring the accrual", () => {
+    expect(msg).toContain("silently swallowed")
+    expect(msg).toContain("under-paid")
+  })
+
+  it("never uses the banned renewal vocabulary, even on an internal card", () => {
+    // Staff-facing, but the wording rule is about not confusing the two arrangements ANYWHERE —
+    // and this text is the thing a human copies into an email.
+    expect(msg.toLowerCase()).not.toMatch(/\b(rat[ae]|instal?lments?)\b/)
   })
 })

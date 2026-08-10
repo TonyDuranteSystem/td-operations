@@ -159,11 +159,34 @@ export function trancheCommissionKey(offerToken: string, seq: number): string {
  * yet either.
  */
 
+/**
+ * ⛔ STRUCTURAL INTERLOCK — not a comment, a gate.
+ *
+ * `false` because the referral credit-note issuer CANNOT yet key a credit per part: it hardcodes
+ * one key per referral and ignores whatever a caller passes, and the referral row overwrites its
+ * recorded amount instead of accumulating. Wire accrual on top of that and part two's credit is
+ * silently swallowed — the referrer under-paid, the referral reading as settled.
+ *
+ * While this is `false`, `decideAccrual` REFUSES every share, so no amount of wiring can issue one.
+ * A future session cannot reach the accrual path without flipping this, and flipping it means
+ * reading why it exists. That is the point: the previous version of this protection was a comment,
+ * and a comment does not stop anybody.
+ *
+ * TO FLIP IT, both must be true — verify them, do not assume:
+ *   1. the credit-note issuer accepts a caller-supplied idempotency key and uses it;
+ *   2. the referral row ACCUMULATES the credited amount rather than assigning it, and its status
+ *      gate does not treat the first part as "done".
+ * Tracked as its own job because it touches live money partners can already see.
+ */
+export const ISSUER_SUPPORTS_PER_PART_KEY = false
+
 export type AccrualRefusal =
   /** The arrangement's commission is not a share of the fee, so it cannot be split by part. */
   | "not_divisible_by_part"
   /** The money for this part has not arrived. */
   | "not_paid_yet"
+  /** The credit path cannot yet issue one credit per part — see the interlock above. */
+  | "issuer_cannot_key_per_part"
 
 export interface AccrualDecision {
   accrue: boolean
@@ -189,7 +212,18 @@ export interface AccrualDecision {
 export function decideAccrual(
   commissionType: string,
   partState: PartState,
+  /**
+   * Whether the credit path can key one credit per part. Defaults to the interlock constant, so
+   * production behaviour cannot drift by omission.
+   *
+   * It is a PARAMETER rather than only a constant so the entitlement logic underneath stays
+   * provable — a hard-wired `false` would make "is this share earned?" untestable, and an
+   * untestable rule is one that rots. Passing `true` is an explicit claim that the prerequisite
+   * has landed, which reads as a deliberate act in any diff.
+   */
+  opts?: { issuerSupportsPerPartKey?: boolean },
 ): AccrualDecision {
+  const issuerReady = opts?.issuerSupportsPerPartKey ?? ISSUER_SUPPORTS_PER_PART_KEY
   if (commissionType === "price_difference") {
     return {
       accrue: false,
@@ -206,6 +240,20 @@ export function decideAccrual(
       accrue: false,
       refusal: "not_paid_yet",
       reason: "Commission is earned when the money for a part arrives, not when the part is raised.",
+    }
+  }
+
+  if (!issuerReady) {
+    // The share IS earned — this refusal is about our ability to pay it correctly, not about
+    // entitlement. The caller's job here is to suppress the automatic credit and surface the deal
+    // for hand settlement, which is exactly what the interim guard does.
+    return {
+      accrue: false,
+      refusal: "issuer_cannot_key_per_part",
+      reason:
+        "This part's share is earned, but the credit path cannot yet issue one credit note per " +
+        "part — a second part's credit would be silently swallowed and the referrer under-paid. " +
+        "Settle this deal's commission by hand.",
     }
   }
 
