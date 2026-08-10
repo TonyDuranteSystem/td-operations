@@ -30,7 +30,8 @@ export interface RevisedOfferSeed {
  * notes/currency), linkage (lead_id, account_id, contact_id), deal facts
  * (contract_type, entity_type, formation_state — normalized so a legacy or
  * invalid stored value can never propagate), pinned money facts
- * (card_fee_rate, referrer_name/type + referrer_contact_id).
+ * (card_fee_rate, referrer_name/type + referrer_contact_id), and the payment
+ * plan verbatim with its triggers.
  *
  * DELIBERATELY NOT COPIED (recorded decisions, not omissions):
  *   selected_services   — the client re-selects on the new version
@@ -83,6 +84,12 @@ export function buildRevisedOfferInsert(
     // document the client compares side by side with the previous version.
     credit_kind: (original.credit_kind as string | null | undefined) ?? null,
     referrer_contact_id: (original.referrer_contact_id as string | null | undefined) ?? null,
+    // WS-C: the payment plan is a FACT OF THE DEAL — what the client agreed to pay and when.
+    // Copied VERBATIM, triggers included. Two reasons it cannot be left to regeneration:
+    // dropping it would silently turn a EUR1,250 + EUR1,250 agreement back into one EUR2,500
+    // bill on v2, and a trigger flattened to a plain amount loses the answer to "when is part
+    // two due?" — which is the only thing the schedule and the mint action have to go on.
+    payment_plan: (original.payment_plan as unknown) ?? null,
     view_count: 0,
     version: seed.newVersion,
   }
