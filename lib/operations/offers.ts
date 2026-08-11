@@ -495,10 +495,8 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
       const hasReferrer = Boolean(
         params.referrer_name || params.referrer_contact_id || params.referrer_account_id,
       )
-      const referrerRefusal = refusePlanWithReferralPartner(
-        hasReferrer,
-        params.language === "it" ? "it" : "en",
-      )
+      // Staff-facing, English only — the client never learns a referrer exists.
+      const referrerRefusal = refusePlanWithReferralPartner(hasReferrer)
       if (referrerRefusal) {
         return { success: false, outcome: "validation_error", error: referrerRefusal }
       }

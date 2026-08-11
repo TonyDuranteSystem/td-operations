@@ -41,12 +41,14 @@ export interface TrancheTrigger {
   /** For kind='date': ISO date. A REMINDER, never a scheduler — see the header. */
   date?: string
   /**
-   * For kind='manual': what the human is waiting for, in their own words
-   * (e.g. "Bank account opened (Relay)"). Staff-facing.
+   * For kind='manual': what the client is waiting for, in plain words — e.g.
+   * "when your bank account is opened". ⚠️ CLIENT-VISIBLE: this text renders on the client's
+   * schedule line (architect ruling, 2026-08-11 — a generic "the agreed step" tells a client
+   * nothing about when they owe money, and these are the words the author chose). Write it FOR
+   * the client; do not put internal vendor chatter here — `internal_label` exists for that.
    *
-   * This is where "when the bank account opens" belongs, and it is deliberately FREE TEXT rather
-   * than a named event: the system has no idea when a bank account opens, so a name would imply
-   * a mechanism that does not exist.
+   * Deliberately FREE TEXT rather than a named event: the system has no idea when a bank
+   * account opens, so an event name would imply a mechanism that does not exist.
    */
   label?: string
 }
@@ -83,7 +85,7 @@ export type PaymentPlan = PaymentPlanPart[]
  * promise in a more plausible costume.
  *
  * TO WIRE ONE, all three in the same change: add the name here, dispatch it from the real moment,
- * and add its client-facing wording in BOTH languages below. Copy ready for the two plausible
+ * and add its client-facing wording below (English — this feature is English-only). Ready copy
  * candidates when someone does the work:
  *   ein_received   → "when your EIN is issued" / "al rilascio dell'EIN"
  *   company_formed → "when your company is formed" / "alla costituzione della società"
@@ -263,21 +265,19 @@ export function validatePaymentPlan(raw: unknown): PlanValidation {
  * condition stacks a second guess on the first, and the next thing that legitimately defers a
  * commission trips it again. That is why `a5e61a46` makes intent explicit instead.
  *
- * The message travels to whoever is authoring, in their language, and says what to do rather than
- * just refusing (R099).
+ * ⛔ STAFF-FACING ONLY, and verified so (2026-08-11): this fires inside offer creation, which
+ * only the CRM dialog and the staff tool call — no client route reaches it, no client page
+ * renders any referrer field, and Antonio's constraint is explicit: THE CLIENT HAS NOTHING TO DO
+ * WITH THE REFERRER. A client must never learn a referrer exists, so no version of this message
+ * may ever be surfaced on a client page. English only (Antonio, 2026-08-11).
  */
-export function refusePlanWithReferralPartner(
-  hasReferrer: boolean,
-  lang: "en" | "it" = "en",
-): string | null {
+export function refusePlanWithReferralPartner(hasReferrer: boolean): string | null {
   if (!hasReferrer) return null
-  return lang === "it"
-    ? "Questa offerta ha un segnalatore, quindi non può essere venduta con un Pagamento Parziale: " +
-      "la provvigione verrebbe accreditata per intero al primo pagamento. Rimuovi il piano, oppure " +
-      "togli il segnalatore e registra la provvigione a mano."
-    : "This offer has a referrer, so it cannot be sold with a Partial Payment: the commission would " +
-      "be credited in full on the first payment. Either drop the plan, or remove the referrer and " +
-      "settle their commission by hand."
+  return (
+    "This offer has a referrer, so it cannot be sold with a Partial Payment: the commission would " +
+    "be credited in full on the first payment. Either drop the plan, or remove the referrer and " +
+    "settle their commission by hand."
+  )
 }
 
 /** Total of every part — what the client has actually committed to. */
@@ -309,49 +309,33 @@ export function laterParts(plan: PaymentPlan): PaymentPlanPart[] {
 const EVENT_WORDING: Record<string, string> = {}
 
 /**
- * The Italian register for the same phrasing — the offer and the contract are bilingual.
- *
- * ⚠️ PLACEHOLDER WORDING, NOT YET APPROVED. Antonio confirmed the INVOICE LABEL — "Pagamento
- * Parziale", used verbatim in `trancheInvoiceDescription` — and said nothing about these
- * schedule lines. Silence is not approval. They are draft copy pending his read of the RENDERED
- * Italian schedule at the click-through gate, where he sees them in context on screen rather
- * than as a string in a message, and approves or replaces them before any client sees one.
- *
- * The BAN, by contrast, is settled: never "rata" or "rateizzazione". That is Antonio's own rule
- * applied to Italian rather than a new decision — "rata" is the word his renewal contracts use,
- * so it carries exactly the collision in Italian that "instalment" carries in English.
+ * Render an ISO date the way every other client-facing date on the offer pages renders —
+ * "1 September 2026" — rather than leaking raw ISO to a client. Matches the pages' own
+ * `formatDate` (day, month name, year, UTC) instead of inventing a second format; UTC on purpose,
+ * same as the pages, so the date never shifts by timezone.
  */
-const EVENT_WORDING_IT: Record<string, string> = {}
+function clientFacingDate(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`)
+  if (Number.isNaN(d.getTime())) return iso
+  const months = ["January","February","March","April","May","June","July","August","September","October","November","December"]
+  return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+}
 
 /**
- * What a CLIENT is told about when a part is due.
+ * What a CLIENT is told about when a part is due. ENGLISH ONLY (Antonio, 2026-08-11) — the
+ * earlier Italian register is withdrawn, and this feature has exactly one set of words.
  *
- * ⛔ The only sanctioned client-facing phrasing, and it never says "instalment". A client reading
- * a formation offer must not see the vocabulary of the annual renewal contract — Antonio's rule,
- * non-negotiable. "Part 2 of 2, due when your bank account is open" answers what they owe and
- * when; "2nd instalment" answers neither and imports the wrong contract.
+ * ⛔ Still the only sanctioned client-facing phrasing, and it never says "instalment" — that word
+ * belongs to the renewal contract, and the separation from the annual Jan/Jun machinery has to
+ * hold in the words as well as the data.
+ *
+ * A MANUAL part renders THE STORED WORDS (`trigger.label`) when present — the author's own
+ * description of what the client is waiting for, e.g. "when your bank account is opened"
+ * (architect ruling: a generic "the agreed step" tells the client nothing). The label is
+ * client-visible by contract now; the generic phrase survives only as the fallback for a part
+ * authored without one.
  */
-export function clientFacingPartLabel(
-  part: PaymentPlanPart,
-  totalParts: number,
-  lang: "en" | "it" = "en",
-): string {
-  if (lang === "it") {
-    const posizione = `Parte ${part.seq} di ${totalParts}`
-    switch (part.trigger.kind) {
-      case "signing":
-        return `${posizione}, alla firma`
-      case "event":
-        return `${posizione}, ${EVENT_WORDING_IT[part.trigger.event ?? ""] ?? "al completamento del passaggio concordato"}`
-      case "date":
-        return `${posizione}, entro il ${part.trigger.date}`
-      case "manual":
-      default:
-        // Deliberately NOT the staff label — that may name an internal vendor ("Relay") and is
-        // nobody's business but ours. The client is told the shape of the agreement they made.
-        return `${posizione}, al completamento del passaggio concordato`
-    }
-  }
+export function clientFacingPartLabel(part: PaymentPlanPart, totalParts: number): string {
   const position = `Part ${part.seq} of ${totalParts}`
   switch (part.trigger.kind) {
     case "signing":
@@ -359,10 +343,12 @@ export function clientFacingPartLabel(
     case "event":
       return `${position}, due ${EVENT_WORDING[part.trigger.event ?? ""] ?? "when the agreed step is complete"}`
     case "date":
-      return `${position}, due ${part.trigger.date}`
+      return `${position}, due by ${clientFacingDate(part.trigger.date ?? "")}`
     case "manual":
     default:
-      return `${position}, due when the agreed step is complete`
+      return part.trigger.label
+        ? `${position}, due ${part.trigger.label}`
+        : `${position}, due when the agreed step is complete`
   }
 }
 
@@ -376,13 +362,12 @@ export function clientFacingPartLabel(
  */
 export function clientFacingSchedule(
   plan: PaymentPlan,
-  lang: "en" | "it" = "en",
 ): Array<{ seq: number; amount: number; currency: string; label: string }> {
   return plan.map((p) => ({
     seq: p.seq,
     amount: p.amount,
     currency: p.currency,
-    label: clientFacingPartLabel(p, plan.length, lang),
+    label: clientFacingPartLabel(p, plan.length),
   }))
 }
 
@@ -458,30 +443,26 @@ export function decideSigningBill(args: {
 }
 
 /**
- * THE APPROVED NAME for a part of a split setup fee, in both languages.
+ * THE NAME for a part of a split setup fee. ENGLISH ONLY — Antonio's ruling, 2026-08-11:
+ * "I don't want a fucking nothing in italian. Luca and I work in english." This SUPERSEDES his
+ * earlier approval of an Italian label; every client- and staff-facing string in the payment-plan
+ * feature ships in English. (The platform's EXISTING Italian — the offer hero, the bilingual
+ * emails — is untouched; the ruling is about THIS feature's copy.)
  *
- * Both confirmed by Antonio: "Partial Payment" is his own wording from Domenico's invoice, and
- * "Pagamento Parziale" is the Italian he confirmed verbatim. Neither may be swapped for the
- * renewal contract's vocabulary — see the ban above.
+ * "Partial Payment" is his own wording from Domenico's invoice. Never the renewal contract's
+ * vocabulary — see the ban above, which stays armed precisely so no future session reintroduces
+ * what has now been ruled out twice.
  */
-export const PARTIAL_PAYMENT_LABEL: Record<"en" | "it", string> = {
-  en: "Partial Payment",
-  it: "Pagamento Parziale",
-}
+export const PARTIAL_PAYMENT_LABEL = "Partial Payment"
 
 /**
- * The description that goes ON the invoice for a part.
- *
- * ⛔ DELIBERATELY ENGLISH-ONLY, and not an oversight. Every invoice description in this system is
- * English regardless of the client's language — an Italian client's other invoices read
- * "LLC Formation Package - Mario". Localising this one line would make a single row of their
- * invoice list disagree with the rest of it. The Italian label exists for the surfaces that DO
- * render Italian: the offer, the contract and the portal schedule.
+ * The description that goes ON the invoice for a part. English, like every other invoice
+ * description in the system — and like every other string in this feature (Antonio, 2026-08-11).
  */
 export function trancheInvoiceDescription(
   part: PaymentPlanPart,
   totalParts: number,
   serviceLabel: string,
 ): string {
-  return `${serviceLabel} — ${PARTIAL_PAYMENT_LABEL.en} (part ${part.seq} of ${totalParts})`
+  return `${serviceLabel} — ${PARTIAL_PAYMENT_LABEL} (part ${part.seq} of ${totalParts})`
 }

@@ -133,8 +133,8 @@ const LABELS = {
     contactPayment: 'Scrivici nella App per procedere con il pagamento.',
     payByCard: 'Paga con Carta',
     payByTransfer: 'Bonifico Bancario',
-    scheduleTitle: 'Pagamento Parziale',
-    amountUnavailable: 'Il tuo piano di pagamento richiede una correzione prima del pagamento. Contattaci e ti invieremo l\'importo esatto.',
+    scheduleTitle: 'Partial Payment', // English only — Antonio, 2026-08-11
+    amountUnavailable: 'Your payment schedule needs a correction before you pay. Please contact us and we will send you the exact amount.', // English only — Antonio, 2026-08-11
     totalDueToday: 'Totale Dovuto Oggi',
     creditApplied: 'Già pagato — Call Strategica',
     creditAppliedGeneric: 'Credito applicato',
@@ -237,8 +237,10 @@ export default function OfferPageWithCode() {
     if (raw == null) return null
     const parsed = validatePaymentPlan(raw)
     if (!parsed.ok || !parsed.plan || parsed.plan.length < 2) return null
-    return clientFacingSchedule(parsed.plan, lang === 'it' ? 'it' : 'en')
-  }, [offer, lang])
+    // English only (Antonio, 2026-08-11): the schedule renders in English on every offer,
+    // including Italian ones — the platform's existing Italian elsewhere is untouched.
+    return clientFacingSchedule(parsed.plan)
+  }, [offer])
 
   // WS-A display row. Reads the SINGLE amount authority — it does no arithmetic
   // of its own, because that is exactly how the summary and the pay buttons came

@@ -191,7 +191,9 @@ describe("⛔ CLIENT-FACING WORDING — never 'instalment'", () => {
 
   it("says what is due and when, in the client's terms", () => {
     expect(clientFacingPartLabel(plan[0], 2)).toBe("Part 1 of 2, due on signing")
-    expect(clientFacingPartLabel(plan[1], 2)).toBe("Part 2 of 2, due when the agreed step is complete")
+    // The stored words render — Domenico's fixture label, verbatim (architect ruling 2026-08-11:
+    // a generic "the agreed step" tells a client nothing about when they owe money).
+    expect(clientFacingPartLabel(plan[1], 2)).toBe("Part 2 of 2, due Bank account opened (Relay)")
   })
 
   it("NEVER uses the renewal contract's vocabulary, in any label or description", () => {
@@ -214,12 +216,15 @@ describe("⛔ CLIENT-FACING WORDING — never 'instalment'", () => {
     )
   })
 
-  it("never leaks the staff label into the client's sentence", () => {
-    // The label is where a human writes what they are waiting for, sometimes naming an internal
-    // vendor. The client is told the shape of their agreement, not our operational detail.
-    const odd = { seq: 2, amount: 1, currency: "USD", trigger: { kind: "manual" as const, label: "chase Relay rep" } }
-    expect(clientFacingPartLabel(odd, 2)).toBe("Part 2 of 2, due when the agreed step is complete")
-    expect(clientFacingPartLabel(odd, 2)).not.toContain("Relay")
+  it("renders the STORED words on a manual part — the label is client copy now", () => {
+    // INVERTED 2026-08-11 by architect ruling: this cell used to assert the label NEVER reached
+    // the client. The ruling made it client-visible ("a client reading 'the agreed step' learns
+    // nothing about when they owe money"), and the field's doc now says to write it FOR the
+    // client. The generic phrase survives only as the fallback for a part authored without one.
+    const labelled = { seq: 2, amount: 1, currency: "USD", trigger: { kind: "manual" as const, label: "when your bank account is opened" } }
+    expect(clientFacingPartLabel(labelled, 2)).toBe("Part 2 of 2, due when your bank account is opened")
+    const bare = { seq: 2, amount: 1, currency: "USD", trigger: { kind: "manual" as const } }
+    expect(clientFacingPartLabel(bare, 2)).toBe("Part 2 of 2, due when the agreed step is complete")
   })
 })
 
@@ -267,28 +272,31 @@ describe("reconciliation against Domenico's hand-executed deal", () => {
   })
 })
 
-describe("⛔ the Italian register carries the same ban", () => {
+describe("⛔ ENGLISH ONLY — Antonio's ruling, 2026-08-11", () => {
+  // "I don't want a fucking nothing in italian. Luca and I work in english." This supersedes the
+  // earlier Italian label approval. The banned-words guard STAYS armed — it costs nothing and it
+  // stops the next session reintroducing what has now been ruled out twice.
   const plan = validatePaymentPlan(DOMENICO_PLAN).plan!
 
-  it("says what is due and when, in Italian", () => {
-    expect(clientFacingPartLabel(plan[0], 2, "it")).toBe("Parte 1 di 2, alla firma")
-    expect(clientFacingPartLabel(plan[1], 2, "it")).toBe("Parte 2 di 2, al completamento del passaggio concordato")
-  })
-
-  it("NEVER uses the renewal contract's Italian vocabulary either", () => {
-    // "rata" / "rateizzazione" is what the ANNUAL contract calls its Jan/Jun payments. A
-    // formation client must not see it, for the same reason the English side must not see
-    // "instalment": it imports the wrong contract and the wrong machinery.
-    for (const lang of ["en", "it"] as const) {
-      for (const p of plan) {
-        const s = clientFacingPartLabel(p, plan.length, lang).toLowerCase()
-        expect(s).not.toMatch(BANNED_WORDS)
-      }
+  it("every schedule line is English, on every offer", () => {
+    for (const p of plan) {
+      const label = clientFacingPartLabel(p, plan.length)
+      expect(label).toMatch(/^Part \d+ of \d+, due /)
+      expect(label.toLowerCase()).not.toMatch(BANNED_WORDS)
     }
   })
 
-  it("defaults to English when no language is given, so a missing argument cannot leak Italian", () => {
-    expect(clientFacingPartLabel(plan[0], 2)).toBe(clientFacingPartLabel(plan[0], 2, "en"))
+  it("a DATE part renders a human date, never raw ISO", () => {
+    // "2026-09-01" to a client is wrong in any language. Format matches the offer pages' own
+    // client-facing dates: day, month name, year, UTC.
+    const dated = { seq: 2, amount: 1, currency: "EUR", trigger: { kind: "date" as const, date: "2026-09-01" } }
+    expect(clientFacingPartLabel(dated, 2)).toBe("Part 2 of 2, due by 1 September 2026")
+    expect(clientFacingPartLabel(dated, 2)).not.toContain("2026-09")
+  })
+
+  it("an unparseable date falls back to the raw string rather than 'Invalid Date'", () => {
+    const odd = { seq: 2, amount: 1, currency: "EUR", trigger: { kind: "date" as const, date: "soon" } }
+    expect(clientFacingPartLabel(odd, 2)).toBe("Part 2 of 2, due by soon")
   })
 })
 
@@ -298,7 +306,7 @@ describe("clientFacingSchedule — one sentence per part, in order", () => {
     const rows = clientFacingSchedule(plan)
     expect(rows).toHaveLength(2)
     expect(rows[0]).toEqual({ seq: 1, amount: 1250, currency: "EUR", label: "Part 1 of 2, due on signing" })
-    expect(rows[1].label).toBe("Part 2 of 2, due when the agreed step is complete")
+    expect(rows[1].label).toBe("Part 2 of 2, due Bank account opened (Relay)")
     // Money stays a number: each surface owns its own symbol and locale rules, and a
     // pre-formatted string here would be a fourth place for them to disagree.
     expect(typeof rows[1].amount).toBe("number")
@@ -403,22 +411,16 @@ describe("decideSigningBill — what signing actually asks the client for", () =
   })
 })
 
-describe("⛔ THE APPROVED LABELS — Antonio confirmed both, verbatim", () => {
-  it("is 'Partial Payment' in English and 'Pagamento Parziale' in Italian", () => {
-    expect(PARTIAL_PAYMENT_LABEL.en).toBe("Partial Payment")
-    expect(PARTIAL_PAYMENT_LABEL.it).toBe("Pagamento Parziale")
+describe("⛔ THE LABEL — English only (Antonio, 2026-08-11, superseding the Italian approval)", () => {
+  it("is 'Partial Payment', a single string, no locale variants", () => {
+    expect(PARTIAL_PAYMENT_LABEL).toBe("Partial Payment")
+    expect(typeof PARTIAL_PAYMENT_LABEL).toBe("string")
   })
 
-  it("neither label carries the renewal contract's vocabulary, in either language", () => {
-    // "rata" is the word the ANNUAL contracts use for their Jan/Jun payments, so it collides in
-    // Italian exactly as "instalment" collides in English — the same rule, not a new one.
-    for (const label of Object.values(PARTIAL_PAYMENT_LABEL)) {
-      const s = label.toLowerCase()
-      expect(s).not.toContain("instalment")
-      expect(s).not.toContain("installment")
-      expect(s).not.toContain("rata")
-      expect(s).not.toContain("rateizzazione")
-    }
+  it("never carries the renewal contract's vocabulary", () => {
+    // The ban stays armed even though the Italian copy is gone: it has now been ruled out twice,
+    // and the guard is what stops a third introduction.
+    expect(PARTIAL_PAYMENT_LABEL.toLowerCase()).not.toMatch(BANNED_WORDS)
   })
 
   it("the invoice description uses the English label even for an Italian client", () => {
@@ -464,18 +466,13 @@ describe("⛔ an event trigger cannot promise a mechanism that does not exist", 
     expect(res.plan![1].trigger.event).toBeUndefined()
   })
 
-  it("a manual part tells the client a neutral phrase, never the staff label", () => {
-    // The staff label may name an internal vendor ("Relay"); the client is told only that it
-    // falls due when the agreed step is done.
+  it("a manual part renders its stored words, and the ban still holds over them", () => {
+    // The label is CLIENT COPY now (architect ruling 2026-08-11) — the author writes it for the
+    // client, and the banned-vocabulary guard applies to what actually renders.
     const plan = validatePaymentPlan(DOMENICO_PLAN).plan!
-    const en = clientFacingPartLabel(plan[1], 2, "en")
-    const it = clientFacingPartLabel(plan[1], 2, "it")
-    expect(en).not.toContain("Relay")
-    expect(it).not.toContain("Relay")
-    for (const s of [en, it]) {
-      expect(s.toLowerCase()).not.toContain("instalment")
-      expect(s.toLowerCase()).not.toContain("rata")
-    }
+    const line = clientFacingPartLabel(plan[1], 2)
+    expect(line).toContain("Bank account opened")
+    expect(line.toLowerCase()).not.toMatch(BANNED_WORDS)
   })
 })
 
@@ -507,9 +504,11 @@ describe("a plan is refused on an offer that carries a referrer", () => {
     expect(refusePlanWithReferralPartner(true)).toContain("credited in full on the first payment")
   })
 
-  it("refuses in Italian too, using the approved label and never the banned words", () => {
-    const it = refusePlanWithReferralPartner(true, "it")!
-    expect(it).toContain("Pagamento Parziale")
-    expect(it.toLowerCase()).not.toMatch(/\b(rat[ae]|rateizzazion[ei]|instal?lments?)\b/)
+  it("is English only and stays inside the banned-vocabulary guard", () => {
+    // Staff-facing — and the client never learns a referrer exists, so there is no localised
+    // variant to leak anywhere (Antonio, 2026-08-11).
+    const msg = refusePlanWithReferralPartner(true)!
+    expect(msg).toContain("Partial Payment")
+    expect(msg.toLowerCase()).not.toMatch(BANNED_WORDS)
   })
 })

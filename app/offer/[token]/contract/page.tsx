@@ -39,7 +39,7 @@ const CL = {
     // schedule lines. It is a SAFETY line, not schedule copy: shown only when the offer's payment
     // plan disagrees with its own totals, where quoting any figure risks an overpayment we cannot
     // yet resolve. Saying nothing at all would be worse — the client would just wire the old number.
-    amountUnavailable: 'Your payment schedule needs a correction before you pay. Please contact us and we will send you the exact amount — do not transfer anything yet.',
+    amountUnavailable: 'Your payment schedule needs a correction before you pay. Please contact us and we will send you the exact amount — do not make any payment yet, by card or by transfer.',
     cardSurcharge: 'A 5% processing fee applies to card payments.',
     orSeparator: 'OR',
     bankTitle: 'Bank Transfer Details',
@@ -65,7 +65,7 @@ const CL = {
     choosePayment: 'Scegli come pagare:',
     payByCard: 'Paga con Carta',
     payByTransfer: 'Bonifico Bancario',
-    amountUnavailable: 'Il tuo piano di pagamento richiede una correzione prima del pagamento. Contattaci e ti invieremo l\'importo esatto — non effettuare ancora alcun bonifico.',
+    amountUnavailable: 'Your payment schedule needs a correction before you pay. Please contact us and we will send you the exact amount — do not make any payment yet, by card or by transfer.', // English only — Antonio, 2026-08-11
     cardSurcharge: 'Il pagamento con carta prevede una maggiorazione del 5%.',
     orSeparator: 'OPPURE',
     bankTitle: 'Coordinate Bancarie',
