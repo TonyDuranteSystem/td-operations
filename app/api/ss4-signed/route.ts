@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
     // Fetch SS-4 record
     const { data: ss4, error: ss4Err } = await supabaseAdmin
       .from("ss4_applications")
-      .select("id, token, company_name, account_id, contact_id, entity_type, responsible_party_name, status, state_of_formation")
+      .select("id, token, access_code, company_name, account_id, contact_id, entity_type, responsible_party_name, status, state_of_formation")
       .eq("id", ss4_id)
       .eq("token", token)
       .single()
@@ -451,7 +451,7 @@ export async function POST(req: NextRequest) {
             : `The combined SS-4 + Articles package is attached. Print and fax to the IRS.`
           : `ACTION REQUIRED: Download the signed SS-4 PDF from the client's Drive folder and fax it to the IRS.`,
         ``,
-        `Admin Preview: ${APP_BASE_URL}/ss4/${ss4.token}?preview=td`,
+        `Admin Preview: ${APP_BASE_URL}/ss4/${ss4.token}/${ss4.access_code}?preview=td`,
       ].join("\n")
 
       const boundary = `boundary_${Date.now()}`

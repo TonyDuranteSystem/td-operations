@@ -85,6 +85,10 @@ export function GenerateSS4Dialog({
         toast.success(data.regenerated
           ? `SS-4 regenerated for ${companyName} — same client link, updated data`
           : `SS-4 created for ${companyName}`)
+        // Kept-explicit-pick note (the responsible party is a staff pick and
+        // was NOT re-derived) — the workspace shows this; the CRM dialog must
+        // not be the one silent surface.
+        if (data.note) toast.warning(data.note as string, { duration: 12000 })
         router.refresh()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Error')

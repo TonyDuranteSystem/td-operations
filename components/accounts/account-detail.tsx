@@ -1626,6 +1626,11 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
       setMembers(prev => prev.map(m => m.id === editingId ? (data.data as CrmMember) : m))
       setEditingId(null)
       toast.success('Member updated')
+      // What the SS-4 auto-refresh did with this edit — kept an explicit pick,
+      // blocked on the flag count, or refused an orphaned signer. Silence here
+      // is how conflicting staff actions go unnoticed (council major, 2026-08-11).
+      const ss4Note = (data.ss4_refresh as { message?: string } | null | undefined)?.message
+      if (ss4Note) toast.warning(ss4Note, { duration: 12000 })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save')
     } finally {
@@ -1651,6 +1656,8 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
       setShowAddForm(false)
       setAddDraft({})
       toast.success('Member added')
+      const addSs4Note = (data.ss4_refresh as { message?: string } | null | undefined)?.message
+      if (addSs4Note) toast.warning(addSs4Note, { duration: 12000 })
     } catch (err) {
       // Show the plain-language reason right here in the form (persistent),
       // not just a toast that disappears.
@@ -1671,6 +1678,10 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Failed to remove member')
       setMembers(prev => prev.filter(m => m.id !== deleteTarget.id))
+      // Deleting the member who IS the SS-4 signer triggers the orphan alert
+      // (link revoked, staff must pick) — that must reach the person deleting.
+      const delSs4Note = (data.ss4_refresh as { message?: string } | null | undefined)?.message
+      if (delSs4Note) toast.warning(delSs4Note, { duration: 12000 })
       return { success: true, message: `${displayName(deleteTarget)} removed` }
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Failed to remove' }

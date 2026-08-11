@@ -15,6 +15,16 @@ interface Ss4Record {
   company_name: string
   signed_at?: string | null
   previewUrl?: string
+  contact_id?: string | null
+  responsible_party_name?: string | null
+}
+
+/** A person linked to the account — any role. Roles inform, they never restrict. */
+interface SignerCandidate {
+  contact_id: string
+  full_name: string
+  email: string | null
+  role: string | null
 }
 
 /**
@@ -32,6 +42,7 @@ interface Ss4Record {
  */
 export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
   const [ss4, setSs4] = useState<Ss4Record | null>(null)
+  const [candidates, setCandidates] = useState<SignerCandidate[]>([])
   const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -43,11 +54,49 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
     try {
       const res = await fetch(`/api/flows/${serviceDeliveryId}/generate-ss4`, { cache: 'no-store' })
       const data = await res.json().catch(() => ({}))
-      if (res.ok && data.success) setSs4(data.ss4 ?? null)
+      if (res.ok && data.success) {
+        setSs4(data.ss4 ?? null)
+        setCandidates(Array.isArray(data.candidates) ? data.candidates : [])
+      }
     } finally {
       setLoaded(true)
     }
   }, [serviceDeliveryId])
+
+  // Change the responsible party. The server resets an already-sent SS-4 to
+  // draft and rotates the access code, so the previous signer's link dies.
+  async function setSigner(contactId: string) {
+    setBusy(true)
+    setError(null)
+    setInfo(null)
+    try {
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/generate-ss4`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ set_signer: contactId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Could not change the responsible party.')
+      }
+      if (data.unchanged) {
+        setInfo('That person is already the responsible party.')
+      } else {
+        setInfo(
+          data.status_reset
+            ? 'Responsible party changed. The SS-4 went back to draft and the previous signing link no longer works — send it again when you are ready.'
+            : 'Responsible party changed. The previous signing link no longer works.',
+        )
+      }
+      // Re-read from the server rather than trusting the response shape — the
+      // status and the preview link both change on a switch.
+      await load()
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Could not change the responsible party.')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   useEffect(() => {
     load()
@@ -87,14 +136,22 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Could not regenerate the SS-4.')
       }
-      setSs4(data.ss4 ?? null)
-      setInfo(
-        data.unchanged
-          ? 'Already up to date — the SS-4 matches the current account and member data.'
-          : data.signer_changed
+      // Truthful notification claim (council minor, 2026-08-11): the refresh
+      // notifies the new signer ONLY on an awaiting_signature record — a draft
+      // stays silent by design, so never tell staff the client was pinged.
+      const wasAwaiting = ss4?.status === 'awaiting_signature'
+      const base = data.unchanged
+        ? 'Already up to date — the SS-4 matches the current account and member data.'
+        : data.signer_changed
+          ? wasAwaiting
             ? 'Refreshed — the responsible party changed; the new signer has been notified.'
-            : 'Refreshed from current account and member data — same client link.',
-      )
+            : 'Refreshed — the responsible party changed. The draft is NOT sent yet; use "Send to Client for Signature" when ready.'
+          : 'Refreshed from current account and member data — same client link.'
+      setInfo(data.note ? `${base} ${data.note}` : base)
+      // Re-read from the server instead of trusting the regenerate response:
+      // it omits the responsible-party fields, and setting it directly blanked
+      // the card's signer block until a page reload (council minor, 2026-08-10).
+      await load()
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not regenerate the SS-4.')
     } finally {
@@ -151,6 +208,68 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
         <FileText className="h-4 w-4 text-zinc-400" />
         <h3 className="text-sm font-semibold text-zinc-900">SS-4 (EIN Application)</h3>
       </div>
+
+      {/* ── Responsible party (IRS Line 7a) ──
+          Deliberately the FIRST thing on the card and always visible: the signer
+          is picked automatically at creation from a role hint, so a wrong default
+          has to be catchable at a glance during review (ACE Marketing Group LLC,
+          2026-08-10). Staff may change it right up until the form is signed —
+          any linked person, whatever their role, because the SS-4 responsible
+          party is decoupled from ownership. */}
+      {loaded && ss4 && (
+        <div className="mb-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+            Responsible party (signs the SS-4)
+          </div>
+          <div className="mt-0.5 text-sm font-semibold text-zinc-900">
+            {ss4.responsible_party_name || 'Not set'}
+          </div>
+
+          {ss4.status === 'signed' || ss4.status === 'submitted' ? (
+            <p className="mt-1.5 text-xs text-zinc-500">
+              Signed — the responsible party can no longer be changed.
+            </p>
+          ) : candidates.length === 0 ? (
+            <p className="mt-1.5 text-xs text-zinc-500">
+              No people are linked to this company yet.
+            </p>
+          ) : (
+            <div className="mt-2">
+              <label htmlFor="ss4-signer" className="sr-only">
+                Change the responsible party
+              </label>
+              <select
+                id="ss4-signer"
+                value={ss4.contact_id ?? ''}
+                disabled={busy}
+                onChange={(e) => {
+                  const next = e.target.value
+                  if (next && next !== (ss4.contact_id ?? '')) setSigner(next)
+                }}
+                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 disabled:opacity-50"
+              >
+                {/* Only shown when the stamped contact isn't among the links —
+                    stale data rather than a real choice. */}
+                {!candidates.some((c) => c.contact_id === (ss4.contact_id ?? '')) && (
+                  <option value={ss4.contact_id ?? ''}>
+                    {ss4.responsible_party_name || 'Current'} (not linked to this company)
+                  </option>
+                )}
+                {candidates.map((c) => (
+                  <option key={c.contact_id} value={c.contact_id}>
+                    {c.full_name}
+                    {c.role ? ` — ${c.role}` : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1.5 text-xs text-zinc-500">
+                Changing this rewrites the form and revokes the previous signing link.
+                {ss4.status === 'awaiting_signature' ? ' It also returns the SS-4 to draft.' : ''}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       {!loaded ? (
         <div className="flex items-center gap-2 text-sm text-zinc-400">
