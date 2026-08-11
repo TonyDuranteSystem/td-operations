@@ -41,6 +41,10 @@ const fixtures: {
   account: Record<string, unknown> | null
   members: MemberRow[]
   contact: Record<string, unknown> | null
+  /** Rows returned for the contacts `.in('email', …)` rep-resolution query. */
+  repContacts: Array<{ id: string; email: string }>
+  /** Rows returned for the action_log pick-record lookup. */
+  pickRecords: Array<{ id: string }>
   raAddress: Record<string, unknown> | null
   updateResult: { data: Array<{ id: string }> | null; error: { message: string } | null }
 } = {
@@ -48,6 +52,8 @@ const fixtures: {
   account: null,
   members: [],
   contact: null,
+  repContacts: [],
+  pickRecords: [],
   raAddress: null,
   updateResult: { data: [{ id: "ss4-1" }], error: null },
 }
@@ -56,36 +62,43 @@ const updateCalls: Array<{ table: string; values: Record<string, unknown> }> = [
 const logCalls: Array<Record<string, unknown>> = []
 const notifyCalls: Array<Record<string, unknown>> = []
 
-function resolveFor(table: string, op: string) {
+function resolveFor(table: string, op: string, usedIn: boolean) {
   if (op === "update") return { data: fixtures.updateResult.data, error: fixtures.updateResult.error }
   if (table === "ss4_applications") return { data: fixtures.ss4, error: null }
   if (table === "accounts") return { data: fixtures.account, error: null }
   if (table === "members") return { data: fixtures.members, error: null }
-  if (table === "contacts") return { data: fixtures.contact, error: null }
+  // The `.in('email', …)` rep-resolution query returns an ARRAY; the id-keyed
+  // signer lookup returns a single row.
+  if (table === "contacts") return usedIn ? { data: fixtures.repContacts, error: null } : { data: fixtures.contact, error: null }
+  if (table === "action_log") return { data: fixtures.pickRecords, error: null }
   if (table === "addresses") return { data: fixtures.raAddress, error: null }
   return { data: null, error: null }
 }
 
 function makeBuilder(table: string) {
-  const state = { table, op: "select", values: {} as Record<string, unknown> }
+  const state = { table, op: "select", values: {} as Record<string, unknown>, usedIn: false }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const b: any = {}
   const chain = () => b
   b.select = chain
   b.eq = chain
-  b.in = chain
+  b.in = (..._args: unknown[]) => {
+    state.usedIn = true
+    return b
+  }
   b.is = chain
   b.order = chain
+  b.limit = chain
   b.update = (values: Record<string, unknown>) => {
     state.op = "update"
     state.values = values
     updateCalls.push({ table, values })
     return b
   }
-  b.maybeSingle = () => Promise.resolve(resolveFor(state.table, state.op))
-  b.single = () => Promise.resolve(resolveFor(state.table, state.op))
+  b.maybeSingle = () => Promise.resolve(resolveFor(state.table, state.op, state.usedIn))
+  b.single = () => Promise.resolve(resolveFor(state.table, state.op, state.usedIn))
   b.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-    Promise.resolve(resolveFor(state.table, state.op)).then(resolve, reject)
+    Promise.resolve(resolveFor(state.table, state.op, state.usedIn)).then(resolve, reject)
   return b
 }
 
@@ -293,6 +306,8 @@ beforeEach(() => {
   fixtures.account = { ...dbAccount }
   fixtures.members = [memberMichele, memberGaia]
   fixtures.contact = { ...michele }
+  fixtures.repContacts = []
+  fixtures.pickRecords = []
   fixtures.raAddress = { county: "Bernalillo", state: "NM" }
   fixtures.updateResult = { data: [{ id: "ss4-1" }], error: null }
   updateCalls.length = 0
@@ -372,16 +387,20 @@ describe("refreshSS4", () => {
   // members, no MMLLC flag block. These are the cells that go red if the
   // currentPartyIsMember guard is removed (the pre-fix code re-stamped the
   // flagged member and would then re-notify the REVERTED signer).
-  it("PICK WINS: a non-member responsible party survives a refresh — members flags not consulted", async () => {
+  it("PICK WINS: a PICKED non-member responsible party survives a refresh — members flags not consulted", async () => {
     fixtures.ss4 = {
       ...dbSs4Row,
       contact_id: "c-authorized-rep", // NOT a member — explicit staff pick
       responsible_party_name: "Picked Rep",
       company_name: "Acme Old Name LLC", // stale → forces an account-field update
     }
+    fixtures.pickRecords = [{ id: "log-pick-1" }] // the pick record exists
     const r = await refreshSS4({ account_id: "acc-1", source: "test" })
     expect(r.outcome).toBe("refreshed")
     expect(r.signerChanged).toBe(false)
+    // The kept-pick note travels in the response so the members panels can
+    // surface it (a "Set as signer" click must never be a silent no-op).
+    expect(r.message).toContain("was chosen explicitly and was kept")
     expect(updateCalls).toHaveLength(1)
     // Account fields refresh; the party does NOT (pre-fix: contact_id would be
     // c-michele, the flagged member — the silent revert).
@@ -392,17 +411,61 @@ describe("refreshSS4", () => {
     expect(logCalls.some((l) => String(l.summary).includes("kept explicitly picked non-member"))).toBe(true)
   })
 
-  it("PICK WINS: non-member party on an MMLLC with ZERO flagged signers — refresh does NOT block (pre-fix livelock)", async () => {
+  it("PICK WINS: picked non-member on an MMLLC with ZERO flagged signers — refresh does NOT block (pre-fix livelock)", async () => {
     fixtures.ss4 = {
       ...dbSs4Row,
       contact_id: "c-authorized-rep",
       responsible_party_name: "Picked Rep",
       company_name: "Acme Old Name LLC",
     }
+    fixtures.pickRecords = [{ id: "log-pick-1" }]
     fixtures.members = [{ ...memberMichele, is_signer: false }, memberGaia] // 0 flags
     const r = await refreshSS4({ account_id: "acc-1", source: "test" })
     expect(r.outcome).toBe("refreshed") // NOT needs_signer
     expect(updateCalls[0].values).not.toHaveProperty("contact_id")
+  })
+
+  it("ORPHANED SIGNER: non-member party with NO pick record → alert + link revoked, never a silent keep", async () => {
+    // The deleted-member case: the stamped signer was a member (never picked),
+    // the member row is gone. Pre-fix: kept forever, logged as "explicitly
+    // picked" (false), their live link stayed valid.
+    fixtures.ss4 = {
+      ...dbSs4Row,
+      status: "awaiting_signature",
+      contact_id: "c-departed-member",
+      responsible_party_name: "Departed Member",
+    }
+    fixtures.pickRecords = [] // nobody picked them
+    const r = await refreshSS4({ account_id: "acc-1", source: "test" })
+    expect(r.ok).toBe(false)
+    expect(r.outcome).toBe("orphaned_signer")
+    expect(r.message).toContain("no longer one of this company's members")
+    expect(r.message).toContain("signing link has been revoked")
+    // The revoke write: access code rotated + pulled back to draft.
+    expect(updateCalls).toHaveLength(1)
+    expect(updateCalls[0].values.status).toBe("draft")
+    expect(typeof updateCalls[0].values.access_code).toBe("string")
+    expect(updateCalls[0].values.access_code).not.toBe(dbSs4Row.access_code)
+    // Alerted, never re-notified as if the party were valid.
+    expect(notifyCalls).toHaveLength(0)
+    expect(logCalls.some((l) => String(l.summary).includes("orphaned by a member change"))).toBe(true)
+  })
+
+  it("COMPANY-TYPE MEMBER: the rep's contact counts as member-derived — flag changes keep propagating, no orphan, no pick needed", async () => {
+    const companyMember: MemberRow = {
+      id: "m-co", member_type: "company", full_name: null, company_name: "Holdings LLC",
+      contact_id: null, representative_name: "Rep Person", representative_email: "rep@holdings.com",
+      is_primary: true, is_signer: true,
+    }
+    fixtures.members = [companyMember]
+    fixtures.ss4 = { ...dbSs4Row, contact_id: "c-rep", responsible_party_name: "Rep Person" }
+    fixtures.repContacts = [{ id: "c-rep", email: "rep@holdings.com" }] // resolution
+    fixtures.contact = { id: "c-rep", full_name: "Rep Person", itin_number: null, phone: null, language: "en" }
+    const r = await refreshSS4({ account_id: "acc-1", source: "test" })
+    // Member-derived → normal re-derivation path, NOT orphaned, NOT kept-as-pick.
+    expect(r.outcome).not.toBe("orphaned_signer")
+    expect(r.ok).toBe(true)
+    expect(r.message).toBeUndefined() // no kept-pick note — this is not a pick
   })
 
   it("member-to-member re-derivation still works when the party IS a member (AI Venture Labs behaviour preserved)", async () => {
@@ -411,6 +474,13 @@ describe("refreshSS4", () => {
     const r = await refreshSS4({ account_id: "acc-1", source: "test" })
     expect(r.outcome).toBe("refreshed")
     expect(r.signerChanged).toBe(true)
+    expect(updateCalls[0].values.contact_id).toBe("c-michele")
+  })
+
+  it("null row contact_id with members present → re-derives (the untested path the council flagged)", async () => {
+    fixtures.ss4 = { ...dbSs4Row, contact_id: null, responsible_party_name: null }
+    const r = await refreshSS4({ account_id: "acc-1", source: "test" })
+    expect(r.outcome).toBe("refreshed")
     expect(updateCalls[0].values.contact_id).toBe("c-michele")
   })
 })

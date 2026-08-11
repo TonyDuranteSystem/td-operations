@@ -35,6 +35,7 @@
  * unit-testable; refreshSS4 is the thin DB wrapper.
  */
 
+import { randomBytes } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { formatCountyAndState } from "@/lib/addresses"
@@ -205,6 +206,7 @@ export type Ss4RefreshOutcome =
   | "no_ss4"        // no SS-4 for the account — nothing to refresh
   | "locked"        // signed/submitted — must never be rewritten
   | "needs_signer"  // MMLLC with ≠1 flagged signer — row untouched, staff alert in `message`
+  | "orphaned_signer" // party was member-derived but the member is gone/repointed — link revoked, staff alert in `message`
   | "no_signer_contact" // decided signer has no resolvable contact — row untouched
   | "unchanged"     // recomputed values identical — no write
   | "refreshed"     // row updated in place (same token/link)
@@ -246,7 +248,10 @@ export async function refreshSS4(args: {
 }): Promise<Ss4RefreshResult> {
   const { account_id, source, notify = true } = args
   try {
-    const { data: ss4 } = await supabaseAdmin
+    // supabase-js RETURNS errors — distinguish "no row" from "read failed", or a
+    // transient DB failure tells staff "No SS-4 exists — use Generate" (council
+    // minor, 2026-08-11; same fix already applied in setSs4Signer).
+    const { data: ss4, error: ss4ReadErr } = await supabaseAdmin
       .from("ss4_applications")
       .select(
         "id, token, access_code, status, signed_at, contact_id, company_name, entity_type, state_of_formation, formation_date, member_count, responsible_party_name, responsible_party_itin, responsible_party_phone, responsible_party_title, language, county_and_state, mailing_street, mailing_city_state_zip",
@@ -254,6 +259,9 @@ export async function refreshSS4(args: {
       .eq("account_id", account_id)
       .maybeSingle()
 
+    if (ss4ReadErr) {
+      return { ok: false, outcome: "error", message: `Could not load the SS-4: ${ss4ReadErr.message}` }
+    }
     if (!ss4) return { ok: true, outcome: "no_ss4" }
 
     const row = ss4 as unknown as Ss4RowSnapshot
@@ -294,24 +302,90 @@ export async function refreshSS4(args: {
     const members = (membersRows ?? []) as Ss4SignerMember[]
 
     // ── Decide the signer (shared rule — same as generation) ──
-    // PICK-WINS GUARD (Antonio, 2026-08-10): if the currently stamped
-    // responsible party is NOT one of the members, it is an explicit staff pick
-    // (the workspace picker offers every linked contact, member or not) and the
-    // refresh must KEEP it — never re-derive from members, never block on the
-    // MMLLC flag rules. Account fields still refresh below (signerContact stays
-    // null = keep party, same mechanism as the no_members branch).
+    // PICK-WINS GUARD, refined (Antonio, 2026-08-10/11): when the stamped
+    // responsible party is not MEMBER-DERIVED, it is either an EXPLICIT STAFF
+    // PICK (keep it — never re-derive, never block on the MMLLC flag rules) or
+    // an ORPHANED signer (a member who was deleted or whose contact was
+    // repointed): "a deleted or repointed member on the form triggers a staff
+    // alert and revokes their live link, never a silent keep labeled as a
+    // choice."
+    //
+    // The two are distinguished by the PICK RECORD: setSs4Signer writes an
+    // awaited action_log row with details.picked_contact_id at every explicit
+    // pick. Party matches a pick record → keep. No pick record → orphaned →
+    // rotate the access code (kills their live link), pull an awaiting record
+    // back to draft, alert staff, and refuse the refresh until someone picks.
+    //
+    // "Member-derived" resolves COMPANY members through their representative:
+    // a company-type member's rep contact counts as member-derived, so flag
+    // changes keep propagating to it until someone actually picks (Antonio's
+    // explicit rule — the rep was auto-derived at generation, not picked).
+    //
+    // Failure posture: if the pick-record READ fails, treat the party as
+    // picked (keep). An infrastructure hiccup must never revoke a client's
+    // signing link; the worst case of failing open here is one extra refresh
+    // keeping the current name — visible, recoverable, never a silent swap.
     let signerContact: Ss4SignerContact | null = null
-    const partyIsMember = currentPartyIsMember(members, row.contact_id)
+    let keptExplicitPick = false
 
-    if (members.length > 0 && !partyIsMember && row.contact_id) {
-      await logAction({
-        action_type: "update",
-        table_name: "ss4_applications",
-        record_id: row.id,
-        account_id,
-        summary: `SS-4 refresh (${source}): kept explicitly picked non-member responsible party — members flags not consulted`,
-      })
-      // fall through with signerContact = null (keep party)
+    let partyIsMemberDerived = currentPartyIsMember(members, row.contact_id)
+    if (!partyIsMemberDerived && row.contact_id && members.length > 0) {
+      const repEmails = members
+        .filter((m) => m.member_type === "company" && !m.contact_id && m.representative_email)
+        .map((m) => m.representative_email as string)
+      if (repEmails.length > 0) {
+        const { data: repRows } = await supabaseAdmin
+          .from("contacts")
+          .select("id, email")
+          .in("email", repEmails)
+        if (repRows?.some((r) => r.id === row.contact_id)) partyIsMemberDerived = true
+      }
+    }
+
+    if (members.length > 0 && !partyIsMemberDerived && row.contact_id) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: pickRows, error: pickErr } = await (supabaseAdmin as any)
+        .from("action_log")
+        .select("id")
+        .eq("table_name", "ss4_applications")
+        .eq("record_id", row.id)
+        .eq("details->>picked_contact_id", row.contact_id)
+        .limit(1)
+
+      const isExplicitPick = pickErr ? true : !!(pickRows && pickRows.length > 0)
+      if (pickErr) {
+        console.error("[refreshSS4] pick-record read failed — failing open (keeping party):", pickErr.message)
+      }
+
+      if (isExplicitPick) {
+        keptExplicitPick = true
+        // fall through with signerContact = null (keep party)
+      } else {
+        // ── ORPHANED SIGNER ──
+        const revokedCode = randomBytes(4).toString("hex")
+        const { error: revokeErr } = await supabaseAdmin
+          .from("ss4_applications")
+          .update({ access_code: revokedCode, status: "draft", updated_at: new Date().toISOString() })
+          .eq("id", row.id)
+          .in("status", ["draft", "awaiting_signature"])
+          .is("signed_at", null)
+        const who = row.responsible_party_name || "the previous signer"
+        const message = [
+          `The SS-4's responsible party (${who}) is no longer one of this company's members — the member was removed or their contact was changed.`,
+          revokeErr
+            ? `⚠️ Their signing link could NOT be revoked automatically (${revokeErr.message}) — revoke it by changing the signer now.`
+            : `Their signing link has been revoked and the SS-4 returned to draft.`,
+          `Pick the correct responsible party on the SS-4 card (any linked contact), or fix the Members section, then regenerate.`,
+        ].join(" ")
+        await logAction({
+          action_type: "update",
+          table_name: "ss4_applications",
+          record_id: row.id,
+          account_id,
+          summary: `SS-4 refresh BLOCKED (${source}): responsible party (${who}) orphaned by a member change — link revoked, staff must pick a signer`,
+        })
+        return { ok: false, outcome: "orphaned_signer", message, ss4: { ...identity(row), status: revokeErr ? row.status : "draft", access_code: revokeErr ? row.access_code : revokedCode } }
+      }
     } else {
     const decision = decideSs4Signer(members, entityType)
 
@@ -396,8 +470,16 @@ export async function refreshSS4(args: {
       raCountyAndState,
     })
 
+    // Staff-facing note whenever an explicit pick was honoured — surfaced by
+    // the members panels so a "Set as signer" click that DIDN'T move the SS-4
+    // is never a silent no-op (council major, 2026-08-11).
+    const keptPickMessage = keptExplicitPick
+      ? `The SS-4's responsible party (${row.responsible_party_name || "the picked signer"}) was chosen explicitly and was kept — member flag changes don't affect it. Use the signer picker on the SS-4 card to change it.`
+      : undefined
+
     if (computation.kind === "unchanged") {
-      return { ok: true, outcome: "unchanged", ss4: identity(row) }
+      // No write → no audit row (the kept-pick note travels in the response).
+      return { ok: true, outcome: "unchanged", message: keptPickMessage, ss4: identity(row) }
     }
 
     // TOCTOU guard: only rewrite while still unsigned (the client may have
@@ -427,7 +509,7 @@ export async function refreshSS4(args: {
       table_name: "ss4_applications",
       record_id: row.id,
       account_id,
-      summary: `Refreshed SS-4 for ${account.company_name} from account data (${source}) — fields: ${computation.changed.join(", ")}; same token, link unchanged`,
+      summary: `Refreshed SS-4 for ${account.company_name} from account data (${source}) — fields: ${computation.changed.join(", ")}; same token, link unchanged${keptExplicitPick ? "; kept explicitly picked non-member responsible party — members flags not consulted" : ""}`,
     })
 
     // Signer changed while the client-facing invite is out → tell the NEW
@@ -446,6 +528,7 @@ export async function refreshSS4(args: {
     return {
       ok: true,
       outcome: "refreshed",
+      message: keptPickMessage,
       changed: computation.changed,
       signerChanged: computation.signerChanged,
       ss4: {

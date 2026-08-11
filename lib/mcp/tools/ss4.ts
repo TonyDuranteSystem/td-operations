@@ -150,12 +150,20 @@ Note: signed records (status='signed') cannot be updated.`,
           .eq("account_id", params.account_id)
           .maybeSingle()
 
+        // A COMMITTED switch must never be hidden by a later error (council
+        // minor, 2026-08-11): every error return below carries switchNote, so
+        // staff always learn that the party already changed, the old link is
+        // already dead, and (if it was awaiting) the record is now draft.
+        const withSwitch = (text: string) => ({
+          content: [{ type: "text" as const, text: `${text}${switchNote}` }],
+        })
+
         if (fetchErr || !ss4) {
-          return { content: [{ type: "text" as const, text: `Error: SS-4 not found for this account: ${fetchErr?.message || "no data"}` }] }
+          return withSwitch(`Error: SS-4 not found for this account: ${fetchErr?.message || "no data"}`)
         }
 
         if (ss4.status === "signed" || ss4.status === "submitted") {
-          return { content: [{ type: "text" as const, text: `Error: SS-4 for ${ss4.company_name} has status '${ss4.status}' — it cannot be modified after signing/submission.` }] }
+          return withSwitch(`Error: SS-4 for ${ss4.company_name} has status '${ss4.status}' — it cannot be modified after signing/submission.`)
         }
 
         const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
@@ -172,7 +180,7 @@ Note: signed records (status='signed') cannot be updated.`,
           if (params.status === "awaiting_signature") {
             const resolvedCounty = (params.county_and_state as string | undefined) || (ss4.county_and_state as string | undefined)
             if (!resolvedCounty) {
-              return { content: [{ type: "text" as const, text: `Error: Cannot advance SS-4 for ${ss4.company_name} to awaiting_signature — county_and_state (Line 6) is blank. Line 6 is sourced from the account's Registered Agent address. Add or correct the Registered Agent address on the account, then re-run ss4_update — the value will populate automatically. If the RA address is correct but unrecognized by the helper, set county_and_state explicitly: ss4_update(..., county_and_state: "<County>, <State>").` }] }
+              return withSwitch(`Error: Cannot advance SS-4 for ${ss4.company_name} to awaiting_signature — county_and_state (Line 6) is blank. Line 6 is sourced from the account's Registered Agent address. Add or correct the Registered Agent address on the account, then re-run ss4_update — the value will populate automatically. If the RA address is correct but unrecognized by the helper, set county_and_state explicitly: ss4_update(..., county_and_state: "<County>, <State>").`)
             }
           }
           updates.status = params.status
@@ -180,13 +188,22 @@ Note: signed records (status='signed') cannot be updated.`,
           updates.status = "draft"
         }
 
-        const { error: updateErr } = await supabaseAdmin
+        // Signed-row guard on the residual write too (council minor): the client
+        // may sign between the re-fetch above and this update — the same TOCTOU
+        // pattern the switch core and refresh already carry.
+        const { data: updatedRows, error: updateErr } = await supabaseAdmin
           .from("ss4_applications")
           .update(updates)
           .eq("id", ss4.id)
+          .in("status", ["draft", "awaiting_signature"])
+          .is("signed_at", null)
+          .select("id")
 
         if (updateErr) {
-          return { content: [{ type: "text" as const, text: `Error updating SS-4: ${updateErr.message}` }] }
+          return withSwitch(`Error updating SS-4: ${updateErr.message}`)
+        }
+        if (!updatedRows || updatedRows.length === 0) {
+          return withSwitch(`Error: the SS-4 for ${ss4.company_name} was signed while this update was running — the remaining fields were left untouched.`)
         }
 
         await logAction({

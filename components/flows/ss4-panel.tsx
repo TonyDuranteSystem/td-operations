@@ -136,13 +136,18 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Could not regenerate the SS-4.')
       }
-      setInfo(
-        data.unchanged
-          ? 'Already up to date — the SS-4 matches the current account and member data.'
-          : data.signer_changed
+      // Truthful notification claim (council minor, 2026-08-11): the refresh
+      // notifies the new signer ONLY on an awaiting_signature record — a draft
+      // stays silent by design, so never tell staff the client was pinged.
+      const wasAwaiting = ss4?.status === 'awaiting_signature'
+      const base = data.unchanged
+        ? 'Already up to date — the SS-4 matches the current account and member data.'
+        : data.signer_changed
+          ? wasAwaiting
             ? 'Refreshed — the responsible party changed; the new signer has been notified.'
-            : 'Refreshed from current account and member data — same client link.',
-      )
+            : 'Refreshed — the responsible party changed. The draft is NOT sent yet; use "Send to Client for Signature" when ready.'
+          : 'Refreshed from current account and member data — same client link.'
+      setInfo(data.note ? `${base} ${data.note}` : base)
       // Re-read from the server instead of trusting the regenerate response:
       // it omits the responsible-party fields, and setting it directly blanked
       // the card's signer block until a page reload (council minor, 2026-08-10).

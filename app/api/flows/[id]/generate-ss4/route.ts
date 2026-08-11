@@ -152,6 +152,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           regenerated: true,
           unchanged: refresh.outcome === 'unchanged',
           signer_changed: refresh.signerChanged === true,
+          // The kept-explicit-pick note (present when member flags were NOT
+          // consulted because the party is a staff pick) — panel shows it.
+          note: refresh.message ?? null,
           ss4: refresh.ss4
             ? {
                 id: refresh.ss4.id,
@@ -165,9 +168,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       if (refresh.outcome === 'no_ss4') {
         return NextResponse.json({ success: false, error: 'No SS-4 exists yet — use Generate SS-4 instead.' }, { status: 404 })
       }
+      // orphaned_signer / needs_signer / locked = business refusals (409, the
+      // message is the staff alert); a genuine infrastructure failure is 500.
       return NextResponse.json(
         { success: false, error: refresh.message || `Could not regenerate the SS-4 (${refresh.outcome}).`, outcome: refresh.outcome },
-        { status: 409 },
+        { status: refresh.outcome === 'error' ? 500 : 409 },
       )
     }
 

@@ -51,7 +51,6 @@
 
 import { randomBytes } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { logAction } from "@/lib/mcp/action-log"
 
 /** The ss4_applications columns the switch reads and may rewrite. */
 export interface Ss4SignerSwitchRow {
@@ -339,15 +338,33 @@ export async function setSs4Signer(args: {
     }
 
     const row = updated[0]
-    await logAction({
-      action_type: "update",
-      table_name: "ss4_applications",
-      record_id: ss4.id,
-      account_id,
-      summary:
-        `SS-4 responsible party changed to ${row.responsible_party_name ?? contact_id} (${source})` +
-        `${decision.statusReset ? " — reset to draft, previous signing link revoked" : " — signing link revoked"}`,
-    })
+    // ── THE PICK RECORD — awaited and error-checked, never fire-and-forget. ──
+    // refreshSS4 distinguishes an explicit pick from an ORPHANED signer by this
+    // row (details.picked_contact_id): if it were lost, the next refresh would
+    // treat a legitimate pick as orphaned and revoke the client's signing link.
+    // A failed insert is surfaced in the log; the degraded mode is exactly that
+    // orphan alert — visible and recoverable via re-picking, never a silent
+    // wrong signer.
+    {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: pickLogErr } = await (supabaseAdmin as any).from("action_log").insert({
+        actor: "system",
+        action_type: "update",
+        table_name: "ss4_applications",
+        record_id: ss4.id,
+        account_id,
+        summary:
+          `SS-4 responsible party changed to ${row.responsible_party_name ?? contact_id} (${source})` +
+          `${decision.statusReset ? " — reset to draft, previous signing link revoked" : " — signing link revoked"}`,
+        details: { picked_contact_id: contact_id, source },
+      })
+      if (pickLogErr) {
+        console.error(
+          "[setSs4Signer] PICK RECORD insert failed — the next refresh may treat this pick as orphaned (alert+revoke, recoverable):",
+          pickLogErr.message,
+        )
+      }
+    }
 
     return {
       ok: true,
