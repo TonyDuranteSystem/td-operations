@@ -41,11 +41,31 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
     const { data: ss4 } = await supabaseAdmin
       .from('ss4_applications')
-      .select('id, token, access_code, status, company_name, signed_at, county_and_state')
+      .select('id, token, access_code, status, company_name, signed_at, county_and_state, contact_id, responsible_party_name')
       .eq('account_id', sd.account_id)
       .maybeSingle()
 
     if (!ss4) return NextResponse.json({ success: true, ss4: null })
+
+    // Signer candidates = EVERY contact linked to the account, whatever their
+    // role. Roles are shown so staff can tell people apart, but they never
+    // restrict the choice: the SS-4 responsible party is decoupled from
+    // ownership by design (Antonio, 2026-08-10) — an SMLLC's signer may hold no
+    // ownership at all.
+    const { data: links } = await supabaseAdmin
+      .from('account_contacts')
+      .select('contact_id, role, contacts(id, full_name, email)')
+      .eq('account_id', sd.account_id)
+
+    const candidates = (links ?? []).map((l) => {
+      const c = l.contacts as unknown as { id: string; full_name: string | null; email: string | null } | null
+      return {
+        contact_id: l.contact_id as string,
+        full_name: c?.full_name ?? 'Unknown',
+        email: c?.email ?? null,
+        role: (l as unknown as { role: string | null }).role ?? null,
+      }
+    })
 
     return NextResponse.json({
       success: true,
@@ -55,8 +75,11 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
         company_name: ss4.company_name,
         signed_at: ss4.signed_at ?? null,
         has_county: !!ss4.county_and_state,
+        contact_id: ss4.contact_id ?? null,
+        responsible_party_name: ss4.responsible_party_name ?? null,
         previewUrl: `${APP_BASE_URL}/ss4/${ss4.token}/${ss4.access_code}?preview=td`,
       },
+      candidates,
     })
   } catch (e) {
     return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 })
@@ -78,6 +101,43 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     const body = await req.json().catch(() => ({} as Record<string, unknown>))
+
+    // ── Change the responsible party (workspace signer picker) ──
+    // Staff may re-point the SS-4 at any linked contact right up until it is
+    // signed — clients change their mind mid-job. The shared core resets an
+    // already-sent record to draft, ROTATES the access code so the previous
+    // signer's link stops working, repoints the internal documents row and
+    // clears the previous signer's chat/bell.
+    if (typeof body?.set_signer === 'string' && body.set_signer) {
+      const { setSs4Signer } = await import('@/lib/operations/ss4-set-signer')
+      const res = await setSs4Signer({
+        account_id: sd.account_id,
+        contact_id: body.set_signer,
+        source: 'flow-ss4-picker',
+      })
+      if (!res.ok) {
+        return NextResponse.json(
+          { success: false, error: res.message || `Could not change the signer (${res.outcome}).`, outcome: res.outcome },
+          { status: res.outcome === 'no_ss4' ? 404 : 409 },
+        )
+      }
+      return NextResponse.json({
+        success: true,
+        signer_changed: res.outcome === 'switched',
+        unchanged: res.outcome === 'unchanged',
+        status_reset: res.statusReset === true,
+        ss4: res.ss4
+          ? {
+              id: res.ss4.id,
+              status: res.ss4.status,
+              company_name: null,
+              contact_id: res.ss4.contact_id,
+              responsible_party_name: res.ss4.responsible_party_name,
+              previewUrl: `${APP_BASE_URL}/ss4/${res.ss4.token}/${res.ss4.access_code}?preview=td`,
+            }
+          : null,
+      })
+    }
 
     // ── Regenerate: refresh the existing unsigned SS-4 in place ──
     if (body?.regenerate === true) {

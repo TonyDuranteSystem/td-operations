@@ -3,22 +3,48 @@
  * "which member signs the SS-4, and when must we block and ask staff to flag one".
  *
  * Why this exists: there are two SS-4 generation paths —
- *   1. lib/operations/ss4.ts::createSS4  (flow Workspace button + ss4_create MCP tool)
+ *   1. lib/operations/ss4.ts::createSS4  (flow Workspace button + ss4_create MCP tool
+ *      + the "SS-4 Prepared" stage-advance auto-generate hook)
  *   2. app/api/crm/admin-actions/generate-document/route.ts::generateSS4 (CRM account page)
  * Historically only path (1) enforced the MMLLC signer rule; path (2) just took the
  * first linked contact, which is how the wrong responsible party (Gaia instead of
- * Michele on AI Venture Labs LLC) was stamped on an SS-4. Both paths now call
- * `decideSs4Signer` so the blocking rule can never drift between them.
+ * Michele on AI Venture Labs LLC) was stamped on an SS-4.
  *
- * Rule (Antonio, 2026-06-24):
- *   - Single-member LLC (SMLLC): the owner signs — no alert, unambiguous.
+ * ─── TWO RULES LIVE HERE. THEY APPLY TO DIFFERENT POPULATIONS. ───
+ *
+ * `decideSs4Signer` — the MMLLC BLOCKING rule, driven by the `members` table.
  *   - Multi-member LLC (MMLLC, >1 member): exactly ONE member must be flagged
  *     `is_signer=true`. Zero or more-than-one → BLOCK and alert staff to fix it in
- *     the Members section before continuing.
+ *     the Members section before continuing. (Antonio, 2026-06-24; reaffirmed
+ *     2026-08-10: "Multi-member rule stands. MMLLCs keep the existing stop-and-ask
+ *     block — that protection stays exactly as it is.")
+ *   - A single member row (SMLLC / Corporation) is unambiguous — use it.
  *
- * Pure (no DB, no I/O) so it is fully unit-testable. The caller is responsible for
- * querying members (ordered is_signer desc, is_primary desc) and for resolving the
- * chosen member to a contact_id (a company-type member resolves via its
+ * `pickDefaultSs4SignerLink` — the SMLLC DEFAULT rule, driven by `account_contacts`.
+ *   NOTE (2026-08-10): `decideSs4Signer` NEVER sees a single-member LLC.
+ *   `formation-materialize.ts` writes the owner `members` row only `if (isMMLC)`, so
+ *   every SMLLC has ZERO member rows and falls through to the account_contacts
+ *   fallback — that fallback is the PRIMARY path for single-member formations, not a
+ *   legacy edge case. It used to take `links[0]` from an UNORDERED select with no role
+ *   filter (`account_contacts` has no created_at, so that was physical row order), which
+ *   is how ACE Marketing Group LLC's SS-4 named the authorized representative instead
+ *   of the owner.
+ *
+ * Rules for the default pick (Antonio, 2026-08-10 — read them before "improving" this):
+ *   - The SS-4 responsible party is DECOUPLED FROM OWNERSHIP by design. An SMLLC's
+ *     signer may hold no ownership at all. Roles are a HINT for a default, NEVER a
+ *     constraint. Do not reintroduce a rule equating "signer" with "owner".
+ *   - NEVER BLOCK a single-member company. The stage-advance hook must always produce
+ *     an SS-4. A wrong default is acceptable *because* it is created as a draft and the
+ *     signer picker on the workspace SS-4 card is the correction point; a formation that
+ *     halts with no SS-4 is not acceptable.
+ *   - Exactly one owner-type link → use it. Otherwise fall back to a STABLE pick
+ *     (same input → same signer) so the behaviour is pinnable by a test; the old
+ *     physical-row-order fallback was not reproducible.
+ *
+ * Both are pure (no DB, no I/O) so they are fully unit-testable. The caller is
+ * responsible for querying members (ordered is_signer desc, is_primary desc) and for
+ * resolving the chosen member to a contact_id (a company-type member resolves via its
  * representative).
  */
 
@@ -63,6 +89,66 @@ export function decideSs4Signer(
   // SMLLC, Corporation, or a single member row: unambiguous — take the first
   // (caller has ordered is_signer/is_primary first).
   return { kind: "use_member", member: members[0] }
+}
+
+/** One `account_contacts` link, as the default-pick rule sees it. */
+export type Ss4SignerLink = {
+  contact_id: string
+  /** Free text, case-inconsistent in production, and NULLABLE. */
+  role?: string | null
+}
+
+/**
+ * Role values that make a link the OBVIOUS default responsible party.
+ * Matched on the whole normalized string — never as a substring, because
+ * "Partner - Tax/NHR Consultant (Portugal)" must not match on "partner", and a
+ * substring test for "owner" would silently miss "Sole Member".
+ *
+ * Deliberately EXCLUDES the bare "Member" / "member": `formation-materialize.ts`
+ * writes the literal "Member" on every additional-member link, so it is a
+ * materializer default rather than anyone's statement about who signs — it must
+ * not out-vote a real owner label. It is not disqualifying either; a lone
+ * "Member" link still wins the stable fallback below.
+ */
+const OWNER_TYPE_ROLES = new Set(["owner", "sole member"])
+
+function normalizeRole(role: string | null | undefined): string {
+  return (role ?? "").trim().toLowerCase()
+}
+
+/** True when this link's role marks it as an owner-type (default-signer) link. */
+export function isOwnerTypeRole(role: string | null | undefined): boolean {
+  return OWNER_TYPE_ROLES.has(normalizeRole(role))
+}
+
+/**
+ * Choose the DEFAULT responsible-party link for an account that has no `members`
+ * rows (i.e. every single-member LLC). NEVER returns null for a non-empty list and
+ * NEVER blocks — see the rules in the module header.
+ *
+ * Precedence:
+ *   1. Exactly one owner-type link  → that link.
+ *   2. Anything else (zero owner-type links, or several) → the stable fallback:
+ *      owner-type links first, then lowest contact_id. Deterministic by
+ *      construction, so the same account always yields the same default and a test
+ *      can pin it — unlike the physical-row-order pick this replaces.
+ */
+export function pickDefaultSs4SignerLink(
+  links: Ss4SignerLink[] | null | undefined,
+): Ss4SignerLink | null {
+  if (!links || links.length === 0) return null
+
+  const ownerLinks = links.filter((l) => isOwnerTypeRole(l.role))
+  if (ownerLinks.length === 1) return ownerLinks[0]
+
+  // Stable fallback — owner-type first, then lowest contact_id. Sort a copy: the
+  // caller's array is its own query result and must not be mutated underneath it.
+  return [...links].sort((a, b) => {
+    const ao = isOwnerTypeRole(a.role) ? 0 : 1
+    const bo = isOwnerTypeRole(b.role) ? 0 : 1
+    if (ao !== bo) return ao - bo
+    return a.contact_id < b.contact_id ? -1 : a.contact_id > b.contact_id ? 1 : 0
+  })[0]
 }
 
 /**

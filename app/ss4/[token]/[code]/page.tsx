@@ -53,6 +53,11 @@ export default function SS4SignPage() {
   // false) must NOT enable Submit. Gated on isMeaningfulSignature (enough
   // points + large-enough bounding box). See the Numero Uno Social LLC incident.
   const [sigValid, setSigValid] = useState(false)
+  // Only a form that is actually OUT FOR SIGNATURE may be signed. A draft is
+  // staff-side work-in-progress: it may be mid-correction, or it may have been
+  // pulled BACK to draft because the responsible party was changed. Without this
+  // gate the previous signer could still complete a signature on their old link.
+  const [canSign, setCanSign] = useState(false)
 
   // Refs
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -84,19 +89,26 @@ export default function SS4SignPage() {
 
         setSs4(data)
         setSigned(data.status === "signed")
+        setCanSign(data.status === "awaiting_signature")
 
         // Build PDF URL
         const pdfEndpoint = `/api/ss4/${token}/pdf?code=${encodeURIComponent(data.access_code || code)}${isAdmin ? "&preview=td" : ""}`
         setPdfUrl(pdfEndpoint)
 
-        // Track view (not for admin)
+        // Track view (not for admin).
+        // NEVER promote the status here. This used to flip a draft straight to
+        // awaiting_signature just because the page was opened, which meant a
+        // draft could be signed by anyone holding the link AND that pulling a
+        // sent SS-4 back to draft (what the signer picker does when staff change
+        // the responsible party) was undone by the previous signer merely
+        // opening their old link. Promotion is an explicit staff action only —
+        // "Send to Client for Signature" / ss4_update.
         if (!isAdmin) {
           await supabase
             .from("ss4_applications")
             .update({
               view_count: (data.view_count || 0) + 1,
               viewed_at: new Date().toISOString(),
-              status: data.status === "draft" ? "awaiting_signature" : data.status,
             })
             .eq("id", data.id)
         }
@@ -148,6 +160,16 @@ export default function SS4SignPage() {
   // Sign handler
   const handleSign = useCallback(async () => {
     if (!ss4 || !sigPadRef.current) return
+    // Status gate, re-checked at submit time and not only at render: the record
+    // may have been pulled back to draft (signer changed) while this page sat
+    // open. Refuse rather than silently sign a form that is no longer this
+    // person's to sign.
+    if (!canSign) {
+      setError(
+        "This SS-4 is not currently awaiting signature. It may have been updated — please contact support@tonydurante.us.",
+      )
+      return
+    }
     // A real signature is REQUIRED — block submit on an empty pad or a single
     // dot/tap (the Numero Uno Social LLC bug, which left the form effectively
     // unsigned). The Submit button is also disabled until this passes.
@@ -249,7 +271,7 @@ export default function SS4SignPage() {
     } finally {
       setSigning(false)
     }
-  }, [ss4, pdfUrl, token, isPortal, code, isAdmin])
+  }, [ss4, pdfUrl, token, isPortal, code, isAdmin, canSign])
 
   // ─── RENDER ───
 
@@ -304,7 +326,18 @@ export default function SS4SignPage() {
         </div>
 
         {/* Signature Section */}
-        {!signed ? (
+        {!signed && !canSign ? (
+          // Not out for signature (draft / submitted / done). Show the form for
+          // review but NEVER a signature pad — this is the state an SS-4 is pulled
+          // back to when staff change the responsible party, so the previous
+          // signer must not be able to complete a signature from an old link.
+          <div className={`mt-6 bg-amber-50 border border-amber-200 rounded-xl p-6 text-center ${isPortal ? "mx-4 mb-4" : ""}`}>
+            <p className="text-sm text-amber-800">
+              This SS-4 is not currently awaiting signature. If you were asked to sign it,
+              please contact us at support@tonydurante.us.
+            </p>
+          </div>
+        ) : !signed ? (
           <div className={`mt-6 bg-white rounded-xl shadow-sm border border-gray-200 p-6 ${isPortal ? "mx-4 mb-4" : ""}`}>
             <h2 className="text-lg font-semibold text-gray-900 mb-1">
               Sign Below

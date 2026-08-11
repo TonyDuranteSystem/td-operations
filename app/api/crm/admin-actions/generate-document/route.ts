@@ -17,7 +17,7 @@ import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { createClient } from "@/lib/supabase/server"
 import { canPerform } from "@/lib/permissions"
 import { formatCountyAndState } from "@/lib/addresses"
-import { decideSs4Signer, ss4SignerAlertMessage, type Ss4SignerMember } from "@/lib/operations/ss4-signer"
+import { decideSs4Signer, ss4SignerAlertMessage, pickDefaultSs4SignerLink, type Ss4SignerMember } from "@/lib/operations/ss4-signer"
 import { refreshSS4 } from "@/lib/operations/ss4-refresh"
 import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
 
@@ -420,6 +420,31 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
   // decideSs4Signer so the two SS-4 paths can never drift. Without this, the CRM
   // path silently stamped the first linked contact (the Gaia/Michele bug).
   let responsibleContact = contact
+
+  // Default responsible party for the NO-members case (every SMLLC, plus any
+  // account whose members rows were never created). `contact` here is
+  // fetchAccountAndContact's contactLinks[0] — an UNORDERED, role-blind pick, the
+  // same defect that put the authorized representative on ACE Marketing Group's
+  // SS-4. Resolve the default properly instead.
+  //
+  // Deliberately scoped to THIS function: fetchAccountAndContact is shared with
+  // generateOA and generateLease, and for an SMLLC that contact is the legally
+  // named sole Member of the Operating Agreement — changing it there would
+  // silently rename the member on OAs. Never move this into the shared helper.
+  const defaultLink = pickDefaultSs4SignerLink(
+    (contactLinks ?? []).map((l) => ({
+      contact_id: l.contact_id as string,
+      role: (l as unknown as { role: string | null }).role ?? null,
+    })),
+  )
+  if (defaultLink && defaultLink.contact_id !== contact.id) {
+    const { data: defaultC } = await supabaseAdmin
+      .from("contacts")
+      .select("id, full_name, email, phone, residency, language, itin_number")
+      .eq("id", defaultLink.contact_id)
+      .single()
+    if (defaultC) responsibleContact = defaultC
+  }
 
   // Member count: members table first (company members aren't account_contacts),
   // then contact links — and never below 2 for a non-SMLLC: a multi-member LLC

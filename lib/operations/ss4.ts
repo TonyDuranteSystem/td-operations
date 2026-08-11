@@ -22,6 +22,7 @@ import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
 import { formatCountyAndState } from "@/lib/addresses"
 import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
+import { pickDefaultSs4SignerLink } from "@/lib/operations/ss4-signer"
 
 export interface CreateSS4Params {
   account_id: string
@@ -191,7 +192,15 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
         }
       }
     } else {
-      // Legacy fallback: account_contacts.
+      // ── No `members` rows → resolve from account_contacts. ──
+      // This is NOT a legacy edge case: formation-materialize writes the owner
+      // members row only `if (isMMLC)`, so EVERY single-member LLC lands here.
+      // It used to take links[0] from this unordered select (account_contacts has
+      // no created_at, so that was physical row order) — the ACE Marketing Group
+      // wrong-signer bug. The default now comes from pickDefaultSs4SignerLink:
+      // role-aware, stable, and it NEVER blocks an SMLLC (Antonio, 2026-08-10 —
+      // a wrong default is correctable via the workspace picker, a halted
+      // formation is not). The MMLLC block below is unchanged and still stands.
       const { data: links } = await supabaseAdmin
         .from("account_contacts")
         .select("contact_id, role, contacts(id, full_name, email)")
@@ -218,7 +227,13 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
           ].join("\n"),
         }
       }
-      contactId = links[0].contact_id
+      contactId =
+        pickDefaultSs4SignerLink(
+          links.map((l) => ({
+            contact_id: l.contact_id as string,
+            role: (l as unknown as { role: string | null }).role ?? null,
+          })),
+        )?.contact_id ?? links[0].contact_id
     }
   }
 
