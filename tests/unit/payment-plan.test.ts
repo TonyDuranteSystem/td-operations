@@ -512,3 +512,66 @@ describe("a plan is refused on an offer that carries a referrer", () => {
     expect(msg.toLowerCase()).not.toMatch(BANNED_WORDS)
   })
 })
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+//  ⛔ THE PLAN MUST AGREE WITH ITS OFFER AT SIGNING TOO (council blocker, 2026-08-11)
+//
+//  Structural validity is not agreement. Every other rail already refused a plan whose offer
+//  drifted; this function used to bill part one anyway — an invoice of record for an amount
+//  nobody agreed to, possibly in the wrong currency, with only a console line anywhere.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+
+describe("decideSigningBill refuses to honour a plan that contradicts its offer", () => {
+  it("total mismatch → bills the WHOLE fee, loudly, never part one", () => {
+    const bill = decideSigningBill({
+      rawPlan: DOMENICO_PLAN, // 1250 + 1250 = 2500
+      offerToken: "t",
+      offerGross: 3000, // the offer drifted after authoring
+      offerCurrency: "EUR",
+      baseDescription: "LLC Formation",
+    })
+    expect(bill.amount).toBe(3000)
+    expect(bill.tranche).toBeNull()
+    expect(bill.category).toBeNull()
+    expect(bill.planIgnored).toContain("2500")
+    expect(bill.planIgnored).toContain("3000")
+  })
+
+  it("currency mismatch → bills the whole fee, loudly, never a cross-currency part", () => {
+    const bill = decideSigningBill({
+      rawPlan: DOMENICO_PLAN, // EUR plan
+      offerToken: "t",
+      offerGross: 2500,
+      offerCurrency: "USD",
+      baseDescription: "LLC Formation",
+    })
+    expect(bill.amount).toBe(2500)
+    expect(bill.tranche).toBeNull()
+    expect(bill.planIgnored).toContain("EUR")
+    expect(bill.planIgnored).toContain("USD")
+  })
+
+  it("an agreeing plan still bills part one with lineage — the crosscheck adds no false refusal", () => {
+    const bill = decideSigningBill({
+      rawPlan: DOMENICO_PLAN,
+      offerToken: "t",
+      offerGross: 2500,
+      offerCurrency: "EUR",
+      baseDescription: "LLC Formation",
+    })
+    expect(bill.amount).toBe(1250)
+    expect(bill.tranche).toEqual({ offerToken: "t", seq: 1 })
+    expect(bill.planIgnored).toBeNull()
+  })
+
+  it("omitting the currency skips only the currency check, never the total check", () => {
+    const bill = decideSigningBill({
+      rawPlan: DOMENICO_PLAN,
+      offerToken: "t",
+      offerGross: 9999,
+      baseDescription: "LLC Formation",
+    })
+    expect(bill.planIgnored).toBeTruthy()
+    expect(bill.amount).toBe(9999)
+  })
+})

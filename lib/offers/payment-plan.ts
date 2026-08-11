@@ -168,6 +168,16 @@ export function validatePaymentPlan(raw: unknown): PlanValidation {
       const date = typeof trigger.date === "string" ? trigger.date : ""
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         errors.push(`${at}: a date trigger needs a date (YYYY-MM-DD).`)
+      } else {
+        // The regex admits impossible dates ("2026-13-45") which would then render raw on the
+        // client's schedule (council, 2026-08-11). A date the calendar rejects is refused here,
+        // where the author can fix it.
+        const d = new Date(`${date}T00:00:00Z`)
+        const roundTrips =
+          !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === date
+        if (!roundTrips) {
+          errors.push(`${at}: "${date}" is not a real calendar date.`)
+        }
       }
     }
 
@@ -401,6 +411,8 @@ export function decideSigningBill(args: {
   offerToken: string
   /** The whole commitment, from the offer amount engine. */
   offerGross: number
+  /** The offer's resolved currency, from the engine. Omitted = skip the currency crosscheck. */
+  offerCurrency?: string
   /** The description an ordinary offer would use. */
   baseDescription: string
 }): SigningBill {
@@ -417,6 +429,35 @@ export function decideSigningBill(args: {
   const parsed = validatePaymentPlan(args.rawPlan)
   if (!parsed.ok || !parsed.plan) {
     return { ...ordinary, planIgnored: parsed.errors.join(" ") }
+  }
+
+  // ⛔ THE PLAN MUST AGREE WITH ITS OFFER, HERE TOO (council blocker, 2026-08-11). Structural
+  // validity is not agreement: a plan can be internally perfect while its offer's total drifted
+  // (a revision changed the services) or its currency never matched. Every other rail refuses
+  // that shape — the pages hide the pay controls, checkout 400s — but this function used to bill
+  // part one anyway, silently, minting an invoice of record for an amount nobody agreed to, in a
+  // currency that could be wrong. Worse: the pages tell the client "do not pay" while the portal
+  // mirror shows a live payable invoice for the same deal.
+  //
+  // The degrade is the documented one, and it is deliberate: bill the WHOLE fee, loudly. By this
+  // point the signature is stored, and a signed deal with no bill is worse than one Antonio
+  // amends — the same reasoning as the structurally-invalid case above.
+  const total = planTotal(parsed.plan)
+  if (Math.abs(total - args.offerGross) > 0.01) {
+    return {
+      ...ordinary,
+      planIgnored:
+        `The plan adds up to ${total} but the offer totals ${args.offerGross} — billed the whole ` +
+        `fee instead of part one. Fix whichever is wrong, then void and re-raise.`,
+    }
+  }
+  if (args.offerCurrency && planCurrency(parsed.plan).toUpperCase() !== args.offerCurrency.toUpperCase()) {
+    return {
+      ...ordinary,
+      planIgnored:
+        `The plan is in ${planCurrency(parsed.plan)} but the offer is in ${args.offerCurrency} — ` +
+        `billed the whole fee instead of part one. Fix whichever is wrong, then void and re-raise.`,
+    }
   }
 
   const signing = signingPart(parsed.plan)

@@ -72,6 +72,40 @@ export async function createInvoice(
       )
 
   return safeAction(async () => {
+    // A later PART of a plan inherits the OFFER's pinned card-fee rate (council, 2026-08-11).
+    // Part one gets the pin from the signing webhook; without this, a hand-raised part two on a
+    // waived-fee deal would pin the CURRENT configured rate and charge a card fee the signed
+    // agreement waived — two invoices for one deal carrying different rates.
+    // Both reads are edge-cast: the tranche columns and offers.card_fee_rate postdate the
+    // deliberately-stale generated types (same pattern as the plan fetch in activation).
+    let inheritedCardFeeRate: number | undefined
+    if (invoiceData.tranche) {
+      const part1Query = supabaseAdmin
+        .from('payments')
+        .select('card_fee_rate' as never) as unknown as {
+          eq: (c: string, v: unknown) => {
+            eq: (c: string, v: unknown) => {
+              limit: (n: number) => { maybeSingle: () => Promise<{ data: { card_fee_rate?: number | null } | null }> }
+            }
+          }
+        }
+      const { data: part1 } = await part1Query
+        .eq('tranche_offer_token', invoiceData.tranche.offer_token)
+        .eq('tranche_seq', 1)
+        .limit(1)
+        .maybeSingle()
+      if (typeof part1?.card_fee_rate === 'number') inheritedCardFeeRate = part1.card_fee_rate
+      if (inheritedCardFeeRate === undefined) {
+        const offerQuery = supabaseAdmin
+          .from('offers')
+          .select('card_fee_rate' as never)
+          .eq('token', invoiceData.tranche.offer_token) as unknown as {
+            maybeSingle: () => Promise<{ data: { card_fee_rate?: number | null } | null }>
+          }
+        const { data: offerRow } = await offerQuery.maybeSingle()
+        if (typeof offerRow?.card_fee_rate === 'number') inheritedCardFeeRate = offerRow.card_fee_rate
+      }
+    }
     const result = await createTDInvoice({
       account_id: invoiceData.account_id,
       line_items: items.map((item) => ({
@@ -92,6 +126,7 @@ export async function createInvoice(
             // accountant hand-off gate and feeds the June cron. A split setup fee must touch
             // neither.
             payment_category: 'setup_tranche',
+            ...(inheritedCardFeeRate !== undefined ? { card_fee_rate: inheritedCardFeeRate } : {}),
           }
         : {}),
     })

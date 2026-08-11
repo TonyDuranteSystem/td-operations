@@ -99,6 +99,15 @@ export async function POST(req: NextRequest) {
     }
 
     if (total <= 0) {
+      // A plan whose signing part is fully covered by credit legitimately owes NOTHING today —
+      // "could not determine" would read as our failure when the truth is better news (council,
+      // 2026-08-11). Distinguish the two.
+      if (totals.hasPaymentPlan) {
+        return NextResponse.json(
+          { error: "Nothing is due by card today — your first payment is already covered. Later parts are invoiced separately." },
+          { status: 400 },
+        )
+      }
       return NextResponse.json({ error: "Could not determine payment amount" }, { status: 400 })
     }
 

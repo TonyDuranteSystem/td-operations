@@ -1481,7 +1481,10 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       // the call leaves any pending referral row PENDING — visible and unsettled on the referrals
       // dashboard, which is honest — rather than converted-and-credited against money not yet
       // received. It also never reaches this rail's own internal recovery branch.
-      steps.push({ step: "referral_credit", status: "skipped", detail: "Commission suppressed — deal is on a payment plan; settle by hand (see the review card)" })
+      // The review card is raised by the OFFER-referrer rail; a deal with only a Calendly lead
+      // referral has none, so the message must not point at a card that may not exist (council,
+      // 2026-08-11). The pending referral row itself stays visible on the referrals dashboard.
+      steps.push({ step: "referral_credit", status: "skipped", detail: "Commission suppressed — deal is on a payment plan. The lead referral stays PENDING on the referrals dashboard; settle it by hand as parts are paid." })
     } else if (leadId) {
       let setupFeeTotal = 0
       try {
@@ -1532,7 +1535,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       // computed from the activation amount — the WHOLE commitment — so a plan deal would write a
       // plausible full-deal figure with nothing telling the approver only part one arrived. The
       // hand-settlement card raised in Step 3.5 is the record for this deal's commission.
-      steps.push({ step: "partner_payout", status: "skipped", detail: "Suppressed — deal is on a payment plan; settle the partner payout by hand (see the review card)" })
+      steps.push({ step: "partner_payout", status: "skipped", detail: "Suppressed — deal is on a payment plan; compute and record the partner payout by hand as parts are paid (no automatic card exists for partner payouts)" })
     } else if (offer?.partner_id && offer.partner_payout_model && offer.partner_payout_model !== "none") {
       const { calculatePartnerPayout } = await import("@/lib/partners/payout-calc")
 

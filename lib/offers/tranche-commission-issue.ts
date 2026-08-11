@@ -121,7 +121,17 @@ export async function raiseCommissionNeedsHandSettlement(input: {
       client_notified: false, // staff-only, never surfaced to the client or the referrer
     } as never
 
-    await supabaseAdmin.from("portal_issues").insert(row)
+    // supabase-js RETURNS errors rather than throwing (council, 2026-08-11 — the same shape as
+    // the View-as restore bug): an RLS refusal or a bad column would have resolved cleanly and
+    // this function would have reported a card that does not exist, silently erasing the ONLY
+    // record of a suppressed commission.
+    const { error } = await supabaseAdmin.from("portal_issues").insert(row)
+    if (error) {
+      console.error(
+        `[tranche-commission] hand-settlement card INSERT failed for ${input.offerToken}: ${error.message}`,
+      )
+      return false
+    }
     return true
   } catch (e) {
     // The client has signed and paid by now. A missing card is a bookkeeping problem; throwing

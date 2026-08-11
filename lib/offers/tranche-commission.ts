@@ -83,6 +83,18 @@ export function splitCommissionAcrossParts(
     shares.push({ seq: part.seq, partAmount: part.amount, commission: Math.max(commission, 0) })
   })
 
+  // ⛔ Council edge (2026-08-11): a TINY last part after rounded-up earlier shares can drive the
+  // raw remainder NEGATIVE, and the zero-clamp above then made the SUM EXCEED the whole
+  // commission (parts [100, 100, 0.01] at 0.671 → 0.34 + 0.34 + 0 = 0.68). Never-negative and
+  // sums-exactly are both promises; when they conflict, the overshoot comes off the LARGEST
+  // share, where a cent disappears into rounding rather than distorting a small one.
+  const sum = round2(shares.reduce((acc, x) => acc + x.commission, 0))
+  const overshoot = round2(sum - totalCommission)
+  if (overshoot > 0) {
+    const largest = shares.reduce((a, b) => (b.commission > a.commission ? b : a))
+    largest.commission = round2(Math.max(largest.commission - overshoot, 0))
+  }
+
   return shares
 }
 

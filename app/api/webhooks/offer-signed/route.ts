@@ -239,6 +239,7 @@ export async function POST(req: NextRequest) {
       rawPlan: (offer as { payment_plan?: unknown }).payment_plan,
       offerToken: offer_token,
       offerGross: totalAmount,
+      offerCurrency,
       baseDescription: getInvoiceDescription(contractType, selectedServices, offer.client_name),
     })
     if (signingBill.planIgnored) {
@@ -249,6 +250,19 @@ export async function POST(req: NextRequest) {
         `[offer-signed] IGNORING an unusable payment plan on ${offer_token} and invoicing the ` +
           `whole fee instead: ${signingBill.planIgnored}`,
       )
+      // Loud means SEEN, not just logged (council, 2026-08-11): a client just signed for a plan
+      // that could not be honoured, and the bill they got is the whole fee. That must reach the
+      // error auto-audit surface, not sit in a function log nobody tails. Fire-and-forget — the
+      // report must never break signing.
+      try {
+        const { reportSystemError } = await import("@/lib/system-errors")
+        void reportSystemError({
+          source: "server",
+          route: "/api/webhooks/offer-signed",
+          message: `Payment plan ignored at signing on ${offer_token} — whole fee billed: ${signingBill.planIgnored}`,
+          context: { offer_token, plan_ignored: signingBill.planIgnored },
+        })
+      } catch { /* never block signing on telemetry */ }
     }
 
     try {

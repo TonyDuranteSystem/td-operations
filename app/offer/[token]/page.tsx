@@ -248,7 +248,9 @@ export default function OfferPage() {
       planRefusal: t.planRefusal,
       dueNow: t.dueNow,
       dueNowFormatted: `${symbol}${t.dueNow.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
-      dueNowCardFormatted: `${symbol}${Math.round(t.dueNow * 1.05).toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      // Pinned rate, not a hardcoded 5% (council, 2026-08-11): a waived-fee deal must not quote
+      // a card figure above what checkout actually charges from the pinned rate.
+      dueNowCardFormatted: `${symbol}${Math.round(t.dueNow * (1 + ((offer as { card_fee_rate?: number | null }).card_fee_rate ?? 0.05))).toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
       symbol,
     }
   }, [offer, selectedOptional])
@@ -268,7 +270,7 @@ export default function OfferPage() {
       // PART net of credit — not the whole commitment. Leaving the full figure under that exact
       // label was the most misleading line on the page: it names the timing explicitly and then
       // states a number for a different one.
-      netFormatted: fmt(dynamicTotal.hasPlan ? dynamicTotal.dueNow : dynamicTotal.total),
+      netFormatted: dynamicTotal.planRefusal ? '—' : fmt(dynamicTotal.hasPlan ? dynamicTotal.dueNow : dynamicTotal.total),
       // LABEL HONESTY (architect ruling): only call it a strategy call when it IS
       // one. The snapshot is the sum of every credit the person holds, so a
       // referral credit was being described to the client as a paid call.
@@ -634,7 +636,7 @@ export default function OfferPage() {
                   <div style={{ marginTop: 16, paddingTop: 12, borderTop: '2px solid var(--offer-blue)' }}>
                     <div className="offer-riepilogo-total" style={{ fontSize: 16 }}>
                       <span style={{ fontWeight: 700 }}>{L.totalDueToday}</span>
-                      <span style={{ fontWeight: 700, transition: 'all 0.3s' }}>{dynamicTotal.hasPlan ? dynamicTotal.dueNowFormatted : dynamicTotal.formatted}</span>
+                      <span style={{ fontWeight: 700, transition: 'all 0.3s' }}>{dynamicTotal.planRefusal ? '—' : dynamicTotal.hasPlan ? dynamicTotal.dueNowFormatted : dynamicTotal.formatted}</span>
                     </div>
                   </div>
                 )}

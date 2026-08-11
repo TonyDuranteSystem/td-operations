@@ -34,6 +34,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncTDInvoiceStatus } from "@/lib/portal/td-invoice"
 import { logAction } from "@/lib/mcp/action-log"
+import { DEAD_INVOICE_STATUSES } from "@/lib/offers/payment-plan-state"
 
 export interface BlockedPaidInvoice {
   payment_id: string
@@ -170,8 +171,13 @@ export async function cancelPaymentsForOfferTokens(
   }
 
   // 3. Skip rows already cancelled — idempotency.
+  // Already-DEAD rows (any dead status, not only Cancelled) are left untouched: re-stamping a
+  // Voided or Credit row to Cancelled would rewrite its history for no benefit — the slot is
+  // already free and the audit trail is the point of soft-cancel (council, 2026-08-11).
   const cancellable = (payments ?? []).filter(
-    (p) => p.status !== "Cancelled" && p.invoice_status !== "Cancelled",
+    (p) =>
+      p.status !== "Cancelled" &&
+      !DEAD_INVOICE_STATUSES.includes((p.invoice_status ?? "") as (typeof DEAD_INVOICE_STATUSES)[number]),
   )
 
   if (!cancellable.length) {

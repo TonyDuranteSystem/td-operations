@@ -80,6 +80,16 @@ describe("splitCommissionAcrossParts — the referrer's total never changes", ()
     }
   })
 
+  it("⛔ never EXCEEDS the whole commission either — the tiny-last-part edge", () => {
+    // Council, 2026-08-11: rounded-up earlier shares can drive the raw last share negative, and
+    // the zero-clamp then made the SUM exceed the total (0.34+0.34+0 = 0.68 on 0.671). The
+    // overshoot now comes off the largest share.
+    const shares = splitCommissionAcrossParts(plan(100, 100, 0.01), 0.671)
+    const sum = Math.round(shares.reduce((a, x) => a + x.commission, 0) * 100) / 100
+    expect(sum).toBeLessThanOrEqual(0.671)
+    for (const x of shares) expect(x.commission).toBeGreaterThanOrEqual(0)
+  })
+
   it("never produces a negative share", () => {
     for (const shares of [
       splitCommissionAcrossParts(plan(1250, 1250), 250),

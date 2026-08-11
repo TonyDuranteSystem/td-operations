@@ -10,6 +10,7 @@ import ServiceAgreement from './service-agreement'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import { computeOfferPayable } from '@/lib/offers/compute-offer-totals'
+import { clientFacingSchedule, validatePaymentPlan } from '@/lib/offers/payment-plan'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
 import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 
@@ -452,6 +453,27 @@ export default function ContractPage() {
           : money(totalSetup))
       : 'As specified in the offer'
 
+    // ⛔ WS-C (council blocker, 2026-08-11): the CONTRACT is the legal record, and it used to
+    // state the whole fee as "one-time, due upon signing" even when the client was agreeing a
+    // plan — the one surface the shared sentence-builder never reached, frozen into the signed
+    // PDF for ever. When a USABLE plan exists, the fee lines below carry the schedule instead.
+    // A plan that does not agree with its offer contributes nothing here — the payment panel is
+    // already refusing, and the signing webhook bills the whole fee, which is what the ordinary
+    // wording states.
+    let planFeeWording: string | null = null
+    {
+      const rawPlan = (o as { payment_plan?: unknown }).payment_plan
+      if (rawPlan != null && !contractTotals.planRefusal) {
+        const parsedPlan = validatePaymentPlan(rawPlan)
+        if (parsedPlan.ok && parsedPlan.plan && parsedPlan.plan.length >= 2) {
+          const lines = clientFacingSchedule(parsedPlan.plan)
+            .map((r) => `${money(r.amount)} — ${r.label}`)
+            .join('; ')
+          planFeeWording = `${fee}, paid as a Partial Payment schedule: ${lines}`
+        }
+      }
+    }
+
     // Derive annual maintenance from recurring_costs
     // Use installment_currency if set, otherwise fall back to setup currency
     const instCurrency = (o as any).installment_currency || setupCurrency
@@ -500,7 +522,7 @@ export default function ContractPage() {
     }
     if (!llcType) llcType = 'Single-Member LLC'
 
-    return { fee, llcType, installments, annualFee, year }
+    return { fee, planFeeWording, llcType, installments, annualFee, year }
   }
 
   // Sign contract
@@ -1025,7 +1047,7 @@ export default function ContractPage() {
     )
   }
 
-  const { fee, llcType, installments, annualFee, year } = getContractData()
+  const { fee, planFeeWording, llcType, installments, annualFee, year } = getContractData()
   // WS-B: the offer's pinned formation state (null on pre-WS-B offers → row hidden)
   const contractFormationState = normalizeFormationState((offer as { formation_state?: string | null } | null)?.formation_state)
   const effDate = today()
@@ -1112,7 +1134,7 @@ export default function ContractPage() {
             {contractFormationState && (
               <tr><th>State of Formation</th><td>{FORMATION_STATE_NAMES[contractFormationState]}</td></tr>
             )}
-            <tr><th>Setup Fee</th><td>{fee} -- one-time, due upon signing. Covers all selected services for the first contract year.</td></tr>
+            <tr><th>Setup Fee</th><td>{planFeeWording ?? `${fee} -- one-time, due upon signing.`} Covers all selected services for the first contract year.</td></tr>
             {annualFee && <tr><th>Annual Maintenance (from {year + 1})</th><td>{annualFee} -- {installments}</td></tr>}
             <tr><th>Cancellation Deadline</th><td>Written notice must be received no later than November 1 of the current Contract Year to prevent automatic renewal.</td></tr>
           </tbody>
@@ -1230,7 +1252,7 @@ export default function ContractPage() {
         <div className="contract-section"><h3>Payment Schedule</h3>
           <table className="contract-key-terms">
             <tbody>
-              <tr><th>Setup Fee</th><td>{fee} (one-time, due upon signing)</td></tr>
+              <tr><th>Setup Fee</th><td>{planFeeWording ?? `${fee} (one-time, due upon signing)`}</td></tr>
               <tr><th>Annual Maintenance (from following year)</th><td>{installments}</td></tr>
             </tbody>
           </table>
