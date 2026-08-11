@@ -245,10 +245,20 @@ export default async function PortalDashboardPage() {
     // getInProgressFormations (1 query when there's no formation SD, so it's
     // free for ordinary leads/onboarding clients). Short-circuits the lookup
     // when the tier already says formation.
+    // Fetched unconditionally (one cheap query) because BOTH uses below need it:
+    // the has-a-formation check AND the wizard link. The dashboard's "Action
+    // required" card used to link to the BARE wizard path here, which drops the
+    // lead scope — Antonio hit this during the ca788354 QA pass: the wizard
+    // opened BLANK instead of his in-progress formation, and his re-typed
+    // submission arrived unattributable (the ambiguous safety net caught it).
+    // With exactly ONE in-progress formation the lead is unambiguous — carry
+    // it. With several, leave the bare path: the company switcher sets the
+    // portal_formation cookie and that branch above already carries the lead.
+    const inProgressFormations = contactId ? await getInProgressFormations(contactId) : []
+    const soleInProgressLeadId =
+      inProgressFormations.length === 1 ? inProgressFormations[0].leadId : null
     const hasActiveFormation =
-      authTier !== 'formation' &&
-      !!contactId &&
-      (await getInProgressFormations(contactId)).length > 0
+      authTier !== 'formation' && inProgressFormations.length > 0
     if ((authTier === 'formation' || hasActiveFormation) && contactId) {
       const formationAccount = await getFormationAccount(contactId)
       // Contact-scoped Company Closure SD — surfaces a Closure CTA on the
@@ -317,6 +327,7 @@ export default async function PortalDashboardPage() {
               leaseData={leaseRes.data}
               closureData={closureSd}
               trackerSteps={trackerSteps}
+              formationLeadId={soleInProgressLeadId}
               sdStage={tracker?.currentStage ?? null}
               filedAt={tracker?.filedAt ?? null}
             />
@@ -348,6 +359,7 @@ export default async function PortalDashboardPage() {
             leaseData={ctx.lease}
             closureData={closureSd}
             trackerSteps={trackerSteps}
+            formationLeadId={soleInProgressLeadId}
             sdStage={tracker?.currentStage ?? null}
             filedAt={tracker?.filedAt ?? null}
           />
