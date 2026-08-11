@@ -17,7 +17,7 @@ import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { createClient } from "@/lib/supabase/server"
 import { canPerform } from "@/lib/permissions"
 import { formatCountyAndState } from "@/lib/addresses"
-import { decideSs4Signer, ss4SignerAlertMessage, type Ss4SignerMember } from "@/lib/operations/ss4-signer"
+import { decideSs4Signer, ss4SignerAlertMessage, pickDefaultSs4SignerLink, type Ss4SignerMember } from "@/lib/operations/ss4-signer"
 import { refreshSS4 } from "@/lib/operations/ss4-refresh"
 import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
 
@@ -399,6 +399,10 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
         success: true,
         regenerated: true,
         unchanged: result.outcome === "unchanged",
+        // The kept-explicit-pick note — the flow workspace surfaces it, and a
+        // CRM regenerate must not be the one silent surface (final council
+        // pass, 2026-08-11).
+        note: result.message ?? undefined,
         token: existing.token,
         access_code: existing.access_code,
         admin_preview: `${SS4_BASE_URL}/${existing.token}/${existing.access_code}?preview=td`,
@@ -413,13 +417,18 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
   const entityType = ENTITY_MAP[rawEntity] || "SMLLC"
   const state = STATE_MAP[(account.state_of_formation || "").toUpperCase().trim()] || account.state_of_formation
 
-  // Responsible party defaults to the first linked contact (the SMLLC owner). For
-  // a multi-member LLC the responsible party MUST be the member flagged as signer
-  // — and we BLOCK with a staff alert if zero or more than one is flagged. This is
-  // the SAME rule createSS4 enforces (lib/operations/ss4.ts), shared via
-  // decideSs4Signer so the two SS-4 paths can never drift. Without this, the CRM
-  // path silently stamped the first linked contact (the Gaia/Michele bug).
+  // Responsible-party resolution, in STRICT precedence order (the members
+  // decision must always outrank the role hint — final-diff council fix,
+  // 2026-08-10; the earlier ordering let an SMLLC role hint out-vote an MMLLC's
+  // flagged signer):
+  //   1. Non-SMLLC with members rows → decideSs4Signer (flagged signer, or
+  //      BLOCK with the staff alert) — same rule createSS4 enforces.
+  //   2. Otherwise (SMLLC, or no members rows) → pickDefaultSs4SignerLink over
+  //      the account_contacts roles (never blocks; the ACE fix).
+  // `memberDecided` marks case 1 so case 2 can never override it — including
+  // when the flagged signer happens to BE the first linked contact.
   let responsibleContact = contact
+  let memberDecided = false
 
   // Member count: members table first (company members aren't account_contacts),
   // then contact links — and never below 2 for a non-SMLLC: a multi-member LLC
@@ -449,16 +458,52 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
         const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", m.representative_email).maybeSingle()
         signerContactId = repC?.id ?? null
       }
-      if (signerContactId && signerContactId !== contact.id) {
-        const { data: signerC } = await supabaseAdmin
-          .from("contacts")
-          .select("id, full_name, email, phone, residency, language, itin_number")
-          .eq("id", signerContactId)
-          .single()
-        if (signerC) responsibleContact = signerC
+      if (signerContactId) {
+        // A member decided the signer — the role-hint default below must never
+        // override this, even when the flagged signer IS the first linked
+        // contact (comparing against `contact.id` alone was the precedence
+        // inversion the council caught).
+        memberDecided = true
+        if (signerContactId !== responsibleContact.id) {
+          const { data: signerC } = await supabaseAdmin
+            .from("contacts")
+            .select("id, full_name, email, phone, residency, language, itin_number")
+            .eq("id", signerContactId)
+            .single()
+          if (signerC) responsibleContact = signerC
+        }
       }
     }
-    // decision.kind === "no_members" → keep the first linked contact (legacy fallback)
+    // decision.kind === "no_members" → memberDecided stays false → role-hint
+    // default below applies (legacy-shaped account).
+  }
+
+  if (!memberDecided) {
+    // Role-hint default for the NO-members-decision case (every SMLLC, plus any
+    // account whose members rows were never created). `contact` above is
+    // fetchAccountAndContact's contactLinks[0] — an UNORDERED, role-blind pick,
+    // the same defect that put the authorized representative on ACE Marketing
+    // Group's SS-4.
+    //
+    // Deliberately scoped to THIS function: fetchAccountAndContact is shared
+    // with generateOA and generateLease, and for an SMLLC that contact is the
+    // legally named sole Member of the Operating Agreement — changing it there
+    // would silently rename the member on OAs. Never move this into the shared
+    // helper.
+    const defaultLink = pickDefaultSs4SignerLink(
+      (contactLinks ?? []).map((l) => ({
+        contact_id: l.contact_id as string,
+        role: (l as unknown as { role: string | null }).role ?? null,
+      })),
+    )
+    if (defaultLink && defaultLink.contact_id !== responsibleContact.id) {
+      const { data: defaultC } = await supabaseAdmin
+        .from("contacts")
+        .select("id, full_name, email, phone, residency, language, itin_number")
+        .eq("id", defaultLink.contact_id)
+        .single()
+      if (defaultC) responsibleContact = defaultC
+    }
   }
 
   // Resolve Line 6 (county_and_state) from the addresses registry via FK join.

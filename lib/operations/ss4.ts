@@ -22,6 +22,7 @@ import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
 import { formatCountyAndState } from "@/lib/addresses"
 import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
+import { pickDefaultSs4SignerLink } from "@/lib/operations/ss4-signer"
 
 export interface CreateSS4Params {
   account_id: string
@@ -191,7 +192,15 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
         }
       }
     } else {
-      // Legacy fallback: account_contacts.
+      // ── No `members` rows → resolve from account_contacts. ──
+      // This is NOT a legacy edge case: formation-materialize writes the owner
+      // members row only `if (isMMLC)`, so EVERY single-member LLC lands here.
+      // It used to take links[0] from this unordered select (account_contacts has
+      // no created_at, so that was physical row order) — the ACE Marketing Group
+      // wrong-signer bug. The default now comes from pickDefaultSs4SignerLink:
+      // role-aware, stable, and it NEVER blocks an SMLLC (Antonio, 2026-08-10 —
+      // a wrong default is correctable via the workspace picker, a halted
+      // formation is not). The MMLLC block below is unchanged and still stands.
       const { data: links } = await supabaseAdmin
         .from("account_contacts")
         .select("contact_id, role, contacts(id, full_name, email)")
@@ -218,7 +227,13 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
           ].join("\n"),
         }
       }
-      contactId = links[0].contact_id
+      contactId =
+        pickDefaultSs4SignerLink(
+          links.map((l) => ({
+            contact_id: l.contact_id as string,
+            role: (l as unknown as { role: string | null }).role ?? null,
+          })),
+        )?.contact_id ?? links[0].contact_id
     }
   }
 
@@ -344,13 +359,39 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
   }
 
   // ─── 10. LOG ───
-  await logAction({
-    action_type: "create",
-    table_name: "ss4_applications",
-    record_id: ss4.id,
-    account_id: params.account_id,
-    summary: `Created SS-4 for ${account.company_name} (${entityType}, ${state})`,
-  })
+  // When the caller EXPLICITLY named the responsible party (ss4_create with
+  // contact_id — the tool's own documented MMLLC flow), that is a pick exactly
+  // like the workspace picker's, so it writes the same PICK RECORD
+  // (details.picked_contact_id) that refreshSS4's pick-wins guard consults.
+  // Without it, a later member edit would mis-class the creation-time choice as
+  // an ORPHANED signer and revoke its link (final council pass, 2026-08-11).
+  // Awaited + error-checked for the same reason as in setSs4Signer.
+  if (params.contact_id) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: pickLogErr } = await (supabaseAdmin as any).from("action_log").insert({
+      actor: "system",
+      action_type: "create",
+      table_name: "ss4_applications",
+      record_id: ss4.id,
+      account_id: params.account_id,
+      summary: `Created SS-4 for ${account.company_name} (${entityType}, ${state}) — responsible party explicitly specified by the caller`,
+      details: { picked_contact_id: params.contact_id, source: "ss4-create-explicit" },
+    })
+    if (pickLogErr) {
+      console.error(
+        "[createSS4] PICK RECORD insert failed — a later refresh may treat this explicit party as orphaned (alert+revoke, recoverable):",
+        pickLogErr.message,
+      )
+    }
+  } else {
+    await logAction({
+      action_type: "create",
+      table_name: "ss4_applications",
+      record_id: ss4.id,
+      account_id: params.account_id,
+      summary: `Created SS-4 for ${account.company_name} (${entityType}, ${state})`,
+    })
+  }
 
   // ─── 10b. SYNC member_count TO ACCOUNTS (MMLLC only, don't overwrite) ───
   if (memberCount && entityType === "MMLLC") {

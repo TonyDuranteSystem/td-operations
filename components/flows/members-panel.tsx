@@ -28,6 +28,12 @@ export function MembersPanel({ serviceDeliveryId }: { serviceDeliveryId: string 
   const [members, setMembers] = useState<PanelMember[]>([])
   const [error, setError] = useState<string | null>(null)
   const [savingId, setSavingId] = useState<string | null>(null)
+  // What the SS-4 auto-refresh did after a signer flag change. Without this,
+  // flagging a member while a non-member is the explicitly picked responsible
+  // party was a SILENT no-op — green Signer badge here, different name on the
+  // SS-4 card, no explanation (council major, 2026-08-11). Also surfaces the
+  // needs_signer / orphaned alerts that used to be dropped on the floor.
+  const [ss4Note, setSs4Note] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -63,6 +69,10 @@ export function MembersPanel({ serviceDeliveryId }: { serviceDeliveryId: string 
         if (!res.ok || !data.success) {
           throw new Error(data.error || 'Could not update the signer.')
         }
+        // Surface what the SS-4 did with this flag change — kept an explicit
+        // pick, blocked on the flag count, or refused an orphaned signer.
+        const refresh = data.ss4_refresh as { outcome?: string; message?: string } | null | undefined
+        setSs4Note(refresh?.message ?? null)
         await load()
       } catch (err) {
         setError(err instanceof Error && err.message ? err.message : 'Could not update the signer.')
@@ -100,6 +110,13 @@ export function MembersPanel({ serviceDeliveryId }: { serviceDeliveryId: string 
         <div className="mb-3 flex items-start gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{error}</span>
+        </div>
+      )}
+
+      {ss4Note && (
+        <div className="mb-3 flex items-start gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{ss4Note}</span>
         </div>
       )}
 

@@ -31,8 +31,8 @@ export interface LeaseData {
   // Landlord
   landlordName?: string            // Default: Tony Durante LLC
   landlordAddress?: string         // Default: 10225 Ulmerton Rd, Suite 3D, Largo, FL 33771
-  landlordSigner?: string          // Default: Antonio Durante
-  landlordTitle?: string           // Default: Managing Member
+  landlordSigner?: string          // Default: Antonio Noel Durante
+  landlordTitle?: string           // Default: Executive Director
 
   // Tenant
   tenantCompany: string            // Company/LLC name
@@ -255,8 +255,8 @@ class PageWriter {
 export async function generateLeasePDF(data: LeaseData): Promise<Uint8Array> {
   const landlordName = data.landlordName ?? 'Tony Durante LLC'
   const landlordAddress = data.landlordAddress ?? '10225 Ulmerton Rd, Suite 3D, Largo, FL 33771'
-  const landlordSigner = data.landlordSigner ?? 'Antonio Durante'
-  const landlordTitle = data.landlordTitle ?? 'Managing Member'
+  const landlordSigner = data.landlordSigner ?? 'Antonio Noel Durante'
+  const landlordTitle = data.landlordTitle ?? 'Executive Director'
 
   const tenantTitle = data.tenantTitle ?? 'Owner/Member'
   const tenantEinDisplay = data.tenantEin ? ` (EIN: ${data.tenantEin})` : ''

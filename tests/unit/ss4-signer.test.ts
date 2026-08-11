@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest"
-import { decideSs4Signer, ss4SignerAlertMessage, type Ss4SignerMember } from "@/lib/operations/ss4-signer"
+import {
+  decideSs4Signer,
+  ss4SignerAlertMessage,
+  pickDefaultSs4SignerLink,
+  isOwnerTypeRole,
+  currentPartyIsMember,
+  type Ss4SignerMember,
+  type Ss4SignerLink,
+} from "@/lib/operations/ss4-signer"
 
 const michele: Ss4SignerMember = { member_type: "individual", full_name: "Michele Cotti", contact_id: "michele-id", is_signer: true, is_primary: true }
 const gaia: Ss4SignerMember = { member_type: "individual", full_name: "Gaia Pellegrinelli", contact_id: "gaia-id", is_signer: false }
@@ -43,6 +51,146 @@ describe("decideSs4Signer", () => {
   it("Corporation: treated like the unambiguous branch (first member)", () => {
     const pres: Ss4SignerMember = { member_type: "individual", full_name: "President", contact_id: "pres-id" }
     expect(decideSs4Signer([pres, gaia], "Corporation")).toEqual({ kind: "use_member", member: pres })
+  })
+})
+
+/**
+ * The SMLLC default-pick rule (account_contacts). These are the cells that go red
+ * if the fix is removed — see the "MUTATION PROOF" block at the end.
+ *
+ * Role strings below are the REAL production vocabulary (counted 2026-08-10):
+ * owner 264 · Member 68 · Owner 27 · member 3 · authorized_representative 2 ·
+ * "Sole Member" 1 · "Partner - Tax/NHR Consultant (Portugal)" 1 ·
+ * "Collaborator - Client Communications (Francesco Valentini's team)" 1.
+ */
+describe("pickDefaultSs4SignerLink", () => {
+  // Contact ids are ordered so that the WRONG answer is the lexicographically
+  // first one — a fallback that ignored role would return `aaa…` and fail.
+  const rep: Ss4SignerLink = { contact_id: "aaa-rep", role: "authorized_representative" }
+  const owner: Ss4SignerLink = { contact_id: "zzz-owner", role: "owner" }
+
+  it("returns null only for an empty / null / undefined list", () => {
+    expect(pickDefaultSs4SignerLink([])).toBeNull()
+    expect(pickDefaultSs4SignerLink(null)).toBeNull()
+    expect(pickDefaultSs4SignerLink(undefined)).toBeNull()
+  })
+
+  it("THE ACE CASE: owner + authorized_representative → the OWNER, not the rep", () => {
+    // Reproduces ACE Marketing Group LLC exactly: two links, the rep's contact
+    // sorts first, and the old code took whichever row Postgres handed back.
+    expect(pickDefaultSs4SignerLink([rep, owner])).toEqual(owner)
+    // Order of the input must not change the answer.
+    expect(pickDefaultSs4SignerLink([owner, rep])).toEqual(owner)
+  })
+
+  it("resolves every production role-case variant of owner", () => {
+    for (const role of ["owner", "Owner", "OWNER", "  Owner  ", "Sole Member", "sole member"]) {
+      const o: Ss4SignerLink = { contact_id: "zzz-owner", role }
+      expect(pickDefaultSs4SignerLink([rep, o])).toEqual(o)
+    }
+  })
+
+  it("NEVER blocks: two owner-type links still yield a default (Smart Consulting / Magic Scale shape)", () => {
+    const a: Ss4SignerLink = { contact_id: "bbb", role: "owner" }
+    const b: Ss4SignerLink = { contact_id: "ccc", role: "Owner" }
+    const picked = pickDefaultSs4SignerLink([b, a])
+    expect(picked).not.toBeNull()
+    // Stable: lowest contact_id among the tied owner-type links, either input order.
+    expect(picked).toEqual(a)
+    expect(pickDefaultSs4SignerLink([a, b])).toEqual(a)
+  })
+
+  it("NEVER blocks: zero owner-type links still yield a default (partner/collaborator shape)", () => {
+    const partner: Ss4SignerLink = { contact_id: "yyy", role: "Partner - Tax/NHR Consultant (Portugal)" }
+    const collab: Ss4SignerLink = { contact_id: "xxx", role: "Collaborator - Client Communications (team)" }
+    expect(pickDefaultSs4SignerLink([partner, collab])).toEqual(collab)
+  })
+
+  it("single link is used whatever its role — including a lone non-owner", () => {
+    expect(pickDefaultSs4SignerLink([rep])).toEqual(rep)
+    const lone: Ss4SignerLink = { contact_id: "solo", role: "Member" }
+    expect(pickDefaultSs4SignerLink([lone])).toEqual(lone)
+  })
+
+  it("is null-safe on role (the column is nullable and the old cast lied about it)", () => {
+    const nullRole: Ss4SignerLink = { contact_id: "aaa", role: null }
+    const blank: Ss4SignerLink = { contact_id: "bbb", role: "   " }
+    const undef: Ss4SignerLink = { contact_id: "ccc" }
+    expect(() => pickDefaultSs4SignerLink([nullRole, blank, undef])).not.toThrow()
+    expect(pickDefaultSs4SignerLink([nullRole, blank, undef])).toEqual(nullRole)
+    // A real owner still beats all three.
+    expect(pickDefaultSs4SignerLink([nullRole, blank, undef, owner])).toEqual(owner)
+  })
+
+  it("bare 'Member' is a materializer default, so a real owner outranks it", () => {
+    const member: Ss4SignerLink = { contact_id: "aaa", role: "Member" }
+    expect(pickDefaultSs4SignerLink([member, owner])).toEqual(owner)
+  })
+
+  it("does not mutate the caller's array (it is a live query result)", () => {
+    const input = [rep, owner]
+    const snapshot = [...input]
+    pickDefaultSs4SignerLink(input)
+    expect(input).toEqual(snapshot)
+  })
+
+  it("MUTATION PROOF — a role-blind first-row pick fails these", () => {
+    // This is what the code did before the fix: take links[0].
+    const naive = (links: Ss4SignerLink[]) => links[0]
+    expect(naive([rep, owner])).not.toEqual(pickDefaultSs4SignerLink([rep, owner]))
+    // And it is order-dependent, which is exactly why it was unpinnable.
+    expect(naive([rep, owner])).not.toEqual(naive([owner, rep]))
+    expect(pickDefaultSs4SignerLink([rep, owner])).toEqual(pickDefaultSs4SignerLink([owner, rep]))
+  })
+})
+
+describe("isOwnerTypeRole", () => {
+  it("matches owner-type roles case-insensitively, whole-string only", () => {
+    expect(isOwnerTypeRole("owner")).toBe(true)
+    expect(isOwnerTypeRole("Owner")).toBe(true)
+    expect(isOwnerTypeRole("Sole Member")).toBe(true)
+    expect(isOwnerTypeRole(null)).toBe(false)
+    expect(isOwnerTypeRole(undefined)).toBe(false)
+    expect(isOwnerTypeRole("")).toBe(false)
+    expect(isOwnerTypeRole("Member")).toBe(false)
+    expect(isOwnerTypeRole("authorized_representative")).toBe(false)
+  })
+
+  it("does NOT substring-match (the trap that would misread these two real roles)", () => {
+    // Contains "owner" nowhere, but a naive .includes('partner') style rule would
+    // have classed this as ownership-ish; and a .includes('owner') rule would
+    // wrongly match a hypothetical "Former owner - resigned".
+    expect(isOwnerTypeRole("Partner - Tax/NHR Consultant (Portugal)")).toBe(false)
+    expect(isOwnerTypeRole("Collaborator - Client Communications (team)")).toBe(false)
+    expect(isOwnerTypeRole("Former owner - resigned")).toBe(false)
+  })
+})
+
+/**
+ * The pick-wins membership test (Antonio, 2026-08-10): refresh may re-derive
+ * the responsible party from members ONLY when the stamped party IS a member.
+ */
+describe("currentPartyIsMember", () => {
+  const members: Ss4SignerMember[] = [
+    { member_type: "individual", full_name: "Member One", contact_id: "c-member-1" },
+    { member_type: "company", company_name: "Holdings LLC", contact_id: null }, // null must never match
+  ]
+
+  it("true only when the party's contact matches a member's contact", () => {
+    expect(currentPartyIsMember(members, "c-member-1")).toBe(true)
+    expect(currentPartyIsMember(members, "c-outsider")).toBe(false)
+  })
+
+  it("null current contact NEVER matches — including a member with null contact_id", () => {
+    // A company member with contact_id null must not make a null party 'a member'.
+    expect(currentPartyIsMember(members, null)).toBe(false)
+    expect(currentPartyIsMember(members, undefined)).toBe(false)
+  })
+
+  it("empty/absent member lists → false (keeps the no_members semantics)", () => {
+    expect(currentPartyIsMember([], "c-member-1")).toBe(false)
+    expect(currentPartyIsMember(null, "c-member-1")).toBe(false)
+    expect(currentPartyIsMember(undefined, "c-member-1")).toBe(false)
   })
 })
 

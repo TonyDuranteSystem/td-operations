@@ -97,7 +97,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
     `Update fields on an existing SS-4 application. If the record is at 'awaiting_signature', updating any content field resets it to 'draft' so the client sees the corrected version before re-signing.
 
 Use cases:
-- Correct responsible party (new contact_id + name/ITIN/phone)
+- Correct responsible party (new contact_id — MUST be a contact linked to the account; runs the shared signer-switch: rewrites name/ITIN/phone as a set, resets awaiting_signature to draft, and ROTATES the access code so the previous signing link stops working)
 - Fix member_count
 - Add county_and_state or trade_name
 - Promote draft → awaiting_signature (pass status='awaiting_signature' explicitly)
@@ -114,39 +114,59 @@ Note: signed records (status='signed') cannot be updated.`,
     },
     async (params) => {
       try {
+        // ── Responsible-party change goes through the SINGLE switch core ──
+        // (lib/operations/ss4-set-signer.ts). Before 2026-08-10 this tool
+        // rewrote the four party columns itself — a second, WEAKER switch path:
+        // no access-code rotation (the old signer's link stayed live), no
+        // members.is_signer sync, no documents repoint, no chat/bell cleanup —
+        // so an MCP-driven correction could be silently reverted by the next
+        // refresh. Now both surfaces share setSs4Signer. Note this also
+        // enforces that the new signer is LINKED to the account.
+        let switchNote = ""
+        if (params.contact_id) {
+          const { setSs4Signer } = await import("@/lib/operations/ss4-set-signer")
+          const sw = await setSs4Signer({
+            account_id: params.account_id,
+            contact_id: params.contact_id,
+            source: "mcp-ss4-update",
+          })
+          if (!sw.ok && sw.outcome !== "unchanged") {
+            return { content: [{ type: "text" as const, text: `Error: ${sw.message || `Could not change the responsible party (${sw.outcome}).`}` }] }
+          }
+          if (sw.outcome === "switched") {
+            switchNote = sw.statusReset
+              ? "\nResponsible party changed — status reset to draft and the previous signing link was revoked (access code rotated)."
+              : "\nResponsible party changed — the previous signing link was revoked (access code rotated)."
+          } else if (sw.outcome === "unchanged") {
+            switchNote = "\nResponsible party unchanged (that contact is already the signer)."
+          }
+        }
+
+        // Re-fetch AFTER any switch: the status may have reset to draft and the
+        // access code rotated — the logic below must see the post-switch row.
         const { data: ss4, error: fetchErr } = await supabaseAdmin
           .from("ss4_applications")
           .select("id, token, status, company_name, access_code, county_and_state, entity_type")
           .eq("account_id", params.account_id)
           .maybeSingle()
 
+        // A COMMITTED switch must never be hidden by a later error (council
+        // minor, 2026-08-11): every error return below carries switchNote, so
+        // staff always learn that the party already changed, the old link is
+        // already dead, and (if it was awaiting) the record is now draft.
+        const withSwitch = (text: string) => ({
+          content: [{ type: "text" as const, text: `${text}${switchNote}` }],
+        })
+
         if (fetchErr || !ss4) {
-          return { content: [{ type: "text" as const, text: `Error: SS-4 not found for this account: ${fetchErr?.message || "no data"}` }] }
+          return withSwitch(`Error: SS-4 not found for this account: ${fetchErr?.message || "no data"}`)
         }
 
         if (ss4.status === "signed" || ss4.status === "submitted") {
-          return { content: [{ type: "text" as const, text: `Error: SS-4 for ${ss4.company_name} has status '${ss4.status}' — it cannot be modified after signing/submission.` }] }
+          return withSwitch(`Error: SS-4 for ${ss4.company_name} has status '${ss4.status}' — it cannot be modified after signing/submission.`)
         }
 
         const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
-
-        // Resolve new responsible party if contact_id provided
-        if (params.contact_id) {
-          const { data: contact, error: ctErr } = await supabaseAdmin
-            .from("contacts")
-            .select("id, full_name, itin_number, phone")
-            .eq("id", params.contact_id)
-            .single()
-
-          if (ctErr || !contact) {
-            return { content: [{ type: "text" as const, text: `Error: Contact not found: ${ctErr?.message || "no data"}` }] }
-          }
-
-          updates.contact_id = params.contact_id
-          updates.responsible_party_name = contact.full_name
-          updates.responsible_party_itin = contact.itin_number || null
-          updates.responsible_party_phone = contact.phone || null
-        }
 
         if (params.member_count !== undefined) updates.member_count = params.member_count
         if (params.county_and_state !== undefined) updates.county_and_state = params.county_and_state
@@ -160,7 +180,23 @@ Note: signed records (status='signed') cannot be updated.`,
           if (params.status === "awaiting_signature") {
             const resolvedCounty = (params.county_and_state as string | undefined) || (ss4.county_and_state as string | undefined)
             if (!resolvedCounty) {
-              return { content: [{ type: "text" as const, text: `Error: Cannot advance SS-4 for ${ss4.company_name} to awaiting_signature — county_and_state (Line 6) is blank. Line 6 is sourced from the account's Registered Agent address. Add or correct the Registered Agent address on the account, then re-run ss4_update — the value will populate automatically. If the RA address is correct but unrecognized by the helper, set county_and_state explicitly: ss4_update(..., county_and_state: "<County>, <State>").` }] }
+              return withSwitch(`Error: Cannot advance SS-4 for ${ss4.company_name} to awaiting_signature — county_and_state (Line 6) is blank. Line 6 is sourced from the account's Registered Agent address. Add or correct the Registered Agent address on the account, then re-run ss4_update — the value will populate automatically. If the RA address is correct but unrecognized by the helper, set county_and_state explicitly: ss4_update(..., county_and_state: "<County>, <State>").`)
+            }
+            // ROUND-5 PROMOTION GATE — never arm a signing link for an orphaned
+            // responsible party (deleted/repointed member, never picked). Same
+            // shared check as send-ss4 / resend-ss4.
+            const { assertSs4PartyPromotable } = await import("@/lib/operations/ss4-refresh")
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const { data: gateRow } = await (supabaseAdmin as any)
+              .from("ss4_applications")
+              .select("id, contact_id, entity_type, responsible_party_name")
+              .eq("id", ss4.id)
+              .single()
+            if (gateRow) {
+              const gate = await assertSs4PartyPromotable({ account_id: params.account_id, ss4: gateRow })
+              if (gate.ok === false) {
+                return withSwitch(`Error: ${gate.message}`)
+              }
             }
           }
           updates.status = params.status
@@ -168,13 +204,22 @@ Note: signed records (status='signed') cannot be updated.`,
           updates.status = "draft"
         }
 
-        const { error: updateErr } = await supabaseAdmin
+        // Signed-row guard on the residual write too (council minor): the client
+        // may sign between the re-fetch above and this update — the same TOCTOU
+        // pattern the switch core and refresh already carry.
+        const { data: updatedRows, error: updateErr } = await supabaseAdmin
           .from("ss4_applications")
           .update(updates)
           .eq("id", ss4.id)
+          .in("status", ["draft", "awaiting_signature"])
+          .is("signed_at", null)
+          .select("id")
 
         if (updateErr) {
-          return { content: [{ type: "text" as const, text: `Error updating SS-4: ${updateErr.message}` }] }
+          return withSwitch(`Error updating SS-4: ${updateErr.message}`)
+        }
+        if (!updatedRows || updatedRows.length === 0) {
+          return withSwitch(`Error: the SS-4 for ${ss4.company_name} was signed while this update was running — the remaining fields were left untouched.`)
         }
 
         await logAction({
@@ -225,6 +270,7 @@ Note: signed records (status='signed') cannot be updated.`,
               `SS-4 updated for ${ss4.company_name}`,
               `Status: ${newStatus}`,
               `Fields updated: ${Object.keys(updates).filter(k => k !== "updated_at" && k !== "status").join(", ") || "none"}`,
+              switchNote,
               resetNote,
               notifyNote,
               ``,
