@@ -80,15 +80,19 @@ export default function SS4SignPage() {
           return
         }
 
-        // Verify access code — ALWAYS, including portal mode (admin preview is
-        // the only exemption). The old `!isPortal` skip let anyone append
-        // ?portal=true to bypass the code check entirely — after a signer
-        // switch, the departed member's dead link came back to life that way
-        // (round-5 council, 2026-08-11). The legitimate portal wrapper
-        // (app/portal/sign/ss4) is contact-gated server-side and always embeds
-        // the CURRENT access code, so it never needed the skip. ?portal=true
-        // remains layout/postMessage-only.
-        if (!isAdmin && data.access_code !== code) {
+        // Verify access code — ALWAYS. Neither the portal flag NOR the admin
+        // preview flag skips it. A query-string flag is not a credential
+        // (2026-07-21 incident, lib/auth/staff-preview.ts): the old skips let a
+        // departed signer append ?portal=true (their own re-sent iframe link)
+        // OR ?preview=td (the internal admin convention) to bypass the code and
+        // reach a signable form after a signer switch (round-5/6 council).
+        // BOTH legitimate flows already carry the CURRENT code — every admin
+        // preview link is /ss4/{token}/{access_code}?preview=td, and the portal
+        // wrapper (contact-gated) embeds the current code — so enforcing the
+        // check unconditionally breaks neither. The flags remain
+        // layout/postMessage-only. Real staff-session preview is enforced
+        // server-side on the PDF/upload routes via isStaffPreview, unchanged.
+        if (data.access_code !== code) {
           setError("Invalid access code.")
           setLoading(false)
           return
