@@ -80,8 +80,15 @@ export default function SS4SignPage() {
           return
         }
 
-        // Verify access code (skip for admin/portal)
-        if (!isAdmin && !isPortal && data.access_code !== code) {
+        // Verify access code — ALWAYS, including portal mode (admin preview is
+        // the only exemption). The old `!isPortal` skip let anyone append
+        // ?portal=true to bypass the code check entirely — after a signer
+        // switch, the departed member's dead link came back to life that way
+        // (round-5 council, 2026-08-11). The legitimate portal wrapper
+        // (app/portal/sign/ss4) is contact-gated server-side and always embeds
+        // the CURRENT access code, so it never needed the skip. ?portal=true
+        // remains layout/postMessage-only.
+        if (!isAdmin && data.access_code !== code) {
           setError("Invalid access code.")
           setLoading(false)
           return
