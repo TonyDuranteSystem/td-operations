@@ -321,8 +321,8 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
               <div className="contract-sig-label">Service Provider</div>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <div className="contract-sig-static"><img src="/images/logo.jpg" alt="Tony Durante" style={{ maxHeight: 40, opacity: 0.8 }} /></div>
-              <div className="contract-sig-field">Name: Tony Durante</div>
-              <div className="contract-sig-field">Title: Managing Member</div>
+              <div className="contract-sig-field">Name: Antonio Noel Durante</div>
+              <div className="contract-sig-field">Title: Executive Director</div>
               <div className="contract-sig-date">Date: {today()}</div>
             </div>
             <div className="contract-sig-block">

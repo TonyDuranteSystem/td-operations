@@ -363,7 +363,7 @@ export function extractOfferTokenFromNotes(notes: string | null | undefined): st
 export async function getInProgressFormations(contactId: string): Promise<InProgressFormation[]> {
   const { data: sds } = await supabaseAdmin
     .from('service_deliveries')
-    .select('id, service_name, notes')
+    .select('id, service_name, notes, source_offer_token')
     .eq('contact_id', contactId)
     .eq('service_type', 'Company Formation')
     .is('account_id', null)
@@ -402,7 +402,16 @@ export async function getInProgressFormations(contactId: string): Promise<InProg
       ? ((formationOffers ?? []).find(o => o.lead_id)?.lead_id ?? null)
       : null
 
-  function resolveLeadId(notes: string | null): string | null {
+  function resolveLeadId(sourceOfferToken: string | null, notes: string | null): string | null {
+    // The stamped offer token is authoritative when present: activate-service
+    // has always written it, and since dev job ca788354 the formation_setup
+    // handler stamps it too (its notes name the job+submission, NOT the offer,
+    // so the notes-parsing path below never matches handler-created SDs — that
+    // mismatch sent Antonio's dashboard card to the WRONG company's wizard
+    // during the 2026-08-11 QA pass).
+    if (sourceOfferToken && tokenToLead.has(sourceOfferToken)) {
+      return tokenToLead.get(sourceOfferToken) ?? null
+    }
     const token = extractOfferTokenFromNotes(notes)
     if (token && tokenToLead.has(token)) return tokenToLead.get(token) ?? null
     // Fallback only when there is exactly one in-progress formation, so we
@@ -435,7 +444,7 @@ export async function getInProgressFormations(contactId: string): Promise<InProg
       (sd.service_name ? sd.service_name.replace(/^Company Formation - /, '') : '') ||
       'New company (in formation)',
     stage: 'formation' as const,
-    leadId: resolveLeadId(sd.notes as string | null),
+    leadId: resolveLeadId((sd as { source_offer_token?: string | null }).source_offer_token ?? null, sd.notes as string | null),
   }))
 }
 

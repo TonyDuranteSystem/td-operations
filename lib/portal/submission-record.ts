@@ -104,3 +104,31 @@ export function buildSubmissionRecord(
 
   return record
 }
+
+/**
+ * Never DOWNGRADE an already-reviewed submission back to "completed"
+ * (dev job ca788354).
+ *
+ * The submission upsert keys on `token`, and a formation token is stable for
+ * the same person + lead + calendar year. So a client re-opening a submitted
+ * wizard lands on the SAME row, and the record above unconditionally carries
+ * `status: "completed"` — silently undoing the review. Antonio, 2026-08-10: a
+ * refused re-submit must not reset the reviewed status or the original
+ * completion timestamps.
+ *
+ * Safe in both directions: when the run IS a legitimate continuation, the
+ * background handler sets "reviewed" again a few seconds later anyway. The only
+ * behaviour removed is the downgrade itself.
+ *
+ * Returns the record to write — the same object when there is nothing to
+ * preserve, so callers can use it unconditionally.
+ */
+export function preserveReviewedStatus(
+  record: Record<string, unknown>,
+  existingStatus: string | null | undefined,
+): Record<string, unknown> {
+  if (existingStatus === "reviewed" && record.status === "completed") {
+    return { ...record, status: "reviewed" }
+  }
+  return record
+}
