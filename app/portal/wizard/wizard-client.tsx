@@ -951,26 +951,49 @@ export function WizardClient({
     )
   }
 
-  // Locked screen — Antonio has reviewed the data, no more editing
+  // Locked screen — the data has moved past the point where the client may
+  // still change it themselves.
+  //
+  // The copy is per-wizard. It used to be hardcoded to the TAX wording, which
+  // was fine while `isLocked` was computed for tax only — but a locked FORMATION
+  // client was then told "Your tax information has been reviewed", which is
+  // both wrong and dead-ends them (dev job ca788354, caught in sandbox
+  // click-through). Formation clients are pointed at chat instead, per
+  // Antonio's ruling: changes after we begin work go through us.
   if (isLocked) {
+    const lockedCopy =
+      wizardType === 'formation'
+        ? {
+            title: locale === 'it' ? 'Dati già inviati' : 'Your details are with us',
+            body:
+              locale === 'it'
+                ? 'Abbiamo iniziato a lavorare sulla tua società, quindi questo modulo non è più modificabile. Se qualcosa deve essere corretto, scrivicelo in chat e ce ne occupiamo noi.'
+                : 'We have started work on your company, so this form can no longer be edited. If something needs correcting, send us a message in chat and we will take care of it.',
+            cta: locale === 'it' ? 'Vai alla chat' : 'Message us in chat',
+            href: '/portal/chat',
+          }
+        : {
+            title: locale === 'it' ? 'Informazioni fiscali in elaborazione' : 'Tax information reviewed',
+            body:
+              locale === 'it'
+                ? 'Le tue informazioni fiscali sono state esaminate e sono in fase di elaborazione. Non sono necessarie ulteriori azioni da parte tua.'
+                : 'Your tax information has been reviewed and is being processed. No further action is required from you.',
+            cta: locale === 'it' ? 'Torna alla Dashboard' : 'Back to Dashboard',
+            href: '/portal',
+          }
+
     return (
       <div className="max-w-lg mx-auto text-center py-16">
         <div className="h-16 w-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6">
           <Lock className="h-8 w-8 text-blue-600" />
         </div>
-        <h2 className="text-2xl font-bold mb-2">
-          {locale === 'it' ? 'Informazioni fiscali in elaborazione' : 'Tax information reviewed'}
-        </h2>
-        <p className="text-zinc-500 mb-6">
-          {locale === 'it'
-            ? 'Le tue informazioni fiscali sono state esaminate e sono in fase di elaborazione. Non sono necessarie ulteriori azioni da parte tua.'
-            : 'Your tax information has been reviewed and is being processed. No further action is required from you.'}
-        </p>
+        <h2 className="text-2xl font-bold mb-2">{lockedCopy.title}</h2>
+        <p className="text-zinc-500 mb-6">{lockedCopy.body}</p>
         <a
-          href="/portal"
+          href={lockedCopy.href}
           className="inline-flex items-center px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
         >
-          {locale === 'it' ? 'Torna alla Dashboard' : 'Back to Dashboard'}
+          {lockedCopy.cta}
         </a>
       </div>
     )

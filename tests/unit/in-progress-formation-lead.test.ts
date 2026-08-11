@@ -34,3 +34,19 @@ describe('extractOfferTokenFromNotes', () => {
     expect(extractOfferTokenFromNotes('created from offer abc_123-xy')).toBe('abc_123-xy')
   })
 })
+
+describe('handler-created SD notes do NOT match the offer-notes pattern (dev job ca788354)', () => {
+  // The formation_setup handler's notes name the JOB and SUBMISSION — not the
+  // offer — so the notes-parsing path must not fire on them. Their lead resolves
+  // through source_offer_token instead (made authoritative after Antonio's
+  // dashboard card opened the WRONG company's wizard during the 2026-08-11 QA
+  // pass: my seeded/handler-shaped SD had no offer-notes, the resolver fell back
+  // to "newest formation offer", and that was the OTHER company's).
+  it('returns null for the handler note shape rather than a false token', () => {
+    expect(
+      extractOfferTokenFromNotes(
+        'Created by formation_setup job 1fd98839-3187-44e9-962d-088be96463d8 from submission 27fb5ed8-ae7a-4a75-a794-23a3029c0c55.',
+      ),
+    ).toBeNull()
+  })
+})

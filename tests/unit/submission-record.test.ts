@@ -17,6 +17,7 @@
 import { describe, it, expect } from "vitest"
 import {
   buildSubmissionRecord,
+  preserveReviewedStatus,
   type SubmissionRecordInput,
 } from "@/lib/portal/submission-record"
 import { SUBMISSION_TABLES } from "@/lib/portal/wizard-map"
@@ -140,5 +141,29 @@ describe("buildSubmissionRecord — per-table column rules", () => {
   it("tax_year is omitted when null even on tax_return", () => {
     const r = buildSubmissionRecord("tax_return_submissions", { ...MAXIMAL_INPUT, tax_year: null })
     expect(r).not.toHaveProperty("tax_year")
+  })
+})
+
+describe('preserveReviewedStatus — a re-submit must not undo a review (dev job ca788354)', () => {
+  it('keeps "reviewed" instead of downgrading it to "completed"', () => {
+    const record = { token: 'portal-x-2026-abcd1234', status: 'completed' }
+    expect(preserveReviewedStatus(record, 'reviewed').status).toBe('reviewed')
+  })
+
+  it('leaves a first submission alone (no prior row)', () => {
+    const record = { token: 'portal-x-2026-abcd1234', status: 'completed' }
+    expect(preserveReviewedStatus(record, null).status).toBe('completed')
+    expect(preserveReviewedStatus(record, undefined).status).toBe('completed')
+  })
+
+  it('does not resurrect a status the new record did not set', () => {
+    const record = { token: 'portal-x-2026-abcd1234', status: 'draft' }
+    expect(preserveReviewedStatus(record, 'reviewed').status).toBe('draft')
+  })
+
+  it('does not mutate the record it was given', () => {
+    const record = { token: 'portal-x-2026-abcd1234', status: 'completed' }
+    preserveReviewedStatus(record, 'reviewed')
+    expect(record.status).toBe('completed')
   })
 })
