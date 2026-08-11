@@ -231,8 +231,37 @@ export function validatePaymentPlan(raw: unknown): PlanValidation {
  * than the normal route. Same pattern as the price-difference refusal and the empty event registry:
  * excluded and loud beats included and wrong.
  *
- * LIFTED BY: the referral-issuer job (a caller-supplied key + an accumulating referral row). When
- * that lands, delete this check and flip the accrual interlock — in that order, and verify both.
+ * ── THE LIFT ORDER, and it is an ORDER ────────────────────────────────────────────────────
+ *
+ * 1. Job `a5e61a46` lands — commission timing becomes recorded DATA rather than an assumption
+ *    hardcoded to activation. That job carries all four parts: timing recorded (null reading as
+ *    activation, so every existing offer is unchanged); the issuer accepting a caller-supplied key
+ *    while still producing today's key when none is passed; the referral row ACCUMULATING and only
+ *    reaching "credited" when the recorded commission is fully credited; and the self-heal reading
+ *    recorded intent instead of inferring it from an empty field.
+ * 2. THEN delete this check.
+ * 3. THEN flip `ISSUER_SUPPORTS_PER_PART_KEY` in `tranche-commission.ts`.
+ *
+ * Never out of order, and verify each step rather than assuming the previous one landed.
+ *
+ * ── WHY A REFUSAL WAS THE HONEST INTERIM ANSWER, not a shortcut ───────────────────────────
+ *
+ * It refuses at AUTHORING — before any money moves, before a client sees a figure, before a
+ * partner is owed anything. And it costs nothing today: no production offer carries both a plan
+ * and a referrer, so nothing that exists is blocked by it.
+ *
+ * The alternative considered and rejected was a half-built accrual — crediting per part on top of
+ * machinery that cannot key a second credit. That would have been a patch: it would have looked
+ * like the feature working while silently under-paying a partner, which is the failure mode that
+ * leaves nothing looking wrong afterwards. A refusal is visible the moment someone hits it.
+ *
+ * ── ONE FURTHER OPTION, REJECTED, AND THE REASON IS THE POINT ─────────────────────────────
+ *
+ * Teaching the self-heal to skip a plan-bearing offer was the smaller-looking change and it was
+ * rejected as the WRONG SHAPE rather than the wrong size: the self-heal is not broken because it
+ * does not know about plans, it is broken because it INFERS INTENT FROM AN EMPTY FIELD. A skip
+ * condition stacks a second guess on the first, and the next thing that legitimately defers a
+ * commission trips it again. That is why `a5e61a46` makes intent explicit instead.
  *
  * The message travels to whoever is authoring, in their language, and says what to do rather than
  * just refusing (R099).

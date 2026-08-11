@@ -172,6 +172,9 @@ export function trancheCommissionKey(offerToken: string, seq: number): string {
  * reading why it exists. That is the point: the previous version of this protection was a comment,
  * and a comment does not stop anybody.
  *
+ * ⛔ FLIP THIS LAST. The order is: job `a5e61a46` lands → delete the authoring refusal in
+ * `payment-plan.ts::refusePlanWithReferralPartner` → then flip this. Never before.
+ *
  * TO FLIP IT, both must be true — verify them, do not assume:
  *   1. the credit-note issuer accepts a caller-supplied idempotency key and uses it;
  *   2. the referral row ACCUMULATES the credited amount rather than assigning it, and its status
