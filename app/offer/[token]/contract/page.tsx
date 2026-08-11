@@ -50,6 +50,7 @@ const CL = {
     afterPayment: 'Once payment is received and verified, we will begin working on your LLC immediately.',
     backToOffer: '&larr; Back to Offer',
     signed: 'Contract signed and submitted! Check your client portal for next steps.',
+    signedNoPaymentNote: 'You can download your signed copy below. Message us in the app and we will take it from here.',
     uploaded: 'Uploaded',
   },
   it: {
@@ -75,6 +76,7 @@ const CL = {
     afterPayment: 'Una volta ricevuto e verificato il pagamento, inizieremo subito a lavorare sulla tua LLC.',
     backToOffer: '&larr; Torna all&#39;Offerta',
     signed: 'Contratto firmato e inviato! Controlla il portale clienti per i prossimi passi.',
+    signedNoPaymentNote: 'Puoi scaricare la tua copia firmata qui sotto. Scrivici nella app e ci occupiamo noi del resto.',
     uploaded: 'Caricata',
   },
 }
@@ -712,6 +714,34 @@ export default function ContractPage() {
       const hasBank = !!offer.bank_details
       const successEl = document.getElementById('success-state')
 
+      // Shared by BOTH post-sign panels (with and without payment): serve the
+      // signed PDF from the blob we just generated, or re-fetch it through the
+      // access-code-gated doorway when the blob is gone (e.g. after a reload).
+      const attachPdfDownload = () => {
+        document.getElementById('download-pdf-btn')?.addEventListener('click', async () => {
+          try {
+            let blob = pdfBlobRef.current
+            if (!blob) {
+              const res = await fetch(`/api/offer/${encodeURIComponent(offer.token)}/contract-pdf?code=${encodeURIComponent(offer.access_code || '')}`)
+              if (res.ok) {
+                const { url: signedUrl } = await res.json().catch(() => ({ url: null }))
+                if (signedUrl) {
+                  const dl = await fetch(signedUrl)
+                  if (dl.ok) blob = await dl.blob()
+                }
+              }
+            }
+            if (!blob) { alert('PDF not available. Please contact support.'); return }
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `Tony_Durante_Contract_${offer.token}.pdf`
+            a.click()
+            URL.revokeObjectURL(url)
+          } catch { alert('Download failed. Please contact support.') }
+        })
+      }
+
       if ((hasCard || hasBank) && successEl && contractBodyRef.current) {
         contractBodyRef.current.style.display = 'none'
         let sh = '<div class="contract-success-panel"><div class="contract-success-icon">&#10004;</div>'
@@ -782,32 +812,7 @@ export default function ContractPage() {
         successEl.innerHTML = sh
         successEl.style.display = 'block'
 
-        // Download PDF handler
-        document.getElementById('download-pdf-btn')?.addEventListener('click', async () => {
-          try {
-            let blob = pdfBlobRef.current
-            if (!blob) {
-              // Server doorway: verifies the offer's access code, signs the EXACT
-              // recorded contract path, returns a one-minute link. Replaces the old
-              // anon list()+download(newest) so signed-contracts needs no anon read.
-              const res = await fetch(`/api/offer/${encodeURIComponent(offer.token)}/contract-pdf?code=${encodeURIComponent(offer.access_code || '')}`)
-              if (res.ok) {
-                const { url: signedUrl } = await res.json().catch(() => ({ url: null }))
-                if (signedUrl) {
-                  const dl = await fetch(signedUrl)
-                  if (dl.ok) blob = await dl.blob()
-                }
-              }
-            }
-            if (!blob) { alert('PDF not available. Please contact support.'); return }
-            const url = URL.createObjectURL(blob)
-            const a = document.createElement('a')
-            a.href = url
-            a.download = `Tony_Durante_Contract_${offer.token}.pdf`
-            a.click()
-            URL.revokeObjectURL(url)
-          } catch { alert('Download failed. Please contact support.') }
-        })
+        attachPdfDownload()
 
         // Bank choice click handler — show bank panel, hide choice buttons
         if (hasBank) {
@@ -860,6 +865,26 @@ export default function ContractPage() {
             }
           })
         }
+      } else if (successEl && contractBodyRef.current) {
+        // No payment attached to this offer (payment_type 'none', no links, no
+        // bank details). Before this branch existed the ONLY post-sign feedback
+        // was a status line while the full contract stayed on screen — a client
+        // who had just signed a legal document got no confirmation screen at
+        // all (Antonio, sandbox QA 2026-08-11). Same panel as the paid path,
+        // minus the payment options.
+        contractBodyRef.current.style.display = 'none'
+        let sh = '<div class="contract-success-panel"><div class="contract-success-icon">&#10004;</div>'
+        sh += `<h2 style="color:var(--c-green);font-size:18pt;margin-bottom:8px;">${cl.successTitle}</h2>`
+        sh += `<p style="font-size:12pt;margin-bottom:12px;">${cl.signed}</p>`
+        sh += `<p style="font-size:10pt;color:var(--c-muted);margin-bottom:20px;">${cl.signedNoPaymentNote}</p>`
+        sh += '<div style="margin-top:8px;padding-top:16px;border-top:1px solid #d4e8d4;">'
+        sh += '<button id="download-pdf-btn" style="padding:10px 32px;font-size:14px;font-weight:600;background:#0A3161;color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:Georgia,serif;">Download Signed PDF</button>'
+        sh += '</div>'
+        sh += `<a href="/offer/${encodeURIComponent(offer.token)}" class="contract-success-link">${cl.backToOffer}</a>`
+        sh += '</div>'
+        successEl.innerHTML = sh
+        successEl.style.display = 'block'
+        attachPdfDownload()
       } else {
         setStatusMsg(cl.signed)
         setStatusType('success')
