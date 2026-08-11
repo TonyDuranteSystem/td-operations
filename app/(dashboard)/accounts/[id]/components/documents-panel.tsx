@@ -145,6 +145,26 @@ export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, o
     return appBaseUrl
   })()
 
+  // Open the OA as the client sees it. The client-facing host has no staff
+  // session, and the bare ?preview=td flag no longer skips the email gate, so we
+  // mint a short-lived staff-preview pass here (on the CRM host, where the staff
+  // session exists) and carry it. The pass also suppresses view tracking, so a
+  // staff preview never registers as "client viewed". Falls back to the plain
+  // coded link if the mint fails — staff can then enter the client email.
+  const handleOaPreview = async (token: string, accessCode: string | null | undefined) => {
+    const base = accessCode
+      ? `${previewBase}/operating-agreement/${token}/${accessCode}?preview=td`
+      : `${previewBase}/operating-agreement/${token}?preview=td`
+    try {
+      const res = await fetch(`/api/crm/oa-preview-pass?token=${encodeURIComponent(token)}`)
+      const data = await res.json().catch(() => ({}))
+      const url = res.ok && data.pass ? `${base}&pass=${encodeURIComponent(data.pass)}` : base
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch {
+      window.open(base, '_blank', 'noopener,noreferrer')
+    }
+  }
+
   const handleCancelDraft = async (token: string) => {
     if (!window.confirm('Cancel this draft lease? It will be permanently deleted — this cannot be undone. (Only drafts can be cancelled; a sent or signed lease is never touched.)')) return
     setCancellingDoc('lease')
@@ -358,28 +378,25 @@ export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, o
                     )}
 
                     {/* Preview link */}
-                    {doc.data.token && (
+                    {doc.data.token && doc.key === 'oa' && (
+                      // OA preview goes through a minted staff-preview pass (see
+                      // handleOaPreview): the client-facing host has no staff
+                      // session and the bare ?preview=td flag no longer skips the
+                      // email gate or tracking, so a plain link would ask staff
+                      // for the client's email and register a false "client viewed".
+                      <button
+                        type="button"
+                        onClick={() => handleOaPreview(doc.data.token as string, doc.data.access_code)}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded text-muted-foreground hover:bg-zinc-100 transition-colors"
+                        title="Open the document as the client sees it (no email is sent, nothing is marked as opened)"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        View
+                      </button>
+                    )}
+                    {doc.data.token && doc.key !== 'oa' && (
                       <a
                         href={
-                          // The access code is REQUIRED. The OA page verifies it
-                          // server-side now, and ?preview=td no longer skips that
-                          // check — the staff session cookie is scoped to the CRM
-                          // host and is absent on the client-facing domain, so
-                          // preview always falls back to the code. The sibling
-                          // ss4 link below already carried it; this one did not.
-                          // The access code is REQUIRED: the OA page verifies it
-                          // server-side now, and ?preview=td no longer skips that
-                          // check (the staff session cookie is scoped to the CRM
-                          // host and is absent on the client-facing domain).
-                          // Fall back to the codeless URL for any legacy row that
-                          // has no code, rather than interpolating "undefined".
-                          // Base URL is the CURRENT environment's client domain (prod vs
-                          // sandbox), passed from the server — never hardcoded, or a sandbox
-                          // View opens the production document (different access code →
-                          // "Invalid access code"). R012.
-                          doc.key === 'oa' ? (doc.data.access_code
-                            ? `${previewBase}/operating-agreement/${doc.data.token}/${doc.data.access_code}?preview=td`
-                            : `${previewBase}/operating-agreement/${doc.data.token}?preview=td`) :
                           // Lease preview MUST carry the access code. On the client-facing
                           // domain the staff session cookie is absent, so ?preview=td alone
                           // does not authenticate — the page falls back to requiring the code

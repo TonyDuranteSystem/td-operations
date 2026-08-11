@@ -56,19 +56,14 @@ const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
   // and revoking this is the tracked step 2 (mirrors the OA).
   lease_agreements: ["UPDATE"],
   member_info_requests: ["SELECT"],
-  // Signing moved SERVER-SIDE for the canonical page (`[token]/[code]`): it now
-  // POSTs to /api/operating-agreement/[token]/sign, which writes with the SERVICE
-  // key. That fully removed the anon `oa_signatures` write — hence oa_signatures
-  // no longer appears here.
-  //
-  // `oa_agreements: [UPDATE]` REMAINS for one reason only: the LEGACY bare-token
-  // page `app/operating-agreement/[token]/page.tsx` still browser-signs the
-  // no-code case (staff preview link) and updates oa_agreements with the anon key
-  // (line ~279). Retiring/redirecting that page is the tracked follow-up that
-  // removes this last entry and unblocks REVOKING the anon UPDATE grant — the
-  // final step that closes the anon-write hole (dev_task 023c7d06). Until then the
-  // grant must stay or that page breaks silently.
-  oa_agreements: ["UPDATE"],
+  // NO oa_agreements / oa_signatures entry — the browser no longer writes EITHER
+  // OA table with the anon key. The canonical `[token]/[code]` page moved signing
+  // fully server-side (/api/operating-agreement/[token]/sign, service key), and
+  // as of 2026-08-11 the LEGACY bare-token page is a pure redirect — its old
+  // browser-side anon write (html2pdf screenshot + status/pdf update) is gone.
+  // That closes the last anon-write hole and unblocks revoking the anon UPDATE
+  // grant on oa_agreements (migration 20260811-2100). The signed-oa BUCKET stays
+  // anon-reachable (the canonical page still downloads signature images from it).
   offers: ["SELECT", "UPDATE"],
   onboarding_submissions: ["SELECT", "UPDATE"],
   signature_requests: ["SELECT", "UPDATE"],

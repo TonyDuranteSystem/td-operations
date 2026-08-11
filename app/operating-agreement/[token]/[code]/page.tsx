@@ -186,6 +186,11 @@ function OperatingAgreementCodeContent() {
     if (signerCode) qs.set('signer', signerCode)
     if (adminMode) qs.set('preview', 'td')
     if (portalMode) qs.set('portal', 'true')
+    // The short-lived pass minted by the contact-gated portal wrapper (or CRM
+    // staff preview). It is what lets the embedded iframe skip the email gate now
+    // that the bare ?portal=true / ?preview=td flags no longer do.
+    const passToken = searchParams.get('pass')
+    if (passToken) qs.set('pass', passToken)
 
     let res: Response
     try {
@@ -939,7 +944,7 @@ function OperatingAgreementCodeContent() {
           </p>
           <div style={{ textAlign: 'center', marginBottom: canSign ? 16 : 0 }}>
             <a
-              href={`/api/operating-agreement/${token}/pdf?code=${encodeURIComponent(accessCode)}`}
+              href={`/api/operating-agreement/${token}/pdf?code=${encodeURIComponent(accessCode)}${searchParams.get('signer') ? `&signer=${encodeURIComponent(searchParams.get('signer')!)}` : ''}`}
               target="_blank"
               rel="noopener noreferrer"
               style={{ fontSize: 14, color: '#0A3161', textDecoration: 'underline', fontFamily: 'Georgia, serif' }}

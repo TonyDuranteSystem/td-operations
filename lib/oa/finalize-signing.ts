@@ -28,6 +28,7 @@ import { generateOperatingAgreementPDF, type OASignatureBlock } from "@/lib/pdf/
 import { appendCertificatePage, type CertificateSigner } from "@/lib/esign/certificate"
 import { toPublicMembers } from "@/lib/oa/public-view"
 import { reportSystemError } from "@/lib/system-errors"
+import { internalWebhookServerHeaders } from "@/lib/webhook-internal-auth"
 import type { OAData, OAMember } from "@/lib/types/oa-templates"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -193,7 +194,13 @@ export async function finalizeOaAgreement(oaId: string): Promise<FinalizeResult>
       updated_at: now,
     })
     .eq("id", agreement.id)
-    .neq("status", "signed")
+    // Flip ONLY from a pre-terminal state. `.neq('status','signed')` alone would
+    // also match a 'voided' row — and die-on-change can void this agreement in the
+    // seconds this function spends rendering the PDF (a member edit fires exactly
+    // when signing has stalled). Resurrecting a voided agreement to 'signed' would
+    // execute a document built from the OLD, now-invalid roster. Whitelisting the
+    // live states makes a mid-render void win: the flip finds no row and we bail.
+    .in("status", ["sent", "viewed", "draft", "partially_signed"])
     .select("id")
   if (flipErr) return { ok: false, error: `flip to signed: ${flipErr.message}` }
   if (!flipped || flipped.length === 0) return { ok: true, skipped: "already_signed" }
@@ -206,7 +213,7 @@ export async function finalizeOaAgreement(oaId: string): Promise<FinalizeResult>
   try {
     const res = await fetch(`${APP_BASE_URL}/api/oa-signed`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...internalWebhookServerHeaders() },
       body: JSON.stringify({ oa_id: agreement.id, token: agreement.token }),
     })
     if (!res.ok) {

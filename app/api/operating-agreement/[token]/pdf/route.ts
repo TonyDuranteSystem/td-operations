@@ -52,7 +52,7 @@ import { checkRateLimit, getRateLimitKey } from "@/lib/portal/rate-limit"
 import { isStaffPreview } from "@/lib/auth/staff-preview"
 import { normalizeEntityType } from "@/lib/portal/entity-type"
 import { generateOperatingAgreementPDF } from "@/lib/pdf/operating-agreement-pdf"
-import { OA_AGREEMENT_SELECT, toPublicMembers } from "@/lib/oa/public-view"
+import { OA_AGREEMENT_SELECT, OA_SIGNATURE_SELECT, resolveSignerIndex, signerLinkState, toPublicMembers } from "@/lib/oa/public-view"
 import type { OAData, OAMember } from "@/lib/types/oa-templates"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -62,6 +62,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
   const { token } = await params
   const url = new URL(req.url)
   const code = url.searchParams.get("code") || ""
+  const signerCode = url.searchParams.get("signer")
   const isPreview = await isStaffPreview(url.searchParams.get("preview") === "td")
 
   // Throughput limit. The shared access guard throttles WRONG codes; it does not
@@ -142,6 +143,38 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
       },
       { status: 409 },
     )
+  }
+
+  // Die-on-change + expiry, when a specific co-signer is addressed. A dead link
+  // blocks READING the document too (Antonio, 2026-08-11), and the draft is the
+  // document — so a revoked/expired co-signer cannot pull it here either. The
+  // shared-code holder (SMLLC / the primary opening the portal) sends no signer
+  // code and is unaffected; the per-signer link is what expires.
+  if (signerCode) {
+    const { data: sigRows } = await db
+      .from("oa_signatures")
+      .select(OA_SIGNATURE_SELECT)
+      .eq("oa_id", agreement.id)
+      .order("member_index")
+    const signatures = sigRows ?? []
+    const idx = resolveSignerIndex(signatures, signerCode)
+    if (idx === null) {
+      return NextResponse.json({ error: "Invalid signing link." }, { status: 403 })
+    }
+    const row = signatures.find((s: { member_index: number }) => s.member_index === idx)
+    const state = row ? signerLinkState(row) : "ok"
+    if (state === "revoked") {
+      return NextResponse.json(
+        { error: "This signing link is no longer valid because the company's members changed. Please ask the company owner to re-issue it from the portal." },
+        { status: 403 },
+      )
+    }
+    if (state === "expired") {
+      return NextResponse.json(
+        { error: "This signing link has expired. Please ask the company owner to re-send it from the portal." },
+        { status: 403 },
+      )
+    }
   }
 
   // Multi-member is entity type AND more than one signer — the same test the

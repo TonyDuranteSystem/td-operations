@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { explainFailure } from "@/lib/errors/explain-failure"
 import { refreshSS4, type Ss4RefreshResult } from "@/lib/operations/ss4-refresh"
+import { autoRefreshOa } from "@/lib/operations/oa-refresh"
 
 export const dynamic = "force-dynamic"
 
@@ -21,6 +22,15 @@ async function autoRefreshSs4(accountId: string): Promise<Pick<Ss4RefreshResult,
     console.error("[members] SS-4 auto-refresh failed (non-fatal):", err)
     return null
   }
+}
+
+/**
+ * Sibling of the SS-4 refresh, for the Operating Agreement: a material roster
+ * change kills the co-signer links (die-on-change). Best-effort. Returned to the
+ * CRM UI as `oa_refresh` so staff can see when an OA was voided by their edit.
+ */
+async function autoRefreshOaForEdit(accountId: string) {
+  return autoRefreshOa(accountId, "crm-members-edit")
 }
 
 // GET /api/accounts/[id]/members — list all members
@@ -121,7 +131,8 @@ export async function POST(
     }
 
     const ss4Refresh = await autoRefreshSs4(params.id)
-    return NextResponse.json({ data, ss4_refresh: ss4Refresh }, { status: 201 })
+    const oaRefresh = await autoRefreshOaForEdit(params.id)
+    return NextResponse.json({ data, ss4_refresh: ss4Refresh, oa_refresh: oaRefresh }, { status: 201 })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
@@ -170,7 +181,8 @@ export async function PATCH(
     if (error) return NextResponse.json({ error: explainFailure(error).message }, { status: 400 })
     if (!data) return NextResponse.json({ error: "Member not found" }, { status: 404 })
     const ss4Refresh = await autoRefreshSs4(params.id)
-    return NextResponse.json({ data, ss4_refresh: ss4Refresh })
+    const oaRefresh = await autoRefreshOaForEdit(params.id)
+    return NextResponse.json({ data, ss4_refresh: ss4Refresh, oa_refresh: oaRefresh })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
@@ -197,7 +209,8 @@ export async function DELETE(
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     const ss4Refresh = await autoRefreshSs4(params.id)
-    return NextResponse.json({ success: true, ss4_refresh: ss4Refresh })
+    const oaRefresh = await autoRefreshOaForEdit(params.id)
+    return NextResponse.json({ success: true, ss4_refresh: ss4Refresh, oa_refresh: oaRefresh })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }

@@ -51,3 +51,15 @@ export function verifyInternalWebhookSecret(req: { headers: { get(name: string):
 }
 
 export const INTERNAL_WEBHOOK_HEADER = HEADER
+
+/**
+ * Header a SERVER-side caller attaches to reach an internal-secret-gated webhook
+ * (e.g. /api/oa-signed) from another server route. Uses the server-only
+ * INTERNAL_WEBHOOK_SECRET (never the NEXT_PUBLIC one — this never runs in a
+ * browser bundle). Returns {} when unset, so the call still goes out and the
+ * receiver's own fail-closed check produces the (loud) 401 rather than throwing here.
+ */
+export function internalWebhookServerHeaders(): Record<string, string> {
+  const secret = process.env.INTERNAL_WEBHOOK_SECRET?.trim()
+  return secret ? { [HEADER]: secret } : {}
+}

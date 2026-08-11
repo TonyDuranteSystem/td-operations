@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { emitClientChatEvent } from '@/lib/portal/chat-events'
 import { refreshSS4 } from '@/lib/operations/ss4-refresh'
+import { autoRefreshOa } from '@/lib/operations/oa-refresh'
 import { explainFailure } from '@/lib/errors/explain-failure'
 import { firstDuplicateIndividualIdentity } from '@/lib/members/member-identity'
 import { resolveMemberContactId } from '@/lib/members/resolve-member-contact'
@@ -250,6 +251,12 @@ export async function POST(
   } catch (err) {
     console.error('[member-info] SS-4 auto-refresh failed (non-fatal):', err)
   }
+
+  // 11. Sibling die-on-change for the Operating Agreement: this form REPLACES the
+  //     whole roster, so a member added/removed/re-owned here must kill any live
+  //     unsigned co-signer links (or revoke the unsigned ones on a partially
+  //     signed agreement). The material-diff no-ops a same-people re-submit.
+  await autoRefreshOa(accountId, 'member-info-form')
 
   return NextResponse.json({ success: true, member_count: members.length })
 }

@@ -28,6 +28,9 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { accessCodeError } from "@/lib/esign/access-guard"
 import { isStaffPreview } from "@/lib/auth/staff-preview"
+import { checkRateLimit, recordLoginFailure } from "@/lib/portal/rate-limit"
+import { clientIp } from "@/lib/esign/request-meta"
+import { verifyOaPass } from "@/lib/oa/portal-pass"
 import {
   OA_AGREEMENT_SELECT,
   OA_SIGNATURE_SELECT,
@@ -35,6 +38,7 @@ import {
   emailGateFor,
   emailGateMatches,
   resolveSignerIndex,
+  signerLinkState,
   toPublicAgreement,
   toPublicSignature,
 } from "@/lib/oa/public-view"
@@ -42,17 +46,35 @@ import {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
 
+const VOIDED_MESSAGE =
+  "This Operating Agreement is no longer valid. Please generate a new one from your portal, or contact support@tonydurante.us."
+const REVOKED_MESSAGE =
+  "This signing link is no longer valid because the company's members changed. Please ask the company owner to re-issue it from the portal, or contact support@tonydurante.us."
+const EXPIRED_MESSAGE =
+  "This signing link has expired. Please ask the company owner to re-send it from the portal, or contact support@tonydurante.us."
+
 export async function GET(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params
   const url = new URL(req.url)
   const code = url.searchParams.get("code") || ""
   const signerCode = url.searchParams.get("signer")
+  const passToken = url.searchParams.get("pass")
   // The email-gate answer arrives in a HEADER, never the query string. A query
   // param would put the client's address into every access log and referrer for
   // the life of the deployment — this change exists to stop that class of leak,
   // so it must not introduce a smaller version of it.
   const email = req.headers.get("x-oa-email")
   const isPreview = await isStaffPreview(url.searchParams.get("preview") === "td")
+
+  // Throughput cap — the ONLY thing standing between an access-code holder (or a
+  // legitimate co-signer) and brute-forcing the 8-hex per-signer code space,
+  // which the access-code lockout does not cover (a correct shared code clears
+  // that counter). Keyed by IP + token.
+  const rlKey = `oa-fetch:${clientIp(req) || "unknown"}:${token}`
+  const rl = checkRateLimit(rlKey, 30, 60_000)
+  if (!rl.allowed) {
+    return NextResponse.json({ error: "Too many attempts. Please wait a moment and try again." }, { status: 429 })
+  }
 
   const { data: agreement } = await db
     .from("oa_agreements")
@@ -71,6 +93,15 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
   })
   if (codeErr) return NextResponse.json({ error: codeErr.error }, { status: codeErr.status })
 
+  // A voided agreement is dead — block the READ, not only signing. This does not
+  // depend on the best-effort code rotation: even if rotation failed, the void
+  // status alone withholds the document (EIN, every member's name/address/split).
+  // The portal wrapper already routes a voided OA to "outdated — generate a new
+  // one" before it ever loads this, so a client never reaches this branch.
+  if (agreement.status === "voided") {
+    return NextResponse.json({ error: VOIDED_MESSAGE }, { status: 410 })
+  }
+
   const { data: sigRows } = await db
     .from("oa_signatures")
     .select(OA_SIGNATURE_SELECT)
@@ -83,38 +114,55 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
   // none — but it must never silently resolve to member 0.
   const signerIndex = resolveSignerIndex(signatures, signerCode)
   if (signerCode && signerIndex === null) {
+    // A wrong signer code is a brute-force probe of the per-signer space — make
+    // it cost against the shared IP+token lockout, exactly like a wrong code.
+    recordLoginFailure(`esign:${clientIp(req) || "unknown"}:${token}`)
     return NextResponse.json({ error: "Invalid signing link." }, { status: 403 })
   }
 
-  // Email gate. Staff preview skips it, exactly as the pages did before.
-  // Two flags skip the EMAIL gate — and ONLY the email gate. Neither is a code
-  // bypass: the access code was already required above, and it is the real
-  // credential here.
-  //   ?portal=true  — the embedded portal iframe, exactly as before.
-  //   ?preview=td   — staff previewing from the CRM.
-  // Neither can be upgraded to a session check: both are served from the
-  // client-facing host, and the staff/portal session cookies are scoped to their
-  // own hosts, so they are simply absent on this request. Requiring a session
-  // here does not make it safer — it makes staff preview impossible, which is
-  // what the first version of this change accidentally did.
-  // What preview must NEVER do is sign; that is enforced on the pages, where the
-  // Sign button is gated on `!isAdmin`.
-  // Residual, pre-existing and unchanged: anyone already holding the access code
-  // can append either flag to skip the email step. The email gate is a
-  // convenience check on top of the code, not a control in its own right.
-  const portalMode = url.searchParams.get("portal") === "true"
-  const previewFlag = url.searchParams.get("preview") === "td"
-  const gateAddress =
-    isPreview || portalMode || previewFlag ? null : emailGateFor(agreement, signatures, signerIndex)
+  // Die-on-change + expiry: a specific signer's emailed link can be dead even
+  // though the shared access code is right. A revoked link (membership changed)
+  // or an expired one blocks the READ too (Antonio, 2026-08-11) — no document is
+  // returned. A SIGNED row is never blocked (expiry/revocation never un-sign).
+  if (signerIndex !== null) {
+    const row = signatures.find((s: { member_index: number }) => s.member_index === signerIndex)
+    const state = row ? signerLinkState(row) : "ok"
+    if (state === "revoked") return NextResponse.json({ error: REVOKED_MESSAGE }, { status: 403 })
+    if (state === "expired") return NextResponse.json({ error: EXPIRED_MESSAGE }, { status: 403 })
+  }
+
+  // A short-lived signed pass, minted by the contact-gated portal wrapper (a
+  // logged-in member) or by CRM staff preview, bound to THIS agreement. It
+  // replaces the spoofable bare `?portal=true` / `?preview=td` email-gate skip.
+  const pass = passToken ? await verifyOaPass(passToken, agreement.id) : null
+  const isStaffPreviewPass = pass?.kind === "staff_preview"
+
+  // Email gate. It is skipped ONLY by, in order of strength:
+  //   1. a REAL staff session (isStaffPreview) — rare on this client-facing host,
+  //   2. a valid OA pass bound to this agreement (portal member or staff preview),
+  //   3. a valid, unexpired, unrevoked per-signer code (the co-signer's own
+  //      credential, delivered to their own mailbox — the address the gate would
+  //      ask for is already proven by holding the code).
+  // The bare `?portal=true` and `?preview=td` flags NO LONGER skip it — they are
+  // trivially appended by anyone holding the shared code, and that is exactly the
+  // trick door this change closes.
+  const skipEmailGate = isPreview || !!pass || signerIndex !== null
+  const gateAddress = skipEmailGate ? null : emailGateFor(agreement, signatures, signerIndex)
   if (gateAddress && !emailGateMatches(gateAddress, email)) {
     // No document data in this response — the point of the gate is that an
     // unverified caller receives nothing, including the address being matched.
     return NextResponse.json({ requiresEmail: true, companyName: agreement.company_name })
   }
 
-  // View tracking — server-side, best effort, never blocks the read. Skipped for
-  // any preview so staff opening the document does not look like the client did.
-  if (!isPreview && !previewFlag && !agreement.signed_at) {
+  // View tracking — server-side, best effort, never blocks the read. Suppressed
+  // for staff viewing (a real session OR a staff-preview pass) so staff opening
+  // the document never looks like the client did. A portal-member pass counts as
+  // a genuine view. The bare `?preview=td` flag no longer suppresses tracking —
+  // it authenticates nothing now, so a request carrying it is treated as a
+  // client, which is what stops it from silently poisoning the "client viewed"
+  // signal only when it was actually staff.
+  const suppressTracking = isPreview || isStaffPreviewPass
+  if (!suppressTracking && !agreement.signed_at) {
     const now = new Date().toISOString()
     try {
       await db

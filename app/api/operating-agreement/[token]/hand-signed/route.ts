@@ -48,7 +48,7 @@ import { checkRateLimit, getRateLimitKey } from "@/lib/portal/rate-limit"
 import { isStaffPreview } from "@/lib/auth/staff-preview"
 import { normalizeEntityType } from "@/lib/portal/entity-type"
 import { generateOperatingAgreementPDF } from "@/lib/pdf/operating-agreement-pdf"
-import { OA_AGREEMENT_SELECT, OA_SIGNATURE_SELECT, resolveSignerIndex, toPublicMembers } from "@/lib/oa/public-view"
+import { OA_AGREEMENT_SELECT, OA_SIGNATURE_SELECT, resolveSignerIndex, signerLinkState, toPublicMembers } from "@/lib/oa/public-view"
 
 // The public whitelist withholds account_id / contact_id because the client-facing
 // PAGES never render them. This is a server-only route that must FILE to the
@@ -183,22 +183,48 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
   // Who is declaring? For a multi-signer agreement, resolve them from their
   // personal link so the record names a person rather than "someone".
-  const isMultiSigner =
-    normalizeEntityType(agreement.entity_type) === "MMLLC" && (agreement.total_signers || 1) > 1
+  //
+  // Per-member signing is decided by whether signature ROWS exist, matching the
+  // electronic sign route — NOT by `total_signers > 1`, which mis-classified a
+  // legacy MMLLC-with-one-expected-signature as single-signer at this door while
+  // the other door treated it as per-member.
+  const { data: sigRows } = await db
+    .from("oa_signatures")
+    .select(OA_SIGNATURE_SELECT)
+    .eq("oa_id", agreement.id)
+    .order("member_index")
+  const signatures = sigRows ?? []
+  const isMultiSigner = normalizeEntityType(agreement.entity_type) === "MMLLC" && signatures.length > 0
 
   let declaredBy: string = agreement.member_name || "the client"
   if (isMultiSigner) {
-    const { data: sigRows } = await db
-      .from("oa_signatures")
-      .select(OA_SIGNATURE_SELECT)
-      .eq("oa_id", agreement.id)
-      .order("member_index")
-    const signatures = sigRows ?? []
+    // ⛔ A multi-member hand-signed declaration REQUIRES a valid per-signer code.
+    // Without this, a request carrying only the shared access code — which every
+    // co-signer's emailed URL contains — marked the WHOLE agreement complete with
+    // no idea who did it. A removed member could strip `&signer=` and close out
+    // the agreement. Now the shared code alone can never complete an MMLLC, and a
+    // revoked or expired signer link is refused (die-on-change + expiry).
     const idx = resolveSignerIndex(signatures, signerCode)
-    if (signerCode && idx === null) {
-      return NextResponse.json({ error: "Invalid signing link." }, { status: 403 })
+    if (idx === null) {
+      return NextResponse.json(
+        { error: "Please open your personal signing link from your email to confirm you signed by hand." },
+        { status: 403 },
+      )
     }
     const who = signatures.find((s: { member_index: number }) => s.member_index === idx)
+    const state = who ? signerLinkState(who) : "ok"
+    if (state === "revoked") {
+      return NextResponse.json(
+        { error: "This signing link is no longer valid because the company's members changed. Please ask the company owner to re-issue it from the portal." },
+        { status: 403 },
+      )
+    }
+    if (state === "expired") {
+      return NextResponse.json(
+        { error: "This signing link has expired. Please ask the company owner to re-send it from the portal." },
+        { status: 403 },
+      )
+    }
     if (who?.member_name) declaredBy = who.member_name
   }
 

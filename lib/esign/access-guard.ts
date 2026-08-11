@@ -2,8 +2,17 @@
  * Shared access-code verification for the public signer routes (fetch / submit /
  * decline / pdf). Two hardenings over a bare `access_code !== code`:
  *  - constant-time comparison (no timing oracle on the code), and
- *  - per-(IP, token) failed-attempt lockout (best-effort, in-memory — the codes
- *    are already 128-bit, so this is defense-in-depth against obvious hammering).
+ *  - per-(IP, token) failed-attempt lockout (best-effort, in-memory).
+ *
+ * ⚠️ ENTROPY REALITY (do not repeat the old "codes are already 128-bit" claim,
+ * which was FALSE for this family): the OA access code and the per-signer code
+ * both DEFAULT to 8 hex chars = 32 bits (see the oa_signatures.access_code /
+ * oa_agreements.access_code DB defaults). Only the esign_signers UUID codes are
+ * 128-bit. So the lockout here is NOT mere hardening on top of a strong secret —
+ * for the OA family it is load-bearing, and the OA fetch route adds its own
+ * throughput cap + records a failure on a bad per-signer code so the signer
+ * dimension is throttled too. Any code this system ROTATES (die-on-change /
+ * re-send / reissue) is minted full-length (128-bit) to close the gap going forward.
  * Preview mode (?preview=td) skips the code, exactly as before — but it still
  * requires the secret per-signer token, so it does not widen exposure.
  */

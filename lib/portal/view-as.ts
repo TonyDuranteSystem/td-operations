@@ -24,6 +24,8 @@
  * viewing, it is not a sandbox against a deliberate admin. Admin-only + audited.
  */
 
+import { signSignedTokenWithTtl, verifySignedToken } from '@/lib/crypto/signed-token'
+
 export const VIEW_AS_COOKIE = 'td_view_as'
 
 /** Default TTLs (ms). */
@@ -39,51 +41,6 @@ export interface ViewAsPayload {
   exp: number
 }
 
-const encoder = new TextEncoder()
-
-/** URL-safe base64 of a string (edge + node safe, no Buffer dependency). */
-function base64urlEncode(input: string): string {
-  // btoa expects a binary string; encode UTF-8 bytes to latin1 first.
-  const bytes = encoder.encode(input)
-  let binary = ''
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-function base64urlDecode(input: string): string {
-  const b64 = input.replace(/-/g, '+').replace(/_/g, '/')
-  const binary = atob(b64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return new TextDecoder().decode(bytes)
-}
-
-function bytesToBase64url(bytes: Uint8Array): string {
-  let binary = ''
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-/** Constant-time string compare (length-leaking but value-safe). */
-function timingSafeEqualStr(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  let diff = 0
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return diff === 0
-}
-
-async function hmacSha256(secret: string, data: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
-  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(data))
-  return bytesToBase64url(new Uint8Array(sig))
-}
-
 function getSecret(): string {
   const secret = process.env.API_SECRET_TOKEN?.trim()
   if (!secret) {
@@ -95,48 +52,36 @@ function getSecret(): string {
 
 /**
  * Sign a payload into a `<base64url(json)>.<base64url(hmac)>` token.
- * `expFromNow` lets callers stamp the TTL; `now` is injectable for tests.
+ * `ttlMs` stamps the TTL; `now` is injectable for tests. Delegates to the shared
+ * signed-token core (lib/crypto/signed-token.ts) so this and the OA portal pass
+ * share one crypto stack.
  */
 export async function signViewAs(
   data: Omit<ViewAsPayload, 'exp'>,
   ttlMs: number,
   now: number = Date.now(),
 ): Promise<string> {
-  const payload: ViewAsPayload = { ...data, exp: now + ttlMs }
-  const body = base64urlEncode(JSON.stringify(payload))
-  const sig = await hmacSha256(getSecret(), body)
-  return `${body}.${sig}`
+  return signSignedTokenWithTtl(getSecret(), { contactId: data.contactId, adminId: data.adminId }, ttlMs, now)
 }
 
 /**
  * Verify a token's signature and expiry. Returns the payload, or null when the
  * token is malformed, tampered, or expired. Never throws on bad input.
- * `now` is injectable for tests.
+ * `now` is injectable for tests. The field validation below is unchanged — the
+ * shared core guarantees integrity + expiry, this layer keeps view-as's own
+ * shape check so a token minted for a different payload type cannot pass here.
  */
 export async function verifyViewAs(
   token: string | undefined | null,
   now: number = Date.now(),
 ): Promise<ViewAsPayload | null> {
-  if (!token || typeof token !== 'string') return null
-  const dot = token.indexOf('.')
-  if (dot <= 0 || dot === token.length - 1) return null
-  const body = token.slice(0, dot)
-  const sig = token.slice(dot + 1)
-
-  let expectedSig: string
+  let secret: string
   try {
-    expectedSig = await hmacSha256(getSecret(), body)
+    secret = getSecret()
   } catch {
     return null
   }
-  if (!timingSafeEqualStr(sig, expectedSig)) return null
-
-  let payload: ViewAsPayload
-  try {
-    payload = JSON.parse(base64urlDecode(body)) as ViewAsPayload
-  } catch {
-    return null
-  }
+  const payload = await verifySignedToken(secret, token, { now, requireExp: true })
   if (
     !payload ||
     typeof payload.contactId !== 'string' ||
@@ -145,6 +90,5 @@ export async function verifyViewAs(
   ) {
     return null
   }
-  if (payload.exp <= now) return null
-  return payload
+  return payload as unknown as ViewAsPayload
 }
