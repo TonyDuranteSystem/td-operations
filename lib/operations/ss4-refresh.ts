@@ -22,6 +22,11 @@
  *  - MMLLC with zero/multiple flagged signers → the row is NOT touched and the
  *    caller gets a staff-facing alert (same rule as generation, via
  *    decideSs4Signer — see lib/operations/ss4-signer.ts).
+ *  - PICK WINS (Antonio, 2026-08-10): when the stamped responsible party is not
+ *    one of the members (an explicit staff pick — the picker offers any linked
+ *    contact), the refresh KEEPS the party and skips the member rules entirely:
+ *    no re-derivation, no MMLLC block. Bookkeeping bends to the pick, never the
+ *    reverse (currentPartyIsMember in ss4-signer.ts).
  *  - Missing RA county never blocks a refresh: the existing Line 6 value is
  *    kept (the send-for-signature gate still enforces it before the client
  *    signs).
@@ -37,6 +42,7 @@ import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
 import {
   decideSs4Signer,
   ss4SignerAlertMessage,
+  currentPartyIsMember,
   type Ss4SignerMember,
 } from "@/lib/operations/ss4-signer"
 
@@ -288,7 +294,25 @@ export async function refreshSS4(args: {
     const members = (membersRows ?? []) as Ss4SignerMember[]
 
     // ── Decide the signer (shared rule — same as generation) ──
+    // PICK-WINS GUARD (Antonio, 2026-08-10): if the currently stamped
+    // responsible party is NOT one of the members, it is an explicit staff pick
+    // (the workspace picker offers every linked contact, member or not) and the
+    // refresh must KEEP it — never re-derive from members, never block on the
+    // MMLLC flag rules. Account fields still refresh below (signerContact stays
+    // null = keep party, same mechanism as the no_members branch).
     let signerContact: Ss4SignerContact | null = null
+    const partyIsMember = currentPartyIsMember(members, row.contact_id)
+
+    if (members.length > 0 && !partyIsMember && row.contact_id) {
+      await logAction({
+        action_type: "update",
+        table_name: "ss4_applications",
+        record_id: row.id,
+        account_id,
+        summary: `SS-4 refresh (${source}): kept explicitly picked non-member responsible party — members flags not consulted`,
+      })
+      // fall through with signerContact = null (keep party)
+    } else {
     const decision = decideSs4Signer(members, entityType)
 
     if (decision.kind === "needs_signer") {
@@ -338,6 +362,7 @@ export async function refreshSS4(args: {
     }
     // decision.kind === "no_members" → signerContact stays null: keep the row's
     // existing responsible party (never guess), refresh account fields only.
+    }
 
     // ── Member count ──
     let memberCount: number

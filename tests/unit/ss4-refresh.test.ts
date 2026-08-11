@@ -365,4 +365,52 @@ describe("refreshSS4", () => {
     expect(r.message).toContain("signed while the refresh was running")
     expect(notifyCalls).toHaveLength(0)
   })
+
+  // ── PICK-WINS (Antonio, 2026-08-10 — final-diff council blocker fix) ──
+  // The picker may stamp ANY linked contact, member or not. Once a NON-member
+  // is the responsible party, refresh must KEEP them: no re-derivation from
+  // members, no MMLLC flag block. These are the cells that go red if the
+  // currentPartyIsMember guard is removed (the pre-fix code re-stamped the
+  // flagged member and would then re-notify the REVERTED signer).
+  it("PICK WINS: a non-member responsible party survives a refresh — members flags not consulted", async () => {
+    fixtures.ss4 = {
+      ...dbSs4Row,
+      contact_id: "c-authorized-rep", // NOT a member — explicit staff pick
+      responsible_party_name: "Picked Rep",
+      company_name: "Acme Old Name LLC", // stale → forces an account-field update
+    }
+    const r = await refreshSS4({ account_id: "acc-1", source: "test" })
+    expect(r.outcome).toBe("refreshed")
+    expect(r.signerChanged).toBe(false)
+    expect(updateCalls).toHaveLength(1)
+    // Account fields refresh; the party does NOT (pre-fix: contact_id would be
+    // c-michele, the flagged member — the silent revert).
+    expect(updateCalls[0].values).not.toHaveProperty("contact_id")
+    expect(updateCalls[0].values).not.toHaveProperty("responsible_party_name")
+    expect(updateCalls[0].values.company_name).toBe("Acme LLC")
+    expect(notifyCalls).toHaveLength(0)
+    expect(logCalls.some((l) => String(l.summary).includes("kept explicitly picked non-member"))).toBe(true)
+  })
+
+  it("PICK WINS: non-member party on an MMLLC with ZERO flagged signers — refresh does NOT block (pre-fix livelock)", async () => {
+    fixtures.ss4 = {
+      ...dbSs4Row,
+      contact_id: "c-authorized-rep",
+      responsible_party_name: "Picked Rep",
+      company_name: "Acme Old Name LLC",
+    }
+    fixtures.members = [{ ...memberMichele, is_signer: false }, memberGaia] // 0 flags
+    const r = await refreshSS4({ account_id: "acc-1", source: "test" })
+    expect(r.outcome).toBe("refreshed") // NOT needs_signer
+    expect(updateCalls[0].values).not.toHaveProperty("contact_id")
+  })
+
+  it("member-to-member re-derivation still works when the party IS a member (AI Venture Labs behaviour preserved)", async () => {
+    // baseRow's party is Gaia (a member, not flagged) — refresh re-derives the
+    // flagged Michele exactly as before the pick-wins guard.
+    const r = await refreshSS4({ account_id: "acc-1", source: "test" })
+    expect(r.outcome).toBe("refreshed")
+    expect(r.signerChanged).toBe(true)
+    expect(updateCalls[0].values.contact_id).toBe("c-michele")
+  })
 })

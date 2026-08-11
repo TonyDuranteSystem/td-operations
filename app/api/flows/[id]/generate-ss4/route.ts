@@ -116,9 +116,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         source: 'flow-ss4-picker',
       })
       if (!res.ok) {
+        // 404 = nothing to switch; 500 = a genuine write/read failure (council
+        // minor: an infrastructure error is not a 409 conflict); 409 = business
+        // refusals (locked / not_linked / no_contact).
+        const status = res.outcome === 'no_ss4' ? 404 : res.outcome === 'error' ? 500 : 409
         return NextResponse.json(
           { success: false, error: res.message || `Could not change the signer (${res.outcome}).`, outcome: res.outcome },
-          { status: res.outcome === 'no_ss4' ? 404 : 409 },
+          { status },
         )
       }
       return NextResponse.json({

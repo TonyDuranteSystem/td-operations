@@ -97,7 +97,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
     `Update fields on an existing SS-4 application. If the record is at 'awaiting_signature', updating any content field resets it to 'draft' so the client sees the corrected version before re-signing.
 
 Use cases:
-- Correct responsible party (new contact_id + name/ITIN/phone)
+- Correct responsible party (new contact_id — MUST be a contact linked to the account; runs the shared signer-switch: rewrites name/ITIN/phone as a set, resets awaiting_signature to draft, and ROTATES the access code so the previous signing link stops working)
 - Fix member_count
 - Add county_and_state or trade_name
 - Promote draft → awaiting_signature (pass status='awaiting_signature' explicitly)
@@ -114,6 +114,36 @@ Note: signed records (status='signed') cannot be updated.`,
     },
     async (params) => {
       try {
+        // ── Responsible-party change goes through the SINGLE switch core ──
+        // (lib/operations/ss4-set-signer.ts). Before 2026-08-10 this tool
+        // rewrote the four party columns itself — a second, WEAKER switch path:
+        // no access-code rotation (the old signer's link stayed live), no
+        // members.is_signer sync, no documents repoint, no chat/bell cleanup —
+        // so an MCP-driven correction could be silently reverted by the next
+        // refresh. Now both surfaces share setSs4Signer. Note this also
+        // enforces that the new signer is LINKED to the account.
+        let switchNote = ""
+        if (params.contact_id) {
+          const { setSs4Signer } = await import("@/lib/operations/ss4-set-signer")
+          const sw = await setSs4Signer({
+            account_id: params.account_id,
+            contact_id: params.contact_id,
+            source: "mcp-ss4-update",
+          })
+          if (!sw.ok && sw.outcome !== "unchanged") {
+            return { content: [{ type: "text" as const, text: `Error: ${sw.message || `Could not change the responsible party (${sw.outcome}).`}` }] }
+          }
+          if (sw.outcome === "switched") {
+            switchNote = sw.statusReset
+              ? "\nResponsible party changed — status reset to draft and the previous signing link was revoked (access code rotated)."
+              : "\nResponsible party changed — the previous signing link was revoked (access code rotated)."
+          } else if (sw.outcome === "unchanged") {
+            switchNote = "\nResponsible party unchanged (that contact is already the signer)."
+          }
+        }
+
+        // Re-fetch AFTER any switch: the status may have reset to draft and the
+        // access code rotated — the logic below must see the post-switch row.
         const { data: ss4, error: fetchErr } = await supabaseAdmin
           .from("ss4_applications")
           .select("id, token, status, company_name, access_code, county_and_state, entity_type")
@@ -129,24 +159,6 @@ Note: signed records (status='signed') cannot be updated.`,
         }
 
         const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
-
-        // Resolve new responsible party if contact_id provided
-        if (params.contact_id) {
-          const { data: contact, error: ctErr } = await supabaseAdmin
-            .from("contacts")
-            .select("id, full_name, itin_number, phone")
-            .eq("id", params.contact_id)
-            .single()
-
-          if (ctErr || !contact) {
-            return { content: [{ type: "text" as const, text: `Error: Contact not found: ${ctErr?.message || "no data"}` }] }
-          }
-
-          updates.contact_id = params.contact_id
-          updates.responsible_party_name = contact.full_name
-          updates.responsible_party_itin = contact.itin_number || null
-          updates.responsible_party_phone = contact.phone || null
-        }
 
         if (params.member_count !== undefined) updates.member_count = params.member_count
         if (params.county_and_state !== undefined) updates.county_and_state = params.county_and_state
@@ -225,6 +237,7 @@ Note: signed records (status='signed') cannot be updated.`,
               `SS-4 updated for ${ss4.company_name}`,
               `Status: ${newStatus}`,
               `Fields updated: ${Object.keys(updates).filter(k => k !== "updated_at" && k !== "status").join(", ") || "none"}`,
+              switchNote,
               resetNote,
               notifyNote,
               ``,

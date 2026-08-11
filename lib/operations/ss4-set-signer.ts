@@ -30,9 +30,11 @@
  *   4. Repoints the internal SS-4 `documents` row, which is stamped with
  *      contact_id at creation and was never updated — the form would otherwise
  *      stay filed under the wrong contact in the CRM.
- *   5. Keeps `members.is_signer` in step when the account HAS member rows, so the
- *      picker and the auto-refresh (`refreshSS4` → `decideSs4Signer`) can never
- *      disagree and silently undo each other.
+ *   5. Keeps `members.is_signer` in step when the picked signer IS a member
+ *      (set-true first, then clear others — never a zero-flag state). A
+ *      NON-member pick leaves the flags untouched: `refreshSS4` keeps a
+ *      non-member party via the `currentPartyIsMember` pick-wins guard, so the
+ *      flags are simply not consulted while a non-member is the signer.
  *   6. Clears the old signer's leftovers — the portal chat message (soft-delete,
  *      R100) and the bell alert (marked read; that table has no soft-delete).
  *      Emails already sent cannot be recalled — accepted, out of scope.
@@ -175,12 +177,17 @@ export async function setSs4Signer(args: {
 }): Promise<Ss4SetSignerResult> {
   const { account_id, contact_id, source } = args
   try {
-    const { data: ss4Row } = await supabaseAdmin
+    // supabase-js RETURNS errors — distinguish "no row" from "read failed", or a
+    // DB hiccup gets reported to staff as the confidently-wrong "No SS-4 exists".
+    const { data: ss4Row, error: ss4ReadErr } = await supabaseAdmin
       .from("ss4_applications")
       .select("id, token, access_code, status, signed_at, contact_id, company_name")
       .eq("account_id", account_id)
       .maybeSingle()
 
+    if (ss4ReadErr) {
+      return { ok: false, outcome: "error", message: `Could not load the SS-4: ${ss4ReadErr.message}` }
+    }
     if (!ss4Row) {
       return { ok: false, outcome: "no_ss4", message: "No SS-4 exists for this account yet." }
     }
@@ -189,12 +196,15 @@ export async function setSs4Signer(args: {
     // The chosen contact MUST be linked to this account. The picker is populated
     // from these same links, so a mismatch means a stale page or a hand-made
     // request — never stamp an unrelated person on a federal filing.
-    const { data: link } = await supabaseAdmin
+    const { data: link, error: linkReadErr } = await supabaseAdmin
       .from("account_contacts")
       .select("contact_id")
       .eq("account_id", account_id)
       .eq("contact_id", contact_id)
       .maybeSingle()
+    if (linkReadErr) {
+      return { ok: false, outcome: "error", message: `Could not verify the contact link: ${linkReadErr.message}` }
+    }
     if (!link) {
       return {
         ok: false,
@@ -248,67 +258,84 @@ export async function setSs4Signer(args: {
     }
 
     // ── Keep members.is_signer in step (accounts that HAVE member rows). ──
-    // Without this the next refreshSS4 would re-derive the OLD signer from the
-    // members table and silently undo the pick. SMLLCs have no member rows, so
-    // this is a no-op for them by design.
-    try {
-      const { data: memberRows } = await supabaseAdmin
-        .from("members")
-        .select("id, contact_id")
-        .eq("account_id", account_id)
-      if (memberRows && memberRows.length > 0) {
-        await supabaseAdmin
+    // PICK-WINS SEMANTICS (Antonio, 2026-08-10, council fix): the flag is only
+    // meaningful when the picked signer IS a member. Picking a member flips the
+    // flag to them (set-true FIRST, then clear the others — a concurrent refresh
+    // in the gap sees a transient two-flag state, which BLOCKS rather than
+    // silently reverting; never a zero-flag state). Picking a NON-member leaves
+    // every flag untouched: refreshSS4's currentPartyIsMember guard now keeps a
+    // non-member party without consulting the flags, so clearing them would only
+    // destroy information and (on a transient error) recreate the zero-flag
+    // livelock. supabase-js RETURNS errors rather than throwing — check them
+    // explicitly; a silent sync failure here is how a pick gets undone later.
+    const { data: memberRows, error: memberReadErr } = await supabaseAdmin
+      .from("members")
+      .select("id, contact_id")
+      .eq("account_id", account_id)
+    if (memberReadErr) {
+      console.error("[setSs4Signer] members read failed (sync skipped):", memberReadErr.message)
+    } else if (memberRows && memberRows.length > 0) {
+      const match = memberRows.find((m) => m.contact_id === contact_id)
+      if (match) {
+        const { error: setErr } = await supabaseAdmin
           .from("members")
-          .update({ is_signer: false, updated_at: new Date().toISOString() })
-          .eq("account_id", account_id)
-        const match = memberRows.find((m) => m.contact_id === contact_id)
-        if (match) {
-          await supabaseAdmin
+          .update({ is_signer: true, updated_at: new Date().toISOString() })
+          .eq("id", match.id)
+        if (setErr) {
+          console.error("[setSs4Signer] members is_signer set failed:", setErr.message)
+        } else {
+          const { error: clearErr } = await supabaseAdmin
             .from("members")
-            .update({ is_signer: true, updated_at: new Date().toISOString() })
-            .eq("id", match.id)
+            .update({ is_signer: false, updated_at: new Date().toISOString() })
+            .eq("account_id", account_id)
+            .neq("id", match.id)
+          if (clearErr) console.error("[setSs4Signer] members is_signer clear failed:", clearErr.message)
         }
       }
-    } catch (memberErr) {
-      console.error("[setSs4Signer] members is_signer sync failed (non-fatal):", memberErr)
+      // No match → non-member pick → flags deliberately untouched.
     }
 
     // ── Repoint the internal SS-4 documents row at the new signer. ──
-    try {
+    {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabaseAdmin as any)
+      const { error: docErr } = await (supabaseAdmin as any)
         .from("documents")
         .update({ contact_id })
         .eq("account_id", account_id)
         .eq("document_type_name", "SS-4")
-    } catch (docErr) {
-      console.error("[setSs4Signer] documents contact repoint failed (non-fatal):", docErr)
+      if (docErr) console.error("[setSs4Signer] documents contact repoint failed (non-fatal):", docErr.message)
     }
 
-    // ── Clear the previous signer's leftovers. ──
+    // ── Clear the previous signer's leftovers — THIS ACCOUNT ONLY. ──
     // The chat message is soft-deleted (R100 — client-visible content is never
     // hard-deleted); the bell alert is marked read, since portal_notifications
     // has no soft-delete column. Emails already sent cannot be recalled.
+    // Scoped by account_id AND (for chat) sender_type='admin': the sign link is
+    // the same string for every company, so an unscoped sweep would hide a
+    // serial founder's still-valid prompt for their OTHER company — and without
+    // the sender filter it would even delete the client's own message quoting
+    // the link ("this link errors for me").
     if (decision.previousContactId && decision.previousContactId !== contact_id) {
-      try {
-        const nowIso = new Date().toISOString()
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (supabaseAdmin as any)
-          .from("portal_messages")
-          .update({ deleted_at: nowIso })
-          .eq("contact_id", decision.previousContactId)
-          .is("deleted_at", null)
-          .like("message", "%/portal/sign/ss4%")
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (supabaseAdmin as any)
-          .from("portal_notifications")
-          .update({ read_at: nowIso })
-          .eq("contact_id", decision.previousContactId)
-          .eq("link", "/portal/sign/ss4")
-          .is("read_at", null)
-      } catch (clearErr) {
-        console.error("[setSs4Signer] old-signer cleanup failed (non-fatal):", clearErr)
-      }
+      const nowIso = new Date().toISOString()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: msgErr } = await (supabaseAdmin as any)
+        .from("portal_messages")
+        .update({ deleted_at: nowIso })
+        .eq("account_id", account_id)
+        .eq("contact_id", decision.previousContactId)
+        .eq("sender_type", "admin")
+        .is("deleted_at", null)
+        .like("message", "%/portal/sign/ss4%")
+      if (msgErr) console.error("[setSs4Signer] old-signer chat cleanup failed (non-fatal):", msgErr.message)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: notifErr } = await (supabaseAdmin as any)
+        .from("portal_notifications")
+        .update({ read_at: nowIso })
+        .eq("account_id", account_id)
+        .eq("contact_id", decision.previousContactId)
+        .eq("link", "/portal/sign/ss4")
+        .is("read_at", null)
+      if (notifErr) console.error("[setSs4Signer] old-signer bell cleanup failed (non-fatal):", notifErr.message)
     }
 
     const row = updated[0]

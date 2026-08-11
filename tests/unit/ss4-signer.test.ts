@@ -4,6 +4,7 @@ import {
   ss4SignerAlertMessage,
   pickDefaultSs4SignerLink,
   isOwnerTypeRole,
+  currentPartyIsMember,
   type Ss4SignerMember,
   type Ss4SignerLink,
 } from "@/lib/operations/ss4-signer"
@@ -162,6 +163,34 @@ describe("isOwnerTypeRole", () => {
     expect(isOwnerTypeRole("Partner - Tax/NHR Consultant (Portugal)")).toBe(false)
     expect(isOwnerTypeRole("Collaborator - Client Communications (team)")).toBe(false)
     expect(isOwnerTypeRole("Former owner - resigned")).toBe(false)
+  })
+})
+
+/**
+ * The pick-wins membership test (Antonio, 2026-08-10): refresh may re-derive
+ * the responsible party from members ONLY when the stamped party IS a member.
+ */
+describe("currentPartyIsMember", () => {
+  const members: Ss4SignerMember[] = [
+    { member_type: "individual", full_name: "Member One", contact_id: "c-member-1" },
+    { member_type: "company", company_name: "Holdings LLC", contact_id: null }, // null must never match
+  ]
+
+  it("true only when the party's contact matches a member's contact", () => {
+    expect(currentPartyIsMember(members, "c-member-1")).toBe(true)
+    expect(currentPartyIsMember(members, "c-outsider")).toBe(false)
+  })
+
+  it("null current contact NEVER matches — including a member with null contact_id", () => {
+    // A company member with contact_id null must not make a null party 'a member'.
+    expect(currentPartyIsMember(members, null)).toBe(false)
+    expect(currentPartyIsMember(members, undefined)).toBe(false)
+  })
+
+  it("empty/absent member lists → false (keeps the no_members semantics)", () => {
+    expect(currentPartyIsMember([], "c-member-1")).toBe(false)
+    expect(currentPartyIsMember(null, "c-member-1")).toBe(false)
+    expect(currentPartyIsMember(undefined, "c-member-1")).toBe(false)
   })
 })
 

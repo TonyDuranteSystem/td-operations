@@ -136,7 +136,6 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Could not regenerate the SS-4.')
       }
-      setSs4(data.ss4 ?? null)
       setInfo(
         data.unchanged
           ? 'Already up to date — the SS-4 matches the current account and member data.'
@@ -144,6 +143,10 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
             ? 'Refreshed — the responsible party changed; the new signer has been notified.'
             : 'Refreshed from current account and member data — same client link.',
       )
+      // Re-read from the server instead of trusting the regenerate response:
+      // it omits the responsible-party fields, and setting it directly blanked
+      // the card's signer block until a page reload (council minor, 2026-08-10).
+      await load()
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not regenerate the SS-4.')
     } finally {

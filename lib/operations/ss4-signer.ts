@@ -1,6 +1,12 @@
 /**
- * SS-4 responsible-party (signer) decision rule — the SINGLE source of truth for
- * "which member signs the SS-4, and when must we block and ask staff to flag one".
+ * SS-4 responsible-party (signer) decision rules.
+ *
+ * HONESTY NOTE on "single source of truth": `decideSs4Signer` is the shared
+ * MMLLC rule for the CRM generate path and refreshSS4 — but `createSS4`
+ * (lib/operations/ss4.ts:140-192) still carries its OWN inline copy of the same
+ * rule rather than importing this one. The two are kept in sync by hand; if you
+ * change the rule here, change it there too. (Unifying them is desirable but is
+ * a behaviour-preserving refactor for its own change, not a drive-by.)
  *
  * Why this exists: there are two SS-4 generation paths —
  *   1. lib/operations/ss4.ts::createSS4  (flow Workspace button + ss4_create MCP tool
@@ -149,6 +155,29 @@ export function pickDefaultSs4SignerLink(
     if (ao !== bo) return ao - bo
     return a.contact_id < b.contact_id ? -1 : a.contact_id > b.contact_id ? 1 : 0
   })[0]
+}
+
+/**
+ * Is the SS-4's CURRENT responsible party one of the account's members?
+ *
+ * THE PICK-WINS RULE (Antonio, 2026-08-10, final-diff council fix): the signer
+ * may be anyone linked to the account — member or not — and once picked it
+ * survives every regenerate, member edit, and refresh. "The bookkeeping bends
+ * to the pick, never the reverse." So a refresh may RE-DERIVE the responsible
+ * party from the members table ONLY when the currently stamped party is itself
+ * a member; a non-member party is an explicit staff choice and is kept, and the
+ * MMLLC flag rules don't apply to it (no block, no revert).
+ *
+ * Matching is on `members.contact_id` equality only — a company-type member
+ * whose contact_id is null cannot match, which errs on the KEEPING side (never
+ * silently swaps the stamped party). Pure, null-safe.
+ */
+export function currentPartyIsMember(
+  members: Ss4SignerMember[] | null | undefined,
+  currentContactId: string | null | undefined,
+): boolean {
+  if (!currentContactId || !members || members.length === 0) return false
+  return members.some((m) => m.contact_id === currentContactId)
 }
 
 /**
