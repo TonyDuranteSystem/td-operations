@@ -219,8 +219,38 @@ export function isClientInvoicePayment(
   // on the real book), so knowing who sent it can never imply which bill it clears.
   if (evidence.taught && taughtClientsFor(feed, evidence.taught).mappings.length > 0) return true
 
-  // ⛔ NO ROSTER-WIDE NAME MATCHING HERE. REMOVED DELIBERATELY (architect-approved, 2026-08-09)
-  // after it was built, measured, and found to be the wrong mechanism for a MONEY decision.
+  // ⛔⛔ ROSTER-DEPENDENT NAME MATCHING IS A REJECTED DESIGN. DO NOT BUILD IT A THIRD TIME.
+  //
+  // Read this before adding any rule that scans the client roster to identify a payer. It has now
+  // been built and taken out TWICE, and a removed commit does not stop a third attempt — which is
+  // why the rejection lives here, beside the rule that replaced it, rather than only in history.
+  //
+  // WHAT WAS TRIED (both times): match a bank descriptor against the names of all clients, and keep
+  // the money in Finance when a name looks like a match.
+  //
+  // WHY IT IS DISQUALIFIED — and it is the SHAPE, not any particular bug in it:
+  // A rule that reads the LIVE CLIENT ROSTER is not deterministic. The same transaction classifies
+  // differently as the roster changes: create a client, rename one, and money routes differently
+  // with no code change and no failing test. A money decision has to be replayable from the
+  // transaction and the invoice alone. Nothing in a test suite can catch a rule whose inputs are
+  // the whole customer list.
+  //
+  // THE INCIDENT THAT SETTLED IT (2026-07-22): one shared word sent a $1,000 wire from LC Marketing
+  // onto Aces Marketing's invoice. Guessing identity from names IS the mechanism of that incident.
+  //
+  // THE SECOND ATTEMPT, INSIDE THIS BRANCH, RELEARNED IT IN THREE COMMITS: added, then patched
+  // because a one-word client name was claiming a payout, then removed. THE PATCH IN THE MIDDLE IS
+  // THE TELL — it was already producing wrong answers before it came out. A rule that needs a
+  // special case for short names on its first contact with real data is not one special case short
+  // of working.
+  //
+  // THE RULE THAT STANDS: deterministic identity only — a payer a human TAUGHT, or a payer name
+  // that names ONE client scoped to ONE invoice. Amount is CONTEXT, never a reason on its own.
+  // If the system does not know, the money goes to My Finances with a button to send it back
+  // (Antonio, 2026-07-27). A name guess is the system pretending to know.
+  //
+  // (Original note, kept: removed deliberately, architect-approved 2026-08-09, after it was built,
+  // measured, and found to be the wrong mechanism for a MONEY decision.)
   //
   // Three reasons, in the order that matters:
   //
@@ -289,7 +319,18 @@ export type ConcernLens = "alert" | "triage"
 
 export function describeOwnerLedgerConcern(
   feed: ProjectableFeed,
-  openInvoices: OpenInvoiceRef[] = [],
+  /**
+   * DELIBERATELY UNUSED, and kept only so callers that pass positionally do not shift their
+   * remaining arguments. The branch that consumed it — selecting a row because its amount fitted
+   * some open invoice — was removed on purpose (see the note above `return null`): on a real book
+   * almost any of TD's own payouts fits one by amount, so it surfaced the owner's own money on a
+   * triage screen, which is worse than surfacing nothing.
+   *
+   * Silencing this with an underscore rather than deleting the parameter is the conservative
+   * choice: the tests call it positionally, and a signature change would quietly re-map their
+   * third and fourth arguments.
+   */
+  _openInvoices: OpenInvoiceRef[] = [],
   evidence: ClientEvidenceContext = {},
   lens: ConcernLens = "alert",
 ): OwnerLedgerConcern | null {
