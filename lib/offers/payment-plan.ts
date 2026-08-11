@@ -365,10 +365,18 @@ export function clientFacingPartLabel(part: PaymentPlanPart, totalParts: number)
     case "date":
       return `${position}, due by ${clientFacingDate(part.trigger.date ?? "")}`
     case "manual":
-    default:
-      return part.trigger.label
-        ? `${position}, due ${part.trigger.label}`
-        : `${position}, due when the agreed step is complete`
+    default: {
+      const label = part.trigger.label
+      if (!label) return `${position}, due when the agreed step is complete`
+      // The author's words are a CONDITION, not always a phrase that can follow "due" directly —
+      // "Bank account opened" rendered as the non-sentence "due Bank account opened" (gate
+      // defect, 2026-08-11). Fix the JOINING, never the author's text: words that already begin
+      // with a connective read straight through; anything else gets the colon form, verbatim.
+      const startsConnected = /^(when|once|after|upon|as soon as|by|within|in|on)\b/i.test(label)
+      return startsConnected
+        ? `${position}, due ${label}`
+        : `${position} — due once complete: ${label}`
+    }
   }
 }
 

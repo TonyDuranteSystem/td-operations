@@ -191,9 +191,9 @@ describe("⛔ CLIENT-FACING WORDING — never 'instalment'", () => {
 
   it("says what is due and when, in the client's terms", () => {
     expect(clientFacingPartLabel(plan[0], 2)).toBe("Part 1 of 2, due on signing")
-    // The stored words render — Domenico's fixture label, verbatim (architect ruling 2026-08-11:
-    // a generic "the agreed step" tells a client nothing about when they owe money).
-    expect(clientFacingPartLabel(plan[1], 2)).toBe("Part 2 of 2, due Bank account opened (Relay)")
+    // The stored words render via the GRAMMAR JOIN (gate defect, 2026-08-11): a bare condition
+    // takes the colon form, verbatim — never the non-sentence "due Bank account opened".
+    expect(clientFacingPartLabel(plan[1], 2)).toBe("Part 2 of 2 — due once complete: Bank account opened (Relay)")
   })
 
   it("NEVER uses the renewal contract's vocabulary, in any label or description", () => {
@@ -223,6 +223,9 @@ describe("⛔ CLIENT-FACING WORDING — never 'instalment'", () => {
     // client. The generic phrase survives only as the fallback for a part authored without one.
     const labelled = { seq: 2, amount: 1, currency: "USD", trigger: { kind: "manual" as const, label: "when your bank account is opened" } }
     expect(clientFacingPartLabel(labelled, 2)).toBe("Part 2 of 2, due when your bank account is opened")
+    // Antonio's own example from the ruling: "the part 2 is due in 30 days or whatever".
+    const days = { seq: 2, amount: 1, currency: "USD", trigger: { kind: "manual" as const, label: "in 30 days" } }
+    expect(clientFacingPartLabel(days, 2)).toBe("Part 2 of 2, due in 30 days")
     const bare = { seq: 2, amount: 1, currency: "USD", trigger: { kind: "manual" as const } }
     expect(clientFacingPartLabel(bare, 2)).toBe("Part 2 of 2, due when the agreed step is complete")
   })
@@ -281,7 +284,8 @@ describe("⛔ ENGLISH ONLY — Antonio's ruling, 2026-08-11", () => {
   it("every schedule line is English, on every offer", () => {
     for (const p of plan) {
       const label = clientFacingPartLabel(p, plan.length)
-      expect(label).toMatch(/^Part \d+ of \d+, due /)
+      // Two grammatical shapes exist since the join fix: direct ("due when…") and colon form.
+      expect(label).toMatch(/^Part \d+ of \d+(, due | — due once complete: )/)
       expect(label.toLowerCase()).not.toMatch(BANNED_WORDS)
     }
   })
@@ -306,7 +310,7 @@ describe("clientFacingSchedule — one sentence per part, in order", () => {
     const rows = clientFacingSchedule(plan)
     expect(rows).toHaveLength(2)
     expect(rows[0]).toEqual({ seq: 1, amount: 1250, currency: "EUR", label: "Part 1 of 2, due on signing" })
-    expect(rows[1].label).toBe("Part 2 of 2, due Bank account opened (Relay)")
+    expect(rows[1].label).toBe("Part 2 of 2 — due once complete: Bank account opened (Relay)")
     // Money stays a number: each surface owns its own symbol and locale rules, and a
     // pre-formatted string here would be a fourth place for them to disagree.
     expect(typeof rows[1].amount).toBe("number")

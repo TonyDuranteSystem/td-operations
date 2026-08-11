@@ -471,7 +471,10 @@ export default function ContractPage() {
           const lines = clientFacingSchedule(parsedPlan.plan)
             .map((r) => `${money(r.amount)} — ${r.label}`)
             .join('; ')
-          planFeeWording = `${fee}, paid as a Partial Payment schedule: ${lines}`
+          // Terminal full stop is load-bearing (gate defect, 2026-08-11): the Key Terms row
+          // appends its coverage sentence directly after this wording, and without it the MSA
+          // rendered "…(Relay) Covers all selected services" as one run-on sentence.
+          planFeeWording = `${fee}, paid as a Partial Payment schedule: ${lines}.`
         }
       }
     }
