@@ -33,12 +33,25 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
 
     const { data: ss4 } = await supabaseAdmin
       .from('ss4_applications')
-      .select('id, status, company_name, county_and_state')
+      .select('id, status, company_name, county_and_state, contact_id, entity_type, responsible_party_name')
       .eq('account_id', sd.account_id)
       .maybeSingle()
 
     if (!ss4) {
       return NextResponse.json({ success: false, error: 'No SS-4 exists for this account yet. Generate it first.' }, { status: 404 })
+    }
+
+    // ── ROUND-5 PROMOTION GATE ── never (re-)arm a signing link for an
+    // orphaned responsible party (a deleted/repointed member). The orphan
+    // revoke deliberately leaves the departed name STAMPED (no silent swap),
+    // so a staff member who missed the alert and sees a plain draft would
+    // otherwise re-arm the departed person with one click (above-bar AB2).
+    {
+      const { assertSs4PartyPromotable } = await import('@/lib/operations/ss4-refresh')
+      const gate = await assertSs4PartyPromotable({ account_id: sd.account_id, ss4 })
+      if (gate.ok === false) {
+        return NextResponse.json({ success: false, error: gate.message }, { status: 409 })
+      }
     }
     if (ss4.status === 'signed' || ss4.status === 'submitted') {
       return NextResponse.json(

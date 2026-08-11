@@ -90,6 +90,51 @@ export type Ss4SignerSwitchDecision =
 const MUTABLE_STATUSES = new Set(["draft", "awaiting_signature"])
 
 /**
+ * Clear a previous SS-4 signer's leftover prompts — THIS ACCOUNT ONLY.
+ *
+ * The chat message is soft-deleted (R100 — client-visible content is never
+ * hard-deleted); the bell alert is marked read, since portal_notifications has
+ * no soft-delete column. Emails already sent cannot be recalled.
+ *
+ * Scoped by account_id AND (for chat) sender_type='admin': the sign link is the
+ * same string for every company, so an unscoped sweep would hide a serial
+ * founder's still-valid prompt for their OTHER company — and without the sender
+ * filter it would even delete the client's own message quoting the link
+ * ("this link errors for me").
+ *
+ * Shared by BOTH signer-change surfaces (round-5 invariant): the picker's
+ * switch core here, and refreshSS4's member-flag re-derivation — a signer
+ * change must clean the old prompts whichever door it came through.
+ * Best-effort: errors are logged, never thrown.
+ */
+export async function cleanupOldSignerPrompts(args: {
+  account_id: string
+  previousContactId: string
+}): Promise<void> {
+  const { account_id, previousContactId } = args
+  const nowIso = new Date().toISOString()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error: msgErr } = await (supabaseAdmin as any)
+    .from("portal_messages")
+    .update({ deleted_at: nowIso })
+    .eq("account_id", account_id)
+    .eq("contact_id", previousContactId)
+    .eq("sender_type", "admin")
+    .is("deleted_at", null)
+    .like("message", "%/portal/sign/ss4%")
+  if (msgErr) console.error("[cleanupOldSignerPrompts] chat cleanup failed (non-fatal):", msgErr.message)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error: notifErr } = await (supabaseAdmin as any)
+    .from("portal_notifications")
+    .update({ read_at: nowIso })
+    .eq("account_id", account_id)
+    .eq("contact_id", previousContactId)
+    .eq("link", "/portal/sign/ss4")
+    .is("read_at", null)
+  if (notifErr) console.error("[cleanupOldSignerPrompts] bell cleanup failed (non-fatal):", notifErr.message)
+}
+
+/**
  * Decide the patch for a signer switch. Pure — the caller has already loaded the
  * row and resolved the chosen contact, and is responsible for having verified the
  * contact is linked to the account.
@@ -306,35 +351,8 @@ export async function setSs4Signer(args: {
     }
 
     // ── Clear the previous signer's leftovers — THIS ACCOUNT ONLY. ──
-    // The chat message is soft-deleted (R100 — client-visible content is never
-    // hard-deleted); the bell alert is marked read, since portal_notifications
-    // has no soft-delete column. Emails already sent cannot be recalled.
-    // Scoped by account_id AND (for chat) sender_type='admin': the sign link is
-    // the same string for every company, so an unscoped sweep would hide a
-    // serial founder's still-valid prompt for their OTHER company — and without
-    // the sender filter it would even delete the client's own message quoting
-    // the link ("this link errors for me").
     if (decision.previousContactId && decision.previousContactId !== contact_id) {
-      const nowIso = new Date().toISOString()
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error: msgErr } = await (supabaseAdmin as any)
-        .from("portal_messages")
-        .update({ deleted_at: nowIso })
-        .eq("account_id", account_id)
-        .eq("contact_id", decision.previousContactId)
-        .eq("sender_type", "admin")
-        .is("deleted_at", null)
-        .like("message", "%/portal/sign/ss4%")
-      if (msgErr) console.error("[setSs4Signer] old-signer chat cleanup failed (non-fatal):", msgErr.message)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error: notifErr } = await (supabaseAdmin as any)
-        .from("portal_notifications")
-        .update({ read_at: nowIso })
-        .eq("account_id", account_id)
-        .eq("contact_id", decision.previousContactId)
-        .eq("link", "/portal/sign/ss4")
-        .is("read_at", null)
-      if (notifErr) console.error("[setSs4Signer] old-signer bell cleanup failed (non-fatal):", notifErr.message)
+      await cleanupOldSignerPrompts({ account_id, previousContactId: decision.previousContactId })
     }
 
     const row = updated[0]

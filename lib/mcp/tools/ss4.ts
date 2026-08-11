@@ -182,6 +182,22 @@ Note: signed records (status='signed') cannot be updated.`,
             if (!resolvedCounty) {
               return withSwitch(`Error: Cannot advance SS-4 for ${ss4.company_name} to awaiting_signature — county_and_state (Line 6) is blank. Line 6 is sourced from the account's Registered Agent address. Add or correct the Registered Agent address on the account, then re-run ss4_update — the value will populate automatically. If the RA address is correct but unrecognized by the helper, set county_and_state explicitly: ss4_update(..., county_and_state: "<County>, <State>").`)
             }
+            // ROUND-5 PROMOTION GATE — never arm a signing link for an orphaned
+            // responsible party (deleted/repointed member, never picked). Same
+            // shared check as send-ss4 / resend-ss4.
+            const { assertSs4PartyPromotable } = await import("@/lib/operations/ss4-refresh")
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const { data: gateRow } = await (supabaseAdmin as any)
+              .from("ss4_applications")
+              .select("id, contact_id, entity_type, responsible_party_name")
+              .eq("id", ss4.id)
+              .single()
+            if (gateRow) {
+              const gate = await assertSs4PartyPromotable({ account_id: params.account_id, ss4: gateRow })
+              if (gate.ok === false) {
+                return withSwitch(`Error: ${gate.message}`)
+              }
+            }
           }
           updates.status = params.status
         } else if (contentFieldsChanged && ss4.status === "awaiting_signature") {

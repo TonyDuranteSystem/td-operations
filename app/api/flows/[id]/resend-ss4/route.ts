@@ -36,12 +36,23 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
 
     const { data: ss4 } = await supabaseAdmin
       .from('ss4_applications')
-      .select('id, status, company_name')
+      .select('id, status, company_name, contact_id, entity_type, responsible_party_name')
       .eq('account_id', sd.account_id)
       .maybeSingle()
 
     if (!ss4) {
       return NextResponse.json({ success: false, error: 'No SS-4 exists for this account yet.' }, { status: 404 })
+    }
+
+    // ── ROUND-5 PROMOTION GATE ── a re-open must not re-arm a link for a
+    // responsible party who is no longer a member and was never picked (the
+    // member roster may have changed since the signature being re-done).
+    {
+      const { assertSs4PartyPromotable } = await import('@/lib/operations/ss4-refresh')
+      const gate = await assertSs4PartyPromotable({ account_id: sd.account_id, ss4 })
+      if (gate.ok === false) {
+        return NextResponse.json({ success: false, error: gate.message }, { status: 409 })
+      }
     }
     if (ss4.status === 'draft') {
       return NextResponse.json(

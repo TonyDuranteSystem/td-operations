@@ -16,6 +16,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 import {
   refreshSS4,
   computeSs4RefreshUpdates,
+  classifySs4Party,
+  assertSs4PartyPromotable,
   resolveEntityType,
   resolveStateCode,
   resolveMailing,
@@ -95,6 +97,7 @@ function makeBuilder(table: string) {
   b.is = chain
   b.order = chain
   b.limit = chain
+  b.like = chain
   b.update = (values: Record<string, unknown>) => {
     state.op = "update"
     state.values = values
@@ -345,22 +348,43 @@ describe("refreshSS4", () => {
     expect(logCalls.some((l) => String(l.summary).includes("SKIPPED"))).toBe(true)
   })
 
-  it("refreshed: draft signer change updates the row but does NOT notify", async () => {
+  // ── ROUND-5 INVARIANT (Antonio, 2026-08-11): a signer CHANGE through the
+  // refresh gets FULL PICKER SEMANTICS — revoke the old link (code rotation),
+  // reset an awaiting record to draft, clean the old signer's prompts, and
+  // never notify from the swap itself (the new signer is notified exactly once,
+  // at the explicit re-send). These replace the pre-invariant cells that
+  // expected the old keep-the-link + notify-on-awaiting behaviour (AB1).
+  const ss4Updates = () => updateCalls.filter((c) => c.table === "ss4_applications")
+  const promptCleanups = () => updateCalls.filter((c) => c.table === "portal_messages" || c.table === "portal_notifications")
+
+  it("AB1: draft signer swap rotates the code (old link dies), stays draft, no notify", async () => {
     const r = await refreshSS4({ account_id: "acc-1", source: "test" })
     expect(r.outcome).toBe("refreshed")
     expect(r.signerChanged).toBe(true)
-    expect(updateCalls).toHaveLength(1)
-    expect(updateCalls[0].values.contact_id).toBe("c-michele")
+    expect(ss4Updates()).toHaveLength(1)
+    expect(ss4Updates()[0].values.contact_id).toBe("c-michele")
+    // MUTATION PROOF LEG: the swap MUST rotate the code — this is what kills
+    // the previous signer's link (remove the rotation → this cell reds).
+    expect(typeof ss4Updates()[0].values.access_code).toBe("string")
+    expect(ss4Updates()[0].values.access_code).not.toBe(dbSs4Row.access_code)
+    // A draft stays a draft (no silent promotion).
+    expect(ss4Updates()[0].values.status).toBeUndefined()
     expect(notifyCalls).toHaveLength(0) // drafts stay silent
+    // Old signer's prompts cleaned (chat soft-delete + bell mark-read).
+    expect(promptCleanups().length).toBeGreaterThanOrEqual(2)
     expect(r.ss4?.responsible_party_name).toBe("Michele Cotti")
   })
 
-  it("refreshed: signer change while awaiting_signature notifies the NEW signer", async () => {
+  it("AB1: signer swap while awaiting_signature RESETS TO DRAFT, revokes, cleans — and does NOT notify from the swap", async () => {
     fixtures.ss4 = { ...dbSs4Row, status: "awaiting_signature" }
     const r = await refreshSS4({ account_id: "acc-1", source: "test" })
     expect(r.outcome).toBe("refreshed")
-    expect(notifyCalls).toHaveLength(1)
-    expect(notifyCalls[0]).toEqual({ ss4Id: "ss4-1" })
+    expect(ss4Updates()[0].values.status).toBe("draft")
+    expect(ss4Updates()[0].values.access_code).not.toBe(dbSs4Row.access_code)
+    expect(notifyCalls).toHaveLength(0) // notified once — at the explicit re-send, not here
+    expect(promptCleanups().length).toBeGreaterThanOrEqual(2)
+    expect(r.ss4?.status).toBe("draft")
+    expect(r.message).toContain("previous signer's link was revoked")
   })
 
   it("unchanged: no write and no notification when data already matches", async () => {
@@ -536,5 +560,68 @@ describe("refreshSS4", () => {
     // The payload must not pretend the row is draft with a fresh code.
     expect(r.ss4?.status).toBe("awaiting_signature")
     expect(r.ss4?.access_code).toBe(dbSs4Row.access_code)
+  })
+})
+
+// ── THE shared classifier + promotion gate (round-5 invariant) ───────────────
+// One classification consulted by refreshSS4 AND every promotion door — these
+// cells pin each class and the gate's refusal (mutation: bypass the gate in a
+// promotion route and the CLICKED missed-alert-send cell reds; drop a class
+// here and these red).
+describe("classifySs4Party / assertSs4PartyPromotable", () => {
+  const ss4Ref = { id: "ss4-1", contact_id: "c-x" }
+
+  it("member_derived: the party is a member's contact", async () => {
+    fixtures.members = [memberMichele, memberGaia]
+    const cls = await classifySs4Party({ account_id: "acc-1", ss4: { id: "ss4-1", contact_id: "c-michele" }, entityType: "MMLLC" })
+    expect(cls).toBe("member_derived")
+  })
+
+  it("member_derived: a company member's rep contact (case-insensitive email)", async () => {
+    fixtures.members = [{ id: "m-co", member_type: "company", full_name: null, company_name: "Holdings", contact_id: null, representative_name: "Rep", representative_email: "Rep@Holdings.com", is_primary: true, is_signer: true }]
+    fixtures.repContacts = [{ id: "c-rep", email: "rep@holdings.com" }]
+    const cls = await classifySs4Party({ account_id: "acc-1", ss4: { id: "ss4-1", contact_id: "c-rep" }, entityType: "MMLLC" })
+    expect(cls).toBe("member_derived")
+  })
+
+  it("picked: a pick record protects a non-member party", async () => {
+    fixtures.members = [memberMichele]
+    fixtures.pickRecords = [{ id: "log-1" }]
+    const cls = await classifySs4Party({ account_id: "acc-1", ss4: ss4Ref, entityType: "MMLLC" })
+    expect(cls).toBe("picked")
+  })
+
+  it("orphaned: non-member, no pick record — with members AND with an empty MMLLC roster", async () => {
+    fixtures.members = [memberMichele]
+    fixtures.pickRecords = []
+    expect(await classifySs4Party({ account_id: "acc-1", ss4: ss4Ref, entityType: "MMLLC" })).toBe("orphaned")
+    fixtures.members = []
+    expect(await classifySs4Party({ account_id: "acc-1", ss4: ss4Ref, entityType: "MMLLC" })).toBe("orphaned")
+  })
+
+  it("exempt: SMLLC/Corporation with no member rows; no_party: no contact stamped", async () => {
+    fixtures.members = []
+    expect(await classifySs4Party({ account_id: "acc-1", ss4: ss4Ref, entityType: "SMLLC" })).toBe("exempt")
+    expect(await classifySs4Party({ account_id: "acc-1", ss4: { id: "ss4-1", contact_id: null }, entityType: "MMLLC" })).toBe("no_party")
+  })
+
+  it("PROMOTION GATE: refuses ONLY the orphaned class, with the picker-pointing message", async () => {
+    fixtures.members = [memberMichele]
+    fixtures.pickRecords = []
+    const refused = await assertSs4PartyPromotable({
+      account_id: "acc-1",
+      ss4: { id: "ss4-1", contact_id: "c-departed", entity_type: "MMLLC", responsible_party_name: "Departed Member" },
+    })
+    expect(refused.ok).toBe(false)
+    if (refused.ok === false) {
+      expect(refused.message).toContain("Departed Member")
+      expect(refused.message).toContain("signer picker")
+    }
+    // Every legitimate class proceeds.
+    fixtures.pickRecords = [{ id: "log-1" }]
+    expect((await assertSs4PartyPromotable({ account_id: "acc-1", ss4: { id: "ss4-1", contact_id: "c-departed", entity_type: "MMLLC", responsible_party_name: null } })).ok).toBe(true)
+    fixtures.members = []
+    fixtures.pickRecords = []
+    expect((await assertSs4PartyPromotable({ account_id: "acc-1", ss4: { id: "ss4-1", contact_id: "c-owner", entity_type: "Single Member LLC", responsible_party_name: null } })).ok).toBe(true)
   })
 })
