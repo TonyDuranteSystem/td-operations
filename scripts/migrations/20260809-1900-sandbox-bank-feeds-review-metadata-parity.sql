@@ -1,3 +1,11 @@
+-- ⛔⛔ NEVER PROMOTE THIS MIGRATION TO PRODUCTION. SANDBOX-ONLY, BY DESIGN. ⛔⛔
+--
+-- This file exists to make the SANDBOX schema match what production ALREADY IS: production's
+-- review_metadata column is already nullable with no default (verified live, 2026-08-11, by the
+-- System Counselor during the WS-C council pass). Running it on production would be a no-op at
+-- best — but promoting "parity" migrations teaches the promote step a habit that will eventually
+-- run one that is NOT a no-op. If you are reading this while promoting WS-C: skip this file.
+--
 -- ============================================================================
 -- SANDBOX/PRODUCTION SCHEMA PARITY — td_bank_feeds.review_metadata
 --

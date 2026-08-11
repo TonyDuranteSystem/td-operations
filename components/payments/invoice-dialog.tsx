@@ -16,6 +16,12 @@ export interface InvoiceDialogDefaults {
   currency?: 'USD' | 'EUR'
   installment?: string
   dueDate?: string
+  /**
+   * WS-C: which offer's payment plan this invoice is one part of. Not a form field — carried
+   * silently from the Raise button through to the action, where it flips the dedup rule to
+   * part-identity and stamps the tranche lineage. Staff never type it.
+   */
+  tranche?: { offer_token: string; seq: number }
 }
 
 interface InvoiceDialogProps {
@@ -206,6 +212,7 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
         }
       } else {
         const input: CreateInvoiceInput = {
+          ...(defaultValues?.tranche ? { tranche: defaultValues.tranche } : {}),
           account_id: accountId!,
           description: description.trim(),
           amount_currency: currency,

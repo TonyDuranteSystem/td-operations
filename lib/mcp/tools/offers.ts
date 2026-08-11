@@ -555,7 +555,7 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
           const willHavePlan = addsPlan || storedPlan != null
           const willHaveReferrer = touchesReferrer || hasStoredReferrer
           if (willHavePlan && willHaveReferrer) {
-            return { content: [{ type: "text" as const, text: `❌ offer_update error: ${refusePlanWithReferralPartner(true)}` }] }
+            return { content: [{ type: "text" as const, text: `❌ offer_update error: ${refusePlanWithReferralPartner(true, token)}` }] }
           }
         }
 

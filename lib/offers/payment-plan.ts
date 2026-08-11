@@ -281,12 +281,22 @@ export function validatePaymentPlan(raw: unknown): PlanValidation {
  * WITH THE REFERRER. A client must never learn a referrer exists, so no version of this message
  * may ever be surfaced on a client page. English only (Antonio, 2026-08-11).
  */
-export function refusePlanWithReferralPartner(hasReferrer: boolean): string | null {
+export function refusePlanWithReferralPartner(
+  hasReferrer: boolean,
+  /**
+   * Names WHICH offer refused — the client's name at creation, the token on an update. Two real
+   * referred offers are live and unsigned right now, so a staff member will meet this refusal on
+   * a real deal soon (counselor, 2026-08-11): a message that names the deal and says what to do
+   * is actionable; one that only says "refused" sends them hunting.
+   */
+  subject?: string,
+): string | null {
   if (!hasReferrer) return null
+  const which = subject ? `Offer "${subject}" has a referrer` : "This offer has a referrer"
   return (
-    "This offer has a referrer, so it cannot be sold with a Partial Payment: the commission would " +
-    "be credited in full on the first payment. Either drop the plan, or remove the referrer and " +
-    "settle their commission by hand."
+    `${which}, so it cannot be sold with a Partial Payment: the commission would ` +
+    "be credited in full on the first payment. Either drop the plan, or remove the referrer " +
+    "(and settle their commission by hand as the parts are paid) — then save again."
   )
 }
 
