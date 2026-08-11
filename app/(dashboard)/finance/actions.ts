@@ -403,6 +403,12 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     const { error: voidErr } = await supabaseAdmin.from('payments').update({
       status: 'Cancelled', invoice_status: 'Cancelled', updated_at: now,
+      // Free the idempotency slot (gate defect, 2026-08-11 — found by Antonio's real click):
+      // this is the THIRD door that marks an invoice dead, and it was the only one still keeping
+      // the key. The key is globally unique while present, so a cancelled tranche part blocked
+      // its own re-raise with a collision — the corpse-bug's sibling, one file over from where
+      // the council fixed it. The cascade and the payments-page void both already release it.
+      idempotency_key: null,
     }).eq('id', paymentId)
     if (voidErr) throw new Error(`Failed to void payment: ${voidErr.message}`)
 
