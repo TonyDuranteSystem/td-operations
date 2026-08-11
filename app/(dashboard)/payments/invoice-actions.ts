@@ -291,6 +291,9 @@ export async function voidInvoice(
       .update({
         invoice_status: 'Voided',
         status: 'Waived',
+        // Free the idempotency slot, mirroring the offer-cancel cascade: a voided tranche part
+        // must be re-raisable, and a keyed corpse blocks the re-mint (council blocker, 2026-08-11).
+        idempotency_key: null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', paymentId)

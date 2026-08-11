@@ -225,3 +225,31 @@ describe("an auto-matched payment is recognised as paid despite its phantom owin
     expect(Object.keys(row)).not.toContain("amount_due")
   })
 })
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+//  ⛔ THE MIRROR IS MECHANICAL NOW (council, 2026-08-11): the dead-invoice list is asserted
+//  against the MIGRATION'S OWN PREDICATE, not restated as a literal. Blocker 2 of this council
+//  round was exactly this class of drift — a third copy of "what counts as dead" that diverged
+//  at birth — so the mirror is no longer comment-and-literal only.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
+
+describe("the dead list matches the newest index migration, mechanically", () => {
+  it("every dead status appears in the 20260810-0940 predicate, and no live one does", () => {
+    const sql = readFileSync(
+      join(process.cwd(), "scripts/migrations/20260810-0940-tranche-uniqueness-excludes-dead-invoices.sql"),
+      "utf-8",
+    )
+    for (const status of DEAD_INVOICE_STATUSES) {
+      expect(sql).toContain(`'${status}'`)
+    }
+    // And the predicate's NOT IN list contains exactly the dead statuses — nothing extra that
+    // the resolver would then treat as live while the database treats it as dead.
+    const m = sql.match(/NOT IN \(([^)]+)\)/)
+    expect(m).toBeTruthy()
+    const inDb = m![1].split(",").map((x) => x.trim().replace(/'/g, ""))
+    expect([...inDb].sort()).toEqual([...DEAD_INVOICE_STATUSES].sort())
+  })
+})

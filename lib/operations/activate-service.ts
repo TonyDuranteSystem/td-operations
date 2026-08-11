@@ -1527,7 +1527,13 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // Writes a row to referral_payouts with status='pending'. Admin reviews
   // in the CRM partner detail page and clicks Approve / Mark Paid.
   try {
-    if (offer?.partner_id && offer.partner_payout_model && offer.partner_payout_model !== "none") {
+    if (offer?.partner_id && offer.partner_payout_model && offer.partner_payout_model !== "none" && commissionSuppressedForPlan) {
+      // Same guard as the other two commission rails (council blocker, 2026-08-11): the payout is
+      // computed from the activation amount — the WHOLE commitment — so a plan deal would write a
+      // plausible full-deal figure with nothing telling the approver only part one arrived. The
+      // hand-settlement card raised in Step 3.5 is the record for this deal's commission.
+      steps.push({ step: "partner_payout", status: "skipped", detail: "Suppressed — deal is on a payment plan; settle the partner payout by hand (see the review card)" })
+    } else if (offer?.partner_id && offer.partner_payout_model && offer.partner_payout_model !== "none") {
       const { calculatePartnerPayout } = await import("@/lib/partners/payout-calc")
 
       // Read partner's td_base_costs map for the price_difference model.

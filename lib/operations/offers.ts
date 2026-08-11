@@ -492,8 +492,12 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
       // ⛔ A plan and a referrer cannot share an offer until the referral credit path can pay a
       // commission part by part. Refused HERE, at authoring, so the hand-settlement card stays a
       // safety net rather than the normal route.
+      // partner_id included (council blocker, 2026-08-11): a managed-partner deal is a THIRD
+      // commission rail — its payout is computed from the activation amount, which is the WHOLE
+      // commitment, so a plan would write a full-deal payout figure on first-part payment with
+      // nothing telling the approver only part one arrived.
       const hasReferrer = Boolean(
-        params.referrer_name || params.referrer_contact_id || params.referrer_account_id,
+        params.referrer_name || params.referrer_contact_id || params.referrer_account_id || params.partner_id,
       )
       // Staff-facing, English only — the client never learns a referrer exists.
       const referrerRefusal = refusePlanWithReferralPartner(hasReferrer)

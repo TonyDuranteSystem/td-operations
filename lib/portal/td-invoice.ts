@@ -16,6 +16,7 @@ import { syncTDInvoiceMirror } from '@/lib/portal/td-invoice-mirror'
 import { generateInvoiceNumber, generateCreditNoteNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
 import { computeCreditApplication, consumeCredits, releaseStaleCreditClaims, claimCredits, confirmCreditClaims, unwindCreditClaims } from '@/lib/operations/credit-netting'
 import { categoryFromInstallmentLabel } from '@/lib/billing/payment-classification'
+import { DEAD_INVOICE_STATUSES } from '@/lib/offers/payment-plan-state'
 import { getConfiguredCardFeeRate } from '@/lib/payments/card-fee-config'
 
 // ─── Types ──────────────────────────────────────────
@@ -546,12 +547,18 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
  * the cascade.
  */
 async function findByIdempotencyKey(key: string): Promise<TDInvoiceResult | null> {
+  // ⛔ Skip every DEAD invoice, not only Cancelled — council blocker, 2026-08-11. Voiding an
+  // invoice writes 'Voided' (and 'Waived' on the status column) WITHOUT nulling the key, so this
+  // lookup used to hand back the corpse: raise part two, void it, raise again → the "new" invoice
+  // was the dead one, unpayable, while the UI and the partial unique index both said the slot was
+  // free. The dead-list is IMPORTED from the one shared definition rather than restated, so the
+  // third copy of "what counts as dead" cannot drift the way this one did at birth.
   const { data: payment } = await supabaseAdmin
     .from('payments')
     .select('id, invoice_number, total, invoice_status, status')
     .eq('idempotency_key', key)
     .neq('status', 'Cancelled')
-    .neq('invoice_status', 'Cancelled')
+    .not('invoice_status', 'in', `(${DEAD_INVOICE_STATUSES.join(',')})`)
     .limit(1)
     .maybeSingle()
 

@@ -8,6 +8,7 @@ import {
   OWNER_ACCOUNT_ID,
   type ProjectableFeed,
   type OpenInvoiceRef,
+  expectedPartsFromPlans,
 } from "@/lib/finance/owner-ledger-projection"
 import type { ClientRosterEntry } from "@/lib/finance/client-payer-evidence"
 import { buildTaughtPayerIndex } from "@/lib/finance/payer-learning-rules"
@@ -422,5 +423,57 @@ describe("ISOLATION: routing must never reach the roster scan [UNIT]", () => {
     expect(
       describeOwnerLedgerConcern(NAMES_THE_CLIENT_EXACTLY, [], { roster: PERFECT_MATCH_ROSTER })?.suspectedClientName,
     ).toBe("Vandenberg Logistics")
+  })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+//  ⛔ THE EXPECTED-PAYMENTS EVIDENCE IS NOW WIRED (council blocker, 2026-08-11)
+//
+//  `matchesExpectedPayment` existed and the router consulted it, but no production caller ever
+//  built the list — a protection that was claimed and inert. These pin the pure core of the
+//  loader the sweep now calls.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+
+
+describe("expectedPartsFromPlans — what the system is still waiting on", () => {
+  const PLAN = [
+    { seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "signing" } },
+    { seq: 2, amount: 1250, currency: "EUR", trigger: { kind: "manual", label: "when your bank account is opened" } },
+  ]
+
+  it("expects every part of a live plan when nothing is raised", () => {
+    const exp = expectedPartsFromPlans([{ token: "t1", payment_plan: PLAN }], new Set())
+    expect(exp.map((e) => e.amount)).toEqual([1250, 1250])
+    expect(exp[1].label).toContain("part 2 of 2")
+  })
+
+  it("excludes a part that already has a LIVE tranche invoice", () => {
+    // Once raised, the open-invoice band covers it; expecting it twice would widen the net for
+    // no reason.
+    const exp = expectedPartsFromPlans([{ token: "t1", payment_plan: PLAN }], new Set(["t1:1"]))
+    expect(exp.map((e) => e.amount)).toEqual([1250])
+    expect(exp[0].label).toContain("part 2")
+  })
+
+  it("a malformed stored plan contributes nothing rather than throwing", () => {
+    // The sweep must never die on one bad row — it runs before the matcher on every cycle.
+    const exp = expectedPartsFromPlans(
+      [
+        { token: "bad", payment_plan: [{ seq: 1, amount: -5 }] },
+        { token: "good", payment_plan: PLAN },
+      ],
+      new Set(),
+    )
+    expect(exp).toHaveLength(2)
+    expect(exp.every((e) => e.label?.includes("good"))).toBe(true)
+  })
+
+  it("carries the currency so a €1,250 wire never matches a $1,250 part", () => {
+    const exp = expectedPartsFromPlans([{ token: "t1", payment_plan: PLAN }], new Set())
+    expect(exp.every((e) => e.currency === "EUR")).toBe(true)
+  })
+
+  it("no plans → empty, which is exactly the pre-plan behaviour of the sweep", () => {
+    expect(expectedPartsFromPlans([], new Set())).toEqual([])
   })
 })

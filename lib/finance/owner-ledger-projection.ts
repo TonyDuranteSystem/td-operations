@@ -49,6 +49,7 @@ import {
 } from "@/lib/finance/payer-learning-rules"
 
 import { reportSystemError } from "@/lib/system-errors"
+import { validatePaymentPlan } from "@/lib/offers/payment-plan"
 
 import { TD_ENTITY_ID } from "@/lib/owner-finance"
 
@@ -743,6 +744,85 @@ async function fetchTaughtPayerIndex(): Promise<TaughtPayerIndex> {
 }
 
 /**
+ * Amounts the system is already EXPECTING from clients — the parts of live payment plans.
+ *
+ * ⛔ Council blocker, 2026-08-11: `matchesExpectedPayment` existed and the router consulted
+ * `evidence.expected`, but NO production caller ever built the list — the comment claimed a
+ * protection that was inert (failure pattern #6 in the offers doc, found by the project
+ * director). This loader is the wiring.
+ *
+ * WHY IT MATTERS: a client on a plan wires a later part when their trigger happens — possibly
+ * BEFORE staff raise that part's invoice. With no invoice open at that amount, the deposit
+ * carries none of the router's positive evidence, and this sweep (which runs before the matcher)
+ * would file a real client payment into the owner's books: the exact Domenico misfile this
+ * module's header cites as its reason to exist.
+ *
+ * Shape: every part of every plan on a live (non-final) plan-bearing offer, minus parts that
+ * already have a live tranche invoice (those are covered by the open-invoice band once raised,
+ * and by the matcher once sent). Narrow-cast reads because the generated types predate the
+ * plan/tranche columns. Fail-open to an empty list: a read error must not stop the sweep, and an
+ * empty list is exactly the pre-plan behaviour.
+ */
+async function fetchExpectedPlanPayments(): Promise<ExpectedPayment[]> {
+  try {
+    const offersQuery = supabaseAdmin
+      .from("offers")
+      .select("token, status, payment_plan" as never)
+      .not("payment_plan" as never, "is", null) as unknown as {
+        then: PromiseLike<{ data: Array<{ token: string; status: string | null; payment_plan?: unknown }> | null }>["then"]
+      }
+    const { data: planOffers } = await offersQuery
+    if (!planOffers?.length) return []
+
+    const live = planOffers.filter((o) => !["superseded", "cancelled", "declined"].includes(o.status ?? ""))
+    if (!live.length) return []
+
+    const tranchesQuery = supabaseAdmin
+      .from("payments")
+      .select("tranche_offer_token, tranche_seq, invoice_status" as never)
+      .in("tranche_offer_token" as never, live.map((o) => o.token) as never) as unknown as {
+        then: PromiseLike<{ data: Array<{ tranche_offer_token: string; tranche_seq: number; invoice_status: string | null }> | null }>["then"]
+      }
+    const { data: trancheRows } = await tranchesQuery
+    const raisedLive = new Set(
+      (trancheRows ?? [])
+        .filter((r) => !["Cancelled", "Voided", "Credit"].includes(r.invoice_status ?? ""))
+        .map((r) => `${r.tranche_offer_token}:${r.tranche_seq}`),
+    )
+
+    return expectedPartsFromPlans(live, raisedLive)
+  } catch {
+    return [] // fail open — empty is the pre-plan behaviour, and the sweep must not stop
+  }
+}
+
+/**
+ * PURE CORE of the expected-payments loader: which plan parts is the system still waiting on?
+ * A part with a LIVE tranche invoice is excluded (covered by the open-invoice band once raised);
+ * a malformed stored plan contributes nothing rather than throwing — the sweep must never die
+ * on one bad row.
+ */
+export function expectedPartsFromPlans(
+  offers: Array<{ token: string; payment_plan?: unknown }>,
+  raisedLive: Set<string>,
+): ExpectedPayment[] {
+  const expected: ExpectedPayment[] = []
+  for (const o of offers) {
+    const parsed = validatePaymentPlan(o.payment_plan)
+    if (!parsed.ok || !parsed.plan) continue
+    for (const part of parsed.plan) {
+      if (raisedLive.has(`${o.token}:${part.seq}`)) continue
+      expected.push({
+        amount: part.amount,
+        currency: part.currency,
+        label: `part ${part.seq} of ${parsed.plan.length} on offer ${o.token}`,
+      })
+    }
+  }
+  return expected
+}
+
+/**
  * The scheduled sweep: anything that is not positively a client invoice payment is copied to
  * My Finances and taken out of the Bank Feed. Runs each cycle before the invoice matcher.
  *
@@ -754,6 +834,7 @@ export async function sweepFeedsToOwnerLedger(): Promise<ProjectionResult> {
   const openInvoices = await fetchOpenInvoices()
   const roster = await fetchClientRoster()
   const taught = await fetchTaughtPayerIndex()
+  const expected = await fetchExpectedPlanPayments()
 
   const { data, error } = await supabaseAdmin
     .from("td_bank_feeds")
@@ -770,6 +851,7 @@ export async function sweepFeedsToOwnerLedger(): Promise<ProjectionResult> {
     openInvoices,
     roster,
     taught,
+    expected,
   })
 }
 
