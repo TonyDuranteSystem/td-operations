@@ -78,11 +78,49 @@ function step(name: string, status: "ok" | "error" | "skipped", detail?: string)
   return { name, status, detail, timestamp: new Date().toISOString() }
 }
 
+/**
+ * Which revision of THIS handler is running. Bump it whenever the handler's
+ * behaviour changes (dev job ca788354).
+ *
+ * WHY THIS EXISTS. On 2026-08-10 the sandbox served the NEW portal pages and
+ * the OLD compiled job handler at the same time — a stale build artifact. The
+ * job dutifully created a "WhatsApp follow-up" task from a step that had been
+ * deleted, and every job-level QA result taken that evening was quietly
+ * meaningless. It looked like a passing test.
+ *
+ * Nothing in the job's own record said which code produced it, so "which
+ * handler ran" was an INFERENCE. Now it is a FACT written into the step log:
+ * read `build_identity` on any run before trusting what the other steps say.
+ * The revision string proves the BUNDLE is fresh (it changes when this file
+ * changes); the deployment id proves WHICH deployment served it.
+ */
+const HANDLER_REVISION = "ca788354-resubmit-gate-v1"
+
+/** The build identity line, emitted as the FIRST step of every run. */
+export function buildIdentityDetail(
+  env: { deploymentId?: string; commitSha?: string } = {},
+): string {
+  const deployment = env.deploymentId || "local"
+  const commit = env.commitSha ? env.commitSha.slice(0, 7) : "n/a"
+  return `handler=${HANDLER_REVISION} deployment=${deployment} commit=${commit}`
+}
+
 export async function handleFormationSetup(job: Job): Promise<JobResult> {
   const p = job.payload as unknown as FormationPayload
   const result: JobResult = { steps: [] }
   const now = new Date().toISOString()
   const submitted = p.submitted_data || {}
+
+  // ─── 0a. BUILD IDENTITY — always first, even if everything else fails ───
+  // So that "which code produced this result" is never inferred again.
+  result.steps.push(step(
+    "build_identity",
+    "ok",
+    buildIdentityDetail({
+      deploymentId: process.env.VERCEL_DEPLOYMENT_ID,
+      commitSha: process.env.VERCEL_GIT_COMMIT_SHA,
+    }),
+  ))
 
   // ─── 0. VALIDATE WIZARD DATA ───
   const validation = validateFormationData(submitted)

@@ -47,7 +47,7 @@ vi.mock('@/lib/operations/itin-from-wizard', () => ({
   createItinDeliveriesFromWizard: vi.fn(async () => ({ created: 0, skipped: 0, people: [] })),
 }))
 
-import { handleFormationSetup } from '@/lib/jobs/handlers/formation-setup'
+import { handleFormationSetup, buildIdentityDetail } from '@/lib/jobs/handlers/formation-setup'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createSD } from '@/lib/operations/service-delivery'
 import { advanceServiceDelivery } from '@/lib/service-delivery'
@@ -419,5 +419,48 @@ describe('the lookup must not be keyed on the contact alone', () => {
     install({ formations: [FINISHED_FORMATION], offer: { token: 'a-different-offer-2026' } })
     await handleFormationSetup(job())
     expect(createSD).toHaveBeenCalled()
+  })
+})
+
+describe('build identity — the job states which code produced its result', () => {
+  // The 2026-08-10 stale-build incident: the sandbox served new pages and an
+  // OLD compiled handler, so a deleted step still ran and every job-level QA
+  // result that evening was meaningless while looking green. "Which handler
+  // ran" must be a fact in the log, never an inference.
+
+  it('is the FIRST step of every run, before anything can fail', async () => {
+    install({ formations: [], offer: { token: OFFER_TOKEN } })
+    const result = await handleFormationSetup(job())
+    expect(result.steps[0]?.name).toBe('build_identity')
+  })
+
+  it('is emitted even when validation rejects the submission', async () => {
+    const { validateFormationData } = await import('@/lib/jobs/validation')
+    vi.mocked(validateFormationData).mockReturnValueOnce({
+      valid: false,
+      errors: [{ field: 'owner_email', message: 'required' }],
+    } as never)
+    install({ formations: [], offer: { token: OFFER_TOKEN } })
+    const result = await handleFormationSetup(job())
+    expect(result.steps[0]?.name).toBe('build_identity')
+  })
+
+  it('names the handler revision, the deployment and the commit', () => {
+    const detail = buildIdentityDetail({ deploymentId: 'dpl_abc123', commitSha: '0123456789abcdef' })
+    expect(detail).toContain('handler=')
+    expect(detail).toContain('deployment=dpl_abc123')
+    expect(detail).toContain('commit=0123456')
+  })
+
+  it('says so plainly when it is not running on a deployment', () => {
+    const detail = buildIdentityDetail({})
+    expect(detail).toContain('deployment=local')
+    expect(detail).toContain('commit=n/a')
+  })
+
+  it('carries a revision string that changes when this handler changes', () => {
+    // A constant that a stale bundle cannot fake: if the deployed job reports
+    // an older revision than the source, the deployment is stale.
+    expect(buildIdentityDetail({})).toMatch(/handler=ca788354-resubmit-gate-v\d+/)
   })
 })
