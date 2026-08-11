@@ -333,16 +333,35 @@ export async function refreshSS4(args: {
       const repEmails = members
         .filter((m) => m.member_type === "company" && !m.contact_id && m.representative_email)
         .map((m) => m.representative_email as string)
-      if (repEmails.length > 0) {
+      // CASE-INSENSITIVE, matching resolveMemberContactId's .ilike semantics —
+      // contacts.email is stored as entered, so a case-drifted rep email must
+      // not demote a member-derived party to "pick or orphan" (final council
+      // pass, 2026-08-11). Bounded loop: one query per company member without a
+      // linked contact, typically 0–2.
+      for (const email of repEmails) {
         const { data: repRows } = await supabaseAdmin
           .from("contacts")
-          .select("id, email")
-          .in("email", repEmails)
-        if (repRows?.some((r) => r.id === row.contact_id)) partyIsMemberDerived = true
+          .select("id")
+          .ilike("email", email)
+        if (repRows?.some((r) => r.id === row.contact_id)) {
+          partyIsMemberDerived = true
+          break
+        }
       }
     }
 
-    if (members.length > 0 && !partyIsMemberDerived && row.contact_id) {
+    // The orphan check runs when the party is not member-derived AND members
+    // exist — OR when an MMLLC's member list is EMPTY (the buyout hole: delete
+    // every member with the stamped signer's row last, and the departed signer
+    // would otherwise slip through the no_members keep-rule with a live link —
+    // the original incident class, final council pass 2026-08-11). SMLLCs are
+    // structurally 0-members and their party is account_contacts-derived, so
+    // the empty-roster arm deliberately applies to MMLLC only.
+    const partyNeedsPickCheck =
+      !!row.contact_id &&
+      (members.length > 0 ? !partyIsMemberDerived : entityType === "MMLLC")
+
+    if (partyNeedsPickCheck) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: pickRows, error: pickErr } = await (supabaseAdmin as any)
         .from("action_log")
@@ -363,19 +382,26 @@ export async function refreshSS4(args: {
       } else {
         // ── ORPHANED SIGNER ──
         const revokedCode = randomBytes(4).toString("hex")
-        const { error: revokeErr } = await supabaseAdmin
+        const { data: revokedRows, error: revokeErr } = await supabaseAdmin
           .from("ss4_applications")
           .update({ access_code: revokedCode, status: "draft", updated_at: new Date().toISOString() })
           .eq("id", row.id)
           .in("status", ["draft", "awaiting_signature"])
           .is("signed_at", null)
+          .select("id")
+        // Zero rows = the guarded update matched nothing — the client signed in
+        // the read→revoke window. NEVER claim the link was revoked then (final
+        // council pass: the earlier code reported success on a no-op).
+        const revokeFailed = !!revokeErr || !revokedRows || revokedRows.length === 0
         const who = row.responsible_party_name || "the previous signer"
         const message = [
           `The SS-4's responsible party (${who}) is no longer one of this company's members — the member was removed or their contact was changed.`,
           revokeErr
             ? `⚠️ Their signing link could NOT be revoked automatically (${revokeErr.message}) — revoke it by changing the signer now.`
-            : `Their signing link has been revoked and the SS-4 returned to draft.`,
-          `Pick the correct responsible party on the SS-4 card (any linked contact), or fix the Members section, then regenerate.`,
+            : revokeFailed
+              ? `⚠️ Their signing link could NOT be revoked — the record appears to have just been signed. Check the SS-4 before anything else.`
+              : `Their signing link has been revoked and the SS-4 returned to draft.`,
+          `Pick the correct responsible party with the signer picker on the SS-4 card (any linked contact).`,
         ].join(" ")
         await logAction({
           action_type: "update",
@@ -384,7 +410,7 @@ export async function refreshSS4(args: {
           account_id,
           summary: `SS-4 refresh BLOCKED (${source}): responsible party (${who}) orphaned by a member change — link revoked, staff must pick a signer`,
         })
-        return { ok: false, outcome: "orphaned_signer", message, ss4: { ...identity(row), status: revokeErr ? row.status : "draft", access_code: revokeErr ? row.access_code : revokedCode } }
+        return { ok: false, outcome: "orphaned_signer", message, ss4: { ...identity(row), status: revokeFailed ? row.status : "draft", access_code: revokeFailed ? row.access_code : revokedCode } }
       }
     } else {
     const decision = decideSs4Signer(members, entityType)

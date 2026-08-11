@@ -86,6 +86,12 @@ function makeBuilder(table: string) {
     state.usedIn = true
     return b
   }
+  // The rep-email resolution is now a per-email `.ilike` (case-insensitive,
+  // array result) — flag it like `.in` so contacts resolves the ARRAY fixture.
+  b.ilike = (..._args: unknown[]) => {
+    state.usedIn = true
+    return b
+  }
   b.is = chain
   b.order = chain
   b.limit = chain
@@ -482,5 +488,53 @@ describe("refreshSS4", () => {
     const r = await refreshSS4({ account_id: "acc-1", source: "test" })
     expect(r.outcome).toBe("refreshed")
     expect(updateCalls[0].values.contact_id).toBe("c-michele")
+  })
+
+  it("CREATION-TIME EXPLICIT PICK: a pick record from ss4_create keeps the party like any picker pick", async () => {
+    // The round-4 major: createSS4(contact_id=X) now writes the same pick
+    // record — this cell only cares that ANY matching record protects the
+    // party (the record's source is irrelevant to the guard).
+    fixtures.ss4 = { ...dbSs4Row, contact_id: "c-created-explicit", responsible_party_name: "Created Pick", company_name: "Acme Old Name LLC" }
+    fixtures.pickRecords = [{ id: "log-created" }]
+    const r = await refreshSS4({ account_id: "acc-1", source: "test" })
+    expect(r.outcome).toBe("refreshed")
+    expect(updateCalls[0].values).not.toHaveProperty("contact_id")
+  })
+
+  it("DELETE-ALL-MEMBERS HOLE CLOSED: MMLLC with an EMPTY roster and an unpicked party → orphan, not silent keep", async () => {
+    // The buyout sequence: every member deleted, the stamped signer's row last.
+    // Pre-fix this fell through the no_members keep-rule with a live link —
+    // the original incident class.
+    fixtures.ss4 = { ...dbSs4Row, status: "awaiting_signature", contact_id: "c-departed", responsible_party_name: "Departed Last Member" }
+    fixtures.members = []
+    fixtures.pickRecords = []
+    const r = await refreshSS4({ account_id: "acc-1", source: "test" })
+    expect(r.outcome).toBe("orphaned_signer")
+    expect(updateCalls).toHaveLength(1)
+    expect(updateCalls[0].values.status).toBe("draft")
+    expect(updateCalls[0].values.access_code).not.toBe(dbSs4Row.access_code)
+  })
+
+  it("SMLLC with an empty roster keeps its party — the empty-roster orphan arm is MMLLC-only", async () => {
+    fixtures.ss4 = { ...dbSs4Row, entity_type: "SMLLC", contact_id: "c-owner", responsible_party_name: "Solo Owner" }
+    fixtures.account = { ...dbAccount, entity_type: "Single Member LLC" }
+    fixtures.members = []
+    fixtures.pickRecords = []
+    const r = await refreshSS4({ account_id: "acc-1", source: "test" })
+    expect(r.outcome).not.toBe("orphaned_signer")
+    expect(r.ok).toBe(true)
+  })
+
+  it("ORPHAN REVOKE ZERO-ROWS: the client signed in the window → message admits the link was NOT revoked", async () => {
+    fixtures.ss4 = { ...dbSs4Row, status: "awaiting_signature", contact_id: "c-departed", responsible_party_name: "Departed" }
+    fixtures.pickRecords = []
+    fixtures.updateResult = { data: [], error: null } // guarded revoke matches nothing
+    const r = await refreshSS4({ account_id: "acc-1", source: "test" })
+    expect(r.outcome).toBe("orphaned_signer")
+    expect(r.message).toContain("could NOT be revoked")
+    expect(r.message).not.toContain("has been revoked")
+    // The payload must not pretend the row is draft with a fresh code.
+    expect(r.ss4?.status).toBe("awaiting_signature")
+    expect(r.ss4?.access_code).toBe(dbSs4Row.access_code)
   })
 })

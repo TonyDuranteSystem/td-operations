@@ -359,13 +359,39 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
   }
 
   // ─── 10. LOG ───
-  await logAction({
-    action_type: "create",
-    table_name: "ss4_applications",
-    record_id: ss4.id,
-    account_id: params.account_id,
-    summary: `Created SS-4 for ${account.company_name} (${entityType}, ${state})`,
-  })
+  // When the caller EXPLICITLY named the responsible party (ss4_create with
+  // contact_id — the tool's own documented MMLLC flow), that is a pick exactly
+  // like the workspace picker's, so it writes the same PICK RECORD
+  // (details.picked_contact_id) that refreshSS4's pick-wins guard consults.
+  // Without it, a later member edit would mis-class the creation-time choice as
+  // an ORPHANED signer and revoke its link (final council pass, 2026-08-11).
+  // Awaited + error-checked for the same reason as in setSs4Signer.
+  if (params.contact_id) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: pickLogErr } = await (supabaseAdmin as any).from("action_log").insert({
+      actor: "system",
+      action_type: "create",
+      table_name: "ss4_applications",
+      record_id: ss4.id,
+      account_id: params.account_id,
+      summary: `Created SS-4 for ${account.company_name} (${entityType}, ${state}) — responsible party explicitly specified by the caller`,
+      details: { picked_contact_id: params.contact_id, source: "ss4-create-explicit" },
+    })
+    if (pickLogErr) {
+      console.error(
+        "[createSS4] PICK RECORD insert failed — a later refresh may treat this explicit party as orphaned (alert+revoke, recoverable):",
+        pickLogErr.message,
+      )
+    }
+  } else {
+    await logAction({
+      action_type: "create",
+      table_name: "ss4_applications",
+      record_id: ss4.id,
+      account_id: params.account_id,
+      summary: `Created SS-4 for ${account.company_name} (${entityType}, ${state})`,
+    })
+  }
 
   // ─── 10b. SYNC member_count TO ACCOUNTS (MMLLC only, don't overwrite) ───
   if (memberCount && entityType === "MMLLC") {

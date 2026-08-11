@@ -399,6 +399,10 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
         success: true,
         regenerated: true,
         unchanged: result.outcome === "unchanged",
+        // The kept-explicit-pick note — the flow workspace surfaces it, and a
+        // CRM regenerate must not be the one silent surface (final council
+        // pass, 2026-08-11).
+        note: result.message ?? undefined,
         token: existing.token,
         access_code: existing.access_code,
         admin_preview: `${SS4_BASE_URL}/${existing.token}/${existing.access_code}?preview=td`,
