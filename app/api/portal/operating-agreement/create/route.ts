@@ -17,7 +17,7 @@
  * stored as 'sent', not 'draft', or it never reaches the portal's action-required
  * list — see the comment on the status field.
  *
- * Body: { account_id: string, effective_date: string, legacy_member_address?: string }
+ * Body: { account_id: string, effective_date: string }
  *
  * ⛔ `member_addresses: string[]` IS GONE — do not reintroduce it (dev job
  * `61f184ca`, Antonio's ruling 2026-08-12: "A legal document must never be able to
@@ -36,12 +36,15 @@
  * Deleting the path removes both by construction. The screen is now read-only and
  * renders exactly what this route stores, via the shared resolver.
  *
- * `legacy_member_address` is the ONE remaining exception and is not the same thing:
- * accounts predating the members table have no member row at all, so a read-only
- * field would leave them permanently empty with no way to proceed. For those — and
- * ONLY those, enforced server-side below — the client supplies their address once
- * and it is written back to their contact record, so there is still exactly one
- * source of truth afterwards rather than a value that lives only on the agreement.
+ * NO ADDRESS FIELD OF ANY KIND is accepted. A sole owner could briefly type one
+ * (their company has no member roster by design), which meant prefilling a form by
+ * SPLITTING a stored one-line address back apart. That join is lossy — 35 of 271
+ * contacts have fewer than five parts — so the split guessed wrong and the guess
+ * was written back over the client's contact record, erasing city, state, postal
+ * code and country. Antonio removed the field and the write-back entirely rather
+ * than repair the splitter: the record wins everywhere, with no carve-out. A sole
+ * owner corrects their address on their PROFILE screen, which already offers the
+ * five structured fields and a safe write.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -55,25 +58,17 @@ import { APP_BASE_URL } from '@/lib/config'
 import { notifyClientActionRequired } from '@/lib/portal/action-required'
 import { reportSystemError } from '@/lib/system-errors'
 import { resolveSigningSet, describeSigningBlock, signerDisplayName, type ResolvedSigner } from '@/lib/members/signing-set'
-import { formatMemberAddressRow, resolveMemberAddress, isMemberAddressEmpty } from '@/lib/members/member-address'
 import {
-  maySupplyAddress,
+  mustRefuseSuppliedAddress,
   mustRefuseOnMemberReadFailure,
   resolveSoleMemberAddress,
   pickSoleMemberRow,
   formatOwnerContactAddress,
   shouldStoreSoleMemberAddress,
 } from '@/lib/members/oa-address-decisions'
-import { updateContact } from '@/lib/operations/contact'
+import { formatMemberAddressRow } from '@/lib/members/member-address'
 import { resolveOwnerOfRecord } from '@/lib/members/sole-owner-address'
 import { signerLinkExpiryISO } from '@/lib/oa/public-view'
-
-/** Blank-safe trim shared by the legacy-address fields — "" and "  " become null. */
-function cleanField(value: string | undefined): string | null {
-  if (typeof value !== 'string') return null
-  const trimmed = value.trim()
-  return trimmed.length > 0 ? trimmed : null
-}
 
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -86,7 +81,8 @@ export async function POST(request: NextRequest) {
   let body: {
     account_id?: string
     effective_date?: string
-    legacy_member_address?: { street?: string; city?: string; state?: string; zip?: string; country?: string }
+    // No address field of any kind. See mustRefuseSuppliedAddress below.
+    [key: string]: unknown
   }
   try {
     body = await request.json()
@@ -96,24 +92,17 @@ export async function POST(request: NextRequest) {
 
   const { account_id, effective_date } = body
 
-  // STRUCTURED, not one free-text line. The legacy value is written back to the
-  // client's contact record, and that record stores street / city / state / ZIP /
-  // country as separate columns — posting a single string would either be dumped
-  // whole into the street column or split by guesswork, and either way the "one
-  // source of truth" this exception exists to preserve would be corrupt on arrival.
-  const legacyAddressInput = body.legacy_member_address ?? null
-  const legacyMemberAddress = legacyAddressInput
-    ? {
-        address_street: cleanField(legacyAddressInput.street),
-        address_city: cleanField(legacyAddressInput.city),
-        address_state: cleanField(legacyAddressInput.state),
-        address_zip: cleanField(legacyAddressInput.zip),
-        address_country: cleanField(legacyAddressInput.country),
-        member_type: 'individual' as const,
-      }
-    : null
-  // Whitespace-only in every field counts as "not supplied", never as a blank address.
-  const legacyAddressSupplied = !!legacyMemberAddress && !isMemberAddressEmpty(resolveMemberAddress(legacyMemberAddress))
+  // NOTHING on the Generate Documents screen is editable, so no request may carry
+  // an address. Refused LOUDLY rather than ignored: the deleted editable field was
+  // silently discarded for every account that had member records, which meant a
+  // client correcting a wrong address had no way to succeed and no way to know they
+  // had failed. A stale client or a crafted post gets told, not humoured.
+  if (mustRefuseSuppliedAddress(body as Record<string, unknown>)) {
+    return NextResponse.json({
+      error: 'Member addresses come from your company records and cannot be set here. If an address is wrong, contact support@tonydurante.us and we\'ll correct it before you sign.',
+    }, { status: 400 })
+  }
+
   if (!account_id || !effective_date) {
     return NextResponse.json({ error: 'account_id and effective_date are required' }, { status: 400 })
   }
@@ -269,27 +258,9 @@ export async function POST(request: NextRequest) {
     ownerOfRecordContactId = resolveOwnerOfRecord(links ?? [])
   }
 
-  // THE GATE — one decision, made in one tested place (see
-  // lib/members/oa-address-decisions.ts). Inline, this was two separate checks in
-  // two branches and neither had a test; a reviewer found a fail-open defect a few
-  // lines above that code-reading had missed, in a path that produces legal
-  // documents. Both refusal reasons come back from the same function so the screen
-  // and the server cannot drift on who may author an address.
-  const submission = maySupplyAddress({
-    supplied: legacyAddressSupplied,
-    hasMemberRecords,
-    ownerOfRecordContactId,
-    callerContactId: contactId,
-  })
-  if (!submission.allowed) {
-    return submission.reason === 'has_member_records'
-      ? NextResponse.json({
-          error: 'This company\'s member details come from its member records and cannot be edited here. If an address is wrong, contact support@tonydurante.us and we\'ll correct it.',
-        }, { status: 400 })
-      : NextResponse.json({
-          error: 'Only the owner listed on this company can set the address that appears on the Operating Agreement. You can still create the agreement — if the address shown is wrong, contact support@tonydurante.us.',
-        }, { status: 403 })
-  }
+  // No submission gate is needed any more: an address on the request was already
+  // refused above, for every account shape. What remains is only WHOSE address to
+  // display and store, which is the owner-of-record lookup above.
 
   if (isMMLC) {
     if (membersRows.length === 0) {
@@ -520,7 +491,7 @@ export async function POST(request: NextRequest) {
   // holds it — the same record-vs-document split this job exists to close, and
   // what the first cut of this change did on exactly this path.
   let ownerRecordAddress: string | null = null
-  if (!hasMemberRecords && !legacyAddressSupplied && ownerOfRecordContactId) {
+  if (!hasMemberRecords && ownerOfRecordContactId) {
     const { data: ownerContact } = await supabaseAdmin
       .from('contacts')
       .select('address_line1, address_city, address_state, address_zip, address_country')
@@ -536,8 +507,6 @@ export async function POST(request: NextRequest) {
   const soleMemberAddress = resolveSoleMemberAddress({
     hasMemberRecords,
     primaryMemberRow: pickSoleMemberRow(membersRows),
-    suppliedAddress: legacyMemberAddress,
-    suppliedAllowed: legacyAddressSupplied,
     ownerRecordAddress,
   })
 
@@ -600,63 +569,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: insertErr?.message ?? 'Failed to create OA' }, { status: 500 })
   }
 
-  // ── 7b. WRITE THE LEGACY ADDRESS BACK TO THE RECORD ──
-  // Without this, an address typed by a pre-members-table client would live ONLY
-  // on the agreement — the exact split this change exists to close, just moved
-  // somewhere less visible. Writing it to their contact means the next agreement,
-  // and every screen, reads the same value they just signed.
-  //
-  // AFTER the insert, deliberately: the agreement is the thing the client asked
-  // for, and a contacts write that failed first must not cost them the document.
-  // Best-effort for the same reason — but NOT silent, because a failure here
-  // leaves precisely the divergence we are removing, so it raises a real alarm.
-  if (!hasMemberRecords && legacyAddressSupplied && legacyMemberAddress) {
-    try {
-      // Through the operations layer, not a raw update: `contacts` is a protected
-      // table, and routing it here gets the write an action_log entry — so a
-      // client-initiated change to the address on a legal document is auditable
-      // rather than appearing in the record from nowhere.
-      const res = await updateContact({
-        // The owner of record, established above from the account's own links —
-        // not the logged-in caller. (They are the same person here, because a
-        // mismatch was refused with a 403; writing the derived id rather than
-        // `contactId` keeps that guarantee structural if the guard ever moves.)
-        id: ownerOfRecordContactId ?? contactId,
-        actor: 'portal-client',
-        summary: 'Address supplied by the client while generating their Operating Agreement',
-        details: { account_id, company: account.company_name, address: soleMemberAddress },
-        patch: {
-          address_line1: legacyMemberAddress.address_street,
-          address_city: legacyMemberAddress.address_city,
-          address_state: legacyMemberAddress.address_state,
-          address_zip: legacyMemberAddress.address_zip,
-          address_country: legacyMemberAddress.address_country,
-          // ALSO the field the STAFF generator reads. The CRM and MCP OA doors
-          // compose a sole member's address from `residency`, not from the
-          // structured columns — so writing only the columns meant a staff reissue
-          // for this same client printed a different (or blank) address from the
-          // one they signed. Both doors read the same value or the job isn't done
-          // (Antonio, 2026-08-12).
-          residency: soleMemberAddress,
-        },
-      })
-      if (!res.success) throw new Error(res.error ?? res.outcome)
-    } catch (err) {
-      await reportSystemError({
-        source: 'server',
-        route: '/api/portal/operating-agreement/create',
-        method: 'POST',
-        message: `Operating Agreement for ${account.company_name} stored an address that could NOT be written back to the client's contact record — the agreement and the CRM now disagree on this member's address`,
-        context: {
-          account_id,
-          contact_id: contactId,
-          token: oa.token,
-          address: soleMemberAddress,
-          db_error: err instanceof Error ? err.message : String(err),
-        },
-      })
-    }
-  }
+  // NO WRITE-BACK. A document-generation screen READS the record; only the
+  // record's own screen writes it. The removed version wrote the client's typed
+  // address into their contact row (and into the legacy `residency` column that
+  // other code reads as a country), which forced an unreliable "who is the owner"
+  // lookup to become load-bearing for a WRITE — and, through a lossy address
+  // split, erased city/state/postal-code/country for contacts whose address had
+  // fewer than five parts. A sole owner corrects their address on their profile.
 
   // ── 8. FOR MMLLC: INSERT OA_SIGNATURES + SEND PORTAL CHAT ──
   const notifyOutcomes: Awaited<ReturnType<typeof notifyClientActionRequired>>[] = []

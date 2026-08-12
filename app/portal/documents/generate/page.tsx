@@ -8,7 +8,6 @@ import { getLocale } from '@/lib/portal/i18n'
 import { GenerateDocumentsClient } from './generate-documents-client'
 import { formatMemberAddress } from '@/lib/members/member-address'
 import { resolveOwnerOfRecord } from '@/lib/members/sole-owner-address'
-import { decideScreenAddressMode } from '@/lib/members/oa-address-decisions'
 
 export const dynamic = 'force-dynamic'
 
@@ -126,19 +125,6 @@ export default async function GenerateDocumentsPage() {
         }]
       : []
 
-  // Only the owner of record may supply the address on a no-roster account. Anyone
-  // else linked to the company sees it read-only — they can still generate the
-  // agreement, they just cannot author someone else's address. Computed here and
-  // re-derived server-side by the create route; this only decides what is RENDERED.
-  // Both flags from ONE tested decision, so the screen has no logic of its own to
-  // drift from the server's copy — and so "always read-only" or "always editable"
-  // cannot be introduced here without a test going red.
-  const screenMode = decideScreenAddressMode({
-    memberRowCount: rawMembers.length,
-    ownerOfRecordContactId: ownerOfRecordId,
-    viewerContactId: contactId,
-  })
-
   return (
     <GenerateDocumentsClient
       account={{
@@ -154,8 +140,6 @@ export default async function GenerateDocumentsPage() {
         memberCount: (accountDetail as Record<string, unknown>).member_count as number | null ?? null,
       }}
       members={mappedMembers}
-      membersFromRecord={screenMode.membersFromRecord}
-      canEditSoleOwnerAddress={screenMode.canEditSoleOwnerAddress}
       history={historyResult.data || []}
       locale={locale}
     />
