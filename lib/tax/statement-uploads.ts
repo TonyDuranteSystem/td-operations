@@ -132,5 +132,32 @@ export async function deleteStatementRows(accountId: string, taxYear: number, so
     .eq("source_file_id", sourceFileId)
     .select("id")
   if (error) return { ok: false, deleted: 0, error: error.message }
+
+  // CANCEL this file's ingest jobs (card 4a39e0fd, architect blocker B2 —
+  // this was a LIVE bug): the upload path is content-hashed, and the enqueue
+  // helper skips any path with a non-failed job. So deleting a file and
+  // re-uploading the IDENTICAL file found the old completed job, returned
+  // "already queued", and the statement silently never came back — vanished
+  // from the books while the UI reported success. Cancelling the jobs here
+  // makes delete truly supersede: the re-upload enqueues fresh. 'processing'
+  // rows are left alone (a running handler can't be stopped safely; its rows
+  // are already deleted or will be re-deletable). Drive-id sources have no
+  // ingest jobs — the filter simply matches nothing.
+  if (sourceFileId.startsWith("upload:")) {
+    const sha16 = sourceFileId.slice("upload:".length, "upload:".length + 16)
+    const { error: cancelErr } = await supabaseAdmin
+      .from("job_queue")
+      .update({ status: "cancelled", error: "Superseded: the client deleted this statement file" })
+      .eq("job_type", "ingest_bank_statement")
+      .eq("account_id", accountId)
+      .like("payload->>path", `tax/${accountId}/${taxYear}/${sha16}\\_%`)
+      .in("status", ["pending", "completed", "failed"])
+    if (cancelErr) {
+      // Non-fatal: rows are gone (the delete succeeded); worst case a
+      // same-bytes re-upload still hits the old skip until this is retried.
+      console.error(`[statement-uploads] job cancel failed for ${sourceFileId}: ${cancelErr.message}`)
+    }
+  }
+
   return { ok: true, deleted: (deleted ?? []).length }
 }

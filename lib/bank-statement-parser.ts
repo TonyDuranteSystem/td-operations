@@ -53,6 +53,14 @@ export interface ParseResult {
    *  confirmation (S1, 2026-07-07): a mapping was proposed but carries
    *  ambiguities — the file must NOT ingest until confirmed. */
   quarantine?: { mapping_id: string | null; fingerprint: string; bank_label: string; ambiguities: string[]; sample: unknown }
+  /** The file's CONTENT SIGNATURE matched a known bank format and parsed
+   *  cleanly, but the statement period simply has no transactions (a real
+   *  June with zero activity). Distinguishes "empty but valid" from
+   *  "unreadable": before this flag (2026-08-12, card 4a39e0fd) an empty
+   *  month fell through to AI extraction, returned zero rows, and the client
+   *  was told the file was corrupt and scolded for merging files. Only set on
+   *  a true signature match — never on filename-based routing. */
+  recognized_empty?: boolean
   /**
    * Balance reconciliation guard (set by AI extraction). When a statement
    * reports opening + closing balances, we verify opening + Σamounts ≈ closing.
@@ -875,30 +883,51 @@ export async function parseBankStatement(
     const dialect = sniffCsvDialect(content)
     const headerCells = parseDelimitedRows(content, dialect.delimiter)[0] ?? []
     const signature = detectCsvSignature(headerCells)
+    // EMPTY-BUT-VALID (card 4a39e0fd): a true signature match that parses
+    // cleanly to zero rows is a real statement for a month with no activity —
+    // return it as recognized_empty instead of falling through to AI (which
+    // would burn an extraction to also find nothing, and the caller would tell
+    // the client their file is corrupt). Only for `signature` matches — the
+    // filename-based Wise entry below stays retry-through-AI, since a name
+    // proves nothing about content. Row-level parse errors disqualify: a
+    // half-readable file is NOT "empty", it goes to AI as before.
+    // Accepted "errors" that do NOT disqualify emptiness: the parsers' own
+    // informational markers — "Empty CSV" (header-only file) and Mercury's
+    // "Skipped N non-Sent row(s)" (a month whose only rows are failed/pending
+    // payments — real statement, zero booked transactions; letting it fall to
+    // AI risks the AI extracting the FAILED payments as if they happened).
+    const INFORMATIONAL_ERROR = /^(empty csv|skipped \d+ non-sent row\(s\))$/i
+    const emptyOk = (r: ParseResult): boolean =>
+      r.transactions.length === 0 && r.errors.every(e => INFORMATIONAL_ERROR.test(e.trim()))
     if (signature === "relay") {
       const r = parseRelayCSV(content, fileName)
       r.extraction_method = "relay_csv"
       if (r.transactions.length > 0) return r
+      if (emptyOk(r)) { r.recognized_empty = true; return r }
     }
     if (signature === "mercury") {
       const r = parseMercuryCSV(content, fileName)
       r.extraction_method = "mercury_csv"
       if (r.transactions.length > 0) return r
+      if (emptyOk(r)) { r.recognized_empty = true; return r }
     }
     if (signature === "revolut") {
       const r = parseRevolutCSV(content, fileName)
       r.extraction_method = "revolut_csv"
       if (r.transactions.length > 0) return r
+      if (emptyOk(r)) { r.recognized_empty = true; return r }
     }
     if (signature === "slash") {
       const r = parseSlashCSV(content, fileName, { fallbackYear: opts?.taxYear })
       r.extraction_method = "slash_csv"
       if (r.transactions.length > 0) return r
+      if (emptyOk(r)) { r.recognized_empty = true; return r }
     }
     if (signature === "wise" || /wise/i.test(lowerName) || /transferwise|wise\.com/i.test(content)) {
       const r = parseWiseCSV(content, fileName)
       r.extraction_method = "wise_csv"
       if (r.transactions.length > 0) return r
+      if (signature === "wise" && emptyOk(r)) { r.recognized_empty = true; return r }
     }
     // S1 (2026-07-07, tri-role reviewed): LEARNED FORMAT MAPPINGS. When the
     // ingest path injects a mapping store, unknown layouts go through:

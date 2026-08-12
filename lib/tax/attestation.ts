@@ -9,17 +9,19 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { resolveClientSubmission } from "./resolve-submission"
 
 export async function resetFinancialsAttestation(accountId: string, taxYear: number, reason: string): Promise<void> {
-  const { data: sub } = await supabaseAdmin
-    .from("tax_return_submissions")
-    .select("id, confirmation_accepted, review_history")
-    .eq("account_id", accountId)
-    .eq("tax_year", taxYear)
-    .eq("status", "completed")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  // The ONE submission resolver (card 4a39e0fd, architect blocker B3): the
+  // old `.eq("status","completed")` filter missed `reviewed` submissions —
+  // the exact stale rule resolve-submission.ts exists to kill. A mutation on
+  // a reviewed+attested account-year left the client's sworn attestation
+  // standing over numbers that had changed underneath it.
+  const sub = await resolveClientSubmission<{
+    id: string
+    confirmation_accepted: boolean | null
+    review_history: unknown
+  }>(supabaseAdmin, accountId, taxYear, "id, confirmation_accepted, review_history")
   if (!sub || sub.confirmation_accepted !== true) return // nothing to reset
 
   const history = Array.isArray(sub.review_history) ? sub.review_history : []

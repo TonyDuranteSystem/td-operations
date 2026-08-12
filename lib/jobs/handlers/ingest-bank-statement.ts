@@ -25,12 +25,16 @@ import type { Job, JobResult } from "../queue"
 interface IngestStatementPayload {
   account_id: string
   tax_year: number
-  /** Storage path in the onboarding-uploads bucket. */
+  /** Storage path in `bucket` (default: onboarding-uploads). */
   path: string
   /** Fallback bank label; the parser re-detects the real bank from content. */
   bank_label?: string
   /** Client-provided account number/label — the account identity for this file. */
   account_number?: string | null
+  /** Storage bucket for `path`. Portal wizard/financials uploads live in
+   *  "onboarding-uploads" (default); the external public tax form uploads to
+   *  "tax-form-uploads" (its route enqueues with this set — 2026-08-12). */
+  bucket?: string
 }
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {
@@ -53,7 +57,7 @@ export async function handleIngestBankStatement(job: Job): Promise<JobResult> {
   // Download from storage. A download failure may be transient → THROW so the
   // worker retries it.
   const { data: blob, error: dlErr } = await supabaseAdmin.storage
-    .from("onboarding-uploads")
+    .from(p.bucket || "onboarding-uploads")
     .download(p.path)
   if (dlErr || !blob) {
     throw new Error(`Download failed for ${fileName}: ${dlErr?.message ?? "no data"}`)
@@ -77,12 +81,14 @@ export async function handleIngestBankStatement(job: Job): Promise<JobResult> {
       // A corrupt archive won't fix itself on retry — surface it, don't throw.
       result.steps.push(step("expand_zip", "error", `${fileName}: could not open archive — ${e instanceof Error ? e.message : String(e)}`))
       result.ok = false
+      result.terminal = true
       result.summary = `Could not open ${fileName}`
       return result
     }
     if (inner.length === 0) {
       result.steps.push(step("expand_zip", "error", `${fileName}: no PDF/CSV statements found inside the archive`))
       result.ok = false
+      result.terminal = true
       result.summary = `No statements found in ${fileName}`
       return result
     }
@@ -127,9 +133,16 @@ export async function handleIngestBankStatement(job: Job): Promise<JobResult> {
   })
 
   if (r.ok) {
-    result.steps.push(step("ingest", "ok",
-      `${fileName}: ${r.inserted} inserted / ${r.parsed} parsed (${r.bankDetected}, ${r.months.join(", ") || "no months"})${r.failed ? ` — ⚠ ${r.failed} row(s) FAILED to insert (error-audited)` : ""}${r.alert ? ` — ${r.alert}` : ""}`))
-    result.summary = `Ingested ${fileName}: ${r.inserted} transactions`
+    if (r.emptyStatement) {
+      // Empty-but-valid month — processed, zero rows, truthful summary
+      // (card 4a39e0fd: this used to read as a corrupt file).
+      result.steps.push(step("ingest", "ok", `${fileName}: statement read correctly — no transactions in its period`))
+      result.summary = `Processed ${fileName}: empty statement period (0 transactions)`
+    } else {
+      result.steps.push(step("ingest", "ok",
+        `${fileName}: ${r.inserted} inserted / ${r.parsed} parsed (${r.bankDetected}, ${r.months.join(", ") || "no months"})${r.failed ? ` — ⚠ ${r.failed} row(s) FAILED to insert (error-audited)` : ""}${r.alert ? ` — ${r.alert}` : ""}`))
+      result.summary = `Ingested ${fileName}: ${r.inserted} transactions`
+    }
 
     // If this was the LAST statement for the account+year, tell the client their
     // P&L is ready (one-time, locale-aware). Self-gates + never throws, so it
@@ -138,10 +151,23 @@ export async function handleIngestBankStatement(job: Job): Promise<JobResult> {
     const { notifyIfIngestComplete } = await import("../ingest-complete-notify")
     const notif = await notifyIfIngestComplete({ accountId: p.account_id, taxYear: p.tax_year, selfJobId: job.id })
     if (notif.notified) result.steps.push(step("notify_ready", "ok", "client notified: statements ready"))
+  } else if (r.quarantine) {
+    // S1 quarantine — unknown format awaiting a one-tap STAFF confirmation.
+    // Marker-prefixed detail (same contract as the workspace handler) so
+    // surfaces can render the confirm card without extra queries. terminal:
+    // re-parsing changes nothing until a human confirms the mapping.
+    result.steps.push(step("ingest", "error",
+      `FORMAT_CONFIRMATION_NEEDED:${JSON.stringify({ file: fileName, path: p.path, ...r.quarantine })}`))
+    result.ok = false
+    result.terminal = true
+    result.summary = `Needs format confirmation: ${fileName}`
   } else {
-    // Unreadable file — do NOT throw (retrying won't help). Surface it.
+    // Unreadable / wrong-year file. terminal (card 4a39e0fd): the worker used
+    // to bounce ok:false through the retry loop, burning a full AI extraction
+    // per attempt on a file that is dead on every attempt.
     result.steps.push(step("ingest", "error", `${fileName}: ${r.error ?? "could not read file"}`))
     result.ok = false
+    result.terminal = true
     result.summary = `Could not read ${fileName}`
   }
   return result

@@ -57,8 +57,15 @@ export async function enqueueStatementIngestJobs(params: {
   uploadPaths: string[]
   submittedData: Record<string, unknown>
   createdBy?: string
+  /** Storage bucket the paths live in. The portal wizard uploads to
+   *  "onboarding-uploads" (the handler's default); the EXTERNAL public tax
+   *  form uploads to "tax-form-uploads" with a `{token}/{attempt}/…` scheme.
+   *  Added 2026-08-12 (card 4a39e0fd) when the external route's legacy Drive
+   *  scrape was replaced by these jobs — without the right bucket every
+   *  external ingest would fail at download. */
+  bucket?: string
 }): Promise<EnqueueStatementIngestResult> {
-  const { accountId, taxYear, uploadPaths, submittedData, createdBy = "portal_wizard" } = params
+  const { accountId, taxYear, uploadPaths, submittedData, createdBy = "portal_wizard", bucket } = params
 
   const statementPaths = filterStatementPaths(uploadPaths)
   if (statementPaths.length === 0) return { enqueued: 0, skipped: 0 }
@@ -92,7 +99,13 @@ export async function enqueueStatementIngestJobs(params: {
   await supabaseAdmin.from("job_queue").insert(
     toEnqueue.map(path => ({
       job_type: "ingest_bank_statement",
-      payload: { account_id: accountId, tax_year: taxYear, path, bank_label: bankLabelForPath(path, submittedData) },
+      payload: {
+        account_id: accountId,
+        tax_year: taxYear,
+        path,
+        bank_label: bankLabelForPath(path, submittedData),
+        ...(bucket ? { bucket } : {}),
+      },
       priority: 4,
       account_id: accountId,
       created_by: createdBy,

@@ -42,6 +42,17 @@ export interface JobResult {
    * flip the whole job to failed.
    */
   ok?: boolean
+  /**
+   * With `ok:false`: this failure is PERMANENT — retrying cannot change the
+   * outcome (an unreadable file, a wrong-year statement, a corrupt archive).
+   * Both runners pass it through to failJob, which then FINAL-fails on the
+   * first attempt instead of resetting to pending. Before this flag existed
+   * (2026-08-12, card 4a39e0fd), every dead statement file was retried to
+   * max_attempts, burning a full AI extraction per retry with an identical
+   * result. Omitted → ok:false retries as before (transient-looking failures
+   * keep their retry budget).
+   */
+  terminal?: boolean
 }
 
 export interface Job {
@@ -186,7 +197,15 @@ export async function completeJob(jobId: string, result: JobResult): Promise<voi
 /**
  * Mark job as failed.
  */
-export async function failJob(jobId: string, errorMsg: string, result?: JobResult): Promise<void> {
+export async function failJob(
+  jobId: string,
+  errorMsg: string,
+  result?: JobResult,
+  opts?: {
+    /** Skip the retry branch — the failure is permanent (JobResult.terminal). */
+    terminal?: boolean
+  },
+): Promise<void> {
   // Get current attempts + the fields needed to notify the client if this is a
   // wizard job reaching its FINAL failed state (see wizard-failure-notify.ts).
   const { data: job } = await supabaseAdmin
@@ -198,7 +217,7 @@ export async function failJob(jobId: string, errorMsg: string, result?: JobResul
   const attempts = (job?.attempts ?? 0) + 1
   const maxAttempts = job?.max_attempts ?? 3
 
-  if (attempts < maxAttempts) {
+  if (!opts?.terminal && attempts < maxAttempts) {
     // Reset to pending for retry
     const { error } = await supabaseAdmin
       .from("job_queue")
@@ -240,13 +259,19 @@ export async function failJob(jobId: string, errorMsg: string, result?: JobResul
     // on the real transition (guard above) so a re-entrant call can't double-post.
     if ((transitioned?.length ?? 0) > 0) {
       try {
-        const { notifyClientOfWizardJobFailure } = await import("./wizard-failure-notify")
-        await notifyClientOfWizardJobFailure({
+        const { notifyClientOfWizardJobFailure, notifyClientOfStatementIngestFailure } = await import("./wizard-failure-notify")
+        const failedJob = {
           id: jobId,
           job_type: (job?.job_type as string | undefined) ?? "",
           account_id: (job?.account_id as string | null | undefined) ?? null,
           payload: (job?.payload as Record<string, unknown> | null | undefined) ?? null,
-        })
+        }
+        // Both self-gate on job_type, so calling both is safe; exactly one
+        // (or neither) acts. Ingest failures gained their own notifier on
+        // 2026-08-12 (card 4a39e0fd) — before that, a dead statement file
+        // never told the client or staff anything.
+        await notifyClientOfWizardJobFailure(failedJob)
+        await notifyClientOfStatementIngestFailure(failedJob)
       } catch (e) {
         console.error(`[failJob] wizard failure notify error for ${jobId}:`, e)
       }

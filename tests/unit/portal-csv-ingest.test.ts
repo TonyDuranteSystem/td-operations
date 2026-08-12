@@ -30,9 +30,11 @@ vi.mock("@/lib/supabase-admin", () => ({
         return chain
       }
       if (table === "tax_return_submissions") {
-        // resetFinancialsAttestation lookup — no attested submission in these tests
+        // resetFinancialsAttestation lookup — no attested submission in these
+        // tests. `.in` joined the chain when the reset moved to the shared
+        // submission resolver (card 4a39e0fd, statuses completed+reviewed).
         const chain = {
-          select: () => chain, eq: () => chain, order: () => chain, limit: () => chain,
+          select: () => chain, eq: () => chain, in: () => chain, order: () => chain, limit: () => chain,
           maybeSingle: () => Promise.resolve({ data: null }),
         }
         return chain
@@ -149,5 +151,52 @@ describe("ingestPortalCsv", () => {
     expect(r.ok).toBe(true)
     expect(r.bankDetected).toBe("My Mercury")
     expect((upsertCalls[0] as Record<string, unknown>).bank_name).toBe("My Mercury")
+  })
+
+  // ── Card 4a39e0fd — empty-but-valid + quarantine ──
+
+  it("recognized-empty statement → ok:true emptyStatement, NOT the corrupt-file error", async () => {
+    // A real Relay June with zero activity: signature matched, parsed cleanly,
+    // no transactions. Used to fail as "could not read" and scold the client.
+    parseMock.mockResolvedValue({ transactions: [], bank_name: "Relay", errors: [], recognized_empty: true })
+    const r = await ingestPortalCsv(INPUT)
+    expect(r.ok).toBe(true)
+    expect(r.emptyStatement).toBe(true)
+    expect(r.error).toBeUndefined()
+    expect(r.alert).toContain("no transactions for its period")
+    expect(r.inserted).toBe(0)
+    expect(upsertCalls).toHaveLength(0)
+    // NEGATIVE (mutation guard): without the flag the same zero-row parse is
+    // still the unreadable error — the empty path must not widen.
+    parseMock.mockResolvedValue({ transactions: [], bank_name: "Relay", errors: [] })
+    const r2 = await ingestPortalCsv(INPUT)
+    expect(r2.ok).toBe(false)
+    expect(r2.emptyStatement).toBeUndefined()
+  })
+
+  it("quarantined format → ok:false with quarantine payload, calm client copy, nothing inserted", async () => {
+    parseMock.mockResolvedValue({
+      transactions: [], bank_name: "QB Export", errors: ["needs confirmation"],
+      extraction_method: "quarantined",
+      quarantine: { mapping_id: "map-1", fingerprint: "fp-1", bank_label: "QB Export", ambiguities: ["amount sign unclear"], sample: null },
+    })
+    const r = await ingestPortalCsv(INPUT)
+    expect(r.ok).toBe(false)
+    expect(r.quarantine).toEqual({ mapping_id: "map-1", fingerprint: "fp-1", bank_label: "QB Export", ambiguities: ["amount sign unclear"] })
+    expect(r.error).toContain("Nothing is needed from you")
+    // Never the delete-and-re-upload / do-not-merge scolding for a format WE must confirm.
+    expect(r.error).not.toContain("Do not merge")
+    expect(upsertCalls).toHaveLength(0)
+  })
+
+  it("passes the S1 mapping store to the parser (client uploads get learned formats + quarantine)", async () => {
+    parseMock.mockResolvedValue({ transactions: [parsedTx("2025-01-05", "r1")], bank_name: "Mercury", errors: [] })
+    await ingestPortalCsv(INPUT)
+    const opts = parseMock.mock.calls[0][3] as { taxYear: number; mappingStore?: unknown }
+    expect(opts.taxYear).toBe(2025)
+    // The store's presence is the whole S1 gate in parseBankStatement — its
+    // absence silently re-enables the generic parser (the Dynamiq
+    // double-conversion origin).
+    expect(opts.mappingStore).toBeTruthy()
   })
 })

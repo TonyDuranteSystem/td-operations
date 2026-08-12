@@ -1,15 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Hoisted mocks so the vi.mock factories (hoisted above imports) can reference them.
-const { mockDownload, mockIngest, mockExtractZip, mockSaveEnqueue } = vi.hoisted(() => ({
+const { mockDownload, mockIngest, mockExtractZip, mockSaveEnqueue, bucketCalls } = vi.hoisted(() => ({
   mockDownload: vi.fn(),
   mockIngest: vi.fn(),
   mockExtractZip: vi.fn(),
   mockSaveEnqueue: vi.fn(),
+  bucketCalls: [] as string[],
 }))
 
 vi.mock('@/lib/supabase-admin', () => ({
-  supabaseAdmin: { storage: { from: () => ({ download: mockDownload }) } },
+  supabaseAdmin: { storage: { from: (bucket: string) => { bucketCalls.push(bucket); return { download: mockDownload } } } },
 }))
 vi.mock('@/lib/tax/portal-csv-ingest', () => ({ ingestPortalCsv: mockIngest }))
 vi.mock('@/lib/bank-statement-parser', () => ({ extractZipStatements: mockExtractZip }))
@@ -123,6 +124,64 @@ describe('handleIngestBankStatement', () => {
       await expect(
         handleIngestBankStatement(job({ account_id: 'a', tax_year: 2025, path: 'tax/a/x.zip' })),
       ).rejects.toThrow(/Failed to expand/)
+    })
+  })
+
+  // ── Card 4a39e0fd — terminal no-retry, empty-but-valid, quarantine, bucket ──
+  describe('terminal semantics + new file states', () => {
+    it('unreadable file → terminal:true (no retry budget burned on a dead file)', async () => {
+      mockIngest.mockResolvedValue(ingestResult({ ok: false, error: 'could not read', inserted: 0, parsed: 0 }))
+      const r = await handleIngestBankStatement(job({ account_id: 'a', tax_year: 2025, path: 'tax/a/bank_statements_x_bad.csv' }))
+      expect(r.ok).toBe(false)
+      expect(r.terminal).toBe(true)
+    })
+
+    it('corrupt/empty archive → terminal:true', async () => {
+      mockExtractZip.mockResolvedValue([])
+      const r = await handleIngestBankStatement(job({ account_id: 'a', tax_year: 2025, path: 'tax/a/empty.zip' }))
+      expect(r.ok).toBe(false)
+      expect(r.terminal).toBe(true)
+      mockExtractZip.mockRejectedValue(new Error('invalid zip data'))
+      const r2 = await handleIngestBankStatement(job({ account_id: 'a', tax_year: 2025, path: 'tax/a/corrupt.zip' }))
+      expect(r2.terminal).toBe(true)
+    })
+
+    it('transient download failure still THROWS (retry) — terminal never widens to transient errors', async () => {
+      mockDownload.mockResolvedValue({ data: null, error: { message: 'object not found' } })
+      await expect(
+        handleIngestBankStatement(job({ account_id: 'a', tax_year: 2025, path: 'tax/a/bank_statements_x_gone.pdf' })),
+      ).rejects.toThrow('object not found')
+    })
+
+    it('empty-but-valid statement → completes ok with a truthful zero-transactions summary', async () => {
+      mockIngest.mockResolvedValue(ingestResult({ ok: true, emptyStatement: true, inserted: 0, parsed: 0, months: [] }))
+      const r = await handleIngestBankStatement(job({ account_id: 'a', tax_year: 2025, path: 'tax/a/bank_statements_x_june.csv' }))
+      expect(r.ok).not.toBe(false)
+      expect(r.summary).toContain('empty statement period')
+      expect(r.steps[0].status).toBe('ok')
+    })
+
+    it('quarantined format → ok:false terminal with the FORMAT_CONFIRMATION_NEEDED marker', async () => {
+      mockIngest.mockResolvedValue(ingestResult({
+        ok: false, inserted: 0, parsed: 0,
+        quarantine: { mapping_id: 'm1', fingerprint: 'fp', bank_label: 'QB', ambiguities: ['sign'] },
+      }))
+      const r = await handleIngestBankStatement(job({ account_id: 'a', tax_year: 2025, path: 'tax/a/bank_statements_x_qb.csv' }))
+      expect(r.ok).toBe(false)
+      expect(r.terminal).toBe(true)
+      expect(r.summary).toContain('format confirmation')
+      expect(r.steps[0].detail).toContain('FORMAT_CONFIRMATION_NEEDED:')
+      expect(r.steps[0].detail).toContain('"mapping_id":"m1"')
+    })
+
+    it('downloads from the payload bucket when set (external tax form), default otherwise', async () => {
+      bucketCalls.length = 0
+      mockIngest.mockResolvedValue(ingestResult())
+      await handleIngestBankStatement(job({ account_id: 'a', tax_year: 2025, path: 't/1/bank_statements_x_f.csv', bucket: 'tax-form-uploads' }))
+      expect(bucketCalls[0]).toBe('tax-form-uploads')
+      bucketCalls.length = 0
+      await handleIngestBankStatement(job({ account_id: 'a', tax_year: 2025, path: 'tax/a/bank_statements_x_f.csv' }))
+      expect(bucketCalls[0]).toBe('onboarding-uploads')
     })
   })
 })

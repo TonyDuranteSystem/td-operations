@@ -425,8 +425,6 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
     // 2026-07-24). The inline drive_save above is best-effort with no retry and
     // no marker — this durable job self-heals, sets drive_archived_at on full
     // success, and is idempotent (skips if one is already queued or archived).
-    // Kept ALONGSIDE the inline copy on purpose: the MMLLC statement-scrape
-    // block below still reads statements from Drive synchronously.
     if (p.submission_id) {
       try {
         const { enqueueTaxArchiveJob } = await import("@/lib/tax/archive-enqueue")
@@ -440,131 +438,19 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
 
   await updateJobProgress(job.id, result)
 
-  if ((entityType === "MMLLC" || entityType === "Corp") && p.account_id && taxYear) {
-    try {
-      const { listFolder, uploadBinaryToDriveUpsert, downloadFileBinary } = await import("@/lib/google-drive")
-      const { data: acc } = await supabaseAdmin
-        .from("accounts")
-        .select("drive_folder_id")
-        .eq("id", p.account_id)
-        .single()
-
-      if (acc?.drive_folder_id) {
-        // Find 3. Tax folder
-        const listing = await listFolder(acc.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
-        const taxFolder = listing.files?.find(f =>
-          f.mimeType === "application/vnd.google-apps.folder" && /^3\.\s*Tax/i.test(f.name)
-        )
-
-        if (taxFolder) {
-          // Look in the year subfolder first, then fall back to Tax folder
-          let statementFolderId = taxFolder.id
-          const taxFiles = await listFolder(taxFolder.id, 100) as { files?: { id: string; name: string; mimeType: string }[] }
-          const yearFolder = taxFiles.files?.find(f =>
-            f.mimeType === "application/vnd.google-apps.folder" && f.name === String(taxYear)
-          )
-          if (yearFolder) statementFolderId = yearFolder.id
-
-          const statementFiles = await listFolder(statementFolderId, 100) as { files?: { id: string; name: string; mimeType: string }[] }
-          const statementPattern = /wise|mercury|relay|chase|statement|bank|estratto/i
-          const statements = (statementFiles.files || []).filter(f => {
-            const lower = f.name.toLowerCase()
-            const isStatement = statementPattern.test(f.name)
-            const isSupported = f.mimeType === "application/pdf" || f.mimeType === "text/csv"
-              || lower.endsWith(".csv") || lower.endsWith(".pdf") || lower.endsWith(".zip")
-            return isStatement && isSupported
-          })
-
-          if (statements.length > 0) {
-            const { parseBankStatement, categorizeTransaction } = await import("@/lib/bank-statement-parser")
-
-            // Shared roster — curated members ∪ linked contacts, one usable-name
-            // rule. Building this list here by hand made this path disagree with
-            // the portal ingest and the re-sort. See lib/tax/member-roster.ts.
-            const { fetchMemberRoster } = await import("@/lib/tax/member-roster")
-            const memberNames = (await fetchMemberRoster(supabaseAdmin, p.account_id)).names
-
-            let totalParsed = 0
-            for (const file of statements) {
-              try {
-                const { data: existing } = await supabaseAdmin
-                  .from("bank_transactions")
-                  .select("id")
-                  .eq("source_file_id", file.id)
-                  .limit(1)
-                if (existing && existing.length > 0) continue
-
-                const { buffer, mimeType } = await downloadFileBinary(file.id)
-                const parseResult = await parseBankStatement(buffer, file.name, mimeType)
-
-                for (const tx of parseResult.transactions) {
-                  const txYear = parseInt(tx.transaction_date.substring(0, 4))
-                  if (txYear !== taxYear) continue
-
-                  const cat = categorizeTransaction(tx, memberNames, [])
-                  await supabaseAdmin.from("bank_transactions").upsert({
-                    account_id: p.account_id,
-                    tax_year: taxYear,
-                    transaction_date: cat.transaction_date,
-                    description: cat.description,
-                    category: cat.category,
-                    subcategory: cat.subcategory,
-                    counterparty: cat.counterparty,
-                    amount: cat.amount,
-                    currency: cat.currency,
-                    balance_after: cat.balance_after,
-                    bank_name: cat.bank_name,
-                    account_type: cat.account_type,
-                    transaction_ref: cat.transaction_ref,
-                    source_file_id: file.id,
-                    is_related_party: cat.is_related_party,
-                    notes: cat.notes,
-                  }, {
-                    onConflict: "account_id,transaction_ref,transaction_date,amount",
-                    ignoreDuplicates: true,
-                  })
-                  totalParsed++
-                }
-              } catch {
-                // Skip individual file errors
-              }
-            }
-
-            result.steps.push(step("bank_statement_parse", totalParsed > 0 ? "ok" : "skipped",
-              `Parsed ${totalParsed} transactions from ${statements.length} statements`))
-
-            // Generate P&L if we have transactions
-            if (totalParsed > 0) {
-              try {
-                const { generatePnlExcel } = await import("@/lib/pnl-generator")
-                const pnl = await generatePnlExcel(p.account_id!, taxYear)
-
-                // Upload P&L to Drive. Stable file name → UPSERT: a re-run
-                // refreshes the one existing workbook instead of adding a copy.
-                await uploadBinaryToDriveUpsert(
-                  pnl.fileName,
-                  pnl.buffer,
-                  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                  yearFolder?.id || taxFolder.id
-                )
-                result.steps.push(step("pnl_generated", "ok", `P&L Excel uploaded. ${pnl.summary}`))
-              } catch (e) {
-                result.steps.push(step("pnl_generated", "error", e instanceof Error ? e.message : String(e)))
-              }
-            }
-          } else {
-            result.steps.push(step("bank_statement_parse", "skipped", "No bank statement files found"))
-          }
-        } else {
-          result.steps.push(step("bank_statement_parse", "skipped", "No 3. Tax folder found in Drive"))
-        }
-      }
-    } catch (e) {
-      result.steps.push(step("bank_statement_parse", "error", e instanceof Error ? e.message : String(e)))
-    }
-  }
-
-  await updateJobProgress(job.id, result)
+  // ─── 7. (REMOVED 2026-08-12) Legacy Drive statement scrape + legacy P&L ───
+  // The block that re-parsed every statement-looking file in the Drive
+  // "3. Tax" folder and uploaded a legacy-engine P&L workbook is GONE
+  // (card 4a39e0fd; Antonio's ruling: Drive is archive-only — no machine
+  // reads files into the books invisibly). It double-ingested the wizard's
+  // own uploads under Drive file ids (the Dynamiq duplicate mechanism: the
+  // 6b copy above lands the files in the exact folder the scrape read, with
+  // refs that defeat the dedup index), bypassed the smart categorization
+  // pipeline (Zhang Holding: 192/192 uncategorized), and put a second,
+  // disagreeing P&L Excel in the folder the accountant reads. Statement
+  // ingestion is owned SOLELY by the per-file `ingest_bank_statement` jobs
+  // enqueued in step 6 (and synchronously at wizard-submit). Statements that
+  // exist only on Drive are a staff decision now, never an automatic ingest.
 
   // ─── 8. DETAILED EMAIL TO TEAM ───
   try {

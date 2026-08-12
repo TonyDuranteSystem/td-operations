@@ -50,14 +50,17 @@ vi.mock("@/lib/supabase-admin", () => ({
 }))
 
 const notifyMock = vi.fn(async () => ({ notified: true }))
+const ingestNotifyMock = vi.fn(async () => ({ notified: true }))
 vi.mock("@/lib/jobs/wizard-failure-notify", () => ({
   notifyClientOfWizardJobFailure: (...args: unknown[]) => notifyMock(...args),
+  notifyClientOfStatementIngestFailure: (...args: unknown[]) => ingestNotifyMock(...args),
 }))
 
 import { failJob } from "@/lib/jobs/queue"
 
 beforeEach(() => {
   notifyMock.mockClear()
+  ingestNotifyMock.mockClear()
   fixtures.jobRow = { attempts: 2, max_attempts: 3, job_type: "tax_form_setup", account_id: "acc-1", payload: {} }
   fixtures.transitioned = [{ id: "job-1" }]
 })
@@ -84,5 +87,28 @@ describe("failJob → client notification", () => {
     fixtures.transitioned = [] // job was already 'failed' — guard excluded it
     await failJob("job-1", "boom")
     expect(notifyMock).not.toHaveBeenCalled()
+  })
+
+  // ── Card 4a39e0fd — terminal failures + the ingest notifier ──
+
+  it("terminal:true final-fails on the FIRST attempt (no retry) and still notifies", async () => {
+    // attempts 0 of 3 — a plain failure would retry; terminal must not.
+    fixtures.jobRow = { ...fixtures.jobRow, attempts: 0, max_attempts: 3 }
+    await failJob("job-1", "dead file", undefined, { terminal: true })
+    expect(notifyMock).toHaveBeenCalledTimes(1)
+    // NEGATIVE (mutation guard): same shape without terminal retries silently.
+    notifyMock.mockClear()
+    await failJob("job-1", "dead file")
+    expect(notifyMock).not.toHaveBeenCalled()
+  })
+
+  it("an ingest_bank_statement final failure fires the INGEST notifier (both are called; each self-gates)", async () => {
+    fixtures.jobRow = {
+      attempts: 2, max_attempts: 3, job_type: "ingest_bank_statement",
+      account_id: "acc-1", payload: { path: "tax/a/2025/x_relay.csv", tax_year: 2025 },
+    }
+    await failJob("job-1", "Could not read relay.csv")
+    expect(ingestNotifyMock).toHaveBeenCalledTimes(1)
+    expect(ingestNotifyMock).toHaveBeenCalledWith(expect.objectContaining({ job_type: "ingest_bank_statement" }))
   })
 })

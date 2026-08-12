@@ -110,3 +110,26 @@ describe("enqueueStatementIngestJobs", () => {
     expect(jobInserts).toHaveLength(0)
   })
 })
+
+// ── Card 4a39e0fd — bucket passthrough (external tax form wiring) ──
+describe("enqueueStatementIngestJobs — bucket", () => {
+  it("stamps the payload bucket when given, omits it by default", async () => {
+    jobInserts.length = 0
+    await enqueueStatementIngestJobs({
+      accountId: "acc-1", taxYear: 2025,
+      uploadPaths: ["tok/a1/bank_statements_x_wise.csv"],
+      submittedData: {}, bucket: "tax-form-uploads",
+    })
+    const rows = jobInserts[0] as Array<{ payload: { bucket?: string } }>
+    expect(rows[0].payload.bucket).toBe("tax-form-uploads")
+
+    jobInserts.length = 0
+    await enqueueStatementIngestJobs({
+      accountId: "acc-1", taxYear: 2025,
+      uploadPaths: ["tok/a1/bank_statements_x_wise.csv"],
+      submittedData: {},
+    })
+    const rows2 = jobInserts[0] as Array<{ payload: Record<string, unknown> }>
+    expect("bucket" in rows2[0].payload).toBe(false)
+  })
+})

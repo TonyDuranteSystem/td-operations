@@ -66,8 +66,14 @@ vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: { from: (table: string) => makeBuilder(table) },
 }))
 
+const reportedErrors: Array<Record<string, unknown>> = []
+vi.mock("@/lib/system-errors", () => ({
+  reportSystemError: vi.fn(async (e: Record<string, unknown>) => { reportedErrors.push(e) }),
+}))
+
 import {
   notifyClientOfWizardJobFailure,
+  notifyClientOfStatementIngestFailure,
   isWizardFailureJobType,
   localeFromLanguage,
   WIZARD_FAILURE_JOB_TYPES,
@@ -198,5 +204,62 @@ describe("notifyClientOfWizardJobFailure", () => {
     })
     expect(r.notified).toBe(false)
     expect(r.reason).toBe("insert_failed")
+  })
+})
+
+
+// ── Card 4a39e0fd — the ingest-failure notifier ──────────────────────────────
+describe("notifyClientOfStatementIngestFailure", () => {
+  const ingestJob = (over: Record<string, unknown> = {}) => ({
+    id: "job-i1",
+    job_type: "ingest_bank_statement",
+    account_id: "acc-1",
+    payload: { path: "tax/acc-1/2025/bank_accounts_0_statements_6a008993_Relay_2025-06.csv", tax_year: 2025 },
+    ...over,
+  })
+
+  beforeEach(() => { reportedErrors.length = 0 })
+
+  it("self-gates: any other job type does nothing", async () => {
+    const r = await notifyClientOfStatementIngestFailure(ingestJob({ job_type: "tax_form_setup" }))
+    expect(r.notified).toBe(false)
+    expect(r.reason).toBe("not_an_ingest_job")
+    expect(inserts).toHaveLength(0)
+  })
+
+  it("posts a client message naming the CLIENT's filename (upload prefixes stripped) + staff error-audit", async () => {
+    const r = await notifyClientOfStatementIngestFailure(ingestJob())
+    expect(r.notified).toBe(true)
+    expect(inserts).toHaveLength(1)
+    const msg = String((inserts[0] as Record<string, unknown>).message)
+    expect(msg).toContain("Relay_2025-06.csv")
+    expect(msg).not.toContain("bank_accounts_0_statements")
+    expect(msg).toContain("no action is needed from you")
+    // staff signal fired
+    expect(reportedErrors).toHaveLength(1)
+    expect(String(reportedErrors[0].message)).toContain("FAILED ingestion")
+  })
+
+  it("quarantined jobs get the calm we-are-confirming copy, not the failure copy", async () => {
+    fixtures.jobResult = { steps: [{ detail: 'FORMAT_CONFIRMATION_NEEDED:{"file":"x.csv"}' }] }
+    const r = await notifyClientOfStatementIngestFailure(ingestJob())
+    expect(r.notified).toBe(true)
+    const msg = String((inserts[0] as Record<string, unknown>).message)
+    expect(msg).toContain("format")
+    expect(msg).not.toContain("could not be read")
+  })
+
+  it("idempotent via the job result marker", async () => {
+    fixtures.jobResult = { client_failure_notified: true }
+    const r = await notifyClientOfStatementIngestFailure(ingestJob())
+    expect(r.notified).toBe(false)
+    expect(r.reason).toBe("already_notified")
+    expect(inserts).toHaveLength(0)
+  })
+
+  it("no account target → no message, no throw", async () => {
+    const r = await notifyClientOfStatementIngestFailure(ingestJob({ account_id: null, payload: { path: "p" } }))
+    expect(r.notified).toBe(false)
+    expect(r.reason).toBe("no_target")
   })
 })

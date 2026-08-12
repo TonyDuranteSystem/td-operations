@@ -14,7 +14,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
 interface Fixtures {
-  otherJobs: Array<{ id: string; payload: { tax_year?: number | string } | null }>
+  otherJobs: Array<{ id: string; status?: string; result?: { ok?: boolean; steps?: Array<{ detail?: string }> } | null; payload: { tax_year?: number | string; path?: string } | null }>
   submission: { id: string; financials_meta: Record<string, unknown> | null } | null
   dispatchResult: { dispatched: boolean; chat: string; notification: string; email: string }
 }
@@ -96,7 +96,7 @@ describe("notifyIfIngestComplete", () => {
   })
 
   it("does NOT notify when another ingest job for the same year is still in flight", async () => {
-    fixtures.otherJobs = [{ id: "job-other", payload: { tax_year: 2025 } }]
+    fixtures.otherJobs = [{ id: "job-other", status: "pending", result: null, payload: { tax_year: 2025, path: "p-other" } }]
     const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
     expect(res.notified).toBe(false)
     expect(res.reason).toBe("more_pending")
@@ -104,7 +104,7 @@ describe("notifyIfIngestComplete", () => {
   })
 
   it("ignores in-flight jobs that belong to a DIFFERENT tax year", async () => {
-    fixtures.otherJobs = [{ id: "job-other", payload: { tax_year: 2024 } }]
+    fixtures.otherJobs = [{ id: "job-other", status: "pending", result: null, payload: { tax_year: 2024, path: "p-2024" } }]
     const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
     expect(res.notified).toBe(true)
     expect(dispatches).toHaveLength(1)
@@ -134,6 +134,45 @@ describe("notifyIfIngestComplete", () => {
 
   it("still notifies when only one channel fails (partial success)", async () => {
     fixtures.dispatchResult = { dispatched: true, chat: "failed: boom", notification: "ok", email: "ok (1 sent)" }
+    const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
+    expect(res.notified).toBe(true)
+  })
+
+  // ── Card 4a39e0fd — the FALSE ALL-CLEAR is dead ──
+
+  it("does NOT send the all-clear when a sibling FILE has failed (the PAMAG shape)", async () => {
+    fixtures.otherJobs = [
+      { id: "job-dead", status: "failed", result: { ok: false }, payload: { tax_year: 2025, path: "p-dead" } },
+    ]
+    const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
+    expect(res.notified).toBe(false)
+    expect(res.reason).toBe("failed_or_quarantined_files")
+    expect(dispatches).toHaveLength(0)
+  })
+
+  it("does NOT send the all-clear while a file sits quarantined for format confirmation", async () => {
+    fixtures.otherJobs = [
+      { id: "job-q", status: "failed", result: { ok: false, steps: [{ detail: 'FORMAT_CONFIRMATION_NEEDED:{"file":"qb.csv"}' }] }, payload: { tax_year: 2025, path: "p-q" } },
+    ]
+    const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
+    expect(res.notified).toBe(false)
+    expect(res.reason).toBe("failed_or_quarantined_files")
+  })
+
+  it("a failed EARLIER attempt on a file that later succeeded does not block the all-clear", async () => {
+    fixtures.otherJobs = [
+      { id: "job-old-fail", status: "failed", result: { ok: false }, payload: { tax_year: 2025, path: "p-1" } },
+      { id: "job-retry-ok", status: "completed", result: { ok: true }, payload: { tax_year: 2025, path: "p-1" } },
+    ]
+    const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
+    expect(res.notified).toBe(true)
+  })
+
+  it("a prior failed attempt on the SELF path cannot wedge the gate (self counts as its success)", async () => {
+    fixtures.otherJobs = [
+      { id: "job-self-old", status: "failed", result: { ok: false }, payload: { tax_year: 2025, path: "p-self" } },
+      { id: "job-self", status: "processing", result: null, payload: { tax_year: 2025, path: "p-self" } },
+    ]
     const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
     expect(res.notified).toBe(true)
   })

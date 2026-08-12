@@ -24,6 +24,12 @@ export interface IngestResult {
   ok: boolean
   /** Guide-grade message when the file could not be used. */
   error?: string
+  /** The file parsed cleanly as a known bank format but the period has no
+   *  transactions (empty-but-valid month). ok:true, nothing inserted. */
+  emptyStatement?: boolean
+  /** S1 quarantine: unknown CSV layout, mapping proposed but ambiguous —
+   *  awaiting a one-tap staff format confirmation. Nothing inserted. */
+  quarantine?: { mapping_id: string | null; fingerprint: string; bank_label: string; ambiguities: string[] }
   /** Dedup alert (L1/L2/L3) — informational; insert proceeds unless identical file. */
   alert?: string | null
   inserted: number
@@ -96,7 +102,43 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     : lower.endsWith(".zip") || lower.endsWith(".x-zip-compressed")
       ? "application/zip"
       : "text/csv"
-  const parsed = await parseBankStatement(buffer, fileName, mimeType, { taxYear })
+  // S1 mapping store WIRED for client uploads too (card 4a39e0fd — it was
+  // workspace-only, so client CSVs with unknown layouts went to the generic
+  // parser, the very path the store was built to retire): stored verified
+  // mappings apply deterministically, ambiguous proposals QUARANTINE for a
+  // one-tap staff confirmation instead of guessing.
+  const { makeSupabaseMappingStore } = await import("@/lib/bank-format-mappings")
+  const parsed = await parseBankStatement(buffer, fileName, mimeType, {
+    taxYear,
+    mappingStore: makeSupabaseMappingStore(supabaseAdmin),
+  })
+  if (parsed.quarantine) {
+    return {
+      ok: false,
+      error: `This file's format needs a quick confirmation by our team before it can be read. Nothing is needed from you.`,
+      quarantine: {
+        mapping_id: parsed.quarantine.mapping_id,
+        fingerprint: parsed.quarantine.fingerprint,
+        bank_label: parsed.quarantine.bank_label,
+        ambiguities: parsed.quarantine.ambiguities,
+      },
+      inserted: 0, parsed: 0, months: [], bankDetected: parsed.bank_name || bankLabel,
+      uncategorizedRemaining: 0, sourceFileId,
+    }
+  }
+  if (parsed.recognized_empty) {
+    // Empty-but-valid: a real statement whose period has no transactions.
+    // Success with zero rows — NOT the corrupt-file error (card 4a39e0fd:
+    // Economicamente's no-activity June was failed 4 times and nobody told
+    // the client anything true).
+    return {
+      ok: true,
+      emptyStatement: true,
+      alert: `This statement was read correctly — it has no transactions for its period (a month with no account activity is normal).`,
+      inserted: 0, parsed: 0, months: [], bankDetected: parsed.bank_name || bankLabel,
+      uncategorizedRemaining: 0, sourceFileId,
+    }
+  }
   if (parsed.transactions.length === 0) {
     const detail = parsed.errors.length ? ` (${parsed.errors[0]})` : ""
     return fail(
