@@ -50,10 +50,12 @@ const TY = 2025
 const cleanup = { accountIds: [] as string[], contactIds: [] as string[], submissionIds: [] as string[] }
 
 async function seedAccount(name: string): Promise<{ accountId: string; contactId: string }> {
+  // eslint-disable-next-line no-restricted-syntax -- QA fixture seed, cleaned up at exit
   const { data: acct, error: aErr } = await db.from("accounts").insert({
     company_name: `QA-WAVE ${name}`, entity_type: "Multi Member LLC", account_type: "Client", status: "Active",
   }).select("id").single()
   if (aErr) throw new Error(`seed account: ${aErr.message}`)
+  // eslint-disable-next-line no-restricted-syntax -- QA fixture seed, cleaned up at exit
   const { data: ctc, error: cErr } = await db.from("contacts").insert({
     first_name: "QA", last_name: `Wave-${name}`, full_name: `QA Wave-${name}`,
     email: `qa-wave-${name.toLowerCase()}@example.com`, language: "English",
@@ -80,10 +82,6 @@ const QB_CSV = [
   "02/20/2025,02/21/2025,AWS,-300.00,900.00",
 ].join("\n")
 
-async function jobRow(id: string) {
-  const { data } = await db.from("job_queue").select("*").eq("id", id).single()
-  return data
-}
 async function latestIngestJobFor(accountId: string) {
   const { data } = await db.from("job_queue").select("*")
     .eq("job_type", "ingest_bank_statement").eq("account_id", accountId)
