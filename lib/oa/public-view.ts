@@ -85,7 +85,46 @@ export const OA_SIGNATURE_SELECT = [
   "signed_at",
   "signature_image_path",
   "view_count",
+  // Die-on-change + expiry. Not secret (they carry no credential), and NOT added
+  // to toPublicSignature — the browser never needs them; the server evaluates the
+  // link state and returns a decision, not the raw timestamps.
+  "link_expires_at",
+  "revoked_at",
 ].join(", ")
+
+/** How long an emailed per-signer signing link stays valid (Antonio, 2026-08-11). */
+export const OA_SIGNER_LINK_TTL_DAYS = 15
+
+/** The `link_expires_at` value to stamp when a per-signer link is emailed NOW.
+ *  Every emailing surface uses this one helper so the window can never drift. */
+export function signerLinkExpiryISO(now: number = Date.now()): string {
+  return new Date(now + OA_SIGNER_LINK_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString()
+}
+
+/** The state of an emailed per-signer link, decided server-side. */
+export type SignerLinkState = "ok" | "revoked" | "expired"
+
+/**
+ * Is this signer's emailed link still usable? Pure, so it is unit-testable and
+ * the same rule runs at every door (fetch / sign / hand-signed / pdf).
+ *
+ *  - A SIGNED row is always "ok": expiry and revocation never un-sign anyone, and
+ *    a signed member re-opening the document must still see it.
+ *  - `revoked_at` set → "revoked" (membership changed under it — die-on-change).
+ *  - `link_expires_at` in the past → "expired".
+ *
+ * `revoked` is checked before `expired` because it is the stronger, deliberate
+ * kill; the message differs (withdrawn vs lapsed).
+ */
+export function signerLinkState(
+  row: { status?: string | null; revoked_at?: string | null; link_expires_at?: string | null },
+  now: number = Date.now(),
+): SignerLinkState {
+  if (row.status === "signed") return "ok"
+  if (row.revoked_at) return "revoked"
+  if (row.link_expires_at && new Date(row.link_expires_at).getTime() <= now) return "expired"
+  return "ok"
+}
 
 /**
  * Never leaves the server, on either table.

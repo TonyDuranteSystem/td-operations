@@ -24,6 +24,8 @@ import { APP_BASE_URL } from '@/lib/config'
 import { PortalOAClient } from './portal-oa-client'
 import { cookies } from 'next/headers'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
+import { signOaPass } from '@/lib/oa/portal-pass'
+import { signerLinkExpiryISO } from '@/lib/oa/public-view'
 
 /**
  * `?account=` selects the company (validated against the caller's own accounts).
@@ -162,9 +164,10 @@ export default async function PortalSignOAPage({ searchParams }: { searchParams?
     // same order they appear on the agreement, and the first UNSIGNED row is
     // handed to him; once every one is signed the last row's status drives the
     // "already signed" screen below.
-    const { data: memberSigs } = await supabaseAdmin
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- new columns not yet in generated DB types
+    const { data: memberSigs } = await (supabaseAdmin as any)
       .from('oa_signatures')
-      .select('access_code, status, member_name')
+      .select('id, access_code, status, member_name, member_index, link_expires_at, revoked_at')
       .eq('oa_id', oa.id)
       .eq('contact_id', contactId)
       .order('member_index')
@@ -174,6 +177,44 @@ export default async function PortalSignOAPage({ searchParams }: { searchParams?
     const memberSig = nextUnsigned ?? rows[rows.length - 1] ?? null
 
     if (memberSig) {
+      // A REVOKED link (the membership changed under a partially-signed agreement)
+      // is NOT auto-healed — the roster changed and staff must reissue. Show the
+      // logged-in member a clear message instead of a signing pad.
+      if (memberSig.revoked_at && memberSig.status !== 'signed') {
+        return (
+          <div className="flex items-center justify-center h-[60vh]">
+            <div className="text-center space-y-3 max-w-md px-4">
+              <p className="text-zinc-700 text-lg font-medium">This signing link needs to be re-issued</p>
+              <p className="text-zinc-500 text-sm">
+                The list of members for {oa.company_name} changed, so this Operating Agreement&apos;s signing links were reset.
+                Please ask the company owner to re-send the links from the portal, or contact{' '}
+                <a href="mailto:support@tonydurante.us" className="text-blue-500 hover:text-blue-400 underline">support@tonydurante.us</a>.
+              </p>
+            </div>
+          </div>
+        )
+      }
+
+      // AUTO-HEAL an EXPIRED own link for a logged-in member: they proved their
+      // identity by signing in, so silently re-stamp a fresh 15-day window on THIS
+      // row (never touches another member's row, never un-revokes, never un-signs).
+      // The row's code is unchanged — the wrapper embeds the current one live — so
+      // no previously-dead emailed link is revived elsewhere.
+      if (
+        memberSig.status !== 'signed' &&
+        !memberSig.revoked_at &&
+        memberSig.link_expires_at &&
+        new Date(memberSig.link_expires_at).getTime() <= Date.now()
+      ) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- new columns not yet in generated DB types
+        await (supabaseAdmin as any)
+          .from('oa_signatures')
+          .update({ link_expires_at: signerLinkExpiryISO(), updated_at: new Date().toISOString() })
+          .eq('id', memberSig.id)
+          .is('revoked_at', null)
+          .neq('status', 'signed')
+      }
+
       signerParam = `&signer=${memberSig.access_code}`
       memberStatus = memberSig.status
     }
@@ -213,8 +254,14 @@ export default async function PortalSignOAPage({ searchParams }: { searchParams?
     )
   }
 
-  // Construct URL with portal=true (and signer param for MMLLC)
-  const oaUrl = `${APP_BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}?portal=true${signerParam}`
+  // A short-lived pass, bound to THIS agreement, that proves to the public fetch
+  // route "a logged-in member of this company opened it" — so the embedded iframe
+  // skips the email gate without the spoofable bare ?portal=true flag. ?portal=true
+  // stays only for the page's layout / postMessage behaviour, no longer for auth.
+  const portalPass = await signOaPass({ oaId: oa.id, kind: 'portal', sub: contactId })
+
+  // Construct URL with portal=true (and signer param for MMLLC) + the bound pass.
+  const oaUrl = `${APP_BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}?portal=true${signerParam}&pass=${encodeURIComponent(portalPass)}`
 
   return (
     <div>
@@ -230,6 +277,8 @@ export default async function PortalSignOAPage({ searchParams }: { searchParams?
         status={oa.status}
         companyName={oa.company_name}
         language={oa.language}
+        accountId={selectedAccountId}
+        canResend={isMultiSigner}
       />
     </div>
   )

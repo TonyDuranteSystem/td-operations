@@ -44,9 +44,10 @@ import { accessCodeError } from "@/lib/esign/access-guard"
 import { checkRateLimit, getRateLimitKey } from "@/lib/portal/rate-limit"
 import { isStaffPreview } from "@/lib/auth/staff-preview"
 import { normalizeEntityType } from "@/lib/portal/entity-type"
-import { OA_AGREEMENT_SELECT, OA_SIGNATURE_SELECT, resolveSignerIndex } from "@/lib/oa/public-view"
+import { OA_AGREEMENT_SELECT, OA_SIGNATURE_SELECT, resolveSignerIndex, signerLinkState } from "@/lib/oa/public-view"
 import { finalizeOaAgreement } from "@/lib/oa/finalize-signing"
 import { reportSystemError } from "@/lib/system-errors"
+import { internalWebhookServerHeaders } from "@/lib/webhook-internal-auth"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -192,6 +193,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     }
     memberIndex = idx
     const row = signatures.find(s => s.member_index === idx)
+    // Die-on-change + expiry: this member's link may be dead even though the
+    // shared code is right. A signature already recorded is never blocked (the
+    // guard below excludes signed rows anyway); an unsigned one that was revoked
+    // (membership changed) or has expired must not sign — with the signature
+    // possibly already drawn on screen, the message says to request a fresh link,
+    // never "invalid link".
+    const state = row ? signerLinkState(row) : "ok"
+    if (state === "revoked") {
+      return NextResponse.json(
+        { error: "This signing link is no longer valid because the company's members changed. Please ask the company owner to re-issue it from the portal." },
+        { status: 403 },
+      )
+    }
+    if (state === "expired") {
+      return NextResponse.json(
+        { error: "This signing link has expired. Please ask the company owner to re-send it from the portal, then sign from the fresh link." },
+        { status: 403 },
+      )
+    }
     memberName = row?.member_name || agreement.member_name || "Member"
     memberEmail = row?.member_email ?? null
   } else {
@@ -342,7 +362,7 @@ async function notifyOaSigned(oaId: string, token: string, memberIndex?: number)
   try {
     await fetch(`${APP_BASE_URL}/api/oa-signed`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...internalWebhookServerHeaders() },
       body: JSON.stringify({ oa_id: oaId, token, member_index: memberIndex }),
     })
   } catch {

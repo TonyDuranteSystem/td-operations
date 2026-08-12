@@ -765,6 +765,16 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     }
 
     await updateJobProgress(job.id, result)
+
+    // Die-on-change safety net: if this account already held a live unsigned
+    // Operating Agreement when its roster was (re)built here, kill its co-signer
+    // links so a superseded agreement can't still be signed. Fires ONCE after the
+    // whole roster is written, not per row; the material-diff no-ops when the
+    // roster is unchanged. Best-effort — never fails onboarding.
+    if (account_id) {
+      const { autoRefreshOa } = await import("@/lib/operations/oa-refresh")
+      await autoRefreshOa(account_id, "onboarding-setup")
+    }
   }
 
   // ─── 2. AUTO-CREATE LEASE AGREEMENT ───

@@ -31,6 +31,7 @@ import { APP_BASE_URL } from '@/lib/config'
 import { notifyClientActionRequired } from '@/lib/portal/action-required'
 import { reportSystemError } from '@/lib/system-errors'
 import { resolveSigningSet, describeSigningBlock, signerDisplayName, type ResolvedSigner } from '@/lib/members/signing-set'
+import { signerLinkExpiryISO } from '@/lib/oa/public-view'
 
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -404,12 +405,16 @@ export async function POST(request: NextRequest) {
   if (isMMLC) {
     // One row per SIGNER, not per member. A company member's row carries its
     // representative — the human who signs on the company's behalf.
+    // link_expires_at is stamped NOW because this same request emails each signer
+    // their link — a 15-day window on the emailed credential (Antonio, 2026-08-11).
+    const linkExpiry = signerLinkExpiryISO()
     const sigRows = oaSigners.map((s, idx) => ({
       oa_id: oa.id,
       member_index: idx,
       member_name: signerDisplayName(s),
       member_email: s.email,
       contact_id: s.contactId,
+      link_expires_at: linkExpiry,
     }))
 
     const { data: insertedSigs, error: sigErr } = await supabaseAdmin

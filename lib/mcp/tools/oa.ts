@@ -16,6 +16,7 @@ import { safeSend } from "@/lib/mcp/safe-send"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { APP_BASE_URL } from "@/lib/config"
 import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
+import { signerLinkExpiryISO } from "@/lib/oa/public-view"
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
 
@@ -642,10 +643,13 @@ Tony Durante LLC`
                 account_id: oa.account_id || null,
               })
 
-              // Update signature row
+              // Update signature row. Stamp the 15-day link expiry HERE, because
+              // this is the moment the per-signer credential is emailed — the same
+              // rule the portal create route follows. A staff resend re-stamps a
+              // fresh 15-day window (Antonio, 2026-08-11).
               await supabaseAdmin
                 .from("oa_signatures")
-                .update({ status: "sent", sent_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+                .update({ status: "sent", sent_at: new Date().toISOString(), link_expires_at: signerLinkExpiryISO(), updated_at: new Date().toISOString() })
                 .eq("id", sig.id)
 
               resultLines.push(`✅ ${sig.member_name} (${sig.member_email}) — sent (${gmailResult.id})`)

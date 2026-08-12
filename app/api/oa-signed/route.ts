@@ -6,19 +6,36 @@
  * For MMLLC: handles partial (member_index present) vs complete signing
  *
  * Body: { oa_id: string, token: string, member_index?: number }
- * No auth required (public endpoint — only triggers internal notifications)
+ *
+ * ⛔ INTERNAL-ONLY. This route files the executed PDF to the client's Drive and
+ * emails staff, and it sits on the public `/api/*` path (no session) so our own
+ * SERVER-side signing code can reach it. It used to accept ANY caller — and OA
+ * ids are enumerable (anon holds SELECT(id)) with tokens derivable from a public
+ * company name — so anyone could POST to fire a bogus "OA Signed" alert or
+ * re-trigger filing. It now requires the shared internal-webhook secret, the same
+ * fail-closed gate the offer/agreement webhooks use. The only callers are the two
+ * server-to-server ones (the sign route's partial-sign notifier and the finalizer);
+ * both attach the header. The old browser caller (the legacy signing page) is gone
+ * — that page is now a pure redirect.
  */
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { APP_BASE_URL } from "@/lib/config"
+import { CRM_BASE_URL } from "@/lib/config"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { resolveSignedPdfPath, signedPdfPathProblem } from "@/lib/oa/signed-pdf-path"
 import { reportSystemError } from "@/lib/system-errors"
 import { normalizeEntityType } from "@/lib/portal/entity-type"
+import { verifyInternalWebhookSecret } from "@/lib/webhook-internal-auth"
 
 export async function POST(req: NextRequest) {
   try {
+    // Fail closed: only our own server code (carrying the internal secret) may
+    // trigger filing + the staff notification.
+    if (!verifyInternalWebhookSecret(req)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
     const body = await req.json()
     const { oa_id, token, member_index } = body as { oa_id?: string; token?: string; member_index?: number }
 
@@ -38,15 +55,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "OA not found" }, { status: 404 })
     }
 
-    // The preview link must carry the access code: ?preview=td no longer skips
-    // the server-side code check, because the staff session cookie is scoped to
-    // the CRM host and is absent on the client-facing domain.
-    // A row with NO code has no working preview URL at all — the codeless form
-    // 403s too, on the same guard. So omit the line rather than email a link
-    // that cannot work. (An earlier version of this fallback claimed to solve
-    // that and did not: both branches 403.)
-    const previewUrl = oa.access_code
-      ? `${APP_BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}?preview=td`
+    // Preview from the CRM, not an embedded client-host link. The bare ?preview=td
+    // flag no longer skips the email gate or view-tracking on the client-facing
+    // host (a staff session cookie doesn't reach it), so a link here would ask
+    // staff for the client's email AND register a false "client viewed" on a legal
+    // document. The CRM account's Documents panel has a "View" that mints a proper
+    // staff-preview pass — that is now the one staff preview path.
+    const previewUrl = oa.account_id
+      ? `${CRM_BASE_URL}/accounts/${oa.account_id}`
       : null
 
     const results: { step: string; status: string; detail?: string }[] = []
@@ -88,7 +104,7 @@ export async function POST(req: NextRequest) {
             ``,
             `The agreement is NOT yet fully executed. Remaining members must still sign.`,
             ``,
-            previewUrl ? `Admin Preview: ${previewUrl}` : null,
+            previewUrl ? `View in CRM: ${previewUrl}` : null,
           ].filter(Boolean)
         : [
             `The Operating Agreement for ${oa.company_name} has been ${isMMLC ? "fully " : ""}signed.`,
@@ -98,7 +114,7 @@ export async function POST(req: NextRequest) {
             isMMLC ? `All ${oa.total_signers} members have signed.` : null,
             `Token: ${oa.token}`,
             ``,
-            previewUrl ? `Admin Preview: ${previewUrl}` : null,
+            previewUrl ? `View in CRM: ${previewUrl}` : null,
           ].filter(Boolean)
 
       const emailBody = bodyLines.join("\n")
