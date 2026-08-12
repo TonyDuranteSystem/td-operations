@@ -7,7 +7,7 @@ import { cookies } from 'next/headers'
 import { getLocale } from '@/lib/portal/i18n'
 import { GenerateDocumentsClient } from './generate-documents-client'
 import { formatMemberAddress } from '@/lib/members/member-address'
-import { resolveOwnerOfRecord } from '@/lib/members/sole-owner-address'
+import { resolveOwnerOfRecord, resolveOwnerName } from '@/lib/members/sole-owner-address'
 
 export const dynamic = 'force-dynamic'
 
@@ -52,7 +52,7 @@ export default async function GenerateDocumentsPage() {
     // resolve one owner on screen and a different one in the stored document.
     supabaseAdmin
       .from('account_contacts')
-      .select('contact_id, role, contacts(first_name, last_name, address_line1, address_city, address_state, address_zip, address_country)')
+      .select('contact_id, role, contacts(full_name, first_name, last_name, address_line1, address_city, address_state, address_zip, address_country)')
       .eq('account_id', selectedAccountId)
       .order('contact_id', { ascending: true }),
   ])
@@ -68,7 +68,7 @@ export default async function GenerateDocumentsPage() {
     contact_id: string
     role: string | null
     contacts: {
-      first_name: string | null; last_name: string | null
+      full_name: string | null; first_name: string | null; last_name: string | null
       address_line1: string | null; address_city: string | null
       address_state: string | null; address_zip: string | null; address_country: string | null
     } | null
@@ -87,7 +87,13 @@ export default async function GenerateDocumentsPage() {
   // stored the logged-in person's name — the previewed and the signed document
   // disagreeing about who owns the company, which is the exact defect this job
   // exists to remove. Both surfaces now refuse from the SAME resolution.
-  const ownerUnresolved = rawMembers.length === 0 && !ownerResolution.resolved
+  // The owner's NAME, from the same resolution and the same helper as the route.
+  const ownerName = resolveOwnerName(ownerContact)
+
+  // Refuse when the owner cannot be established OR has no usable name. Both are
+  // "we cannot say who owns this company", and both must stop generation on BOTH
+  // surfaces — the route refuses identically.
+  const ownerUnresolved = rawMembers.length === 0 && (!ownerResolution.resolved || !ownerName)
 
   const mappedMembers = rawMembers.length > 0
     ? rawMembers.map(m => ({
@@ -111,9 +117,13 @@ export default async function GenerateDocumentsPage() {
         email: m.email ?? null,
         member_id: m.member_id,
       }))
-    : ownerContact
+    : (ownerContact && ownerName)
       ? [{
-          fullName: `${ownerContact.first_name ?? ''} ${ownerContact.last_name ?? ''}`.trim() || 'N/A',
+          // The SAME helper the create route uses, so the previewed name and the
+          // stored name cannot differ. Never the literal "N/A": if no usable name
+          // exists the screen refuses below rather than printing a placeholder as
+          // the sole member of a company.
+          fullName: ownerName as string,
           role: 'owner',
           ownershipPct: null,
           // No member roster — correct state for a Single Member LLC — so the
@@ -155,11 +165,6 @@ export default async function GenerateDocumentsPage() {
       }}
       members={mappedMembers}
       ownerUnresolved={ownerUnresolved}
-      // TRUE only where the self-service pointer is actually TRUE: a rosterless
-      // company whose owner is the person reading the screen, who can therefore
-      // edit these fields on their own profile. Everyone else is pointed at support,
-      // because for them it genuinely is a support job.
-      canSelfEditOnProfile={rawMembers.length === 0 && ownerResolution.resolved && ownerResolution.contactId === contactId}
       history={historyResult.data || []}
       locale={locale}
     />

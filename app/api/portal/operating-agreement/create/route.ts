@@ -67,7 +67,7 @@ import {
   shouldStoreSoleMemberAddress,
 } from '@/lib/members/oa-address-decisions'
 import { formatMemberAddressRow } from '@/lib/members/member-address'
-import { resolveOwnerOfRecord } from '@/lib/members/sole-owner-address'
+import { resolveOwnerOfRecord, resolveOwnerName } from '@/lib/members/sole-owner-address'
 import { signerLinkExpiryISO } from '@/lib/oa/public-view'
 
 export async function POST(request: NextRequest) {
@@ -210,7 +210,7 @@ export async function POST(request: NextRequest) {
       context: { account_id, db_error: membersErr.message },
     })
     return NextResponse.json({
-      error: 'We could not read this company\'s member details just now, so we have not created the agreement. Please try again in a moment — if it keeps happening, contact support@tonydurante.us.',
+      error: 'We could not read this company\'s member details just now, so we have not created the agreement. Please try again in a moment — if it keeps happening, send us a message.',
     }, { status: 503 })
   }
 
@@ -252,7 +252,7 @@ export async function POST(request: NextRequest) {
         context: { account_id, db_error: linksErr.message },
       })
       return NextResponse.json({
-        error: 'We could not confirm this company\'s owner just now, so we have not created the agreement. Please try again in a moment — if it keeps happening, contact support@tonydurante.us.',
+        error: 'We could not confirm this company\'s owner just now, so we have not created the agreement. Please try again in a moment — if it keeps happening, send us a message.',
       }, { status: 503 })
     }
 
@@ -271,8 +271,13 @@ export async function POST(request: NextRequest) {
     if (!ownerResolution.resolved) {
       return NextResponse.json({
         error: ownerResolution.reason === 'no_contacts'
-          ? 'We don\'t have anyone on file as the owner of this company yet, so we can\'t put a name on the Operating Agreement. Contact support@tonydurante.us and we\'ll set it up.'
-          : 'Your company has several people linked to it and none is marked as the owner, so we can\'t say whose name and address belong on the Operating Agreement. Contact support@tonydurante.us and we\'ll set it straight.',
+          // Portal wording, no email: the form and the correction both reach the
+          // client IN THEIR PORTAL, and client-facing copy must never say otherwise
+          // (Antonio, 2026-08-12).
+          ? 'We don\'t have anyone on file as the owner of this company yet, so we can\'t put a name on the Operating Agreement. Send us a message and we\'ll set it up.'
+          : ownerResolution.reason === 'several_owners'
+            ? 'More than one person on this company is listed as an owner, so we can\'t say who should be named as the member on the Operating Agreement. Send us a message and we\'ll set it straight.'
+            : 'Your company has several people linked to it and none is marked as the owner, so we can\'t say whose name and address belong on the Operating Agreement. Send us a message and we\'ll set it straight.',
       }, { status: 422 })
     }
 
@@ -512,19 +517,36 @@ export async function POST(request: NextRequest) {
   // holds it — the same record-vs-document split this job exists to close, and
   // what the first cut of this change did on exactly this path.
   let ownerRecordAddress: string | null = null
+  let ownerName: string | null = null
+  let ownerEmail: string | null = null
   if (!hasMemberRecords && ownerOfRecordContactId) {
     const { data: ownerContact } = await supabaseAdmin
       .from('contacts')
-      .select('address_line1, address_city, address_state, address_zip, address_country')
+      .select('full_name, first_name, last_name, email, address_line1, address_city, address_state, address_zip, address_country')
       .eq('id', ownerOfRecordContactId)
       .maybeSingle()
     ownerRecordAddress = formatOwnerContactAddress(ownerContact)
+    // The document NAMES the owner, never whoever is holding the mouse (Antonio,
+    // 2026-08-12: "A document that names the person holding the mouse is not a
+    // legal instrument, it is a form letter"). Same helper as the screen, so the
+    // previewed and the stored name cannot differ.
+    ownerName = resolveOwnerName(ownerContact)
+    ownerEmail = ownerContact?.email ?? null
   }
 
   // Which address the agreement stores — decided in one tested place, including
   // WHICH member row a single-member agreement reads. `[0]` after an is_primary
   // sort is not safe by itself: ties are unordered, so an account with no flagged
   // primary could store a different member's address on two consecutive runs.
+  // No usable name is the same class of failure as no identifiable owner: we
+  // cannot say who owns this company. Refuse rather than print "N/A" as the sole
+  // member of a legal instrument. The screen blocks on the identical condition.
+  if (!hasMemberRecords && !ownerName) {
+    return NextResponse.json({
+      error: 'We don\'t have a name on file for the owner of this company, so we can\'t put one on the Operating Agreement. Send us a message and we\'ll set it up.',
+    }, { status: 422 })
+  }
+
   const soleMemberAddress = resolveSoleMemberAddress({
     hasMemberRecords,
     primaryMemberRow: pickSoleMemberRow(membersRows),
@@ -549,15 +571,23 @@ export async function POST(request: NextRequest) {
       formation_date: account.formation_date || effective_date || new Date().toISOString().split('T')[0],
       ein_number: account.ein_number ?? null,
       entity_type: entityType,
-      manager_name: contact.full_name,
-      member_name: isMMLC ? (primaryMember?.full_name ?? contact.full_name) : contact.full_name,
+      // ROSTERLESS PATH ONLY. A company WITH a member roster is untouched — that
+      // roster already drives its naming, and whether the manager on a
+      // multi-member agreement should be its creator is a separate question with
+      // its own card, not a change to make tonight.
+      manager_name: hasMemberRecords ? contact.full_name : (ownerName as string),
+      member_name: isMMLC
+        ? (primaryMember?.full_name ?? contact.full_name)
+        : (hasMemberRecords ? contact.full_name : (ownerName as string)),
       // Only the SMLLC templates render this (Article 2.1 "Sole Member"); the
       // multi-member ones print the roster from `members` above. It used to be
       // `member_addresses[0]` — the browser's first typed value — which on a
       // multi-member agreement stored one member's typed address in a column
       // labelled as the sole member's, for no reader.
       member_address: shouldStoreSoleMemberAddress(isMMLC) ? soleMemberAddress : null,
-      member_email: isMMLC ? (primaryMember?.email ?? contact.email) : contact.email,
+      member_email: isMMLC
+        ? (primaryMember?.email ?? contact.email)
+        : (hasMemberRecords ? contact.email : (ownerEmail ?? contact.email)),
       members: membersJson,
       effective_date: effective_date,
       business_purpose: 'any and all lawful business activities',

@@ -61,13 +61,6 @@ interface Props {
    */
   ownerUnresolved: boolean
   /**
-   * True ONLY when the viewer can genuinely fix these addresses themselves — a
-   * sole owner reading their own company's screen, whose address lives on their
-   * contact record and is editable on their profile. Everyone else is pointed at
-   * support, because for them it really is a support job.
-   */
-  canSelfEditOnProfile: boolean
-  /**
    * True when the members above come from real member records — which is when
    * their addresses are the system of record and MUST NOT be editable here
    * (Antonio, 2026-08-12: a legal document must never be able to disagree with
@@ -108,35 +101,24 @@ const LABELS: Record<string, Record<string, string>> = {
   // The screen is read-only for EVERY company shape, so this is the only address
   // copy there is. The original told every client to "enter" an address on a screen
   // that then discarded what they typed.
-  // ONE honest line for EVERY company shape. The previous wording claimed these
-  // came from "your company's member records", which is simply false for the 216
-  // Single Member LLCs that have no member roster at all — their address lives on
-  // the owner's own record. Antonio's ruling, 2026-08-12: say what is true for
-  // everyone, and add the self-service pointer only where it is also true.
+  // ONE text for EVERY company shape — no branching, no Profile link, no email
+  // address (Antonio's final copy ruling, 2026-08-12). Two reasons the earlier
+  // version was wrong: it claimed the addresses come from "member records", which
+  // is false for the 216 Single Member LLCs that have no roster; and it linked to
+  // the Profile screen, where a client can rewrite the address that feeds legal
+  // documents AND, in the same save, change the residency value the tax side reads
+  // — unreviewed. Linking there from this screen would have undone the whole
+  // ruling while appearing to honour it. THE MEMBER/CONTACT INFO FORM is the
+  // channel: we issue it deliberately, it captures the roster coherently, and it
+  // leaves a submission record. And the form reaches the client IN THEIR PORTAL —
+  // client-facing copy must never say otherwise.
   addressFromRecord: {
-    en: 'These addresses come from your records with us and appear in the Operating Agreement exactly as shown.',
-    it: 'Questi indirizzi provengono dai tuoi dati registrati presso di noi e compaiono nell\'Atto Costitutivo esattamente come mostrati.',
-  },
-  addressFixViaSupport: {
-    en: 'If anything is wrong, contact support@tonydurante.us and we\'ll correct it before you sign.',
-    it: 'Se qualcosa non è corretto, scrivi a support@tonydurante.us e lo sistemiamo prima della firma.',
-  },
-  addressFixViaProfile: {
-    en: 'If anything is wrong, update it in your Profile and come back — the document will pick it up.',
-    it: 'Se qualcosa non è corretto, aggiornalo nel tuo Profilo e torna qui — il documento lo recepirà.',
-  },
-  addressProfileLink: { en: 'Go to Profile', it: 'Vai al Profilo' },
-  ownerUnresolvedTitle: {
-    en: 'We can\'t tell who the owner of this company is',
-    it: 'Non riusciamo a determinare chi è il titolare di questa azienda',
-  },
-  ownerUnresolvedBody: {
-    en: 'Your company has several people linked to it and none is marked as the owner, so we can\'t say whose name and address belong on the Operating Agreement. Contact support@tonydurante.us and we\'ll set it straight — it takes us a moment.',
-    it: 'Alla tua azienda sono collegate più persone e nessuna è indicata come titolare, quindi non possiamo stabilire quale nome e indirizzo debbano comparire nell\'Atto Costitutivo. Scrivi a support@tonydurante.us e lo sistemiamo subito.',
+    en: 'These addresses come from your records with us and appear in the Operating Agreement exactly as shown. If anything is wrong, send us a message and we\'ll put the form in your portal so you can update them.',
+    it: 'Questi indirizzi provengono dai tuoi dati registrati presso di noi e compaiono nell\'Atto Costitutivo esattamente come mostrati. Se qualcosa non è corretto, scrivici e ti mettiamo il modulo nel portale per aggiornarli.',
   },
   addressMissing: {
-    en: 'Not on file — contact support@tonydurante.us to add it.',
-    it: 'Non disponibile — scrivi a support@tonydurante.us per aggiungerlo.',
+    en: 'Not on file — send us a message and we\'ll add it.',
+    it: 'Non disponibile — scrivici e lo aggiungiamo.',
   },
   address: { en: 'Address', it: 'Indirizzo' },
   amount: { en: 'Distribution Amount', it: 'Importo Distribuzione' },
@@ -173,7 +155,7 @@ function docTypeLabel(type: string, lang: string): string {
   return type
 }
 
-export function GenerateDocumentsClient({ account, members, ownerUnresolved, canSelfEditOnProfile, history: initialHistory, locale }: Props) {
+export function GenerateDocumentsClient({ account, members, ownerUnresolved, history: initialHistory, locale }: Props) {
   const { locale: ctxLocale } = useLocale()
   const lang = ctxLocale || locale || 'en'
   const router = useRouter()
@@ -724,17 +706,7 @@ export function GenerateDocumentsClient({ account, members, ownerUnresolved, can
               */}
               <div>
                 <label className="block text-xs text-zinc-500 mb-1">{l('memberAddresses', lang)}</label>
-                <p className="text-xs text-zinc-500 mb-1">{l('addressFromRecord', lang)}</p>
-                {/* The remedy differs by who is reading. A sole owner can fix this
-                    themselves on their profile; anyone else genuinely needs us. */}
-                {canSelfEditOnProfile ? (
-                  <p className="text-xs text-zinc-500 mb-3">
-                    {l('addressFixViaProfile', lang)}{' '}
-                    <a href="/portal/profile" className="text-blue-700 hover:underline">{l('addressProfileLink', lang)}</a>
-                  </p>
-                ) : (
-                  <p className="text-xs text-zinc-500 mb-3">{l('addressFixViaSupport', lang)}</p>
-                )}
+                <p className="text-xs text-zinc-500 mb-3">{l('addressFromRecord', lang)}</p>
                 <div className="space-y-2">
                   {members.map((m, i) => (
                     <div key={i} className="rounded border border-zinc-200 bg-zinc-50 px-3 py-2">
@@ -972,8 +944,10 @@ export function GenerateDocumentsClient({ account, members, ownerUnresolved, can
                     ? 'L\'Atto Costitutivo è stato creato, ma non siamo riusciti a inviare la notifica. Usa il pulsante qui sotto per firmare, e contatta l\'assistenza se hai bisogno di aiuto.'
                     : 'Your Operating Agreement was created, but we could not send the notification. Use the button below to sign, and contact support if you need help.')
                   : (lang === 'it'
-                    ? 'L\'Atto Costitutivo è stato creato, ma non siamo riusciti a inviare la notifica ai soci. Contatta l\'assistenza a support@tonydurante.us così possiamo avvisarli.'
-                    : 'Your Operating Agreement was created, but we could not notify the members. Please contact support@tonydurante.us so we can reach them.')
+                    // Portal wording, no email — the correction and the form both
+                    // reach the client IN THEIR PORTAL (Antonio, 2026-08-12).
+                    ? 'L\'Atto Costitutivo è stato creato, ma non siamo riusciti ad avvisare i soci. Scrivici e li avvisiamo noi.'
+                    : 'Your Operating Agreement was created, but we could not notify the members. Send us a message and we\'ll reach them.')
                 : isMMLC
                 ? (lang === 'it'
                   ? 'Ogni socio ha ricevuto il proprio link personale per firmare l\'Atto Costitutivo.'

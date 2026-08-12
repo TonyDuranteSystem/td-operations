@@ -22,7 +22,7 @@
 
 import { describe, it, expect } from 'vitest'
 
-import { resolveOwnerOfRecord, ownerContactIdOrNull, type AccountContactLink } from '@/lib/members/sole-owner-address'
+import { resolveOwnerOfRecord, ownerContactIdOrNull, resolveOwnerName, type AccountContactLink } from '@/lib/members/sole-owner-address'
 
 const OWNER: AccountContactLink = { contact_id: 'c-owner', role: 'Owner' }
 const ADMIN: AccountContactLink = { contact_id: 'c-admin', role: 'Administrator' }
@@ -55,6 +55,78 @@ describe('resolveOwnerOfRecord — rule 2: several people, go by role', () => {
     const r = resolveOwnerOfRecord([ADMIN, MEMBER])
     expect(r.contactId).toBe('c-member')
     expect(r.via).toBe('member_role')
+  })
+})
+
+describe('resolveOwnerOfRecord — refuse when SEVERAL people are the owner', () => {
+  it('THE RULING: two owner-role links REFUSE — never silently pick one', () => {
+    // A 50/50 couple company still flagged single-member with no roster would
+    // otherwise have one of them named SOLE member of the company, chosen by
+    // internal ordering. Antonio: "Where several owner-role links exist, refuse.
+    // Do not pick one silently. Same rule you already applied to the address."
+    const r = resolveOwnerOfRecord([
+      { contact_id: 'c-a', role: 'Owner' },
+      { contact_id: 'c-b', role: 'Sole Member' },
+    ])
+    expect(r.resolved).toBe(false)
+    expect(r.reason).toBe('several_owners')
+    expect(r.contactId).toBeNull()
+  })
+
+  it('is not order-dependent — the refusal holds whichever way round they come', () => {
+    const a = { contact_id: 'c-a', role: 'Owner' }
+    const b = { contact_id: 'c-b', role: 'Owner' }
+    expect(resolveOwnerOfRecord([a, b]).resolved).toBe(false)
+    expect(resolveOwnerOfRecord([b, a]).resolved).toBe(false)
+  })
+
+  it('two member-role links refuse too, for the same reason', () => {
+    expect(resolveOwnerOfRecord([
+      { contact_id: 'c-a', role: 'Member' },
+      { contact_id: 'c-b', role: 'member' },
+    ]).reason).toBe('several_owners')
+  })
+
+  it('but ONE owner among several links still resolves cleanly', () => {
+    const r = resolveOwnerOfRecord([ADMIN, OWNER, { contact_id: 'c-acct', role: 'Accountant' }])
+    expect(r.resolved).toBe(true)
+    expect(r.contactId).toBe('c-owner')
+  })
+})
+
+describe('resolveOwnerName — one name, both surfaces, never a placeholder', () => {
+  it('THE DIVERGENCE FIX: prefers the reliably-populated full name', () => {
+    // The screen used to build it from first + last while the route used the full
+    // name. 78 of 473 production contacts are missing one of the two parts, so the
+    // preview printed a partial name — or "N/A" — while the document printed the
+    // real one.
+    expect(resolveOwnerName({ full_name: 'Alice Rossi', first_name: null, last_name: null })).toBe('Alice Rossi')
+  })
+
+  it('falls back to first + last when there is no full name', () => {
+    expect(resolveOwnerName({ full_name: null, first_name: 'Alice', last_name: 'Rossi' })).toBe('Alice Rossi')
+    expect(resolveOwnerName({ full_name: '   ', first_name: 'Alice', last_name: null })).toBe('Alice')
+  })
+
+  it('RETURNS NULL rather than a placeholder when no name exists — callers refuse', () => {
+    // "N/A" as the sole member of a company is not a tidy-up-later defect; it is a
+    // legal instrument naming nobody.
+    expect(resolveOwnerName({ full_name: null, first_name: null, last_name: null })).toBeNull()
+    expect(resolveOwnerName({ full_name: '', first_name: '  ', last_name: '' })).toBeNull()
+    expect(resolveOwnerName(null)).toBeNull()
+    expect(resolveOwnerName(undefined)).toBeNull()
+  })
+
+  it('never returns the literal N/A for any input', () => {
+    for (const c of [
+      { full_name: null, first_name: null, last_name: null },
+      { full_name: 'N/A' },
+      { first_name: 'Alice' },
+    ]) {
+      const out = resolveOwnerName(c)
+      if (out !== null) expect(out).not.toBe('')
+    }
+    expect(resolveOwnerName({ full_name: null, first_name: null, last_name: null })).not.toBe('N/A')
   })
 })
 

@@ -33,7 +33,7 @@ export interface AccountContactLink {
 }
 
 export type OwnerVia = 'sole_contact' | 'owner_role' | 'member_role'
-export type OwnerRefusalReason = 'no_contacts' | 'ambiguous_roles'
+export type OwnerRefusalReason = 'no_contacts' | 'ambiguous_roles' | 'several_owners' | 'no_usable_name'
 
 /**
  * Both fields are always present rather than forming a discriminated union: TS
@@ -77,11 +77,18 @@ export function resolveOwnerOfRecord(links: AccountContactLink[]): OwnerResoluti
   // Rule 1: one person, no ambiguity — role text is irrelevant.
   if (links.length === 1) return { resolved: true, contactId: links[0].contact_id, via: 'sole_contact', reason: null }
 
-  const byOwnerRole = links.find(l => /owner|sole member/i.test(l.role ?? ''))
-  if (byOwnerRole) return { resolved: true, contactId: byOwnerRole.contact_id, via: 'owner_role', reason: null }
+  // SEVERAL owner-ish links is a refusal, not a race. Taking the first would be
+  // the same silent guess the address path was fixed to stop — deterministic, yes,
+  // but it names one of two real people as SOLE member of a company on a legal
+  // instrument. Antonio, 2026-08-12: "Where several owner-role links exist, refuse.
+  // Do not pick one silently. Same rule you already applied to the address."
+  const owners = links.filter(l => /owner|sole member/i.test(l.role ?? ''))
+  if (owners.length === 1) return { resolved: true, contactId: owners[0].contact_id, via: 'owner_role', reason: null }
+  if (owners.length > 1) return { resolved: false, contactId: null, via: null, reason: 'several_owners' }
 
-  const byMemberRole = links.find(l => /member/i.test(l.role ?? ''))
-  if (byMemberRole) return { resolved: true, contactId: byMemberRole.contact_id, via: 'member_role', reason: null }
+  const members = links.filter(l => /member/i.test(l.role ?? ''))
+  if (members.length === 1) return { resolved: true, contactId: members[0].contact_id, via: 'member_role', reason: null }
+  if (members.length > 1) return { resolved: false, contactId: null, via: null, reason: 'several_owners' }
 
   return { resolved: false, contactId: null, via: null, reason: 'ambiguous_roles' }
 }
@@ -90,4 +97,36 @@ export function resolveOwnerOfRecord(links: AccountContactLink[]): OwnerResoluti
 export function ownerContactIdOrNull(links: AccountContactLink[]): string | null {
   const r = resolveOwnerOfRecord(links)
   return r.resolved ? r.contactId : null
+}
+
+// ─── The NAME on the document ────────────────────────────────────────────────
+
+/** The name columns both surfaces read for the owner. */
+export interface OwnerNameSource {
+  full_name?: string | null
+  first_name?: string | null
+  last_name?: string | null
+}
+
+/**
+ * The owner's name for the document — ONE helper, ONE precedence, both surfaces.
+ *
+ * Why this exists: the screen built the name from first + last, the route used
+ * full_name, and first/last are optional while full_name is what is reliably
+ * populated (78 of 473 production contacts are missing one of the two parts). So
+ * the preview printed a partial name — or the literal string "N/A" — while the
+ * stored agreement printed the real one. Preview and signed document naming
+ * different people is the disease this whole job exists to cure; it merely moved
+ * from the address to the name.
+ *
+ * Returns null when no usable name exists. **Callers must REFUSE on null, never
+ * substitute a placeholder.** "N/A" as the sole member of a company is not a
+ * document defect to be tidied up later — it is a legal instrument naming nobody.
+ */
+export function resolveOwnerName(contact: OwnerNameSource | null | undefined): string | null {
+  if (!contact) return null
+  const full = (contact.full_name ?? '').trim()
+  if (full) return full
+  const joined = [contact.first_name ?? '', contact.last_name ?? ''].map(p => p.trim()).filter(Boolean).join(' ')
+  return joined || null
 }
