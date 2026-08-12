@@ -264,6 +264,24 @@ try {
     const events = (after.review_history ?? []).map((h: { event: string }) => h.event)
     check("W8", "both history entries written", events.includes("financials_attestation_reset") && events.includes("failed_files_override_cleared"), events.join(","))
   }
+
+  // ── W8b (round 3 blocker): override-ONLY submission — a mutation clears it
+  //     even when nothing was attested (the failed-upload path calls the same
+  //     reset from the upload route; the route join is a CLICKED cell). ──
+  {
+    const { accountId, contactId } = await seedAccount("W8B")
+    const { data: sub } = await db.from("tax_return_submissions").insert({
+      account_id: accountId, contact_id: contactId, tax_year: TY, status: "reviewed",
+      token: `qa-wave-w8b-${Date.now().toString(36)}`, submitted_data: { entity_type: "MMLLC" },
+      confirmation_accepted: false,
+      financials_meta: { failed_files_override: { by: "qa", reason: "seeded", at: new Date().toISOString() } },
+    }).select("id").single()
+    cleanup.submissionIds.push(sub.id)
+    const { resetFinancialsAttestation } = await import("../../lib/tax/attestation")
+    await resetFinancialsAttestation(accountId, TY, "QA new upload (failing file)")
+    const { data: after } = await db.from("tax_return_submissions").select("financials_meta").eq("id", sub.id).single()
+    check("W8b", "override cleared on an UN-attested submission too (failed-upload class)", after.financials_meta?.failed_files_override == null, JSON.stringify(after.financials_meta))
+  }
 } finally {
   // ── Cleanup ───────────────────────────────────────────────────────────────
   for (const id of cleanup.submissionIds) await db.from("tax_return_submissions").delete().eq("id", id)

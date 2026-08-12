@@ -165,8 +165,16 @@ async function extractSinglePass(
   mimeType: string,
   opts?: { fetchImpl?: typeof fetch; model?: string; maxAttempts?: number; budgetMs?: number },
 ): Promise<ParseResult> {
+  // NOTE (round 3): a missing/rotated key is OUR config problem, not the
+  // file's — the no-key result below is flagged transient so the job retries
+  // instead of terminally branding every upload of the mishap window as
+  // unreadable and notifying the clients.
   const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) return emptyResult(fileName, ["ANTHROPIC_API_KEY not configured — cannot AI-extract statement"])
+  if (!apiKey) {
+    const r = emptyResult(fileName, ["ANTHROPIC_API_KEY not configured — cannot AI-extract statement"])
+    r.transient_failure = true
+    return r
+  }
 
   const doFetch = opts?.fetchImpl || fetch
   const requestBody = JSON.stringify({

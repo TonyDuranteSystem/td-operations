@@ -126,4 +126,23 @@ describe("buildIngestFileEntries", () => {
     )
     expect(entries.every(e => e.client_error === null)).toBe(true)
   })
+
+  it("empty-but-valid succeeded files carry the empty flag (they must not vanish from the UI)", () => {
+    const entries = buildIngestFileEntries(
+      [row({ status: "completed", result: { ok: true, summary: "Processed f.csv: empty statement period (0 transactions)" }, payload: { tax_year: 2025, path: "empty.csv" } })],
+      2025,
+    )
+    expect(entries[0].state).toBe("succeeded")
+    expect(entries[0].empty).toBe(true)
+  })
+
+  it("a failed job with NO ingest-step detail (infra-exhausted throw path) gets the OUR-side copy, never blame-the-file", () => {
+    const entries = buildIngestFileEntries(
+      [row({ status: "failed", result: null, payload: { tax_year: 2025, path: "f.csv" } })],
+      2025,
+    )
+    expect(entries[0].state).toBe("failed")
+    expect(entries[0].client_error).toContain("This is on our side")
+    expect(entries[0].client_error).not.toContain("delete it and upload")
+  })
 })

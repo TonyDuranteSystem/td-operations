@@ -198,8 +198,24 @@ export async function clearFailedStatementFile(
     .eq("status", "failed")
     .select("id")
   if (error) return { ok: false, cleared: 0, error: error.message }
-  if ((cancelled ?? []).length === 0) {
+  let clearedCount = (cancelled ?? []).length
+  // Legacy pre-parity rows: before the runners flipped ok:false results to
+  // status='failed', an unreadable file could sit COMPLETED with ok:false —
+  // shown as failed by the state helper but unreachable by the filter above
+  // (round 3). Cancel those too so no era of rows is unclearable.
+  const { data: legacyCancelled } = await supabaseAdmin
+    .from("job_queue")
+    .update({ status: "cancelled", error: "Cleared: the client removed this failed statement file (legacy completed-with-error row)" })
+    .eq("job_type", "ingest_bank_statement")
+    .eq("account_id", accountId)
+    .eq("payload->>path", path)
+    .eq("payload->>tax_year", String(taxYear))
+    .eq("status", "completed")
+    .eq("result->>ok", "false")
+    .select("id")
+  clearedCount += (legacyCancelled ?? []).length
+  if (clearedCount === 0) {
     return { ok: false, cleared: 0, error: "This file is not in a failed state (it may still be processing, or its data is already in — delete it from its file card instead)." }
   }
-  return { ok: true, cleared: (cancelled ?? []).length }
+  return { ok: true, cleared: clearedCount }
 }

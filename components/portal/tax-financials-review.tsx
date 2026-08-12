@@ -89,7 +89,7 @@ interface View {
   ingestFailed: number
   /** W9 (card 4a39e0fd): live per-file status — filename, state, and for
    *  failed files the plain-language what-happened + how-to-fix. */
-  file_statuses?: Array<{ path: string; file_name: string; state: 'pending' | 'succeeded' | 'failed' | 'quarantined'; client_error: string | null }>
+  file_statuses?: Array<{ path: string; file_name: string; state: 'pending' | 'succeeded' | 'failed' | 'quarantined'; client_error: string | null; empty?: boolean }>
   /** W9: staff unlocked the failed-file hard block from the CRM. */
   failedFilesOverridden?: boolean
   /** S1: statement files quarantined pending a one-tap format confirmation (staff). */
@@ -1419,9 +1419,9 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         {/* W9 (card 4a39e0fd): live per-file status — every in-flight, failed
             or quarantined file gets its own named card; never a naked spinner,
             never a bare error. Succeeded files render above as source cards. */}
-        {(view.file_statuses ?? []).filter(f => f.state !== 'succeeded').length > 0 && (
+        {(view.file_statuses ?? []).filter(f => f.state !== 'succeeded' || f.empty).length > 0 && (
           <ul className="space-y-2 mb-4">
-            {(view.file_statuses ?? []).filter(f => f.state !== 'succeeded').map(f => (
+            {(view.file_statuses ?? []).filter(f => f.state !== 'succeeded' || f.empty).map(f => (
               <li
                 key={f.path}
                 className={`rounded-lg border px-3 py-2 ${
@@ -1435,6 +1435,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       {f.state === 'pending' && (it ? 'Lettura in corso…' : 'Reading…')}
                       {f.state === 'quarantined' && (it ? 'Formato in verifica dal nostro team — nessuna azione richiesta' : 'Format being confirmed by our team — nothing needed from you')}
                       {f.state === 'failed' && (it ? 'Non leggibile' : 'Could not be read')}
+                      {f.state === 'succeeded' && f.empty && (it ? 'Letto correttamente — nessuna transazione nel periodo (mese senza attività)' : 'Read correctly — no transactions in its period (a month with no activity)')}
                     </span>
                   </div>
                   {f.state === 'failed' && (

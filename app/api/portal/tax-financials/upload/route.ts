@@ -92,6 +92,18 @@ export async function POST(request: NextRequest) {
     const { saveAndEnqueueStatementUpload } = await import('@/lib/tax/portal-upload-enqueue')
     const result = await saveAndEnqueueStatementUpload({ accountId, taxYear, bankLabel, accountNumber, buffer, fileName: file.name })
 
+    // The file SET changed the moment the upload was accepted — clear a stale
+    // attestation AND any staff failed-files unlock NOW, not only when rows
+    // later land (card 4a39e0fd round 3, bug-hunter blocker: an upload that
+    // goes on to FAIL used to leave a prior staff unlock standing, so the
+    // client could attest over a brand-new hole no staff ever judged).
+    try {
+      const { resetFinancialsAttestation } = await import('@/lib/tax/attestation')
+      await resetFinancialsAttestation(accountId, taxYear, `new file uploaded (${file.name})`)
+    } catch (e) {
+      console.error('[tax-financials/upload] attestation/override reset failed (upload saved):', e)
+    }
+
     // Kick the worker so the file starts processing promptly. AWAITED + bounded
     // (triggerWorker has a 5s timeout) so it never dangles past the response —
     // an un-awaited trigger is exactly the teardown pattern we're removing. The

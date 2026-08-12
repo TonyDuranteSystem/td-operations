@@ -92,7 +92,8 @@ describe("clearFailedStatementFile — W9 clear a row-less dead file", () => {
   it("cancels the path's FAILED jobs (owner-scoped by account + year)", async () => {
     const r = await clearFailedStatementFile("acc-1", 2025, "tax/acc-1/2025/x_f.csv")
     expect(r.ok).toBe(true)
-    expect(state.cancelUpdates).toHaveLength(1)
+    // Two passes: status='failed' + the legacy completed-ok:false class.
+    expect(state.cancelUpdates).toHaveLength(2)
     const upd = state.cancelUpdates[0]
     expect(upd.payload.status).toBe("cancelled")
     expect(upd.filters).toEqual(expect.arrayContaining([
@@ -107,5 +108,17 @@ describe("clearFailedStatementFile — W9 clear a row-less dead file", () => {
     const r = await clearFailedStatementFile("acc-1", 2025, "p")
     expect(r.ok).toBe(false)
     expect(state.cancelUpdates).toHaveLength(0)
+  })
+
+  it("also cancels LEGACY completed-with-error rows (pre-parity era) — no era is unclearable", async () => {
+    const r = await clearFailedStatementFile("acc-1", 2025, "tax/acc-1/2025/x_f.csv")
+    expect(r.ok).toBe(true)
+    // Two cancel passes: status='failed' AND the legacy completed+ok:false class.
+    expect(state.cancelUpdates).toHaveLength(2)
+    const second = state.cancelUpdates[1]
+    expect(second.filters).toEqual(expect.arrayContaining([
+      ["eq:status", "completed"],
+      ["eq:result->>ok", "false"],
+    ]))
   })
 })

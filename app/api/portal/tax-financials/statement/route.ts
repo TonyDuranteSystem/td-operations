@@ -40,6 +40,10 @@ export async function DELETE(request: NextRequest) {
       const { clearFailedStatementFile } = await import('@/lib/tax/statement-uploads')
       const cleared = await clearFailedStatementFile(accountId, taxYear, failedPath)
       if (!cleared.ok) return NextResponse.json({ error: cleared.error }, { status: 409 })
+      // Clearing a failed file IS a file-set mutation — a standing staff
+      // unlock was judged against a set that included this hole (round 3).
+      const { resetFinancialsAttestation } = await import('@/lib/tax/attestation')
+      await resetFinancialsAttestation(accountId, taxYear, `failed file cleared (${failedPath.split('/').pop()})`)
       return NextResponse.json({ deleted: 0, cleared: cleared.cleared })
     }
 

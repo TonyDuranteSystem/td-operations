@@ -124,16 +124,24 @@ export async function POST(request: NextRequest) {
         (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean; steps?: Array<{ detail?: string }> } | null; payload: { tax_year?: number | string; path?: string } | null }>,
         taxYear,
       ))
-      const blockedFiles = counts.failed + counts.quarantined
       const override = (sub.financials_meta ?? {}) as Record<string, unknown>
       const overridden = typeof override.failed_files_override === 'object' && override.failed_files_override !== null
-      if (blockedFiles > 0 && !overridden) {
+      // The staff override covers FAILED files only (that is the judgment the
+      // unlock records). QUARANTINED files always block: they are OURS to
+      // confirm, and the confirm auto-requeue drains them — an override must
+      // not paper over our own queue (round 3: with quarantined covered, the
+      // UI stayed locked while the server would have allowed — and the unlock
+      // message lied to the client).
+      const blockedFiles = (overridden ? 0 : counts.failed) + counts.quarantined
+      if (blockedFiles > 0) {
         return NextResponse.json(
           {
             error:
-              blockedFiles === 1
-                ? 'One of your bank statements could not be processed, so the numbers are not complete yet. Our team has been notified and is on it — you will be able to confirm as soon as it is resolved.'
-                : `${blockedFiles} of your bank statements could not be processed, so the numbers are not complete yet. Our team has been notified and is on it — you will be able to confirm as soon as they are resolved.`,
+              counts.quarantined > 0
+                ? 'One of your bank statements is being format-checked by our team. Nothing is needed from you — you will be able to confirm as soon as it is processed.'
+                : blockedFiles === 1
+                  ? 'One of your bank statements could not be processed, so the numbers are not complete yet. Our team has been notified and is on it — you will be able to confirm as soon as it is resolved.'
+                  : `${blockedFiles} of your bank statements could not be processed, so the numbers are not complete yet. Our team has been notified and is on it — you will be able to confirm as soon as they are resolved.`,
           },
           { status: 409 },
         )

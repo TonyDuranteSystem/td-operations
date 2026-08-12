@@ -221,9 +221,13 @@ export async function resolveStatementFormat(
     if (mapping.status !== "proposed") throw new Error(`Already ${String(mapping.status).replace("_", " ")}.`)
 
     const nextStatus = decision === "confirm" ? "staff_confirmed" : "rejected"
+    // Row-level attribution (round 3): the workspace confirm route stamps the
+    // decider; this surface must too — action_log alone is not on the row.
+    const { createClient } = await import("@/lib/supabase/server")
+    const { data: { user } } = await createClient().auth.getUser()
     const { error } = await db
       .from("statement_format_mappings")
-      .update({ status: nextStatus, updated_at: new Date().toISOString() })
+      .update({ status: nextStatus, created_by: user?.email ?? "exception-center", updated_at: new Date().toISOString() })
       .eq("id", mappingId)
       .eq("status", "proposed") // TOCTOU: one resolver wins
     if (error) throw new Error(error.message)

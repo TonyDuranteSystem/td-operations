@@ -36,7 +36,7 @@ export type IngestFileState = "pending" | "succeeded" | "failed" | "quarantined"
 
 export interface IngestJobRow {
   status: string
-  result: { ok?: boolean; steps?: Array<{ detail?: string }> } | null
+  result: { ok?: boolean; summary?: string; steps?: Array<{ detail?: string }> } | null
   payload: { tax_year?: number | string; path?: string } | null
 }
 
@@ -95,6 +95,10 @@ export interface IngestFileEntry {
    *  text) — shown verbatim on the client file card per Antonio's ruling
    *  ("what happened and how to fix it, never a bare error"). */
   client_error: string | null
+  /** Succeeded with ZERO transactions — a valid empty month. Surfaced so the
+   *  UI can render a neutral card (round 3: these files vanished from both
+   *  lists and the client re-uploaded in confusion). */
+  empty?: boolean
 }
 
 /** Full per-file entries (state + display name + failure copy) for file-card
@@ -104,9 +108,13 @@ export function buildIngestFileEntries(jobs: IngestJobRow[], taxYear: number): I
   // Latest failure detail per path (for failed cards): scan jobs in given
   // order, last matching write wins — callers pass rows in insertion order.
   const failDetail = new Map<string, string>()
+  const emptyPaths = new Set<string>()
   for (const j of jobs) {
     const path = j.payload?.path
     if (!path || String(j.payload?.tax_year ?? "") !== String(taxYear)) continue
+    if (j.status === "completed" && j.result?.ok !== false && typeof j.result?.summary === "string" && j.result.summary.includes("empty statement period")) {
+      emptyPaths.add(path)
+    }
     for (const s of j.result?.steps ?? []) {
       if (typeof s.detail === "string" && !s.detail.startsWith(FORMAT_CONFIRMATION_MARKER)) {
         // Step details are "<file>: <guide text>" — keep the guide text only.
@@ -121,7 +129,13 @@ export function buildIngestFileEntries(jobs: IngestJobRow[], taxYear: number): I
     path,
     file_name: displayStatementFileName(path),
     state,
-    client_error: state === "failed" ? (failDetail.get(path) ?? "This file could not be read. Please delete it and upload the statement exactly as your bank exports it.") : null,
+    // A failed job with NO ingest-step detail died on infrastructure (a
+    // thrown transient exhausted its retries) — the copy must not blame the
+    // client's file (round 3).
+    client_error: state === "failed"
+      ? (failDetail.get(path) ?? "This file could not be processed after several tries. This is on our side — our team has been notified; nothing is needed from you.")
+      : null,
+    ...(state === "succeeded" && emptyPaths.has(path) ? { empty: true } : {}),
   }))
 }
 

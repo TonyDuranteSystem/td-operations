@@ -23,6 +23,7 @@ vi.mock("@/lib/supabase-admin", () => ({
       b.update = (payload: Record<string, unknown>) => { op = "update"; filters.payload = payload; return b }
       b.insert = (row: Record<string, unknown>) => { state.inserts.push(row); return Promise.resolve({ error: null }) }
       b.eq = (col: string, v: unknown) => { filters[col] = v; return b }
+      b.in = () => b
       b.not = () => b
       b.limit = () => {
         const path = filters["payload->>path"] as string
@@ -42,10 +43,15 @@ vi.mock("@/lib/supabase-admin", () => ({
 
 import { requeueQuarantinedPortalIngests, quarantineMarkerOf } from "@/lib/tax/quarantine-requeue"
 
-const qJob = (path: string, mappingId: string) => ({
+const qJob = (path: string, mappingId: string, jobType = "ingest_bank_statement") => ({
   id: `j-${path}`,
+  job_type: jobType,
   account_id: "acc-1",
-  payload: { account_id: "acc-1", tax_year: 2025, path, bank_label: "QB" },
+  related_entity_type: jobType === "ingest_workspace_statement" ? "pnl_workspace" : null,
+  related_entity_id: jobType === "ingest_workspace_statement" ? "ws-1" : null,
+  payload: jobType === "ingest_workspace_statement"
+    ? { workspace_id: "ws-1", path }
+    : { account_id: "acc-1", tax_year: 2025, path, bank_label: "QB" },
   result: { steps: [{ detail: `${MARKER}{"file":"f.csv","mapping_id":"${mappingId}"}` }] },
 })
 
@@ -96,5 +102,15 @@ describe("requeueQuarantinedPortalIngests", () => {
     state.failedJobs = [{ id: "j", account_id: "acc-1", payload: { path: "p", tax_year: 2025 }, result: { steps: [{ detail: "ingest: could not read" }] } }]
     const r = await requeueQuarantinedPortalIngests("map-1")
     expect(r).toEqual({ requeued: 0, cancelled: 0, skipped: 0 })
+  })
+
+  it("also recovers WORKSPACE-quarantined files (an EC confirm must not strand the workspace pipeline)", async () => {
+    state.failedJobs = [qJob("pnl-workspaces/ws-1/a_f.csv", "map-1", "ingest_workspace_statement")]
+    const r = await requeueQuarantinedPortalIngests("map-1")
+    expect(r.requeued).toBe(1)
+    const ins = state.inserts[0] as { job_type: string; related_entity_id: string | null; payload: { workspace_id?: string } }
+    expect(ins.job_type).toBe("ingest_workspace_statement")
+    expect(ins.related_entity_id).toBe("ws-1")
+    expect(ins.payload.workspace_id).toBe("ws-1")
   })
 })
