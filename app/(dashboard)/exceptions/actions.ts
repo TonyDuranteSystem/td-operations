@@ -255,8 +255,15 @@ export async function unlockConfirmFromException(
   reason: string,
 ): Promise<ActionResult> {
   return safeAction(async () => {
+    // The override history must name WHO unlocked (the ruling: logged means
+    // attributable) — resolve the signed-in staff member, never a surface name.
+    const { createClient } = await import("@/lib/supabase/server")
+    const { data: { user } } = await createClient().auth.getUser()
     const { unlockFinancialsConfirm } = await import("@/lib/tax/confirm-unlock")
-    const r = await unlockFinancialsConfirm({ accountId, taxYear, reason, actor: "exception-center" })
+    const r = await unlockFinancialsConfirm({
+      accountId, taxYear, reason,
+      actor: user?.email ?? "exception-center",
+    })
     if (!r.ok) throw new Error(r.error || "Could not unlock.")
     revalidatePath("/exceptions")
   })
