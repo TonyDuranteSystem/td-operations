@@ -11,7 +11,9 @@ vi.mock("@/lib/supabase-admin", () => ({
       const chain: Record<string, unknown> = {}
       chain.select = () => chain
       chain.eq = () => chain
-      chain.neq = () => Promise.resolve({ data: existingRows, error: null })
+      // Card 4a39e0fd round 2: the dedup filter became a positive .in() status
+      // list (cancelled must never block a re-upload).
+      chain.in = () => Promise.resolve({ data: existingRows, error: null })
       chain.insert = (rows: unknown) => { jobInserts.push(rows); return Promise.resolve({ error: null }) }
       return chain
     },

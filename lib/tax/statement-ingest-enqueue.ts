@@ -57,12 +57,12 @@ export async function enqueueStatementIngestJobs(params: {
   uploadPaths: string[]
   submittedData: Record<string, unknown>
   createdBy?: string
-  /** Storage bucket the paths live in. The portal wizard uploads to
-   *  "onboarding-uploads" (the handler's default); the EXTERNAL public tax
-   *  form uploads to "tax-form-uploads" with a `{token}/{attempt}/…` scheme.
-   *  Added 2026-08-12 (card 4a39e0fd) when the external route's legacy Drive
-   *  scrape was replaced by these jobs — without the right bucket every
-   *  external ingest would fail at download. */
+  /** Storage bucket the paths live in; defaults to "onboarding-uploads" (the
+   *  portal wizard's bucket). NO production caller passes this yet: the
+   *  external form deliberately does NOT auto-ingest (its statement upload
+   *  key is a mixed bag of financial documents), and the Drive scrape it
+   *  replaced is gone. The param exists for the tax-workspace Phase 1 staff
+   *  add-file flow, which will enqueue from other buckets deliberately. */
   bucket?: string
 }): Promise<EnqueueStatementIngestResult> {
   const { accountId, taxYear, uploadPaths, submittedData, createdBy = "portal_wizard", bucket } = params
@@ -70,15 +70,16 @@ export async function enqueueStatementIngestJobs(params: {
   const statementPaths = filterStatementPaths(uploadPaths)
   if (statementPaths.length === 0) return { enqueued: 0, skipped: 0 }
 
-  // Idempotency: a path already covered by a non-failed ingest job is skipped.
-  // Failed jobs are NOT counted, so a genuinely failed file can be retried by
-  // re-uploading it.
+  // Idempotency: a path already covered by a LIVE ingest job is skipped.
+  // Failed jobs don't count (a failed file retries by re-upload) and CANCELLED
+  // jobs don't count either — delete-supersede cancels a deleted file's jobs
+  // so the identical re-upload re-ingests (card 4a39e0fd).
   const { data: existing } = await supabaseAdmin
     .from("job_queue")
     .select("payload")
     .eq("account_id", accountId)
     .eq("job_type", "ingest_bank_statement")
-    .neq("status", "failed")
+    .in("status", ["pending", "processing", "completed"])
 
   const existingPaths = new Set(
     (existing ?? [])

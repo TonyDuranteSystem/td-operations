@@ -161,3 +161,45 @@ export async function deleteStatementRows(accountId: string, taxYear: number, so
 
   return { ok: true, deleted: (deleted ?? []).length }
 }
+
+/**
+ * Clear a FAILED/QUARANTINED statement file that never produced rows (card
+ * 4a39e0fd round 2, bug-hunter M4): such a file has no source card and no
+ * transactions, so `deleteStatementRows` can never reach it — yet its failed
+ * state wedges the amber banner, the confirm hard-block, and the
+ * "statements ready" all-clear FOREVER, even after the client recovers with a
+ * corrected re-upload (different bytes → different path). Cancelling the
+ * path's jobs removes the file from the per-file states entirely.
+ *
+ * Only non-live jobs are touched: a pending/processing file is "still
+ * preparing", not clearable; a file with a COMPLETED job has rows and must go
+ * through the row-deleting path instead.
+ */
+export async function clearFailedStatementFile(
+  accountId: string,
+  taxYear: number,
+  path: string,
+): Promise<{ ok: boolean; cleared: number; error?: string }> {
+  const { resolveEditability } = await import("./resolve-submission")
+  const { editable: canEdit } = await resolveEditability(supabaseAdmin, accountId, taxYear)
+  if (!canEdit) {
+    return { ok: false, cleared: 0, error: "Your submission is locked (under review or already confirmed) — ask us to reopen it before changing files." }
+  }
+
+  // The path must belong to THIS account's jobs (owner-scoped callers pass
+  // untrusted paths) — the account_id + path filter enforces it.
+  const { data: cancelled, error } = await supabaseAdmin
+    .from("job_queue")
+    .update({ status: "cancelled", error: "Cleared: the client removed this failed statement file" })
+    .eq("job_type", "ingest_bank_statement")
+    .eq("account_id", accountId)
+    .eq("payload->>path", path)
+    .eq("payload->>tax_year", String(taxYear))
+    .eq("status", "failed")
+    .select("id")
+  if (error) return { ok: false, cleared: 0, error: error.message }
+  if ((cancelled ?? []).length === 0) {
+    return { ok: false, cleared: 0, error: "This file is not in a failed state (it may still be processing, or its data is already in — delete it from its file card instead)." }
+  }
+  return { ok: true, cleared: (cancelled ?? []).length }
+}

@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest"
 import {
   computeIngestFileStates,
   summarizeIngestFileStates,
+  buildIngestFileEntries,
+  displayStatementFileName,
   FORMAT_CONFIRMATION_MARKER,
   type IngestJobRow,
 } from "@/lib/tax/ingest-file-status"
@@ -85,5 +87,43 @@ describe("computeIngestFileStates", () => {
       2025,
     )
     expect(summarizeIngestFileStates(states)).toEqual({ pending: 1, succeeded: 1, failed: 1, quarantined: 1 })
+  })
+})
+
+
+describe("displayStatementFileName", () => {
+  it("strips the upload machinery prefixes, keeps the client's name", () => {
+    expect(displayStatementFileName("tax/sub-1/bank_accounts_0_statements_6a008993_Relay_June.csv")).toBe("Relay_June.csv")
+    expect(displayStatementFileName("tax/sub-1/bank_statements_1f00eaac_wise-export.csv")).toBe("wise-export.csv")
+    expect(displayStatementFileName("tax/acc/2025/aaaaaaaaaaaaaaaa_Mercury_2025.pdf")).toBe("Mercury_2025.pdf")
+    expect(displayStatementFileName("plain.csv")).toBe("plain.csv")
+  })
+})
+
+describe("buildIngestFileEntries", () => {
+  it("failed files carry the plain-language guide text from the ingest step", () => {
+    const entries = buildIngestFileEntries(
+      [row({
+        status: "failed",
+        result: { ok: false, steps: [{ detail: "f1.csv: We could not read any transactions from this file. Please upload each statement exactly as your bank exports it." }] },
+        payload: { tax_year: 2025, path: "tax/a/2025/aaaaaaaaaaaaaaaa_f1.csv" },
+      })],
+      2025,
+    )
+    expect(entries).toHaveLength(1)
+    expect(entries[0].state).toBe("failed")
+    expect(entries[0].file_name).toBe("f1.csv")
+    expect(entries[0].client_error).toContain("Please upload each statement")
+  })
+
+  it("succeeded/pending/quarantined entries carry no error text", () => {
+    const entries = buildIngestFileEntries(
+      [
+        row({ payload: { tax_year: 2025, path: "ok.csv" } }),
+        row({ payload: { tax_year: 2025, path: "wip.csv" }, status: "pending", result: null }),
+      ],
+      2025,
+    )
+    expect(entries.every(e => e.client_error === null)).toBe(true)
   })
 })

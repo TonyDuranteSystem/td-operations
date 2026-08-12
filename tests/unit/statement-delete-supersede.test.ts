@@ -38,6 +38,7 @@ vi.mock("@/lib/supabase-admin", () => ({
           return b
         }
         b.eq = (col: string, v: unknown) => { filters.push([`eq:${col}`, v]); return b }
+        b.select = () => Promise.resolve({ data: [{ id: "c1" }], error: null })
         b.like = (col: string, v: unknown) => { filters.push([`like:${col}`, v]); return b }
         b.in = (col: string, v: unknown) => { filters.push([`in:${col}`, v]); return b }
         b.then = (resolve: (v: unknown) => unknown) => Promise.resolve({ error: null }).then(resolve)
@@ -48,7 +49,7 @@ vi.mock("@/lib/supabase-admin", () => ({
   },
 }))
 
-import { deleteStatementRows } from "@/lib/tax/statement-uploads"
+import { deleteStatementRows, clearFailedStatementFile } from "@/lib/tax/statement-uploads"
 
 const SHA = "a".repeat(64)
 
@@ -82,6 +83,28 @@ describe("deleteStatementRows — job supersede", () => {
   it("still refuses when the submission is locked (semantics unchanged)", async () => {
     state.editable = false
     const r = await deleteStatementRows("acc-1", 2025, `upload:${SHA}`)
+    expect(r.ok).toBe(false)
+    expect(state.cancelUpdates).toHaveLength(0)
+  })
+})
+
+describe("clearFailedStatementFile — W9 clear a row-less dead file", () => {
+  it("cancels the path's FAILED jobs (owner-scoped by account + year)", async () => {
+    const r = await clearFailedStatementFile("acc-1", 2025, "tax/acc-1/2025/x_f.csv")
+    expect(r.ok).toBe(true)
+    expect(state.cancelUpdates).toHaveLength(1)
+    const upd = state.cancelUpdates[0]
+    expect(upd.payload.status).toBe("cancelled")
+    expect(upd.filters).toEqual(expect.arrayContaining([
+      ["eq:payload->>path", "tax/acc-1/2025/x_f.csv"],
+      ["eq:status", "failed"],
+      ["eq:account_id", "acc-1"],
+    ]))
+  })
+
+  it("refuses when locked", async () => {
+    state.editable = false
+    const r = await clearFailedStatementFile("acc-1", 2025, "p")
     expect(r.ok).toBe(false)
     expect(state.cancelUpdates).toHaveLength(0)
   })

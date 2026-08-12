@@ -87,6 +87,11 @@ interface View {
   ingestPending: number
   /** Statement files that couldn't be read (unreadable/merged or failed). */
   ingestFailed: number
+  /** W9 (card 4a39e0fd): live per-file status — filename, state, and for
+   *  failed files the plain-language what-happened + how-to-fix. */
+  file_statuses?: Array<{ path: string; file_name: string; state: 'pending' | 'succeeded' | 'failed' | 'quarantined'; client_error: string | null }>
+  /** W9: staff unlocked the failed-file hard block from the CRM. */
+  failedFilesOverridden?: boolean
   /** S1: statement files quarantined pending a one-tap format confirmation (staff). */
   format_proposals?: Array<{ mapping_id: string; file: string; path: string; bank_label: string; ambiguities: string[]; sample: Array<{ date: string; description: string; amount: number; currency: string; account: string }> | null }>
   questions: QuestionGroup[]
@@ -1080,6 +1085,27 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     }
   }
 
+  // W9: clear a FAILED file (never produced rows — job-cancel, not row delete).
+  const clearFailedFile = async (path: string, fileName: string) => {
+    const msg = it
+      ? `Rimuovere il file "${fileName}"? Poi carica l'estratto conto corretto.`
+      : `Remove the file "${fileName}"? Then upload the corrected statement.`
+    if (!window.confirm(msg)) return
+    setBusy(path)
+    try {
+      const res = await fetch(`${API}/statement?account_id=${accountId}&tax_year=${taxYear}&failed_path=${encodeURIComponent(path)}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Impossibile rimuovere il file — riprova.' : 'Could not remove the file — please try again.'))
+      }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   // Upload one statement file; throws on failure with the server's message.
   const uploadOneStatement = async (file: File, bank: string, account: string): Promise<void> => {
     const fd = new FormData()
@@ -1390,6 +1416,51 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             ))}
           </ul>
         )}
+        {/* W9 (card 4a39e0fd): live per-file status — every in-flight, failed
+            or quarantined file gets its own named card; never a naked spinner,
+            never a bare error. Succeeded files render above as source cards. */}
+        {(view.file_statuses ?? []).filter(f => f.state !== 'succeeded').length > 0 && (
+          <ul className="space-y-2 mb-4">
+            {(view.file_statuses ?? []).filter(f => f.state !== 'succeeded').map(f => (
+              <li
+                key={f.path}
+                className={`rounded-lg border px-3 py-2 ${
+                  f.state === 'failed' ? 'border-red-200 bg-red-50/60' : f.state === 'quarantined' ? 'border-sky-200 bg-sky-50/60' : 'border-zinc-200 bg-zinc-50/60'
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm text-zinc-800 min-w-0">
+                    <span className="font-medium break-all">{f.file_name}</span>
+                    <span className={`text-xs ml-2 ${f.state === 'failed' ? 'text-red-700' : f.state === 'quarantined' ? 'text-sky-700' : 'text-zinc-500'}`}>
+                      {f.state === 'pending' && (it ? 'Lettura in corso…' : 'Reading…')}
+                      {f.state === 'quarantined' && (it ? 'Formato in verifica dal nostro team — nessuna azione richiesta' : 'Format being confirmed by our team — nothing needed from you')}
+                      {f.state === 'failed' && (it ? 'Non leggibile' : 'Could not be read')}
+                    </span>
+                  </div>
+                  {f.state === 'failed' && (
+                    <button
+                      disabled={busyOrLocked}
+                      onClick={() => void clearFailedFile(f.path, f.file_name)}
+                      className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                    >
+                      {it ? 'Rimuovi questo file' : 'Remove this file'}
+                    </button>
+                  )}
+                </div>
+                {f.state === 'failed' && f.client_error && (
+                  <p className="mt-1 text-xs text-red-700">{f.client_error}</p>
+                )}
+                {f.state === 'failed' && (
+                  <p className="mt-1 text-xs text-zinc-600">
+                    {it
+                      ? 'Rimuovi il file e carica l\'estratto conto corretto (CSV o PDF ufficiale della banca). Il nostro team è già stato avvisato.'
+                      : 'Remove the file and upload the corrected statement (your bank\'s official CSV or PDF). Our team has already been notified.'}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
         {pdfWarning}
         <div className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50/60 p-3 sm:p-4">
           <div className="text-sm font-medium text-zinc-800">{it ? 'Aggiungi gli estratti conto' : 'Add statements'}</div>
@@ -1529,7 +1600,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               <span className="text-zinc-500">No statements loaded yet.</span>
             )}
             {view.ingestFailed > 0 && (
-              <span className="block text-xs text-amber-700 mt-1">{view.ingestFailed} file(s) could not be read — delete and re-upload them, or generate without them.</span>
+              <span className="block text-xs text-red-700 mt-1">
+                {it
+                  ? `${view.ingestFailed} file non leggibile/i — vedi le schede file sopra per la soluzione. La conferma resta bloccata finché non è risolto (il nostro team è avvisato).`
+                  : `${view.ingestFailed} file(s) could not be read — see the file cards above for how to fix each one. Confirmation stays locked until this is resolved (our team has been notified).`}
+              </span>
             )}
           </div>
           <button
@@ -2955,12 +3030,22 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   </span>
                 </label>
                 <button
-                  disabled={!attestChecked || !view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || view.ingestPending > 0 || busyOrLocked}
+                  disabled={!attestChecked || !view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || view.ingestPending > 0 || (view.ingestFailed > 0 && !view.failedFilesOverridden) || busyOrLocked}
                   onClick={() => void attest()}
                   className="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-40"
                 >
                   {it ? 'Accetto e confermo' : 'Accept and confirm'}
                 </button>
+                {/* W9 HARD BLOCK (card 4a39e0fd, binding ruling): a failed
+                    statement file locks Confirm — server-enforced too; this
+                    names the blocker instead of a mute disabled button. */}
+                {view.ingestFailed > 0 && !view.failedFilesOverridden && (
+                  <p className="text-xs text-red-700">
+                    {it
+                      ? 'La conferma è bloccata: uno o più estratti conto non sono stati letti. Vedi le schede file nella sezione Estratti conto — il nostro team è già avvisato.'
+                      : 'Confirmation is locked: one or more bank statements could not be read. See the file cards in the Bank statements section — our team has already been notified.'}
+                  </p>
+                )}
                 {/* Name the RIGHT blocker (2026-08-03). No gate blocks confirm
                     any more, so what lands here is the year-coverage step — but
                     the old wording said "the remaining questions above", which

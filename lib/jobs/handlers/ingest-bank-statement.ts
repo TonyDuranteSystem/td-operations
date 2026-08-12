@@ -151,6 +151,12 @@ export async function handleIngestBankStatement(job: Job): Promise<JobResult> {
     const { notifyIfIngestComplete } = await import("../ingest-complete-notify")
     const notif = await notifyIfIngestComplete({ accountId: p.account_id, taxYear: p.tax_year, selfJobId: job.id })
     if (notif.notified) result.steps.push(step("notify_ready", "ok", "client notified: statements ready"))
+  } else if (r.transient) {
+    // TRANSIENT infrastructure failure (AI outage / roster down / insert
+    // error) — THROW so the worker retries with the normal attempt budget.
+    // Never terminal, never a client "corrupt file" message (card 4a39e0fd
+    // round 2: an API blip must not brand a client's statement unreadable).
+    throw new Error(`${fileName}: ${r.error ?? "transient ingest failure"}`)
   } else if (r.quarantine) {
     // S1 quarantine — unknown format awaiting a one-tap STAFF confirmation.
     // Marker-prefixed detail (same contract as the workspace handler) so

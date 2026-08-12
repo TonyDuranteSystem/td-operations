@@ -269,14 +269,15 @@ export async function GET(request: NextRequest) {
     // disagree). QUARANTINED files (format awaiting a one-tap STAFF confirm)
     // count as PENDING for the client — "still preparing" is the truth they
     // can act on; "could not be read, delete and re-upload" is not.
-    const { computeIngestFileStates, summarizeIngestFileStates } = await import('@/lib/tax/ingest-file-status')
-    const fileStates = computeIngestFileStates(
-      (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean; steps?: Array<{ detail?: string }> } | null; payload: { tax_year?: number | string; path?: string } | null }>,
-      taxYear,
-    )
+    const { computeIngestFileStates, summarizeIngestFileStates, buildIngestFileEntries } = await import('@/lib/tax/ingest-file-status')
+    const ingestJobRows = (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean; steps?: Array<{ detail?: string }> } | null; payload: { tax_year?: number | string; path?: string } | null }>
+    const fileStates = computeIngestFileStates(ingestJobRows, taxYear)
     const stateCounts = summarizeIngestFileStates(fileStates)
     const ingestPending = stateCounts.pending + stateCounts.quarantined
     const ingestFailed = stateCounts.failed
+    // W9 (Antonio's ruling): per-file live status for the client file cards —
+    // filename, state, and for failed files the plain-language what+how-to-fix.
+    const file_statuses = buildIngestFileEntries(ingestJobRows, taxYear)
 
     // Location-period + country cards (Phase B2, 2026-07-08): same pure
     // builder as the staff tool (lib/tax/location-cards.ts), fed from the
@@ -367,7 +368,12 @@ export async function GET(request: NextRequest) {
       buckets,
       ingestPending,
       ingestFailed,
+      file_statuses,
       attested: sub?.confirmation_accepted === true,
+      // W9: staff override of the failed-file hard block (set only by the CRM
+      // unlock route; cleared by any file mutation). The client UI re-enables
+      // Confirm when true — the server attest gate honors the same flag.
+      failedFilesOverridden: (sub?.financials_meta as Record<string, unknown> | null)?.failed_files_override != null,
       editable,
       reviewStatus: lockStatus,
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),

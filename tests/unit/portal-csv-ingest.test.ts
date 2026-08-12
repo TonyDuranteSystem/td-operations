@@ -199,4 +199,13 @@ describe("ingestPortalCsv", () => {
     // double-conversion origin).
     expect(opts.mappingStore).toBeTruthy()
   })
+
+  it("transient AI transport failure → ok:false transient (never the corrupt-file error)", async () => {
+    parseMock.mockResolvedValue({ transactions: [], bank_name: "unknown", errors: ["Claude API error 529"], transient_failure: true })
+    const r = await ingestPortalCsv(INPUT)
+    expect(r.ok).toBe(false)
+    expect(r.transient).toBe(true)
+    expect(r.error).not.toContain("Do not merge")
+    expect(upsertCalls).toHaveLength(0)
+  })
 })

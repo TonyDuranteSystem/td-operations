@@ -212,9 +212,19 @@ export async function notifyClientOfStatementIngestFailure(
       return { notified: false, reason: "insert_failed" }
     }
 
-    // Staff signal: fingerprinted error-audit row (the Exception Center list
-    // is passive; this feeds the stream staff actually watch + the auto-audit
-    // cron). Best-effort — never breaks the client notification above.
+    // Staff signals (Antonio's ruling: failure raises a staff What's New card,
+    // never only a passive list). Both best-effort — never break the client
+    // notification above. The card is idempotent per FILE via source_ref.
+    try {
+      const { emitActionNeeded } = await import("@/lib/notifications/act-event")
+      await emitActionNeeded({
+        event: "statement_ingest_failed",
+        account_id: accountId,
+        source_ref: `ingest_file:${path || job.id}`,
+      })
+    } catch (e) {
+      console.error(`[ingest-failure-notify] staff card failed for ${job.id}:`, e)
+    }
     try {
       const { reportSystemError } = await import("@/lib/system-errors")
       await reportSystemError({

@@ -53,6 +53,11 @@ export interface ParseResult {
    *  confirmation (S1, 2026-07-07): a mapping was proposed but carries
    *  ambiguities — the file must NOT ingest until confirmed. */
   quarantine?: { mapping_id: string | null; fingerprint: string; bank_label: string; ambiguities: string[]; sample: unknown }
+  /** The parse failed for a TRANSIENT infrastructure reason (AI API outage /
+   *  429 storm / network error) — NOT because the file is unreadable. Callers
+   *  must retry (job-level) instead of terminally failing the file and telling
+   *  the client it is corrupt (card 4a39e0fd round 2, bug-hunter blocker). */
+  transient_failure?: boolean
   /** The file's CONTENT SIGNATURE matched a known bank format and parsed
    *  cleanly, but the statement period simply has no transactions (a real
    *  June with zero activity). Distinguishes "empty but valid" from

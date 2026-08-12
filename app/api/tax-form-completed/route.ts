@@ -204,7 +204,7 @@ export async function POST(req: NextRequest) {
 <ol>
 <li>Review data: <code>tax_form_review(token="${sub.token}")</code></li>
 <li>If complete, apply changes: <code>tax_form_review(token="${sub.token}", apply_changes=true)</code></li>
-${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statements auto-parsed. Review: <code>bank_statement_review(account_id="${sub.account_id}")</code></li>
+${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>⚠ Statements are NOT auto-ingested on this (external form) path — ingest deliberately: <code>bank_statement_process(account_id="${sub.account_id}", tax_year=${sub.tax_year})</code>, then review: <code>bank_statement_review(account_id="${sub.account_id}")</code></li>
 <li>Generate P&L: <code>bank_statement_pnl(account_id="${sub.account_id}", tax_year=${sub.tax_year})</code></li>` : ""}
 <li>Check if 2nd installment is paid (Stage 6 gate)</li>
 <li>When ready, send to accountant: <code>tax_send_to_accountant(account_id="${sub.account_id}", tax_year=${sub.tax_year})</code></li>

@@ -171,6 +171,28 @@ describe('aiExtractBankStatement', () => {
     expect(r.transactions).toHaveLength(0)
   })
 
+
+  // ── Card 4a39e0fd round 2: transport failures are TRANSIENT, not "unreadable" ──
+  it('all-attempts transient API failure → transient_failure flag (job must retry, file is NOT branded corrupt)', async () => {
+    const { fn, calls } = makeSeqFetch([{ status: 529 }, { status: 503 }, { status: 529 }])
+    const r = await aiExtractBankStatement(Buffer.from('x'), 'chase.pdf', 'application/pdf', { fetchImpl: fn })
+    expect(calls.count).toBe(3)
+    expect(r.transactions).toHaveLength(0)
+    expect(r.transient_failure).toBe(true)
+  })
+
+  it('permanent 400 → NO transient flag (a bad request retries the same way forever)', async () => {
+    const { fn } = makeSeqFetch([{ status: 400 }])
+    const r = await aiExtractBankStatement(Buffer.from('x'), 'chase.pdf', 'application/pdf', { fetchImpl: fn })
+    expect(r.transient_failure).toBeUndefined()
+  })
+
+  it('model answered with ZERO rows → NO transient flag (genuinely unreadable stays terminal)', async () => {
+    const { fn } = makeSeqFetch([{ input: { transactions: [] } }])
+    const r = await aiExtractBankStatement(Buffer.from('x'), 'scanned.pdf', 'application/pdf', { fetchImpl: fn })
+    expect(r.transient_failure).toBeUndefined()
+  })
+
   // ── Large multi-page PDF chunking ──
   it('splits a LARGE (>15pp) PDF into page-chunks, extracts each, and merges', async () => {
     const pdf = await makePdf(20) // 20 pages → 10/chunk → 2 chunks

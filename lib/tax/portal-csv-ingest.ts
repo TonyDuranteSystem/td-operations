@@ -27,6 +27,10 @@ export interface IngestResult {
   /** The file parsed cleanly as a known bank format but the period has no
    *  transactions (empty-but-valid month). ok:true, nothing inserted. */
   emptyStatement?: boolean
+  /** With ok:false: the failure is TRANSIENT infrastructure (AI outage,
+   *  roster read down, insert failure) — the JOB must retry; never terminal,
+   *  never a client "your file is corrupt" message (card 4a39e0fd round 2). */
+  transient?: boolean
   /** S1 quarantine: unknown CSV layout, mapping proposed but ambiguous —
    *  awaiting a one-tap staff format confirmation. Nothing inserted. */
   quarantine?: { mapping_id: string | null; fingerprint: string; bank_label: string; ambiguities: string[] }
@@ -139,6 +143,15 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
       uncategorizedRemaining: 0, sourceFileId,
     }
   }
+  if (parsed.transient_failure) {
+    // The file was never actually read (AI API outage / network) — the job
+    // retries; the client sees nothing but "still preparing".
+    return {
+      ok: false, transient: true,
+      error: `Temporary problem reading statements (${parsed.errors[0] ?? "service unavailable"}) — will retry automatically.`,
+      inserted: 0, parsed: 0, months: [], bankDetected: bankLabel, uncategorizedRemaining: 0, sourceFileId,
+    }
+  }
   if (parsed.transactions.length === 0) {
     const detail = parsed.errors.length ? ` (${parsed.errors[0]})` : ""
     return fail(
@@ -160,7 +173,11 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     memberNames = (await fetchMemberRoster(supabaseAdmin, accountId)).names
   } catch (e) {
     console.error(`[portal-csv-ingest] member roster unavailable for ${accountId}:`, e)
-    return fail("We could not read your company's owner details, so the file was not processed. Nothing was saved. Please try again shortly — this is on our side, not yours.")
+    return {
+      ok: false, transient: true,
+      error: "We could not read your company's owner details, so the file was not processed. Nothing was saved. This is on our side and will retry automatically.",
+      inserted: 0, parsed: 0, months: [], bankDetected: bankLabel, uncategorizedRemaining: 0, sourceFileId,
+    }
   }
 
   const bankDetected = parsed.bank_name && parsed.bank_name !== "unknown" ? parsed.bank_name : bankLabel
@@ -232,7 +249,13 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     }
   }
   if (inserted === 0 && categorized.length > 0 && firstInsertError) {
-    return fail(`The file was read correctly (${categorized.length} transactions) but could not be saved: ${firstInsertError}. Please contact us — this is on our side, not yours.`)
+    // Insert-level failure is infrastructure (constraint/db), not the file —
+    // job-level retry; the eventual final failure still surfaces loudly.
+    return {
+      ok: false, transient: true,
+      error: `The file was read correctly (${categorized.length} transactions) but could not be saved: ${firstInsertError}. This is on our side — it will retry automatically.`,
+      inserted: 0, parsed: categorized.length, months: [], bankDetected, uncategorizedRemaining: 0, sourceFileId,
+    }
   }
   if (failedCount > 0) {
     console.error(`[portal-csv-ingest] ${failedCount} row(s) FAILED to insert for account ${accountId} ${taxYear}: ${firstInsertError}`)

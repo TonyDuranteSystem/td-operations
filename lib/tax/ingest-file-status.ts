@@ -2,8 +2,11 @@
  * Per-FILE ingest state, derived from `ingest_bank_statement` job rows.
  *
  * ONE implementation for every surface that needs "what happened to each
- * uploaded statement file" (card 4a39e0fd): the client financials GET, the
- * "statements ready" notification gate, and the staff workspace panel. Before
+ * uploaded statement file" (card 4a39e0fd). Consumers TODAY: the client
+ * financials GET, the "statements ready" notification gate, and the attest
+ * hard-block. (The standalone /tools/pnl workspace still has its own older
+ * per-path logic — migrating it here is part of the tax-workspace Phase 1
+ * work, not yet done.) Before
  * this existed, the GET computed it inline and the ready-notification gate
  * counted only in-flight jobs — so a client whose file had FAILED still got
  * "good news, we've finished reading your statements" the moment the last
@@ -71,6 +74,55 @@ export function computeIngestFileStates(
     else if (e.failed) out.set(path, "failed")
   }
   return out
+}
+
+/** The CLIENT's filename for an upload path — machinery prefixes stripped
+ *  (`bank_accounts_0_statements_6a008993_Relay_June.csv` → `Relay_June.csv`,
+ *  and the sha16 prefix of the financials-page scheme). One implementation for
+ *  the client file cards, the failure notification, and staff surfaces. */
+export function displayStatementFileName(path: string): string {
+  const fileName = path.split("/").pop() ?? "statement"
+  return fileName
+    .replace(/^(bank_accounts_\d+_statements|bank_statements)_[a-f0-9]+_/i, "")
+    .replace(/^[a-f0-9]{16}_/i, "")
+}
+
+export interface IngestFileEntry {
+  path: string
+  file_name: string
+  state: IngestFileState
+  /** Plain-language explanation for failed files (the ingest step's guide
+   *  text) — shown verbatim on the client file card per Antonio's ruling
+   *  ("what happened and how to fix it, never a bare error"). */
+  client_error: string | null
+}
+
+/** Full per-file entries (state + display name + failure copy) for file-card
+ *  surfaces. Same grouping rules as computeIngestFileStates. */
+export function buildIngestFileEntries(jobs: IngestJobRow[], taxYear: number): IngestFileEntry[] {
+  const states = computeIngestFileStates(jobs, taxYear)
+  // Latest failure detail per path (for failed cards): scan jobs in given
+  // order, last matching write wins — callers pass rows in insertion order.
+  const failDetail = new Map<string, string>()
+  for (const j of jobs) {
+    const path = j.payload?.path
+    if (!path || String(j.payload?.tax_year ?? "") !== String(taxYear)) continue
+    for (const s of j.result?.steps ?? []) {
+      if (typeof s.detail === "string" && !s.detail.startsWith(FORMAT_CONFIRMATION_MARKER)) {
+        // Step details are "<file>: <guide text>" — keep the guide text only.
+        const idx = s.detail.indexOf(": ")
+        if (idx > 0 && (j.status === "failed" || j.result?.ok === false)) {
+          failDetail.set(path, s.detail.slice(idx + 2))
+        }
+      }
+    }
+  }
+  return Array.from(states.entries()).map(([path, state]) => ({
+    path,
+    file_name: displayStatementFileName(path),
+    state,
+    client_error: state === "failed" ? (failDetail.get(path) ?? "This file could not be read. Please delete it and upload the statement exactly as your bank exports it.") : null,
+  }))
 }
 
 /** Convenience counts for surfaces that only need the totals. */

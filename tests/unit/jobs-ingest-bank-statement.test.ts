@@ -183,5 +183,12 @@ describe('handleIngestBankStatement', () => {
       await handleIngestBankStatement(job({ account_id: 'a', tax_year: 2025, path: 'tax/a/bank_statements_x_f.csv' }))
       expect(bucketCalls[0]).toBe('onboarding-uploads')
     })
+
+    it('transient ingest failure THROWS (retry) instead of terminal-failing', async () => {
+      mockIngest.mockResolvedValue(ingestResult({ ok: false, transient: true, error: 'Temporary problem reading statements', inserted: 0, parsed: 0 }))
+      await expect(
+        handleIngestBankStatement(job({ account_id: 'a', tax_year: 2025, path: 'tax/a/bank_statements_x_f.csv' })),
+      ).rejects.toThrow(/Temporary problem/)
+    })
   })
 })

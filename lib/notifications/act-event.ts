@@ -44,6 +44,7 @@ export type ActEvent =
   | "ra_renewal_upcoming"
   | "annual_report_upcoming"
   | "itin_renewal_upcoming"
+  | "statement_ingest_failed"
 
 export interface ActionEventMeta {
   next_step: string
