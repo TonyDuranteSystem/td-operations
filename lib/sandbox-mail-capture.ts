@@ -78,8 +78,15 @@ export function decodeSandboxEmail(rawBase64Url: string): {
   }
   if (!body) body = splitAt >= 0 ? mime.slice(splitAt).trim() : mime
 
-  const links = Array.from(new Set((body.match(/https?:\/\/[^\s"'<>)]+/g) ?? []).map(s => s.replace(/[.,);]+$/, ""))))
-  return { recipient, subject, body, links }
+  // HTML bodies encode `&` as `&amp;`, so a raw-extracted signing link reads
+  // `...?portal=true&amp;signer=CODE` — which a browser parses as a broken param
+  // and the link fails. Decode the common entities so a captured link is clean
+  // and clickable.
+  const decodeEntities = (s: string): string =>
+    s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&#x27;/gi, "'").replace(/&#x2f;/gi, "/")
+  const cleanBody = decodeEntities(body)
+  const links = Array.from(new Set((cleanBody.match(/https?:\/\/[^\s"'<>)]+/g) ?? []).map(s => s.replace(/[.,);]+$/, ""))))
+  return { recipient, subject, body: cleanBody, links }
 }
 
 /** Store one blocked outbound email. Never throws. */
