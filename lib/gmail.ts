@@ -141,6 +141,12 @@ export async function gmailPost(
 ) {
   if (process.env.SANDBOX_MODE === '1' && endpoint.includes('/messages/send')) {
     console.warn('[SANDBOX] Email blocked:', { endpoint, asUser: asUser ?? DEFAULT_EMAIL() })
+    // QA-only: record the rendered content so a tester can read what would have
+    // been sent (sandbox blocks real delivery). Fire-and-forget; never disturbs
+    // the no-op. Only reachable under SANDBOX_MODE — inert in production.
+    void import('@/lib/sandbox-mail-capture')
+      .then(m => m.captureSandboxEmail((body as { raw?: unknown }).raw))
+      .catch(() => {})
     return { success: true, sandbox: true }
   }
   const { token, userEmail } = await getGmailToken(asUser)
