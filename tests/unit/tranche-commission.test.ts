@@ -345,12 +345,18 @@ describe("⛔ nothing can accrue while the credit path cannot key per part", () 
 // ══════════════════════════════════════════════════════════════════════════════════════════
 
 describe("the hand-settlement card carries the amount and the parts", () => {
+  // The REAL production shape: the reward is USD by the standing rule (netted against USD
+  // installments, no FX) while the deal itself is a EUR setup fee. The gate's commission cell
+  // (2026-08-11) caught the card labelling the DEAL figures with the reward's currency — the
+  // architect's ruling: a money card that misstates a currency is a trap for whoever reads it
+  // months later, so the two currencies are pinned separately here.
   const msg = buildCommissionReviewMessage({
     clientName: "Mario Rossi",
     referrerName: "Studio Bianchi",
     commissionType: "credit_note",
     totalCommission: 250,
-    currency: "EUR",
+    currency: "USD",
+    dealCurrency: "EUR",
     plan: plan(1250, 1250),
   })
 
@@ -360,10 +366,15 @@ describe("the hand-settlement card carries the amount and the parts", () => {
   })
 
   it("states the total AND every part's share", () => {
-    expect(msg).toContain("250 EUR")
+    expect(msg).toContain("250 USD")
     expect(msg).toContain("part 1 of 2")
     expect(msg).toContain("part 2 of 2")
-    expect(msg.match(/125 EUR/g)?.length).toBe(2)
+    expect(msg.match(/125 USD/g)?.length).toBe(2)
+  })
+
+  it("labels the deal figures with the DEAL's currency, never the reward's", () => {
+    expect(msg.match(/deal 1250 EUR/g)?.length).toBe(2)
+    expect(msg).not.toContain("deal 1250 USD")
   })
 
   it("says plainly that nothing was credited", () => {

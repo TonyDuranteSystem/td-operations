@@ -63,13 +63,18 @@ export function buildCommissionReviewMessage(input: {
   referrerName: string
   commissionType: string
   totalCommission: number
+  /** Commission currency — always USD by the standing rule (reward nets against USD installments). */
   currency: string
+  /** The DEAL's currency (the plan's own) — setup fees are typically EUR. The architect's ruling
+   *  (2026-08-11): a money card that labels the deal figures with the commission's currency is a
+   *  trap for whoever reads it months later, so the two are stated separately. */
+  dealCurrency: string
   plan: PaymentPlan
 }): string {
   const shares = splitCommissionAcrossParts(input.plan, input.totalCommission)
   const lines = shares.map(
     (s) =>
-      `  • part ${s.seq} of ${shares.length} — deal ${s.partAmount} ${input.currency}` +
+      `  • part ${s.seq} of ${shares.length} — deal ${s.partAmount} ${input.dealCurrency}` +
       `, commission ${s.commission} ${input.currency} (earned when that part is paid)`,
   )
   return [
@@ -98,6 +103,7 @@ export async function raiseCommissionNeedsHandSettlement(input: {
   commissionType: string
   totalCommission: number
   currency: string
+  dealCurrency: string
   plan: PaymentPlan
   accountId?: string | null
 }): Promise<boolean> {
@@ -113,6 +119,7 @@ export async function raiseCommissionNeedsHandSettlement(input: {
         commission_type: input.commissionType,
         total_commission: input.totalCommission,
         currency: input.currency,
+        deal_currency: input.dealCurrency,
         parts: splitCommissionAcrossParts(input.plan, input.totalCommission),
         account_id: input.accountId ?? null,
         reason: "payment_plan_commission_not_automated",

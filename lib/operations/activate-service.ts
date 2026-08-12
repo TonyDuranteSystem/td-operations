@@ -1250,6 +1250,11 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       } catch { /* fee parse failed; the card still names the parts, total shows 0 */ }
       const { commissionType, commissionAmount, commissionCurrency } = resolveOfferCommission(offer, setupFeeTotal)
       const parsedPlan = validatePaymentPlan(offerPaymentPlanRaw)
+      // The DEAL's currency is the plan's own (validated single-currency) — the commission stays
+      // USD by the standing rule, and the card states the two separately so the deal figures are
+      // never mislabelled with the reward's currency.
+      const dealCurrency =
+        (parsedPlan.ok && parsedPlan.plan?.[0]?.currency) || activation.currency || "EUR"
       const cardRaised = await raiseCommissionNeedsHandSettlement({
         offerToken: activation.offer_token,
         clientName: activation.client_name,
@@ -1257,6 +1262,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         commissionType,
         totalCommission: commissionAmount,
         currency: commissionCurrency,
+        dealCurrency,
         plan: parsedPlan.ok && parsedPlan.plan ? parsedPlan.plan : [],
         accountId: autoAccountId,
       })
