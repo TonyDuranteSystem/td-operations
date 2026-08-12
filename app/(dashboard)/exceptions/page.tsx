@@ -233,15 +233,16 @@ export default async function ExceptionsPage() {
             <div key={row.id} className="flex items-center justify-between gap-4 px-4 py-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-zinc-900">{row.job_type}</span>
-                  <span className="text-xs text-zinc-500">
-                    {row.attempts}/{row.max_attempts} attempts
-                  </span>
+                  <span className="text-sm font-medium text-zinc-900">{row.headline}</span>
                 </div>
-                {row.error && (
-                  <div className="mt-1 text-xs text-red-600 truncate">{row.error}</div>
+                {row.job_type === "ingest_bank_statement" ? (
+                  <div className="mt-1 text-xs text-zinc-600">
+                    The client&apos;s file could not be read. Fix: get a corrected export from the client (or upload it for them), or use Unlock Confirm if the numbers are complete without it.
+                  </div>
+                ) : (
+                  row.error && <div className="mt-1 text-xs text-red-600 truncate">{row.error}</div>
                 )}
-                <div className="mt-1 text-xs text-zinc-400">Age {formatAge(row.age_hours)}</div>
+                <div className="mt-1 text-xs text-zinc-400">Age {formatAge(row.age_hours)} · {row.attempts}/{row.max_attempts} attempts</div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 {/* W9: a failed statement ingest hard-blocks the client's

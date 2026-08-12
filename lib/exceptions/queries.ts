@@ -55,6 +55,9 @@ export interface FailedJobRow {
   account_id: string | null
   age_hours: number | null
   tax_year: number | null
+  company_name: string | null
+  file_name: string | null
+  headline: string
 }
 
 export interface FailedEmailRow {
@@ -232,23 +235,40 @@ export async function getFailedJobs(): Promise<FailedJobRow[]> {
     .limit(50)
   if (error) throw new Error(error.message)
 
-  return (data ?? []).map(r => ({
-    id: r.id,
-    job_type: r.job_type,
-    status: r.status,
-    attempts: r.attempts ?? 0,
-    max_attempts: r.max_attempts ?? 3,
-    error: r.error,
-    created_at: r.created_at,
-    account_id: r.account_id,
-    // W9: the ingest-job unlock button needs the tax year from the payload.
-    tax_year: (() => {
-      const ty = (r.payload as { tax_year?: number | string } | null)?.tax_year
-      const n = Number(ty)
-      return Number.isInteger(n) ? n : null
-    })(),
-    age_hours: hoursSince(r.created_at),
-  }))
+  // Staff read COMPANIES and FILES, not job types (Antonio, 2026-08-12):
+  // resolve the account names in one batch and, for statement ingests, the
+  // client's clean filename + a plain-English headline.
+  const accountIds = Array.from(new Set((data ?? []).map(r => r.account_id).filter((a): a is string => !!a)))
+  const names = new Map<string, string>()
+  if (accountIds.length > 0) {
+    const { data: accts } = await supabaseAdmin.from("accounts").select("id, company_name").in("id", accountIds)
+    for (const a of (accts ?? []) as Array<{ id: string; company_name: string }>) names.set(a.id, a.company_name)
+  }
+  const { displayStatementFileName } = await import("@/lib/tax/ingest-file-status")
+  return (data ?? []).map(r => {
+    const payload = (r.payload as { tax_year?: number | string; path?: string } | null)
+    const tyNum = Number(payload?.tax_year)
+    const isIngest = r.job_type === "ingest_bank_statement"
+    const fileName = isIngest && payload?.path ? displayStatementFileName(payload.path) : null
+    const companyName = r.account_id ? (names.get(r.account_id) ?? null) : null
+    return {
+      id: r.id,
+      job_type: r.job_type,
+      status: r.status,
+      attempts: r.attempts ?? 0,
+      max_attempts: r.max_attempts ?? 3,
+      error: r.error,
+      created_at: r.created_at,
+      account_id: r.account_id,
+      company_name: companyName,
+      file_name: fileName,
+      headline: isIngest
+        ? `Bank statement could not be read — ${companyName ?? "unknown client"}${fileName ? `: ${fileName}` : ""}`
+        : `${r.job_type}${companyName ? ` — ${companyName}` : ""}`,
+      tax_year: Number.isInteger(tyNum) ? tyNum : null,
+      age_hours: hoursSince(r.created_at),
+    }
+  })
 }
 
 export async function getFailedEmails(): Promise<FailedEmailRow[]> {
