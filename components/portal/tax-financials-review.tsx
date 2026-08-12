@@ -295,12 +295,17 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [periodConfirm, setPeriodConfirm] = useState<{ period: PresencePeriodView; choice: 'business' | 'personal' } | null>(null)
   // S3: country-policy confirm ("everything in Spain this year → business").
   const [countryConfirm, setCountryConfirm] = useState<{ card: CountryCardView; choice: 'business' | 'personal' } | null>(null)
-  // W9 pop-up (card 4a39e0fd, Antonio's UX call): a file that could not be
-  // read — or an empty month — must NOT be buried mid-page. This holds the
-  // per-file notices the client has manually dismissed; the toast itself is
-  // DERIVED from view.file_statuses, so it reappears while a failure is real
-  // and disappears on its own the moment the file is removed/corrected.
-  const [dismissedFileToasts, setDismissedFileToasts] = useState<Set<string>>(new Set())
+  // W9 pop-up (card 4a39e0fd, Antonio's UX calls, both rounds): a file that
+  // could not be read — or an empty month — must NOT be buried mid-page, BUT
+  // the pop-up may only announce files uploaded IN THIS SESSION as their
+  // outcome arrives. Round-2 correction: the first cut derived it from all
+  // file states, so logging in with an old failed file still on record threw
+  // pop-ups in the client's face before they did anything. `watchedPaths` =
+  // paths this session uploaded and not yet announced; a pop-up fires exactly
+  // once, when a watched path reaches a final state. Pre-existing failures
+  // stay in the inline cards + the locked Confirm — visible, not shouting.
+  const [watchedPaths, setWatchedPaths] = useState<Set<string>>(new Set())
+  const [fileToasts, setFileToasts] = useState<Array<{ path: string; file_name: string; state: 'failed' | 'empty'; client_error: string | null }>>([])
   const [periodFilter, setPeriodFilter] = useState<{ label: string; keys: Set<string> } | null>(null)
   // Period-answer failures render INSIDE the period section (2026-07-04:
   // Antonio's rejected taps surfaced only in the far-away top banner — the
@@ -379,24 +384,49 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     return () => clearInterval(t)
   }, [view, load])
 
-  // W9 pop-up feed: files that need the client's eyes right now — a failure
-  // (needs action) or an empty-but-valid month (reassurance). Quarantined
-  // files are OUR job and stay in the calm inline card, not a pop-up.
-  const fileToasts = useMemo(() => {
-    const list = (view?.file_statuses ?? []).filter(
-      f => (f.state === 'failed' || (f.state === 'succeeded' && f.empty)) && !dismissedFileToasts.has(f.path),
-    )
-    return list
-  }, [view?.file_statuses, dismissedFileToasts])
-
-  // An EMPTY-month notice is pure reassurance — auto-dismiss it after a read.
-  // A FAILURE stays until the client removes/fixes the file (or dismisses it).
+  // W9 pop-up feed: when a WATCHED (this-session) upload reaches its outcome,
+  // announce it once. Failures stay up until removed/dismissed; empty-month
+  // reassurance auto-closes after 10s. Quarantined files are OUR job and stay
+  // in the calm inline card, never a pop-up.
   useEffect(() => {
-    const emptyPaths = fileToasts.filter(f => f.state === 'succeeded').map(f => f.path)
-    if (emptyPaths.length === 0) return
-    const t = setTimeout(() => {
-      setDismissedFileToasts(prev => { const n = new Set(prev); emptyPaths.forEach(p => n.add(p)); return n })
-    }, 8000)
+    if (watchedPaths.size === 0 || !view?.file_statuses) return
+    const arrived = view.file_statuses.filter(
+      f => watchedPaths.has(f.path) && (f.state === 'failed' || (f.state === 'succeeded' && f.empty)),
+    )
+    const settled = view.file_statuses.filter(f => watchedPaths.has(f.path) && f.state === 'succeeded' && !f.empty)
+    if (arrived.length === 0 && settled.length === 0) return
+    setWatchedPaths(prev => {
+      const n = new Set(prev)
+      arrived.forEach(f => n.delete(f.path))
+      settled.forEach(f => n.delete(f.path)) // normal success: no pop-up needed
+      return n
+    })
+    if (arrived.length > 0) {
+      setFileToasts(prev => [
+        ...prev,
+        ...arrived.map(f => ({
+          path: f.path,
+          file_name: f.file_name,
+          state: (f.state === 'failed' ? 'failed' : 'empty') as 'failed' | 'empty',
+          client_error: f.client_error,
+        })),
+      ])
+    }
+  }, [view?.file_statuses, watchedPaths])
+
+  // A failure toast also self-clears when its file stops being failed (the
+  // client removed it from the inline card, or a retry recovered it).
+  useEffect(() => {
+    if (fileToasts.length === 0 || !view?.file_statuses) return
+    const stillFailed = new Set(view.file_statuses.filter(f => f.state === 'failed').map(f => f.path))
+    setFileToasts(prev => prev.filter(t => t.state === 'empty' || stillFailed.has(t.path)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- prune on state refresh only
+  }, [view?.file_statuses])
+
+  // Empty-month toasts fade on their own — long enough to actually read.
+  useEffect(() => {
+    if (!fileToasts.some(t => t.state === 'empty')) return
+    const t = setTimeout(() => setFileToasts(prev => prev.filter(x => x.state !== 'empty')), 10000)
     return () => clearTimeout(t)
   }, [fileToasts])
 
@@ -1147,6 +1177,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     if (!res.ok) {
       throw new Error(d.error || (it ? 'Caricamento non riuscito — riprova.' : 'Upload failed — please try again.'))
     }
+    // Watch THIS upload so its outcome (failed / empty month) pops up once —
+    // only files from this session ever pop; old failures stay inline (W9
+    // round 2: login must never open onto a wall of pop-ups).
+    if (typeof d.path === 'string' && d.path) {
+      setWatchedPaths(prev => new Set(prev).add(d.path))
+    }
   }
 
   // Upload one or more files SEQUENTIALLY (one at a time), refreshing the P&L
@@ -1690,7 +1726,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       </button>
                     )}
                     <button
-                      onClick={() => setDismissedFileToasts(prev => new Set(prev).add(f.path))}
+                      onClick={() => setFileToasts(prev => prev.filter(x => x.path !== f.path))}
                       aria-label={it ? 'Chiudi' : 'Dismiss'}
                       className={`rounded-md px-2 py-1 text-sm ${failed ? 'text-red-500 hover:text-red-700' : 'text-emerald-600 hover:text-emerald-800'}`}
                     >

@@ -120,6 +120,9 @@ export async function POST(request: NextRequest) {
       queued: result.queued,
       alreadyQueued: result.alreadyQueued,
       fileName: file.name,
+      // The content-hashed storage path — the client watches it so the W9
+      // pop-up can announce THIS upload's outcome (and only this session's).
+      path: result.path,
     })
   } catch (err) {
     console.error('[tax-financials] upload failed:', err)
