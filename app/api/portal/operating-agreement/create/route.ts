@@ -99,7 +99,11 @@ export async function POST(request: NextRequest) {
   // had failed. A stale client or a crafted post gets told, not humoured.
   if (mustRefuseSuppliedAddress(body as Record<string, unknown>)) {
     return NextResponse.json({
-      error: 'Member addresses come from your company records and cannot be set here. If an address is wrong, contact support@tonydurante.us and we\'ll correct it before you sign.',
+      // The ONLY realistic sender is a browser tab or cached app shell still
+      // running the PREVIOUS build, which posted an address on every generate. That
+      // client has done nothing wrong and their address is fine — telling them to
+      // contact support would send us mail about a problem a refresh fixes.
+      error: 'This page is out of date — please refresh and try again.',
     }, { status: 400 })
   }
 
@@ -186,14 +190,12 @@ export async function POST(request: NextRequest) {
   // decides WHO IS AUTHORITATIVE. `rows` is null on failure, which is
   // indistinguishable from "this company has no member records", and TWO things
   // now hang off that distinction: the member address that goes into the
-  // agreement, and `hasMemberRecords` — the gate that decides whether a browser
-  // may supply an address at all. So a transient database failure (or a typo in
-  // the select list above) would (a) store a single-member agreement with NO
-  // address, printing "As on file with the Company" behind a green success
-  // screen, and (b) if the same failure hit the page render, flip the screen to
-  // its editable branch AND disarm this route's guard in the same breath — both
-  // surfaces wrong in the same direction, looking perfectly consistent while a
-  // typed address overwrote a real member's record.
+  // agreement, and which record it comes from. So a transient database failure (or
+  // a typo in the select list above) would store a single-member agreement with NO
+  // address, printing "As on file with the Company" behind a green success screen —
+  // and, if the same failure hit the page render, the screen would show the same
+  // emptiness, so both surfaces would be wrong in the same direction and look
+  // perfectly consistent.
   //
   // Refusing costs a client one retry. The alternative is a wrong legal
   // document that nobody is told about. Same reasoning, and the same shape, as
@@ -214,28 +216,28 @@ export async function POST(request: NextRequest) {
 
   membersRows = rows ?? []
 
-  // The ONLY case allowed to supply an address from the browser: an account with
-  // no member rows at all (pre-members-table). Enforced HERE, on the server,
-  // rather than by the screen choosing to render a read-only field — a client
-  // posting the field directly must not be able to overwrite a member of record.
   // A Single Member LLC has NO member roster by design — an empty result here is
-  // correct state, not a gap. (The read failure that would be indistinguishable
-  // from it is refused above.)
+  // CORRECT state, not a gap. (The read failure that would be indistinguishable
+  // from it is refused above.) For those companies the address of record lives on
+  // the owner's contact instead; nobody may supply one from the browser.
   const hasMemberRecords = membersRows.length > 0
 
   // WHO OWNS THIS ADDRESS. Re-derived here from the account's own links, NOT taken
-  // from the caller and NOT trusted from the browser: the address is written back
-  // to this person's contact record, so letting the logged-in identity stand in for
-  // it would let a co-owner or administrator author an address into someone else's
-  // record — and the agreement would name one person while the address belonged to
-  // another (Antonio, 2026-08-12: "the document follows the OWNER of record, never
-  // whoever is signed in"). Same role preference the screen uses, so the two agree.
+  // from the caller and NOT trusted from the browser: this decides the NAME and the
+  // ADDRESS on the document, so letting the logged-in identity stand in for it would
+  // let a co-owner or administrator shift whose details the agreement carries
+  // (Antonio, 2026-08-12: "the document follows the OWNER of record, never whoever
+  // is signed in"). Same helper and same query shape as the screen, so the two
+  // cannot resolve different people.
   let ownerOfRecordContactId: string | null = null
   if (!hasMemberRecords) {
     const { data: links, error: linksErr } = await supabaseAdmin
       .from('account_contacts')
       .select('contact_id, role')
       .eq('account_id', account_id)
+      // Ordered, and NOT limited — the screen runs the same query to resolve the
+      // same owner, and the two must never see a different link set.
+      .order('contact_id', { ascending: true })
 
     // Fail closed for the same reason the members read does: an unreadable link
     // list is indistinguishable from "you are not the owner", and guessing either
@@ -255,7 +257,26 @@ export async function POST(request: NextRequest) {
     }
 
     // SAME helper the screen uses, so the two cannot reach different owners.
-    ownerOfRecordContactId = resolveOwnerOfRecord(links ?? [])
+    const ownerResolution = resolveOwnerOfRecord(links ?? [])
+
+    // REFUSE rather than guess. The screen blocks generation on the identical
+    // resolution, so the two agree; the version that returned null instead let the
+    // screen render a member called "N/A" while this route stored the LOGGED-IN
+    // person's name — the previewed and the signed document disagreeing about who
+    // owns the company, which is the defect this whole job exists to remove.
+    // (A company with exactly ONE linked person needs no role at all — the helper
+    // treats that as unambiguous, which is why this refuses almost nobody: 218 of
+    // 225 rosterless accounts match an owner role, 4 more match member-ish, and the
+    // only 3 with no match have no contacts to name.)
+    if (!ownerResolution.resolved) {
+      return NextResponse.json({
+        error: ownerResolution.reason === 'no_contacts'
+          ? 'We don\'t have anyone on file as the owner of this company yet, so we can\'t put a name on the Operating Agreement. Contact support@tonydurante.us and we\'ll set it up.'
+          : 'Your company has several people linked to it and none is marked as the owner, so we can\'t say whose name and address belong on the Operating Agreement. Contact support@tonydurante.us and we\'ll set it straight.',
+      }, { status: 422 })
+    }
+
+    ownerOfRecordContactId = ownerResolution.contactId
   }
 
   // No submission gate is needed any more: an address on the request was already
@@ -482,8 +503,8 @@ export async function POST(request: NextRequest) {
     : null
 
   // The single-member agreement's address, resolved the same way. Where a member
-  // row exists it wins; only a pre-members-table account falls through to the value
-  // the client supplied (already refused above if any member row exists).
+  // row exists it wins; a rosterless company falls through to the owner's own
+  // contact record, which is what the screen displays read-only.
   // For a no-roster account the OWNER'S CONTACT RECORD is the record. Read it
   // whenever the caller did not supply a new address, so a client who generates a
   // second agreement without retyping gets the address they already gave us

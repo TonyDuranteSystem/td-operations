@@ -53,6 +53,21 @@ interface Props {
   }
   members: ExtendedMemberInfo[]
   /**
+   * A company with no member roster whose OWNER could not be established. The
+   * screen must refuse rather than render a placeholder: the previous version
+   * showed a member called "N/A" while the server stored the logged-in person's
+   * name, so the previewed and the signed document disagreed about who owns the
+   * company. Both surfaces now refuse from the same resolution.
+   */
+  ownerUnresolved: boolean
+  /**
+   * True ONLY when the viewer can genuinely fix these addresses themselves — a
+   * sole owner reading their own company's screen, whose address lives on their
+   * contact record and is editable on their profile. Everyone else is pointed at
+   * support, because for them it really is a support job.
+   */
+  canSelfEditOnProfile: boolean
+  /**
    * True when the members above come from real member records — which is when
    * their addresses are the system of record and MUST NOT be editable here
    * (Antonio, 2026-08-12: a legal document must never be able to disagree with
@@ -93,9 +108,31 @@ const LABELS: Record<string, Record<string, string>> = {
   // The screen is read-only for EVERY company shape, so this is the only address
   // copy there is. The original told every client to "enter" an address on a screen
   // that then discarded what they typed.
+  // ONE honest line for EVERY company shape. The previous wording claimed these
+  // came from "your company's member records", which is simply false for the 216
+  // Single Member LLCs that have no member roster at all — their address lives on
+  // the owner's own record. Antonio's ruling, 2026-08-12: say what is true for
+  // everyone, and add the self-service pointer only where it is also true.
   addressFromRecord: {
-    en: 'These addresses come from your company\'s member records and appear in the Operating Agreement exactly as shown. If anything is wrong, contact support@tonydurante.us and we\'ll correct it before you sign.',
-    it: 'Questi indirizzi provengono dai dati dei soci registrati e compaiono nell\'Atto Costitutivo esattamente come mostrati. Se qualcosa non è corretto, scrivi a support@tonydurante.us e lo sistemiamo prima della firma.',
+    en: 'These addresses come from your records with us and appear in the Operating Agreement exactly as shown.',
+    it: 'Questi indirizzi provengono dai tuoi dati registrati presso di noi e compaiono nell\'Atto Costitutivo esattamente come mostrati.',
+  },
+  addressFixViaSupport: {
+    en: 'If anything is wrong, contact support@tonydurante.us and we\'ll correct it before you sign.',
+    it: 'Se qualcosa non è corretto, scrivi a support@tonydurante.us e lo sistemiamo prima della firma.',
+  },
+  addressFixViaProfile: {
+    en: 'If anything is wrong, update it in your Profile and come back — the document will pick it up.',
+    it: 'Se qualcosa non è corretto, aggiornalo nel tuo Profilo e torna qui — il documento lo recepirà.',
+  },
+  addressProfileLink: { en: 'Go to Profile', it: 'Vai al Profilo' },
+  ownerUnresolvedTitle: {
+    en: 'We can\'t tell who the owner of this company is',
+    it: 'Non riusciamo a determinare chi è il titolare di questa azienda',
+  },
+  ownerUnresolvedBody: {
+    en: 'Your company has several people linked to it and none is marked as the owner, so we can\'t say whose name and address belong on the Operating Agreement. Contact support@tonydurante.us and we\'ll set it straight — it takes us a moment.',
+    it: 'Alla tua azienda sono collegate più persone e nessuna è indicata come titolare, quindi non possiamo stabilire quale nome e indirizzo debbano comparire nell\'Atto Costitutivo. Scrivi a support@tonydurante.us e lo sistemiamo subito.',
   },
   addressMissing: {
     en: 'Not on file — contact support@tonydurante.us to add it.',
@@ -136,7 +173,7 @@ function docTypeLabel(type: string, lang: string): string {
   return type
 }
 
-export function GenerateDocumentsClient({ account, members, history: initialHistory, locale }: Props) {
+export function GenerateDocumentsClient({ account, members, ownerUnresolved, canSelfEditOnProfile, history: initialHistory, locale }: Props) {
   const { locale: ctxLocale } = useLocale()
   const lang = ctxLocale || locale || 'en'
   const router = useRouter()
@@ -151,11 +188,6 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   })
   // OA-specific state
   const [oaEffectiveDate, setOaEffectiveDate] = useState(new Date().toISOString().split('T')[0])
-  // ONE address, and only for a pre-members-table account (the sole member is the
-  // person on the screen). The previous per-member map was the free-typing path:
-  // it was pre-filled from the record, rendered as editable for everyone, and then
-  // discarded by the server for every account that had member records — i.e. all
-  // of them. Deleted rather than repaired (Antonio, 2026-08-12).
   const [isGenerating, setIsGenerating] = useState(false)
   const [signatureImage, setSignatureImage] = useState<string | null>(null)
   const [portalSaveWarning, setPortalSaveWarning] = useState(false)
@@ -199,17 +231,17 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
     return { memberCountOk, allHavePortal, ownershipOk, ownershipTotal, missingPortal }
   })() : null
 
-  const oaCanProceed = !isMMLC || (oaPreflight?.allHavePortal === true)
+  // An unresolvable owner blocks EVERY document type, not just the Operating
+  // Agreement: the previous shape let the OA through (the existing block is
+  // `!isOA`) and produced a preview naming the member "N/A" while the server stored
+  // a different name. Refuse in one place, from the server's own resolution.
+  const oaCanProceed = !ownerUnresolved && (!isMMLC || (oaPreflight?.allHavePortal === true))
 
-  // What the preview and the downloadable PDF render. For an account with member
-  // records this is the record verbatim — the same value the create route stores —
-  // so the document on screen and the document that gets signed cannot differ.
-  // Only a legacy account substitutes what is being typed, because there is no
-  // record to show and that value is what will be stored and saved back.
-  // NOTHING here is editable. Every address is the record, rendered read-only, and
-  // the create route stores exactly this. Do not reintroduce a field: the version
-  // that existed briefly corrupted client contact records (see
-  // lib/members/oa-address-decisions.ts).
+  // What the preview and the downloadable PDF render: the record verbatim, which
+  // is the same value the create route stores — so the document on screen and the
+  // document that gets signed cannot differ. NOTHING here is editable, for any
+  // company shape. Do not reintroduce a field: the version that briefly existed
+  // corrupted client contact records (see lib/members/oa-address-decisions.ts).
   const oaMembers = members.map(m => ({
     fullName: m.fullName,
     address: m.address || '',
@@ -676,6 +708,13 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 />
               </div>
 
+              {ownerUnresolved && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                  <p className="text-sm font-semibold text-amber-900 mb-1">{l('ownerUnresolvedTitle', lang)}</p>
+                  <p className="text-sm text-amber-800 leading-snug">{l('ownerUnresolvedBody', lang)}</p>
+                </div>
+              )}
+
               {/*
                 READ-ONLY, ALWAYS, for every company shape. These addresses go into
                 a legal document verbatim, so the screen shows the record and offers
@@ -685,7 +724,17 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
               */}
               <div>
                 <label className="block text-xs text-zinc-500 mb-1">{l('memberAddresses', lang)}</label>
-                <p className="text-xs text-zinc-500 mb-3">{l('addressFromRecord', lang)}</p>
+                <p className="text-xs text-zinc-500 mb-1">{l('addressFromRecord', lang)}</p>
+                {/* The remedy differs by who is reading. A sole owner can fix this
+                    themselves on their profile; anyone else genuinely needs us. */}
+                {canSelfEditOnProfile ? (
+                  <p className="text-xs text-zinc-500 mb-3">
+                    {l('addressFixViaProfile', lang)}{' '}
+                    <a href="/portal/profile" className="text-blue-700 hover:underline">{l('addressProfileLink', lang)}</a>
+                  </p>
+                ) : (
+                  <p className="text-xs text-zinc-500 mb-3">{l('addressFixViaSupport', lang)}</p>
+                )}
                 <div className="space-y-2">
                   {members.map((m, i) => (
                     <div key={i} className="rounded border border-zinc-200 bg-zinc-50 px-3 py-2">

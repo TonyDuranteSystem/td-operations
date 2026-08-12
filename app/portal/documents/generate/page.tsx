@@ -45,11 +45,16 @@ export default async function GenerateDocumentsPage() {
     // silently returned nothing for 20+ accounts, which emptied the members
     // list and made the Distribution Resolution / Tax Statement templates
     // skip their entire body (the "two-line document" bug, 2026-07-07).
+    //
+    // DELIBERATELY UNLIMITED and ordered: the create route runs the SAME query to
+    // resolve the SAME owner, and the two must not see different link sets. A
+    // `.limit(20)` here (and none there) meant an account with more links could
+    // resolve one owner on screen and a different one in the stored document.
     supabaseAdmin
       .from('account_contacts')
       .select('contact_id, role, contacts(first_name, last_name, address_line1, address_city, address_state, address_zip, address_country)')
       .eq('account_id', selectedAccountId)
-      .limit(20),
+      .order('contact_id', { ascending: true }),
   ])
 
   if (!accountDetail) redirect('/portal')
@@ -71,9 +76,18 @@ export default async function GenerateDocumentsPage() {
   // Owner of record — resolved by the SHARED helper, which the create route also
   // calls server-side. When these two disagreed, the screen offered an editable
   // field for one person while the server wrote it to another's record.
-  const ownerOfRecordId = resolveOwnerOfRecord(contactLinks)
-  const ownerLink = contactLinks.find(l => l.contact_id === ownerOfRecordId) ?? null
+  const ownerResolution = resolveOwnerOfRecord(contactLinks)
+  const ownerLink = ownerResolution.resolved
+    ? (contactLinks.find(l => l.contact_id === ownerResolution.contactId) ?? null)
+    : null
   const ownerContact = ownerLink?.contacts ?? null
+
+  // A rosterless company whose owner CANNOT be established must not render a
+  // placeholder member. It previously showed "N/A" on the preview while the route
+  // stored the logged-in person's name — the previewed and the signed document
+  // disagreeing about who owns the company, which is the exact defect this job
+  // exists to remove. Both surfaces now refuse from the SAME resolution.
+  const ownerUnresolved = rawMembers.length === 0 && !ownerResolution.resolved
 
   const mappedMembers = rawMembers.length > 0
     ? rawMembers.map(m => ({
@@ -102,9 +116,9 @@ export default async function GenerateDocumentsPage() {
           fullName: `${ownerContact.first_name ?? ''} ${ownerContact.last_name ?? ''}`.trim() || 'N/A',
           role: 'owner',
           ownershipPct: null,
-          // Pre-members-table account: there is no member row, so the contact record
-          // IS the record here. Previously hard-coded to null, which left the client
-          // retyping their address on every agreement with nothing kept afterwards.
+          // No member roster — correct state for a Single Member LLC — so the
+          // owner's contact record IS the address of record. Read-only, like every
+          // other address on this screen.
           address: formatMemberAddress({
             line1: ownerContact.address_line1,
             city: ownerContact.address_city,
@@ -115,11 +129,11 @@ export default async function GenerateDocumentsPage() {
           isPrimary: true,
           // The OWNER OF RECORD — never `contactId`, the person who happens to be
           // logged in. The agreement names an owner; who opened the browser is an
-          // accident. This id is what the create route writes the address back to,
-          // and what decides whether the field is editable at all, so an
-          // administrator or co-owner opening this screen must not be able to type
-          // an address into another person's contact record (Antonio, 2026-08-12).
-          contact_id: ownerLink?.contact_id ?? contactId,
+          // accident, and an administrator or co-owner viewing this screen must not
+          // shift whose name the document carries. Resolved by the SAME helper the
+          // create route calls, so the previewed and the stored document can never
+          // name different people (Antonio, 2026-08-12).
+          contact_id: ownerLink.contact_id,
           email: null,
           member_id: undefined,
         }]
@@ -140,6 +154,12 @@ export default async function GenerateDocumentsPage() {
         memberCount: (accountDetail as Record<string, unknown>).member_count as number | null ?? null,
       }}
       members={mappedMembers}
+      ownerUnresolved={ownerUnresolved}
+      // TRUE only where the self-service pointer is actually TRUE: a rosterless
+      // company whose owner is the person reading the screen, who can therefore
+      // edit these fields on their own profile. Everyone else is pointed at support,
+      // because for them it genuinely is a support job.
+      canSelfEditOnProfile={rawMembers.length === 0 && ownerResolution.resolved && ownerResolution.contactId === contactId}
       history={historyResult.data || []}
       locale={locale}
     />
