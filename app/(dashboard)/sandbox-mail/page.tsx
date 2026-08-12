@@ -36,7 +36,8 @@ export default async function SandboxMailPage() {
     )
   }
 
-  const { data } = await supabaseAdmin
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- new QA-only table not in generated DB types
+  const { data } = await (supabaseAdmin as any)
     .from("sandbox_captured_emails")
     .select("id, recipient, subject, body, links, created_at")
     .order("created_at", { ascending: false })
