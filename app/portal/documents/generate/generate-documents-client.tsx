@@ -18,6 +18,7 @@ import {
   formatDocumentAmount,
 } from '@/lib/portal/document-templates'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
+import { splitStoredAddress } from '@/lib/members/sole-owner-address'
 
 interface HistoryItem {
   id: string
@@ -52,6 +53,24 @@ interface Props {
     memberCount?: number | null
   }
   members: ExtendedMemberInfo[]
+  /**
+   * True when the members above come from real member records — which is when
+   * their addresses are the system of record and MUST NOT be editable here
+   * (Antonio, 2026-08-12: a legal document must never be able to disagree with
+   * the record). False only for pre-members-table accounts, where there is no
+   * record to show and the client supplies their address once; the server
+   * enforces the same distinction independently, so this flag controls what is
+   * rendered, never what is trusted.
+   */
+  membersFromRecord: boolean
+  /**
+   * No-roster accounts only (every Single Member LLC): is the VIEWER the owner of
+   * record? Only they may author the address, because it is written back to that
+   * owner's contact record — a co-owner or administrator who happens to be logged
+   * in must never type an address into someone else's record. The create route
+   * re-derives this server-side; this flag only decides what is rendered.
+   */
+  canEditSoleOwnerAddress: boolean
   history: HistoryItem[]
   locale: string
 }
@@ -81,9 +100,34 @@ const LABELS: Record<string, Record<string, string>> = {
   },
   effectiveDate: { en: 'Effective Date', it: 'Data di Efficacia' },
   memberAddresses: { en: 'Member Addresses', it: 'Indirizzi dei Soci' },
+  // Shown ONLY where the address is read-only (i.e. wherever member records
+  // exist). The old copy told every client to "enter" an address on a screen
+  // that discarded what they typed — see addressHint below, now scoped to the
+  // one case where typing genuinely does something.
+  addressFromRecord: {
+    en: 'These addresses come from your company\'s member records and appear in the Operating Agreement exactly as shown. If anything is wrong, contact support@tonydurante.us and we\'ll correct it before you sign.',
+    it: 'Questi indirizzi provengono dai dati dei soci registrati e compaiono nell\'Atto Costitutivo esattamente come mostrati. Se qualcosa non è corretto, scrivi a support@tonydurante.us e lo sistemiamo prima della firma.',
+  },
+  addressOwnerOnly: {
+    en: 'This address comes from the owner\'s record and appears in the Operating Agreement exactly as shown. Only the owner can change it — if it\'s wrong, contact support@tonydurante.us and we\'ll correct it before you sign.',
+    it: 'Questo indirizzo proviene dai dati del titolare e compare nell\'Atto Costitutivo esattamente come mostrato. Solo il titolare può modificarlo — se non è corretto, scrivi a support@tonydurante.us e lo sistemiamo prima della firma.',
+  },
+  addressMissing: {
+    en: 'Not on file — contact support@tonydurante.us to add it.',
+    it: 'Non disponibile — scrivi a support@tonydurante.us per aggiungerlo.',
+  },
+  addressStreet: { en: 'Street', it: 'Via' },
+  addressCity: { en: 'City', it: 'Città' },
+  addressState: { en: 'State / Province', it: 'Provincia' },
+  addressZip: { en: 'ZIP / Postal code', it: 'CAP' },
+  addressCountry: { en: 'Country', it: 'Paese' },
   addressHint: {
-    en: 'Enter each member\'s full address to include in the Operating Agreement.',
-    it: 'Inserisci l\'indirizzo completo di ciascun socio da includere nell\'Atto Costitutivo.',
+    en: 'Enter your full address to include in the Operating Agreement.',
+    it: 'Inserisci il tuo indirizzo completo da includere nell\'Atto Costitutivo.',
+  },
+  addressSavedNote: {
+    en: 'We\'ll save this to your profile so you don\'t have to enter it again.',
+    it: 'Lo salveremo nel tuo profilo così non dovrai reinserirlo.',
   },
   address: { en: 'Address', it: 'Indirizzo' },
   amount: { en: 'Distribution Amount', it: 'Importo Distribuzione' },
@@ -120,7 +164,7 @@ function docTypeLabel(type: string, lang: string): string {
   return type
 }
 
-export function GenerateDocumentsClient({ account, members, history: initialHistory, locale }: Props) {
+export function GenerateDocumentsClient({ account, members, membersFromRecord, canEditSoleOwnerAddress, history: initialHistory, locale }: Props) {
   const { locale: ctxLocale } = useLocale()
   const lang = ctxLocale || locale || 'en'
   const router = useRouter()
@@ -135,9 +179,14 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   })
   // OA-specific state
   const [oaEffectiveDate, setOaEffectiveDate] = useState(new Date().toISOString().split('T')[0])
-  const [oaMemberAddresses, setOaMemberAddresses] = useState<Record<number, string>>(
-    Object.fromEntries(members.map((m, i) => [i, m.address || '']))
-  )
+  // ONE address, and only for a pre-members-table account (the sole member is the
+  // person on the screen). The previous per-member map was the free-typing path:
+  // it was pre-filled from the record, rendered as editable for everyone, and then
+  // discarded by the server for every account that had member records — i.e. all
+  // of them. Deleted rather than repaired (Antonio, 2026-08-12).
+  // PREFILLED from the owner's record — not blank. See splitStoredAddress above
+  // for why a blank form here silently recreated the very split this fixes.
+  const [legacyAddress, setLegacyAddress] = useState(() => splitStoredAddress(members[0]?.address))
   const [isGenerating, setIsGenerating] = useState(false)
   const [signatureImage, setSignatureImage] = useState<string | null>(null)
   const [portalSaveWarning, setPortalSaveWarning] = useState(false)
@@ -183,10 +232,24 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
 
   const oaCanProceed = !isMMLC || (oaPreflight?.allHavePortal === true)
 
-  // Members with addresses resolved from OA state (for OA template)
-  const oaMembers = members.map((m, i) => ({
+  // What the preview and the downloadable PDF render. For an account with member
+  // records this is the record verbatim — the same value the create route stores —
+  // so the document on screen and the document that gets signed cannot differ.
+  // Only a legacy account substitutes what is being typed, because there is no
+  // record to show and that value is what will be stored and saved back.
+  const legacyAddressLine = [
+    legacyAddress.street, legacyAddress.city, legacyAddress.state, legacyAddress.zip, legacyAddress.country,
+  ].map(part => part.trim()).filter(Boolean).join(', ')
+
+  // The address is authorable in exactly ONE situation: this account has no member
+  // roster (every Single Member LLC) AND the viewer is the owner of record. Anyone
+  // else — a company with member records, or a co-owner/administrator on a
+  // sole-owner account — gets the record, read-only.
+  const canAuthorAddress = !membersFromRecord && canEditSoleOwnerAddress
+
+  const oaMembers = members.map(m => ({
     fullName: m.fullName,
-    address: oaMemberAddresses[i] || m.address || '',
+    address: canAuthorAddress ? legacyAddressLine : (m.address || ''),
     ownershipPct: m.ownershipPct ?? 100 / members.length,
   }))
 
@@ -378,14 +441,16 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
     setOaCreateError(null)
     let succeeded = false
     try {
-      const memberAddresses = members.map((_, i) => oaMemberAddresses[i] || '')
       const res = await fetch('/api/portal/operating-agreement/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           account_id: account.id,
           effective_date: oaEffectiveDate,
-          member_addresses: memberAddresses,
+          // Sent ONLY for a pre-members-table account. Posting it for an account
+          // that has member records is refused by the route — the record is the
+          // system of truth and the browser does not get to overrule it.
+          ...(canAuthorAddress ? { legacy_member_address: legacyAddress } : {}),
         }),
       })
       const data = await res.json().catch(() => ({}))
@@ -432,7 +497,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
       currency: 'USD',
     })
     setOaEffectiveDate(new Date().toISOString().split('T')[0])
-    setOaMemberAddresses(Object.fromEntries(members.map((m, i) => [i, m.address || ''])))
+    setLegacyAddress(splitStoredAddress(members[0]?.address))
   }
 
   return (
@@ -653,26 +718,95 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 />
               </div>
 
-              <div>
-                <label className="block text-xs text-zinc-500 mb-1">{l('memberAddresses', lang)}</label>
-                <p className="text-xs text-zinc-500 mb-3">{l('addressHint', lang)}</p>
-                <div className="space-y-3">
-                  {members.map((m, i) => (
-                    <div key={i}>
-                      <label className="block text-xs text-zinc-500 mb-1">
-                        {m.fullName} — {l('address', lang)}
-                      </label>
+              {/*
+                READ-ONLY wherever member records exist — which is every account
+                formed or onboarded since April 2026. These addresses go into a
+                legal document verbatim, so the screen shows the record and offers
+                no way to type over it; the route refuses a posted address for
+                these accounts regardless of what is rendered here.
+                The editable branch below is ONLY for pre-members-table accounts,
+                which have no record to show.
+              */}
+              {!canAuthorAddress ? (
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">{l('memberAddresses', lang)}</label>
+                  {/* Two different truths: a company with member records reads from
+                      those; a sole-owner account being viewed by someone who is NOT
+                      the owner reads from the owner's own record and they cannot
+                      edit it. Telling the second group "your member records" would
+                      point them at something that does not exist for them. */}
+                  <p className="text-xs text-zinc-500 mb-3">
+                    {l(membersFromRecord ? 'addressFromRecord' : 'addressOwnerOnly', lang)}
+                  </p>
+                  <div className="space-y-2">
+                    {members.map((m, i) => (
+                      <div key={i} className="rounded border border-zinc-200 bg-zinc-50 px-3 py-2">
+                        <p className="text-xs text-zinc-500">{m.fullName}</p>
+                        {m.address ? (
+                          <p className="text-sm text-zinc-900">{m.address}</p>
+                        ) : (
+                          /* Never blank and never a placeholder that could read as
+                             an address — an absent record says so in words. */
+                          <p className="text-sm text-amber-700">{l('addressMissing', lang)}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">{l('memberAddresses', lang)}</label>
+                  <p className="text-xs text-zinc-500 mb-1">{l('addressHint', lang)}</p>
+                  <p className="text-xs text-zinc-400 mb-3">{l('addressSavedNote', lang)}</p>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="md:col-span-2">
+                      <label className="block text-xs text-zinc-500 mb-1">{l('addressStreet', lang)}</label>
                       <input
                         type="text"
-                        value={oaMemberAddresses[i] || ''}
-                        onChange={e => setOaMemberAddresses(prev => ({ ...prev, [i]: e.target.value }))}
-                        placeholder="123 Main St, City, State, Country"
+                        value={legacyAddress.street}
+                        onChange={e => setLegacyAddress(p => ({ ...p, street: e.target.value }))}
                         className="w-full px-3 py-2 bg-zinc-50 rounded border border-zinc-200 text-zinc-900 text-sm focus:outline-none focus:border-violet-500"
                       />
                     </div>
-                  ))}
+                    <div>
+                      <label className="block text-xs text-zinc-500 mb-1">{l('addressCity', lang)}</label>
+                      <input
+                        type="text"
+                        value={legacyAddress.city}
+                        onChange={e => setLegacyAddress(p => ({ ...p, city: e.target.value }))}
+                        className="w-full px-3 py-2 bg-zinc-50 rounded border border-zinc-200 text-zinc-900 text-sm focus:outline-none focus:border-violet-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-zinc-500 mb-1">{l('addressState', lang)}</label>
+                      <input
+                        type="text"
+                        value={legacyAddress.state}
+                        onChange={e => setLegacyAddress(p => ({ ...p, state: e.target.value }))}
+                        className="w-full px-3 py-2 bg-zinc-50 rounded border border-zinc-200 text-zinc-900 text-sm focus:outline-none focus:border-violet-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-zinc-500 mb-1">{l('addressZip', lang)}</label>
+                      <input
+                        type="text"
+                        value={legacyAddress.zip}
+                        onChange={e => setLegacyAddress(p => ({ ...p, zip: e.target.value }))}
+                        className="w-full px-3 py-2 bg-zinc-50 rounded border border-zinc-200 text-zinc-900 text-sm focus:outline-none focus:border-violet-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-zinc-500 mb-1">{l('addressCountry', lang)}</label>
+                      <input
+                        type="text"
+                        value={legacyAddress.country}
+                        onChange={e => setLegacyAddress(p => ({ ...p, country: e.target.value }))}
+                        className="w-full px-3 py-2 bg-zinc-50 rounded border border-zinc-200 text-zinc-900 text-sm focus:outline-none focus:border-violet-500"
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           ) : (
             /* Distribution/Tax fields */

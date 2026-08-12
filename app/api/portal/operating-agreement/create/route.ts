@@ -17,7 +17,31 @@
  * stored as 'sent', not 'draft', or it never reaches the portal's action-required
  * list — see the comment on the status field.
  *
- * Body: { account_id: string, effective_date: string, member_addresses: string[] }
+ * Body: { account_id: string, effective_date: string, legacy_member_address?: string }
+ *
+ * ⛔ `member_addresses: string[]` IS GONE — do not reintroduce it (dev job
+ * `61f184ca`, Antonio's ruling 2026-08-12: "A legal document must never be able to
+ * disagree with the system of record").
+ *
+ * It was a client-typed address per member, position-matched to a SEPARATE members
+ * query, and carried two defects that were only ever held off by discipline:
+ *   1. Whenever the member row had an address — i.e. always, for every company
+ *      member in production — the typed value was silently discarded. The field
+ *      looked editable and was not, so a client correcting a wrong address had no
+ *      way to succeed and no way to know they had failed.
+ *   2. The array was indexed against a query ordered only by `is_primary`, so with
+ *      three members and one primary the two non-primary rows could come back in a
+ *      different relative order than the browser used — pairing a typed address
+ *      with a DIFFERENT member, in a legal document.
+ * Deleting the path removes both by construction. The screen is now read-only and
+ * renders exactly what this route stores, via the shared resolver.
+ *
+ * `legacy_member_address` is the ONE remaining exception and is not the same thing:
+ * accounts predating the members table have no member row at all, so a read-only
+ * field would leave them permanently empty with no way to proceed. For those — and
+ * ONLY those, enforced server-side below — the client supplies their address once
+ * and it is written back to their contact record, so there is still exactly one
+ * source of truth afterwards rather than a value that lives only on the agreement.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -31,7 +55,25 @@ import { APP_BASE_URL } from '@/lib/config'
 import { notifyClientActionRequired } from '@/lib/portal/action-required'
 import { reportSystemError } from '@/lib/system-errors'
 import { resolveSigningSet, describeSigningBlock, signerDisplayName, type ResolvedSigner } from '@/lib/members/signing-set'
+import { formatMemberAddressRow, resolveMemberAddress, isMemberAddressEmpty } from '@/lib/members/member-address'
+import {
+  maySupplyAddress,
+  mustRefuseOnMemberReadFailure,
+  resolveSoleMemberAddress,
+  pickSoleMemberRow,
+  formatOwnerContactAddress,
+  shouldStoreSoleMemberAddress,
+} from '@/lib/members/oa-address-decisions'
+import { updateContact } from '@/lib/operations/contact'
+import { resolveOwnerOfRecord } from '@/lib/members/sole-owner-address'
 import { signerLinkExpiryISO } from '@/lib/oa/public-view'
+
+/** Blank-safe trim shared by the legacy-address fields — "" and "  " become null. */
+function cleanField(value: string | undefined): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
 
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -41,14 +83,37 @@ export async function POST(request: NextRequest) {
   const contactId = getClientContactId(user)
   if (!contactId) return NextResponse.json({ error: 'No contact linked to your account' }, { status: 403 })
 
-  let body: { account_id?: string; effective_date?: string; member_addresses?: string[] }
+  let body: {
+    account_id?: string
+    effective_date?: string
+    legacy_member_address?: { street?: string; city?: string; state?: string; zip?: string; country?: string }
+  }
   try {
     body = await request.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
-  const { account_id, effective_date, member_addresses = [] } = body
+  const { account_id, effective_date } = body
+
+  // STRUCTURED, not one free-text line. The legacy value is written back to the
+  // client's contact record, and that record stores street / city / state / ZIP /
+  // country as separate columns — posting a single string would either be dumped
+  // whole into the street column or split by guesswork, and either way the "one
+  // source of truth" this exception exists to preserve would be corrupt on arrival.
+  const legacyAddressInput = body.legacy_member_address ?? null
+  const legacyMemberAddress = legacyAddressInput
+    ? {
+        address_street: cleanField(legacyAddressInput.street),
+        address_city: cleanField(legacyAddressInput.city),
+        address_state: cleanField(legacyAddressInput.state),
+        address_zip: cleanField(legacyAddressInput.zip),
+        address_country: cleanField(legacyAddressInput.country),
+        member_type: 'individual' as const,
+      }
+    : null
+  // Whitespace-only in every field counts as "not supplied", never as a blank address.
+  const legacyAddressSupplied = !!legacyMemberAddress && !isMemberAddressEmpty(resolveMemberAddress(legacyMemberAddress))
   if (!account_id || !effective_date) {
     return NextResponse.json({ error: 'account_id and effective_date are required' }, { status: 400 })
   }
@@ -93,12 +158,16 @@ export async function POST(request: NextRequest) {
     || account.member_structure === 'multi_member'
   const entityType = isMMLC ? 'MMLLC' : 'SMLLC'
 
-  // ── 2. FETCH MEMBERS (MMLLC only) ──
-  // Who will actually be sent a signature request. NOT the same as the member
-  // roster: an individual with no email is a member but cannot be asked to
-  // sign, and a company member signs through its representative. Populated in
-  // the MMLLC branch below; empty for a single-member OA, which the caller
-  // signs alone.
+  // ── 2. FETCH MEMBERS ──
+  // Now fetched for SINGLE-member agreements too, not just multi-member ones.
+  // A single-member OA used to take its member address purely from what the
+  // client typed on screen, which is the free-typing path this change deletes:
+  // where a member row exists it is the system of record for BOTH entity types,
+  // and the screen renders it read-only. The row is still the only source for
+  // `oaSigners` below — who gets sent a signature request is a different
+  // question from who is on the roster (an individual with no email is a member
+  // but cannot be asked to sign; a company member signs through its
+  // representative), and that stays multi-member-only.
   let oaSigners: ResolvedSigner[] = []
   let membersRows: Array<{
     id: string
@@ -118,15 +187,111 @@ export async function POST(request: NextRequest) {
     address_country: string | null
   }> = []
 
-  if (isMMLC) {
-    const { data: rows } = await supabaseAdmin
-      .from('members')
-      .select('id, full_name, company_name, email, ownership_pct, is_primary, contact_id, member_type, representative_name, representative_email, address_street, address_city, address_state, address_zip, address_country')
+  const { data: rows, error: membersErr } = await supabaseAdmin
+    .from('members')
+    .select('id, full_name, company_name, email, ownership_pct, is_primary, contact_id, member_type, representative_name, representative_email, address_street, address_city, address_state, address_zip, address_country')
+    .eq('account_id', account_id)
+    .order('is_primary', { ascending: false })
+
+  // FAIL CLOSED. Discarding this error is not a missing nicety — it silently
+  // decides WHO IS AUTHORITATIVE. `rows` is null on failure, which is
+  // indistinguishable from "this company has no member records", and TWO things
+  // now hang off that distinction: the member address that goes into the
+  // agreement, and `hasMemberRecords` — the gate that decides whether a browser
+  // may supply an address at all. So a transient database failure (or a typo in
+  // the select list above) would (a) store a single-member agreement with NO
+  // address, printing "As on file with the Company" behind a green success
+  // screen, and (b) if the same failure hit the page render, flip the screen to
+  // its editable branch AND disarm this route's guard in the same breath — both
+  // surfaces wrong in the same direction, looking perfectly consistent while a
+  // typed address overwrote a real member's record.
+  //
+  // Refusing costs a client one retry. The alternative is a wrong legal
+  // document that nobody is told about. Same reasoning, and the same shape, as
+  // the signature-count guard further down this file.
+  if (mustRefuseOnMemberReadFailure(membersErr)) {
+    await reportSystemError({
+      source: 'server',
+      route: '/api/portal/operating-agreement/create',
+      method: 'POST',
+      http_status: 503,
+      message: `Operating Agreement for ${account.company_name} refused — the member records could not be read, so the agreement's member addresses could not be trusted`,
+      context: { account_id, db_error: membersErr.message },
+    })
+    return NextResponse.json({
+      error: 'We could not read this company\'s member details just now, so we have not created the agreement. Please try again in a moment — if it keeps happening, contact support@tonydurante.us.',
+    }, { status: 503 })
+  }
+
+  membersRows = rows ?? []
+
+  // The ONLY case allowed to supply an address from the browser: an account with
+  // no member rows at all (pre-members-table). Enforced HERE, on the server,
+  // rather than by the screen choosing to render a read-only field — a client
+  // posting the field directly must not be able to overwrite a member of record.
+  // A Single Member LLC has NO member roster by design — an empty result here is
+  // correct state, not a gap. (The read failure that would be indistinguishable
+  // from it is refused above.)
+  const hasMemberRecords = membersRows.length > 0
+
+  // WHO OWNS THIS ADDRESS. Re-derived here from the account's own links, NOT taken
+  // from the caller and NOT trusted from the browser: the address is written back
+  // to this person's contact record, so letting the logged-in identity stand in for
+  // it would let a co-owner or administrator author an address into someone else's
+  // record — and the agreement would name one person while the address belonged to
+  // another (Antonio, 2026-08-12: "the document follows the OWNER of record, never
+  // whoever is signed in"). Same role preference the screen uses, so the two agree.
+  let ownerOfRecordContactId: string | null = null
+  if (!hasMemberRecords) {
+    const { data: links, error: linksErr } = await supabaseAdmin
+      .from('account_contacts')
+      .select('contact_id, role')
       .eq('account_id', account_id)
-      .order('is_primary', { ascending: false })
 
-    membersRows = rows ?? []
+    // Fail closed for the same reason the members read does: an unreadable link
+    // list is indistinguishable from "you are not the owner", and guessing either
+    // way either blocks the real owner or lets the wrong person author an address.
+    if (linksErr) {
+      await reportSystemError({
+        source: 'server',
+        route: '/api/portal/operating-agreement/create',
+        method: 'POST',
+        http_status: 503,
+        message: `Operating Agreement for ${account.company_name} refused — the account's contact links could not be read, so the owner of record could not be established`,
+        context: { account_id, db_error: linksErr.message },
+      })
+      return NextResponse.json({
+        error: 'We could not confirm this company\'s owner just now, so we have not created the agreement. Please try again in a moment — if it keeps happening, contact support@tonydurante.us.',
+      }, { status: 503 })
+    }
 
+    // SAME helper the screen uses, so the two cannot reach different owners.
+    ownerOfRecordContactId = resolveOwnerOfRecord(links ?? [])
+  }
+
+  // THE GATE — one decision, made in one tested place (see
+  // lib/members/oa-address-decisions.ts). Inline, this was two separate checks in
+  // two branches and neither had a test; a reviewer found a fail-open defect a few
+  // lines above that code-reading had missed, in a path that produces legal
+  // documents. Both refusal reasons come back from the same function so the screen
+  // and the server cannot drift on who may author an address.
+  const submission = maySupplyAddress({
+    supplied: legacyAddressSupplied,
+    hasMemberRecords,
+    ownerOfRecordContactId,
+    callerContactId: contactId,
+  })
+  if (!submission.allowed) {
+    return submission.reason === 'has_member_records'
+      ? NextResponse.json({
+          error: 'This company\'s member details come from its member records and cannot be edited here. If an address is wrong, contact support@tonydurante.us and we\'ll correct it.',
+        }, { status: 400 })
+      : NextResponse.json({
+          error: 'Only the owner listed on this company can set the address that appears on the Operating Agreement. You can still create the agreement — if the address shown is wrong, contact support@tonydurante.us.',
+        }, { status: 403 })
+  }
+
+  if (isMMLC) {
     if (membersRows.length === 0) {
       return NextResponse.json({ error: 'No members found for this MMLLC — add members in the CRM first' }, { status: 422 })
     }
@@ -318,11 +483,16 @@ export async function POST(request: NextRequest) {
   }
 
   // ── 6. BUILD MEMBERS JSON FOR MMLLC ──
-  // Address priority: CRM members row → caller-provided member_addresses[i].
-  const composeMemberAddress = (m: (typeof membersRows)[number]): string | null => {
-    const parts = [m.address_street, m.address_city, m.address_state, m.address_zip, m.address_country].filter(Boolean)
-    return parts.length > 0 ? parts.join(', ') : null
-  }
+  // No priority list any more: the member row IS the address. The shared resolver
+  // is the SAME one `getPortalMembers` uses to render the screen, so what the
+  // client reviewed and what is stored here cannot drift apart — that is the whole
+  // point of it living in lib/members/member-address.ts rather than being composed
+  // locally at each call site, which is how the two came to disagree.
+  //
+  // A member with no address on file resolves to null and the templates print
+  // "As on file with the Company". That is deliberate: an absent address stays
+  // visibly absent rather than being quietly filled from the representative's
+  // personal address or from anywhere else.
   // For an MMLLC this now EQUALS the member count: the gate above refuses to
   // issue the agreement unless every member can be sent a signature request, so
   // signers and roster cannot diverge. Kept as the signing-set length rather
@@ -331,14 +501,45 @@ export async function POST(request: NextRequest) {
   // waiting for), not as a coincidence.
   const totalSigners = isMMLC ? oaSigners.length : 1
   const membersJson = isMMLC
-    ? membersRows.map((m, i) => ({
+    ? membersRows.map(m => ({
         name: m.full_name ?? m.company_name ?? 'Unknown',
-        address: composeMemberAddress(m) ?? member_addresses[i] ?? null,
+        address: formatMemberAddressRow(m),
         email: m.email ?? null,
         ownership_pct: m.ownership_pct ?? 0,
         initial_contribution: '$1,000 USD',
       }))
     : null
+
+  // The single-member agreement's address, resolved the same way. Where a member
+  // row exists it wins; only a pre-members-table account falls through to the value
+  // the client supplied (already refused above if any member row exists).
+  // For a no-roster account the OWNER'S CONTACT RECORD is the record. Read it
+  // whenever the caller did not supply a new address, so a client who generates a
+  // second agreement without retyping gets the address they already gave us
+  // instead of a document reading "As on file with the Company" while their record
+  // holds it — the same record-vs-document split this job exists to close, and
+  // what the first cut of this change did on exactly this path.
+  let ownerRecordAddress: string | null = null
+  if (!hasMemberRecords && !legacyAddressSupplied && ownerOfRecordContactId) {
+    const { data: ownerContact } = await supabaseAdmin
+      .from('contacts')
+      .select('address_line1, address_city, address_state, address_zip, address_country')
+      .eq('id', ownerOfRecordContactId)
+      .maybeSingle()
+    ownerRecordAddress = formatOwnerContactAddress(ownerContact)
+  }
+
+  // Which address the agreement stores — decided in one tested place, including
+  // WHICH member row a single-member agreement reads. `[0]` after an is_primary
+  // sort is not safe by itself: ties are unordered, so an account with no flagged
+  // primary could store a different member's address on two consecutive runs.
+  const soleMemberAddress = resolveSoleMemberAddress({
+    hasMemberRecords,
+    primaryMemberRow: pickSoleMemberRow(membersRows),
+    suppliedAddress: legacyMemberAddress,
+    suppliedAllowed: legacyAddressSupplied,
+    ownerRecordAddress,
+  })
 
   // ── 7. INSERT OA_AGREEMENTS ──
   const primaryMember = isMMLC ? membersRows[0] : null
@@ -360,7 +561,12 @@ export async function POST(request: NextRequest) {
       entity_type: entityType,
       manager_name: contact.full_name,
       member_name: isMMLC ? (primaryMember?.full_name ?? contact.full_name) : contact.full_name,
-      member_address: member_addresses[0] ?? null,
+      // Only the SMLLC templates render this (Article 2.1 "Sole Member"); the
+      // multi-member ones print the roster from `members` above. It used to be
+      // `member_addresses[0]` — the browser's first typed value — which on a
+      // multi-member agreement stored one member's typed address in a column
+      // labelled as the sole member's, for no reader.
+      member_address: shouldStoreSoleMemberAddress(isMMLC) ? soleMemberAddress : null,
       member_email: isMMLC ? (primaryMember?.email ?? contact.email) : contact.email,
       members: membersJson,
       effective_date: effective_date,
@@ -392,6 +598,64 @@ export async function POST(request: NextRequest) {
 
   if (insertErr || !oa) {
     return NextResponse.json({ error: insertErr?.message ?? 'Failed to create OA' }, { status: 500 })
+  }
+
+  // ── 7b. WRITE THE LEGACY ADDRESS BACK TO THE RECORD ──
+  // Without this, an address typed by a pre-members-table client would live ONLY
+  // on the agreement — the exact split this change exists to close, just moved
+  // somewhere less visible. Writing it to their contact means the next agreement,
+  // and every screen, reads the same value they just signed.
+  //
+  // AFTER the insert, deliberately: the agreement is the thing the client asked
+  // for, and a contacts write that failed first must not cost them the document.
+  // Best-effort for the same reason — but NOT silent, because a failure here
+  // leaves precisely the divergence we are removing, so it raises a real alarm.
+  if (!hasMemberRecords && legacyAddressSupplied && legacyMemberAddress) {
+    try {
+      // Through the operations layer, not a raw update: `contacts` is a protected
+      // table, and routing it here gets the write an action_log entry — so a
+      // client-initiated change to the address on a legal document is auditable
+      // rather than appearing in the record from nowhere.
+      const res = await updateContact({
+        // The owner of record, established above from the account's own links —
+        // not the logged-in caller. (They are the same person here, because a
+        // mismatch was refused with a 403; writing the derived id rather than
+        // `contactId` keeps that guarantee structural if the guard ever moves.)
+        id: ownerOfRecordContactId ?? contactId,
+        actor: 'portal-client',
+        summary: 'Address supplied by the client while generating their Operating Agreement',
+        details: { account_id, company: account.company_name, address: soleMemberAddress },
+        patch: {
+          address_line1: legacyMemberAddress.address_street,
+          address_city: legacyMemberAddress.address_city,
+          address_state: legacyMemberAddress.address_state,
+          address_zip: legacyMemberAddress.address_zip,
+          address_country: legacyMemberAddress.address_country,
+          // ALSO the field the STAFF generator reads. The CRM and MCP OA doors
+          // compose a sole member's address from `residency`, not from the
+          // structured columns — so writing only the columns meant a staff reissue
+          // for this same client printed a different (or blank) address from the
+          // one they signed. Both doors read the same value or the job isn't done
+          // (Antonio, 2026-08-12).
+          residency: soleMemberAddress,
+        },
+      })
+      if (!res.success) throw new Error(res.error ?? res.outcome)
+    } catch (err) {
+      await reportSystemError({
+        source: 'server',
+        route: '/api/portal/operating-agreement/create',
+        method: 'POST',
+        message: `Operating Agreement for ${account.company_name} stored an address that could NOT be written back to the client's contact record — the agreement and the CRM now disagree on this member's address`,
+        context: {
+          account_id,
+          contact_id: contactId,
+          token: oa.token,
+          address: soleMemberAddress,
+          db_error: err instanceof Error ? err.message : String(err),
+        },
+      })
+    }
   }
 
   // ── 8. FOR MMLLC: INSERT OA_SIGNATURES + SEND PORTAL CHAT ──

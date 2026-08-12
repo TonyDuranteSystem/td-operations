@@ -626,7 +626,12 @@ export default async function PortalDashboardPage() {
     getPortalPayments(selectedAccountId),
     contactId ? getPortalPaymentsByContact(contactId) : Promise.resolve([]),
     getPortalTaxReturns(selectedAccountId),
-    getPortalMembers(selectedAccountId),
+    // DISPLAY ONLY — this page just lists the roster card, so a read failure
+    // degrades to "no members shown" rather than taking the whole dashboard down
+    // with it. The Generate Documents screen deliberately does NOT do this: there,
+    // "no member records" decides whether a client may type an address into a
+    // legal document, so a failure must surface, not look like an empty roster.
+    getPortalMembers(selectedAccountId).catch(() => []),
     getPortalActionItems(selectedAccountId, contactId || undefined),
     contactId ? getProfileBannerStatus(contactId) : Promise.resolve({ shouldShow: false, missingFields: [] as string[] }),
     // Unsigned annual agreement for active clients — shown as a banner until signed

@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect, notFound } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalMembers } from '@/lib/portal/queries'
+import { formatMemberAddress } from '@/lib/members/member-address'
 import { cookies } from 'next/headers'
 import { User, Mail, Phone, MapPin, Globe, Calendar, Shield, ChevronLeft, Building2, CreditCard } from 'lucide-react'
 import Link from 'next/link'
@@ -40,14 +41,20 @@ export default async function MemberDetailPage({ params }: { params: { memberId:
     return new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
   }
 
-  function buildAddress(street: string | null, city: string | null, state: string | null, country: string | null) {
-    const parts = [street, city, state, country].filter(Boolean)
-    return parts.length > 0 ? parts.join(', ') : null
-  }
-
   // ─── Company member rendering ───────────────────────────────────────────────
   if (member.member_type === 'company') {
-    const companyAddress = buildAddress(member.address_line1, member.address_city, member.address_state, member.address_country)
+    // Genuinely the COMPANY's address now. This variable was always named
+    // companyAddress and rendered under "Company Information", but the query
+    // behind it preferred the representative's personal address — so this card
+    // showed a person's home address labelled as the company's (dev job
+    // 61f184ca). The ZIP is included here too; it used to be dropped.
+    const companyAddress = formatMemberAddress({
+      line1: member.address_line1,
+      city: member.address_city,
+      state: member.address_state,
+      zip: member.address_zip,
+      country: member.address_country,
+    })
     return (
       <div className="p-4 sm:p-6 lg:p-8 max-w-2xl mx-auto space-y-6">
         <Link href="/portal" className="inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-700">
@@ -154,7 +161,15 @@ export default async function MemberDetailPage({ params }: { params: { memberId:
   }
 
   // ─── Individual member rendering ─────────────────────────────────────────────
-  const address = buildAddress(member.address_line1, member.address_city, member.address_state, member.address_country)
+  // Individual member — same formatter, so this card, the document screen and the
+  // agreement itself all render one address the same way, postal code included.
+  const address = formatMemberAddress({
+    line1: member.address_line1,
+    city: member.address_city,
+    state: member.address_state,
+    zip: member.address_zip,
+    country: member.address_country,
+  })
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-2xl mx-auto space-y-6">
