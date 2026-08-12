@@ -37,7 +37,7 @@ interface Gate { id: number; title: string; status: 'pass' | 'na' | 'fail'; deta
 interface Member { name: string; pct: number; beginning_capital: number; contributions: number; distributions: number; income_share: number; ending_capital: number }
 interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; has_auto_paired_leg?: boolean; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string; suspected_members?: string[]; suspected_count?: number; suspected_ids?: string[]; suspected_by_member?: Record<string, string[]>; confirmed_by_member?: Record<string, string[]>; confirmed_alternatives?: string[] }
 interface Bucket { slug: string; label: string }
-interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
+interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string; file_name?: string | null }
 interface AccountOnFile { account_ref: string; bank: string; acct: string; count: number }
 
 interface CoverageQuestion { key: string; bank_key: string; kind: string; months: string[]; question: string; answer: 'no_activity' | 'had_activity' | null }
@@ -765,6 +765,44 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // the banner also promises the client can still READ everything.
   const busyOrLocked = busy !== null || locked
 
+  /**
+   * THE ONE LIST OF WHAT BLOCKS CONFIRM (card 85f6f0b2 Door-1 rule, applied
+   * after Antonio hit the false all-clear: the page said "nothing needs your
+   * decision" while two unanswered coverage questions silently locked Confirm).
+   * The status header and the Confirm button BOTH read this, so they can never
+   * again tell the client different stories. Location cards are deliberately
+   * NOT here — they are informational (see the residence-default ruling).
+   */
+  const confirmBlockers = useMemo(() => {
+    if (!view) return [] as Array<{ key: string; label: string; labelIt: string }>
+    const out: Array<{ key: string; label: string; labelIt: string }> = []
+    const openDecisions = view.questions.filter(
+      g => (g.current_category ?? 'uncategorized') === 'uncategorized' || g.suspected_ids?.length,
+    ).length
+    if (openDecisions > 0) out.push({
+      key: 'decisions',
+      label: `${openDecisions} ${openDecisions === 1 ? 'item needs' : 'items need'} your decision`,
+      labelIt: `${openDecisions} ${openDecisions === 1 ? 'voce da decidere' : 'voci da decidere'}`,
+    })
+    const cov = (view.coverage?.unanswered ?? 0) + (view.coverage?.incomplete ?? 0)
+    if (cov > 0) out.push({
+      key: 'coverage',
+      label: `${cov} ${cov === 1 ? 'question' : 'questions'} about whether your statements cover the whole year`,
+      labelIt: `${cov} ${cov === 1 ? 'domanda' : 'domande'} sulla copertura dell'anno`,
+    })
+    if (view.ingestPending > 0) out.push({
+      key: 'reading',
+      label: `${view.ingestPending} ${view.ingestPending === 1 ? 'file is' : 'files are'} still being read`,
+      labelIt: `${view.ingestPending} file in lettura`,
+    })
+    if (view.ingestFailed > 0 && !view.failedFilesOverridden) out.push({
+      key: 'failed',
+      label: `${view.ingestFailed} ${view.ingestFailed === 1 ? 'file' : 'files'} we could not read`,
+      labelIt: `${view.ingestFailed} file non leggibili`,
+    })
+    return out
+  }, [view])
+
   // One merchant-group question card (chips, bucket select, bulk checkbox).
   // COMPONENT-scope since 2026-07-06 so the country/period cards can render it
   // INLINE ("Review one-by-one" opens in the same card — Antonio).
@@ -1138,9 +1176,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   }
 
   const deleteFile = async (f: FileCard) => {
+    const label = f.file_name ? `"${f.file_name}"` : `${f.bank_name}`
     const msg = it
-      ? `Eliminare il file di ${f.bank_name} (${f.count} transazioni)? Potrai caricarne uno nuovo subito dopo.`
-      : `Delete the ${f.bank_name} file (${f.count} transactions)? You can upload a new one right after.`
+      ? `Eliminare ${label} (${f.count} transazioni)? Potrai caricarne uno nuovo subito dopo.`
+      : `Delete ${label} (${f.count} transactions)? You can upload a new one right after.`
     if (!window.confirm(msg)) return
     setBusy(f.source_file_id)
     try {
@@ -1481,8 +1520,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           <ul className="space-y-2 mb-4">
             {view.files.map(f => (
               <li key={f.source_file_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-100 px-3 py-2">
-                <div className="text-sm text-zinc-800">
+                <div className="min-w-0 text-sm text-zinc-800">
                   <span className="font-medium">{f.bank_name}</span>
+                  {/* The uploaded file's own name — without it, fourteen Relay
+                      lines are indistinguishable and Delete is a coin flip. */}
+                  {f.file_name && <span className="ml-2 break-all text-xs text-zinc-600">{f.file_name}</span>}
                   <span className="text-zinc-500 text-xs ml-2">{f.count} {it ? 'transazioni' : 'transactions'} · {f.from} → {f.to}</span>
                 </div>
                 <button
@@ -2361,8 +2403,8 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       ? 'Nessuna residenza fiscale registrata nel CRM per questo cliente — mostriamo tutti i periodi rilevati.'
                       : 'No fiscal residence on file in the CRM for this client — showing every detected period.')
                     : (it
-                      ? 'Abbiamo rilevato spese localizzate in questi paesi — una risposta registra tutto il periodo.'
-                      : 'We detected spending located in these countries — one answer books the whole period.')}
+                      ? 'Spese rilevate in questi paesi, già registrate come aziendali (regola: fuori dal paese di residenza = azienda). Non serve fare nulla — tocca solo per correggere.'
+                      : 'Spending we detected in these countries, already booked as business (rule: outside your home country = business). Nothing is required — tap only to correct it.')}
               </p>
               {periodError && (
                 <div className="mb-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
@@ -2381,7 +2423,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                         : `${locLabel(c.loc_code, it)}, whole year — ${c.count} transactions · $${fmt(c.total)}`}
                     </div>
                     <div className="mt-1 text-xs text-zinc-600">
-                      {it ? 'Spese localizzate lì e ancora da decidere' : 'Spending located there, still awaiting a decision'}
+                      {/* Antonio's ruling (card 85f6f0b2): the residence default
+                          ALREADY decided this — spending outside the home
+                          country is business. So the card states what we booked
+                          and why, and never implies a decision is owed. It is
+                          informational, not a Confirm blocker. */}
+                      {it
+                        ? `Registrate come spese aziendali, perché fuori dal tuo paese di residenza. Tocca solo se qualcosa era personale.`
+                        : `Booked as business spending, because it's outside your home country. Tap only if some of it was personal.`}
                       {c.merchants.length > 0 && (
                         <span className="text-zinc-500"> ({it ? 'principali' : 'top merchants'}: {c.merchants.join(', ')})</span>
                       )}
@@ -2425,6 +2474,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                         {it
                           ? `${p.row_count} transazioni sul posto · $${fmt(p.dollar_total)}`
                           : `${p.row_count} in-person transactions · $${fmt(p.dollar_total)}`}
+                      <span className="block mt-0.5">
+                        {/* Same ruling as the country cards: already booked by
+                            the residence default; the tap is a correction, not
+                            an obligation. */}
+                        {it
+                          ? 'Già registrate come spese aziendali. Tocca solo se erano personali.'
+                          : 'Already booked as business spending. Tap only if it was personal.'}
+                      </span>
                         {p.top_merchants.length > 0 && (
                           <span className="text-zinc-500"> ({it ? 'principali' : 'top merchants'}: {p.top_merchants.join(', ')})</span>
                         )}
@@ -2825,9 +2882,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       </p>
                       <p>
                         <strong>{it ? 'Cosa DEVI fare: ' : 'What you MUST do: '}</strong>
-                        {it
-                          ? `rispondere alle voci in “Serve una tua decisione” (${needs.length}) — un tocco ciascuna.`
-                          : `answer the items under “Needs your decision” (${needs.length}) — one tap each.`}
+                        {/* Counts EVERYTHING that blocks Confirm, from the same
+                            expression the Confirm button uses — not just the
+                            merchant decisions (the false all-clear Antonio hit). */}
+                        {confirmBlockers.length === 0
+                          ? (it ? 'niente — puoi confermare.' : 'nothing — you can confirm.')
+                          : confirmBlockers.map(b => (it ? b.labelIt : b.label)).join(it ? '; ' : '; ') + '.'}
                       </p>
                       <p>
                         <strong>{it ? 'Cosa PUOI fare (facoltativo): ' : 'What you CAN do (optional): '}</strong>
@@ -2899,8 +2959,18 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                         })}
                       </div>
                     ) : (
-                      <div className="mb-5 rounded-xl border-2 border-emerald-300 bg-emerald-50 px-4 py-4 text-sm font-semibold text-emerald-900">
-                        ✓ {it ? 'Tutto registrato — non serve nessuna decisione.' : 'All booked — nothing needs your decision.'}
+                      <div className={`mb-5 rounded-xl border-2 px-4 py-4 text-sm font-semibold ${
+                        confirmBlockers.length === 0
+                          ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                          : 'border-amber-300 bg-amber-50 text-amber-900'
+                      }`}>
+                        {/* Scoped honestly: this section is about merchant
+                            decisions, so it says THAT — and when something else
+                            still blocks Confirm it names it instead of implying
+                            the client is finished. */}
+                        {confirmBlockers.length === 0
+                          ? `✓ ${it ? 'Tutto registrato — non serve nessuna decisione.' : 'All booked — nothing needs your decision.'}`
+                          : `✓ ${it ? 'Nessuna spesa da decidere qui. Resta da fare: ' : 'No merchant decisions left here. Still to do: '}${confirmBlockers.map(b => (it ? b.labelIt : b.label)).join('; ')}.`}
                       </div>
                     )}
 
@@ -3164,7 +3234,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   </span>
                 </label>
                 <button
-                  disabled={!attestChecked || !view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || view.ingestPending > 0 || (view.ingestFailed > 0 && !view.failedFilesOverridden) || busyOrLocked}
+                  // ONE source of truth with the status header (card 85f6f0b2):
+                  // confirmBlockers is built from exactly these conditions, so
+                  // a disabled button always has a named reason on screen.
+                  disabled={!attestChecked || !view.completeness.can_accept_as_is || confirmBlockers.length > 0 || busyOrLocked}
                   onClick={() => void attest()}
                   className="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-40"
                 >

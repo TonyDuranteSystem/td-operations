@@ -273,6 +273,27 @@ export async function GET(request: NextRequest) {
     const ingestJobRows = (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean; steps?: Array<{ detail?: string }> } | null; payload: { tax_year?: number | string; path?: string } | null }>
     const fileStates = computeIngestFileStates(ingestJobRows, taxYear)
     const stateCounts = summarizeIngestFileStates(fileStates)
+    // ORIGINAL FILENAME per statement line (card c5ff8b4d, Antonio 2026-08-12).
+    // The list is grouped by (bank, source) and carried NO filename, so with
+    // fourteen Relay lines nobody — client or staff — can tell which upload
+    // produced which line, and "delete" is a coin flip. bank_transactions has
+    // no filename column; the name lives in the ingest job's storage path.
+    // The financials-page upload scheme embeds the first 16 hex of the file's
+    // content hash in that path, and the row's source id IS `upload:<hash>` —
+    // so the join is deterministic. Wizard-era paths predate that scheme and
+    // simply resolve to no name (the line renders as it does today).
+    const nameBySha16 = new Map<string, string>()
+    for (const j of ingestJobRows) {
+      const path = j.payload?.path
+      if (typeof path !== 'string') continue
+      const seg = path.split('/').pop() ?? ''
+      const m = seg.match(/^([a-f0-9]{16})_(.+)$/i)
+      if (m) nameBySha16.set(m[1].toLowerCase(), m[2])
+    }
+    const fileNameForSource = (sourceId: string): string | null => {
+      if (!sourceId.startsWith('upload:')) return null
+      return nameBySha16.get(sourceId.slice(7, 23).toLowerCase()) ?? null
+    }
     const ingestPending = stateCounts.pending + stateCounts.quarantined
     const ingestFailed = stateCounts.failed
     // W9 (Antonio's ruling): per-file live status for the client file cards —
@@ -376,7 +397,11 @@ export async function GET(request: NextRequest) {
       failedFilesOverridden: (sub?.financials_meta as Record<string, unknown> | null)?.failed_files_override != null,
       editable,
       reviewStatus: lockStatus,
-      files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
+      files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({
+        source_file_id,
+        ...s,
+        file_name: fileNameForSource(source_file_id),
+      })),
       accounts: Array.from(byAccount.values()).sort((a, b) => b.count - a.count),
       aiState,
       aiRemaining,
