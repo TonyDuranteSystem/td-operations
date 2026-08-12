@@ -15,6 +15,10 @@ interface ChatMessage {
   sender_name: string | null
   message: string
   topic: string | null
+  /** This message belongs to THIS return's thread. False = the client's other
+   *  conversation with us — shown here so nothing they said is invisible to
+   *  the person answering (card c5ff8b4d Phase 1). */
+  in_flow?: boolean
 }
 
 /**
@@ -101,19 +105,27 @@ export function FlowChat({ serviceDeliveryId, label }: FlowChatProps) {
             <Loader2 className="h-4 w-4 animate-spin" /> Loading…
           </p>
         ) : messages.length === 0 ? (
-          <p className="text-sm text-zinc-500">No messages yet for this flow.</p>
+          <p className="text-sm text-zinc-500">No messages yet with this client.</p>
         ) : (
           messages.map((m) => {
             const isAdmin = m.sender_type === 'admin'
+            // Messages outside this return's thread are the client's OTHER
+            // conversation with us. They are shown (never hidden — that was the
+            // defect) but visually quieter, and labelled so staff know the
+            // context they were written in.
+            const other = m.in_flow === false
             return (
               <div key={m.id} className={`flex ${isAdmin ? 'justify-end' : 'justify-start'}`}>
                 <div
                   className={`max-w-[80%] rounded-lg px-3 py-2 ${
-                    isAdmin ? 'bg-blue-600 text-white' : 'bg-zinc-100 text-zinc-900'
+                    isAdmin
+                      ? other ? 'bg-blue-400 text-white' : 'bg-blue-600 text-white'
+                      : other ? 'border border-dashed border-zinc-300 bg-white text-zinc-700' : 'bg-zinc-100 text-zinc-900'
                   }`}
                 >
                   <div className={`text-[11px] mb-0.5 ${isAdmin ? 'text-blue-100' : 'text-zinc-500'}`}>
                     {m.sender_name || (isAdmin ? 'Tony Durante Team' : 'Client')}
+                    {other && <span className="ml-1 font-medium opacity-90">· other conversation</span>}
                     {m.topic && <span className="ml-1 opacity-80">· {m.topic}</span>}
                     {m.created_at && (
                       <span className="ml-1 opacity-80">

@@ -39,6 +39,8 @@ type ChatRow = {
   message: string
   topic: string | null
   created_at: string | null
+  /** Present on the room's list read — used to tag this return's own thread. */
+  service_delivery_id?: string | null
   contacts?: { full_name: string } | null
 }
 
@@ -62,9 +64,16 @@ type UntypedChat = {
   }
 }
 
-function flatten(row: ChatRow) {
+function flatten(row: ChatRow, ctx?: { serviceDeliveryId: string; topic: string | null }) {
   const { contacts, ...rest } = row
-  return { ...rest, sender_name: pickChatSenderName(contacts?.full_name, rest.sender_name) }
+  const r = rest
+  // `in_flow` = this message belongs to THIS return's thread (stamped with the
+  // service delivery, or carrying its topic). Everything else is the client's
+  // other conversation with us — shown, never hidden, just not emphasised.
+  const inFlow = ctx
+    ? r.service_delivery_id === ctx.serviceDeliveryId || (!!ctx.topic && r.topic === ctx.topic)
+    : true
+  return { ...rest, in_flow: inFlow, sender_name: pickChatSenderName(contacts?.full_name, rest.sender_name) }
 }
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -85,11 +94,19 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     const topic = sd ? (buildFlowTopic(sd.service_type, deriveFlowYear(sd)) || null) : null
     const accountId = (sd?.account_id as string | null) ?? null
 
-    // Match by SD stamp OR (flow topic + same account). The topic branch is only
-    // added when both are known. Topic is quoted to tolerate spaces; flow topics
-    // are plain ("Tax Return 2025") with no PostgREST-reserved chars.
-    const orFilter = topic && accountId
-      ? `service_delivery_id.eq.${serviceDeliveryId},and(topic.eq."${topic}",account_id.eq.${accountId})`
+    // THE ROOM SHOWS THE CLIENT'S WHOLE CONVERSATION (card c5ff8b4d Phase 1,
+    // Antonio 2026-08-12). It used to show ONLY rows stamped with this SD or
+    // carrying the flow topic — so a client who wrote in their general portal
+    // chat was INVISIBLE to the staff member working in the room, who believed
+    // he was looking at the whole conversation. Luca answers clients from here;
+    // a message he cannot see is a message nobody answers.
+    // Now: every non-deleted message on this ACCOUNT (plus any row stamped with
+    // this SD, defensively), each tagged `in_flow` so the UI can emphasise this
+    // return's thread without hiding the rest. Internal chat-event notes stay
+    // excluded, so the room shows exactly what the CLIENT sees — one
+    // conversation, one truth.
+    const orFilter = accountId
+      ? `service_delivery_id.eq.${serviceDeliveryId},account_id.eq.${accountId}`
       : `service_delivery_id.eq.${serviceDeliveryId}`
 
     const { data, error } = (await (supabaseAdmin as unknown as {
@@ -106,7 +123,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       }
     })
       .from('portal_messages')
-      .select('id, sender_type, sender_name, message, topic, created_at, contacts:contact_id(full_name)')
+      .select('id, sender_type, sender_name, message, topic, created_at, service_delivery_id, contacts:contact_id(full_name)')
       .or(orFilter)
       .is('deleted_at', null)
       // Internal chat-event notes (`<!-- chat-event: -->`) are staff-only and
@@ -121,7 +138,10 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       )
     }
 
-    return NextResponse.json({ success: true, messages: (data ?? []).map(flatten) })
+    return NextResponse.json({
+      success: true,
+      messages: (data ?? []).map((r) => flatten(r, { serviceDeliveryId, topic })),
+    })
   } catch (e) {
     return NextResponse.json(
       { success: false, error: e instanceof Error ? e.message : String(e) },
@@ -193,7 +213,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         sender_id: user.id,
         message,
       })
-      .select('id, sender_type, sender_name, message, topic, created_at, contacts:contact_id(full_name)')
+      .select('id, sender_type, sender_name, message, topic, created_at, service_delivery_id, contacts:contact_id(full_name)')
       .single()
 
     if (error || !inserted) {
