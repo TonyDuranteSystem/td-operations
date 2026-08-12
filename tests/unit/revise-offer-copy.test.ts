@@ -121,3 +121,39 @@ describe("WS-A: credit display scalars carry to v2", () => {
     expect(out.credit_kind).toBe(null)
   })
 })
+
+describe("WS-C: the payment plan survives a revision, triggers and all", () => {
+  /** Domenico's agreement: EUR1,250 on signing, EUR1,250 when his bank account opens. */
+  const plan = [
+    { seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "signing" }, internal_label: "on signing" },
+    { seq: 2, amount: 1250, currency: "EUR", trigger: { kind: "event", event: "bank_account_opened" } },
+  ]
+
+  it("carries the plan to v2 — dropping it would turn a two-part deal back into one bill", () => {
+    const out = buildRevisedOfferInsert({ ...fullOriginal(), payment_plan: plan }, seed)
+    expect(out.payment_plan).toEqual(plan)
+  })
+
+  it("⛔ THE TRIGGER SURVIVES — a flattened plan loses the answer to 'when is part two due?'", () => {
+    // The real regression risk is not losing the column, it is keeping the AMOUNTS while the
+    // trigger degrades to a bare number or a stringified blob. Then the schedule has nothing to
+    // show the client and the mint action has nothing to wait for, while the totals still look
+    // right — the same shape of silent damage the pinned card-fee rate suffered.
+    const out = buildRevisedOfferInsert({ ...fullOriginal(), payment_plan: plan }, seed)
+    const copied = out.payment_plan as typeof plan
+    expect(copied[0].trigger).toEqual({ kind: "signing" })
+    expect(copied[1].trigger).toEqual({ kind: "event", event: "bank_account_opened" })
+    expect(copied[1].trigger.event).toBe("bank_account_opened")
+    expect(typeof copied[1].trigger).toBe("object")
+    // and the staff-only label is not promoted or lost silently
+    expect(copied[0].internal_label).toBe("on signing")
+  })
+
+  it("an ordinary single-payment offer revises to null, not undefined", () => {
+    const out = buildRevisedOfferInsert(fullOriginal(), seed)
+    expect(out.payment_plan).toBe(null)
+    // null is what the column means by "one invoice for the whole fee" — undefined would be
+    // omitted from the insert and read the same, but only by accident.
+    expect("payment_plan" in out).toBe(true)
+  })
+})

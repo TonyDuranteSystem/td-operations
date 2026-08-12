@@ -13,6 +13,7 @@ import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { decideInvoiceAtSigning, getInvoiceDescription } from "@/lib/portal/offer-invoice-policy"
 import { computeOfferTotals } from "@/lib/offers/compute-offer-totals"
+import { decideSigningBill } from "@/lib/offers/payment-plan"
 import { pinnedRateForInheritance } from "@/lib/payments/card-fee-config"
 import { emitOfferSignedEvent } from "@/lib/portal/chat-events"
 import { normalizeFormationState } from "@/lib/formation/states"
@@ -92,6 +93,12 @@ export async function POST(req: NextRequest) {
         lead_id: offer.lead_id || null,
         client_name: offer.client_name,
         client_email: offer.client_email,
+        // WS-C, a DELIBERATE decision rather than an oversight: this holds the whole
+        // commitment, not the part being billed now. It is the record of what was signed, and
+        // Domenico's hand-executed row on production reads the same way (EUR2,500 against a
+        // EUR1,250 invoice). Nothing in the activation gate compares it to a payment —
+        // activation turns on this row's STATUS and on the invoice closing in full — so using
+        // it as "amount to collect" would be the only way to get this wrong.
         amount: totalAmount || null,
         currency: offerCurrency,
         payment_method: paymentMethod,
@@ -223,11 +230,49 @@ export async function POST(req: NextRequest) {
     // When the account is created later (formation/onboarding wizard), account_id gets backfilled.
     let invoiceId: string | null = null
     const contractType = offer.contract_type || "formation"
+
+    // ─── WS-C: A SETUP FEE PAID IN PARTS ───
+    // Only the part due at signing is billed now; `totalAmount` stays the whole commitment,
+    // which is what the client agreed to and what the activation row records. The decision is a
+    // pure function so it is testable without firing this whole route.
+    const signingBill = decideSigningBill({
+      rawPlan: (offer as { payment_plan?: unknown }).payment_plan,
+      offerToken: offer_token,
+      offerGross: totalAmount,
+      offerCurrency,
+      baseDescription: getInvoiceDescription(contractType, selectedServices, offer.client_name),
+    })
+    if (signingBill.planIgnored) {
+      // A refusal must NOT abort the signing — the client has already signed and the signature
+      // is stored — so it degrades to today's behaviour, one invoice for the whole fee, loudly.
+      // Antonio amending an invoice is recoverable; a signed deal with no bill is not.
+      console.error(
+        `[offer-signed] IGNORING an unusable payment plan on ${offer_token} and invoicing the ` +
+          `whole fee instead: ${signingBill.planIgnored}`,
+      )
+      // Loud means SEEN, not just logged (council, 2026-08-11): a client just signed for a plan
+      // that could not be honoured, and the bill they got is the whole fee. That must reach the
+      // error auto-audit surface, not sit in a function log nobody tails. Fire-and-forget — the
+      // report must never break signing.
+      try {
+        const { reportSystemError } = await import("@/lib/system-errors")
+        void reportSystemError({
+          source: "server",
+          route: "/api/webhooks/offer-signed",
+          message: `Payment plan ignored at signing on ${offer_token} — whole fee billed: ${signingBill.planIgnored}`,
+          context: { offer_token, plan_ignored: signingBill.planIgnored },
+        })
+      } catch { /* never block signing on telemetry */ }
+    }
+
     try {
       const invoiceDecision = decideInvoiceAtSigning({
         contract_type: contractType,
         contact_id: contactId,
-        total_amount: totalAmount,
+        // The AMOUNT BEING BILLED decides whether there is an invoice to raise. A plan where
+        // nothing falls due on signing (every part raised by hand later) correctly raises
+        // nothing, where passing the commitment total would bill money not yet due.
+        total_amount: signingBill.amount,
       })
       if (invoiceDecision.create) {
         // Same engine-detected currency as the activation (one source, no drift).
@@ -236,8 +281,8 @@ export async function POST(req: NextRequest) {
         const invoiceResult = await createTDInvoice({
           contact_id: contactId,
           line_items: [{
-            description: getInvoiceDescription(contractType, selectedServices, offer.client_name),
-            unit_price: totalAmount,
+            description: signingBill.description,
+            unit_price: signingBill.amount,
             quantity: 1,
           }],
           currency,
@@ -258,7 +303,21 @@ export async function POST(req: NextRequest) {
           // lib/operations/cancel-offer-payments.ts NULLs the key on cancel,
           // so a re-created offer reusing the same token can mint a fresh
           // invoice cleanly.
+          // ⛔ THE KEY IS UNCHANGED FOR PART ONE, deliberately. The signing invoice is the
+          // signing invoice whether or not a plan exists, and re-keying it would let a re-fired
+          // webhook on an already-signed offer mint a second bill. Later parts get their own
+          // `offer-tranche:TOKEN:SEQ` keys where they are minted.
           idempotency_key: `offer-signed:${offer_token}`,
+          // Lineage + category, so the cancel cascade and the schedule can find this part, and
+          // so paying it never fires the annual instalment handler (which lifts the accountant
+          // hand-off gate and advances the tax card).
+          ...(signingBill.tranche
+            ? {
+                tranche_offer_token: signingBill.tranche.offerToken,
+                tranche_seq: signingBill.tranche.seq,
+                payment_category: signingBill.category ?? undefined,
+              }
+            : {}),
         })
 
         invoiceId = invoiceResult.paymentId
@@ -288,7 +347,7 @@ export async function POST(req: NextRequest) {
         console.warn(`[offer-signed] TD invoice ${invoiceResult.invoiceNumber} created for ${offer.client_name} (contact-only, unpaid)`)
       } else {
         console.warn(
-          `[offer-signed] Skipped invoice: reason=${invoiceDecision.reason}, contactId=${contactId}, amount=${totalAmount}, contract_type=${contractType}`,
+          `[offer-signed] Skipped invoice: reason=${invoiceDecision.reason}, contactId=${contactId}, amount=${signingBill.amount}, contract_type=${contractType}`,
         )
       }
     } catch (invErr) {

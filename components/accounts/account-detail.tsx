@@ -961,6 +961,152 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
 
 /* ── Installments Section ────────────────────────────── */
 
+/**
+ * WS-C: THE RAISE SURFACE for a setup fee paid in parts — a selector wired to machinery that is
+ * already built, and deliberately nothing more (architect scope ruling, 2026-08-11: not an
+ * authoring screen, not a new page). Renders NOTHING unless this account has a plan-bearing
+ * offer, which is zero accounts today.
+ *
+ * The Raise button opens the SAME invoice dialog the installments use, prefilled with the part's
+ * amount and the sanctioned description built server-side — and it carries the part's lineage
+ * silently, which is what flips the action's dedup rule to part-identity and stamps the tranche
+ * columns. Whether a part is raisable comes from the shared resolver via the plan-status route,
+ * never re-derived here: the resolver and the database index agree about what "occupied" means,
+ * and this section must not become a third opinion.
+ */
+function PaymentPlanPartsSection({ account }: { account: Account }) {
+  const [plans, setPlans] = useState<Array<{
+    offer_token: string
+    client_name: string | null
+    currency: string
+    fully_settled: boolean
+    parts: Array<{
+      seq: number
+      amount: number
+      state: string
+      raisable: boolean
+      invoice_number: string | null
+      superseded_count: number
+      suggested_description: string
+    }>
+  }>>([])
+  const [raiseTarget, setRaiseTarget] = useState<{
+    offer_token: string
+    seq: number
+    amount: number
+    currency: 'USD' | 'EUR'
+    description: string
+  } | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+
+  useEffect(() => {
+    let alive = true
+    fetch(`/api/offers/plan-status?account_id=${account.id}`)
+      .then(async (res) => {
+        if (!res.ok) return { plans: [] }
+        return res.json()
+      })
+      .then((d: { plans?: typeof plans }) => {
+        if (alive && Array.isArray(d.plans)) setPlans(d.plans)
+      })
+      .catch(() => { /* section simply does not render — staff lose a shortcut, nothing breaks */ })
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account.id, reloadKey])
+
+  const handleSendInvoice = async (paymentId: string) => {
+    try {
+      const res = await fetch(`/api/invoices/${paymentId}/send`, { method: 'POST' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        return { success: false, error: (d as { error?: string }).error ?? 'Failed to send invoice' }
+      }
+      return { success: true }
+    } catch {
+      return { success: false, error: 'Failed to send invoice' }
+    }
+  }
+
+  if (plans.length === 0) return null
+
+  const stateLabel: Record<string, string> = {
+    not_raised: 'Not raised',
+    raised_unsent: 'Draft — client NOT told yet',
+    awaiting_payment: 'Sent — awaiting payment',
+    part_paid: 'Part-paid',
+    paid: 'Paid',
+  }
+
+  return (
+    <>
+      <div className="bg-white rounded-lg border p-5 space-y-4">
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Partial Payment Schedule</h3>
+        {plans.map((plan) => (
+          <div key={plan.offer_token} className="space-y-2">
+            <div className="text-xs text-muted-foreground">
+              Offer {plan.offer_token}{plan.fully_settled ? ' — fully settled' : ''}
+            </div>
+            {plan.parts.map((part) => (
+              <div key={part.seq} className="flex items-center justify-between gap-3 text-sm border rounded-md px-3 py-2">
+                <div>
+                  <div className="font-medium">
+                    Part {part.seq} — {plan.currency === 'EUR' ? '€' : '$'}{part.amount.toLocaleString('en-US')}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {stateLabel[part.state] ?? part.state}
+                    {part.invoice_number ? ` · ${part.invoice_number}` : ''}
+                    {part.superseded_count > 0 ? ` · ${part.superseded_count} superseded` : ''}
+                  </div>
+                </div>
+                {part.raisable && (
+                  <button
+                    type="button"
+                    className="text-xs font-medium border rounded-md px-3 py-1.5 hover:bg-muted"
+                    onClick={() =>
+                      setRaiseTarget({
+                        offer_token: plan.offer_token,
+                        seq: part.seq,
+                        amount: part.amount,
+                        currency: plan.currency === 'EUR' ? 'EUR' : 'USD',
+                        description: part.suggested_description,
+                      })
+                    }
+                  >
+                    Raise invoice
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+
+      <InvoiceDialog
+        key={raiseTarget ? `${raiseTarget.offer_token}:${raiseTarget.seq}` : 'closed'}
+        open={raiseTarget !== null}
+        onClose={() => { setRaiseTarget(null); setReloadKey((k) => k + 1) }}
+        mode="invoice"
+        defaultValues={raiseTarget ? {
+          accountId: account.id,
+          accountName: account.company_name,
+          description: raiseTarget.description,
+          currency: raiseTarget.currency,
+          tranche: { offer_token: raiseTarget.offer_token, seq: raiseTarget.seq },
+          items: [{
+            description: raiseTarget.description,
+            quantity: 1,
+            unit_price: raiseTarget.amount,
+            amount: raiseTarget.amount,
+            sort_order: 0,
+          }],
+        } : undefined}
+        onCreateInvoice={createInvoice}
+        onSendInvoice={handleSendInvoice}
+      />
+    </>
+  )
+}
+
 function InstallmentsSection({ account, payments, makeAccountSaver }: { account: Account; payments: Payment[]; makeAccountSaver: (field: string) => (val: string) => Promise<{ success: boolean; error?: string }> }) {
   const [openForInst, setOpenForInst] = useState<1 | 2 | null>(null)
 
@@ -2213,7 +2359,10 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
 
       {/* Billing — only for Client-type accounts (vendors/tenants/leads do not have annual installments) */}
       {account.account_type === 'Client' && (
-        <InstallmentsSection account={account} payments={payments} makeAccountSaver={makeAccountSaver} />
+        <>
+          <PaymentPlanPartsSection account={account} />
+          <InstallmentsSection account={account} payments={payments} makeAccountSaver={makeAccountSaver} />
+        </>
       )}
 
       {/* Contacts */}

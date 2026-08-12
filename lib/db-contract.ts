@@ -31,6 +31,7 @@
 
 import { createHash } from "node:crypto"
 import { FEED_STATUSES, MATCH_CONFIDENCES, FEED_SOURCES } from "@/lib/finance/feed-vocabulary"
+import { PAYER_KEY_TYPES } from "@/lib/finance/payer-learning-rules"
 import { PAYMENT_CATEGORIES } from "@/lib/billing/payment-classification"
 import { PAYMENT_ITEM_TYPES } from "@/lib/finance/payment-item-vocabulary"
 import { TEAM_WORK_STATUSES } from "@/lib/team/workspace"
@@ -81,6 +82,9 @@ export const CONSTRAINT_CONTRACTS = [
   // database and live code both used a value the list omitted. A promise in a comment is a
   // note; this is the gate.
   { table: "payments", column: "payment_category", constraint: "payments_payment_category_check", values: PAYMENT_CATEGORIES },
+  // Registered with the table itself (WS-C item 1, payer learning). How a taught payer is keyed:
+  // a structured id the bank supplied, or the normalised payer descriptor.
+  { table: "payer_client_map", column: "key_type", constraint: "payer_client_map_key_type_check", values: PAYER_KEY_TYPES },
   // Registered 2026-07-21. Both had existed on production, unregistered, long
   // enough for the gate to be red on EVERY run — which is worse than no gate:
   // a real failure reads as "the usual one" and gets waved through. That is
@@ -140,6 +144,9 @@ export const NOT_A_VOCABULARY = new Set([
   // row must carry none of them. This is what makes "a portal message dispatched down the Gmail
   // path" impossible at the storage layer instead of at a branch someone can reorder.
   "worker_prepared_sends_kind_shape",
+  // Shape rule, not a vocabulary: an invoice belonging to an offer's payment plan must carry BOTH
+  // the offer and the part number, or neither. A part number without an offer identifies nothing.
+  "payments_tranche_pair_check",
 ])
 
 /**

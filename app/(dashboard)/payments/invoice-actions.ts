@@ -49,17 +49,63 @@ export async function createInvoice(
   const subtotal = items.reduce((sum, item) => sum + item.amount, 0)
   const total = subtotal - (invoiceData.discount || 0)
 
-  const idempotencyKey = manualInvoiceIdempotencyKey(
-    'manual-crm-invoice',
-    invoiceData.account_id,
-    items,
-    invoiceData.description,
-    total,
-    invoiceData.amount_currency,
-    invoiceData.issue_date,
-  )
+  // ⛔ TWO DIFFERENT NOTIONS OF "THE SAME INVOICE", and a part of a payment plan needs the
+  // second one.
+  //
+  // For an ordinary manual invoice, sameness is the CONTENT — two clicks with identical figures
+  // are one invoice, and changing a figure legitimately makes a different one.
+  //
+  // For a part of a plan, sameness is the PART ITSELF. Keying on content would let part two be
+  // raised twice by editing the amount between clicks, which is precisely the double-bill this
+  // is meant to prevent. The database index is the hard guarantee; this key makes the second
+  // attempt return the FIRST invoice instead of surfacing a constraint error to whoever clicked.
+  const idempotencyKey = invoiceData.tranche
+    ? `offer-tranche:${invoiceData.tranche.offer_token}:${invoiceData.tranche.seq}`
+    : manualInvoiceIdempotencyKey(
+        'manual-crm-invoice',
+        invoiceData.account_id,
+        items,
+        invoiceData.description,
+        total,
+        invoiceData.amount_currency,
+        invoiceData.issue_date,
+      )
 
   return safeAction(async () => {
+    // A later PART of a plan inherits the OFFER's pinned card-fee rate (council, 2026-08-11).
+    // Part one gets the pin from the signing webhook; without this, a hand-raised part two on a
+    // waived-fee deal would pin the CURRENT configured rate and charge a card fee the signed
+    // agreement waived — two invoices for one deal carrying different rates.
+    // Both reads are edge-cast: the tranche columns and offers.card_fee_rate postdate the
+    // deliberately-stale generated types (same pattern as the plan fetch in activation).
+    let inheritedCardFeeRate: number | undefined
+    if (invoiceData.tranche) {
+      const part1Query = supabaseAdmin
+        .from('payments')
+        .select('card_fee_rate' as never) as unknown as {
+          eq: (c: string, v: unknown) => {
+            eq: (c: string, v: unknown) => {
+              limit: (n: number) => { maybeSingle: () => Promise<{ data: { card_fee_rate?: number | null } | null }> }
+            }
+          }
+        }
+      const { data: part1 } = await part1Query
+        .eq('tranche_offer_token', invoiceData.tranche.offer_token)
+        .eq('tranche_seq', 1)
+        .limit(1)
+        .maybeSingle()
+      if (typeof part1?.card_fee_rate === 'number') inheritedCardFeeRate = part1.card_fee_rate
+      if (inheritedCardFeeRate === undefined) {
+        const offerQuery = supabaseAdmin
+          .from('offers')
+          .select('card_fee_rate' as never)
+          .eq('token', invoiceData.tranche.offer_token) as unknown as {
+            maybeSingle: () => Promise<{ data: { card_fee_rate?: number | null } | null }>
+          }
+        const { data: offerRow } = await offerQuery.maybeSingle()
+        if (typeof offerRow?.card_fee_rate === 'number') inheritedCardFeeRate = offerRow.card_fee_rate
+      }
+    }
     const result = await createTDInvoice({
       account_id: invoiceData.account_id,
       line_items: items.map((item) => ({
@@ -72,6 +118,17 @@ export async function createInvoice(
       message: invoiceData.message || undefined,
       installment: invoiceData.installment || undefined,
       idempotency_key: idempotencyKey,
+      ...(invoiceData.tranche
+        ? {
+            tranche_offer_token: invoiceData.tranche.offer_token,
+            tranche_seq: invoiceData.tranche.seq,
+            // Its own category, never an instalment one: paying an instalment lifts the
+            // accountant hand-off gate and feeds the June cron. A split setup fee must touch
+            // neither.
+            payment_category: 'setup_tranche',
+            ...(inheritedCardFeeRate !== undefined ? { card_fee_rate: inheritedCardFeeRate } : {}),
+          }
+        : {}),
     })
 
     // Override description + billing_entity_id (createTDInvoice sets description
@@ -93,8 +150,15 @@ export async function createInvoice(
     action_type: 'create',
     table_name: 'payments',
     account_id: invoiceData.account_id,
-    summary: `Invoice created (Draft)`,
-    details: { total, currency: invoiceData.amount_currency, items_count: items.length },
+    summary: invoiceData.tranche
+      ? `Invoice created (Draft) — part ${invoiceData.tranche.seq} of a payment plan`
+      : `Invoice created (Draft)`,
+    details: {
+      total,
+      currency: invoiceData.amount_currency,
+      items_count: items.length,
+      ...(invoiceData.tranche ? { tranche: invoiceData.tranche } : {}),
+    },
   })
 }
 
@@ -262,6 +326,9 @@ export async function voidInvoice(
       .update({
         invoice_status: 'Voided',
         status: 'Waived',
+        // Free the idempotency slot, mirroring the offer-cancel cascade: a voided tranche part
+        // must be re-raisable, and a keyed corpse blocks the re-mint (council blocker, 2026-08-11).
+        idempotency_key: null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', paymentId)

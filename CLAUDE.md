@@ -219,7 +219,7 @@ Full design: `sysdoc_read('workflows-system-master-plan')`. Current state + exte
 - **R053** — Before INSERT on {table:dev_tasks}, SELECT first to check if a task on the same topic already exists. If it does → UPDATE. Never duplicate.
 - **R060** — Master Rules KB (`370347b6`) is the CANONICAL source for business rules — wins on conflict. {table:knowledge_articles}
 - **R067** — When you modify an existing file, fix any ESLint warnings in that file (lint-staged blocks the commit otherwise).
-- **R070** — Run `git pull origin main` BEFORE any work, every session (enforced by SessionStart hook `session-git-pull.sh`).
+- **R070** — Run `git pull origin main` BEFORE any work, every session (enforced by SessionStart hook `session-git-pull.sh`). **Governs the PRIMARY CHECKOUT. As of 2026-08-10 the hook deliberately does NOT stash or pull in a linked worktree on a feature branch** — it silently removed in-flight work (4 occurrences on one job, one of them hiding a file an already-committed change depended on), and pulling main into a feature branch is a merge decision, not housekeeping. A worktree session that wants main's latest merges it deliberately. Full rationale + the three verified cases: `docs/systems/hooks-guardrails.md` (worktree exemption).
 - **R071** — NEVER use `git add -A` or `git add .` — stage specific files by name only. Never commit files you didn't intentionally modify.
 - **R076** — NEVER run `git push --force` — branch protection blocks it and it would destroy other machines' work.
 - **R079** — Every UI feature MUST be tested in the browser (screenshot + interaction) before declaring it done.

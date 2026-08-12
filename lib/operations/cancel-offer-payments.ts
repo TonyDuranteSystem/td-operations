@@ -17,7 +17,15 @@
  *
  * idempotency_key is NULLed on cancel so that if the offer is recreated and
  * re-signed under the same token, createTDInvoice can mint a fresh invoice
- * (the offer-signed webhook keys on `offer-signed:{offer_token}`).
+ * (the offer-signed webhook keys on `offer-signed:{offer_token}`, and a later
+ * part of a payment plan on `offer-tranche:{offer_token}:{seq}`). The partial
+ * unique index that stops a part being invoiced twice excludes cancelled rows
+ * for the same reason, so the two mechanisms agree rather than fight.
+ *
+ * TWO WAYS AN INVOICE BELONGS TO AN OFFER, and both must be swept:
+ *   1. the activation row's single invoice pointer — the original path;
+ *   2. the invoice's own tranche stamp — one row per part of a split setup fee,
+ *      which the single pointer cannot see past the first.
  *
  * Refuses to cascade if any linked payment has been paid — surfaces details so
  * the admin can resolve manually instead of silently voiding real revenue.
@@ -26,6 +34,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncTDInvoiceStatus } from "@/lib/portal/td-invoice"
 import { logAction } from "@/lib/mcp/action-log"
+import { DEAD_INVOICE_STATUSES } from "@/lib/offers/payment-plan-state"
 
 export interface BlockedPaidInvoice {
   payment_id: string
@@ -76,12 +85,48 @@ export async function cancelPaymentsForOfferTokens(
     }
   }
 
+  // 1b. ⛔ AND THE OTHER PARTS OF A PAYMENT PLAN (WS-C).
+  //
+  // The activation row holds exactly ONE invoice pointer, which was sufficient while one offer
+  // meant one invoice. A split setup fee mints an invoice per part, so every part after the
+  // first is invisible to that pointer — deleting the offer would void part one and leave part
+  // two alive, due, and visible in the client's portal against a deal that no longer exists.
+  // Precisely the orphan this file was written to prevent, reappearing through a second door.
+  //
+  // A FAILURE HERE MUST NOT BE IGNORED. Treating it as "no tranches found" would silently
+  // reproduce the bug, so it refuses the whole cascade rather than half-cancelling a plan.
+  //
+  // The cast is here because the generated database types predate the tranche columns, and
+  // regenerating them is its own risky change that has broken production before — so the column
+  // name is deliberately a plain string. It is covered by a real database read in the sandbox
+  // verification pass rather than by the compiler.
+  const trancheQuery = supabaseAdmin.from("payments").select("id") as unknown as {
+    in: (
+      column: string,
+      values: string[],
+    ) => Promise<{ data: Array<{ id: string }> | null; error: { message: string } | null }>
+  }
+  const { data: tranches, error: tranErr } = await trancheQuery.in(
+    "tranche_offer_token",
+    offerTokens,
+  )
+
+  if (tranErr) {
+    return {
+      ok: false,
+      cancelled: 0,
+      payment_ids: [],
+      error: `payment-plan invoice lookup failed: ${tranErr.message}`,
+    }
+  }
+
   const paymentIds = Array.from(
-    new Set(
-      (activations ?? [])
+    new Set([
+      ...(activations ?? [])
         .map((a) => a.portal_invoice_id as string | null)
         .filter((id): id is string => Boolean(id)),
-    ),
+      ...(tranches ?? []).map((p) => p.id as string),
+    ]),
   )
 
   if (!paymentIds.length) {
@@ -126,8 +171,13 @@ export async function cancelPaymentsForOfferTokens(
   }
 
   // 3. Skip rows already cancelled — idempotency.
+  // Already-DEAD rows (any dead status, not only Cancelled) are left untouched: re-stamping a
+  // Voided or Credit row to Cancelled would rewrite its history for no benefit — the slot is
+  // already free and the audit trail is the point of soft-cancel (council, 2026-08-11).
   const cancellable = (payments ?? []).filter(
-    (p) => p.status !== "Cancelled" && p.invoice_status !== "Cancelled",
+    (p) =>
+      p.status !== "Cancelled" &&
+      !DEAD_INVOICE_STATUSES.includes((p.invoice_status ?? "") as (typeof DEAD_INVOICE_STATUSES)[number]),
   )
 
   if (!cancellable.length) {

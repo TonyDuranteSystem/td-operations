@@ -25,6 +25,7 @@ import { normalizeFormationState } from "@/lib/formation/states"
 import { availableCreditForDisplay, unspentCreditByCurrency } from "@/lib/operations/credit-netting"
 import { resolveCreditSubject, subjectForDisplay, type CreditSubject } from "@/lib/operations/credit-subject"
 import { parsePriceQuirk, resolveOfferCurrency, ambiguousDotPrices } from "@/lib/offers/compute-offer-totals"
+import { refusePlanWithReferralPartner, signingPart, validatePaymentPlan } from "@/lib/offers/payment-plan"
 import type { Json } from "@/lib/database.types"
 
 // ─── JSONB validation ───────────────────────────────────────
@@ -271,6 +272,13 @@ export interface CreateOfferParams {
   bundled_pipelines?: string[]
 
   payment_links?: unknown
+  /**
+   * WS-C: a setup fee paid in parts. Validated on the way in — an offer is a document a client
+   * signs, so a malformed plan must be refused here rather than stored and discovered by the
+   * signing webhook, the card rail or the client's schedule, each of which would fail
+   * separately and much further from whoever typed it.
+   */
+  payment_plan?: unknown
   bank_details?: unknown
   effective_date?: string | null
   expires_at?: string | null
@@ -392,6 +400,8 @@ async function tryCreateWhopPlan(params: {
    *  client for their strategy call a second time, and unlike the Stripe rail
    *  there is no overage detector on Whop to catch it after the fact. */
   credit_amount?: number | null
+  /** WS-C: a setup fee paid in parts. A card link must offer the part due NOW. */
+  payment_plan?: unknown
 }): Promise<string | null> {
   try {
     const { createWhopPlan } = await import("@/lib/whop-auto-plan")
@@ -400,7 +410,25 @@ async function tryCreateWhopPlan(params: {
     // WS-A3: shared parser primitive. Whop plans are priced off the FIRST
     // cost_summary header only (the plan's headline price), not the engine's
     // full billable gross — aggregation intentionally unchanged.
-    const grossNum = parsePriceQuirk(firstTotal)
+    const headerGross = parsePriceQuirk(firstTotal)
+
+    // ─── WS-C: A SETUP FEE PAID IN PARTS ───
+    // A stored card link is a standing invitation to pay, so it must quote the part due NOW —
+    // the same rule the live checkout route follows. It deliberately does NOT switch the
+    // non-plan basis to the engine's gross: the header-only pricing above is a pinned quirk,
+    // and changing what an ordinary offer charges is not this change's business.
+    //
+    // An UNUSABLE plan mints NO LINK AT ALL. Minting one at the whole fee would leave a client
+    // a working button that charges more than they agreed; no link means they pay by wire, or
+    // Antonio fixes the plan — both recoverable, unlike a wrong charge.
+    let grossNum = headerGross
+    if (params.payment_plan != null) {
+      const parsed = validatePaymentPlan(params.payment_plan)
+      const signing = parsed.ok && parsed.plan ? signingPart(parsed.plan) : null
+      if (!signing) return null
+      grossNum = signing.amount
+    }
+
     if (!(grossNum > 0)) return null
     const creditNum = Number(params.credit_amount ?? 0)
     const totalNum = creditNum > 0
@@ -445,6 +473,37 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     const validationError = validateOfferJsonb(params as unknown as Record<string, unknown>)
     if (validationError) {
       return { success: false, outcome: "validation_error", error: validationError }
+    }
+
+    // WS-C: refuse a malformed payment plan at the door. The plan is money a client will sign
+    // for, and every downstream consumer fails separately and far from whoever typed it — the
+    // signing webhook silently bills the whole fee, the card rail refuses, the client's schedule
+    // shows nothing. Refusing here is the only place the reason can be explained.
+    if (params.payment_plan != null) {
+      const planCheck = validatePaymentPlan(params.payment_plan)
+      if (!planCheck.ok) {
+        return {
+          success: false,
+          outcome: "validation_error",
+          error: `Payment plan: ${planCheck.errors.join(" ")}`,
+        }
+      }
+
+      // ⛔ A plan and a referrer cannot share an offer until the referral credit path can pay a
+      // commission part by part. Refused HERE, at authoring, so the hand-settlement card stays a
+      // safety net rather than the normal route.
+      // partner_id included (council blocker, 2026-08-11): a managed-partner deal is a THIRD
+      // commission rail — its payout is computed from the activation amount, which is the WHOLE
+      // commitment, so a plan would write a full-deal payout figure on first-part payment with
+      // nothing telling the approver only part one arrived.
+      const hasReferrer = Boolean(
+        params.referrer_name || params.referrer_contact_id || params.referrer_account_id || params.partner_id,
+      )
+      // Staff-facing, English only — the client never learns a referrer exists.
+      const referrerRefusal = refusePlanWithReferralPartner(hasReferrer, params.client_name)
+      if (referrerRefusal) {
+        return { success: false, outcome: "validation_error", error: referrerRefusal }
+      }
     }
 
     // 2. Require at least one of: client_name, and (lead_id OR account_id OR standalone allowed by MCP)
@@ -749,6 +808,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         formation_state: normalizeFormationState(params.formation_state),
         bank_details: bank_details as unknown as Json,
         payment_links: (params.payment_links ?? null) as Json,
+        payment_plan: (params.payment_plan ?? null) as Json,
         effective_date: params.effective_date ?? null,
         expires_at: params.expires_at ?? null,
         currency,
@@ -807,6 +867,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         cost_summary: params.cost_summary,
         token: offer.token,
         credit_amount: creditAmount,
+        payment_plan: params.payment_plan,
       })
     }
 

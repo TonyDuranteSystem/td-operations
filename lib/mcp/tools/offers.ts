@@ -15,6 +15,7 @@ import { logAction } from "@/lib/mcp/action-log"
 import { getGreeting } from "@/lib/greeting"
 import { APP_BASE_URL } from "@/lib/config"
 import { publishOffer, resendOfferEmail } from "@/lib/offers/publish"
+import { clientFacingPartLabel, refusePlanWithReferralPartner, validatePaymentPlan } from "@/lib/offers/payment-plan"
 import { createOffer, type OfferContractType, type OfferPaymentType, type OfferPaymentGateway } from "@/lib/operations/offers"
 import { FORMATION_STATE_CODES, normalizeFormationState } from "@/lib/formation/states"
 
@@ -516,6 +517,61 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
         // QA found this free-form passthrough stored raw invalid values). Valid
         // input (any spelling) is normalized to its code; null clears; anything
         // unrecognized is rejected loudly rather than stored inert.
+        // ⛔ WS-C guard (council blocker, 2026-08-11): this free-form passthrough is the SECOND
+        // DOOR through every "validated at the door" invariant, and this exact hole class has
+        // shipped bad data before (the formation_state guard below exists for the same reason).
+        // Three rules, mirroring offer creation:
+        //   1. a payment_plan written here must VALIDATE — a malformed stored plan makes the card
+        //      rail refuse and the pages hide amounts while the signing webhook bills the WHOLE
+        //      fee to a client who agreed to pay in parts;
+        //   2. a plan cannot be added to an offer that carries a referrer or a managed partner;
+        //   3. a referrer/partner cannot be added to an offer that carries a plan.
+        // Commission on a plan deal is settled BY HAND until job a5e61a46 lands — no automatic
+        // rail can pay it correctly, so the shape is refused everywhere it could be authored.
+        const REFERRER_KEYS = ["referrer_name", "referrer_contact_id", "referrer_account_id", "partner_id"] as const
+        let planEcho = ""
+        if ("payment_plan" in updates && updates.payment_plan != null) {
+          const planCheck = validatePaymentPlan(updates.payment_plan)
+          if (!planCheck.ok) {
+            return { content: [{ type: "text" as const, text: `❌ offer_update error: payment_plan is not usable — ${planCheck.errors.join(" ")}` }] }
+          }
+          // ⛔ THE AUTHORING ECHO (Antonio's ruling, 2026-08-11): the trigger line is CLIENT-AUTHORED
+          // CONTRACT LANGUAGE, and this echo is what makes that authorship real rather than nominal.
+          // Whoever writes a plan here is answered with the exact sentences the client's offer,
+          // schedule and SIGNED CONTRACT will carry — at the one moment they can still change them.
+          // The first real render put a bank's name into a contract because the author never saw
+          // the client's sentence; this is the guard, and it is not optional.
+          planEcho =
+            "\n\n⚠️ THE CLIENT WILL READ, on the offer and in the SIGNED CONTRACT:\n" +
+            planCheck.plan!
+              .map((part) => `   • ${clientFacingPartLabel(part, planCheck.plan!.length)}`)
+              .join("\n") +
+            "\nIf any line is not what the client should see, fix the plan and save again."
+        }
+        const touchesReferrer = REFERRER_KEYS.some((k) => k in updates && updates[k])
+        const addsPlan = "payment_plan" in updates && updates.payment_plan != null
+        if (touchesReferrer || addsPlan) {
+          const { data: current } = await supabaseAdmin
+            .from("offers")
+            .select("referrer_name, referrer_contact_id, referrer_account_id, partner_id")
+            .eq("token", token)
+            .maybeSingle()
+          // The stored plan needs its own narrow read — the column postdates the generated types.
+          const planQuery = supabaseAdmin.from("offers").select("payment_plan" as never).eq("token", token) as unknown as {
+            maybeSingle: () => Promise<{ data: { payment_plan?: unknown } | null }>
+          }
+          const { data: planRow } = await planQuery.maybeSingle()
+          const storedPlan = planRow?.payment_plan ?? null
+          const hasStoredReferrer = Boolean(
+            current?.referrer_name || current?.referrer_contact_id || current?.referrer_account_id || current?.partner_id,
+          )
+          const willHavePlan = addsPlan || storedPlan != null
+          const willHaveReferrer = touchesReferrer || hasStoredReferrer
+          if (willHavePlan && willHaveReferrer) {
+            return { content: [{ type: "text" as const, text: `❌ offer_update error: ${refusePlanWithReferralPartner(true, token)}` }] }
+          }
+        }
+
         if ("formation_state" in updates) {
           const raw = updates.formation_state
           if (raw === null || raw === "") {
@@ -548,7 +604,7 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
         return {
           content: [{
             type: "text" as const,
-            text: `✅ Offer ${token} updated\n${JSON.stringify(data, null, 2)}`,
+            text: `✅ Offer ${token} updated\n${JSON.stringify(data, null, 2)}${planEcho}`,
           }],
         }
       } catch (err: unknown) {

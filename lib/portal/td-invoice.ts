@@ -16,6 +16,7 @@ import { syncTDInvoiceMirror } from '@/lib/portal/td-invoice-mirror'
 import { generateInvoiceNumber, generateCreditNoteNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
 import { computeCreditApplication, consumeCredits, releaseStaleCreditClaims, claimCredits, confirmCreditClaims, unwindCreditClaims } from '@/lib/operations/credit-netting'
 import { categoryFromInstallmentLabel } from '@/lib/billing/payment-classification'
+import { DEAD_INVOICE_STATUSES } from '@/lib/offers/payment-plan-state'
 import { getConfiguredCardFeeRate } from '@/lib/payments/card-fee-config'
 
 // ─── Types ──────────────────────────────────────────
@@ -83,6 +84,19 @@ export interface TDInvoiceInput {
    * when creating a credit note itself or any invoice that must not net.
    */
   skip_credit_netting?: boolean
+  /**
+   * WS-C lineage: which offer's payment plan this invoice is one part of, and which part.
+   *
+   * Both or neither — the database enforces the pair. Without them a later part is an orphan:
+   * the offer-cancel cascade reaches invoices through a single pointer on the activation row, so
+   * an unlinked part two would survive as a live billable invoice against a dead deal.
+   *
+   * ⛔ A PARTIAL unique index guarantees one live invoice per part, and a partial index cannot
+   * back an upsert's ON CONFLICT (Postgres raises 42P10). Callers must read-then-insert; the
+   * retry loop below is on the invoice-number collision, not on this.
+   */
+  tranche_offer_token?: string
+  tranche_seq?: number
 }
 
 export interface TDInvoiceResult {
@@ -115,6 +129,8 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     year,
     skip_credit_netting = false,
     card_fee_rate,
+    tranche_offer_token,
+    tranche_seq,
   } = input
 
   // Pin the card fee rate onto this invoice — the source offer's pin when created
@@ -313,6 +329,11 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         message: message || null,
         bank_preference: bank_preference || null,
         card_fee_rate: pinnedCardFeeRate,
+        // WS-C lineage. Both or neither — `payments_tranche_pair_check` rejects a part number
+        // with no offer behind it, so normalise undefined to null on both rather than letting
+        // one slip through as undefined and the other as a value.
+        tranche_offer_token: tranche_offer_token ?? null,
+        tranche_seq: tranche_offer_token ? (tranche_seq ?? null) : null,
         qb_sync_status: 'pending',
       })
       .select('id')
@@ -526,12 +547,18 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
  * the cascade.
  */
 async function findByIdempotencyKey(key: string): Promise<TDInvoiceResult | null> {
+  // ⛔ Skip every DEAD invoice, not only Cancelled — council blocker, 2026-08-11. Voiding an
+  // invoice writes 'Voided' (and 'Waived' on the status column) WITHOUT nulling the key, so this
+  // lookup used to hand back the corpse: raise part two, void it, raise again → the "new" invoice
+  // was the dead one, unpayable, while the UI and the partial unique index both said the slot was
+  // free. The dead-list is IMPORTED from the one shared definition rather than restated, so the
+  // third copy of "what counts as dead" cannot drift the way this one did at birth.
   const { data: payment } = await supabaseAdmin
     .from('payments')
     .select('id, invoice_number, total, invoice_status, status')
     .eq('idempotency_key', key)
     .neq('status', 'Cancelled')
-    .neq('invoice_status', 'Cancelled')
+    .not('invoice_status', 'in', `(${DEAD_INVOICE_STATUSES.join(',')})`)
     .limit(1)
     .maybeSingle()
 

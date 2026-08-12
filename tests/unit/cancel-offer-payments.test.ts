@@ -28,6 +28,9 @@ let activationsFixture: ActivationRow[] = []
 let activationsError: { message: string } | null = null
 let paymentsFixture: PaymentRow[] = []
 let paymentsError: { message: string } | null = null
+/** WS-C: invoices that carry a tranche stamp for the offer token (part 2, 3, …). */
+let tranchesFixture: Array<{ id: string }> = []
+let tranchesError: { message: string } | null = null
 let updateError: { message: string } | null = null
 let lastUpdatePayload: Record<string, unknown> | null = null
 let lastUpdateIds: string[] | null = null
@@ -62,12 +65,27 @@ vi.mock("@/lib/supabase-admin", () => ({
             lastUpdatePayload = payload
             return chain
           }),
-          in: vi.fn((_col: string, ids: string[]) => {
+          in: vi.fn((col: string, ids: string[]) => {
             if (mode === "update") {
               lastUpdateIds = ids
               return Promise.resolve({ data: null, error: updateError })
             }
-            return Promise.resolve({ data: paymentsFixture, error: paymentsError })
+            // Two different SELECTs hit this table: the tranche sweep (keyed on the
+            // offer token) and the state load (keyed on payment id). Routing on the
+            // column keeps them apart — resolving both to the same fixture would let
+            // a test pass while the code queried the wrong thing entirely.
+            if (col === "tranche_offer_token") {
+              return Promise.resolve({ data: tranchesFixture, error: tranchesError })
+            }
+            // HONOUR THE ID FILTER. Returning the whole fixture regardless of what
+            // was asked for made at least one test pass vacuously: a paid part two
+            // that the code never even looked up still appeared in the result, so
+            // the refusal fired for the wrong reason.
+            const wanted = new Set(ids)
+            return Promise.resolve({
+              data: paymentsError ? null : paymentsFixture.filter((p) => wanted.has(p.id)),
+              error: paymentsError,
+            })
           }),
         }
         return chain
@@ -97,6 +115,8 @@ beforeEach(() => {
   activationsError = null
   paymentsFixture = []
   paymentsError = null
+  tranchesFixture = []
+  tranchesError = null
   updateError = null
   lastUpdatePayload = null
   lastUpdateIds = null
@@ -266,5 +286,107 @@ describe("cancelPaymentsForOfferTokens", () => {
     expect(r.ok).toBe(true)
     expect(r.cancelled).toBe(1)
     expect(mockLogAction).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ─── WS-C: a setup fee paid in parts ─────────────────────
+//
+// The activation row holds ONE invoice pointer. Every part after the first is
+// invisible to it, so deleting the offer used to void part one and leave part
+// two live and due in the client's portal — the same orphan this file exists to
+// prevent, arriving through a second door.
+
+describe("payment plans — the parts the activation pointer cannot see", () => {
+  it("cancels a later part that is linked ONLY by its tranche stamp", async () => {
+    activationsFixture = [{ portal_invoice_id: "pay-part1" }]
+    tranchesFixture = [{ id: "pay-part1" }, { id: "pay-part2" }]
+    paymentsFixture = [
+      { id: "pay-part1", invoice_number: "INV-000501", status: "Sent", invoice_status: "Sent", amount_paid: 0 },
+      { id: "pay-part2", invoice_number: "INV-000502", status: "Draft", invoice_status: "Draft", amount_paid: 0 },
+    ]
+
+    const res = await cancelPaymentsForOfferTokens(["mario-rossi-2026"], "dashboard:antonio")
+
+    expect(res.ok).toBe(true)
+    expect(res.cancelled).toBe(2)
+    expect(lastUpdateIds).toEqual(["pay-part1", "pay-part2"])
+  })
+
+  it("MUTATION GUARD — without the tranche sweep, part two survives the cascade", async () => {
+    // The same offer as above with the tranche sweep returning nothing, which is
+    // exactly what the pointer-only code did. If this ever reads 2, the sweep has
+    // been removed and the orphan is back.
+    activationsFixture = [{ portal_invoice_id: "pay-part1" }]
+    tranchesFixture = []
+    paymentsFixture = [
+      { id: "pay-part1", invoice_number: "INV-000501", status: "Sent", invoice_status: "Sent", amount_paid: 0 },
+    ]
+
+    const res = await cancelPaymentsForOfferTokens(["mario-rossi-2026"], "dashboard:antonio")
+
+    expect(res.cancelled).toBe(1)
+    expect(lastUpdateIds).toEqual(["pay-part1"])
+  })
+
+  it("finds a part even when the activation row has no invoice pointer at all", async () => {
+    // A plan whose activation row was never stamped still has its invoices findable.
+    activationsFixture = []
+    tranchesFixture = [{ id: "pay-part2" }]
+    paymentsFixture = [
+      { id: "pay-part2", invoice_number: "INV-000502", status: "Draft", invoice_status: "Draft", amount_paid: 0 },
+    ]
+
+    const res = await cancelPaymentsForOfferTokens(["mario-rossi-2026"], "dashboard:antonio")
+
+    expect(res.ok).toBe(true)
+    expect(res.cancelled).toBe(1)
+  })
+
+  it("REFUSES the whole cascade when a later part has been paid", async () => {
+    // Voiding part one while part two holds real money would leave the books
+    // describing a deal that no longer exists. Refuse and let a person decide.
+    activationsFixture = [{ portal_invoice_id: "pay-part1" }]
+    tranchesFixture = [{ id: "pay-part1" }, { id: "pay-part2" }]
+    paymentsFixture = [
+      { id: "pay-part1", invoice_number: "INV-000501", status: "Draft", invoice_status: "Draft", amount_paid: 0 },
+      { id: "pay-part2", invoice_number: "INV-000502", status: "Paid", invoice_status: "Paid", amount_paid: 1250 },
+    ]
+
+    const res = await cancelPaymentsForOfferTokens(["mario-rossi-2026"], "dashboard:antonio")
+
+    expect(res.ok).toBe(false)
+    expect(res.cancelled).toBe(0)
+    expect(res.blocked_paid?.[0].invoice_number).toBe("INV-000502")
+    expect(lastUpdateIds).toBeNull()
+  })
+
+  it("a FAILED tranche lookup refuses the cascade instead of half-cancelling", async () => {
+    // Treating the error as "no parts found" would silently void part one and
+    // strand the rest — the failure mode must be refusal, not partial success.
+    activationsFixture = [{ portal_invoice_id: "pay-part1" }]
+    tranchesError = { message: "connection reset" }
+    paymentsFixture = [
+      { id: "pay-part1", invoice_number: "INV-000501", status: "Sent", invoice_status: "Sent", amount_paid: 0 },
+    ]
+
+    const res = await cancelPaymentsForOfferTokens(["mario-rossi-2026"], "dashboard:antonio")
+
+    expect(res.ok).toBe(false)
+    expect(res.cancelled).toBe(0)
+    expect(res.error).toContain("payment-plan invoice lookup failed")
+    expect(lastUpdateIds).toBeNull()
+  })
+
+  it("frees the tranche idempotency key so a re-signed offer can re-mint its parts", async () => {
+    activationsFixture = []
+    tranchesFixture = [{ id: "pay-part2" }]
+    paymentsFixture = [
+      { id: "pay-part2", invoice_number: "INV-000502", status: "Draft", invoice_status: "Draft", amount_paid: 0 },
+    ]
+
+    await cancelPaymentsForOfferTokens(["mario-rossi-2026"], "dashboard:antonio")
+
+    expect(lastUpdatePayload?.idempotency_key).toBeNull()
+    expect(lastUpdatePayload?.status).toBe("Cancelled")
   })
 })

@@ -372,3 +372,121 @@ describe("a money rail must SUPPLY the credit, not just read for it", () => {
     expect(p.net).toBe(0)
   })
 })
+
+describe("WS-C: dueNow — what a rail charges when the fee is paid in parts", () => {
+  /** Domenico's deal, as an offer row: EUR2,500 itemised, split EUR1,250 + EUR1,250. */
+  const planned = {
+    services: [{ name: "LLC Formation", price: "€2,500" }],
+    cost_summary: [{ label: "Setup Fee", total: "€2,500" }],
+    payment_plan: [
+      { seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "signing" } },
+      { seq: 2, amount: 1250, currency: "EUR", trigger: { kind: "manual", label: "Bank account opened (Relay)" } },
+    ],
+  }
+
+  it("charges the signing part, while the offer still states the whole commitment", () => {
+    const p = computeOfferPayable(planned)
+    expect(p.gross).toBe(2500) // what the client agreed to
+    expect(p.net).toBe(2500) // what they owe in total
+    expect(p.dueNow).toBe(1250) // what the card / wire collects today
+    expect(p.hasPaymentPlan).toBe(true)
+    expect(p.planRefusal).toBe(null)
+  })
+
+  it("⛔ an ordinary offer is untouched: dueNow IS net", () => {
+    // The whole safety of this change rests on this cell. Every rail switching from `net` to
+    // `dueNow` must be a no-op for the offers that exist today — payment_plan is non-null on
+    // zero production offers.
+    const p = computeOfferPayable({
+      services: [{ name: "Formation", price: "$1,500" }],
+      cost_summary: [{ label: "Setup", total: "$1,500" }],
+      credit_amount: 257,
+    })
+    expect(p.hasPaymentPlan).toBe(false)
+    expect(p.planRefusal).toBe(null)
+    expect(p.net).toBe(1243)
+    expect(p.dueNow).toBe(1243)
+  })
+
+  it("credit comes off TODAY's part, not the far end of the plan", () => {
+    // A client who already paid for the strategy call owes that much less now. Netting it
+    // against the EUR2,500 commitment and still charging EUR1,250 today would collect money
+    // they do not owe — the WS-A defect in a new costume.
+    const p = computeOfferPayable({ ...planned, credit_amount: 250 })
+    expect(p.credit).toBe(250)
+    expect(p.dueNow).toBe(1000)
+    expect(p.net).toBe(2250)
+  })
+
+  it("a credit larger than the first part spills forward instead of going negative", () => {
+    const p = computeOfferPayable({ ...planned, credit_amount: 1400 })
+    expect(p.dueNow).toBe(0) // nothing to collect at signing
+    expect(p.net).toBe(1100) // and EUR1,100 of the commitment remains
+  })
+
+  it("a plan with no signing part owes nothing today — zero, not the total", () => {
+    const p = computeOfferPayable({
+      ...planned,
+      payment_plan: [
+        { seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "manual" } },
+        { seq: 2, amount: 1250, currency: "EUR", trigger: { kind: "manual" } },
+      ],
+    })
+    expect(p.dueNow).toBe(0)
+    expect(p.planRefusal).toBe(null)
+  })
+})
+
+describe("⛔ WS-C: a plan that contradicts its offer REFUSES — it never picks a winner", () => {
+  const base = {
+    services: [{ name: "LLC Formation", price: "€2,500" }],
+    cost_summary: [{ label: "Setup Fee", total: "€2,500" }],
+  }
+
+  it("refuses when the parts do not add up to the offer", () => {
+    const p = computeOfferPayable({
+      ...base,
+      payment_plan: [
+        { seq: 1, amount: 1250, currency: "EUR", trigger: { kind: "signing" } },
+        { seq: 2, amount: 900, currency: "EUR", trigger: { kind: "manual" } },
+      ],
+    })
+    expect(p.planRefusal).toContain("2150")
+    expect(p.planRefusal).toContain("2500")
+    // The pre-plan number stays put so nothing crashes — but the refusal is what a rail reads.
+    expect(p.dueNow).toBe(2500)
+  })
+
+  it("refuses when the plan is in a different currency from the offer", () => {
+    const p = computeOfferPayable({
+      ...base,
+      payment_plan: [
+        { seq: 1, amount: 1250, currency: "USD", trigger: { kind: "signing" } },
+        { seq: 2, amount: 1250, currency: "USD", trigger: { kind: "manual" } },
+      ],
+    })
+    expect(p.planRefusal).toContain("USD")
+    expect(p.planRefusal).toContain("EUR")
+  })
+
+  it("refuses a malformed plan, and says what is wrong with it", () => {
+    const p = computeOfferPayable({ ...base, payment_plan: [{ seq: 1, amount: 2500 }] })
+    expect(p.hasPaymentPlan).toBe(true)
+    expect(p.planRefusal).toBeTruthy()
+    expect(p.planRefusal).toContain("not usable")
+  })
+
+  it("tolerates rounding dust rather than refusing over a cent", () => {
+    const p = computeOfferPayable({
+      services: [{ name: "Formation", price: "$1,000" }],
+      cost_summary: [{ label: "Setup", total: "$1,000" }],
+      payment_plan: [
+        { seq: 1, amount: 333.33, currency: "USD", trigger: { kind: "signing" } },
+        { seq: 2, amount: 333.33, currency: "USD", trigger: { kind: "manual" } },
+        { seq: 3, amount: 333.34, currency: "USD", trigger: { kind: "manual" } },
+      ],
+    })
+    expect(p.planRefusal).toBe(null)
+    expect(p.dueNow).toBe(333.33)
+  })
+})

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import { computeOfferPayable } from '@/lib/offers/compute-offer-totals'
+import { clientFacingSchedule, validatePaymentPlan } from '@/lib/offers/payment-plan'
 import { openCheckoutTab, deliverCheckout, closeCheckoutTab } from '@/lib/payments/checkout-redirect'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import type { Offer } from '@/lib/types/offer'
@@ -66,6 +67,10 @@ const LABELS = {
     contactPayment: 'Write to us in the App to proceed with payment.',
     payByCard: 'Pay by Card',
     payByTransfer: 'Bank Transfer',
+    scheduleTitle: 'Partial Payment',
+    // ⚠️ PLACEHOLDER pending Antonio's read at the gate — identical to the sibling offer page on
+    // purpose: two client-facing proposals must not word the same refusal differently.
+    amountUnavailable: 'Your payment schedule needs a correction before you pay. Please contact us and we will send you the exact amount.',
     totalDueToday: 'Total Due Today',
     creditApplied: 'Already paid — Strategy Call',
     creditAppliedGeneric: 'Credit applied',
@@ -128,6 +133,8 @@ const LABELS = {
     contactPayment: 'Scrivici nella App per procedere con il pagamento.',
     payByCard: 'Paga con Carta',
     payByTransfer: 'Bonifico Bancario',
+    scheduleTitle: 'Partial Payment', // English only — Antonio, 2026-08-11
+    amountUnavailable: 'Your payment schedule needs a correction before you pay. Please contact us and we will send you the exact amount.', // English only — Antonio, 2026-08-11
     totalDueToday: 'Totale Dovuto Oggi',
     creditApplied: 'Già pagato — Call Strategica',
     creditAppliedGeneric: 'Credito applicato',
@@ -188,6 +195,7 @@ export default function OfferPageWithCode() {
   const dynamicTotal = useMemo(() => {
     if (!offer || !offer.services) return null
     const t = computeOfferPayable({
+      payment_plan: (offer as { payment_plan?: unknown }).payment_plan,
       services: offer.services,
       cost_summary: offer.cost_summary,
       selected_services: Array.from(selectedOptional),
@@ -209,8 +217,32 @@ export default function OfferPageWithCode() {
       formatted: `${symbol}${t.net.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
       // card fee applies to what is actually charged — the net
       cardFormatted: `${symbol}${Math.round(t.net * 1.05).toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      // WS-C: a setup fee paid in parts. Every control on this page must ask for the part due
+      // FIRST, not the whole commitment — and here they are real buttons, not informational rows,
+      // so the card button would otherwise open a checkout for the full amount.
+      hasPlan: t.hasPaymentPlan,
+      planRefusal: t.planRefusal,
+      dueNow: t.dueNow,
+      dueNowFormatted: `${symbol}${t.dueNow.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      // Pinned rate, not a hardcoded 5% (council, 2026-08-11): a waived-fee deal must not quote
+      // a card figure above what checkout actually charges from the pinned rate.
+      dueNowCardFormatted: `${symbol}${Math.round(t.dueNow * (1 + ((offer as { card_fee_rate?: number | null }).card_fee_rate ?? 0.05))).toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      symbol,
     }
   }, [offer, selectedOptional])
+
+  // The client-facing schedule rows, from the ONE shared sentence builder — identical to the
+  // sibling offer page, because two client-facing proposals describing the same agreement
+  // differently is the drift this builder exists to prevent.
+  const planSchedule = useMemo(() => {
+    const raw = (offer as { payment_plan?: unknown } | null)?.payment_plan
+    if (raw == null) return null
+    const parsed = validatePaymentPlan(raw)
+    if (!parsed.ok || !parsed.plan || parsed.plan.length < 2) return null
+    // English only (Antonio, 2026-08-11): the schedule renders in English on every offer,
+    // including Italian ones — the platform's existing Italian elsewhere is untouched.
+    return clientFacingSchedule(parsed.plan)
+  }, [offer])
 
   // WS-A display row. Reads the SINGLE amount authority — it does no arithmetic
   // of its own, because that is exactly how the summary and the pay buttons came
@@ -223,7 +255,11 @@ export default function OfferPageWithCode() {
       amount: dynamicTotal.credit,
       formatted: fmt(dynamicTotal.credit),
       grossFormatted: fmt(dynamicTotal.gross),
-      netFormatted: fmt(dynamicTotal.total),
+      // ⛔ "Total Due Today" must mean TODAY. With a setup fee paid in parts, that is the SIGNING
+      // PART net of credit — not the whole commitment. Leaving the full figure under that exact
+      // label was the most misleading line on the page: it names the timing explicitly and then
+      // states a number for a different one.
+      netFormatted: dynamicTotal.planRefusal ? '—' : fmt(dynamicTotal.hasPlan ? dynamicTotal.dueNow : dynamicTotal.total),
       // LABEL HONESTY (architect ruling): only call it a strategy call when it IS
       // one. The snapshot is the sum of every credit the person holds, so a
       // referral credit was being described to the client as a paid call.
@@ -673,7 +709,7 @@ export default function OfferPageWithCode() {
                   <div style={{ marginTop: 16, paddingTop: 12, borderTop: '2px solid var(--offer-blue)' }}>
                     <div className="offer-riepilogo-total" style={{ fontSize: 16 }}>
                       <span style={{ fontWeight: 700 }}>{L.totalDueToday}</span>
-                      <span style={{ fontWeight: 700 }}>{dynamicTotal.formatted}</span>
+                      <span style={{ fontWeight: 700 }}>{dynamicTotal.planRefusal ? '—' : dynamicTotal.hasPlan ? dynamicTotal.dueNowFormatted : dynamicTotal.formatted}</span>
                     </div>
                   </div>
                 )}
@@ -735,8 +771,17 @@ export default function OfferPageWithCode() {
               </div>
             )}
 
+            {/* ⛔ NO STATEABLE AMOUNT → NO PAYMENT CONTROL AT ALL. These are LIVE buttons: the card
+                one opens a checkout. Hiding a price beside a working button is worse than useless,
+                because the charge happens on click regardless of what is displayed. */}
+            {needsPayment && dynamicTotal?.planRefusal && (
+              <div className="offer-pay-info">
+                <p className="offer-pay-info-note">{L.amountUnavailable}</p>
+              </div>
+            )}
+
             {/* SIGNED BUT NOT PAID — Interactive payment buttons */}
-            {needsPayment && (o.payment_type === 'checkout' || o.payment_links?.length || o.bank_details) && (
+            {needsPayment && !dynamicTotal?.planRefusal && (o.payment_type === 'checkout' || o.payment_links?.length || o.bank_details) && (
               <>
                 <p style={{ fontSize: 15, opacity: 0.9, marginBottom: 24 }}>
                   {lang === 'it' ? L.proceedPayment : L.proceedPayment}
@@ -784,7 +829,7 @@ export default function OfferPageWithCode() {
                     >
                       {checkoutLoading
                         ? (lang === 'it' ? '⏳ Caricamento...' : '⏳ Loading...')
-                        : <>&#128179; {L.payByCard} — {dynamicTotal ? dynamicTotal.cardFormatted : (o.payment_links?.[0]?.amount ?? '')}</>
+                        : <>&#128179; {L.payByCard} — {dynamicTotal ? (dynamicTotal.hasPlan ? dynamicTotal.dueNowCardFormatted : dynamicTotal.cardFormatted) : (o.payment_links?.[0]?.amount ?? '')}</>
                       }
                       {!checkoutLoading && o.bank_details && <span className="offer-surcharge-tag">+5%</span>}
                     </button>
@@ -801,7 +846,7 @@ export default function OfferPageWithCode() {
                       className="offer-payment-btn offer-payment-btn-bank"
                       onClick={() => setShowBankDetails(!showBankDetails)}
                     >
-                      &#127974; {L.payByTransfer} — {dynamicTotal ? dynamicTotal.formatted : dynamicPaymentAmount}
+                      &#127974; {L.payByTransfer} — {dynamicTotal ? (dynamicTotal.hasPlan ? dynamicTotal.dueNowFormatted : dynamicTotal.formatted) : dynamicPaymentAmount}
                     </button>
                   )}
                 </div>
@@ -852,38 +897,59 @@ export default function OfferPageWithCode() {
                     {o.bank_details.reference && (
                       <div className="offer-bank-ref">{L.reference}: {o.bank_details.reference}</div>
                     )}
-                    <div className="offer-bank-amount">{dynamicTotal ? dynamicTotal.formatted : dynamicPaymentAmount}</div>
+                    <div className="offer-bank-amount">{dynamicTotal ? (dynamicTotal.hasPlan ? dynamicTotal.dueNowFormatted : dynamicTotal.formatted) : dynamicPaymentAmount}</div>
                   </div>
                 )}
               </>
             )}
 
+            {!isSigned && dynamicTotal?.planRefusal && (
+              <div className="offer-pay-info">
+                <p className="offer-pay-info-note">{L.amountUnavailable}</p>
+              </div>
+            )}
+
             {/* NOT SIGNED — Static payment info preview */}
-            {!isSigned && (dynamicTotal || o.payment_type === 'checkout' || o.payment_links?.length || o.bank_details) && (
+            {!isSigned && !dynamicTotal?.planRefusal && (dynamicTotal || o.payment_type === 'checkout' || o.payment_links?.length || o.bank_details) && (
               <div className="offer-pay-info">
                 {(o.payment_type === 'checkout' || o.payment_links?.length) && o.bank_details ? (
                   <>
                     <div className="offer-pay-info-row">
                       <span>&#128179; {L.payByCard}</span>
-                      <span className="offer-pay-info-price">{dynamicTotal ? dynamicTotal.cardFormatted : (o.payment_links?.[0]?.amount ?? '')} <span className="offer-surcharge-tag">+5%</span></span>
+                      <span className="offer-pay-info-price">{dynamicTotal ? (dynamicTotal.hasPlan ? dynamicTotal.dueNowCardFormatted : dynamicTotal.cardFormatted) : (o.payment_links?.[0]?.amount ?? '')} <span className="offer-surcharge-tag">+5%</span></span>
                     </div>
                     <div className="offer-pay-info-or">{lang === 'it' ? 'oppure' : 'or'}</div>
                     <div className="offer-pay-info-row">
                       <span>&#127974; {L.payByTransfer}</span>
-                      <span className="offer-pay-info-price">{dynamicTotal ? dynamicTotal.formatted : dynamicPaymentAmount}</span>
+                      <span className="offer-pay-info-price">{dynamicTotal ? (dynamicTotal.hasPlan ? dynamicTotal.dueNowFormatted : dynamicTotal.formatted) : dynamicPaymentAmount}</span>
                     </div>
                   </>
                 ) : (o.payment_type === 'checkout' || o.payment_links?.length) ? (
                   <div className="offer-pay-info-row">
                     <span>&#128179; {L.payByCard}</span>
-                    <span className="offer-pay-info-price">{dynamicTotal ? dynamicTotal.cardFormatted : (o.payment_links?.[0]?.amount ?? '')}</span>
+                    <span className="offer-pay-info-price">{dynamicTotal ? (dynamicTotal.hasPlan ? dynamicTotal.dueNowCardFormatted : dynamicTotal.cardFormatted) : (o.payment_links?.[0]?.amount ?? '')}</span>
                   </div>
                 ) : o.bank_details ? (
                   <div className="offer-pay-info-row">
                     <span>&#127974; {L.payByTransfer}</span>
-                    <span className="offer-pay-info-price">{dynamicTotal ? dynamicTotal.formatted : dynamicPaymentAmount}</span>
+                    <span className="offer-pay-info-price">{dynamicTotal ? (dynamicTotal.hasPlan ? dynamicTotal.dueNowFormatted : dynamicTotal.formatted) : dynamicPaymentAmount}</span>
                   </div>
                 ) : null}
+                {/* THE SCHEDULE — same shared sentence-builder as the sibling offer page, so two
+                    client-facing proposals cannot describe one agreement differently. */}
+                {planSchedule && (
+                  <div className="offer-pay-schedule">
+                    <div className="offer-pay-schedule-title">{L.scheduleTitle}</div>
+                    {planSchedule.map((r) => (
+                      <div key={r.seq} className="offer-pay-info-row">
+                        <span>{r.label}</span>
+                        <span className="offer-pay-info-price">
+                          {dynamicTotal?.symbol}{r.amount.toLocaleString('en-US', { minimumFractionDigits: 0 })}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <p className="offer-pay-info-note">{lang === 'it' ? 'Sceglierai il metodo di pagamento dopo la firma del contratto.' : 'You will choose your payment method after signing the contract.'}</p>
               </div>
             )}
@@ -1067,6 +1133,11 @@ function OfferStyles() {
       .offer-pay-info { background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.15); border-radius: 12px; padding: 20px 28px; margin-bottom: 20px; }
       .offer-pay-info-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; font-size: 16px; font-weight: 600; }
       .offer-pay-info-price { font-family: 'Source Code Pro', monospace; font-weight: 700; font-size: 18px; }
+      /* WS-C schedule — identical to the sibling offer page on purpose. */
+      .offer-pay-schedule { margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,.15); }
+      .offer-pay-schedule-title { font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; opacity: .75; margin-bottom: 4px; }
+      .offer-pay-schedule .offer-pay-info-row { font-size: 15px; font-weight: 500; padding: 7px 0; }
+      .offer-pay-schedule .offer-pay-info-price { font-size: 15px; }
       .offer-pay-info-or { text-align: center; font-size: 12px; font-weight: 700; letter-spacing: 2px; opacity: .5; padding: 4px 0; }
       .offer-pay-info-note { text-align: center; font-size: 12px; opacity: .55; margin: 12px 0 0; font-style: italic; }
       .offer-surcharge-tag { display: inline-block; background: rgba(255,255,255,.2); border: 1px solid rgba(255,255,255,.3); padding: 2px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; margin-left: 8px; vertical-align: middle; }
