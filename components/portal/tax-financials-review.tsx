@@ -295,6 +295,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [periodConfirm, setPeriodConfirm] = useState<{ period: PresencePeriodView; choice: 'business' | 'personal' } | null>(null)
   // S3: country-policy confirm ("everything in Spain this year → business").
   const [countryConfirm, setCountryConfirm] = useState<{ card: CountryCardView; choice: 'business' | 'personal' } | null>(null)
+  // W9 pop-up (card 4a39e0fd, Antonio's UX call): a file that could not be
+  // read — or an empty month — must NOT be buried mid-page. This holds the
+  // per-file notices the client has manually dismissed; the toast itself is
+  // DERIVED from view.file_statuses, so it reappears while a failure is real
+  // and disappears on its own the moment the file is removed/corrected.
+  const [dismissedFileToasts, setDismissedFileToasts] = useState<Set<string>>(new Set())
   const [periodFilter, setPeriodFilter] = useState<{ label: string; keys: Set<string> } | null>(null)
   // Period-answer failures render INSIDE the period section (2026-07-04:
   // Antonio's rejected taps surfaced only in the far-away top banner — the
@@ -372,6 +378,27 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     const t = setInterval(() => { void load(true) }, active ? 20000 : retryWait!)
     return () => clearInterval(t)
   }, [view, load])
+
+  // W9 pop-up feed: files that need the client's eyes right now — a failure
+  // (needs action) or an empty-but-valid month (reassurance). Quarantined
+  // files are OUR job and stay in the calm inline card, not a pop-up.
+  const fileToasts = useMemo(() => {
+    const list = (view?.file_statuses ?? []).filter(
+      f => (f.state === 'failed' || (f.state === 'succeeded' && f.empty)) && !dismissedFileToasts.has(f.path),
+    )
+    return list
+  }, [view?.file_statuses, dismissedFileToasts])
+
+  // An EMPTY-month notice is pure reassurance — auto-dismiss it after a read.
+  // A FAILURE stays until the client removes/fixes the file (or dismisses it).
+  useEffect(() => {
+    const emptyPaths = fileToasts.filter(f => f.state === 'succeeded').map(f => f.path)
+    if (emptyPaths.length === 0) return
+    const t = setTimeout(() => {
+      setDismissedFileToasts(prev => { const n = new Set(prev); emptyPaths.forEach(p => n.add(p)); return n })
+    }, 8000)
+    return () => clearTimeout(t)
+  }, [fileToasts])
 
   /**
    * THE OWNER QUESTION — answered separately from the merchant chips.
@@ -1623,6 +1650,59 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
 
   return (
     <div className="space-y-6">
+      {/* W9 POP-UP (card 4a39e0fd): a failed / empty file surfaces here, fixed
+          at the top of the viewport so it can't be lost mid-page. It is DERIVED
+          from the live file states — it disappears the instant the file is
+          removed or re-read correctly; empty-month notices also auto-close. */}
+      {fileToasts.length > 0 && (
+        <div className="fixed inset-x-0 top-3 z-[60] flex flex-col items-center gap-2 px-3 pointer-events-none" aria-live="assertive">
+          {fileToasts.map(f => {
+            const failed = f.state === 'failed'
+            return (
+              <div
+                key={f.path}
+                role={failed ? 'alert' : 'status'}
+                className={`pointer-events-auto w-full max-w-xl rounded-xl border shadow-lg p-4 ${
+                  failed ? 'border-red-300 bg-red-50' : 'border-emerald-300 bg-emerald-50'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className={`text-sm font-semibold ${failed ? 'text-red-800' : 'text-emerald-800'}`}>
+                      {failed
+                        ? (it ? `Non siamo riusciti a leggere “${f.file_name}”` : `We couldn't read “${f.file_name}”`)
+                        : (it ? `“${f.file_name}” letto correttamente` : `“${f.file_name}” read correctly`)}
+                    </p>
+                    <p className={`mt-1 text-xs ${failed ? 'text-red-700' : 'text-emerald-700'}`}>
+                      {failed
+                        ? (f.client_error ?? (it ? 'Rimuovi il file e carica l’estratto conto corretto.' : 'Remove the file and upload the corrected statement.'))
+                        : (it ? 'Nessuna transazione nel periodo (un mese senza attività). Nessuna azione richiesta.' : 'No transactions in its period (a month with no activity). Nothing needed from you.')}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {failed && (
+                      <button
+                        onClick={() => void clearFailedFile(f.path, f.file_name)}
+                        disabled={busyOrLocked}
+                        className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                      >
+                        {it ? 'Rimuovi' : 'Remove'}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setDismissedFileToasts(prev => new Set(prev).add(f.path))}
+                      aria-label={it ? 'Chiudi' : 'Dismiss'}
+                      className={`rounded-md px-2 py-1 text-sm ${failed ? 'text-red-500 hover:text-red-700' : 'text-emerald-600 hover:text-emerald-800'}`}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
       <div>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">
