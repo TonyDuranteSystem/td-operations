@@ -42,6 +42,11 @@ export interface JobResult {
    * flip the whole job to failed.
    */
   ok?: boolean
+  /** Set by statement ingestion: the `upload:<hash>` source id these rows were
+   *  written under, and the file's own name. Lets any surface name the file
+   *  behind a statement line without a fragile path-shape join. */
+  sourceFileId?: string
+  fileName?: string
   /**
    * With `ok:false`: this failure is PERMANENT — retrying cannot change the
    * outcome (an unreadable file, a wrong-year statement, a corrupt archive).

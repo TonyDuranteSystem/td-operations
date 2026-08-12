@@ -282,8 +282,11 @@ export async function GET(request: NextRequest) {
     // content hash in that path, and the row's source id IS `upload:<hash>` —
     // so the join is deterministic. Wizard-era paths predate that scheme and
     // simply resolve to no name (the line renders as it does today).
-    const nameBySha16 = new Map<string, string>()
+    const nameBySource = new Map<string, string>()   // exact: the job recorded its source id
+    const nameBySha16 = new Map<string, string>()    // fallback: hash embedded in the path
     for (const j of ingestJobRows) {
+      const res = j.result as { sourceFileId?: string; fileName?: string } | null
+      if (res?.sourceFileId && res.fileName) nameBySource.set(res.sourceFileId, res.fileName)
       const path = j.payload?.path
       if (typeof path !== 'string') continue
       const seg = path.split('/').pop() ?? ''
@@ -291,6 +294,8 @@ export async function GET(request: NextRequest) {
       if (m) nameBySha16.set(m[1].toLowerCase(), m[2])
     }
     const fileNameForSource = (sourceId: string): string | null => {
+      const exact = nameBySource.get(sourceId)
+      if (exact) return exact
       if (!sourceId.startsWith('upload:')) return null
       return nameBySha16.get(sourceId.slice(7, 23).toLowerCase()) ?? null
     }

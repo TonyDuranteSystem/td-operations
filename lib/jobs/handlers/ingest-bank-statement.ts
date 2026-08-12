@@ -133,6 +133,14 @@ export async function handleIngestBankStatement(job: Job): Promise<JobResult> {
   })
 
   if (r.ok) {
+    // Record WHICH source id this file became, so surfaces can name the file
+    // behind each statement line (card c5ff8b4d). Joining by the content-hash
+    // in the storage path only works for the financials-page scheme; the
+    // wizard's path shape has no hash, so 14 of Uxio's 15 lines were unnamable.
+    // Carrying the id explicitly makes the join exact for BOTH schemes from
+    // here on, with no backfill.
+    result.sourceFileId = r.sourceFileId
+    result.fileName = fileName
     if (r.emptyStatement) {
       // Empty-but-valid month — processed, zero rows, truthful summary
       // (card 4a39e0fd: this used to read as a corrupt file).
