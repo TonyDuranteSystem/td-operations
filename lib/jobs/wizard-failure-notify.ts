@@ -174,10 +174,11 @@ export async function notifyClientOfStatementIngestFailure(
     if (!accountId) return { notified: false, reason: "no_target" }
 
     const path = typeof payload.path === "string" ? payload.path : ""
-    const fileName = path.split("/").pop() ?? "statement"
-    // Strip the upload machinery's prefixes so the client sees THEIR filename
-    // (bank_accounts_0_statements_6a008993_Relay_2025-06.csv → Relay_2025-06.csv).
-    const displayName = fileName.replace(/^(bank_accounts_\d+_statements|bank_statements)_[a-f0-9]+_/i, "")
+    // ONE name-cleaning implementation (round 3: this had its own inline copy
+    // that missed the financials-page sha16 prefix, so the chat message named
+    // "134b63d41ab21374_QA-3-broken-file.csv" instead of the client's file).
+    const { displayStatementFileName } = await import("@/lib/tax/ingest-file-status")
+    const displayName = displayStatementFileName(path)
 
     // Idempotency marker in the job's own result JSONB (same pattern as the
     // wizard notifier) — a re-fire of failJob never double-posts.
