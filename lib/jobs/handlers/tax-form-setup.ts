@@ -407,6 +407,30 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
         if (driveResult.summaryFileId) {
           result.steps.push(step("drive_save", "ok",
             `Tax Organizer PDF saved (${driveResult.summaryFileId}), ${driveResult.copied.length} files copied${driveResult.skipped.length > 0 ? `, ${driveResult.skipped.length} already on Drive (skipped)` : ""}`))
+
+          // Register the questionnaire PDF as a REAL document on the client's
+          // record (card c5ff8b4d): it used to live on Drive and appear in no
+          // list at all. Staff-only — it prints every member's tax IDs. Linked
+          // to the tax SD so it shows in the room's documents panel. Never
+          // throws; a registration miss must not fail the submission chain.
+          const { registerOrganizerDocument } = await import("@/lib/tax/register-organizer-document")
+          const { data: taxSd } = await supabaseAdmin
+            .from("service_deliveries")
+            .select("id")
+            .eq("account_id", p.account_id)
+            .or("service_type.eq.Tax Return,service_type.eq.Tax Return Filing")
+            .eq("status", "active")
+            .limit(1)
+            .maybeSingle()
+          const reg = await registerOrganizerDocument({
+            accountId: p.account_id,
+            driveFileId: driveResult.summaryFileId,
+            companyName,
+            taxYear,
+            serviceDeliveryId: taxSd?.id ?? null,
+          })
+          result.steps.push(step("organizer_document", reg.registered ? "ok" : "error",
+            reg.registered ? "Tax questionnaire registered on the client's record (staff-only)" : `not registered: ${reg.reason}`))
         }
         if (driveResult.errors.length > 0) {
           result.steps.push(step("drive_save", "error", driveResult.errors.join(", ")))

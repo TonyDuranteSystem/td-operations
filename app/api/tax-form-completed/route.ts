@@ -505,6 +505,27 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>⚠ Stateme
           )
           if (driveResult.summaryFileId) {
             results.push({ step: "drive_save", status: "ok", detail: `Summary: ${driveResult.summaryFileId}, ${driveResult.copied.length} files copied` })
+
+            // Same registration as the portal path (card c5ff8b4d) — the
+            // external form's questionnaire PDF must also become a real
+            // document. Staff-only: it prints every member's tax IDs.
+            const { registerOrganizerDocument } = await import("@/lib/tax/register-organizer-document")
+            const { data: taxSd } = await supabaseAdmin
+              .from("service_deliveries")
+              .select("id")
+              .eq("account_id", sub.account_id)
+              .or("service_type.eq.Tax Return,service_type.eq.Tax Return Filing")
+              .eq("status", "active")
+              .limit(1)
+              .maybeSingle()
+            const reg = await registerOrganizerDocument({
+              accountId: sub.account_id,
+              driveFileId: driveResult.summaryFileId,
+              companyName,
+              taxYear: sub.tax_year,
+              serviceDeliveryId: taxSd?.id ?? null,
+            })
+            results.push({ step: "organizer_document", status: reg.registered ? "ok" : "error", detail: reg.registered ? "Tax questionnaire registered (staff-only)" : `not registered: ${reg.reason}` })
           }
           if (driveResult.errors.length > 0) {
             results.push({ step: "drive_save", status: "error", detail: driveResult.errors.join(", ") })
