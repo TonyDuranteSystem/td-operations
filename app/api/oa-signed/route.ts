@@ -21,6 +21,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { CRM_BASE_URL } from "@/lib/config"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { resolveSignedPdfPath, signedPdfPathProblem } from "@/lib/oa/signed-pdf-path"
 import { reportSystemError } from "@/lib/system-errors"
@@ -61,7 +62,7 @@ export async function POST(req: NextRequest) {
     // document. The CRM account's Documents panel has a "View" that mints a proper
     // staff-preview pass — that is now the one staff preview path.
     const previewUrl = oa.account_id
-      ? `${process.env.NEXT_PUBLIC_APP_URL || "https://td-operations.vercel.app"}/accounts/${oa.account_id}`
+      ? `${CRM_BASE_URL}/accounts/${oa.account_id}`
       : null
 
     const results: { step: string; status: string; detail?: string }[] = []
