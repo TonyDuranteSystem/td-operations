@@ -11,6 +11,7 @@ import { getClientLoginContactIds } from '@/lib/portal/client-login-index'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import { resolveFlows } from '@/lib/flows/resolve-flows'
 import { FormationWorkspaceBanner } from '@/components/flows/formation-workspace-banner'
+import { TaxWorkspaceBanner } from '@/components/flows/tax-workspace-banner'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
 interface DocumentRecord {
@@ -454,6 +455,19 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     (sd) => sd.service_type === 'Company Formation' && sd.status === 'active',
   )
 
+  // Active Tax Return SD → the workspace door (card c5ff8b4d Phase 1; Antonio
+  // hit this wall in QA: the tax room was unreachable from the account). The
+  // workspace is the ONLY staff surface for tax returns, so the way in is a
+  // top-of-page banner, exactly like formation's. Year comes from the open
+  // return so staff see WHICH year they are about to work on.
+  const taxSd = (servicesResult.data ?? []).find(
+    (sd) => (sd.service_type === 'Tax Return' || sd.service_type === 'Tax Return Filing') && sd.status === 'active',
+  )
+  const openTaxYear = ((taxReturnsResult.data ?? []) as Array<{ tax_year: number; data_received: boolean | null }>)
+    .filter((tr) => tr.data_received !== true)
+    .map((tr) => tr.tax_year)
+    .sort((a, b) => b - a)[0] ?? null
+
   // Primary contact for the e-sign prefill: the owner-role link if one exists
   // (case-insensitive — production holds BOTH 'owner' and 'Owner'), else the
   // first contact in the now-deterministic query order.
@@ -495,6 +509,14 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         <FormationWorkspaceBanner
           serviceDeliveryId={formationSd.id}
           stage={formationSd.stage}
+          companyName={(account as Account).company_name}
+        />
+      )}
+      {taxSd && (
+        <TaxWorkspaceBanner
+          serviceDeliveryId={taxSd.id}
+          stage={taxSd.stage}
+          taxYear={openTaxYear}
           companyName={(account as Account).company_name}
         />
       )}
