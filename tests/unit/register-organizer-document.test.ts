@@ -1,7 +1,9 @@
 /**
  * Card c5ff8b4d — the tax questionnaire PDF becomes a real document.
- * The privacy rule is the point of these tests: this PDF prints every member's
- * tax IDs, so it must NEVER register client-visible.
+ * Antonio's ruling is the point of these tests: the tax data the client sent is
+ * NOT secret between the members of one LLC (they file a single return
+ * together), so it registers as a CLIENT-VISIBLE COMPANY document. Decision
+ * closed — this test exists so nobody flips it back to staff-only.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
@@ -28,16 +30,18 @@ describe("organizerDocumentName", () => {
 })
 
 describe("registerOrganizerDocument", () => {
-  it("registers under Tax, linked to the service delivery, and NEVER client-visible", async () => {
+  it("registers under Tax on the COMPANY, client-visible, linked to the service delivery", async () => {
     const r = await registerOrganizerDocument({
       accountId: "acc-1", driveFileId: "drive-1", companyName: "Uxio Test LLC",
       taxYear: 2025, serviceDeliveryId: "sd-1",
     })
     expect(r.registered).toBe(true)
     const call = saved[0]
-    // PRIVACY INVARIANT: this PDF prints other members' ITIN/SSN and foreign
-    // tax IDs, and a REMOVED member can still hold portal access.
-    expect(call.portalVisible).toBe(false)
+    // RULING INVARIANT (Antonio, card c5ff8b4d): the client's own submitted tax
+    // data is not secret between the LLC's members — it belongs in the company
+    // folder and the client's documents. Never flip this to staff-only.
+    expect(call.portalVisible).toBe(true)
+    expect(call.contactId).toBeUndefined() // filed on the COMPANY, not a person
     expect(call.category).toBe(3) // Tax
     expect(call.documentType).toBe("Tax Questionnaire")
     expect(call.serviceDeliveryId).toBe("sd-1") // shows in the room's documents panel

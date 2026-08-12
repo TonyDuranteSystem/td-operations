@@ -508,7 +508,7 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>⚠ Stateme
 
             // Same registration as the portal path (card c5ff8b4d) — the
             // external form's questionnaire PDF must also become a real
-            // document. Staff-only: it prints every member's tax IDs.
+            // client-visible company document.
             const { registerOrganizerDocument } = await import("@/lib/tax/register-organizer-document")
             const { data: taxSd } = await supabaseAdmin
               .from("service_deliveries")
@@ -525,7 +525,7 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>⚠ Stateme
               taxYear: sub.tax_year,
               serviceDeliveryId: taxSd?.id ?? null,
             })
-            results.push({ step: "organizer_document", status: reg.registered ? "ok" : "error", detail: reg.registered ? "Tax questionnaire registered (staff-only)" : `not registered: ${reg.reason}` })
+            results.push({ step: "organizer_document", status: reg.registered ? "ok" : "error", detail: reg.registered ? "Tax questionnaire registered (client-visible)" : `not registered: ${reg.reason}` })
           }
           if (driveResult.errors.length > 0) {
             results.push({ step: "drive_save", status: "error", detail: driveResult.errors.join(", ") })

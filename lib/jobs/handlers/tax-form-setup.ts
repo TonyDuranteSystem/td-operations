@@ -410,9 +410,11 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
 
           // Register the questionnaire PDF as a REAL document on the client's
           // record (card c5ff8b4d): it used to live on Drive and appear in no
-          // list at all. Staff-only — it prints every member's tax IDs. Linked
-          // to the tax SD so it shows in the room's documents panel. Never
-          // throws; a registration miss must not fail the submission chain.
+          // list at all. CLIENT-VISIBLE company document by Antonio's ruling —
+          // the members of one LLC file together, their shared tax data is not
+          // secret between them. Linked to the tax SD so it shows in the room's
+          // documents panel. Never throws; a registration miss must not fail
+          // the submission chain.
           const { registerOrganizerDocument } = await import("@/lib/tax/register-organizer-document")
           const { data: taxSd } = await supabaseAdmin
             .from("service_deliveries")
@@ -430,7 +432,7 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
             serviceDeliveryId: taxSd?.id ?? null,
           })
           result.steps.push(step("organizer_document", reg.registered ? "ok" : "error",
-            reg.registered ? "Tax questionnaire registered on the client's record (staff-only)" : `not registered: ${reg.reason}`))
+            reg.registered ? "Tax questionnaire registered on the client's record (client-visible)" : `not registered: ${reg.reason}`))
         }
         if (driveResult.errors.length > 0) {
           result.steps.push(step("drive_save", "error", driveResult.errors.join(", ")))

@@ -9,13 +9,13 @@
  * insert). The only rows that ever appeared came from an unrelated Drive folder
  * scan run Apr–May 2026, which is why they stop dead on 2026-05-07.
  *
- * STAFF-ONLY, DELIBERATELY (Antonio's ruling, same day, after we checked the
- * PDF's contents): on a multi-member LLC this document prints EVERY member's
- * personal tax identifiers — "ITIN", "ITIN / SSN", "Home-Country Tax ID",
- * plus the owner's local tax number and the ultimate owner's tax ID. One
- * member must never be handed another member's tax ID, and a REMOVED member
- * can still hold portal access. So `portalVisible: false` here is a privacy
- * control, not a default — do not flip it without masking those fields first.
+ * CLIENT-VISIBLE COMPANY DOCUMENT — Antonio's ruling (card c5ff8b4d): "The tax
+ * data sent by the client is not something secret for the members, so it must
+ * go in the company folder and documents." Members of one LLC file a SINGLE
+ * return together; the data they jointly submitted — including each member's
+ * tax identifiers — is not confidential between them. No masking, no
+ * staff-only. DECISION CLOSED: do not re-open it, and do not "harden" this
+ * back to staff-only on privacy instinct.
  *
  * Attached to the service delivery so it appears in the tax room's documents
  * panel, which is where staff work. Idempotent by Drive file id (the helper
@@ -66,8 +66,8 @@ export async function registerOrganizerDocument(
       documentType: "Tax Questionnaire",
       category: CATEGORY_TAX,
       driveFileId,
-      // PRIVACY: carries other members' tax IDs — see the header note.
-      portalVisible: false,
+      // Client-visible by ruling — the company's own submitted tax data.
+      portalVisible: true,
       serviceDeliveryId: serviceDeliveryId ?? null,
     })
     if (res.error) return { registered: false, reason: res.error }
