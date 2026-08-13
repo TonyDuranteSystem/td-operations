@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { groupKeyRoot } from '@/lib/tax/question-groups'
 import { resolveInstitution } from '@/lib/tax/bank-identity'
+import { diagnosisCopy } from '@/lib/tax/ingest-diagnosis'
 import { suggestedPhrase, gateSixText } from '@/lib/tax/disclosure-text'
 import ValidationBreakdownPanel from './validation-breakdown'
 
@@ -89,7 +90,7 @@ interface View {
   ingestFailed: number
   /** W9 (card 4a39e0fd): live per-file status — filename, state, and for
    *  failed files the plain-language what-happened + how-to-fix. */
-  file_statuses?: Array<{ path: string; file_name: string; state: 'pending' | 'succeeded' | 'failed' | 'quarantined'; client_error: string | null; empty?: boolean }>
+  file_statuses?: Array<{ path: string; file_name: string; state: 'pending' | 'succeeded' | 'failed' | 'quarantined'; client_error: string | null; empty?: boolean; diagnosis?: { code: string; found_years?: number[]; expected_year?: number; software?: string } | null }>
   /** W9: staff unlocked the failed-file hard block from the CRM. */
   failedFilesOverridden?: boolean
   /** S1: statement files quarantined pending a one-tap format confirmation (staff). */
@@ -1556,7 +1557,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     <span className={`text-xs ml-2 ${f.state === 'failed' ? 'text-red-700' : f.state === 'quarantined' ? 'text-sky-700' : 'text-zinc-500'}`}>
                       {f.state === 'pending' && (it ? 'Lettura in corso…' : 'Reading…')}
                       {f.state === 'quarantined' && (it ? 'Formato in verifica dal nostro team — nessuna azione richiesta' : 'Format being confirmed by our team — nothing needed from you')}
-                      {f.state === 'failed' && (it ? 'Non leggibile' : 'Could not be read')}
+                      {f.state === 'failed' && (
+                        f.diagnosis?.code === 'wrong_year'
+                          ? (it ? 'Anno sbagliato' : 'Wrong year')
+                          : f.diagnosis?.code === 'not_bank_statement'
+                            ? (it ? 'Non è un estratto conto' : 'Not a bank statement')
+                            : (it ? 'Non leggibile' : 'Could not be read')
+                      )}
                       {f.state === 'succeeded' && f.empty && (it ? 'Letto correttamente — nessuna transazione nel periodo (mese senza attività)' : 'Read correctly — no transactions in its period (a month with no activity)')}
                     </span>
                   </div>
@@ -1570,10 +1577,16 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     </button>
                   )}
                 </div>
-                {f.state === 'failed' && f.client_error && (
-                  <p className="mt-1 text-xs text-red-700">{f.client_error}</p>
-                )}
+                {/* Wave 2 (Antonio): the card says WHAT is wrong + the fix, in
+                    the client's language, from the ONE copy source the chat
+                    message also uses (lib/tax/ingest-diagnosis.ts). Legacy
+                    failures without a diagnosis keep the stored guide text. */}
                 {f.state === 'failed' && (
+                  <p className="mt-1 text-xs text-red-700">
+                    {f.diagnosis ? diagnosisCopy(f.diagnosis as never)[it ? 'it' : 'en'] : f.client_error}
+                  </p>
+                )}
+                {f.state === 'failed' && !f.diagnosis && (
                   <p className="mt-1 text-xs text-zinc-600">
                     {it
                       ? 'Rimuovi il file e carica l\'estratto conto corretto (CSV o PDF ufficiale della banca). Il nostro team è già stato avvisato.'

@@ -34,6 +34,11 @@ export interface IngestResult {
   /** S1 quarantine: unknown CSV layout, mapping proposed but ambiguous —
    *  awaiting a one-tap staff format confirmation. Nothing inserted. */
   quarantine?: { mapping_id: string | null; fingerprint: string; bank_label: string; ambiguities: string[] }
+  /** Wave 2 (card 4a39e0fd): WHY the file failed, when we can tell — wrong
+   *  year / accounting export / empty period. Persisted into the job result so
+   *  the chat message and the file card render the SAME explanation from
+   *  lib/tax/ingest-diagnosis.ts. Absent = generic unreadable. */
+  diagnosis?: import("./ingest-diagnosis").IngestDiagnosis
   /** Dedup alert (L1/L2/L3) — informational; insert proceeds unless identical file. */
   alert?: string | null
   inserted: number
@@ -138,6 +143,7 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     return {
       ok: true,
       emptyStatement: true,
+      diagnosis: { code: "empty_period" },
       alert: `This statement was read correctly — it has no transactions for its period (a month with no account activity is normal).`,
       inserted: 0, parsed: 0, months: [], bankDetected: parsed.bank_name || bankLabel,
       uncategorizedRemaining: 0, sourceFileId,
@@ -153,13 +159,21 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     }
   }
   if (parsed.transactions.length === 0) {
-    const detail = parsed.errors.length ? ` (${parsed.errors[0]})` : ""
-    return fail(
-      `We could not read any transactions from this file${detail}. ` +
-      `Please upload each statement exactly as your bank exports it — a CSV or the official PDF for the full period. ` +
-      `Do not merge, combine, or edit the files: tools like merge-csv.com change the format and make the file unreadable. ` +
-      `Upload one file per bank account, just as the bank gives it to you.`,
-    )
+    // DIAGNOSE before falling back to "unreadable" (Wave 2 — Antonio: tell the
+    // client WHAT is wrong, never ask why). Nova Ratio's real case: QuickBooks
+    // exports uploaded as bank statements — readable as CSV, zero bank
+    // transactions, and the old message blamed the file's format.
+    const { sniffAccountingExport, diagnosisCopy } = await import("./ingest-diagnosis")
+    const headerLine = mimeType === "text/csv" ? buffer.toString("utf8", 0, 2000).split(/\r?\n/)[0] ?? "" : ""
+    const sniff = sniffAccountingExport(headerLine)
+    const diagnosis = sniff.isAccountingExport
+      ? { code: "not_bank_statement" as const, software: sniff.software }
+      : { code: "unreadable" as const }
+    const detail = !sniff.isAccountingExport && parsed.errors.length ? ` (${parsed.errors[0]})` : ""
+    return {
+      ...fail(`${diagnosisCopy(diagnosis).en}${detail}`),
+      diagnosis,
+    }
   }
 
   // 2. Categorize (legacy built-ins + member detection) and keep the tax year.
@@ -191,10 +205,14 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     .map(tx => ({ ...tx, bank_name: ident.canonical, account_ref: ident.account_ref }))
 
   if (categorized.length === 0) {
-    return fail(
-      `This file contains no ${taxYear} transactions (it covers a different period). ` +
-      `Please export the entire year ${taxYear} — January 1 to December 31 — and upload that file.`,
-    )
+    // WRONG YEAR — the PAMAG shape (2026 statements uploaded for a 2025
+    // return). The file parsed fine; name the years it actually holds.
+    const { diagnosisCopy } = await import("./ingest-diagnosis")
+    const foundYears = Array.from(new Set(
+      parsed.transactions.map(t => Number(String(t.transaction_date).slice(0, 4))).filter(y => Number.isInteger(y) && y > 1990),
+    )).sort()
+    const diagnosis = { code: "wrong_year" as const, found_years: foundYears, expected_year: taxYear }
+    return { ...fail(diagnosisCopy(diagnosis).en), diagnosis }
   }
 
   // 3. Duplicate analysis (L1/L2/L3) against what's already in the system.

@@ -143,7 +143,9 @@ export async function handleIngestBankStatement(job: Job): Promise<JobResult> {
     result.fileName = fileName
     if (r.emptyStatement) {
       // Empty-but-valid month — processed, zero rows, truthful summary
-      // (card 4a39e0fd: this used to read as a corrupt file).
+      // (card 4a39e0fd: this used to read as a corrupt file). Diagnosis rides
+      // along so the file card renders the confirm-inactive wording.
+      if (r.diagnosis) result.diagnosis = r.diagnosis
       result.steps.push(step("ingest", "ok", `${fileName}: statement read correctly — no transactions in its period`))
       result.summary = `Processed ${fileName}: empty statement period (0 transactions)`
     } else {
@@ -176,12 +178,17 @@ export async function handleIngestBankStatement(job: Job): Promise<JobResult> {
     result.terminal = true
     result.summary = `Needs format confirmation: ${fileName}`
   } else {
-    // Unreadable / wrong-year file. terminal (card 4a39e0fd): the worker used
-    // to bounce ok:false through the retry loop, burning a full AI extraction
-    // per attempt on a file that is dead on every attempt.
+    // Unreadable / wrong-year / accounting-export file. terminal (card
+    // 4a39e0fd): the worker used to bounce ok:false through the retry loop,
+    // burning a full AI extraction per attempt on a file that is dead on every
+    // attempt. Wave 2: the DIAGNOSIS rides in the result so the client chat
+    // message and the file card explain WHAT is wrong + the fix, from ONE copy
+    // source (lib/tax/ingest-diagnosis.ts) — never the generic error when we
+    // can say more, and never contradicting each other.
     result.steps.push(step("ingest", "error", `${fileName}: ${r.error ?? "could not read file"}`))
     result.ok = false
     result.terminal = true
+    if (r.diagnosis) result.diagnosis = r.diagnosis
     result.summary = `Could not read ${fileName}`
   }
   return result
