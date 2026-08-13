@@ -1629,7 +1629,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           {(view.accounts?.length ?? 0) > 0 && (
             <div className="mt-2">
               <div className="text-xs text-zinc-500">
-                {it ? 'I tuoi conti già caricati — tocca per riusare lo stesso (evita di riscrivere il numero):' : 'Your accounts on file — tap to reuse the same one (no retyping the number):'}
+                {/* Card e1cb2b44: the old parenthetical promised "no retyping
+                    the number" — false for accounts saved without one (the
+                    chip filled the bank and left the number empty next to a
+                    red warning). The promise now matches reality: chips WITH
+                    a number restore it; numberless ones just fill the bank. */}
+                {it ? 'I tuoi conti già caricati — tocca per riusare lo stesso:' : 'Your accounts on file — tap to reuse the same one:'}
               </div>
               <div className="mt-1 flex flex-wrap gap-1.5">
                 {view.accounts!.map(a => (
