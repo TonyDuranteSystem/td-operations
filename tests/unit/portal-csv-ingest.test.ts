@@ -122,6 +122,33 @@ describe("ingestPortalCsv", () => {
     expect(r.error).toContain("download the transactions CSV from your bank")
   })
 
+  it("accounting export beats the format QUARANTINE — never 'we're confirming the format' for the wrong document", async () => {
+    // Sandbox QA found this precedence gap: a QB export is an unknown CSV
+    // layout, so S1 quarantined it and told the client "it will be processed
+    // shortly" — for a file that never will be. The sniff must win.
+    parseMock.mockResolvedValue({
+      transactions: [], bank_name: "unknown", errors: [],
+      quarantine: { mapping_id: "m1", fingerprint: "fp", bank_label: "?", ambiguities: ["cols"] },
+    })
+    const qbBuffer = Buffer.from('"Date","Transaction Type","Num","Posting","Memo/Description","Amount"\n', "utf8")
+    const r = await ingestPortalCsv({ ...INPUT, buffer: qbBuffer })
+    expect(r.ok).toBe(false)
+    expect(r.quarantine).toBeUndefined()
+    expect(r.diagnosis?.code).toBe("not_bank_statement")
+  })
+
+  it("a genuine unknown BANK csv still quarantines (the sniff is conservative)", async () => {
+    parseMock.mockResolvedValue({
+      transactions: [], bank_name: "unknown", errors: [],
+      quarantine: { mapping_id: "m1", fingerprint: "fp", bank_label: "?", ambiguities: ["cols"] },
+    })
+    const bankBuffer = Buffer.from("Booking Day,Details,Value,Saldo\n", "utf8")
+    const r = await ingestPortalCsv({ ...INPUT, buffer: bankBuffer })
+    expect(r.ok).toBe(false)
+    expect(r.quarantine).toBeDefined()
+    expect(r.diagnosis).toBeUndefined()
+  })
+
   it("empty-but-valid month carries the 'empty_period' diagnosis", async () => {
     parseMock.mockResolvedValue({ transactions: [], bank_name: "Relay", errors: ["Empty CSV"], recognized_empty: true })
     const r = await ingestPortalCsv(INPUT)

@@ -121,6 +121,23 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     taxYear,
     mappingStore: makeSupabaseMappingStore(supabaseAdmin),
   })
+  // ACCOUNTING-EXPORT SNIFF RUNS BEFORE QUARANTINE (Wave 2 sandbox QA found
+  // the precedence gap): a QuickBooks export is an unknown CSV layout, so the
+  // S1 quarantine intercepted it and told the client "we're confirming the
+  // format — it will be processed shortly" — for a file that will NEVER
+  // process as a bank statement. An export from accounting software is not a
+  // format to confirm; it is the wrong document, and the client must hear
+  // that immediately (Nova Ratio's real case). Two-signal conservative, so a
+  // genuine unknown bank CSV still quarantines for staff confirmation.
+  if (mimeType === "text/csv" && (parsed.quarantine || parsed.transactions.length === 0)) {
+    const { sniffAccountingExport, diagnosisCopy } = await import("./ingest-diagnosis")
+    const headerLine = buffer.toString("utf8", 0, 2000).split(/\r?\n/)[0] ?? ""
+    const sniff = sniffAccountingExport(headerLine)
+    if (sniff.isAccountingExport) {
+      const diagnosis = { code: "not_bank_statement" as const, software: sniff.software }
+      return { ...fail(diagnosisCopy(diagnosis).en), diagnosis }
+    }
+  }
   if (parsed.quarantine) {
     return {
       ok: false,
@@ -159,21 +176,12 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     }
   }
   if (parsed.transactions.length === 0) {
-    // DIAGNOSE before falling back to "unreadable" (Wave 2 — Antonio: tell the
-    // client WHAT is wrong, never ask why). Nova Ratio's real case: QuickBooks
-    // exports uploaded as bank statements — readable as CSV, zero bank
-    // transactions, and the old message blamed the file's format.
-    const { sniffAccountingExport, diagnosisCopy } = await import("./ingest-diagnosis")
-    const headerLine = mimeType === "text/csv" ? buffer.toString("utf8", 0, 2000).split(/\r?\n/)[0] ?? "" : ""
-    const sniff = sniffAccountingExport(headerLine)
-    const diagnosis = sniff.isAccountingExport
-      ? { code: "not_bank_statement" as const, software: sniff.software }
-      : { code: "unreadable" as const }
-    const detail = !sniff.isAccountingExport && parsed.errors.length ? ` (${parsed.errors[0]})` : ""
-    return {
-      ...fail(`${diagnosisCopy(diagnosis).en}${detail}`),
-      diagnosis,
-    }
+    // Zero transactions and NOT an accounting export (the sniff above already
+    // bounced those) → generic unreadable, with the parser's own hint.
+    const { diagnosisCopy } = await import("./ingest-diagnosis")
+    const diagnosis = { code: "unreadable" as const }
+    const detail = parsed.errors.length ? ` (${parsed.errors[0]})` : ""
+    return { ...fail(`${diagnosisCopy(diagnosis).en}${detail}`), diagnosis }
   }
 
   // 2. Categorize (legacy built-ins + member detection) and keep the tax year.
