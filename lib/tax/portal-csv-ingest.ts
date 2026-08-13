@@ -206,7 +206,11 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
   // Canonicalize the institution name and build the account identity ONCE per file
   // (one uploaded file = one account). Every row gets the canonical name + the
   // account_ref key so the account can never split on a name variant again.
-  const ident = buildAccountRef({ rawBankName: bankDetected, accountNumber })
+  // Identity build (2026-08-13): the registry is now LIVE CATALOG DATA merged
+  // over the code seed — staff reclassify an institution without a deploy.
+  const { loadInstitutionRegistry } = await import("./institution-registry")
+  const registry = await loadInstitutionRegistry()
+  const ident = buildAccountRef({ rawBankName: bankDetected, accountNumber, registry })
   const categorized = parsed.transactions
     .map(tx => categorizeTransaction(tx, memberNames, []))
     .filter(tx => tx.transaction_date.startsWith(String(taxYear)))
