@@ -133,6 +133,26 @@ export function formatMemberAddress(parts: MemberAddressParts): string | null {
   return joined.length > 0 ? joined : null
 }
 
+/**
+ * Choose ONE of two address records — never a field from each.
+ *
+ * The rule this file already stated ("WHOLE address, not field-by-field") was
+ * broken the moment the postal code was added: the individual-member path resolved
+ * `contact?.field ?? memberRow.field` per field, so a contact holding a street but
+ * no postal code took its street from the contact and its postal code from the
+ * member row. That composes an address that exists in NEITHER record — and it goes
+ * into a legal document. 17 production contacts have a street and no postal code.
+ *
+ * Preference wins only if it has SOMETHING; otherwise the fallback is taken whole.
+ * Which record is preferred is the caller's decision and is unchanged here.
+ */
+export function chooseWholeAddress(
+  preferred: MemberAddressParts,
+  fallback: MemberAddressParts,
+): MemberAddressParts {
+  return isMemberAddressEmpty(preferred) ? fallback : preferred
+}
+
 /** Convenience for the common "row in, one line out" call. */
 export function formatMemberAddressRow(member: MemberAddressRow | null | undefined): string | null {
   return formatMemberAddress(resolveMemberAddress(member))

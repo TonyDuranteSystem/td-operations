@@ -24,6 +24,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 import {
+  chooseWholeAddress,
   resolveMemberAddress,
   formatMemberAddress,
   formatMemberAddressRow,
@@ -179,6 +180,39 @@ describe('resolveMemberAddress — individual members', () => {
       address_zip: null, address_country: null,
     }
     expect(formatMemberAddressRow(bare as MemberAddressRow)).toBeNull()
+  })
+})
+
+describe('chooseWholeAddress — one record or the other, never a field from each', () => {
+  const CONTACT = { line1: 'Via Milano 3', city: 'Milano', state: 'MI', zip: null, country: 'Italy' }
+  const MEMBER_ROW = { line1: 'Via Roma 1', city: 'Rogno', state: 'BG', zip: '24060', country: 'Italy' }
+
+  it('THE MIXING DEFECT: a preferred record missing ONE field does not borrow it from the other', () => {
+    // Resolving per field (which is what adding the postal code did) gave the
+    // contact's street with the member row's postal code — an address that exists
+    // in NEITHER record, printed into a legal document. 17 production contacts have
+    // a street and no postal code.
+    const chosen = chooseWholeAddress(CONTACT, MEMBER_ROW)
+    expect(chosen).toEqual(CONTACT)
+    expect(chosen.zip).toBeNull()
+    expect(chosen.zip).not.toBe('24060')
+    expect(chosen.line1).not.toBe('Via Roma 1')
+  })
+
+  it('takes the fallback WHOLE when the preferred record is empty', () => {
+    expect(chooseWholeAddress(EMPTY_MEMBER_ADDRESS, MEMBER_ROW)).toEqual(MEMBER_ROW)
+  })
+
+  it('treats a blank-string record as empty, so it does not win over a real address', () => {
+    const blank = { line1: '  ', city: '', state: null, zip: '   ', country: '' }
+    expect(chooseWholeAddress(resolveMemberAddress({
+      member_type: 'individual', address_street: blank.line1, address_city: blank.city,
+      address_state: blank.state, address_zip: blank.zip, address_country: blank.country,
+    } as MemberAddressRow), MEMBER_ROW)).toEqual(MEMBER_ROW)
+  })
+
+  it('returns an empty address when neither record holds anything — substitutes nothing', () => {
+    expect(chooseWholeAddress(EMPTY_MEMBER_ADDRESS, EMPTY_MEMBER_ADDRESS)).toEqual(EMPTY_MEMBER_ADDRESS)
   })
 })
 

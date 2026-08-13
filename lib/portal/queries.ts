@@ -1,7 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { resolveMailingAddress } from '@/lib/addresses'
-import { resolveMemberAddress } from '@/lib/members/member-address'
+import { resolveMemberAddress, chooseWholeAddress } from '@/lib/members/member-address'
 import { mayIncludePersonalNull } from '@/lib/portal/chat-scope'
 import { isClientVisiblePayment, filterClientVisibleExpenseMirrors } from '@/lib/portal/payment-visibility'
 import type { PortalAccount, PortalService } from '@/lib/types'
@@ -548,13 +548,21 @@ export async function getPortalMembers(accountId: string) {
         citizenship: contact?.citizenship ?? null,
         date_of_birth: contact?.date_of_birth ?? null,
         // Precedence deliberately UNCHANGED for individuals — contact record first,
-        // exactly as before. Only the postal code is added. Whether the member row
-        // should win here is a real question and is REPORT-ONLY on dev job 271bbe46.
-        address_line1: contact?.address_line1 ?? m.address_street ?? null,
-        address_city: contact?.address_city ?? m.address_city ?? null,
-        address_state: contact?.address_state ?? m.address_state ?? null,
-        address_zip: contact?.address_zip ?? m.address_zip ?? null,
-        address_country: contact?.address_country ?? m.address_country ?? null,
+        // exactly as before. Whether the member row should win here is REPORT-ONLY
+        // on dev job 271bbe46.
+        //
+        // But the choice is now made ONCE, over the whole address. Resolving it per
+        // field (which is what adding the postal code did) let a contact with a
+        // street but no postal code take its street from the contact and its postal
+        // code from the member row — an address existing in neither record, in a
+        // legal document. 17 production contacts have a street and no postal code.
+        ...(() => {
+          const a = chooseWholeAddress(
+            { line1: contact?.address_line1 ?? null, city: contact?.address_city ?? null, state: contact?.address_state ?? null, zip: contact?.address_zip ?? null, country: contact?.address_country ?? null },
+            resolveMemberAddress(m),
+          )
+          return { address_line1: a.line1, address_city: a.city, address_state: a.state, address_zip: a.zip, address_country: a.country }
+        })(),
         company_name: null,
         ein: null,
         representative_name: null,
