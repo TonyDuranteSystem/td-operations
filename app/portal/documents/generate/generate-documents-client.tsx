@@ -81,9 +81,16 @@ const LABELS: Record<string, Record<string, string>> = {
   },
   effectiveDate: { en: 'Effective Date', it: 'Data di Efficacia' },
   memberAddresses: { en: 'Member Addresses', it: 'Indirizzi dei Soci' },
-  addressHint: {
-    en: 'Enter each member\'s full address to include in the Operating Agreement.',
-    it: 'Inserisci l\'indirizzo completo di ciascun socio da includere nell\'Atto Costitutivo.',
+  // ONE text for every company shape. The previous copy said "Enter each member's
+  // full address", on a screen whose typed values the server discarded for every
+  // account that had member records — the field looked editable and was not.
+  addressFromRecord: {
+    en: 'These addresses come from your records with us and appear in the Operating Agreement exactly as shown. If anything is wrong, send us a message and we\'ll put the form in your portal so you can update them.',
+    it: 'Questi indirizzi provengono dai tuoi dati registrati presso di noi e compaiono nell\'Atto Costitutivo esattamente come mostrati. Se qualcosa non è corretto, scrivici e ti mettiamo il modulo nel portale per aggiornarli.',
+  },
+  addressMissing: {
+    en: 'Not on file — send us a message and we\'ll add it.',
+    it: 'Non disponibile — scrivici e lo aggiungiamo.',
   },
   address: { en: 'Address', it: 'Indirizzo' },
   amount: { en: 'Distribution Amount', it: 'Importo Distribuzione' },
@@ -135,9 +142,6 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   })
   // OA-specific state
   const [oaEffectiveDate, setOaEffectiveDate] = useState(new Date().toISOString().split('T')[0])
-  const [oaMemberAddresses, setOaMemberAddresses] = useState<Record<number, string>>(
-    Object.fromEntries(members.map((m, i) => [i, m.address || '']))
-  )
   const [isGenerating, setIsGenerating] = useState(false)
   const [signatureImage, setSignatureImage] = useState<string | null>(null)
   const [portalSaveWarning, setPortalSaveWarning] = useState(false)
@@ -184,9 +188,11 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   const oaCanProceed = !isMMLC || (oaPreflight?.allHavePortal === true)
 
   // Members with addresses resolved from OA state (for OA template)
-  const oaMembers = members.map((m, i) => ({
+  const oaMembers = members.map(m => ({
     fullName: m.fullName,
-    address: oaMemberAddresses[i] || m.address || '',
+    // The record verbatim — the same value the create route stores, so the document
+    // on screen and the document that gets signed cannot differ.
+    address: m.address || '',
     ownershipPct: m.ownershipPct ?? 100 / members.length,
   }))
 
@@ -378,14 +384,12 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
     setOaCreateError(null)
     let succeeded = false
     try {
-      const memberAddresses = members.map((_, i) => oaMemberAddresses[i] || '')
       const res = await fetch('/api/portal/operating-agreement/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           account_id: account.id,
           effective_date: oaEffectiveDate,
-          member_addresses: memberAddresses,
         }),
       })
       const data = await res.json().catch(() => ({}))
@@ -432,7 +436,6 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
       currency: 'USD',
     })
     setOaEffectiveDate(new Date().toISOString().split('T')[0])
-    setOaMemberAddresses(Object.fromEntries(members.map((m, i) => [i, m.address || ''])))
   }
 
   return (
@@ -655,20 +658,22 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
 
               <div>
                 <label className="block text-xs text-zinc-500 mb-1">{l('memberAddresses', lang)}</label>
-                <p className="text-xs text-zinc-500 mb-3">{l('addressHint', lang)}</p>
-                <div className="space-y-3">
+                <p className="text-xs text-zinc-500 mb-3">{l('addressFromRecord', lang)}</p>
+                {/* READ-ONLY, for every company shape. These addresses go into a
+                    legal document verbatim, so the screen shows the record and
+                    offers no way to type over it; the route refuses a posted
+                    address outright. */}
+                <div className="space-y-2">
                   {members.map((m, i) => (
-                    <div key={i}>
-                      <label className="block text-xs text-zinc-500 mb-1">
-                        {m.fullName} — {l('address', lang)}
-                      </label>
-                      <input
-                        type="text"
-                        value={oaMemberAddresses[i] || ''}
-                        onChange={e => setOaMemberAddresses(prev => ({ ...prev, [i]: e.target.value }))}
-                        placeholder="123 Main St, City, State, Country"
-                        className="w-full px-3 py-2 bg-zinc-50 rounded border border-zinc-200 text-zinc-900 text-sm focus:outline-none focus:border-violet-500"
-                      />
+                    <div key={i} className="rounded border border-zinc-200 bg-zinc-50 px-3 py-2">
+                      <p className="text-xs text-zinc-500">{m.fullName}</p>
+                      {m.address ? (
+                        <p className="text-sm text-zinc-900">{m.address}</p>
+                      ) : (
+                        /* Never blank and never a placeholder that could read as an
+                           address — an absent record says so in words. */
+                        <p className="text-sm text-amber-700">{l('addressMissing', lang)}</p>
+                      )}
                     </div>
                   ))}
                 </div>

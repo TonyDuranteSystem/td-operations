@@ -17,7 +17,16 @@
  * stored as 'sent', not 'draft', or it never reaches the portal's action-required
  * list — see the comment on the status field.
  *
- * Body: { account_id: string, effective_date: string, member_addresses: string[] }
+ * Body: { account_id: string, effective_date: string }
+ *
+ * ⛔ `member_addresses: string[]` IS GONE — do not reintroduce it (dev job
+ * `61f184ca`). It was a client-typed address per member, position-matched to a
+ * SEPARATE members query, and carried two defects held off only by discipline:
+ * whenever the member row had an address the typed value was silently discarded
+ * (the field looked editable and was not), and the array was indexed against a
+ * query ordered only by `is_primary`, so tied rows could pair a typed address with
+ * a DIFFERENT member in a legal document. The screen is now read-only for every
+ * company shape and this route refuses any posted address.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -32,6 +41,7 @@ import { notifyClientActionRequired } from '@/lib/portal/action-required'
 import { reportSystemError } from '@/lib/system-errors'
 import { resolveSigningSet, describeSigningBlock, signerDisplayName, type ResolvedSigner } from '@/lib/members/signing-set'
 import { signerLinkExpiryISO } from '@/lib/oa/public-view'
+import { formatMemberAddress } from '@/lib/members/member-address'
 
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -41,14 +51,27 @@ export async function POST(request: NextRequest) {
   const contactId = getClientContactId(user)
   if (!contactId) return NextResponse.json({ error: 'No contact linked to your account' }, { status: 403 })
 
-  let body: { account_id?: string; effective_date?: string; member_addresses?: string[] }
+  let body: { account_id?: string; effective_date?: string; [key: string]: unknown }
   try {
     body = await request.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
-  const { account_id, effective_date, member_addresses = [] } = body
+  const { account_id, effective_date } = body
+
+  // NOTHING on the Generate Documents screen is editable, so no request may carry
+  // an address. Refused LOUDLY rather than ignored — silent discarding is exactly
+  // what the deleted field did, and a client correcting a wrong address had no way
+  // to succeed and no way to know they had failed. The only realistic sender is a
+  // browser tab or cached app shell still running the previous build, which posted
+  // an address on every generate: they have done nothing wrong and their address is
+  // fine, so the message says so.
+  if (body.member_addresses !== undefined) {
+    return NextResponse.json({
+      error: 'This page is out of date — please refresh and try again.',
+    }, { status: 400 })
+  }
   if (!account_id || !effective_date) {
     return NextResponse.json({ error: 'account_id and effective_date are required' }, { status: 400 })
   }
@@ -182,7 +205,7 @@ export async function POST(request: NextRequest) {
   // ── 3. FETCH PRIMARY CONTACT ──
   const { data: contact } = await supabaseAdmin
     .from('contacts')
-    .select('full_name, email')
+    .select('full_name, email, address_line1, address_city, address_state, address_zip, address_country')
     .eq('id', contactId)
     .single()
 
@@ -318,7 +341,7 @@ export async function POST(request: NextRequest) {
   }
 
   // ── 6. BUILD MEMBERS JSON FOR MMLLC ──
-  // Address priority: CRM members row → caller-provided member_addresses[i].
+  // No priority list: the member row IS the address, and nothing may be supplied.
   const composeMemberAddress = (m: (typeof membersRows)[number]): string | null => {
     const parts = [m.address_street, m.address_city, m.address_state, m.address_zip, m.address_country].filter(Boolean)
     return parts.length > 0 ? parts.join(', ') : null
@@ -331,9 +354,11 @@ export async function POST(request: NextRequest) {
   // waiting for), not as a coincidence.
   const totalSigners = isMMLC ? oaSigners.length : 1
   const membersJson = isMMLC
-    ? membersRows.map((m, i) => ({
+    ? membersRows.map(m => ({
         name: m.full_name ?? m.company_name ?? 'Unknown',
-        address: composeMemberAddress(m) ?? member_addresses[i] ?? null,
+        // The member row IS the address. The caller-supplied fallback is gone with
+        // the typed field it served.
+        address: composeMemberAddress(m),
         email: m.email ?? null,
         ownership_pct: m.ownership_pct ?? 0,
         initial_contribution: '$1,000 USD',
@@ -360,7 +385,14 @@ export async function POST(request: NextRequest) {
       entity_type: entityType,
       manager_name: contact.full_name,
       member_name: isMMLC ? (primaryMember?.full_name ?? contact.full_name) : contact.full_name,
-      member_address: member_addresses[0] ?? null,
+      // A Single Member LLC has ONE OWNER and no member roster — by design. Their
+      // address is read from their contact record, the same record the screen
+      // displays read-only, so preview and stored document agree. It used to be the
+      // browser's first typed value; there is no typed value any more.
+      member_address: isMMLC ? null : formatMemberAddress({
+        line1: contact.address_line1, city: contact.address_city, state: contact.address_state,
+        zip: contact.address_zip, country: contact.address_country,
+      }),
       member_email: isMMLC ? (primaryMember?.email ?? contact.email) : contact.email,
       members: membersJson,
       effective_date: effective_date,
