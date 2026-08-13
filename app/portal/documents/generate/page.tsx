@@ -6,6 +6,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { getLocale } from '@/lib/portal/i18n'
 import { GenerateDocumentsClient } from './generate-documents-client'
+import { formatMemberAddress } from '@/lib/members/member-address'
 
 export const dynamic = 'force-dynamic'
 
@@ -45,7 +46,7 @@ export default async function GenerateDocumentsPage() {
     // skip their entire body (the "two-line document" bug, 2026-07-07).
     supabaseAdmin
       .from('account_contacts')
-      .select('contact_id, role, contacts(first_name, last_name)')
+      .select('contact_id, role, contacts(first_name, last_name, address_line1, address_city, address_state, address_zip, address_country)')
       .eq('account_id', selectedAccountId)
       .limit(20),
   ])
@@ -56,7 +57,11 @@ export default async function GenerateDocumentsPage() {
   const contactLinks = (contactResult.data ?? []) as Array<{
     contact_id: string
     role: string | null
-    contacts: { first_name: string | null; last_name: string | null } | null
+    contacts: {
+      first_name: string | null; last_name: string | null
+      address_line1: string | null; address_city: string | null
+      address_state: string | null; address_zip: string | null; address_country: string | null
+    } | null
   }>
   // Prefer an owner-ish role (any casing), then any member-ish role, then the
   // first linked contact — never leave the members list silently empty.
@@ -73,7 +78,12 @@ export default async function GenerateDocumentsPage() {
         role: m.role || 'owner',
         ownershipPct: m.ownership_pct ?? null,
         // Address fields for OA generation
-        address: [m.address_line1, m.address_city, m.address_state, m.address_country].filter(Boolean).join(', ') || null,
+        // Postal code included — this join dropped it, so the client reviewed an
+        // address the stored agreement did not contain.
+        address: formatMemberAddress({
+          line1: m.address_line1, city: m.address_city, state: m.address_state,
+          zip: m.address_zip, country: m.address_country,
+        }),
         isPrimary: m.is_primary ?? false,
         // Extended fields for OA signing flow
         contact_id: m.contact_id ?? null,
@@ -85,7 +95,15 @@ export default async function GenerateDocumentsPage() {
           fullName: `${ownerContact.first_name ?? ''} ${ownerContact.last_name ?? ''}`.trim() || 'N/A',
           role: 'owner',
           ownershipPct: null,
-          address: null,
+          // A Single Member LLC has ONE OWNER and no member roster — that is by
+          // design. Their address lives on the contact record, and it is shown
+          // READ-ONLY here like every other address on this screen. This was
+          // hard-coded null, which is why the client was asked to type it.
+          address: formatMemberAddress({
+            line1: ownerContact.address_line1, city: ownerContact.address_city,
+            state: ownerContact.address_state, zip: ownerContact.address_zip,
+            country: ownerContact.address_country,
+          }),
           isPrimary: true,
           contact_id: ownerLink?.contact_id ?? contactId,
           email: null,

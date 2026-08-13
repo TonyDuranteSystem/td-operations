@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { resolveMailingAddress } from '@/lib/addresses'
+import { resolveMemberAddress, chooseWholeAddress } from '@/lib/members/member-address'
 import { mayIncludePersonalNull } from '@/lib/portal/chat-scope'
 import { isClientVisiblePayment, filterClientVisibleExpenseMirrors } from '@/lib/portal/payment-visibility'
 import type { PortalAccount, PortalService } from '@/lib/types'
@@ -463,7 +464,11 @@ export async function getPortalMembers(accountId: string) {
   // Primary source: members table (populated for accounts formed/onboarded after April 2026)
   const { data: membersRows } = await supabaseAdmin
     .from('members')
-    .select('id, member_type, full_name, company_name, ein, email, phone, ownership_pct, is_primary, contact_id, representative_name, representative_email, representative_phone, address_street, address_city, address_state, address_country, representative_address_street, representative_address_city, representative_address_state, representative_address_country')
+    // address_zip IS NOT OPTIONAL HERE. It was missing from this list, so every
+    // member address the portal displayed — and every one it pre-filled into an
+    // Operating Agreement — silently dropped its postal code, while the stored
+    // agreement (which selects the column) carried one.
+    .select('id, member_type, full_name, company_name, ein, email, phone, ownership_pct, is_primary, contact_id, representative_name, representative_email, representative_phone, address_street, address_city, address_state, address_zip, address_country, representative_address_street, representative_address_city, representative_address_state, representative_address_zip, representative_address_country')
     .eq('account_id', accountId)
     .order('is_primary', { ascending: false })
 
@@ -478,13 +483,13 @@ export async function getPortalMembers(accountId: string) {
     let contactMap: Record<string, {
       first_name: string | null; last_name: string | null
       citizenship: string | null; date_of_birth: string | null
-      address_line1: string | null; address_city: string | null; address_state: string | null; address_country: string | null
+      address_line1: string | null; address_city: string | null; address_state: string | null; address_zip: string | null; address_country: string | null
     }> = {}
 
     if (contactIds.length > 0) {
       const { data: contacts } = await supabaseAdmin
         .from('contacts')
-        .select('id, first_name, last_name, citizenship, date_of_birth, address_line1, address_city, address_state, address_country')
+        .select('id, first_name, last_name, citizenship, date_of_birth, address_line1, address_city, address_state, address_zip, address_country')
         .in('id', contactIds)
       contactMap = Object.fromEntries((contacts ?? []).map(c => [c.id, c]))
     }
@@ -504,10 +509,21 @@ export async function getPortalMembers(accountId: string) {
           phone: m.representative_phone,
           citizenship: null,
           date_of_birth: null,
-          address_line1: m.representative_address_street ?? m.address_street ?? null,
-          address_city: m.representative_address_city ?? m.address_city ?? null,
-          address_state: m.representative_address_state ?? m.address_state ?? null,
-          address_country: m.representative_address_country ?? m.address_country ?? null,
+          // THE REPORTED BUG (dev job 61f184ca, Michele Cotti / AI Venture Labs):
+          // this resolved `representative_address_* ?? address_*`, so the human who
+          // signs on the entity's behalf outranked the entity itself — Whalecot
+          // Consulting LLC, a Florida company, was shown to its own owner carrying
+          // his personal Portuguese home address.
+          //
+          // The member of record is the ENTITY. Its own address wins, and the
+          // representative's is not consulted at all: falling back to it is the same
+          // defect one step later. Every other document path in the repo already
+          // composes from `address_*` only — both staff OA doors and the
+          // Intercompany assembler — so this read was the lone outlier.
+          ...(() => { const a = resolveMemberAddress(m); return {
+            address_line1: a.line1, address_city: a.city,
+            address_state: a.state, address_zip: a.zip, address_country: a.country,
+          } })(),
           company_name: m.company_name,
           ein: m.ein,
           representative_name: m.representative_name,
@@ -531,10 +547,22 @@ export async function getPortalMembers(accountId: string) {
         phone: m.phone,
         citizenship: contact?.citizenship ?? null,
         date_of_birth: contact?.date_of_birth ?? null,
-        address_line1: contact?.address_line1 ?? m.address_street ?? null,
-        address_city: contact?.address_city ?? m.address_city ?? null,
-        address_state: contact?.address_state ?? m.address_state ?? null,
-        address_country: contact?.address_country ?? m.address_country ?? null,
+        // Precedence deliberately UNCHANGED for individuals — contact record first,
+        // exactly as before. Whether the member row should win here is REPORT-ONLY
+        // on dev job 271bbe46.
+        //
+        // But the choice is now made ONCE, over the whole address. Resolving it per
+        // field (which is what adding the postal code did) let a contact with a
+        // street but no postal code take its street from the contact and its postal
+        // code from the member row — an address existing in neither record, in a
+        // legal document. 17 production contacts have a street and no postal code.
+        ...(() => {
+          const a = chooseWholeAddress(
+            { line1: contact?.address_line1 ?? null, city: contact?.address_city ?? null, state: contact?.address_state ?? null, zip: contact?.address_zip ?? null, country: contact?.address_country ?? null },
+            resolveMemberAddress(m),
+          )
+          return { address_line1: a.line1, address_city: a.city, address_state: a.state, address_zip: a.zip, address_country: a.country }
+        })(),
         company_name: null,
         ein: null,
         representative_name: null,
