@@ -668,6 +668,45 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
       if (lr?.referrer_contact_id) refContactId = lr.referrer_contact_id
       if (lr?.referrer_account_id) refAccountId = lr.referrer_account_id
       if ((lr?.referrer_contact_id || lr?.referrer_account_id) && !refType) refType = "client"
+      // This inheritance is ALSO "from the lead", and the plan refusal below reads this flag to
+      // explain WHERE the referrer came from. Without it, a lead pinned by id with no name gives
+      // the author a bare "this offer has a referrer" while the form's referrer field is visibly
+      // empty — the exact hunt the message exists to prevent.
+      if (lr?.referrer_contact_id || lr?.referrer_account_id) referralAutoFilled = true
+    }
+
+    // ⛔ 6c. THE REFUSAL, RE-EVALUATED ON THE *EFFECTIVE* REFERRER — the one this offer will
+    // actually be stored with (bug-hunter + system-counselor, both independently, 2026-08-13).
+    //
+    // The check at step 1 tests params only, and the two auto-fill blocks above run AFTER it:
+    // 6a re-fills the NAME from the lead whenever the caller sent none, and 6b inherits the
+    // PINNED ids "regardless of the name-autofill gate". So a caller that clears the referrer
+    // and sends a plan passes the first check and then has the referrer put back underneath it —
+    // storing exactly the plan+referrer shape the guard exists to make impossible.
+    //
+    // That is not hypothetical: the Create Offer dialog's own lock tells staff to "clear the
+    // referrer to use a split", and every Calendly lead carries a free-text referrer_name from
+    // the "how did you find us" answer. Following the instruction produced the forbidden offer.
+    //
+    // Placed here because this is the first point where refName/refContactId/refAccountId are
+    // final. The step-1 check STAYS: it fails fast on an obviously-bad call and names the field
+    // the caller actually sent.
+    if (params.payment_plan != null) {
+      const effectiveRefusal = refusePlanWithReferralPartner(
+        Boolean(refName || refContactId || refAccountId || params.partner_id),
+        params.client_name,
+      )
+      if (effectiveRefusal) {
+        return {
+          success: false,
+          outcome: "validation_error",
+          // Says WHERE the referrer came from — a caller that cleared the field would otherwise
+          // read this as the system contradicting itself.
+          error: referralAutoFilled
+            ? `${effectiveRefusal} (This offer's referrer was inherited from the lead — clear it on the LEAD record, not just on this form.)`
+            : effectiveRefusal,
+        }
+      }
     }
 
     // 7. Currency + bank details

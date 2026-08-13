@@ -42,6 +42,10 @@ export async function POST(req: NextRequest) {
       issues: body.issues,
       admin_notes: body.admin_notes,
       installment_currency: body.installment_currency,
+      // WS-C: the setup fee paid in parts. Passed straight through — createOffer
+      // validates it and refuses a malformed plan, or one sharing an offer with a
+      // referrer/managed partner, at the door.
+      payment_plan: body.payment_plan ?? null,
       intro_en: body.intro_en,
       intro_it: body.intro_it,
       strategy: body.strategy,
