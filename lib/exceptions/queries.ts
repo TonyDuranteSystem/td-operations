@@ -54,6 +54,10 @@ export interface FailedJobRow {
   created_at: string
   account_id: string | null
   age_hours: number | null
+  tax_year: number | null
+  company_name: string | null
+  file_name: string | null
+  headline: string
 }
 
 export interface FailedEmailRow {
@@ -225,23 +229,46 @@ export async function getAuditFindings(): Promise<AuditFindingRow[]> {
 export async function getFailedJobs(): Promise<FailedJobRow[]> {
   const { data, error } = await supabaseAdmin
     .from("job_queue")
-    .select("id, job_type, status, attempts, max_attempts, error, created_at, account_id")
+    .select("id, job_type, status, attempts, max_attempts, error, created_at, account_id, payload")
     .eq("status", "failed")
     .order("created_at", { ascending: false })
     .limit(50)
   if (error) throw new Error(error.message)
 
-  return (data ?? []).map(r => ({
-    id: r.id,
-    job_type: r.job_type,
-    status: r.status,
-    attempts: r.attempts ?? 0,
-    max_attempts: r.max_attempts ?? 3,
-    error: r.error,
-    created_at: r.created_at,
-    account_id: r.account_id,
-    age_hours: hoursSince(r.created_at),
-  }))
+  // Staff read COMPANIES and FILES, not job types (Antonio, 2026-08-12):
+  // resolve the account names in one batch and, for statement ingests, the
+  // client's clean filename + a plain-English headline.
+  const accountIds = Array.from(new Set((data ?? []).map(r => r.account_id).filter((a): a is string => !!a)))
+  const names = new Map<string, string>()
+  if (accountIds.length > 0) {
+    const { data: accts } = await supabaseAdmin.from("accounts").select("id, company_name").in("id", accountIds)
+    for (const a of (accts ?? []) as Array<{ id: string; company_name: string }>) names.set(a.id, a.company_name)
+  }
+  const { displayStatementFileName } = await import("@/lib/tax/ingest-file-status")
+  return (data ?? []).map(r => {
+    const payload = (r.payload as { tax_year?: number | string; path?: string } | null)
+    const tyNum = Number(payload?.tax_year)
+    const isIngest = r.job_type === "ingest_bank_statement"
+    const fileName = isIngest && payload?.path ? displayStatementFileName(payload.path) : null
+    const companyName = r.account_id ? (names.get(r.account_id) ?? null) : null
+    return {
+      id: r.id,
+      job_type: r.job_type,
+      status: r.status,
+      attempts: r.attempts ?? 0,
+      max_attempts: r.max_attempts ?? 3,
+      error: r.error,
+      created_at: r.created_at,
+      account_id: r.account_id,
+      company_name: companyName,
+      file_name: fileName,
+      headline: isIngest
+        ? `Bank statement could not be read — ${companyName ?? "unknown client"}${fileName ? `: ${fileName}` : ""}`
+        : `${r.job_type}${companyName ? ` — ${companyName}` : ""}`,
+      tax_year: Number.isInteger(tyNum) ? tyNum : null,
+      age_hours: hoursSince(r.created_at),
+    }
+  })
 }
 
 export async function getFailedEmails(): Promise<FailedEmailRow[]> {
@@ -537,6 +564,81 @@ export async function getTaxReturnExtensionGaps(): Promise<TaxReturnExtensionGap
     .slice(0, 100)
 }
 
+
+// ─── Quarantined statement formats (card 4a39e0fd) ──────────────────────────
+
+export interface QuarantinedFormatRow {
+  mapping_id: string
+  bank_label: string
+  fingerprint: string
+  ambiguities: string[]
+  created_at: string | null
+  /** Client files (portal pipeline) waiting on this mapping. */
+  waiting_files: Array<{ account_id: string | null; company_name: string | null; file: string }>
+  age_hours: number | null
+}
+
+/**
+ * PROPOSED format mappings + the quarantined CLIENT files waiting on each.
+ * A portal-quarantined file has NO workspace confirm card — this section is
+ * the staff surface that keeps Antonio's ruling ("a client must never sit
+ * stuck behind a file we already approved") satisfiable: one tap here
+ * confirms the format and auto-requeues every waiting client file.
+ */
+export async function getQuarantinedFormats(): Promise<QuarantinedFormatRow[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any // statement_format_mappings not in generated types
+  const { data: proposed } = await db
+    .from("statement_format_mappings")
+    .select("id, bank_label, fingerprint, sample, created_at")
+    .eq("status", "proposed")
+    .order("created_at", { ascending: false })
+    .limit(50)
+  if (!proposed || proposed.length === 0) return []
+
+  // Quarantined portal ingest jobs, matched by marker mapping_id.
+  const { data: failedJobs } = await supabaseAdmin
+    .from("job_queue")
+    .select("account_id, payload, result")
+    .eq("job_type", "ingest_bank_statement")
+    .eq("status", "failed")
+  const { quarantineMarkerOf } = await import("@/lib/tax/quarantine-requeue")
+  const byMapping = new Map<string, Array<{ account_id: string | null; file: string }>>()
+  for (const j of (failedJobs ?? []) as Array<{ account_id: string | null; payload: { path?: string } | null; result: { steps?: Array<{ detail?: string }> } | null }>) {
+    const marker = quarantineMarkerOf(j)
+    const mid = marker?.mapping_id
+    if (!mid) continue
+    const file = (j.payload?.path ?? "").split("/").pop() ?? "statement"
+    const list = byMapping.get(mid) ?? []
+    list.push({ account_id: j.account_id, file })
+    byMapping.set(mid, list)
+  }
+
+  const accountIds = Array.from(new Set(
+    Array.from(byMapping.values()).flat().map(f => f.account_id).filter((a): a is string => !!a),
+  ))
+  const names = new Map<string, string>()
+  if (accountIds.length > 0) {
+    const { data: accts } = await supabaseAdmin
+      .from("accounts").select("id, company_name").in("id", accountIds)
+    for (const a of (accts ?? []) as Array<{ id: string; company_name: string }>) names.set(a.id, a.company_name)
+  }
+
+  return (proposed as Array<{ id: string; bank_label: string; fingerprint: string; sample: unknown; created_at: string | null }>).map(m => ({
+    mapping_id: m.id,
+    bank_label: m.bank_label,
+    fingerprint: m.fingerprint,
+    ambiguities: [],
+    created_at: m.created_at,
+    waiting_files: (byMapping.get(m.id) ?? []).map(f => ({
+      account_id: f.account_id,
+      company_name: f.account_id ? (names.get(f.account_id) ?? null) : null,
+      file: f.file,
+    })),
+    age_hours: hoursSince(m.created_at),
+  }))
+}
+
 export interface ExceptionsSnapshot {
   partialActivations: PartialActivationRow[]
   auditFindings: AuditFindingRow[]
@@ -547,6 +649,7 @@ export interface ExceptionsSnapshot {
   silentFailedJobs: SilentFailedJobRow[]
   orphanTasks: OrphanTaskRow[]
   taxReturnExtensionGaps: TaxReturnExtensionGapRow[]
+  quarantinedFormats: QuarantinedFormatRow[]
   totalCount: number
 }
 
@@ -566,6 +669,7 @@ export async function getExceptionsSnapshot(): Promise<ExceptionsSnapshot> {
     silentFailedJobs,
     orphanTasks,
     taxReturnExtensionGaps,
+    quarantinedFormats,
   ] = await Promise.all([
     getPartialActivations(),
     getAuditFindings(),
@@ -576,6 +680,7 @@ export async function getExceptionsSnapshot(): Promise<ExceptionsSnapshot> {
     getSilentFailedJobs(),
     getOrphanTasks(),
     getTaxReturnExtensionGaps(),
+    getQuarantinedFormats(),
   ])
 
   return {
@@ -588,6 +693,7 @@ export async function getExceptionsSnapshot(): Promise<ExceptionsSnapshot> {
     silentFailedJobs,
     orphanTasks,
     taxReturnExtensionGaps,
+    quarantinedFormats,
     totalCount:
       partialActivations.length +
       auditFindings.length +
@@ -597,6 +703,7 @@ export async function getExceptionsSnapshot(): Promise<ExceptionsSnapshot> {
       tierDrift.length +
       silentFailedJobs.length +
       orphanTasks.length +
-      taxReturnExtensionGaps.length,
+      taxReturnExtensionGaps.length +
+      quarantinedFormats.length,
   }
 }

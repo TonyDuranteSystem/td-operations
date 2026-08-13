@@ -422,6 +422,23 @@ export async function storeMapping(db: Db, row: {
   source_file: string | null
   created_by: string
 }): Promise<string | null> {
+  // A STAFF DECISION is never silently overwritten (card 4a39e0fd round 3):
+  // this upsert used to demote a `staff_confirmed` (or `rejected`) row back to
+  // a fresh `proposed`/`verified_auto` whenever a same-fingerprint file failed
+  // the stored mapping's verification — every later file of an already-
+  // confirmed format re-quarantined and the confirmed column mapping was lost
+  // without trace. Machine writes may only replace machine rows; a file that
+  // disagrees with a staff-decided mapping falls to AI extraction instead.
+  const { data: existing } = await db
+    .from("statement_format_mappings")
+    .select("id, status")
+    .eq("fingerprint", row.fingerprint)
+    .maybeSingle()
+  if (existing && (existing.status === "staff_confirmed" || existing.status === "rejected")) {
+    console.warn(`[format-mappings] refusing to overwrite ${existing.status} mapping ${existing.id} for this fingerprint`)
+    return null
+  }
+
   const { data, error } = await db
     .from("statement_format_mappings")
     .upsert({ ...row, updated_at: new Date().toISOString() }, { onConflict: "fingerprint" })

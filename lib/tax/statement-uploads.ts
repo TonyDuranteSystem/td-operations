@@ -132,5 +132,90 @@ export async function deleteStatementRows(accountId: string, taxYear: number, so
     .eq("source_file_id", sourceFileId)
     .select("id")
   if (error) return { ok: false, deleted: 0, error: error.message }
+
+  // CANCEL this file's ingest jobs (card 4a39e0fd, architect blocker B2 —
+  // this was a LIVE bug): the upload path is content-hashed, and the enqueue
+  // helper skips any path with a non-failed job. So deleting a file and
+  // re-uploading the IDENTICAL file found the old completed job, returned
+  // "already queued", and the statement silently never came back — vanished
+  // from the books while the UI reported success. Cancelling the jobs here
+  // makes delete truly supersede: the re-upload enqueues fresh. 'processing'
+  // rows are left alone (a running handler can't be stopped safely; its rows
+  // are already deleted or will be re-deletable). Drive-id sources have no
+  // ingest jobs — the filter simply matches nothing.
+  if (sourceFileId.startsWith("upload:")) {
+    const sha16 = sourceFileId.slice("upload:".length, "upload:".length + 16)
+    const { error: cancelErr } = await supabaseAdmin
+      .from("job_queue")
+      .update({ status: "cancelled", error: "Superseded: the client deleted this statement file" })
+      .eq("job_type", "ingest_bank_statement")
+      .eq("account_id", accountId)
+      .like("payload->>path", `tax/${accountId}/${taxYear}/${sha16}\\_%`)
+      .in("status", ["pending", "completed", "failed"])
+    if (cancelErr) {
+      // Non-fatal: rows are gone (the delete succeeded); worst case a
+      // same-bytes re-upload still hits the old skip until this is retried.
+      console.error(`[statement-uploads] job cancel failed for ${sourceFileId}: ${cancelErr.message}`)
+    }
+  }
+
   return { ok: true, deleted: (deleted ?? []).length }
+}
+
+/**
+ * Clear a FAILED/QUARANTINED statement file that never produced rows (card
+ * 4a39e0fd round 2, bug-hunter M4): such a file has no source card and no
+ * transactions, so `deleteStatementRows` can never reach it — yet its failed
+ * state wedges the amber banner, the confirm hard-block, and the
+ * "statements ready" all-clear FOREVER, even after the client recovers with a
+ * corrected re-upload (different bytes → different path). Cancelling the
+ * path's jobs removes the file from the per-file states entirely.
+ *
+ * Only non-live jobs are touched: a pending/processing file is "still
+ * preparing", not clearable; a file with a COMPLETED job has rows and must go
+ * through the row-deleting path instead.
+ */
+export async function clearFailedStatementFile(
+  accountId: string,
+  taxYear: number,
+  path: string,
+): Promise<{ ok: boolean; cleared: number; error?: string }> {
+  const { resolveEditability } = await import("./resolve-submission")
+  const { editable: canEdit } = await resolveEditability(supabaseAdmin, accountId, taxYear)
+  if (!canEdit) {
+    return { ok: false, cleared: 0, error: "Your submission is locked (under review or already confirmed) — ask us to reopen it before changing files." }
+  }
+
+  // The path must belong to THIS account's jobs (owner-scoped callers pass
+  // untrusted paths) — the account_id + path filter enforces it.
+  const { data: cancelled, error } = await supabaseAdmin
+    .from("job_queue")
+    .update({ status: "cancelled", error: "Cleared: the client removed this failed statement file" })
+    .eq("job_type", "ingest_bank_statement")
+    .eq("account_id", accountId)
+    .eq("payload->>path", path)
+    .eq("payload->>tax_year", String(taxYear))
+    .eq("status", "failed")
+    .select("id")
+  if (error) return { ok: false, cleared: 0, error: error.message }
+  let clearedCount = (cancelled ?? []).length
+  // Legacy pre-parity rows: before the runners flipped ok:false results to
+  // status='failed', an unreadable file could sit COMPLETED with ok:false —
+  // shown as failed by the state helper but unreachable by the filter above
+  // (round 3). Cancel those too so no era of rows is unclearable.
+  const { data: legacyCancelled } = await supabaseAdmin
+    .from("job_queue")
+    .update({ status: "cancelled", error: "Cleared: the client removed this failed statement file (legacy completed-with-error row)" })
+    .eq("job_type", "ingest_bank_statement")
+    .eq("account_id", accountId)
+    .eq("payload->>path", path)
+    .eq("payload->>tax_year", String(taxYear))
+    .eq("status", "completed")
+    .eq("result->>ok", "false")
+    .select("id")
+  clearedCount += (legacyCancelled ?? []).length
+  if (clearedCount === 0) {
+    return { ok: false, cleared: 0, error: "This file is not in a failed state (it may still be processing, or its data is already in — delete it from its file card instead)." }
+  }
+  return { ok: true, cleared: clearedCount }
 }

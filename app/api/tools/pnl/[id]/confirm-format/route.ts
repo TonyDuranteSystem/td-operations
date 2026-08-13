@@ -33,8 +33,11 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     if (!body.mapping_id || (body.action !== 'confirm' && body.action !== 'reject')) {
       return NextResponse.json({ error: "mapping_id and action ('confirm'|'reject') are required." }, { status: 400 })
     }
-    // The path must belong to THIS workspace (no cross-workspace re-enqueues).
-    if (body.action === 'confirm' && (!body.path || !body.path.startsWith(`pnl-workspaces/${workspaceId}/`))) {
+    // When a workspace file is being re-run, its path must belong to THIS
+    // workspace (no cross-workspace re-enqueues). A confirm WITHOUT a path is
+    // legal (card 4a39e0fd round 2): the quarantine may belong to a PORTAL
+    // upload — the portal requeue below finds those by mapping id.
+    if (body.action === 'confirm' && body.path && !body.path.startsWith(`pnl-workspaces/${workspaceId}/`)) {
       return NextResponse.json({ error: 'path must be a statement of this workspace.' }, { status: 400 })
     }
 
@@ -69,6 +72,21 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       console.error('[tools/pnl] format-confirm audit failed (decision saved):', e)
     }
 
+    // Card 4a39e0fd: a confirmed format also re-processes every QUARANTINED
+    // CLIENT file waiting on this mapping (portal pipeline) — a client must
+    // never sit stuck behind a format staff already approved. Best-effort:
+    // a failure here never voids the confirm (the mapping is saved; the
+    // 5-min cron + a re-upload still recover the file).
+    let portalRequeue = { requeued: 0, cancelled: 0, skipped: 0 }
+    if (body.action === 'confirm') {
+      try {
+        const { requeueQuarantinedPortalIngests } = await import('@/lib/tax/quarantine-requeue')
+        portalRequeue = await requeueQuarantinedPortalIngests(body.mapping_id)
+      } catch (e) {
+        console.error('[tools/pnl] portal quarantine requeue failed (confirm saved):', e)
+      }
+    }
+
     let requeued = false
     if (body.action === 'confirm' && body.path) {
       const { data: live } = await db
@@ -92,7 +110,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       requeued = true
     }
 
-    return NextResponse.json({ ok: true, status: nextStatus, requeued })
+    return NextResponse.json({ ok: true, status: nextStatus, requeued, portal_requeue: portalRequeue })
   } catch (err) {
     console.error('[tools/pnl] confirm-format failed:', err)
     return NextResponse.json({ error: 'Could not save the format decision — please try again.' }, { status: 500 })

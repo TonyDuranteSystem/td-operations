@@ -263,33 +263,47 @@ export async function GET(request: NextRequest) {
       .eq('job_type', 'ingest_bank_statement')
       .eq('account_id', accountId)
       .in('status', ['pending', 'processing', 'failed', 'completed'])
-    // Count by distinct FILE (payload.path), not by job: the stuck-job reaper
-    // re-enqueues, so one file can have several rows (a merged file Luca uploaded
-    // had 3 failed rows). Counting jobs told the client "3 files couldn't be
-    // read" for 1 file. A file is DONE if ANY of its jobs completed successfully
-    // (result.ok !== false on a completed row) — earlier failed/retried attempts
-    // for that same path are then irrelevant. ('cancelled' is excluded by the
-    // query above — superseded enqueues must not count as failures.)
-    const byPath = new Map<string, { succeeded: boolean; pending: boolean; failed: boolean }>()
-    for (const j of (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean } | null; payload: { tax_year?: number | string; path?: string } | null }>) {
-      // Scope to THIS tax year (the account may have statements for other years).
-      if (String(j.payload?.tax_year ?? '') !== String(taxYear)) continue
+    // Per-FILE states via the ONE shared implementation (card 4a39e0fd —
+    // lib/tax/ingest-file-status.ts; the "statements ready" notification gate
+    // and the staff surfaces read the same helper, so the screens can never
+    // disagree). QUARANTINED files (format awaiting a one-tap STAFF confirm)
+    // count as PENDING for the client — "still preparing" is the truth they
+    // can act on; "could not be read, delete and re-upload" is not.
+    const { computeIngestFileStates, summarizeIngestFileStates, buildIngestFileEntries } = await import('@/lib/tax/ingest-file-status')
+    const ingestJobRows = (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean; steps?: Array<{ detail?: string }> } | null; payload: { tax_year?: number | string; path?: string } | null }>
+    const fileStates = computeIngestFileStates(ingestJobRows, taxYear)
+    const stateCounts = summarizeIngestFileStates(fileStates)
+    // ORIGINAL FILENAME per statement line (card c5ff8b4d, Antonio 2026-08-12).
+    // The list is grouped by (bank, source) and carried NO filename, so with
+    // fourteen Relay lines nobody — client or staff — can tell which upload
+    // produced which line, and "delete" is a coin flip. bank_transactions has
+    // no filename column; the name lives in the ingest job's storage path.
+    // The financials-page upload scheme embeds the first 16 hex of the file's
+    // content hash in that path, and the row's source id IS `upload:<hash>` —
+    // so the join is deterministic. Wizard-era paths predate that scheme and
+    // simply resolve to no name (the line renders as it does today).
+    const nameBySource = new Map<string, string>()   // exact: the job recorded its source id
+    const nameBySha16 = new Map<string, string>()    // fallback: hash embedded in the path
+    for (const j of ingestJobRows) {
+      const res = j.result as { sourceFileId?: string; fileName?: string } | null
+      if (res?.sourceFileId && res.fileName) nameBySource.set(res.sourceFileId, res.fileName)
       const path = j.payload?.path
-      if (!path) continue
-      const e = byPath.get(path) ?? { succeeded: false, pending: false, failed: false }
-      if (j.status === 'completed' && j.result?.ok !== false) e.succeeded = true
-      else if (j.status === 'pending' || j.status === 'processing') e.pending = true
-      // Unreadable file → completes with ok:false; transient/throw → 'failed'.
-      else if (j.status === 'failed' || (j.status === 'completed' && j.result?.ok === false)) e.failed = true
-      byPath.set(path, e)
+      if (typeof path !== 'string') continue
+      const seg = path.split('/').pop() ?? ''
+      const m = seg.match(/^([a-f0-9]{16})_(.+)$/i)
+      if (m) nameBySha16.set(m[1].toLowerCase(), m[2])
     }
-    let ingestPending = 0
-    let ingestFailed = 0
-    for (const e of Array.from(byPath.values())) {
-      if (e.succeeded) continue // the file made it in — ignore earlier attempts
-      if (e.pending) ingestPending++
-      else if (e.failed) ingestFailed++
+    const fileNameForSource = (sourceId: string): string | null => {
+      const exact = nameBySource.get(sourceId)
+      if (exact) return exact
+      if (!sourceId.startsWith('upload:')) return null
+      return nameBySha16.get(sourceId.slice(7, 23).toLowerCase()) ?? null
     }
+    const ingestPending = stateCounts.pending + stateCounts.quarantined
+    const ingestFailed = stateCounts.failed
+    // W9 (Antonio's ruling): per-file live status for the client file cards —
+    // filename, state, and for failed files the plain-language what+how-to-fix.
+    const file_statuses = buildIngestFileEntries(ingestJobRows, taxYear)
 
     // Location-period + country cards (Phase B2, 2026-07-08): same pure
     // builder as the staff tool (lib/tax/location-cards.ts), fed from the
@@ -380,10 +394,19 @@ export async function GET(request: NextRequest) {
       buckets,
       ingestPending,
       ingestFailed,
+      file_statuses,
       attested: sub?.confirmation_accepted === true,
+      // W9: staff override of the failed-file hard block (set only by the CRM
+      // unlock route; cleared by any file mutation). The client UI re-enables
+      // Confirm when true — the server attest gate honors the same flag.
+      failedFilesOverridden: (sub?.financials_meta as Record<string, unknown> | null)?.failed_files_override != null,
       editable,
       reviewStatus: lockStatus,
-      files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
+      files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({
+        source_file_id,
+        ...s,
+        file_name: fileNameForSource(source_file_id),
+      })),
       accounts: Array.from(byAccount.values()).sort((a, b) => b.count - a.count),
       aiState,
       aiRemaining,

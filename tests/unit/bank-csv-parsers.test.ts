@@ -311,3 +311,57 @@ describe('Wise duplicate-reference dedup (2026-07-03 — eval harness finding)',
     expect(refs[3]).toBe('Accesso community privata prop-4')
   })
 })
+
+// ─── Card 4a39e0fd: empty-but-valid statements (recognized_empty) ───────────
+
+describe('parseBankStatement — recognized-empty statements', () => {
+  const RELAY_HEADER_ONLY = 'Date,Payee,Transaction Type,Description,Reference,Status,Amount,Currency,Balance'
+  const MERCURY_HEADER_ONLY = 'Date (UTC),Description,Amount,Status,Source Account,Bank Description,Reference,Note,Last Four Digits,Name On Card,Mercury Category,Category,GL Code,Timestamp,Original Currency,Check Number,Tags,Cardholder Email,Tracking ID'
+
+  it('a signature-matched CSV with zero data rows → recognized_empty, NEVER routed to AI', async () => {
+    const r = await parseBankStatement(Buffer.from(RELAY_HEADER_ONLY, 'utf-8'), 'relay-june.csv', 'text/csv')
+    expect(r.recognized_empty).toBe(true)
+    expect(r.transactions).toHaveLength(0)
+    expect(r.extraction_method).toBe('relay_csv')
+
+    const m = await parseBankStatement(Buffer.from(MERCURY_HEADER_ONLY, 'utf-8'), 'mercury-empty.csv', 'text/csv')
+    expect(m.recognized_empty).toBe(true)
+    expect(m.extraction_method).toBe('mercury_csv')
+  })
+
+  it('a Mercury CSV whose rows are all non-transaction (Failed) rows → recognized_empty', async () => {
+    // Statement exists, every row filtered out (e.g. only failed payments in
+    // the period) — still a valid, empty statement, not a corrupt file.
+    const onlyFailed = [
+      MERCURY_HEADER_ONLY,
+      '01-10-2026,FailedThing,-99.00,Failed,Mercury Checking xx1111,X,,,1234,Test Person,,,,01-10-2026 09:00:00,USD,,,test@example.com,',
+    ].join('\n')
+    const r = await parseBankStatement(Buffer.from(onlyFailed, 'utf-8'), 'mercury-failed-only.csv', 'text/csv')
+    expect(r.recognized_empty).toBe(true)
+  })
+
+  it('NEGATIVE: an unknown-layout empty file is NOT recognized_empty (stays the unreadable path)', async () => {
+    const prev = process.env.BANK_STATEMENT_AI_DISABLED
+    process.env.BANK_STATEMENT_AI_DISABLED = 'true' // keep the test offline
+    try {
+      const r = await parseBankStatement(Buffer.from('colA,colB\n', 'utf-8'), 'mystery.csv', 'text/csv')
+      expect(r.recognized_empty).toBeUndefined()
+      expect(r.transactions).toHaveLength(0)
+    } finally {
+      if (prev === undefined) delete process.env.BANK_STATEMENT_AI_DISABLED
+      else process.env.BANK_STATEMENT_AI_DISABLED = prev
+    }
+  })
+
+  it('NEGATIVE: a wise-NAMED file with unknown content is NOT recognized_empty (filename proves nothing)', async () => {
+    const prev = process.env.BANK_STATEMENT_AI_DISABLED
+    process.env.BANK_STATEMENT_AI_DISABLED = 'true'
+    try {
+      const r = await parseBankStatement(Buffer.from('foo,bar\n', 'utf-8'), 'wise-2025.csv', 'text/csv')
+      expect(r.recognized_empty).toBeUndefined()
+    } finally {
+      if (prev === undefined) delete process.env.BANK_STATEMENT_AI_DISABLED
+      else process.env.BANK_STATEMENT_AI_DISABLED = prev
+    }
+  })
+})

@@ -79,16 +79,20 @@ export async function saveAndEnqueueStatementUpload(
     throw new Error(`Could not save your file: ${upErr.message}`)
   }
 
-  // 2. Idempotency: skip if this exact path already has a non-failed ingest job.
-  //    Failed jobs are NOT counted, so a genuinely failed file can be retried by
-  //    re-uploading it. (`payload->>path` is JSONB text extraction.)
+  // 2. Idempotency: skip if this exact path already has a LIVE ingest job.
+  //    Failed jobs don't count (a failed file retries by re-upload) and
+  //    CANCELLED jobs don't count either — delete-supersede flips a deleted
+  //    file's jobs to 'cancelled' precisely so the identical re-upload
+  //    re-ingests (card 4a39e0fd; the first cut used .neq('failed') and the
+  //    cancelled row still blocked the re-add — bug-hunter blocker, the
+  //    "vanished statement" bug survived its own fix).
   const { data: existing } = await supabaseAdmin
     .from("job_queue")
     .select("id")
     .eq("job_type", "ingest_bank_statement")
     .eq("account_id", accountId)
     .eq("payload->>path", path)
-    .neq("status", "failed")
+    .in("status", ["pending", "processing", "completed"])
     .limit(1)
   if (existing && existing.length > 0) {
     return { queued: false, alreadyQueued: true, path }

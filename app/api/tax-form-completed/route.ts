@@ -30,7 +30,6 @@ import { advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { dispatchWorkflowForFormCompletion } from "@/lib/tasks/dispatch-workflow-for-event"
 import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import { APP_BASE_URL } from "@/lib/config"
-import { listFolder, uploadBinaryToDriveUpsert, downloadFileBinary } from "@/lib/google-drive"
 import { emitActionNeeded } from "@/lib/notifications/act-event"
 import { emitClientChatEvent } from "@/lib/portal/chat-events"
 import { buildReviewHistoryEntry, type ReviewStatus } from "@/lib/tax/review-status"
@@ -205,7 +204,7 @@ export async function POST(req: NextRequest) {
 <ol>
 <li>Review data: <code>tax_form_review(token="${sub.token}")</code></li>
 <li>If complete, apply changes: <code>tax_form_review(token="${sub.token}", apply_changes=true)</code></li>
-${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statements auto-parsed. Review: <code>bank_statement_review(account_id="${sub.account_id}")</code></li>
+${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>⚠ Statements are NOT auto-ingested on this (external form) path — ingest deliberately: <code>bank_statement_process(account_id="${sub.account_id}", tax_year=${sub.tax_year})</code>, then review: <code>bank_statement_review(account_id="${sub.account_id}")</code></li>
 <li>Generate P&L: <code>bank_statement_pnl(account_id="${sub.account_id}", tax_year=${sub.tax_year})</code></li>` : ""}
 <li>Check if 2nd installment is paid (Stage 6 gate)</li>
 <li>When ready, send to accountant: <code>tax_send_to_accountant(account_id="${sub.account_id}", tax_year=${sub.tax_year})</code></li>
@@ -506,6 +505,27 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
           )
           if (driveResult.summaryFileId) {
             results.push({ step: "drive_save", status: "ok", detail: `Summary: ${driveResult.summaryFileId}, ${driveResult.copied.length} files copied` })
+
+            // Same registration as the portal path (card c5ff8b4d) — the
+            // external form's questionnaire PDF must also become a real
+            // client-visible company document.
+            const { registerOrganizerDocument } = await import("@/lib/tax/register-organizer-document")
+            const { data: taxSd } = await supabaseAdmin
+              .from("service_deliveries")
+              .select("id")
+              .eq("account_id", sub.account_id)
+              .or("service_type.eq.Tax Return,service_type.eq.Tax Return Filing")
+              .eq("status", "active")
+              .limit(1)
+              .maybeSingle()
+            const reg = await registerOrganizerDocument({
+              accountId: sub.account_id,
+              driveFileId: driveResult.summaryFileId,
+              companyName,
+              taxYear: sub.tax_year,
+              serviceDeliveryId: taxSd?.id ?? null,
+            })
+            results.push({ step: "organizer_document", status: reg.registered ? "ok" : "error", detail: reg.registered ? "Tax questionnaire registered (client-visible)" : `not registered: ${reg.reason}` })
           }
           if (driveResult.errors.length > 0) {
             results.push({ step: "drive_save", status: "error", detail: driveResult.errors.join(", ") })
@@ -518,171 +538,21 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
       }
     }
 
-    // ─── 5. AUTO-GENERATE P&L FOR MMLLCs + Corps ───
+    // ─── 5. (REMOVED 2026-08-12) Legacy Drive statement scrape + auto P&L ───
+    // The twin of the tax_form_setup scrape died with it (card 4a39e0fd;
+    // Antonio's ruling: Drive is archive-only — no machine reads files into
+    // the books invisibly). This copy had drifted further (pattern missed
+    // Chase, scanned only the Tax root, never the year subfolder). External
+    // submissions get NO automatic statement ingestion: the external form's
+    // `financial_statements` upload is a MIXED bag (any financial document),
+    // so auto-parsing it into the books would be guessing. Staff ingest
+    // deliberately via the review tools / the tax workspace instead.
     if ((sub.entity_type === "MMLLC" || sub.entity_type === "Corp") && sub.account_id) {
-      try {
-        // Wait for Drive save to complete (files need to be in Drive first)
-        // Then trigger bank statement processing + P&L generation
-        // downloadFileBinary, listFolder, uploadBinaryToDriveUpsert imported at top
-        const { parseBankStatement, categorizeTransaction } = await import("@/lib/bank-statement-parser")
-
-        const { data: acc } = await supabaseAdmin
-          .from("accounts")
-          .select("drive_folder_id, company_name")
-          .eq("id", sub.account_id)
-          .single()
-
-        if (acc?.drive_folder_id) {
-          // Find Tax folder
-          const listing = (await listFolder(acc.drive_folder_id)) as {
-            files?: { id: string; name: string; mimeType: string }[]
-          }
-          const taxFolder = listing.files?.find(
-            (f: { name: string; mimeType: string }) => f.mimeType === "application/vnd.google-apps.folder" && /^3\.\s*Tax/i.test(f.name)
-          )
-
-          if (taxFolder) {
-            // List bank statement files in Tax folder
-            const taxFiles = (await listFolder(taxFolder.id, 100)) as {
-              files?: { id: string; name: string; mimeType: string }[]
-            }
-            const statementPattern = /wise|mercury|relay|statement|bank|estratto/i
-            const statements = (taxFiles.files || []).filter((f: { name: string; mimeType: string }) => {
-              const isStatement = statementPattern.test(f.name)
-              const isSupported = f.mimeType === "application/pdf" || f.mimeType === "text/csv"
-                || f.name.toLowerCase().endsWith(".csv") || f.name.toLowerCase().endsWith(".pdf")
-              return isStatement && isSupported
-            })
-
-            if (statements.length > 0) {
-              // Member names for categorization — the SHARED roster (curated
-              // members ∪ linked contacts, one usable-name rule). Built by hand
-              // here before, which made this path disagree with the portal
-              // ingest and the re-sort. See lib/tax/member-roster.ts.
-              const { fetchMemberRoster } = await import("@/lib/tax/member-roster")
-              const memberNames = (await fetchMemberRoster(supabaseAdmin, sub.account_id)).names
-
-              let totalParsed = 0
-              for (const file of statements) {
-                try {
-                  // Check if already processed
-                  const { data: existing } = await supabaseAdmin
-                    .from("bank_transactions")
-                    .select("id")
-                    .eq("source_file_id", file.id)
-                    .limit(1)
-                  if (existing && existing.length > 0) continue
-
-                  const { buffer, mimeType } = await downloadFileBinary(file.id)
-                  const result = await parseBankStatement(buffer, file.name, mimeType)
-
-                  for (const tx of result.transactions) {
-                    const txYear = parseInt(tx.transaction_date.substring(0, 4))
-                    if (txYear !== sub.tax_year) continue
-
-                    const cat = categorizeTransaction(tx, memberNames, [])
-                    await dbWriteSafe(
-                      supabaseAdmin
-                        .from("bank_transactions")
-                        .upsert({
-                          account_id: sub.account_id,
-                          tax_year: sub.tax_year,
-                          transaction_date: cat.transaction_date,
-                          description: cat.description,
-                          category: cat.category,
-                          subcategory: cat.subcategory,
-                          counterparty: cat.counterparty,
-                          amount: cat.amount,
-                          currency: cat.currency,
-                          balance_after: cat.balance_after,
-                          bank_name: cat.bank_name,
-                          account_type: cat.account_type,
-                          transaction_ref: cat.transaction_ref,
-                          source_file_id: file.id,
-                          is_related_party: cat.is_related_party,
-                          notes: cat.notes,
-                        }, {
-                          onConflict: "account_id,transaction_ref,transaction_date,amount",
-                          ignoreDuplicates: true,
-                        }),
-                      "bank_transactions.upsert"
-                    )
-                    totalParsed++
-                  }
-                } catch (fileErr) {
-                  // Skip individual file errors, continue with others
-                }
-              }
-
-              results.push({
-                step: "bank_statement_parse",
-                status: totalParsed > 0 ? "ok" : "skipped",
-                detail: `Parsed ${totalParsed} transactions from ${statements.length} bank statement files`,
-              })
-
-              // Generate P&L if we have transactions
-              if (totalParsed > 0) {
-                try {
-                  // Auto-generate the P&L Excel from the SAME financials engine
-                  // as the client screen + accountant hand-off (one filing
-                  // artifact — never the legacy transaction-based generator).
-                  const { buildFinancialsWorkbookForAccount } = await import("@/lib/tax/financials-orchestration")
-                  const pnl = await buildFinancialsWorkbookForAccount(sub.account_id!, sub.tax_year)
-                  if (!pnl) throw new Error("No transactions available to build the P&L")
-
-                  // Upload to Drive Tax/{year}/ folder
-                  const { data: accDrive } = await supabaseAdmin
-                    .from("accounts")
-                    .select("drive_folder_id")
-                    .eq("id", sub.account_id!)
-                    .single()
-
-                  if (accDrive?.drive_folder_id) {
-                    const taxFolderId = await (async () => {
-                      const lf = await listFolder(accDrive.drive_folder_id)
-                      const files = (lf as { files?: { id: string; name: string; mimeType: string }[] }).files || []
-                      const tf = files.find(f => f.mimeType === "application/vnd.google-apps.folder" && /^3\.\s*Tax/i.test(f.name))
-                      if (!tf) return accDrive.drive_folder_id
-                      // Find year subfolder
-                      const yearLf = await listFolder(tf.id)
-                      const yearFiles = (yearLf as { files?: { id: string; name: string; mimeType: string }[] }).files || []
-                      const yf = yearFiles.find(f => f.name === String(sub.tax_year) && f.mimeType === "application/vnd.google-apps.folder")
-                      return yf?.id || tf.id
-                    })()
-
-                    // Stable file name → UPSERT: a re-run refreshes the one
-                    // existing workbook instead of adding a copy.
-                    await uploadBinaryToDriveUpsert(
-                      pnl.fileName,
-                      pnl.buffer,
-                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                      taxFolderId,
-                    )
-                  }
-
-                  results.push({
-                    step: "pnl_generated",
-                    status: "ok",
-                    detail: `P&L Excel generated from the financials engine and uploaded to Drive (${pnl.fileName}).`,
-                  })
-                } catch (pnlErr) {
-                  results.push({
-                    step: "pnl_generation",
-                    status: "error",
-                    detail: pnlErr instanceof Error ? pnlErr.message : String(pnlErr),
-                  })
-                }
-              }
-            } else {
-              results.push({ step: "bank_statement_parse", status: "skipped", detail: "No bank statement files found in Tax folder" })
-            }
-          } else {
-            results.push({ step: "bank_statement_parse", status: "skipped", detail: "No Tax folder found" })
-          }
-        }
-      } catch (e) {
-        results.push({ step: "bank_statement_parse", status: "error", detail: e instanceof Error ? e.message : String(e) })
-      }
+      results.push({
+        step: "bank_statement_parse",
+        status: "skipped",
+        detail: "Automatic Drive ingestion removed (2026-08-12) — statements are ingested only through the reviewed pipeline; staff add files deliberately.",
+      })
     }
 
     return NextResponse.json({ ok: true, results })

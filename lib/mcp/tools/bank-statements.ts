@@ -156,13 +156,24 @@ export function registerBankStatementTools(server: McpServer) {
           return { content: [{ type: "text" as const, text: "No bank statement files found in Tax folder. Upload CSV or PDF statements first." }] }
         }
 
-        // Check which files are already processed
+        // Check which files are already processed — PAGINATED (card 4a39e0fd):
+        // this select returned max 1000 TRANSACTION rows, so with more rows
+        // across the checked files a processed file's id could miss the set →
+        // the file re-parsed → AI-extracted PDFs could DUPLICATE (the exact
+        // cross-parse class behind Dynamiq's 2,138 extra rows).
         if (!reprocess) {
-          const { data: existing } = await supabaseAdmin
-            .from("bank_transactions")
-            .select("source_file_id")
-            .eq("account_id", account_id)
-            .in("source_file_id", filesToProcess.map(f => f.id))
+          const { fetchAllPaged } = await import("@/lib/bank-transactions-fetch")
+          const existing = await fetchAllPaged<{ source_file_id: string | null }>(async (from, to) => {
+            const { data: page, error } = await supabaseAdmin
+              .from("bank_transactions")
+              .select("source_file_id")
+              .eq("account_id", account_id)
+              .in("source_file_id", filesToProcess.map(f => f.id))
+              .order("id", { ascending: true })
+              .range(from, to)
+            if (error) throw new Error(error.message)
+            return (page ?? []) as { source_file_id: string | null }[]
+          })
 
           const processedIds = new Set((existing || []).map(e => e.source_file_id))
           const before = filesToProcess.length
@@ -322,15 +333,19 @@ export function registerBankStatementTools(server: McpServer) {
       try {
         const ctx = await getAccountContext(account_id)
 
-        // Get transactions
-        const { data: transactions, error } = await supabaseAdmin
-          .from("bank_transactions")
-          .select("*")
-          .eq("account_id", account_id)
-          .eq("tax_year", tax_year)
-          .order("transaction_date", { ascending: true })
+        // Get transactions — PAGINATED (card 4a39e0fd): the unpaginated
+        // select capped at 1000 rows, so on big accounts every summary stat
+        // below (uncategorized count, year-end cash, distributions by member,
+        // primary currency) covered only the first 1000 rows by date — it
+        // reported Dynamiq at "470 uncategorized" when the truth was 3,189,
+        // and its "year-end cash" was EARLY-year cash. The workbook itself was
+        // always correct (engine uses this same paginated fetch).
+        const { fetchAllBankTransactionsByYear } = await import("@/lib/bank-transactions-fetch")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const transactions = await fetchAllBankTransactionsByYear<any>(
+          account_id, tax_year, "*", { column: "transaction_date", ascending: true },
+        )
 
-        if (error) throw new Error(error.message)
         if (!transactions || transactions.length === 0) {
           return { content: [{ type: "text" as const, text: "No transactions found. Run bank_statement_process first." }] }
         }
@@ -475,17 +490,24 @@ export function registerBankStatementTools(server: McpServer) {
     },
     async ({ account_id, tax_year, category }) => {
       try {
-        let q = supabaseAdmin
-          .from("bank_transactions")
-          .select("*")
-          .eq("account_id", account_id)
-          .eq("tax_year", tax_year)
-          .order("transaction_date", { ascending: true })
-
-        if (category) q = q.eq("category", category)
-
-        const { data, error } = await q
-        if (error) throw new Error(error.message)
+        // PAGINATED (card 4a39e0fd): the unpaginated select capped at 1000
+        // rows — on big accounts the listing AND the per-category totals were
+        // silently computed on a truncated set.
+        const { fetchAllPaged } = await import("@/lib/bank-transactions-fetch")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data = await fetchAllPaged<any>(async (from, to) => {
+          let q = supabaseAdmin
+            .from("bank_transactions")
+            .select("*")
+            .eq("account_id", account_id)
+            .eq("tax_year", tax_year)
+            .order("transaction_date", { ascending: true })
+            .order("id", { ascending: true })
+          if (category) q = q.eq("category", category)
+          const { data: page, error } = await q.range(from, to)
+          if (error) throw new Error(error.message)
+          return page ?? []
+        })
         if (!data || data.length === 0) {
           return { content: [{ type: "text" as const, text: "No transactions found." }] }
         }

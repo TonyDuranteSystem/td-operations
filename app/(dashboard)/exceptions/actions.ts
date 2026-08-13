@@ -202,3 +202,73 @@ export async function closeOrphanTask(taskId: string): Promise<ActionResult> {
     revalidatePath("/exceptions")
   })
 }
+
+// ─── Resolve a quarantined statement format (card 4a39e0fd) ─────────────────
+
+export async function resolveStatementFormat(
+  mappingId: string,
+  decision: "confirm" | "reject",
+): Promise<ActionResult<{ requeued: number }>> {
+  return safeAction(async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = supabaseAdmin as any // statement_format_mappings not in generated types
+    const { data: mapping } = await db
+      .from("statement_format_mappings")
+      .select("id, status, bank_label")
+      .eq("id", mappingId)
+      .maybeSingle()
+    if (!mapping) throw new Error("Format proposal not found.")
+    if (mapping.status !== "proposed") throw new Error(`Already ${String(mapping.status).replace("_", " ")}.`)
+
+    const nextStatus = decision === "confirm" ? "staff_confirmed" : "rejected"
+    // Row-level attribution (round 3): the workspace confirm route stamps the
+    // decider; this surface must too — action_log alone is not on the row.
+    const { createClient } = await import("@/lib/supabase/server")
+    const { data: { user } } = await createClient().auth.getUser()
+    const { error } = await db
+      .from("statement_format_mappings")
+      .update({ status: nextStatus, created_by: user?.email ?? "exception-center", updated_at: new Date().toISOString() })
+      .eq("id", mappingId)
+      .eq("status", "proposed") // TOCTOU: one resolver wins
+    if (error) throw new Error(error.message)
+
+    // Antonio's ruling: a confirmed format RE-PROCESSES every waiting client
+    // file automatically — a client must never sit stuck behind a format we
+    // already approved.
+    let requeued = 0
+    if (decision === "confirm") {
+      const { requeueQuarantinedPortalIngests } = await import("@/lib/tax/quarantine-requeue")
+      const r = await requeueQuarantinedPortalIngests(mappingId)
+      requeued = r.requeued
+    }
+    revalidatePath("/exceptions")
+    return { requeued }
+  }, {
+    action_type: "update",
+    table_name: "statement_format_mappings",
+    record_id: mappingId,
+    summary: `Statement format ${decision === "confirm" ? "confirmed" : "rejected"} from Exception Center`,
+  })
+}
+
+// ─── Unlock the client's Confirm after a failed statement file (W9) ─────────
+
+export async function unlockConfirmFromException(
+  accountId: string,
+  taxYear: number,
+  reason: string,
+): Promise<ActionResult> {
+  return safeAction(async () => {
+    // The override history must name WHO unlocked (the ruling: logged means
+    // attributable) — resolve the signed-in staff member, never a surface name.
+    const { createClient } = await import("@/lib/supabase/server")
+    const { data: { user } } = await createClient().auth.getUser()
+    const { unlockFinancialsConfirm } = await import("@/lib/tax/confirm-unlock")
+    const r = await unlockFinancialsConfirm({
+      accountId, taxYear, reason,
+      actor: user?.email ?? "exception-center",
+    })
+    if (!r.ok) throw new Error(r.error || "Could not unlock.")
+    revalidatePath("/exceptions")
+  })
+}

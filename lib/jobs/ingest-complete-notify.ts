@@ -50,19 +50,33 @@ export async function notifyIfIngestComplete(params: {
 }): Promise<IngestCompleteNotifyResult> {
   const { accountId, taxYear, selfJobId } = params
   try {
-    // ── Last-job gate: any other ingest job for this account+year still in
-    //    flight means more statements are coming — don't notify yet. tax_year is
-    //    a JSON number in the payload → compare as text.
-    const { data: others } = await supabaseAdmin
+    // ── All-files gate (card 4a39e0fd — replaces the in-flight-only gate that
+    //    produced the FALSE ALL-CLEAR): the "good news, we've finished reading
+    //    your statements" message must consider every FILE, not just jobs
+    //    still running. If any file for this account+year is failed or
+    //    quarantined, saying "finished reading your bank statements" is a lie —
+    //    an entire bank account may be missing from the books (the PAMAG
+    //    shape: one file fails, a later file completes, client gets the happy
+    //    message). Failed files have their own notification (failJob path), so
+    //    withholding the all-clear never leaves the client in silence.
+    const { data: jobRows } = await supabaseAdmin
       .from("job_queue")
-      .select("id, payload")
+      .select("id, status, result, payload")
       .eq("job_type", "ingest_bank_statement")
       .eq("account_id", accountId)
-      .in("status", ["pending", "processing"])
-      .neq("id", selfJobId)
-    const stillInFlight = ((others ?? []) as Array<{ payload: { tax_year?: number | string } | null }>)
-      .some((j) => String(j.payload?.tax_year ?? "") === String(taxYear))
-    if (stillInFlight) return { notified: false, reason: "more_pending" }
+      .neq("status", "cancelled")
+    const { computeIngestFileStates } = await import("@/lib/tax/ingest-file-status")
+    // This job is still 'processing' while its own handler runs — count it as
+    // the success it is (we are only called after a successful ingest), so a
+    // prior failed attempt on the SAME path can't wedge the gate shut forever.
+    const rows = ((jobRows ?? []) as Array<{ id: string; status: string; result: { ok?: boolean } | null; payload: { tax_year?: number | string; path?: string } | null }>)
+      .map(j => (j.id === selfJobId ? { ...j, status: "completed", result: { ...(j.result ?? {}), ok: true } } : j))
+    const states = computeIngestFileStates(rows, taxYear)
+    const values = Array.from(states.values())
+    if (values.some(s => s === "pending")) return { notified: false, reason: "more_pending" }
+    if (values.some(s => s === "failed" || s === "quarantined")) {
+      return { notified: false, reason: "failed_or_quarantined_files" }
+    }
 
     // ── Target submission (carries the idempotency marker). No completed
     //    submission → nothing to attach to / the client has no review screen yet.

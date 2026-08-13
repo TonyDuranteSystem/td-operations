@@ -43,6 +43,7 @@ export type ChatEventKind =
   | "offer_signed"            // client signed the offer/contract (awaiting payment)
   | "decision_responded"      // client answered a client_decision_request (approval/choice/text)
   | "aged_credit_applied"     // an old credit note reduced a bill (WS-A: credits never expire)
+  | "financials_confirm_unlocked" // staff overrode the failed-statement hard block (card 4a39e0fd)
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */

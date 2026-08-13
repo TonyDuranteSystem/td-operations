@@ -11,7 +11,9 @@ vi.mock("@/lib/supabase-admin", () => ({
       const chain: Record<string, unknown> = {}
       chain.select = () => chain
       chain.eq = () => chain
-      chain.neq = () => Promise.resolve({ data: existingRows, error: null })
+      // Card 4a39e0fd round 2: the dedup filter became a positive .in() status
+      // list (cancelled must never block a re-upload).
+      chain.in = () => Promise.resolve({ data: existingRows, error: null })
       chain.insert = (rows: unknown) => { jobInserts.push(rows); return Promise.resolve({ error: null }) }
       return chain
     },
@@ -108,5 +110,28 @@ describe("enqueueStatementIngestJobs", () => {
     })
     expect(r).toEqual({ enqueued: 0, skipped: 1 })
     expect(jobInserts).toHaveLength(0)
+  })
+})
+
+// ── Card 4a39e0fd — bucket passthrough (external tax form wiring) ──
+describe("enqueueStatementIngestJobs — bucket", () => {
+  it("stamps the payload bucket when given, omits it by default", async () => {
+    jobInserts.length = 0
+    await enqueueStatementIngestJobs({
+      accountId: "acc-1", taxYear: 2025,
+      uploadPaths: ["tok/a1/bank_statements_x_wise.csv"],
+      submittedData: {}, bucket: "tax-form-uploads",
+    })
+    const rows = jobInserts[0] as Array<{ payload: { bucket?: string } }>
+    expect(rows[0].payload.bucket).toBe("tax-form-uploads")
+
+    jobInserts.length = 0
+    await enqueueStatementIngestJobs({
+      accountId: "acc-1", taxYear: 2025,
+      uploadPaths: ["tok/a1/bank_statements_x_wise.csv"],
+      submittedData: {},
+    })
+    const rows2 = jobInserts[0] as Array<{ payload: Record<string, unknown> }>
+    expect("bucket" in rows2[0].payload).toBe(false)
   })
 })

@@ -66,8 +66,9 @@ export async function POST(request: NextRequest) {
         if (result.ok === false) {
           // Parity with the cron runner: a handler-reported failure lands in
           // status='failed' (Exception Center + the chain watchdog's terminal
-          // reads), never hidden inside a completed row.
-          await failJob(job.id, result.summary || "Handler reported failure", result)
+          // reads), never hidden inside a completed row. `terminal` skips the
+          // retry budget — a dead file is dead on every attempt.
+          await failJob(job.id, result.summary || "Handler reported failure", result, { terminal: result.terminal === true })
           processed.push({ job_id: job.id, job_type: job.job_type, status: "failed" })
         } else {
           await completeJob(job.id, result)

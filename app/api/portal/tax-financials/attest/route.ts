@@ -104,6 +104,50 @@ export async function POST(request: NextRequest) {
     )
     if (!sub) return NextResponse.json({ error: 'No submission found for this year.' }, { status: 404 })
 
+    // HARD BLOCK on failed/quarantined statement files (card 4a39e0fd,
+    // Antonio's binding ruling 2026-08-12): a failed file means an entire bank
+    // account may be missing from the numbers — confirming over that hole
+    // fires the handoff on incomplete data. Staff can override from the CRM
+    // (reason required, logged, client notified) — the override lives in
+    // financials_meta.failed_files_override, written ONLY by the staff unlock
+    // route. Quarantined files block too: they are ours to confirm, and the
+    // requeue-on-confirm flow clears them without the client doing anything.
+    {
+      const { data: ingestJobs } = await supabaseAdmin
+        .from('job_queue')
+        .select('status, result, payload')
+        .eq('job_type', 'ingest_bank_statement')
+        .eq('account_id', accountId)
+        .neq('status', 'cancelled')
+      const { computeIngestFileStates, summarizeIngestFileStates } = await import('@/lib/tax/ingest-file-status')
+      const counts = summarizeIngestFileStates(computeIngestFileStates(
+        (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean; steps?: Array<{ detail?: string }> } | null; payload: { tax_year?: number | string; path?: string } | null }>,
+        taxYear,
+      ))
+      const override = (sub.financials_meta ?? {}) as Record<string, unknown>
+      const overridden = typeof override.failed_files_override === 'object' && override.failed_files_override !== null
+      // The staff override covers FAILED files only (that is the judgment the
+      // unlock records). QUARANTINED files always block: they are OURS to
+      // confirm, and the confirm auto-requeue drains them — an override must
+      // not paper over our own queue (round 3: with quarantined covered, the
+      // UI stayed locked while the server would have allowed — and the unlock
+      // message lied to the client).
+      const blockedFiles = (overridden ? 0 : counts.failed) + counts.quarantined
+      if (blockedFiles > 0) {
+        return NextResponse.json(
+          {
+            error:
+              counts.quarantined > 0
+                ? 'One of your bank statements is being format-checked by our team. Nothing is needed from you — you will be able to confirm as soon as it is processed.'
+                : blockedFiles === 1
+                  ? 'One of your bank statements could not be processed, so the numbers are not complete yet. Our team has been notified and is on it — you will be able to confirm as soon as it is resolved.'
+                  : `${blockedFiles} of your bank statements could not be processed, so the numbers are not complete yet. Our team has been notified and is on it — you will be able to confirm as soon as they are resolved.`,
+          },
+          { status: 409 },
+        )
+      }
+    }
+
     // Coverage must be resolved too (§3.4) — gate 1 can't see what an export
     // left out; the client's answers are the completeness guarantee.
     const { coverageQuestions, unansweredCoverage, incompleteCoverage } = await import('@/lib/tax/coverage')

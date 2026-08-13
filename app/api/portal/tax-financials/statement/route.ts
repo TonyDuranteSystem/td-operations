@@ -25,11 +25,26 @@ export async function DELETE(request: NextRequest) {
     const accountId = url.searchParams.get('account_id')
     const taxYear = Number(url.searchParams.get('tax_year'))
     const sourceFileId = url.searchParams.get('source_file_id')
-    if (!accountId || !Number.isInteger(taxYear) || !sourceFileId) {
-      return NextResponse.json({ error: 'account_id, tax_year and source_file_id required' }, { status: 400 })
+    const failedPath = url.searchParams.get('failed_path')
+    if (!accountId || !Number.isInteger(taxYear) || (!sourceFileId && !failedPath)) {
+      return NextResponse.json({ error: 'account_id, tax_year and source_file_id (or failed_path) required' }, { status: 400 })
     }
     if (!(await isAccountOwner(user, accountId))) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
+
+    // Card 4a39e0fd round 2: clearing a FAILED file (no rows ever landed) is a
+    // job-cancel, not a row delete — the failed state otherwise wedges the
+    // banner + confirm block + all-clear forever.
+    if (!sourceFileId && failedPath) {
+      const { clearFailedStatementFile } = await import('@/lib/tax/statement-uploads')
+      const cleared = await clearFailedStatementFile(accountId, taxYear, failedPath)
+      if (!cleared.ok) return NextResponse.json({ error: cleared.error }, { status: 409 })
+      // Clearing a failed file IS a file-set mutation — a standing staff
+      // unlock was judged against a set that included this hole (round 3).
+      const { resetFinancialsAttestation } = await import('@/lib/tax/attestation')
+      await resetFinancialsAttestation(accountId, taxYear, `failed file cleared (${failedPath.split('/').pop()})`)
+      return NextResponse.json({ deleted: 0, cleared: cleared.cleared })
     }
 
     const { deleteStatementRows } = await import('@/lib/tax/statement-uploads')

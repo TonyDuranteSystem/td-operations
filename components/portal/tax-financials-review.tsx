@@ -37,7 +37,7 @@ interface Gate { id: number; title: string; status: 'pass' | 'na' | 'fail'; deta
 interface Member { name: string; pct: number; beginning_capital: number; contributions: number; distributions: number; income_share: number; ending_capital: number }
 interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; has_auto_paired_leg?: boolean; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string; suspected_members?: string[]; suspected_count?: number; suspected_ids?: string[]; suspected_by_member?: Record<string, string[]>; confirmed_by_member?: Record<string, string[]>; confirmed_alternatives?: string[] }
 interface Bucket { slug: string; label: string }
-interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
+interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string; file_name?: string | null }
 interface AccountOnFile { account_ref: string; bank: string; acct: string; count: number }
 
 interface CoverageQuestion { key: string; bank_key: string; kind: string; months: string[]; question: string; answer: 'no_activity' | 'had_activity' | null }
@@ -87,6 +87,11 @@ interface View {
   ingestPending: number
   /** Statement files that couldn't be read (unreadable/merged or failed). */
   ingestFailed: number
+  /** W9 (card 4a39e0fd): live per-file status — filename, state, and for
+   *  failed files the plain-language what-happened + how-to-fix. */
+  file_statuses?: Array<{ path: string; file_name: string; state: 'pending' | 'succeeded' | 'failed' | 'quarantined'; client_error: string | null; empty?: boolean }>
+  /** W9: staff unlocked the failed-file hard block from the CRM. */
+  failedFilesOverridden?: boolean
   /** S1: statement files quarantined pending a one-tap format confirmation (staff). */
   format_proposals?: Array<{ mapping_id: string; file: string; path: string; bank_label: string; ambiguities: string[]; sample: Array<{ date: string; description: string; amount: number; currency: string; account: string }> | null }>
   questions: QuestionGroup[]
@@ -290,6 +295,25 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [periodConfirm, setPeriodConfirm] = useState<{ period: PresencePeriodView; choice: 'business' | 'personal' } | null>(null)
   // S3: country-policy confirm ("everything in Spain this year → business").
   const [countryConfirm, setCountryConfirm] = useState<{ card: CountryCardView; choice: 'business' | 'personal' } | null>(null)
+  // W9 pop-up (card 4a39e0fd, Antonio's UX calls, both rounds): a file that
+  // could not be read — or an empty month — must NOT be buried mid-page, BUT
+  // the pop-up may only announce files uploaded IN THIS SESSION as their
+  // outcome arrives. Round-2 correction: the first cut derived it from all
+  // file states, so logging in with an old failed file still on record threw
+  // pop-ups in the client's face before they did anything. `watchedPaths` =
+  // paths this session uploaded and not yet announced; a pop-up fires exactly
+  // once, when a watched path reaches a final state. Pre-existing failures
+  // stay in the inline cards + the locked Confirm — visible, not shouting.
+  // Each watch records the view-sequence current AT ARM TIME: a final state is
+  // only announced from a view loaded AFTER the upload. Round-3 correction —
+  // the arm-time render still held the PRE-upload view, so a re-upload of a
+  // file with an old failure on record announced the STALE failure instantly,
+  // and the next refresh (new attempt pending) swept it away: Antonio's
+  // 1-second flash. The real outcome then arrived to a spent watch.
+  const [watchedPaths, setWatchedPaths] = useState<Map<string, number>>(new Map())
+  const [fileToasts, setFileToasts] = useState<Array<{ path: string; file_name: string; state: 'failed' | 'empty'; client_error: string | null }>>([])
+  // Bumped every time load() lands a fresh view — the watches compare against it.
+  const [viewSeq, setViewSeq] = useState(0)
   const [periodFilter, setPeriodFilter] = useState<{ label: string; keys: Set<string> } | null>(null)
   // Period-answer failures render INSIDE the period section (2026-07-04:
   // Antonio's rejected taps surfaced only in the far-away top banner — the
@@ -325,6 +349,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       }
       const v: View = await res.json()
       setView(v)
+      setViewSeq(s => s + 1) // watches only trust views landed AFTER their arming
       // A reload the CLIENT caused means the screen now reflects the server, so
       // an earlier card-level refusal is stale and must stop shouting. A
       // BACKGROUND reload means nothing of the sort — see the note on `load`.
@@ -367,6 +392,58 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     const t = setInterval(() => { void load(true) }, active ? 20000 : retryWait!)
     return () => clearInterval(t)
   }, [view, load])
+
+  // W9 pop-up feed: when a WATCHED (this-session) upload reaches its outcome
+  // IN A VIEW LOADED AFTER THE ARMING, announce it once. The seq guard is the
+  // whole fix for the 1-second flash: the arm-time render still holds the
+  // pre-upload view, whose stale states must never be announced. Failures stay
+  // until removed/dismissed; empty-month reassurance auto-closes. Quarantined
+  // files are OUR job and stay in the calm inline card, never a pop-up.
+  useEffect(() => {
+    if (watchedPaths.size === 0 || !view?.file_statuses) return
+    const eligible = (path: string) => {
+      const armSeq = watchedPaths.get(path)
+      return armSeq !== undefined && viewSeq > armSeq
+    }
+    const arrived = view.file_statuses.filter(
+      f => eligible(f.path) && (f.state === 'failed' || (f.state === 'succeeded' && f.empty)),
+    )
+    const settled = view.file_statuses.filter(f => eligible(f.path) && f.state === 'succeeded' && !f.empty)
+    if (arrived.length === 0 && settled.length === 0) return
+    setWatchedPaths(prev => {
+      const n = new Map(prev)
+      arrived.forEach(f => n.delete(f.path))
+      settled.forEach(f => n.delete(f.path)) // normal success: no pop-up needed
+      return n
+    })
+    if (arrived.length > 0) {
+      setFileToasts(prev => [
+        ...prev.filter(t => !arrived.some(a => a.path === t.path)),
+        ...arrived.map(f => ({
+          path: f.path,
+          file_name: f.file_name,
+          state: (f.state === 'failed' ? 'failed' : 'empty') as 'failed' | 'empty',
+          client_error: f.client_error,
+        })),
+      ])
+    }
+  }, [view?.file_statuses, watchedPaths, viewSeq])
+
+  // A failure toast also self-clears when its file stops being failed (the
+  // client removed it from the inline card, or a retry recovered it).
+  useEffect(() => {
+    if (fileToasts.length === 0 || !view?.file_statuses) return
+    const stillFailed = new Set(view.file_statuses.filter(f => f.state === 'failed').map(f => f.path))
+    setFileToasts(prev => prev.filter(t => t.state === 'empty' || stillFailed.has(t.path)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- prune on state refresh only
+  }, [view?.file_statuses])
+
+  // Empty-month toasts fade on their own — long enough to actually read.
+  useEffect(() => {
+    if (!fileToasts.some(t => t.state === 'empty')) return
+    const t = setTimeout(() => setFileToasts(prev => prev.filter(x => x.state !== 'empty')), 10000)
+    return () => clearTimeout(t)
+  }, [fileToasts])
 
   /**
    * THE OWNER QUESTION — answered separately from the merchant chips.
@@ -687,6 +764,44 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // affordances — reloading, expanding a category, opening a section — because
   // the banner also promises the client can still READ everything.
   const busyOrLocked = busy !== null || locked
+
+  /**
+   * THE ONE LIST OF WHAT BLOCKS CONFIRM (card 85f6f0b2 Door-1 rule, applied
+   * after Antonio hit the false all-clear: the page said "nothing needs your
+   * decision" while two unanswered coverage questions silently locked Confirm).
+   * The status header and the Confirm button BOTH read this, so they can never
+   * again tell the client different stories. Location cards are deliberately
+   * NOT here — they are informational (see the residence-default ruling).
+   */
+  const confirmBlockers = useMemo(() => {
+    if (!view) return [] as Array<{ key: string; label: string; labelIt: string }>
+    const out: Array<{ key: string; label: string; labelIt: string }> = []
+    const openDecisions = view.questions.filter(
+      g => (g.current_category ?? 'uncategorized') === 'uncategorized' || g.suspected_ids?.length,
+    ).length
+    if (openDecisions > 0) out.push({
+      key: 'decisions',
+      label: `${openDecisions} ${openDecisions === 1 ? 'item needs' : 'items need'} your decision`,
+      labelIt: `${openDecisions} ${openDecisions === 1 ? 'voce da decidere' : 'voci da decidere'}`,
+    })
+    const cov = (view.coverage?.unanswered ?? 0) + (view.coverage?.incomplete ?? 0)
+    if (cov > 0) out.push({
+      key: 'coverage',
+      label: `${cov} ${cov === 1 ? 'question' : 'questions'} about whether your statements cover the whole year`,
+      labelIt: `${cov} ${cov === 1 ? 'domanda' : 'domande'} sulla copertura dell'anno`,
+    })
+    if (view.ingestPending > 0) out.push({
+      key: 'reading',
+      label: `${view.ingestPending} ${view.ingestPending === 1 ? 'file is' : 'files are'} still being read`,
+      labelIt: `${view.ingestPending} file in lettura`,
+    })
+    if (view.ingestFailed > 0 && !view.failedFilesOverridden) out.push({
+      key: 'failed',
+      label: `${view.ingestFailed} ${view.ingestFailed === 1 ? 'file' : 'files'} we could not read`,
+      labelIt: `${view.ingestFailed} file non leggibili`,
+    })
+    return out
+  }, [view])
 
   // One merchant-group question card (chips, bucket select, bulk checkbox).
   // COMPONENT-scope since 2026-07-06 so the country/period cards can render it
@@ -1061,9 +1176,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   }
 
   const deleteFile = async (f: FileCard) => {
+    const label = f.file_name ? `"${f.file_name}"` : `${f.bank_name}`
     const msg = it
-      ? `Eliminare il file di ${f.bank_name} (${f.count} transazioni)? Potrai caricarne uno nuovo subito dopo.`
-      : `Delete the ${f.bank_name} file (${f.count} transactions)? You can upload a new one right after.`
+      ? `Eliminare ${label} (${f.count} transazioni)? Potrai caricarne uno nuovo subito dopo.`
+      : `Delete ${label} (${f.count} transactions)? You can upload a new one right after.`
     if (!window.confirm(msg)) return
     setBusy(f.source_file_id)
     try {
@@ -1071,6 +1187,27 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || (it ? 'Impossibile eliminare il file — riprova.' : 'Could not delete the file — please try again.'))
+      }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // W9: clear a FAILED file (never produced rows — job-cancel, not row delete).
+  const clearFailedFile = async (path: string, fileName: string) => {
+    const msg = it
+      ? `Rimuovere il file "${fileName}"? Poi carica l'estratto conto corretto.`
+      : `Remove the file "${fileName}"? Then upload the corrected statement.`
+    if (!window.confirm(msg)) return
+    setBusy(path)
+    try {
+      const res = await fetch(`${API}/statement?account_id=${accountId}&tax_year=${taxYear}&failed_path=${encodeURIComponent(path)}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Impossibile rimuovere il file — riprova.' : 'Could not remove the file — please try again.'))
       }
       await load()
     } catch (e) {
@@ -1093,6 +1230,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     const d = await res.json().catch(() => ({}))
     if (!res.ok) {
       throw new Error(d.error || (it ? 'Caricamento non riuscito — riprova.' : 'Upload failed — please try again.'))
+    }
+    // Watch THIS upload so its outcome (failed / empty month) pops up once —
+    // only files from this session ever pop; old failures stay inline (W9
+    // round 2: login must never open onto a wall of pop-ups). The stored seq
+    // is the view shown WHEN the upload happened — outcomes only count from
+    // views loaded after it (round 3: the stale-flash fix).
+    if (typeof d.path === 'string' && d.path) {
+      setWatchedPaths(prev => new Map(prev).set(d.path, viewSeq))
     }
   }
 
@@ -1375,8 +1520,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           <ul className="space-y-2 mb-4">
             {view.files.map(f => (
               <li key={f.source_file_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-100 px-3 py-2">
-                <div className="text-sm text-zinc-800">
+                <div className="min-w-0 text-sm text-zinc-800">
                   <span className="font-medium">{f.bank_name}</span>
+                  {/* The uploaded file's own name — without it, fourteen Relay
+                      lines are indistinguishable and Delete is a coin flip. */}
+                  {f.file_name && <span className="ml-2 break-all text-xs text-zinc-600">{f.file_name}</span>}
                   <span className="text-zinc-500 text-xs ml-2">{f.count} {it ? 'transazioni' : 'transactions'} · {f.from} → {f.to}</span>
                 </div>
                 <button
@@ -1386,6 +1534,52 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 >
                   {it ? 'Elimina' : 'Delete'}
                 </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {/* W9 (card 4a39e0fd): live per-file status — every in-flight, failed
+            or quarantined file gets its own named card; never a naked spinner,
+            never a bare error. Succeeded files render above as source cards. */}
+        {(view.file_statuses ?? []).filter(f => f.state !== 'succeeded' || f.empty).length > 0 && (
+          <ul className="space-y-2 mb-4">
+            {(view.file_statuses ?? []).filter(f => f.state !== 'succeeded' || f.empty).map(f => (
+              <li
+                key={f.path}
+                className={`rounded-lg border px-3 py-2 ${
+                  f.state === 'failed' ? 'border-red-200 bg-red-50/60' : f.state === 'quarantined' ? 'border-sky-200 bg-sky-50/60' : 'border-zinc-200 bg-zinc-50/60'
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm text-zinc-800 min-w-0">
+                    <span className="font-medium break-all">{f.file_name}</span>
+                    <span className={`text-xs ml-2 ${f.state === 'failed' ? 'text-red-700' : f.state === 'quarantined' ? 'text-sky-700' : 'text-zinc-500'}`}>
+                      {f.state === 'pending' && (it ? 'Lettura in corso…' : 'Reading…')}
+                      {f.state === 'quarantined' && (it ? 'Formato in verifica dal nostro team — nessuna azione richiesta' : 'Format being confirmed by our team — nothing needed from you')}
+                      {f.state === 'failed' && (it ? 'Non leggibile' : 'Could not be read')}
+                      {f.state === 'succeeded' && f.empty && (it ? 'Letto correttamente — nessuna transazione nel periodo (mese senza attività)' : 'Read correctly — no transactions in its period (a month with no activity)')}
+                    </span>
+                  </div>
+                  {f.state === 'failed' && (
+                    <button
+                      disabled={busyOrLocked}
+                      onClick={() => void clearFailedFile(f.path, f.file_name)}
+                      className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                    >
+                      {it ? 'Rimuovi questo file' : 'Remove this file'}
+                    </button>
+                  )}
+                </div>
+                {f.state === 'failed' && f.client_error && (
+                  <p className="mt-1 text-xs text-red-700">{f.client_error}</p>
+                )}
+                {f.state === 'failed' && (
+                  <p className="mt-1 text-xs text-zinc-600">
+                    {it
+                      ? 'Rimuovi il file e carica l\'estratto conto corretto (CSV o PDF ufficiale della banca). Il nostro team è già stato avvisato.'
+                      : 'Remove the file and upload the corrected statement (your bank\'s official CSV or PDF). Our team has already been notified.'}
+                  </p>
+                )}
               </li>
             ))}
           </ul>
@@ -1529,7 +1723,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               <span className="text-zinc-500">No statements loaded yet.</span>
             )}
             {view.ingestFailed > 0 && (
-              <span className="block text-xs text-amber-700 mt-1">{view.ingestFailed} file(s) could not be read — delete and re-upload them, or generate without them.</span>
+              <span className="block text-xs text-red-700 mt-1">
+                {it
+                  ? `${view.ingestFailed} file non leggibile/i — vedi le schede file sopra per la soluzione. La conferma resta bloccata finché non è risolto (il nostro team è avvisato).`
+                  : `${view.ingestFailed} file(s) could not be read — see the file cards above for how to fix each one. Confirmation stays locked until this is resolved (our team has been notified).`}
+              </span>
             )}
           </div>
           <button
@@ -1547,6 +1745,59 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
 
   return (
     <div className="space-y-6">
+      {/* W9 POP-UP (card 4a39e0fd): a failed / empty file surfaces here, fixed
+          at the top of the viewport so it can't be lost mid-page. It is DERIVED
+          from the live file states — it disappears the instant the file is
+          removed or re-read correctly; empty-month notices also auto-close. */}
+      {fileToasts.length > 0 && (
+        <div className="fixed inset-x-0 top-3 z-[60] flex flex-col items-center gap-2 px-3 pointer-events-none" aria-live="assertive">
+          {fileToasts.map(f => {
+            const failed = f.state === 'failed'
+            return (
+              <div
+                key={f.path}
+                role={failed ? 'alert' : 'status'}
+                className={`pointer-events-auto w-full max-w-xl rounded-xl border shadow-lg p-4 ${
+                  failed ? 'border-red-300 bg-red-50' : 'border-emerald-300 bg-emerald-50'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className={`text-sm font-semibold ${failed ? 'text-red-800' : 'text-emerald-800'}`}>
+                      {failed
+                        ? (it ? `Non siamo riusciti a leggere “${f.file_name}”` : `We couldn't read “${f.file_name}”`)
+                        : (it ? `“${f.file_name}” letto correttamente` : `“${f.file_name}” read correctly`)}
+                    </p>
+                    <p className={`mt-1 text-xs ${failed ? 'text-red-700' : 'text-emerald-700'}`}>
+                      {failed
+                        ? (f.client_error ?? (it ? 'Rimuovi il file e carica l’estratto conto corretto.' : 'Remove the file and upload the corrected statement.'))
+                        : (it ? 'Nessuna transazione nel periodo (un mese senza attività). Nessuna azione richiesta.' : 'No transactions in its period (a month with no activity). Nothing needed from you.')}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {failed && (
+                      <button
+                        onClick={() => void clearFailedFile(f.path, f.file_name)}
+                        disabled={busyOrLocked}
+                        className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                      >
+                        {it ? 'Rimuovi' : 'Remove'}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setFileToasts(prev => prev.filter(x => x.path !== f.path))}
+                      aria-label={it ? 'Chiudi' : 'Dismiss'}
+                      className={`rounded-md px-2 py-1 text-sm ${failed ? 'text-red-500 hover:text-red-700' : 'text-emerald-600 hover:text-emerald-800'}`}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
       <div>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">
@@ -2152,8 +2403,8 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       ? 'Nessuna residenza fiscale registrata nel CRM per questo cliente — mostriamo tutti i periodi rilevati.'
                       : 'No fiscal residence on file in the CRM for this client — showing every detected period.')
                     : (it
-                      ? 'Abbiamo rilevato spese localizzate in questi paesi — una risposta registra tutto il periodo.'
-                      : 'We detected spending located in these countries — one answer books the whole period.')}
+                      ? 'Spese rilevate in questi paesi, già registrate come aziendali (regola: fuori dal paese di residenza = azienda). Non serve fare nulla — tocca solo per correggere.'
+                      : 'Spending we detected in these countries, already booked as business (rule: outside your home country = business). Nothing is required — tap only to correct it.')}
               </p>
               {periodError && (
                 <div className="mb-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
@@ -2172,7 +2423,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                         : `${locLabel(c.loc_code, it)}, whole year — ${c.count} transactions · $${fmt(c.total)}`}
                     </div>
                     <div className="mt-1 text-xs text-zinc-600">
-                      {it ? 'Spese localizzate lì e ancora da decidere' : 'Spending located there, still awaiting a decision'}
+                      {/* Antonio's ruling (card 85f6f0b2): the residence default
+                          ALREADY decided this — spending outside the home
+                          country is business. So the card states what we booked
+                          and why, and never implies a decision is owed. It is
+                          informational, not a Confirm blocker. */}
+                      {it
+                        ? `Registrate come spese aziendali, perché fuori dal tuo paese di residenza. Tocca solo se qualcosa era personale.`
+                        : `Booked as business spending, because it's outside your home country. Tap only if some of it was personal.`}
                       {c.merchants.length > 0 && (
                         <span className="text-zinc-500"> ({it ? 'principali' : 'top merchants'}: {c.merchants.join(', ')})</span>
                       )}
@@ -2216,6 +2474,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                         {it
                           ? `${p.row_count} transazioni sul posto · $${fmt(p.dollar_total)}`
                           : `${p.row_count} in-person transactions · $${fmt(p.dollar_total)}`}
+                      <span className="block mt-0.5">
+                        {/* Same ruling as the country cards: already booked by
+                            the residence default; the tap is a correction, not
+                            an obligation. */}
+                        {it
+                          ? 'Già registrate come spese aziendali. Tocca solo se erano personali.'
+                          : 'Already booked as business spending. Tap only if it was personal.'}
+                      </span>
                         {p.top_merchants.length > 0 && (
                           <span className="text-zinc-500"> ({it ? 'principali' : 'top merchants'}: {p.top_merchants.join(', ')})</span>
                         )}
@@ -2616,9 +2882,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       </p>
                       <p>
                         <strong>{it ? 'Cosa DEVI fare: ' : 'What you MUST do: '}</strong>
-                        {it
-                          ? `rispondere alle voci in “Serve una tua decisione” (${needs.length}) — un tocco ciascuna.`
-                          : `answer the items under “Needs your decision” (${needs.length}) — one tap each.`}
+                        {/* Counts EVERYTHING that blocks Confirm, from the same
+                            expression the Confirm button uses — not just the
+                            merchant decisions (the false all-clear Antonio hit). */}
+                        {confirmBlockers.length === 0
+                          ? (it ? 'niente — puoi confermare.' : 'nothing — you can confirm.')
+                          : confirmBlockers.map(b => (it ? b.labelIt : b.label)).join(it ? '; ' : '; ') + '.'}
                       </p>
                       <p>
                         <strong>{it ? 'Cosa PUOI fare (facoltativo): ' : 'What you CAN do (optional): '}</strong>
@@ -2690,8 +2959,18 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                         })}
                       </div>
                     ) : (
-                      <div className="mb-5 rounded-xl border-2 border-emerald-300 bg-emerald-50 px-4 py-4 text-sm font-semibold text-emerald-900">
-                        ✓ {it ? 'Tutto registrato — non serve nessuna decisione.' : 'All booked — nothing needs your decision.'}
+                      <div className={`mb-5 rounded-xl border-2 px-4 py-4 text-sm font-semibold ${
+                        confirmBlockers.length === 0
+                          ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                          : 'border-amber-300 bg-amber-50 text-amber-900'
+                      }`}>
+                        {/* Scoped honestly: this section is about merchant
+                            decisions, so it says THAT — and when something else
+                            still blocks Confirm it names it instead of implying
+                            the client is finished. */}
+                        {confirmBlockers.length === 0
+                          ? `✓ ${it ? 'Tutto registrato — non serve nessuna decisione.' : 'All booked — nothing needs your decision.'}`
+                          : `✓ ${it ? 'Nessuna spesa da decidere qui. Resta da fare: ' : 'No merchant decisions left here. Still to do: '}${confirmBlockers.map(b => (it ? b.labelIt : b.label)).join('; ')}.`}
                       </div>
                     )}
 
@@ -2955,18 +3234,40 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   </span>
                 </label>
                 <button
-                  disabled={!attestChecked || !view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || view.ingestPending > 0 || busyOrLocked}
+                  // ONE source of truth with the status header (card 85f6f0b2):
+                  // confirmBlockers is built from exactly these conditions, so
+                  // a disabled button always has a named reason on screen.
+                  disabled={!attestChecked || !view.completeness.can_accept_as_is || confirmBlockers.length > 0 || busyOrLocked}
                   onClick={() => void attest()}
                   className="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-40"
                 >
                   {it ? 'Accetto e confermo' : 'Accept and confirm'}
                 </button>
+                {/* W9 HARD BLOCK (card 4a39e0fd, binding ruling): a failed
+                    statement file locks Confirm — server-enforced too; this
+                    names the blocker instead of a mute disabled button. */}
+                {view.ingestFailed > 0 && !view.failedFilesOverridden && (
+                  <p className="text-xs text-red-700">
+                    {it
+                      ? 'La conferma è bloccata: uno o più estratti conto non sono stati letti. Vedi le schede file nella sezione Estratti conto — il nostro team è già avvisato.'
+                      : 'Confirmation is locked: one or more bank statements could not be read. See the file cards in the Bank statements section — our team has already been notified.'}
+                  </p>
+                )}
                 {/* Name the RIGHT blocker (2026-08-03). No gate blocks confirm
                     any more, so what lands here is the year-coverage step — but
                     the old wording said "the remaining questions above", which
                     points at the categorization queue and sent clients back to
                     a list that was never what was stopping them. */}
-                {(!view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0) && (
+                {/* Never render BESIDE the failed-file lock. Both paragraphs
+                    used to show at once, and this one said "ONLY the Year
+                    coverage section is missing — answer there and you can
+                    confirm" while the red line above said confirm was locked by
+                    an unreadable file. Answering coverage would NOT have
+                    unlocked it. One blocker on screen at a time; the hard block
+                    wins because it's the one that actually gates Confirm.
+                    (2026-08-12, found on Antonio's QA of card 4a39e0fd.) */}
+                {!(view.ingestFailed > 0 && !view.failedFilesOverridden) &&
+                  (!view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0) && (
                   <p className="text-xs text-amber-700">
                     {view.coverage.incomplete > 0
                       ? (it ? 'Hai indicato che un export è incompleto — sostituisci il file, poi potrai confermare.' : 'You marked an export as incomplete — replace the file, then you can confirm.')

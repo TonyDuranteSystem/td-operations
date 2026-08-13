@@ -165,8 +165,16 @@ async function extractSinglePass(
   mimeType: string,
   opts?: { fetchImpl?: typeof fetch; model?: string; maxAttempts?: number; budgetMs?: number },
 ): Promise<ParseResult> {
+  // NOTE (round 3): a missing/rotated key is OUR config problem, not the
+  // file's — the no-key result below is flagged transient so the job retries
+  // instead of terminally branding every upload of the mishap window as
+  // unreadable and notifying the clients.
   const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) return emptyResult(fileName, ["ANTHROPIC_API_KEY not configured — cannot AI-extract statement"])
+  if (!apiKey) {
+    const r = emptyResult(fileName, ["ANTHROPIC_API_KEY not configured — cannot AI-extract statement"])
+    r.transient_failure = true
+    return r
+  }
 
   const doFetch = opts?.fetchImpl || fetch
   const requestBody = JSON.stringify({
@@ -203,6 +211,11 @@ async function extractSinglePass(
   let data: { content?: Array<{ type: string; name?: string; input?: AiStatement }>; stop_reason?: string } | null = null
   let lastError: string | null = null
   const retryNotes: string[] = []
+  // Card 4a39e0fd round 2: when we end with NO usable response and the causes
+  // were transport-level (transient API status / request exception), the
+  // caller must job-level retry — this is NOT an unreadable file. A permanent
+  // API rejection (e.g. 400) stays non-transient: retrying can't help.
+  let sawTransportFailure = false
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const remaining = GLOBAL_DEADLINE_MS - (Date.now() - startedAt)
@@ -219,7 +232,8 @@ async function extractSinglePass(
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
         lastError = `Claude API error ${res.status}: ${JSON.stringify(err)}`
-        if (!TRANSIENT.has(res.status)) { data = null; break } // permanent (e.g. 400) — retry won't help
+        if (!TRANSIENT.has(res.status)) { data = null; sawTransportFailure = false; break } // permanent (e.g. 400) — retry won't help
+        sawTransportFailure = true
         retryNotes.push(`attempt ${attempt}: API ${res.status}`)
       } else {
         const attemptData = await res.json()
@@ -232,6 +246,7 @@ async function extractSinglePass(
       }
     } catch (e) {
       lastError = `AI extraction request failed: ${e instanceof Error ? e.message : String(e)}`
+      sawTransportFailure = true
       retryNotes.push(`attempt ${attempt}: ${e instanceof Error ? e.message : "request error"}`)
     } finally {
       clearTimeout(timeout)
@@ -241,7 +256,15 @@ async function extractSinglePass(
     }
   }
 
-  if (!data) return emptyResult(fileName, [lastError || "AI extraction failed"])
+  if (!data) {
+    const r = emptyResult(fileName, [lastError || "AI extraction failed"])
+    // No usable response at all + transport-level causes → the caller must
+    // retry the JOB; the file was never actually read. (A model that DID
+    // answer with zero rows takes the `data` path below and stays a genuine
+    // could-not-read.)
+    if (sawTransportFailure) r.transient_failure = true
+    return r
+  }
 
   const errors: string[] = []
   // Surface that retries happened (helps explain a flaky-but-recovered read).

@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 // from("job_queue").select().eq().eq().eq().neq().limit() → existingRows
 // from("job_queue").insert(row) → captured in jobInserts
 let existingRows: Array<{ id: string }> = []
+const statusFilters: Array<{ kind: string; value: unknown }> = []
 let uploadError: { message: string } | null = null
 let insertError: { message: string } | null = null
 const uploadCalls: Array<{ bucket: string; path: string; opts: unknown }> = []
@@ -24,7 +25,8 @@ vi.mock("@/lib/supabase-admin", () => ({
       const chain: Record<string, unknown> = {}
       chain.select = () => chain
       chain.eq = () => chain
-      chain.neq = () => chain
+      chain.neq = (col: string, v: unknown) => { if (col === "status") statusFilters.push({ kind: "neq", value: v }); return chain }
+      chain.in = (col: string, v: unknown) => { if (col === "status") statusFilters.push({ kind: "in", value: v }); return chain }
       chain.limit = () => Promise.resolve({ data: existingRows, error: null })
       chain.insert = (row: unknown) => { jobInserts.push(row); return Promise.resolve({ error: insertError }) }
       return chain
@@ -44,6 +46,7 @@ const INPUT = {
 }
 
 beforeEach(() => {
+  statusFilters.length = 0
   existingRows = []
   uploadError = null
   insertError = null
@@ -98,5 +101,24 @@ describe("saveAndEnqueueStatementUpload", () => {
   it("enqueue failure → throws a guiding error", async () => {
     insertError = { message: "insert denied" }
     await expect(saveAndEnqueueStatementUpload(INPUT)).rejects.toThrow(/Could not queue your file/)
+  })
+})
+
+
+// ── Card 4a39e0fd, bug-hunter blocker B1 (round 2) — the JOIN-level guarantee ──
+describe("delete-supersede join: cancelled jobs must never block a re-upload", () => {
+  it("the idempotency skip excludes BOTH failed and cancelled jobs", async () => {
+    await saveAndEnqueueStatementUpload(INPUT)
+    // The first cut used .neq('status','failed'): a job cancelled by
+    // delete-supersede still matched the skip and the identical re-upload
+    // silently never re-ingested (the exact live bug W7 exists to close).
+    // The filter must be a positive status list that a cancelled row can
+    // never satisfy.
+    expect(statusFilters).toHaveLength(1)
+    expect(statusFilters[0].kind).toBe("in")
+    const statuses = statusFilters[0].value as string[]
+    expect(statuses).not.toContain("cancelled")
+    expect(statuses).not.toContain("failed")
+    expect(statuses).toEqual(expect.arrayContaining(["pending", "processing", "completed"]))
   })
 })

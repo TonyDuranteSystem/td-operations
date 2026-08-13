@@ -136,6 +136,122 @@ async function resolveLocale(
   return "en"
 }
 
+const INGEST_FAILURE_MESSAGE: Record<"it" | "en", (fileName: string) => string> = {
+  en: (f) =>
+    `One of your bank statements (${f}) could not be read automatically. Our team has been notified and will take care of it — no action is needed from you unless we contact you.`,
+  it: (f) =>
+    `Uno dei tuoi estratti conto (${f}) non è stato letto automaticamente. Il nostro team è stato avvisato e se ne occuperà — non è richiesta alcuna azione da parte tua, a meno che non ti contattiamo noi.`,
+}
+
+const INGEST_QUARANTINE_MESSAGE: Record<"it" | "en", (fileName: string) => string> = {
+  en: (f) =>
+    `One of your bank statements (${f}) uses a format we're confirming on our side. Nothing is needed from you — it will be processed shortly.`,
+  it: (f) =>
+    `Uno dei tuoi estratti conto (${f}) usa un formato che stiamo verificando internamente. Non devi fare nulla — sarà elaborato a breve.`,
+}
+
+/**
+ * Client + staff notification for an `ingest_bank_statement` job reaching its
+ * FINAL failed state (card 4a39e0fd). Before this existed, a dead statement
+ * file was visible ONLY as a passive amber banner on the financials screen and
+ * a row in the Exception Center — three clients (Economicamente, Nova Ratio,
+ * PAMAG) reached August with real holes in their books and nobody told anyone.
+ * Same guardrails as the wizard notifier: system-sender portal message,
+ * idempotent via a marker in job_queue.result, never throws. Staff side:
+ * reportSystemError feeds the fingerprinted error-audit stream.
+ */
+export async function notifyClientOfStatementIngestFailure(
+  job: WizardFailureJob,
+): Promise<WizardFailureNotifyResult> {
+  try {
+    if (job.job_type !== "ingest_bank_statement") {
+      return { notified: false, reason: "not_an_ingest_job" }
+    }
+    const payload = (job.payload ?? {}) as Record<string, unknown>
+    const accountId =
+      (job.account_id as string | null) ||
+      (typeof payload.account_id === "string" ? payload.account_id : null)
+    if (!accountId) return { notified: false, reason: "no_target" }
+
+    const path = typeof payload.path === "string" ? payload.path : ""
+    // ONE name-cleaning implementation (round 3: this had its own inline copy
+    // that missed the financials-page sha16 prefix, so the chat message named
+    // "134b63d41ab21374_QA-3-broken-file.csv" instead of the client's file).
+    const { displayStatementFileName } = await import("@/lib/tax/ingest-file-status")
+    const displayName = displayStatementFileName(path)
+
+    // Idempotency marker in the job's own result JSONB (same pattern as the
+    // wizard notifier) — a re-fire of failJob never double-posts.
+    const { data: jobRow } = await supabaseAdmin
+      .from("job_queue")
+      .select("result")
+      .eq("id", job.id)
+      .maybeSingle()
+    const currentResult = (jobRow?.result ?? {}) as Record<string, unknown>
+    if (currentResult[NOTIFIED_FLAG] === true) {
+      return { notified: false, reason: "already_notified" }
+    }
+    const steps = (currentResult.steps ?? []) as Array<{ detail?: string }>
+    const quarantined = steps.some(
+      (s) => typeof s.detail === "string" && s.detail.startsWith("FORMAT_CONFIRMATION_NEEDED:"),
+    )
+
+    const locale = await resolveLocale(null, accountId)
+    const message = quarantined
+      ? INGEST_QUARANTINE_MESSAGE[locale](displayName)
+      : INGEST_FAILURE_MESSAGE[locale](displayName)
+
+    const { error } = await supabaseAdmin.from("portal_messages").insert({
+      account_id: accountId,
+      contact_id: null,
+      sender_type: "system",
+      sender_id: SYSTEM_SENDER_ID,
+      message,
+    })
+    if (error) {
+      console.error(`[ingest-failure-notify] insert failed for job ${job.id}:`, error.message)
+      return { notified: false, reason: "insert_failed" }
+    }
+
+    // Staff signals (Antonio's ruling: failure raises a staff What's New card,
+    // never only a passive list). Both best-effort — never break the client
+    // notification above. The card is idempotent per FILE via source_ref.
+    try {
+      const { emitActionNeeded } = await import("@/lib/notifications/act-event")
+      await emitActionNeeded({
+        event: "statement_ingest_failed",
+        account_id: accountId,
+        source_ref: `ingest_file:${path || job.id}`,
+      })
+    } catch (e) {
+      console.error(`[ingest-failure-notify] staff card failed for ${job.id}:`, e)
+    }
+    try {
+      const { reportSystemError } = await import("@/lib/system-errors")
+      await reportSystemError({
+        source: "server",
+        route: "lib/jobs/wizard-failure-notify#ingest",
+        message: quarantined
+          ? `Statement file quarantined for format confirmation: ${displayName} (account ${accountId})`
+          : `Statement file FAILED ingestion (final): ${displayName} (account ${accountId})`,
+        context: { job_id: job.id, account_id: accountId, path, quarantined },
+      })
+    } catch (e) {
+      console.error(`[ingest-failure-notify] error-audit report failed for ${job.id}:`, e)
+    }
+
+    await supabaseAdmin
+      .from("job_queue")
+      .update({ result: { ...currentResult, [NOTIFIED_FLAG]: true } as unknown as Json })
+      .eq("id", job.id)
+
+    return { notified: true }
+  } catch (e) {
+    console.error(`[ingest-failure-notify] unexpected error for job ${job.id}:`, e)
+    return { notified: false, reason: "exception" }
+  }
+}
+
 /**
  * Post a client-facing failure chat message for a wizard background job that
  * has reached its FINAL failed state. Safe to call for any job — it self-gates

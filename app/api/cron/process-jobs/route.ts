@@ -53,9 +53,18 @@ async function reapStuckJobs(): Promise<{ requeued: number; failed: number }> {
       .in('id', toRetry)
   }
   if (toFail.length > 0) {
-    await supabaseAdmin.from('job_queue')
-      .update({ status: 'failed', completed_at: new Date().toISOString(), error: 'Reaped: stuck in processing past max_attempts' })
-      .in('id', toFail)
+    // Through the failJob chokepoint, NOT a raw update: final failure is where
+    // the client notification fires (wizard-failure-notify), and a reaped
+    // wizard job used to bypass it — the exact blind spot that module exists
+    // to close (card 4a39e0fd). `terminal` guarantees the final branch even
+    // though these rows are already at max attempts.
+    for (const id of toFail) {
+      try {
+        await failJob(id, 'Reaped: stuck in processing past max_attempts', undefined, { terminal: true })
+      } catch (e) {
+        console.error(`[process-jobs] reap final-fail failed for ${id}:`, e)
+      }
+    }
   }
   return { requeued: toRetry.length, failed: toFail.length }
 }
@@ -111,7 +120,9 @@ export async function GET(req: NextRequest) {
         // Handler reached a failure path but chose not to throw. Move the
         // job to status='failed' so it shows up in the Exception Center's
         // Failed Jobs section instead of hiding inside a completed row.
-        await failJob(job.id, result.summary || 'Handler reported failure', result)
+        // `terminal` skips the retry budget — a dead file is dead on every
+        // attempt (card 4a39e0fd).
+        await failJob(job.id, result.summary || 'Handler reported failure', result, { terminal: result.terminal === true })
         results.push({
           job_id: job.id,
           job_type: job.job_type,

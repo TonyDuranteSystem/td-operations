@@ -50,13 +50,15 @@ export async function saveAndEnqueueWorkspaceUpload(
     .upload(path, buffer, { contentType, upsert: true })
   if (upErr) throw new Error(`Could not save the file: ${upErr.message}`)
 
-  // 2. Idempotency: skip if this exact path already has a non-failed job.
+  // 2. Idempotency: skip if this exact path already has a LIVE job (failed
+  //    AND cancelled excluded — a superseded/deleted file must re-enqueue on
+  //    re-upload; card 4a39e0fd).
   const { data: existing } = await supabaseAdmin
     .from("job_queue")
     .select("id")
     .eq("job_type", "ingest_workspace_statement")
     .eq("payload->>path", path)
-    .neq("status", "failed")
+    .in("status", ["pending", "processing", "completed"])
     .limit(1)
   if (existing && existing.length > 0) {
     return { queued: false, alreadyQueued: true, path }

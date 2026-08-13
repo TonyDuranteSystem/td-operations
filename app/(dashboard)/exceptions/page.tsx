@@ -10,7 +10,7 @@
  */
 
 import Link from "next/link"
-import { AlertTriangle, ShieldAlert, Zap, Mail, Webhook, ExternalLink, Layers, EyeOff, UserX, FileText } from "lucide-react"
+import { AlertTriangle, ShieldAlert, Zap, Mail, Webhook, ExternalLink, Layers, EyeOff, UserX, FileText, FileQuestion } from "lucide-react"
 import { getExceptionsSnapshot } from "@/lib/exceptions/queries"
 import {
   retryPartialActivation,
@@ -21,8 +21,11 @@ import {
   reconcileTierFromException,
   retrySilentFailedJob,
   closeOrphanTask,
+  resolveStatementFormat,
+  unlockConfirmFromException,
 } from "./actions"
 import { RetryButton } from "./retry-button"
+import { UnlockConfirmButton } from "./unlock-confirm-button"
 import type { PortalTier } from "@/lib/portal/tier-config"
 
 export const dynamic = "force-dynamic"
@@ -230,25 +233,95 @@ export default async function ExceptionsPage() {
             <div key={row.id} className="flex items-center justify-between gap-4 px-4 py-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-zinc-900">{row.job_type}</span>
-                  <span className="text-xs text-zinc-500">
-                    {row.attempts}/{row.max_attempts} attempts
-                  </span>
+                  <span className="text-sm font-medium text-zinc-900">{row.headline}</span>
                 </div>
-                {row.error && (
-                  <div className="mt-1 text-xs text-red-600 truncate">{row.error}</div>
+                {row.job_type === "ingest_bank_statement" ? (
+                  <div className="mt-1 text-xs text-zinc-600">
+                    The client&apos;s file could not be read. Fix: get a corrected export from the client (or upload it for them), or use Unlock Confirm if the numbers are complete without it.
+                  </div>
+                ) : (
+                  row.error && <div className="mt-1 text-xs text-red-600 truncate">{row.error}</div>
                 )}
-                <div className="mt-1 text-xs text-zinc-400">Age {formatAge(row.age_hours)}</div>
+                <div className="mt-1 text-xs text-zinc-400">Age {formatAge(row.age_hours)} · {row.attempts}/{row.max_attempts} attempts</div>
               </div>
-              <RetryButton
-                label="Retry Job"
-                successToast="Job requeued"
-                variant="primary"
-                action={async () => {
-                  "use server"
-                  return retryFailedJob(row.id)
-                }}
-              />
+              <div className="flex shrink-0 items-center gap-2">
+                {/* W9: a failed statement ingest hard-blocks the client's
+                    Confirm — the staff override lives here (reason required,
+                    logged, client notified). */}
+                {row.job_type === "ingest_bank_statement" && row.account_id && row.tax_year !== null && (
+                  <UnlockConfirmButton
+                    action={async (reason: string) => {
+                      "use server"
+                      return unlockConfirmFromException(row.account_id!, row.tax_year!, reason)
+                    }}
+                  />
+                )}
+                <RetryButton
+                  label="Retry Job"
+                  successToast="Job requeued"
+                  variant="primary"
+                  action={async () => {
+                    "use server"
+                    return retryFailedJob(row.id)
+                  }}
+                />
+              </div>
+            </div>
+          ))
+        )}
+      </Section>
+
+
+      {/* ── Quarantined statement formats (card 4a39e0fd) — a portal-quarantined
+             file has NO workspace confirm card; this is the staff surface.
+             Confirm auto-requeues every waiting client file. ── */}
+      <Section
+        title="Statement Formats Awaiting Confirmation"
+        icon={FileQuestion}
+        count={snapshot.quarantinedFormats.length}
+        tone="red"
+      >
+        {snapshot.quarantinedFormats.length === 0 ? (
+          <EmptyRow message="No statement formats waiting." />
+        ) : (
+          snapshot.quarantinedFormats.map(row => (
+            <div key={row.mapping_id} className="flex items-center justify-between gap-4 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-zinc-900">{row.bank_label}</span>
+                  <span className="text-xs text-zinc-500">Age {formatAge(row.age_hours)}</span>
+                </div>
+                {row.waiting_files.length > 0 ? (
+                  <div className="mt-1 text-xs text-red-600">
+                    {row.waiting_files.map(f => `${f.company_name ?? "Unknown client"}: ${f.file}`).join(" · ")}
+                  </div>
+                ) : (
+                  <div className="mt-1 text-xs text-zinc-500">No client files currently waiting (workspace-only proposal).</div>
+                )}
+                <div className="mt-1 text-xs text-zinc-400">
+                  Confirming re-processes every waiting client file automatically. Reject only if the export is not a bank statement.
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <RetryButton
+                  label="Confirm Format"
+                  successToast="Format confirmed — waiting files re-queued"
+                  variant="primary"
+                  action={async () => {
+                    "use server"
+                    return resolveStatementFormat(row.mapping_id, "confirm")
+                  }}
+                />
+                <RetryButton
+                  label="Reject"
+                  successToast="Format rejected"
+                  variant="secondary"
+                  action={async () => {
+                    "use server"
+                    return resolveStatementFormat(row.mapping_id, "reject")
+                  }}
+                />
+              </div>
             </div>
           ))
         )}
