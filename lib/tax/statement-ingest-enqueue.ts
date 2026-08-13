@@ -39,6 +39,17 @@ export function bankLabelForPath(path: string, submittedData: Record<string, unk
   return typed || fromName || "Bank"
 }
 
+/** The client-declared account number/label for this file's bank row (identity
+ *  build 2026-08-13, card 4a39e0fd): before this, the wizard's account_label
+ *  flowed NOWHERE — the number a client typed never reached the account
+ *  identity, so every wizard upload keyed on bank name alone. */
+export function accountNumberForPath(path: string, submittedData: Record<string, unknown>): string | null {
+  const idx = path.match(/\/bank_accounts_(\d+)_statements_/)?.[1]
+  if (idx === undefined) return null
+  const label = String(submittedData[`bank_accounts_${idx}_account_label`] ?? "").trim()
+  return label || null
+}
+
 export interface EnqueueStatementIngestResult {
   /** Newly enqueued ingest jobs. */
   enqueued: number
@@ -105,6 +116,9 @@ export async function enqueueStatementIngestJobs(params: {
         tax_year: taxYear,
         path,
         bank_label: bankLabelForPath(path, submittedData),
+        // Threads the client's declared number into the account identity —
+        // the ingest handler passes payload.account_number to buildAccountRef.
+        account_number: accountNumberForPath(path, submittedData),
         ...(bucket ? { bucket } : {}),
       },
       priority: 4,

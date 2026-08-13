@@ -278,7 +278,12 @@ const TAX_DOCUMENTS_BASE: FieldConfig[] = [
     repeaterAddLabelIt: 'Aggiungi un conto bancario',
     repeaterFields: [
       { name: 'bank_name', label: 'Bank name', labelIt: 'Nome della banca', type: 'text', required: true, placeholder: 'e.g. Mercury, Wise, Chase…', placeholderIt: 'es. Mercury, Wise, Chase…', hint: 'Type the bank\'s name — for the most common banks (Mercury, Relay, Wise, Revolut, Slash, Airwallex, Chase, PayPal) the exact step-by-step instructions to download the CSV will appear right below, as soon as you type it.', hintIt: 'Scrivi il nome della banca — per le banche più comuni (Mercury, Relay, Wise, Revolut, Slash, Airwallex, Chase, PayPal) le istruzioni passo-passo per scaricare il CSV appariranno qui sotto, appena lo scrivi.' },
-      { name: 'account_label', label: 'Account nickname / last 4 digits (if you have more than one account at this bank)', labelIt: 'Nome conto / ultime 4 cifre (se hai più conti nella stessa banca)', type: 'text', required: false },
+      // Identity build (2026-08-13, card 4a39e0fd): this field IS the account
+      // identity for account_number-mode institutions. Statically optional —
+      // requiredness is MODE-CONDITIONAL in getStepErrors (a static required
+      // would demand a number from Wise/Revolut clients, the opposite of the
+      // ruling) + server-enforced in wizard-submit's tax path.
+      { name: 'account_label', label: 'Account number — or its last 4 digits (required for banks)', labelIt: 'Numero di conto — o le ultime 4 cifre (obbligatorio per le banche)', type: 'text', required: false, hint: 'This is what keeps two accounts at the same bank apart in your books.', hintIt: 'È ciò che distingue due conti della stessa banca nei tuoi libri contabili.' },
       { name: 'account_kind', label: 'Account type', labelIt: 'Tipo di conto', type: 'select', required: true, options: [
         { value: 'checking', label: 'Bank account (checking)', labelIt: 'Conto corrente' },
         { value: 'credit_card', label: 'Credit card', labelIt: 'Carta di credito' },

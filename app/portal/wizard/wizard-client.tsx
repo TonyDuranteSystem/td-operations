@@ -6,6 +6,7 @@ import { WizardShell, type WizardStep } from '@/components/portal/wizard/wizard-
 import { WizardField, type FieldConfig } from '@/components/portal/wizard/wizard-field'
 import { getWizardConfig, wizardCollectsOwnerMembers, wizardRequiresSs4Signer, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
 import { createClient } from '@/lib/supabase/client'
+import { resolveInstitution } from '@/lib/tax/bank-identity'
 import { AlertCircle, CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
 
 const UPLOAD_BUCKET = 'onboarding-uploads'
@@ -80,6 +81,11 @@ interface WizardClientProps {
   /** Bank CSV-export guides (catalog-driven, §3.1/§8): shown under a bank
    * upload card when the typed bank name matches a guide's match terms. */
   bankGuides?: Array<{ name: string; matchTerms: string[]; stepsEn: string[]; stepsIt: string[]; noteEn: string; noteIt: string }>
+  /** Identity build (2026-08-13): the LIVE institution registry — each bank
+   * row resolves its identity mode from it (banks require the account number;
+   * currency/crypto services never ask). Empty = seed fallback inside
+   * resolveInstitution's default. */
+  institutions?: Array<{ canonical: string; mode: 'account_number' | 'currency' | 'crypto'; matchTerms: string[] }>
   /** DB-driven wizard config. When provided (TD Communication brand audit,
    * built server-side from td_comm_questions), it REPLACES the code-side
    * getWizardConfig() output. Every wizard type without a DB source leaves this
@@ -266,6 +272,7 @@ export function WizardClient({
   isLocked,
   itinCount = 0,
   bankGuides = [],
+  institutions = [],
   configOverride,
 }: WizardClientProps) {
   // The client's answer to the one-owner/multi-owner question, when the server
@@ -572,7 +579,22 @@ export function WizardClient({
         for (let idx = 0; idx < count; idx++) {
           for (const rf of field.repeaterFields ?? []) {
             const key = `${field.name}_${idx}_${rf.name}`
-            if (rf.required && isEmptyValue(formData[key])) errs[key] = reqMsg
+            // Identity build (2026-08-13, card 4a39e0fd): the account number is
+            // MODE-CONDITIONALLY required — a BANK (account_number mode per the
+            // live registry) must carry it, because an unnumbered bank upload
+            // is how one real account silently splits into two; Wise-style
+            // services and crypto are never asked. The per-row escape
+            // ("genuinely has no single number") waives it. Deliberately NOT a
+            // static required flag — that would demand a number from Wise.
+            const modeRequired =
+              field.name === 'bank_accounts' && rf.name === 'account_label' &&
+              String(formData[`${field.name}_${idx}_no_number`] ?? '') !== '1' &&
+              resolveInstitution(
+                String(formData[`${field.name}_${idx}_bank_name`] ?? ''),
+                institutions.length ? institutions : undefined,
+              ).mode === 'account_number' &&
+              String(formData[`${field.name}_${idx}_bank_name`] ?? '').trim().length > 0
+            if ((rf.required || modeRequired) && isEmptyValue(formData[key])) errs[key] = reqMsg
             else if (belowFieldMin(rf, formData[key])) errs[key] = minMsg
           }
         }
@@ -582,7 +604,7 @@ export function WizardClient({
       else if (belowFieldMin(field, formData[field.name])) errs[field.name] = minMsg
     }
     return errs
-  }, [currentStep, steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, locale, reqMsg, minMsg])
+  }, [currentStep, steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, locale, reqMsg, minMsg, institutions])
 
   const validateStep = useCallback(() => Object.keys(getStepErrors()).length === 0, [getStepErrors])
 
@@ -1368,6 +1390,41 @@ export function WizardClient({
                             </div>
                           ))}
                         </div>
+                        {/* Identity build (2026-08-13): when the typed bank is
+                            an account_number-mode institution, say WHY the
+                            number matters (bilingual, red) and offer the
+                            escape for services with no single number. The
+                            requiredness itself is enforced in getStepErrors +
+                            server-side at submit. */}
+                        {field.name === 'bank_accounts' && (() => {
+                          const typed = String(formData[`${field.name}_${idx}_bank_name`] ?? '')
+                          if (typed.trim().length === 0) return null
+                          const inst = resolveInstitution(typed, institutions.length ? institutions : undefined)
+                          if (inst.mode !== 'account_number') return null
+                          const noNumKey = `${field.name}_${idx}_no_number`
+                          const waived = String(formData[noNumKey] ?? '') === '1'
+                          return (
+                            <div className="space-y-1.5">
+                              {!waived && (
+                                <div className="rounded-md border border-red-300 bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-700">
+                                  {locale === 'it'
+                                    ? '⚠️ Ricontrolla il numero di conto dopo averlo scritto — se è sbagliato, il tuo P&L sarà sbagliato.'
+                                    : '⚠️ Double-check the account number after you type it — if it\'s wrong, your P&L will be wrong.'}
+                                </div>
+                              )}
+                              <label className="flex items-center gap-1.5 text-xs text-zinc-500">
+                                <input
+                                  type="checkbox"
+                                  checked={waived}
+                                  onChange={e => handleFieldChange(noNumKey, e.target.checked ? '1' : '')}
+                                />
+                                {locale === 'it'
+                                  ? 'È un servizio multivaluta o crypto (senza numero di conto unico)'
+                                  : 'This is a multi-currency service or crypto (no single account number)'}
+                              </label>
+                            </div>
+                          )
+                        })()}
                         {/* Bank CSV-export guide (catalog-driven): appears when
                             the typed bank name matches a guide — step-by-step
                             download help right under this bank's upload. */}
