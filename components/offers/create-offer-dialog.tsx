@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { ReferrerPicker, type ReferrerValue } from './referrer-picker'
 import { FORMATION_STATE_CODES, FORMATION_STATE_NAMES, type FormationStateCode } from '@/lib/formation/states'
 import { parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
+import { parseAuthoredAmount, authoredAmountValue } from '@/lib/offers/parse-authored-amount'
 import {
   validatePaymentPlan,
   clientFacingPartLabel,
@@ -275,6 +276,17 @@ export function CreateOfferDialog({
     { amount: '', kind: 'signing', date: '', label: '' },
     { amount: '', kind: 'manual', date: '', label: '' },
   ])
+  // The component stays mounted when closed, so without this a plan authored for one client
+  // rides onto the next offer raised from the same panel — money attached to the wrong deal
+  // (bug-hunter, 2026-08-13). Client name and referrer already reset the same way.
+  useEffect(() => {
+    if (!open) return
+    setSplitEnabled(false)
+    setSplitParts([
+      { amount: '', kind: 'signing', date: '', label: '' },
+      { amount: '', kind: 'manual', date: '', label: '' },
+    ])
+  }, [open])
 
   // Required documents
   const [requiredDocs, setRequiredDocs] = useState<string[]>([])
@@ -632,11 +644,19 @@ export function CreateOfferDialog({
   )
   const splitActive = splitEnabled && !splitLockedByCommission
 
+  // Each typed amount, parsed WITHOUT the stored-price quirk (which turns "1.750" into 1.75).
+  // An ambiguous or unreadable entry yields 0, so the plan cannot validate and the author is
+  // stopped rather than surprised by a €1.75 part.
+  const parsedAmounts = useMemo(() => splitParts.map(p => parseAuthoredAmount(p.amount)), [splitParts])
+  const ambiguousAmounts = parsedAmounts
+    .map((a, i) => (a.kind === "ambiguous" ? { seq: i + 1, ...a } : null))
+    .filter(Boolean) as Array<{ seq: number; raw: string; asThousands: number; asDecimal: number }>
+
   const planDraft: PaymentPlanPart[] = useMemo(
     () =>
       splitParts.map((p, i) => ({
         seq: i + 1,
-        amount: parsePriceQuirk(p.amount),
+        amount: authoredAmountValue(parsedAmounts[i]),
         // One currency for the whole plan — the offer's. Credit, bank matching and
         // activation are all single-currency, so a per-part currency would break
         // further down where the error means nothing.
@@ -647,16 +667,36 @@ export function CreateOfferDialog({
           ...(p.kind === 'manual' && i > 0 && p.label.trim() ? { label: p.label.trim() } : {}),
         },
       })),
-    [splitParts, currency],
+    [splitParts, currency, parsedAmounts],
   )
   const planCheck = useMemo(
     () => (splitActive ? validatePaymentPlan(planDraft) : null),
     [splitActive, planDraft],
   )
   const planSum = planDraft.reduce((s, p) => s + p.amount, 0)
-  // The plan schedules the SETUP FEE. If the parts do not add up to it the engine degrades
-  // loudly at signing (no pay controls, whole fee billed) — so it is caught here instead.
-  const planMismatch = splitActive && planSum > 0 && Math.abs(planSum - servicesTotalAmount) > 0.5
+  // ⛔ COMPARED AGAINST THE ENGINE'S GROSS — services PLUS pre-conditions (`totalAmount`), which
+  // is what computeOfferTotals sums and what decideSigningBill judges the plan against. Comparing
+  // against the services subtotal alone was wrong in BOTH directions (bug-hunter, 2026-08-13): it
+  // passed a plan the engine would refuse — stripping every pay control so the client cannot pay
+  // at all — and fired a FALSE warning on the plan the engine actually wants, steering the author
+  // into the broken shape. Any pre-condition on the offer triggered it.
+  const planMismatch = splitActive && planSum > 0 && Math.abs(planSum - totalAmount) > 0.5
+
+  // ⛔ A HALF-WRITTEN SPLIT MUST STOP THE SUBMIT — it must NEVER become "no split".
+  // The first cut posted null whenever the plan failed to validate, on the theory that never
+  // sending a bad plan was the safe choice. It is the DANGEROUS one (bug-hunter, 2026-08-13):
+  // the offer is created as an ordinary full-payment deal, with no error, no toast and no trace
+  // that a split was ever intended — the client signs and is billed the whole fee. Silence is
+  // indistinguishable from "the author changed their mind". So the split now BLOCKS instead.
+  const splitBlockReason: string | null = !splitActive
+    ? null
+    : ambiguousAmounts.length > 0
+      ? `Part ${ambiguousAmounts[0].seq}: "${ambiguousAmounts[0].raw}" could mean ${currencySymbol}${ambiguousAmounts[0].asThousands.toLocaleString('en-US')} or ${currencySymbol}${ambiguousAmounts[0].asDecimal}. Write it without the dot (e.g. ${ambiguousAmounts[0].asThousands}).`
+      : planCheck && !planCheck.ok
+        ? `Payment plan not usable — ${planCheck.errors.join(' ')}`
+        : planMismatch
+          ? `The parts add up to ${currencySymbol}${planSum.toLocaleString('en-US')} but this offer totals ${currencySymbol}${totalAmount.toLocaleString('en-US')}. They must match, or the client is billed the full amount at signing.`
+          : null
 
   // Data-driven default for the per-service individual/business/ask
   // dropdown. The value comes from service_catalog.default_service_context
@@ -729,6 +769,11 @@ export function CreateOfferDialog({
     const withPrices = selected.filter(s => s.price.trim())
     if (withPrices.length === 0) {
       toast.error('Enter a price for at least one service')
+      return
+    }
+
+    if (splitBlockReason) {
+      toast.error(splitBlockReason)
       return
     }
 
@@ -861,11 +906,10 @@ export function CreateOfferDialog({
             bank_preference: bankPreference,
             currency,
             installment_currency: showAnnual ? installmentCurrency : null,
-            // Only a plan the engine already accepted is sent. An invalid one is
-            // never posted — createOffer would refuse it anyway, and a half-written
-            // plan silently attached is exactly the shape that bills a client the
-            // whole fee at signing.
-            payment_plan: splitActive && planCheck?.ok ? planCheck.plan : null,
+            // Reached only when `splitBlockReason` is null (both submit gates return
+            // early otherwise), so an enabled split is ALWAYS sent as a valid plan and
+            // can never degrade into a silent full-payment offer.
+            payment_plan: splitActive ? (planCheck?.plan ?? null) : null,
             services: servicesJson,
             cost_summary: costSummary,
             recurring_costs: recurringCosts,
@@ -1550,11 +1594,18 @@ export function CreateOfferDialog({
                   a scheduler.
                 </p>
 
+                {ambiguousAmounts.map(a => (
+                  <p key={a.seq} className="text-xs text-red-600">
+                    Part {a.seq}: &quot;{a.raw}&quot; could mean {currencySymbol}{a.asThousands.toLocaleString('en-US')} or{' '}
+                    {currencySymbol}{a.asDecimal} — write it without the dot ({a.asThousands}) so there is no doubt.
+                  </p>
+                ))}
+
                 {planMismatch && (
                   <p className="text-xs text-amber-600">
-                    The parts add up to {currencySymbol}{planSum.toLocaleString('en-US')} but the setup fee is{' '}
-                    {currencySymbol}{servicesTotalAmount.toLocaleString('en-US')}. Fix this before sending — the
-                    client would be billed the full fee at signing.
+                    The parts add up to {currencySymbol}{planSum.toLocaleString('en-US')} but this offer totals{' '}
+                    {currencySymbol}{totalAmount.toLocaleString('en-US')}. They must match — otherwise the client is
+                    billed the full amount at signing and cannot pay from the offer at all.
                   </p>
                 )}
 
@@ -1569,9 +1620,17 @@ export function CreateOfferDialog({
                 {planCheck?.ok && planCheck.plan && (
                   <div className="text-xs bg-white border rounded-md p-2">
                     <div className="font-medium mb-1">The client will read, on the offer and in the signed contract:</div>
-                    <ul className="list-disc pl-4 space-y-0.5">
+                    <ul className="space-y-0.5">
                       {planCheck.plan.map(p => (
-                        <li key={p.seq}>{clientFacingPartLabel(p, planCheck.plan!.length)}</li>
+                        <li key={p.seq} className="flex justify-between gap-3">
+                          <span>{clientFacingPartLabel(p, planCheck.plan!.length)}</span>
+                          {/* The wording alone hid a mistyped amount (a "1.750" that parsed as
+                              €1.75 rendered an identical sentence). The figure is shown here
+                              so the author checks the money, not just the words. */}
+                          <span className="font-semibold whitespace-nowrap">
+                            {currencySymbol}{p.amount.toLocaleString('en-US')}
+                          </span>
+                        </li>
                       ))}
                     </ul>
                   </div>
@@ -1916,6 +1975,10 @@ export function CreateOfferDialog({
                     toast.error(`Bank/currency mismatch: ${bankCurrencyMismatch.bankLabel} is ${bankCurrencyMismatch.expected}-only`)
                     return
                   }
+                  if (splitBlockReason) {
+                    toast.error(splitBlockReason)
+                    return
+                  }
                   setShowConfirm(true)
                 }}
                 disabled={isPending || selected.length === 0}
@@ -1962,6 +2025,31 @@ export function CreateOfferDialog({
                     {currencySymbol}{totalAmount.toLocaleString('en-US')} {currency}
                   </dd>
                 </div>
+                {/* The split is MONEY and it was invisible on the last screen before Create
+                    (bug-hunter, 2026-08-13) — an author could confirm an offer without ever
+                    being shown the schedule they had authored. Amounts included on purpose:
+                    the client-facing echo renders wording only, so this is the one place a
+                    mistyped figure can actually be SEEN before it reaches a client. */}
+                {splitActive && planCheck?.ok && planCheck.plan && (
+                  <div className="bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                    <dt className="text-zinc-600 font-medium mb-1">Paid in parts</dt>
+                    <dd>
+                      <ul className="space-y-0.5">
+                        {planCheck.plan.map(p => (
+                          <li key={p.seq} className="flex justify-between gap-3">
+                            <span className="text-zinc-600">{clientFacingPartLabel(p, planCheck.plan!.length)}</span>
+                            <span className="font-bold text-amber-800 whitespace-nowrap">
+                              {currencySymbol}{p.amount.toLocaleString('en-US')}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="text-[11px] text-zinc-500 mt-1">
+                        Only part 1 is invoiced at signing. You raise the rest by hand.
+                      </p>
+                    </dd>
+                  </div>
+                )}
                 <div className="flex justify-between items-center gap-3 bg-blue-50 rounded px-2 py-1.5">
                   <dt className="text-zinc-600 font-medium">Bank</dt>
                   <dd className="font-bold text-blue-700">
