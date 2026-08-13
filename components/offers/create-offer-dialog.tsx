@@ -7,6 +7,12 @@ import { toast } from 'sonner'
 import { ReferrerPicker, type ReferrerValue } from './referrer-picker'
 import { FORMATION_STATE_CODES, FORMATION_STATE_NAMES, type FormationStateCode } from '@/lib/formation/states'
 import { parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
+import {
+  validatePaymentPlan,
+  clientFacingPartLabel,
+  type PaymentPlanPart,
+  type TrancheTriggerKind,
+} from '@/lib/offers/payment-plan'
 
 // ── Service catalog: loaded from DB ──
 interface CatalogService {
@@ -256,6 +262,19 @@ export function CreateOfferDialog({
   // Recurring costs (year 2+)
   const [installment1, setInstallment1] = useState('')
   const [installment2, setInstallment2] = useState('')
+
+  // ── WS-C: the setup fee paid in parts ──────────────────────────────────────
+  // The engine (validatePaymentPlan + createOffer) shipped 2026-08-12 with NO way to
+  // author a plan outside the MCP tool, so a real split deal could not be sold from
+  // this screen at all. This section is that missing door. It deliberately mirrors the
+  // engine's rules rather than inventing softer ones — every constraint below exists
+  // because the engine refuses the shape, and a UI that lets you type a refusable plan
+  // just moves the error later.
+  const [splitEnabled, setSplitEnabled] = useState(false)
+  const [splitParts, setSplitParts] = useState<Array<{ amount: string; kind: TrancheTriggerKind; date: string; label: string }>>([
+    { amount: '', kind: 'signing', date: '', label: '' },
+    { amount: '', kind: 'manual', date: '', label: '' },
+  ])
 
   // Required documents
   const [requiredDocs, setRequiredDocs] = useState<string[]>([])
@@ -604,6 +623,41 @@ export function CreateOfferDialog({
 
   const totalAmount = servicesTotalAmount + preconditionsTotalAmount
 
+  // ── WS-C split: build the plan exactly as the engine will read it ──────────
+  // A plan cannot share an offer with a referrer or a managed partner: activation credits
+  // the WHOLE commission on the first payment, so a referrer would be paid in full on part
+  // one. The engine refuses it; this screen must not let it be typed.
+  const splitLockedByCommission = Boolean(
+    referrer.name.trim() || referrer.contactId || referrer.accountId || partnerId,
+  )
+  const splitActive = splitEnabled && !splitLockedByCommission
+
+  const planDraft: PaymentPlanPart[] = useMemo(
+    () =>
+      splitParts.map((p, i) => ({
+        seq: i + 1,
+        amount: parsePriceQuirk(p.amount),
+        // One currency for the whole plan — the offer's. Credit, bank matching and
+        // activation are all single-currency, so a per-part currency would break
+        // further down where the error means nothing.
+        currency,
+        trigger: {
+          kind: i === 0 ? ('signing' as TrancheTriggerKind) : p.kind,
+          ...(p.kind === 'date' && i > 0 ? { date: p.date } : {}),
+          ...(p.kind === 'manual' && i > 0 && p.label.trim() ? { label: p.label.trim() } : {}),
+        },
+      })),
+    [splitParts, currency],
+  )
+  const planCheck = useMemo(
+    () => (splitActive ? validatePaymentPlan(planDraft) : null),
+    [splitActive, planDraft],
+  )
+  const planSum = planDraft.reduce((s, p) => s + p.amount, 0)
+  // The plan schedules the SETUP FEE. If the parts do not add up to it the engine degrades
+  // loudly at signing (no pay controls, whole fee billed) — so it is caught here instead.
+  const planMismatch = splitActive && planSum > 0 && Math.abs(planSum - servicesTotalAmount) > 0.5
+
   // Data-driven default for the per-service individual/business/ask
   // dropdown. The value comes from service_catalog.default_service_context
   // (see migration 20260512-1500). Adding a new individual-level service
@@ -807,6 +861,11 @@ export function CreateOfferDialog({
             bank_preference: bankPreference,
             currency,
             installment_currency: showAnnual ? installmentCurrency : null,
+            // Only a plan the engine already accepted is sent. An invalid one is
+            // never posted — createOffer would refuse it anyway, and a half-written
+            // plan silently attached is exactly the shape that bills a client the
+            // whole fee at signing.
+            payment_plan: splitActive && planCheck?.ok ? planCheck.plan : null,
             services: servicesJson,
             cost_summary: costSummary,
             recurring_costs: recurringCosts,
@@ -1383,6 +1442,143 @@ export function CreateOfferDialog({
               )}
             </div>
           )}
+
+          {/* Setup fee paid in parts (WS-C payment plan) */}
+          <div className="border rounded-md p-3 bg-zinc-50/60">
+            <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+              <input
+                type="checkbox"
+                checked={splitEnabled}
+                disabled={splitLockedByCommission}
+                onChange={e => setSplitEnabled(e.target.checked)}
+              />
+              Client pays the setup fee in parts
+            </label>
+            {splitLockedByCommission && (
+              <p className="text-xs text-amber-600 mt-1">
+                Not available on this offer: it carries a referrer or a managed partner. Commission is
+                credited in full on the first payment, so a split would pay it before the deal is fully
+                paid. Clear the referrer/partner to use a split, or settle the commission by hand.
+              </p>
+            )}
+
+            {splitActive && (
+              <div className="mt-3 space-y-3">
+                {splitParts.map((part, i) => (
+                  <div key={i} className="flex flex-wrap items-end gap-2">
+                    <div className="w-28">
+                      <label className="text-xs text-muted-foreground">Part {i + 1} amount</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-2 text-sm text-zinc-400">{currencySymbol}</span>
+                        <input
+                          type="text"
+                          value={part.amount}
+                          onChange={e => setSplitParts(prev => prev.map((p, j) => j === i ? { ...p, amount: e.target.value } : p))}
+                          placeholder="1750"
+                          className="w-full pl-7 pr-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+
+                    {i === 0 ? (
+                      <div className="text-xs text-muted-foreground pb-2">
+                        due on signing — this part activates the deal
+                      </div>
+                    ) : (
+                      <>
+                        <div>
+                          <label className="text-xs text-muted-foreground">Due</label>
+                          <select
+                            value={part.kind}
+                            onChange={e => setSplitParts(prev => prev.map((p, j) => j === i ? { ...p, kind: e.target.value as TrancheTriggerKind } : p))}
+                            className="block px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="manual">When you say so</option>
+                            <option value="date">On a date</option>
+                          </select>
+                        </div>
+                        {part.kind === 'date' ? (
+                          <div>
+                            <label className="text-xs text-muted-foreground">Date</label>
+                            <input
+                              type="date"
+                              value={part.date}
+                              onChange={e => setSplitParts(prev => prev.map((p, j) => j === i ? { ...p, date: e.target.value } : p))}
+                              className="block px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                        ) : (
+                          <div className="flex-1 min-w-[200px]">
+                            <label className="text-xs text-muted-foreground">What the client is waiting for (they read this)</label>
+                            <input
+                              type="text"
+                              value={part.label}
+                              onChange={e => setSplitParts(prev => prev.map((p, j) => j === i ? { ...p, label: e.target.value } : p))}
+                              placeholder="e.g. 30 days after signing"
+                              className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                        )}
+                        {splitParts.length > 2 && (
+                          <button
+                            type="button"
+                            onClick={() => setSplitParts(prev => prev.filter((_, j) => j !== i))}
+                            className="pb-1.5 text-xs text-red-600 hover:underline"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ))}
+
+                <button
+                  type="button"
+                  onClick={() => setSplitParts(prev => [...prev, { amount: '', kind: 'manual', date: '', label: '' }])}
+                  className="text-xs text-blue-600 hover:underline"
+                >
+                  + Add another part
+                </button>
+
+                {/* No part after the first ever invoices itself — a date is a reminder, not a
+                    scheduler. Said here because the alternative is Antonio discovering it by a
+                    payment that never arrived. */}
+                <p className="text-xs text-muted-foreground">
+                  Only the first part is invoiced automatically, at signing. Every later part is raised
+                  by you from the client&apos;s account page when it comes due — a date is a reminder, not
+                  a scheduler.
+                </p>
+
+                {planMismatch && (
+                  <p className="text-xs text-amber-600">
+                    The parts add up to {currencySymbol}{planSum.toLocaleString('en-US')} but the setup fee is{' '}
+                    {currencySymbol}{servicesTotalAmount.toLocaleString('en-US')}. Fix this before sending — the
+                    client would be billed the full fee at signing.
+                  </p>
+                )}
+
+                {planCheck && !planCheck.ok && (
+                  <ul className="text-xs text-red-600 list-disc pl-4">
+                    {planCheck.errors.map((err, i) => <li key={i}>{err}</li>)}
+                  </ul>
+                )}
+
+                {/* THE AUTHORING ECHO — the author sees the client's exact sentences at the one
+                    moment they can still change them. Same rule as the MCP tool. */}
+                {planCheck?.ok && planCheck.plan && (
+                  <div className="text-xs bg-white border rounded-md p-2">
+                    <div className="font-medium mb-1">The client will read, on the offer and in the signed contract:</div>
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      {planCheck.plan.map(p => (
+                        <li key={p.seq}>{clientFacingPartLabel(p, planCheck.plan!.length)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Annual Rates */}
           {showAnnual && (
