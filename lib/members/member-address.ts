@@ -15,10 +15,11 @@
  * address. He reported it; he was right.
  *
  * Antonio's ruling (2026-08-12): "A legal document must never be able to
- * disagree with the system of record." The record wins, the field is read-only,
- * and the free-typing path that let the two diverge was deleted rather than
- * repaired. This module is what makes them agree BY CONSTRUCTION rather than by
- * two call sites happening to stay in step.
+ * disagree with the system of record." The record wins, the addresses are
+ * read-only on that screen, and the free-typing path that let the two diverge was
+ * deleted rather than repaired. This module is the one formatter both the screens
+ * and the create route call, so they agree by construction rather than by three
+ * call sites happening to stay in step.
  *
  * ── THE RULES, and why each one is the way it is ──
  *
@@ -40,18 +41,10 @@
  * Company", which is an honest marker, not a substituted value. (Today this is
  * theoretical: all 9 production company-member rows carry their own address.)
  *
- * INDIVIDUAL member → the member row, and ONLY the member row. Deliberately no
- * fallback to the linked `contacts` record even though the pre-fix screen had
- * one, because the stored document never had it: the OA create route composed
- * from the member row alone. Adding a contact fallback here would have been an
- * unrequested change to the content of ~19 real members' legal documents. The
- * member row is also the better source on the merits — it is the client's own
- * attested submission from the member-info form, which validates it, whereas a
- * contacts row is general contact detail that a routine CRM edit can rewrite
- * underneath a signed agreement. Tracked as its own decision on `271bbe46`,
- * along with the resulting inconsistency: the STAFF door still falls back to
- * `contacts.residency`, so a staff-generated and a portal-generated agreement
- * can differ for a member whose row has no address.
+ * INDIVIDUAL member → this resolver returns the member row. `getPortalMembers`
+ * still applies its PRE-EXISTING contact-first precedence for individuals before
+ * calling it; that precedence is deliberately unchanged. Whether the member row
+ * should win there is REPORT-ONLY on dev job `271bbe46`.
  *
  * WHOLE address, not field-by-field. Any fallback added here later must swap the
  * entire address at once. Mixing a street from one source with a city from

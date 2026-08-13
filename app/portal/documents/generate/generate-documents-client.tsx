@@ -52,29 +52,6 @@ interface Props {
     memberCount?: number | null
   }
   members: ExtendedMemberInfo[]
-  /**
-   * A company with no member roster whose OWNER could not be established. The
-   * screen must refuse rather than render a placeholder: the previous version
-   * showed a member called "N/A" while the server stored the logged-in person's
-   * name, so the previewed and the signed document disagreed about who owns the
-   * company. Both surfaces now refuse from the same resolution.
-   */
-  /**
-   * WHY generation is refused, straight from the same resolution the server uses —
-   * or null when nothing is wrong. Not a boolean, because a single message for
-   * every refusal told clients things that were flatly untrue about their own
-   * records.
-   */
-  ownerRefusalReason: string | null
-  /**
-   * True when the members above come from real member records — which is when
-   * their addresses are the system of record and MUST NOT be editable here
-   * (Antonio, 2026-08-12: a legal document must never be able to disagree with
-   * the record). False only for pre-members-table accounts, where there is no
-   * record to show and the client supplies their address once; the server
-   * enforces the same distinction independently, so this flag controls what is
-   * rendered, never what is trusted.
-   */
   history: HistoryItem[]
   locale: string
 }
@@ -104,88 +81,22 @@ const LABELS: Record<string, Record<string, string>> = {
   },
   effectiveDate: { en: 'Effective Date', it: 'Data di Efficacia' },
   memberAddresses: { en: 'Member Addresses', it: 'Indirizzi dei Soci' },
-  // The screen is read-only for EVERY company shape, so this is the only address
-  // copy there is. The original told every client to "enter" an address on a screen
-  // that then discarded what they typed.
-  // ONE text for EVERY company shape — no branching, no Profile link, no email
-  // address (Antonio's final copy ruling, 2026-08-12). Two reasons the earlier
-  // version was wrong: it claimed the addresses come from "member records", which
-  // is false for the 216 Single Member LLCs that have no roster; and it linked to
-  // the Profile screen, where a client can rewrite the address that feeds legal
-  // documents AND, in the same save, change the residency value the tax side reads
-  // — unreviewed. Linking there from this screen would have undone the whole
-  // ruling while appearing to honour it. THE MEMBER/CONTACT INFO FORM is the
-  // channel: we issue it deliberately, it captures the roster coherently, and it
-  // leaves a submission record. And the form reaches the client IN THEIR PORTAL —
-  // client-facing copy must never say otherwise.
+  // ONE text for every company shape. The previous copy said "Enter each member's
+  // full address", on a screen whose typed values the server discarded for every
+  // account that had member records — the field looked editable and was not.
   addressFromRecord: {
     en: 'These addresses come from your records with us and appear in the Operating Agreement exactly as shown. If anything is wrong, send us a message and we\'ll put the form in your portal so you can update them.',
     it: 'Questi indirizzi provengono dai tuoi dati registrati presso di noi e compaiono nell\'Atto Costitutivo esattamente come mostrati. Se qualcosa non è corretto, scrivici e ti mettiamo il modulo nel portale per aggiornarli.',
-  },
-  // These two were REFERENCED by the refusal banner and never defined — scripted
-  // edits removed them and nobody rendered that path, so a client hitting it saw
-  // the literal strings "ownerUnresolvedTitle" and "ownerUnresolvedBody". A test
-  // now asserts every key this file references exists (see the label-coverage test).
-  // One message per refusal reason, mirroring what the route returns for the same
-  // state — a single sentence for every refusal told clients things that were
-  // flatly untrue about their own records.
-  // Was hardcoded English on an otherwise bilingual screen, and said "Cannot
-  // send … Contact support" — both wrong now: the screen no longer blocks on this
-  // (the server decides), and client-facing copy points at the portal.
-  preflightAllHavePortal: {
-    en: 'All owners can be sent their signing link',
-    it: 'Tutti i soci possono ricevere il link per la firma',
-  },
-  preflightSomeLackPortal: {
-    en: 'We may need to set up portal access before signing links can go out to:',
-    it: 'Potrebbe servire configurare l\'accesso al portale prima di inviare i link di firma a:',
-  },
-  refusalOwnerUnclearTitle: {
-    en: 'We can\'t tell who the owner of this company is',
-    it: 'Non riusciamo a determinare chi è il titolare di questa azienda',
-  },
-  refusalOwnerUnclearBody: {
-    en: 'Your records don\'t make clear which person should be named as the owner on the Operating Agreement — either nobody is marked as the owner, or more than one person is. Send us a message and we\'ll set it straight.',
-    it: 'Dai tuoi dati non risulta chiaro quale persona debba essere indicata come titolare nell\'Atto Costitutivo — o nessuno è indicato come titolare, o lo è più di una persona. Scrivici e lo sistemiamo subito.',
-  },
-  refusalNoNameTitle: {
-    en: 'We don\'t have the owner\'s name on file',
-    it: 'Non abbiamo il nome del titolare nei tuoi dati',
-  },
-  refusalNoNameBody: {
-    en: 'We know who the owner of this company is, but we don\'t hold their name, so we can\'t put one on the Operating Agreement. Send us a message and we\'ll add it.',
-    it: 'Sappiamo chi è il titolare di questa azienda, ma non abbiamo il suo nome, quindi non possiamo inserirlo nell\'Atto Costitutivo. Scrivici e lo aggiungiamo.',
-  },
-  refusalNoContactsTitle: {
-    en: 'Nobody is on file for this company yet',
-    it: 'Non risulta ancora nessuna persona per questa azienda',
-  },
-  refusalNoContactsBody: {
-    en: 'We don\'t have anyone recorded as belonging to this company, so we can\'t name an owner on the Operating Agreement. Send us a message and we\'ll set it up.',
-    it: 'Non abbiamo nessuna persona registrata per questa azienda, quindi non possiamo indicare un titolare nell\'Atto Costitutivo. Scrivici e lo configuriamo.',
-  },
-  refusalNoRosterTitle: {
-    en: 'Your company\'s owners aren\'t recorded yet',
-    it: 'I soci della tua azienda non sono ancora registrati',
-  },
-  refusalNoRosterBody: {
-    en: 'This company is registered with more than one owner, but we don\'t yet hold the list of who they are and what share each holds. We can\'t produce an Operating Agreement without it. Send us a message and we\'ll complete your records.',
-    it: 'Questa azienda è registrata con più di un socio, ma non abbiamo ancora l\'elenco di chi sono e della quota di ciascuno. Non possiamo produrre l\'Atto Costitutivo senza. Scrivici e completiamo i tuoi dati.',
-  },
-  // The reason a client cannot proceed goes in VISIBLE TEXT, never in a tooltip:
-  // our clients are on phones, where a tooltip does not exist at all, so a
-  // hover-only explanation is no explanation (Antonio, 2026-08-12).
-  cannotProceedPortalAccounts: {
-    en: 'All owners need a portal account before this can be generated. Send us a message and we\'ll set them up.',
-    it: 'Tutti i soci devono avere un account nel portale prima di poterlo generare. Scrivici e li configuriamo noi.',
   },
   addressMissing: {
     en: 'Not on file — send us a message and we\'ll add it.',
     it: 'Non disponibile — scrivici e lo aggiungiamo.',
   },
+  address: { en: 'Address', it: 'Indirizzo' },
   amount: { en: 'Distribution Amount', it: 'Importo Distribuzione' },
   fiscalYear: { en: 'Fiscal Year', it: 'Anno Fiscale' },
   distributionDate: { en: 'Distribution Date', it: 'Data Distribuzione' },
+  currency: { en: 'Currency', it: 'Valuta' },
   companyName: { en: 'Company', it: 'Azienda' },
   ein: { en: 'EIN', it: 'EIN' },
   state: { en: 'State', it: 'Stato' },
@@ -198,27 +109,11 @@ const LABELS: Record<string, Record<string, string>> = {
   success: { en: 'Document generated successfully!', it: 'Documento generato con successo!' },
   generateAnother: { en: 'Generate Another', it: 'Genera Un Altro' },
   history: { en: 'Document History', it: 'Storico Documenti' },
+  noHistory: { en: 'No documents generated yet.', it: 'Nessun documento generato.' },
   clearSignature: { en: 'Clear Signature', it: 'Cancella Firma' },
   signBelow: { en: 'Sign below to complete the document', it: 'Firma qui sotto per completare il documento' },
   confirmSign: { en: 'Confirm & Download', it: 'Conferma e Scarica' },
   selectDocType: { en: 'Select a document to generate', it: 'Seleziona un documento da generare' },
-}
-
-/**
- * Refusal reason → the label keys that explain it. ONE table, mirroring what the
- * route returns for the same state — the screen used to render a single sentence
- * for every refusal, which told clients things that were flatly untrue about their
- * own records.
- *
- * Declared as an explicit table rather than an inline ternary so the label-coverage
- * test can see these keys as referenced: keys reached through a computed variable
- * are invisible to a scan that only understands `l('literal')`.
- */
-const REFUSAL_KEYS: Record<string, [string, string]> = {
-  no_roster: ['refusalNoRosterTitle', 'refusalNoRosterBody'],
-  no_usable_name: ['refusalNoNameTitle', 'refusalNoNameBody'],
-  no_contacts: ['refusalNoContactsTitle', 'refusalNoContactsBody'],
-  default: ['refusalOwnerUnclearTitle', 'refusalOwnerUnclearBody'],
 }
 
 function l(key: string, locale: string): string {
@@ -232,10 +127,7 @@ function docTypeLabel(type: string, lang: string): string {
   return type
 }
 
-export function GenerateDocumentsClient({ account, members, ownerRefusalReason, history: initialHistory, locale }: Props) {
-  const ownerUnresolved = ownerRefusalReason !== null
-  const [refusalTitleKey, refusalBodyKey] =
-    REFUSAL_KEYS[ownerRefusalReason ?? ''] ?? REFUSAL_KEYS.default
+export function GenerateDocumentsClient({ account, members, history: initialHistory, locale }: Props) {
   const { locale: ctxLocale } = useLocale()
   const lang = ctxLocale || locale || 'en'
   const router = useRouter()
@@ -293,28 +185,13 @@ export function GenerateDocumentsClient({ account, members, ownerRefusalReason, 
     return { memberCountOk, allHavePortal, ownershipOk, ownershipTotal, missingPortal }
   })() : null
 
-  // An unresolvable owner blocks EVERY document type, not just the Operating
-  // Agreement: the previous shape let the OA through (the existing block is
-  // `!isOA`) and produced a preview naming the member "N/A" while the server stored
-  // a different name. Refuse in one place, from the server's own resolution.
-  // ONE GATE, and it is the server's. The screen used to refuse unless every
-  // member had a portal account — a rule the route does NOT enforce, because a
-  // company member signs through its representative, which the route's own
-  // comments call out as the wrong reason to refuse. 7 of 46 active multi-member
-  // companies with a roster are in that shape, so 7 real clients could not
-  // generate their agreement for a condition the server would have accepted.
-  // The screen is never stricter than the thing that actually enforces
-  // (Antonio, 2026-08-12); the route still refuses, with its own message, if a
-  // member genuinely cannot be sent a signature request.
-  const oaCanProceed = !ownerUnresolved
+  const oaCanProceed = !isMMLC || (oaPreflight?.allHavePortal === true)
 
-  // What the preview and the downloadable PDF render: the record verbatim, which
-  // is the same value the create route stores — so the document on screen and the
-  // document that gets signed cannot differ. NOTHING here is editable, for any
-  // company shape. Do not reintroduce a field: the version that briefly existed
-  // corrupted client contact records (see lib/members/oa-address-decisions.ts).
+  // Members with addresses resolved from OA state (for OA template)
   const oaMembers = members.map(m => ({
     fullName: m.fullName,
+    // The record verbatim — the same value the create route stores, so the document
+    // on screen and the document that gets signed cannot differ.
     address: m.address || '',
     ownershipPct: m.ownershipPct ?? 100 / members.length,
   }))
@@ -753,8 +630,8 @@ export function GenerateDocumentsClient({ account, members, ownerRefusalReason, 
                       : <X className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />}
                     <span className={oaPreflight.allHavePortal ? 'text-zinc-700' : 'text-red-600'}>
                       {oaPreflight.allHavePortal
-                        ? l('preflightAllHavePortal', lang)
-                        : `${l('preflightSomeLackPortal', lang)} ${oaPreflight.missingPortal.join(', ')}`}
+                        ? 'All members have portal accounts'
+                        : `Cannot send — ${oaPreflight.missingPortal.join(', ')} ${oaPreflight.missingPortal.length === 1 ? 'has' : 'have'} no portal account. Contact support.`}
                     </span>
                   </div>
                   {/* Ownership */}
@@ -779,23 +656,13 @@ export function GenerateDocumentsClient({ account, members, ownerRefusalReason, 
                 />
               </div>
 
-              {ownerUnresolved && (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-                  <p className="text-sm font-semibold text-amber-900 mb-1">{l(refusalTitleKey, lang)}</p>
-                  <p className="text-sm text-amber-800 leading-snug">{l(refusalBodyKey, lang)}</p>
-                </div>
-              )}
-
-              {/*
-                READ-ONLY, ALWAYS, for every company shape. These addresses go into
-                a legal document verbatim, so the screen shows the record and offers
-                no way to type over it; the route refuses a posted address outright.
-                An editable version existed briefly for sole owners and corrupted
-                client contact records — see lib/members/oa-address-decisions.ts.
-              */}
               <div>
                 <label className="block text-xs text-zinc-500 mb-1">{l('memberAddresses', lang)}</label>
                 <p className="text-xs text-zinc-500 mb-3">{l('addressFromRecord', lang)}</p>
+                {/* READ-ONLY, for every company shape. These addresses go into a
+                    legal document verbatim, so the screen shows the record and
+                    offers no way to type over it; the route refuses a posted
+                    address outright. */}
                 <div className="space-y-2">
                   {members.map((m, i) => (
                     <div key={i} className="rounded border border-zinc-200 bg-zinc-50 px-3 py-2">
@@ -874,22 +741,13 @@ export function GenerateDocumentsClient({ account, members, ownerRefusalReason, 
             </div>
           )}
 
-          {/* Preview button.
-              STANDING RULE (Antonio, 2026-08-12): the reason a client cannot
-              proceed goes in VISIBLE TEXT, never in a tooltip. Our clients are on
-              phones, where a tooltip does not exist at all — a hover-only
-              explanation is no explanation. The blocking reason is rendered below
-              the button, in their language, and the tooltip is gone. */}
-          <div className="flex flex-col items-end gap-2">
-            {isOA && !oaCanProceed && !ownerUnresolved && (
-              <p className="text-sm text-amber-800 text-right max-w-md leading-snug">
-                {l('cannotProceedPortalAccounts', lang)}
-              </p>
-            )}
+          {/* Preview button */}
+          <div className="flex justify-end">
             <button
               onClick={handlePreview}
               disabled={(!isOA && (formData.amount <= 0 || members.length === 0)) || (isOA && !oaCanProceed)}
               className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-300 disabled:text-zinc-500 text-white rounded-lg font-medium text-sm transition"
+              title={isOA && !oaCanProceed ? 'All members must have portal accounts to proceed' : undefined}
             >
               {l('preview', lang)}
             </button>
@@ -1042,10 +900,8 @@ export function GenerateDocumentsClient({ account, members, ownerRefusalReason, 
                     ? 'L\'Atto Costitutivo è stato creato, ma non siamo riusciti a inviare la notifica. Usa il pulsante qui sotto per firmare, e contatta l\'assistenza se hai bisogno di aiuto.'
                     : 'Your Operating Agreement was created, but we could not send the notification. Use the button below to sign, and contact support if you need help.')
                   : (lang === 'it'
-                    // Portal wording, no email — the correction and the form both
-                    // reach the client IN THEIR PORTAL (Antonio, 2026-08-12).
-                    ? 'L\'Atto Costitutivo è stato creato, ma non siamo riusciti ad avvisare i soci. Scrivici e li avvisiamo noi.'
-                    : 'Your Operating Agreement was created, but we could not notify the members. Send us a message and we\'ll reach them.')
+                    ? 'L\'Atto Costitutivo è stato creato, ma non siamo riusciti a inviare la notifica ai soci. Contatta l\'assistenza a support@tonydurante.us così possiamo avvisarli.'
+                    : 'Your Operating Agreement was created, but we could not notify the members. Please contact support@tonydurante.us so we can reach them.')
                 : isMMLC
                 ? (lang === 'it'
                   ? 'Ogni socio ha ricevuto il proprio link personale per firmare l\'Atto Costitutivo.'

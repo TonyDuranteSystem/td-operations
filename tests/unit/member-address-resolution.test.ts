@@ -13,6 +13,11 @@
  * company address plus a foreign representative address, beside two individual
  * members. A test on invented data would have passed against the old code too.
  *
+ * SCOPE NOTE: individual members keep their PRE-EXISTING contact-first precedence
+ * — the change that made them read the member row was cancelled with the wider
+ * owner-of-record work. Whether the member row should win for individuals is
+ * REPORT-ONLY on dev job 271bbe46.
+ *
  * R086: every new function in lib/ gets a unit test.
  */
 
@@ -160,14 +165,14 @@ describe('resolveMemberAddress — company members', () => {
 })
 
 describe('resolveMemberAddress — individual members', () => {
-  it('returns the member row the client submitted', () => {
+  it('reads the member row when no contact record overrides it', () => {
     expect(formatMemberAddressRow(MICHELE as MemberAddressRow))
       .toBe('PRACETA PEDRO IVO, 5, AMADORA, AMADORA, 2700-652, Portugal')
     expect(formatMemberAddressRow(GAIA as MemberAddressRow))
       .toBe('via giacomo leopardi 20, Rogno, BG, 24060, Italy')
   })
 
-  it('is empty when the row has no address — no contact record is consulted', () => {
+  it('is empty when the row has no address and nothing overrides it', () => {
     const bare = {
       ...MICHELE,
       address_street: null, address_city: null, address_state: null,
@@ -272,15 +277,6 @@ describe('getPortalMembers — the screen the client actually reads', () => {
     expect(memberSelect).toContain('representative_address_zip')
   })
 
-  it('no longer reads contact address columns, so they cannot silently override the member row', async () => {
-    mockByTable.members = [MICHELE]
-    mockByTable.contacts = [{ id: 'contact-michele', first_name: 'Michele', last_name: 'Cotti', citizenship: null, date_of_birth: null }]
-    await getPortalMembers('12dadc46')
-
-    const contactSelect = selects.find(s => s.includes('first_name'))!
-    expect(contactSelect).not.toContain('address_line1')
-    expect(contactSelect).not.toContain('address_city')
-  })
 
   it('returns an empty list when the account has no member rows (legacy accounts)', async () => {
     mockByTable.members = []

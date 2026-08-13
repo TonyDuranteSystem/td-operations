@@ -460,41 +460,17 @@ export async function getPortalAccountDetail(accountId: string) {
   return { ...data, physical_address: resolveMailingAddress(data.mailing_address, data.physical_address) }
 }
 
-/**
- * Thrown when the member records could not be READ — as distinct from an account
- * that legitimately has none (every Single Member LLC, by design).
- *
- * The two are indistinguishable in a `data ?? []` result, and callers now make a
- * DECISION on that distinction: the Generate Documents screen uses "has member
- * records" to choose between a read-only address and an editable one. A silent
- * empty array on failure therefore hands a client an editable field for a
- * company whose addresses are the system of record. Callers that only display a
- * roster may treat a failure as empty; the document screen must not, so this is
- * raised rather than swallowed and each caller decides deliberately.
- */
-export class PortalMembersUnavailableError extends Error {
-  constructor(cause: string) {
-    super(`Could not read member records: ${cause}`)
-    this.name = 'PortalMembersUnavailableError'
-  }
-}
-
 export async function getPortalMembers(accountId: string) {
-  // Primary source: members table. NOTE: an empty result is the NORMAL, correct
-  // state for a Single Member LLC — it has no member roster by design. Absence
-  // here is not a gap and not a backfill candidate.
-  const { data: membersRows, error: membersErr } = await supabaseAdmin
+  // Primary source: members table (populated for accounts formed/onboarded after April 2026)
+  const { data: membersRows } = await supabaseAdmin
     .from('members')
-    // address_zip IS NOT OPTIONAL HERE. It was missing from this list until
-    // 2026-08-12, so every member address the portal displayed — and every one it
-    // pre-filled into an Operating Agreement — silently dropped its postal code,
-    // while the stored agreement (which selects the column) carried one. Client
-    // and document disagreed on a legal address. See lib/members/member-address.ts.
+    // address_zip IS NOT OPTIONAL HERE. It was missing from this list, so every
+    // member address the portal displayed — and every one it pre-filled into an
+    // Operating Agreement — silently dropped its postal code, while the stored
+    // agreement (which selects the column) carried one.
     .select('id, member_type, full_name, company_name, ein, email, phone, ownership_pct, is_primary, contact_id, representative_name, representative_email, representative_phone, address_street, address_city, address_state, address_zip, address_country, representative_address_street, representative_address_city, representative_address_state, representative_address_zip, representative_address_country')
     .eq('account_id', accountId)
     .order('is_primary', { ascending: false })
-
-  if (membersErr) throw new PortalMembersUnavailableError(membersErr.message)
 
   if (!membersRows || membersRows.length === 0) return []
 
@@ -504,30 +480,21 @@ export async function getPortalMembers(accountId: string) {
       .filter(m => m.member_type === 'individual' && m.contact_id)
       .map(m => m.contact_id!)
 
-    // Name split + personal details only. The contact's ADDRESS columns are no
-    // longer selected: they used to override the member row here, which showed the
-    // client an address they had not submitted and which the stored agreement was
-    // never going to use. Dropping them from the query makes that impossible to
-    // reintroduce by accident rather than merely unused (dev jobs 61f184ca / 271bbe46).
     let contactMap: Record<string, {
       first_name: string | null; last_name: string | null
       citizenship: string | null; date_of_birth: string | null
+      address_line1: string | null; address_city: string | null; address_state: string | null; address_zip: string | null; address_country: string | null
     }> = {}
 
     if (contactIds.length > 0) {
       const { data: contacts } = await supabaseAdmin
         .from('contacts')
-        .select('id, first_name, last_name, citizenship, date_of_birth')
+        .select('id, first_name, last_name, citizenship, date_of_birth, address_line1, address_city, address_state, address_zip, address_country')
         .in('id', contactIds)
       contactMap = Object.fromEntries((contacts ?? []).map(c => [c.id, c]))
     }
 
     return membersRows.map(m => {
-      // ONE resolver for the screen and for the stored agreement — never a second
-      // opinion computed here. See lib/members/member-address.ts for the rules and
-      // for why a company member's own address must outrank its representative's.
-      const addr = resolveMemberAddress(m)
-
       if (m.member_type === 'company') {
         return {
           member_id: m.id,
@@ -542,14 +509,21 @@ export async function getPortalMembers(accountId: string) {
           phone: m.representative_phone,
           citizenship: null,
           date_of_birth: null,
-          // The ENTITY's address. `representative_address_*` is deliberately not
-          // consulted: it is the signer's personal address, and preferring it here
-          // is the defect this whole change exists to remove (dev job 61f184ca).
-          address_line1: addr.line1,
-          address_city: addr.city,
-          address_state: addr.state,
-          address_zip: addr.zip,
-          address_country: addr.country,
+          // THE REPORTED BUG (dev job 61f184ca, Michele Cotti / AI Venture Labs):
+          // this resolved `representative_address_* ?? address_*`, so the human who
+          // signs on the entity's behalf outranked the entity itself — Whalecot
+          // Consulting LLC, a Florida company, was shown to its own owner carrying
+          // his personal Portuguese home address.
+          //
+          // The member of record is the ENTITY. Its own address wins, and the
+          // representative's is not consulted at all: falling back to it is the same
+          // defect one step later. Every other document path in the repo already
+          // composes from `address_*` only — both staff OA doors and the
+          // Intercompany assembler — so this read was the lone outlier.
+          ...(() => { const a = resolveMemberAddress(m); return {
+            address_line1: a.line1, address_city: a.city,
+            address_state: a.state, address_zip: a.zip, address_country: a.country,
+          } })(),
           company_name: m.company_name,
           ein: m.ein,
           representative_name: m.representative_name,
@@ -573,18 +547,14 @@ export async function getPortalMembers(accountId: string) {
         phone: m.phone,
         citizenship: contact?.citizenship ?? null,
         date_of_birth: contact?.date_of_birth ?? null,
-        // The MEMBER ROW, not the contact record. This used to read
-        // `contact?.address_line1 ?? m.address_street` (per field), which meant the
-        // client reviewed an address they had not submitted while the stored
-        // agreement composed from the member row alone — the same screen-vs-document
-        // split as the company branch. The stored side is deliberately unchanged; it
-        // is the screen that has been brought into line with it. Which source SHOULD
-        // win is recorded as its own decision on dev job 271bbe46.
-        address_line1: addr.line1,
-        address_city: addr.city,
-        address_state: addr.state,
-        address_zip: addr.zip,
-        address_country: addr.country,
+        // Precedence deliberately UNCHANGED for individuals — contact record first,
+        // exactly as before. Only the postal code is added. Whether the member row
+        // should win here is a real question and is REPORT-ONLY on dev job 271bbe46.
+        address_line1: contact?.address_line1 ?? m.address_street ?? null,
+        address_city: contact?.address_city ?? m.address_city ?? null,
+        address_state: contact?.address_state ?? m.address_state ?? null,
+        address_zip: contact?.address_zip ?? m.address_zip ?? null,
+        address_country: contact?.address_country ?? m.address_country ?? null,
         company_name: null,
         ein: null,
         representative_name: null,

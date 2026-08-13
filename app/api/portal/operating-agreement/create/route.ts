@@ -20,31 +20,13 @@
  * Body: { account_id: string, effective_date: string }
  *
  * ⛔ `member_addresses: string[]` IS GONE — do not reintroduce it (dev job
- * `61f184ca`, Antonio's ruling 2026-08-12: "A legal document must never be able to
- * disagree with the system of record").
- *
- * It was a client-typed address per member, position-matched to a SEPARATE members
- * query, and carried two defects that were only ever held off by discipline:
- *   1. Whenever the member row had an address — i.e. always, for every company
- *      member in production — the typed value was silently discarded. The field
- *      looked editable and was not, so a client correcting a wrong address had no
- *      way to succeed and no way to know they had failed.
- *   2. The array was indexed against a query ordered only by `is_primary`, so with
- *      three members and one primary the two non-primary rows could come back in a
- *      different relative order than the browser used — pairing a typed address
- *      with a DIFFERENT member, in a legal document.
- * Deleting the path removes both by construction. The screen is now read-only and
- * renders exactly what this route stores, via the shared resolver.
- *
- * NO ADDRESS FIELD OF ANY KIND is accepted. A sole owner could briefly type one
- * (their company has no member roster by design), which meant prefilling a form by
- * SPLITTING a stored one-line address back apart. That join is lossy — 35 of 271
- * contacts have fewer than five parts — so the split guessed wrong and the guess
- * was written back over the client's contact record, erasing city, state, postal
- * code and country. Antonio removed the field and the write-back entirely rather
- * than repair the splitter: the record wins everywhere, with no carve-out. A sole
- * owner corrects their address on their PROFILE screen, which already offers the
- * five structured fields and a safe write.
+ * `61f184ca`). It was a client-typed address per member, position-matched to a
+ * SEPARATE members query, and carried two defects held off only by discipline:
+ * whenever the member row had an address the typed value was silently discarded
+ * (the field looked editable and was not), and the array was indexed against a
+ * query ordered only by `is_primary`, so tied rows could pair a typed address with
+ * a DIFFERENT member in a legal document. The screen is now read-only for every
+ * company shape and this route refuses any posted address.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -58,17 +40,8 @@ import { APP_BASE_URL } from '@/lib/config'
 import { notifyClientActionRequired } from '@/lib/portal/action-required'
 import { reportSystemError } from '@/lib/system-errors'
 import { resolveSigningSet, describeSigningBlock, signerDisplayName, type ResolvedSigner } from '@/lib/members/signing-set'
-import {
-  mustRefuseSuppliedAddress,
-  mustRefuseOnMemberReadFailure,
-  resolveSoleMemberAddress,
-  pickSoleMemberRow,
-  formatOwnerContactAddress,
-  shouldStoreSoleMemberAddress,
-} from '@/lib/members/oa-address-decisions'
-import { formatMemberAddressRow } from '@/lib/members/member-address'
-import { resolveOwnerOfRecord, resolveOwnerName } from '@/lib/members/sole-owner-address'
 import { signerLinkExpiryISO } from '@/lib/oa/public-view'
+import { formatMemberAddress } from '@/lib/members/member-address'
 
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -78,12 +51,7 @@ export async function POST(request: NextRequest) {
   const contactId = getClientContactId(user)
   if (!contactId) return NextResponse.json({ error: 'No contact linked to your account' }, { status: 403 })
 
-  let body: {
-    account_id?: string
-    effective_date?: string
-    // No address field of any kind. See mustRefuseSuppliedAddress below.
-    [key: string]: unknown
-  }
+  let body: { account_id?: string; effective_date?: string; [key: string]: unknown }
   try {
     body = await request.json()
   } catch {
@@ -93,20 +61,17 @@ export async function POST(request: NextRequest) {
   const { account_id, effective_date } = body
 
   // NOTHING on the Generate Documents screen is editable, so no request may carry
-  // an address. Refused LOUDLY rather than ignored: the deleted editable field was
-  // silently discarded for every account that had member records, which meant a
-  // client correcting a wrong address had no way to succeed and no way to know they
-  // had failed. A stale client or a crafted post gets told, not humoured.
-  if (mustRefuseSuppliedAddress(body as Record<string, unknown>)) {
+  // an address. Refused LOUDLY rather than ignored — silent discarding is exactly
+  // what the deleted field did, and a client correcting a wrong address had no way
+  // to succeed and no way to know they had failed. The only realistic sender is a
+  // browser tab or cached app shell still running the previous build, which posted
+  // an address on every generate: they have done nothing wrong and their address is
+  // fine, so the message says so.
+  if (body.member_addresses !== undefined) {
     return NextResponse.json({
-      // The ONLY realistic sender is a browser tab or cached app shell still
-      // running the PREVIOUS build, which posted an address on every generate. That
-      // client has done nothing wrong and their address is fine — telling them to
-      // contact support would send us mail about a problem a refresh fixes.
       error: 'This page is out of date — please refresh and try again.',
     }, { status: 400 })
   }
-
   if (!account_id || !effective_date) {
     return NextResponse.json({ error: 'account_id and effective_date are required' }, { status: 400 })
   }
@@ -151,16 +116,12 @@ export async function POST(request: NextRequest) {
     || account.member_structure === 'multi_member'
   const entityType = isMMLC ? 'MMLLC' : 'SMLLC'
 
-  // ── 2. FETCH MEMBERS ──
-  // Now fetched for SINGLE-member agreements too, not just multi-member ones.
-  // A single-member OA used to take its member address purely from what the
-  // client typed on screen, which is the free-typing path this change deletes:
-  // where a member row exists it is the system of record for BOTH entity types,
-  // and the screen renders it read-only. The row is still the only source for
-  // `oaSigners` below — who gets sent a signature request is a different
-  // question from who is on the roster (an individual with no email is a member
-  // but cannot be asked to sign; a company member signs through its
-  // representative), and that stays multi-member-only.
+  // ── 2. FETCH MEMBERS (MMLLC only) ──
+  // Who will actually be sent a signature request. NOT the same as the member
+  // roster: an individual with no email is a member but cannot be asked to
+  // sign, and a company member signs through its representative. Populated in
+  // the MMLLC branch below; empty for a single-member OA, which the caller
+  // signs alone.
   let oaSigners: ResolvedSigner[] = []
   let membersRows: Array<{
     id: string
@@ -180,193 +141,19 @@ export async function POST(request: NextRequest) {
     address_country: string | null
   }> = []
 
-  const { data: rows, error: membersErr } = await supabaseAdmin
-    .from('members')
-    .select('id, full_name, company_name, email, ownership_pct, is_primary, contact_id, member_type, representative_name, representative_email, address_street, address_city, address_state, address_zip, address_country')
-    .eq('account_id', account_id)
-    .order('is_primary', { ascending: false })
-
-  // FAIL CLOSED. Discarding this error is not a missing nicety — it silently
-  // decides WHO IS AUTHORITATIVE. `rows` is null on failure, which is
-  // indistinguishable from "this company has no member records", and TWO things
-  // now hang off that distinction: the member address that goes into the
-  // agreement, and which record it comes from. So a transient database failure (or
-  // a typo in the select list above) would store a single-member agreement with NO
-  // address, printing "As on file with the Company" behind a green success screen —
-  // and, if the same failure hit the page render, the screen would show the same
-  // emptiness, so both surfaces would be wrong in the same direction and look
-  // perfectly consistent.
-  //
-  // Refusing costs a client one retry. The alternative is a wrong legal
-  // document that nobody is told about. Same reasoning, and the same shape, as
-  // the signature-count guard further down this file.
-  if (mustRefuseOnMemberReadFailure(membersErr)) {
-    await reportSystemError({
-      source: 'server',
-      route: '/api/portal/operating-agreement/create',
-      method: 'POST',
-      http_status: 503,
-      message: `Operating Agreement for ${account.company_name} refused — the member records could not be read, so the agreement's member addresses could not be trusted`,
-      context: { account_id, db_error: membersErr.message },
-    })
-    return NextResponse.json({
-      error: 'We could not read this company\'s member details just now, so we have not created the agreement. Please try again in a moment — if it keeps happening, send us a message.',
-    }, { status: 503 })
-  }
-
-  membersRows = rows ?? []
-
-  // A Single Member LLC has NO member roster by design — an empty result here is
-  // CORRECT state, not a gap. (The read failure that would be indistinguishable
-  // from it is refused above.) For those companies the address of record lives on
-  // the owner's contact instead; nobody may supply one from the browser.
-  const hasMemberRecords = membersRows.length > 0
-
-  // WHO OWNS THIS ADDRESS. Re-derived here from the account's own links, NOT taken
-  // from the caller and NOT trusted from the browser: this decides the NAME and the
-  // ADDRESS on the document, so letting the logged-in identity stand in for it would
-  // let a co-owner or administrator shift whose details the agreement carries
-  // (Antonio, 2026-08-12: "the document follows the OWNER of record, never whoever
-  // is signed in"). Same helper and same query shape as the screen, so the two
-  // cannot resolve different people.
-  // BEFORE the owner block, deliberately. A multi-member company with no member
-  // rows is a MISSING ROSTER, not an owner problem — and an owner-shaped refusal
-  // points staff at unlinking an owner to fix it, which is a destructive
-  // suggestion for a company that simply needs its members entered (Antonio,
-  // 2026-08-12). Ordering matters: the owner lookup below runs for any account
-  // without member rows, so without this the multi-member case never reaches its
-  // own message.
-  if (isMMLC && membersRows.length === 0) {
-    return NextResponse.json({ error: 'No members found for this MMLLC — add members in the CRM first' }, { status: 422 })
-  }
-
-  let ownerOfRecordContactId: string | null = null
-  let ownerRecordAddress: string | null = null
-  let ownerName: string | null = null
-  let ownerEmail: string | null = null
-  if (!hasMemberRecords) {
-    const { data: links, error: linksErr } = await supabaseAdmin
-      .from('account_contacts')
-      .select('contact_id, role')
-      .eq('account_id', account_id)
-      // Ordered, and NOT limited — the screen runs the same query to resolve the
-      // same owner, and the two must never see a different link set.
-      .order('contact_id', { ascending: true })
-
-    // Fail closed for the same reason the members read does: an unreadable link
-    // list is indistinguishable from "you are not the owner", and guessing either
-    // way either blocks the real owner or lets the wrong person author an address.
-    if (linksErr) {
-      await reportSystemError({
-        source: 'server',
-        route: '/api/portal/operating-agreement/create',
-        method: 'POST',
-        http_status: 503,
-        message: `Operating Agreement for ${account.company_name} refused — the account's contact links could not be read, so the owner of record could not be established`,
-        context: { account_id, db_error: linksErr.message },
-      })
-      return NextResponse.json({
-        error: 'We could not confirm this company\'s owner just now, so we have not created the agreement. Please try again in a moment — if it keeps happening, send us a message.',
-      }, { status: 503 })
-    }
-
-    // SAME helper the screen uses, so the two cannot reach different owners.
-    const ownerResolution = resolveOwnerOfRecord(links ?? [])
-
-    // REFUSE rather than guess. The screen blocks generation on the identical
-    // resolution, so the two agree; the version that returned null instead let the
-    // screen render a member called "N/A" while this route stored the LOGGED-IN
-    // person's name — the previewed and the signed document disagreeing about who
-    // owns the company, which is the defect this whole job exists to remove.
-    // (A company with exactly ONE linked person needs no role at all — the helper
-    // treats that as unambiguous, which is why this refuses almost nobody: 218 of
-    // 225 rosterless accounts match an owner role, 4 more match member-ish, and the
-    // only 3 with no match have no contacts to name.)
-    if (!ownerResolution.resolved) {
-      // ALARMED, like every other refusal here. These are the only ones that used
-      // to pass silently, and every one of them tells the client "send us a
-      // message" — if they don't, nobody learns the account is stuck. A client
-      // silently blocked until they complain is the failure class this whole job
-      // is about.
-      await reportSystemError({
-        source: 'server',
-        route: '/api/portal/operating-agreement/create',
-        method: 'POST',
-        http_status: 422,
-        message: `Operating Agreement blocked for ${account.company_name} — the owner of record could not be established (${ownerResolution.reason})`,
-        context: { account_id, reason: ownerResolution.reason, contact_links: (links ?? []).length },
-      })
-      return NextResponse.json({
-        error: ownerResolution.reason === 'no_contacts'
-          // Portal wording, no email: the form and the correction both reach the
-          // client IN THEIR PORTAL, and client-facing copy must never say otherwise
-          // (Antonio, 2026-08-12).
-          ? 'We don\'t have anyone on file as the owner of this company yet, so we can\'t put a name on the Operating Agreement. Send us a message and we\'ll set it up.'
-          : ownerResolution.reason === 'several_owners'
-            ? `More than one person on this company is listed as ${ownerResolution.ambiguousRole ?? 'an owner'}, so we can't say who should be named as the member on the Operating Agreement. Send us a message and we'll set it straight.`
-            : 'Your company has several people linked to it and none is marked as the owner, so we can\'t say whose name and address belong on the Operating Agreement. Send us a message and we\'ll set it straight.',
-      }, { status: 422 })
-    }
-
-    ownerOfRecordContactId = ownerResolution.contactId
-
-    // The owner's NAME, ADDRESS and EMAIL — read here, BEFORE section 5 deletes any
-    // existing agreement. An earlier version refused further down, after the
-    // delete: the client lost the agreement they had, got nothing back, and was
-    // told we held no name for them. Destroying a document and then refusing is
-    // worse than the bug this job started with (Antonio, 2026-08-12).
-    const { data: ownerContact, error: ownerErr } = await supabaseAdmin
-      .from('contacts')
-      .select('full_name, first_name, last_name, email, address_line1, address_city, address_state, address_zip, address_country')
-      .eq('id', ownerOfRecordContactId)
-      .maybeSingle()
-
-    // FAIL CLOSED, like every sibling read in this file. Discarding this error
-    // turned a transient database problem into "we don't have a name on file for
-    // your owner" — a false statement to the client, with no alarm raised.
-    if (ownerErr) {
-      await reportSystemError({
-        source: 'server',
-        route: '/api/portal/operating-agreement/create',
-        method: 'POST',
-        http_status: 503,
-        message: `Operating Agreement for ${account.company_name} refused — the owner's contact record could not be read`,
-        context: { account_id, owner_contact_id: ownerOfRecordContactId, db_error: ownerErr.message },
-      })
-      return NextResponse.json({
-        error: 'We could not read the owner\'s details just now, so we have not created the agreement. Please try again in a moment — if it keeps happening, send us a message.',
-      }, { status: 503 })
-    }
-
-    ownerRecordAddress = formatOwnerContactAddress(ownerContact)
-    // The document NAMES the owner, never whoever is holding the mouse. Same helper
-    // as the screen, so the previewed and the stored name cannot differ.
-    ownerName = resolveOwnerName(ownerContact)
-    ownerEmail = ownerContact?.email ?? null
-
-    // No usable name is the same class of failure as no identifiable owner: we
-    // cannot say who owns this company. Refuse rather than print a placeholder —
-    // and refuse HERE, before anything is deleted.
-    if (!ownerName) {
-      await reportSystemError({
-        source: 'server',
-        route: '/api/portal/operating-agreement/create',
-        method: 'POST',
-        http_status: 422,
-        message: `Operating Agreement blocked for ${account.company_name} — the owner of record has no usable name on file`,
-        context: { account_id, owner_contact_id: ownerOfRecordContactId },
-      })
-      return NextResponse.json({
-        error: 'We don\'t have a name on file for the owner of this company, so we can\'t put one on the Operating Agreement. Send us a message and we\'ll set it up.',
-      }, { status: 422 })
-    }
-  }
-
-  // No submission gate is needed any more: an address on the request was already
-  // refused above, for every account shape. What remains is only WHOSE address to
-  // display and store, which is the owner-of-record lookup above.
-
   if (isMMLC) {
+    const { data: rows } = await supabaseAdmin
+      .from('members')
+      .select('id, full_name, company_name, email, ownership_pct, is_primary, contact_id, member_type, representative_name, representative_email, address_street, address_city, address_state, address_zip, address_country')
+      .eq('account_id', account_id)
+      .order('is_primary', { ascending: false })
+
+    membersRows = rows ?? []
+
+    if (membersRows.length === 0) {
+      return NextResponse.json({ error: 'No members found for this MMLLC — add members in the CRM first' }, { status: 422 })
+    }
+
     // Being a member and being a SIGNER are different things (Antonio,
     // 2026-08-09) — but a member who cannot sign does not get routed around.
     // "A multi-member operating agreement signed by only one owner must never
@@ -418,7 +205,7 @@ export async function POST(request: NextRequest) {
   // ── 3. FETCH PRIMARY CONTACT ──
   const { data: contact } = await supabaseAdmin
     .from('contacts')
-    .select('full_name, email')
+    .select('full_name, email, address_line1, address_city, address_state, address_zip, address_country')
     .eq('id', contactId)
     .single()
 
@@ -554,16 +341,11 @@ export async function POST(request: NextRequest) {
   }
 
   // ── 6. BUILD MEMBERS JSON FOR MMLLC ──
-  // No priority list any more: the member row IS the address. The shared resolver
-  // is the SAME one `getPortalMembers` uses to render the screen, so what the
-  // client reviewed and what is stored here cannot drift apart — that is the whole
-  // point of it living in lib/members/member-address.ts rather than being composed
-  // locally at each call site, which is how the two came to disagree.
-  //
-  // A member with no address on file resolves to null and the templates print
-  // "As on file with the Company". That is deliberate: an absent address stays
-  // visibly absent rather than being quietly filled from the representative's
-  // personal address or from anywhere else.
+  // No priority list: the member row IS the address, and nothing may be supplied.
+  const composeMemberAddress = (m: (typeof membersRows)[number]): string | null => {
+    const parts = [m.address_street, m.address_city, m.address_state, m.address_zip, m.address_country].filter(Boolean)
+    return parts.length > 0 ? parts.join(', ') : null
+  }
   // For an MMLLC this now EQUALS the member count: the gate above refuses to
   // issue the agreement unless every member can be sent a signature request, so
   // signers and roster cannot diverge. Kept as the signing-set length rather
@@ -574,27 +356,14 @@ export async function POST(request: NextRequest) {
   const membersJson = isMMLC
     ? membersRows.map(m => ({
         name: m.full_name ?? m.company_name ?? 'Unknown',
-        address: formatMemberAddressRow(m),
+        // The member row IS the address. The caller-supplied fallback is gone with
+        // the typed field it served.
+        address: composeMemberAddress(m),
         email: m.email ?? null,
         ownership_pct: m.ownership_pct ?? 0,
         initial_contribution: '$1,000 USD',
       }))
     : null
-
-  // The single-member agreement's address, resolved the same way. Where a member
-  // row exists it wins; a rosterless company falls through to the owner's own
-  // contact record, which is what the screen displays read-only.
-  // For a no-roster account the OWNER'S CONTACT RECORD is the record. Read it
-  // whenever the caller did not supply a new address, so a client who generates a
-  // second agreement without retyping gets the address they already gave us
-  // instead of a document reading "As on file with the Company" while their record
-  // holds it — the same record-vs-document split this job exists to close, and
-  // what the first cut of this change did on exactly this path.
-  const soleMemberAddress = resolveSoleMemberAddress({
-    hasMemberRecords,
-    primaryMemberRow: pickSoleMemberRow(membersRows),
-    ownerRecordAddress,
-  })
 
   // ── 7. INSERT OA_AGREEMENTS ──
   const primaryMember = isMMLC ? membersRows[0] : null
@@ -614,23 +383,17 @@ export async function POST(request: NextRequest) {
       formation_date: account.formation_date || effective_date || new Date().toISOString().split('T')[0],
       ein_number: account.ein_number ?? null,
       entity_type: entityType,
-      // ROSTERLESS PATH ONLY. A company WITH a member roster is untouched — that
-      // roster already drives its naming, and whether the manager on a
-      // multi-member agreement should be its creator is a separate question with
-      // its own card, not a change to make tonight.
-      manager_name: hasMemberRecords ? contact.full_name : (ownerName as string),
-      member_name: isMMLC
-        ? (primaryMember?.full_name ?? contact.full_name)
-        : (hasMemberRecords ? contact.full_name : (ownerName as string)),
-      // Only the SMLLC templates render this (Article 2.1 "Sole Member"); the
-      // multi-member ones print the roster from `members` above. It used to be
-      // `member_addresses[0]` — the browser's first typed value — which on a
-      // multi-member agreement stored one member's typed address in a column
-      // labelled as the sole member's, for no reader.
-      member_address: shouldStoreSoleMemberAddress(isMMLC) ? soleMemberAddress : null,
-      member_email: isMMLC
-        ? (primaryMember?.email ?? contact.email)
-        : (hasMemberRecords ? contact.email : (ownerEmail ?? contact.email)),
+      manager_name: contact.full_name,
+      member_name: isMMLC ? (primaryMember?.full_name ?? contact.full_name) : contact.full_name,
+      // A Single Member LLC has ONE OWNER and no member roster — by design. Their
+      // address is read from their contact record, the same record the screen
+      // displays read-only, so preview and stored document agree. It used to be the
+      // browser's first typed value; there is no typed value any more.
+      member_address: isMMLC ? null : formatMemberAddress({
+        line1: contact.address_line1, city: contact.address_city, state: contact.address_state,
+        zip: contact.address_zip, country: contact.address_country,
+      }),
+      member_email: isMMLC ? (primaryMember?.email ?? contact.email) : contact.email,
       members: membersJson,
       effective_date: effective_date,
       business_purpose: 'any and all lawful business activities',
@@ -662,14 +425,6 @@ export async function POST(request: NextRequest) {
   if (insertErr || !oa) {
     return NextResponse.json({ error: insertErr?.message ?? 'Failed to create OA' }, { status: 500 })
   }
-
-  // NO WRITE-BACK. A document-generation screen READS the record; only the
-  // record's own screen writes it. The removed version wrote the client's typed
-  // address into their contact row (and into the legacy `residency` column that
-  // other code reads as a country), which forced an unreliable "who is the owner"
-  // lookup to become load-bearing for a WRITE — and, through a lossy address
-  // split, erased city/state/postal-code/country for contacts whose address had
-  // fewer than five parts. A sole owner corrects their address on their profile.
 
   // ── 8. FOR MMLLC: INSERT OA_SIGNATURES + SEND PORTAL CHAT ──
   const notifyOutcomes: Awaited<ReturnType<typeof notifyClientActionRequired>>[] = []

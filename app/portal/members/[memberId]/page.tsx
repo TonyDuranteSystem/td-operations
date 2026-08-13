@@ -41,20 +41,19 @@ export default async function MemberDetailPage({ params }: { params: { memberId:
     return new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
   }
 
+  // Postal code included — it was silently dropped here, so this card showed a
+  // different address from the one the Operating Agreement stored.
+  function buildAddress(street: string | null, city: string | null, state: string | null, zip: string | null, country: string | null) {
+    return formatMemberAddress({ line1: street, city, state, zip, country })
+  }
+
   // ─── Company member rendering ───────────────────────────────────────────────
   if (member.member_type === 'company') {
     // Genuinely the COMPANY's address now. This variable was always named
-    // companyAddress and rendered under "Company Information", but the query
-    // behind it preferred the representative's personal address — so this card
-    // showed a person's home address labelled as the company's (dev job
-    // 61f184ca). The ZIP is included here too; it used to be dropped.
-    const companyAddress = formatMemberAddress({
-      line1: member.address_line1,
-      city: member.address_city,
-      state: member.address_state,
-      zip: member.address_zip,
-      country: member.address_country,
-    })
+    // companyAddress and rendered under "Company Information", but the query behind
+    // it preferred the representative's personal address — so this card showed a
+    // person's home address labelled as the company's (dev job 61f184ca).
+    const companyAddress = buildAddress(member.address_line1, member.address_city, member.address_state, member.address_zip, member.address_country)
     return (
       <div className="p-4 sm:p-6 lg:p-8 max-w-2xl mx-auto space-y-6">
         <Link href="/portal" className="inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-700">
@@ -161,15 +160,7 @@ export default async function MemberDetailPage({ params }: { params: { memberId:
   }
 
   // ─── Individual member rendering ─────────────────────────────────────────────
-  // Individual member — same formatter, so this card, the document screen and the
-  // agreement itself all render one address the same way, postal code included.
-  const address = formatMemberAddress({
-    line1: member.address_line1,
-    city: member.address_city,
-    state: member.address_state,
-    zip: member.address_zip,
-    country: member.address_country,
-  })
+  const address = buildAddress(member.address_line1, member.address_city, member.address_state, member.address_zip, member.address_country)
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-2xl mx-auto space-y-6">
