@@ -668,6 +668,11 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
       if (lr?.referrer_contact_id) refContactId = lr.referrer_contact_id
       if (lr?.referrer_account_id) refAccountId = lr.referrer_account_id
       if ((lr?.referrer_contact_id || lr?.referrer_account_id) && !refType) refType = "client"
+      // This inheritance is ALSO "from the lead", and the plan refusal below reads this flag to
+      // explain WHERE the referrer came from. Without it, a lead pinned by id with no name gives
+      // the author a bare "this offer has a referrer" while the form's referrer field is visibly
+      // empty — the exact hunt the message exists to prevent.
+      if (lr?.referrer_contact_id || lr?.referrer_account_id) referralAutoFilled = true
     }
 
     // ⛔ 6c. THE REFUSAL, RE-EVALUATED ON THE *EFFECTIVE* REFERRER — the one this offer will

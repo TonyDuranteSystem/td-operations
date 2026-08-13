@@ -680,7 +680,14 @@ export function CreateOfferDialog({
   // passed a plan the engine would refuse — stripping every pay control so the client cannot pay
   // at all — and fired a FALSE warning on the plan the engine actually wants, steering the author
   // into the broken shape. Any pre-condition on the offer triggered it.
-  const planMismatch = splitActive && planSum > 0 && Math.abs(planSum - totalAmount) > 0.5
+  // ⛔ 0.01 — THE SAME TOLERANCE THE ENGINE USES, not a friendlier one. The first fix corrected
+  // WHAT is compared and left the threshold at 0.5, which is 50× looser than decideSigningBill
+  // and resolveDueNow (both `> 0.01`), and there is no server-side plan-vs-gross crosscheck
+  // behind this gate. A three-way split of a fee that does not divide (3500 → 1166.66 × 3 =
+  // 3499.98, off by 0.02) sailed through here and was then refused by every consumer: the offer
+  // page hides the payment block, the contract cannot state the amount, and signing bills the
+  // WHOLE fee. A gate looser than the thing it guards is not a gate.
+  const planMismatch = splitActive && planSum > 0 && Math.abs(planSum - totalAmount) > 0.01
 
   // ⛔ A HALF-WRITTEN SPLIT MUST STOP THE SUBMIT — it must NEVER become "no split".
   // The first cut posted null whenever the plan failed to validate, on the theory that never
@@ -688,7 +695,16 @@ export function CreateOfferDialog({
   // the offer is created as an ordinary full-payment deal, with no error, no toast and no trace
   // that a split was ever intended — the client signs and is billed the whole fee. Silence is
   // indistinguishable from "the author changed their mind". So the split now BLOCKS instead.
-  const splitBlockReason: string | null = !splitActive
+  //
+  // ⛔ AND THE SECOND DOOR: enabled-but-LOCKED must block too, never silently drop.
+  // `splitActive` is false when a referrer/partner is present, so gating the whole reason on it
+  // reopened the very hole this variable was added to close — author a valid plan FIRST, pick a
+  // referrer AFTER, and the section unmounts while the checkbox stays visibly ticked, the plan is
+  // posted as null, and the client is invoiced the whole fee. The referrer is exactly the field
+  // filled in late (it is remembered mid-call), so this is the likely ordering, not the exotic one.
+  const splitBlockReason: string | null = splitEnabled && splitLockedByCommission
+    ? "This offer now has a referrer or a managed partner, so it cannot be sold in parts — the commission would be credited in full on the first payment. Either remove the referrer/partner, or untick \"Client pays the setup fee in parts\". Your split has NOT been saved."
+    : !splitActive
     ? null
     : ambiguousAmounts.length > 0
       ? `Part ${ambiguousAmounts[0].seq}: "${ambiguousAmounts[0].raw}" could mean ${currencySymbol}${ambiguousAmounts[0].asThousands.toLocaleString('en-US')} or ${currencySymbol}${ambiguousAmounts[0].asDecimal}. Write it without the dot (e.g. ${ambiguousAmounts[0].asThousands}).`
@@ -1499,10 +1515,12 @@ export function CreateOfferDialog({
               Client pays the setup fee in parts
             </label>
             {splitLockedByCommission && (
-              <p className="text-xs text-amber-600 mt-1">
-                Not available on this offer: it carries a referrer or a managed partner. Commission is
-                credited in full on the first payment, so a split would pay it before the deal is fully
-                paid. Clear the referrer/partner to use a split, or settle the commission by hand.
+              <p className={`text-xs mt-1 ${splitEnabled ? 'text-red-600 font-medium' : 'text-amber-600'}`}>
+                {/* When a plan was already authored, this is not an explanatory note — it is a
+                    warning that the work on screen will not be saved. Say so in those words. */}
+                {splitEnabled
+                  ? 'Your split will NOT be saved: this offer now carries a referrer or a managed partner, and commission is credited in full on the first payment. Remove the referrer/partner, or untick this box.'
+                  : 'Not available on this offer: it carries a referrer or a managed partner. Commission is credited in full on the first payment, so a split would pay it before the deal is fully paid. Clear it on the LEAD record (not just this form) to use a split, or settle the commission by hand.'}
               </p>
             )}
 
