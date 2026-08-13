@@ -40,16 +40,37 @@ export async function POST(request: NextRequest) {
     const accountId = String(form.get('account_id') ?? '')
     const taxYear = Number(form.get('tax_year'))
     const bankLabel = String(form.get('bank_name') ?? '').trim()
-    // Account identity for this file (account_number-mode institutions). Optional at
-    // the API — the client UI enforces it as required for banks; currency/crypto
-    // services legitimately have none.
     const accountNumber = String(form.get('account_number') ?? '').trim() || null
+    // The client's explicit "no single account number" declaration (the
+    // multi-currency/crypto escape). Distinguishes "skipped" from "has none".
+    const noAccountNumber = String(form.get('no_account_number') ?? '') === '1'
 
     if (!file || !accountId || !Number.isInteger(taxYear) || !bankLabel) {
       return NextResponse.json({ error: 'file, account_id, tax_year and bank_name are required' }, { status: 400 })
     }
     if (!(await isAccountOwner(user, accountId))) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
+
+    // REQUIRED ACCOUNT NUMBER — SERVER-ENFORCED (identity build 2026-08-13,
+    // plan §B; was client-UI-only, i.e. a hole). For an account_number-mode
+    // institution (a bank — the client can hold two accounts there), a file
+    // without a number and without the explicit no-number declaration is
+    // refused: an unnumbered bank upload is how one real account silently
+    // splits into two, the exact failure the identity plan exists to kill.
+    // Currency/crypto institutions pass — their identity is name + currency.
+    {
+      const { loadInstitutionRegistry } = await import('@/lib/tax/institution-registry')
+      const { resolveInstitution } = await import('@/lib/tax/bank-identity')
+      const inst = resolveInstitution(bankLabel, await loadInstitutionRegistry())
+      if (inst.mode === 'account_number' && !accountNumber && !noAccountNumber) {
+        return NextResponse.json(
+          {
+            error: `${inst.canonical} accounts need the account number (or its last 4 digits) so two accounts at the same bank are never mixed. Enter it and upload again — or tick "multi-currency service or crypto" if this account genuinely has no single number.`,
+          },
+          { status: 400 },
+        )
+      }
     }
 
     // LOCK (added 2026-08-03, bug-hunter blocker). Deleting a statement was

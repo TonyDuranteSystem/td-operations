@@ -91,6 +91,9 @@ interface View {
   /** W9 (card 4a39e0fd): live per-file status — filename, state, and for
    *  failed files the plain-language what-happened + how-to-fix. */
   file_statuses?: Array<{ path: string; file_name: string; state: 'pending' | 'succeeded' | 'failed' | 'quarantined'; client_error: string | null; empty?: boolean; diagnosis?: { code: string; found_years?: number[]; expected_year?: number; software?: string } | null }>
+  /** The LIVE institution registry (identity build 2026-08-13) — the form
+   *  resolves bank-name → identity mode against the catalog, not the seed. */
+  institutions?: Array<{ canonical: string; mode: 'account_number' | 'currency' | 'crypto'; matchTerms: string[] }>
   /** W9: staff unlocked the failed-file hard block from the CRM. */
   failedFilesOverridden?: boolean
   /** S1: statement files quarantined pending a one-tap format confirmation (staff). */
@@ -280,7 +283,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [uploadNote, setUploadNote] = useState<string | null>(null)
   // Institution identity mode (from the curated seed): banks need an account
   // number; multi-currency / crypto do not. Drives the required field + warning.
-  const uploadInst = useMemo(() => resolveInstitution(uploadBank), [uploadBank])
+  // Resolve against the LIVE registry from the payload when present (staff
+  // catalog changes reach the form without a deploy); code seed as fallback.
+  const uploadInst = useMemo(
+    () => resolveInstitution(uploadBank, view?.institutions?.length ? view.institutions : undefined),
+    [uploadBank, view?.institutions],
+  )
   const uploadNeedsAccount = uploadBank.trim().length > 0 && uploadInst.mode === 'account_number' && !uploadNoAcct
   // P&L expense-category drill-down (Luca's request, dev_task 1bee0ffe).
   const [openCat, setOpenCat] = useState<string | null>(null)
@@ -1227,6 +1235,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     fd.append('bank_name', bank)
     fd.append('account_kind', uploadKind)
     fd.append('account_number', account)
+    // The client's explicit "no single account number" choice travels to the
+    // server, so the server-side required-number gate knows the difference
+    // between "skipped" and "genuinely has no number" (multi-currency/crypto).
+    if (uploadNoAcct) fd.append('no_account_number', '1')
     const res = await fetch(`${API}/upload`, { method: 'POST', body: fd })
     const d = await res.json().catch(() => ({}))
     if (!res.ok) {
@@ -1254,6 +1266,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         ? 'Inserisci il numero di conto di questa banca prima di caricare — serve per non confondere due conti diversi.'
         : 'Enter this bank\'s account number before uploading — it\'s what keeps two different accounts apart.')
       return
+    }
+    // RE-ECHO (plan §B, Antonio's rule): the typed number is read BACK to the
+    // client before anything uploads — a typo here silently splits one real
+    // account into two, so the number is confirmed, not just typed.
+    if (uploadNeedsAccount && account) {
+      const echo = it
+        ? `Confermi il numero di conto?\n\n${uploadInst.canonical} — conto ${account}\n\nSe è sbagliato, il tuo P&L sarà sbagliato.`
+        : `Confirm the account number?\n\n${uploadInst.canonical} — account ${account}\n\nIf it's wrong, your P&L will be wrong.`
+      if (!window.confirm(echo)) return
     }
     if (files.length === 0) return
     setError(null)
