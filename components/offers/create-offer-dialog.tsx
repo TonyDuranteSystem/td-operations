@@ -11,6 +11,7 @@ import { parseAuthoredAmount, authoredAmountValue } from '@/lib/offers/parse-aut
 import {
   validatePaymentPlan,
   clientFacingPartLabel,
+  planTotalMatchesGross,
   type PaymentPlanPart,
   type TrancheTriggerKind,
 } from '@/lib/offers/payment-plan'
@@ -687,7 +688,7 @@ export function CreateOfferDialog({
   // 3499.98, off by 0.02) sailed through here and was then refused by every consumer: the offer
   // page hides the payment block, the contract cannot state the amount, and signing bills the
   // WHOLE fee. A gate looser than the thing it guards is not a gate.
-  const planMismatch = splitActive && planSum > 0 && Math.abs(planSum - totalAmount) > 0.01
+  const planMismatch = splitActive && planSum > 0 && !planTotalMatchesGross(planSum, totalAmount)
 
   // ⛔ A HALF-WRITTEN SPLIT MUST STOP THE SUBMIT — it must NEVER become "no split".
   // The first cut posted null whenever the plan failed to validate, on the theory that never
@@ -1509,7 +1510,13 @@ export function CreateOfferDialog({
               <input
                 type="checkbox"
                 checked={splitEnabled}
-                disabled={splitLockedByCommission}
+                // ⛔ NEVER disabled while it is TICKED. The block message and the red warning both
+                // tell the author to "untick this box" — and disabling it in exactly that state
+                // made the instruction impossible to follow AND blocked offer creation entirely,
+                // including the harmless "ticked out of curiosity, nothing typed" case (hunter,
+                // pass 3). A dead end created by a guard is worse than the thing it guarded.
+                // Locked + unticked still prevents STARTING a split on a referred deal.
+                disabled={splitLockedByCommission && !splitEnabled}
                 onChange={e => setSplitEnabled(e.target.checked)}
               />
               Client pays the setup fee in parts
@@ -1564,6 +1571,11 @@ export function CreateOfferDialog({
                             <label className="text-xs text-muted-foreground">Date</label>
                             <input
                               type="date"
+                              // A past date renders verbatim into the client's offer, signed
+                              // contract and portal schedule ("due by 1 September 2025" for a
+                              // payment that has not happened) — a year typo is the realistic
+                              // way in. The picker refuses it at the source.
+                              min={new Date().toISOString().slice(0, 10)}
                               value={part.date}
                               onChange={e => setSplitParts(prev => prev.map((p, j) => j === i ? { ...p, date: e.target.value } : p))}
                               className="block px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"

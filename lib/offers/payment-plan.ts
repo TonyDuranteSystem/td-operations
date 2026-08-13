@@ -66,6 +66,27 @@ export interface PaymentPlanPart {
 export type PaymentPlan = PaymentPlanPart[]
 
 /**
+ * ⛔ HOW FAR A PLAN'S PARTS MAY DIFFER FROM THE OFFER'S GROSS — ONE constant, shared by the
+ * authoring screen and by every consumer that judges the stored plan.
+ *
+ * It exists because the Create Offer dialog shipped its own looser threshold (0.5) while the
+ * engine used 0.01, and there is no server-side plan-vs-gross crosscheck behind the dialog. A
+ * three-way split of a fee that does not divide (3500 → 1166.66 × 3 = 3499.98) passed the gate
+ * and was then refused by every consumer: the offer page hid the payment controls, the contract
+ * could not state an amount, and signing billed the WHOLE fee. A gate looser than the thing it
+ * guards is not a gate — so the number now lives in one place and cannot drift again.
+ *
+ * 0.01 = one cent. Splitting a fee into thirds leaves sub-picocent float drift, which is four
+ * orders of magnitude below this; a real one-cent authoring error is refused.
+ */
+export const PLAN_TOTAL_TOLERANCE = 0.01
+
+/** True when a plan's parts add up to the offer's gross, within the shared tolerance. */
+export function planTotalMatchesGross(planSum: number, gross: number): boolean {
+  return Math.abs(planSum - gross) <= PLAN_TOTAL_TOLERANCE
+}
+
+/**
  * ⛔ EVENTS A TRANCHE MAY WAIT ON — AND THE REGISTRY IS DELIBERATELY EMPTY. (Architect ruling,
  * 2026-08-10.)
  *
@@ -461,7 +482,7 @@ export function decideSigningBill(args: {
   // point the signature is stored, and a signed deal with no bill is worse than one Antonio
   // amends — the same reasoning as the structurally-invalid case above.
   const total = planTotal(parsed.plan)
-  if (Math.abs(total - args.offerGross) > 0.01) {
+  if (!planTotalMatchesGross(total, args.offerGross)) {
     return {
       ...ordinary,
       planIgnored:

@@ -25,7 +25,7 @@
  *    EUR, else USD (the webhook variant — authoritative for money).
  */
 
-import { planCurrency, planTotal, signingPart, validatePaymentPlan } from "@/lib/offers/payment-plan"
+import { planCurrency, planTotal, planTotalMatchesGross, signingPart, validatePaymentPlan } from "@/lib/offers/payment-plan"
 
 export interface OfferLikeForTotals {
   services?: unknown
@@ -364,7 +364,7 @@ function resolveDueNow(
   }
 
   const total = planTotal(plan)
-  if (Math.abs(total - gross) > 0.01) {
+  if (!planTotalMatchesGross(total, gross)) {
     return {
       dueNow: net,
       hasPaymentPlan: true,
