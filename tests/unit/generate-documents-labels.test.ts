@@ -36,15 +36,45 @@ function readSource(): string {
   return readFileSync(SOURCE, 'utf8')
 }
 
+/**
+ * Comments are prose, not references. Without this the scan matched an example
+ * written INSIDE a comment (`l('literal')`) and reported it as a missing label —
+ * a test failing on its own documentation is a test nobody will trust for long.
+ */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+}
+
 /** Keys defined in the LABELS table: `  someKey: {` or `  someKey: { en: ... }`. */
 function definedKeys(src: string): Set<string> {
   const table = src.slice(src.indexOf('const LABELS'), src.indexOf('function l('))
   return new Set(Array.from(table.matchAll(/^ {2}([A-Za-z][A-Za-z0-9_]*):\s*\{/gm), m => m[1]))
 }
 
-/** Keys referenced through the lookup helper: `l('someKey', ...)`. */
+/**
+ * Keys referenced anywhere OUTSIDE the label table — whether through the lookup
+ * helper directly (`l('someKey', lang)`) or through a mapping variable that picks
+ * a key by condition and hands it to the helper.
+ *
+ * Deliberately ANY quoted occurrence, not just `l('...')`: the first version of
+ * this test only understood the literal form, so eight reason-specific keys chosen
+ * through a variable read as "defined but never used" while being very much in
+ * use. A scan that only sees one calling convention silently stops covering the
+ * screen the moment someone writes a normal indirection.
+ */
 function referencedKeys(src: string): Set<string> {
-  return new Set(Array.from(src.matchAll(/\bl\(\s*'([A-Za-z][A-Za-z0-9_]*)'/g), m => m[1]))
+  // Direct calls…
+  const code = stripComments(src)
+  const direct = Array.from(code.matchAll(/\bl\(\s*'([A-Za-z][A-Za-z0-9_]*)'/g), m => m[1])
+  // …plus the ONE declared indirection table. Keys chosen by condition and handed
+  // to the helper are still references; a scan that only understands the literal
+  // form reported eight live keys as dead the moment that indirection appeared.
+  // Any future indirection must go in a table like this, or it is not covered.
+  const tableStart = code.indexOf('const REFUSAL_KEYS')
+  const indirect = tableStart === -1
+    ? []
+    : Array.from(code.slice(tableStart, code.indexOf('}', tableStart)).matchAll(/'([A-Za-z][A-Za-z0-9_]*)'/g), m => m[1])
+  return new Set([...direct, ...indirect])
 }
 
 describe('Generate Documents label coverage', () => {
@@ -65,8 +95,15 @@ describe('Generate Documents label coverage', () => {
   })
 
   it('specifically covers the refusal banner, which no browser pass had ever rendered', () => {
-    expect(defined.has('ownerUnresolvedTitle')).toBe(true)
-    expect(defined.has('ownerUnresolvedBody')).toBe(true)
+    for (const key of [
+      'refusalOwnerUnclearTitle', 'refusalOwnerUnclearBody',
+      'refusalNoNameTitle', 'refusalNoNameBody',
+      'refusalNoContactsTitle', 'refusalNoContactsBody',
+      'refusalNoRosterTitle', 'refusalNoRosterBody',
+    ]) {
+      expect(defined.has(key), `refusal label ${key} is not defined`).toBe(true)
+      expect(referenced.has(key), `refusal label ${key} is never used`).toBe(true)
+    }
   })
 
   it('every defined key is actually used — dead copy misleads the next reader', () => {

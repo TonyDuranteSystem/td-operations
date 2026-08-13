@@ -229,6 +229,17 @@ export async function POST(request: NextRequest) {
   // (Antonio, 2026-08-12: "the document follows the OWNER of record, never whoever
   // is signed in"). Same helper and same query shape as the screen, so the two
   // cannot resolve different people.
+  // BEFORE the owner block, deliberately. A multi-member company with no member
+  // rows is a MISSING ROSTER, not an owner problem — and an owner-shaped refusal
+  // points staff at unlinking an owner to fix it, which is a destructive
+  // suggestion for a company that simply needs its members entered (Antonio,
+  // 2026-08-12). Ordering matters: the owner lookup below runs for any account
+  // without member rows, so without this the multi-member case never reaches its
+  // own message.
+  if (isMMLC && membersRows.length === 0) {
+    return NextResponse.json({ error: 'No members found for this MMLLC — add members in the CRM first' }, { status: 422 })
+  }
+
   let ownerOfRecordContactId: string | null = null
   let ownerRecordAddress: string | null = null
   let ownerName: string | null = null
@@ -272,6 +283,19 @@ export async function POST(request: NextRequest) {
     // 225 rosterless accounts match an owner role, 4 more match member-ish, and the
     // only 3 with no match have no contacts to name.)
     if (!ownerResolution.resolved) {
+      // ALARMED, like every other refusal here. These are the only ones that used
+      // to pass silently, and every one of them tells the client "send us a
+      // message" — if they don't, nobody learns the account is stuck. A client
+      // silently blocked until they complain is the failure class this whole job
+      // is about.
+      await reportSystemError({
+        source: 'server',
+        route: '/api/portal/operating-agreement/create',
+        method: 'POST',
+        http_status: 422,
+        message: `Operating Agreement blocked for ${account.company_name} — the owner of record could not be established (${ownerResolution.reason})`,
+        context: { account_id, reason: ownerResolution.reason, contact_links: (links ?? []).length },
+      })
       return NextResponse.json({
         error: ownerResolution.reason === 'no_contacts'
           // Portal wording, no email: the form and the correction both reach the
@@ -279,7 +303,7 @@ export async function POST(request: NextRequest) {
           // (Antonio, 2026-08-12).
           ? 'We don\'t have anyone on file as the owner of this company yet, so we can\'t put a name on the Operating Agreement. Send us a message and we\'ll set it up.'
           : ownerResolution.reason === 'several_owners'
-            ? 'More than one person on this company is listed as an owner, so we can\'t say who should be named as the member on the Operating Agreement. Send us a message and we\'ll set it straight.'
+            ? `More than one person on this company is listed as ${ownerResolution.ambiguousRole ?? 'an owner'}, so we can't say who should be named as the member on the Operating Agreement. Send us a message and we'll set it straight.`
             : 'Your company has several people linked to it and none is marked as the owner, so we can\'t say whose name and address belong on the Operating Agreement. Send us a message and we\'ll set it straight.',
       }, { status: 422 })
     }
@@ -324,6 +348,14 @@ export async function POST(request: NextRequest) {
     // cannot say who owns this company. Refuse rather than print a placeholder —
     // and refuse HERE, before anything is deleted.
     if (!ownerName) {
+      await reportSystemError({
+        source: 'server',
+        route: '/api/portal/operating-agreement/create',
+        method: 'POST',
+        http_status: 422,
+        message: `Operating Agreement blocked for ${account.company_name} — the owner of record has no usable name on file`,
+        context: { account_id, owner_contact_id: ownerOfRecordContactId },
+      })
       return NextResponse.json({
         error: 'We don\'t have a name on file for the owner of this company, so we can\'t put one on the Operating Agreement. Send us a message and we\'ll set it up.',
       }, { status: 422 })
@@ -335,10 +367,6 @@ export async function POST(request: NextRequest) {
   // display and store, which is the owner-of-record lookup above.
 
   if (isMMLC) {
-    if (membersRows.length === 0) {
-      return NextResponse.json({ error: 'No members found for this MMLLC — add members in the CRM first' }, { status: 422 })
-    }
-
     // Being a member and being a SIGNER are different things (Antonio,
     // 2026-08-09) — but a member who cannot sign does not get routed around.
     // "A multi-member operating agreement signed by only one owner must never

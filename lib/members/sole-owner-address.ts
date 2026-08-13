@@ -45,6 +45,12 @@ export interface OwnerResolution {
   contactId: string | null
   via: OwnerVia | null
   reason: OwnerRefusalReason | null
+  /**
+   * WHICH role was ambiguous, when several links share one. The message used to
+   * say "listed as an owner" even when the clash was on member-ish roles, which
+   * sent staff looking at the wrong column in the CRM.
+   */
+  ambiguousRole: string | null
 }
 
 /**
@@ -72,10 +78,10 @@ export interface OwnerResolution {
  * at all. Nobody is refused today.
  */
 export function resolveOwnerOfRecord(links: AccountContactLink[]): OwnerResolution {
-  if (links.length === 0) return { resolved: false, contactId: null, via: null, reason: 'no_contacts' }
+  if (links.length === 0) return { resolved: false, contactId: null, via: null, reason: 'no_contacts', ambiguousRole: null }
 
   // Rule 1: one person, no ambiguity — role text is irrelevant.
-  if (links.length === 1) return { resolved: true, contactId: links[0].contact_id, via: 'sole_contact', reason: null }
+  if (links.length === 1) return { resolved: true, contactId: links[0].contact_id, via: 'sole_contact', reason: null, ambiguousRole: null }
 
   // SEVERAL owner-ish links is a refusal, not a race. Taking the first would be
   // the same silent guess the address path was fixed to stop — deterministic, yes,
@@ -83,14 +89,14 @@ export function resolveOwnerOfRecord(links: AccountContactLink[]): OwnerResoluti
   // instrument. Antonio, 2026-08-12: "Where several owner-role links exist, refuse.
   // Do not pick one silently. Same rule you already applied to the address."
   const owners = links.filter(l => /owner|sole member/i.test(l.role ?? ''))
-  if (owners.length === 1) return { resolved: true, contactId: owners[0].contact_id, via: 'owner_role', reason: null }
-  if (owners.length > 1) return { resolved: false, contactId: null, via: null, reason: 'several_owners' }
+  if (owners.length === 1) return { resolved: true, contactId: owners[0].contact_id, via: 'owner_role', reason: null, ambiguousRole: null }
+  if (owners.length > 1) return { resolved: false, contactId: null, via: null, reason: 'several_owners', ambiguousRole: 'an owner' }
 
   const members = links.filter(l => /member/i.test(l.role ?? ''))
-  if (members.length === 1) return { resolved: true, contactId: members[0].contact_id, via: 'member_role', reason: null }
-  if (members.length > 1) return { resolved: false, contactId: null, via: null, reason: 'several_owners' }
+  if (members.length === 1) return { resolved: true, contactId: members[0].contact_id, via: 'member_role', reason: null, ambiguousRole: null }
+  if (members.length > 1) return { resolved: false, contactId: null, via: null, reason: 'several_owners', ambiguousRole: 'a member' }
 
-  return { resolved: false, contactId: null, via: null, reason: 'ambiguous_roles' }
+  return { resolved: false, contactId: null, via: null, reason: 'ambiguous_roles', ambiguousRole: null }
 }
 
 /** Convenience for callers that only need the id and treat a refusal as absence. */

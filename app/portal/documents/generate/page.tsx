@@ -93,7 +93,28 @@ export default async function GenerateDocumentsPage() {
   // Refuse when the owner cannot be established OR has no usable name. Both are
   // "we cannot say who owns this company", and both must stop generation on BOTH
   // surfaces — the route refuses identically.
-  const ownerUnresolved = rawMembers.length === 0 && (!ownerResolution.resolved || !ownerName)
+  // A MULTI-MEMBER company with no member rows must not have a member invented for
+  // it. The sole-owner fallback below is correct for a Single Member LLC — which
+  // has one owner and no roster BY DESIGN — but for a multi-member company it
+  // synthesised one person and the preview then rendered them at 100%, letting a
+  // client download a PDF naming them sole member of a multi-member LLC. Never
+  // show a client something our own records contradict (Antonio, 2026-08-12).
+  const multiMemberWithoutRoster = rawMembers.length === 0 &&
+    (String(accountDetail.entity_type ?? '').toLowerCase().includes('multi') ||
+      (accountDetail as Record<string, unknown>).member_structure === 'multi_member')
+
+  // THE SERVER'S REASON, never the screen's own guess. Both come from the same
+  // resolution; the screen used to render one fixed sentence for every refusal,
+  // so a company with exactly one owner who simply had no name on file was told
+  // that nobody was marked as the owner, or several were — flatly untrue, and
+  // incompatible with what the route says for the identical state.
+  const ownerRefusalReason: string | null =
+    multiMemberWithoutRoster ? 'no_roster'
+      : rawMembers.length > 0 ? null
+        : !ownerResolution.resolved ? ownerResolution.reason
+          : !ownerName ? 'no_usable_name'
+            : null
+
 
   const mappedMembers = rawMembers.length > 0
     ? rawMembers.map(m => ({
@@ -117,7 +138,7 @@ export default async function GenerateDocumentsPage() {
         email: m.email ?? null,
         member_id: m.member_id,
       }))
-    : (ownerContact && ownerName)
+    : (ownerContact && ownerName && !multiMemberWithoutRoster)
       ? [{
           // The SAME helper the create route uses, so the previewed name and the
           // stored name cannot differ. Never the literal "N/A": if no usable name
@@ -164,7 +185,7 @@ export default async function GenerateDocumentsPage() {
         memberCount: (accountDetail as Record<string, unknown>).member_count as number | null ?? null,
       }}
       members={mappedMembers}
-      ownerUnresolved={ownerUnresolved}
+      ownerRefusalReason={ownerRefusalReason}
       history={historyResult.data || []}
       locale={locale}
     />

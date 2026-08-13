@@ -59,7 +59,13 @@ interface Props {
    * name, so the previewed and the signed document disagreed about who owns the
    * company. Both surfaces now refuse from the same resolution.
    */
-  ownerUnresolved: boolean
+  /**
+   * WHY generation is refused, straight from the same resolution the server uses —
+   * or null when nothing is wrong. Not a boolean, because a single message for
+   * every refusal told clients things that were flatly untrue about their own
+   * records.
+   */
+  ownerRefusalReason: string | null
   /**
    * True when the members above come from real member records — which is when
    * their addresses are the system of record and MUST NOT be editable here
@@ -120,13 +126,51 @@ const LABELS: Record<string, Record<string, string>> = {
   // edits removed them and nobody rendered that path, so a client hitting it saw
   // the literal strings "ownerUnresolvedTitle" and "ownerUnresolvedBody". A test
   // now asserts every key this file references exists (see the label-coverage test).
-  ownerUnresolvedTitle: {
+  // One message per refusal reason, mirroring what the route returns for the same
+  // state — a single sentence for every refusal told clients things that were
+  // flatly untrue about their own records.
+  // Was hardcoded English on an otherwise bilingual screen, and said "Cannot
+  // send … Contact support" — both wrong now: the screen no longer blocks on this
+  // (the server decides), and client-facing copy points at the portal.
+  preflightAllHavePortal: {
+    en: 'All owners can be sent their signing link',
+    it: 'Tutti i soci possono ricevere il link per la firma',
+  },
+  preflightSomeLackPortal: {
+    en: 'We may need to set up portal access before signing links can go out to:',
+    it: 'Potrebbe servire configurare l\'accesso al portale prima di inviare i link di firma a:',
+  },
+  refusalOwnerUnclearTitle: {
     en: 'We can\'t tell who the owner of this company is',
     it: 'Non riusciamo a determinare chi è il titolare di questa azienda',
   },
-  ownerUnresolvedBody: {
-    en: 'We can\'t tell from your records which person should be named as the owner on the Operating Agreement — either nobody is marked as the owner, or more than one person is. Send us a message and we\'ll set it straight — it takes us a moment.',
-    it: 'Dai tuoi dati non riusciamo a stabilire quale persona debba essere indicata come titolare nell\'Atto Costitutivo — o nessuno è indicato come titolare, o lo è più di una persona. Scrivici e lo sistemiamo subito.',
+  refusalOwnerUnclearBody: {
+    en: 'Your records don\'t make clear which person should be named as the owner on the Operating Agreement — either nobody is marked as the owner, or more than one person is. Send us a message and we\'ll set it straight.',
+    it: 'Dai tuoi dati non risulta chiaro quale persona debba essere indicata come titolare nell\'Atto Costitutivo — o nessuno è indicato come titolare, o lo è più di una persona. Scrivici e lo sistemiamo subito.',
+  },
+  refusalNoNameTitle: {
+    en: 'We don\'t have the owner\'s name on file',
+    it: 'Non abbiamo il nome del titolare nei tuoi dati',
+  },
+  refusalNoNameBody: {
+    en: 'We know who the owner of this company is, but we don\'t hold their name, so we can\'t put one on the Operating Agreement. Send us a message and we\'ll add it.',
+    it: 'Sappiamo chi è il titolare di questa azienda, ma non abbiamo il suo nome, quindi non possiamo inserirlo nell\'Atto Costitutivo. Scrivici e lo aggiungiamo.',
+  },
+  refusalNoContactsTitle: {
+    en: 'Nobody is on file for this company yet',
+    it: 'Non risulta ancora nessuna persona per questa azienda',
+  },
+  refusalNoContactsBody: {
+    en: 'We don\'t have anyone recorded as belonging to this company, so we can\'t name an owner on the Operating Agreement. Send us a message and we\'ll set it up.',
+    it: 'Non abbiamo nessuna persona registrata per questa azienda, quindi non possiamo indicare un titolare nell\'Atto Costitutivo. Scrivici e lo configuriamo.',
+  },
+  refusalNoRosterTitle: {
+    en: 'Your company\'s owners aren\'t recorded yet',
+    it: 'I soci della tua azienda non sono ancora registrati',
+  },
+  refusalNoRosterBody: {
+    en: 'This company is registered with more than one owner, but we don\'t yet hold the list of who they are and what share each holds. We can\'t produce an Operating Agreement without it. Send us a message and we\'ll complete your records.',
+    it: 'Questa azienda è registrata con più di un socio, ma non abbiamo ancora l\'elenco di chi sono e della quota di ciascuno. Non possiamo produrre l\'Atto Costitutivo senza. Scrivici e completiamo i tuoi dati.',
   },
   // The reason a client cannot proceed goes in VISIBLE TEXT, never in a tooltip:
   // our clients are on phones, where a tooltip does not exist at all, so a
@@ -160,6 +204,23 @@ const LABELS: Record<string, Record<string, string>> = {
   selectDocType: { en: 'Select a document to generate', it: 'Seleziona un documento da generare' },
 }
 
+/**
+ * Refusal reason → the label keys that explain it. ONE table, mirroring what the
+ * route returns for the same state — the screen used to render a single sentence
+ * for every refusal, which told clients things that were flatly untrue about their
+ * own records.
+ *
+ * Declared as an explicit table rather than an inline ternary so the label-coverage
+ * test can see these keys as referenced: keys reached through a computed variable
+ * are invisible to a scan that only understands `l('literal')`.
+ */
+const REFUSAL_KEYS: Record<string, [string, string]> = {
+  no_roster: ['refusalNoRosterTitle', 'refusalNoRosterBody'],
+  no_usable_name: ['refusalNoNameTitle', 'refusalNoNameBody'],
+  no_contacts: ['refusalNoContactsTitle', 'refusalNoContactsBody'],
+  default: ['refusalOwnerUnclearTitle', 'refusalOwnerUnclearBody'],
+}
+
 function l(key: string, locale: string): string {
   return LABELS[key]?.[locale] || LABELS[key]?.['en'] || key
 }
@@ -171,7 +232,10 @@ function docTypeLabel(type: string, lang: string): string {
   return type
 }
 
-export function GenerateDocumentsClient({ account, members, ownerUnresolved, history: initialHistory, locale }: Props) {
+export function GenerateDocumentsClient({ account, members, ownerRefusalReason, history: initialHistory, locale }: Props) {
+  const ownerUnresolved = ownerRefusalReason !== null
+  const [refusalTitleKey, refusalBodyKey] =
+    REFUSAL_KEYS[ownerRefusalReason ?? ''] ?? REFUSAL_KEYS.default
   const { locale: ctxLocale } = useLocale()
   const lang = ctxLocale || locale || 'en'
   const router = useRouter()
@@ -233,7 +297,16 @@ export function GenerateDocumentsClient({ account, members, ownerUnresolved, his
   // Agreement: the previous shape let the OA through (the existing block is
   // `!isOA`) and produced a preview naming the member "N/A" while the server stored
   // a different name. Refuse in one place, from the server's own resolution.
-  const oaCanProceed = !ownerUnresolved && (!isMMLC || (oaPreflight?.allHavePortal === true))
+  // ONE GATE, and it is the server's. The screen used to refuse unless every
+  // member had a portal account — a rule the route does NOT enforce, because a
+  // company member signs through its representative, which the route's own
+  // comments call out as the wrong reason to refuse. 7 of 46 active multi-member
+  // companies with a roster are in that shape, so 7 real clients could not
+  // generate their agreement for a condition the server would have accepted.
+  // The screen is never stricter than the thing that actually enforces
+  // (Antonio, 2026-08-12); the route still refuses, with its own message, if a
+  // member genuinely cannot be sent a signature request.
+  const oaCanProceed = !ownerUnresolved
 
   // What the preview and the downloadable PDF render: the record verbatim, which
   // is the same value the create route stores — so the document on screen and the
@@ -680,8 +753,8 @@ export function GenerateDocumentsClient({ account, members, ownerUnresolved, his
                       : <X className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />}
                     <span className={oaPreflight.allHavePortal ? 'text-zinc-700' : 'text-red-600'}>
                       {oaPreflight.allHavePortal
-                        ? 'All members have portal accounts'
-                        : `Cannot send — ${oaPreflight.missingPortal.join(', ')} ${oaPreflight.missingPortal.length === 1 ? 'has' : 'have'} no portal account. Contact support.`}
+                        ? l('preflightAllHavePortal', lang)
+                        : `${l('preflightSomeLackPortal', lang)} ${oaPreflight.missingPortal.join(', ')}`}
                     </span>
                   </div>
                   {/* Ownership */}
@@ -708,8 +781,8 @@ export function GenerateDocumentsClient({ account, members, ownerUnresolved, his
 
               {ownerUnresolved && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-                  <p className="text-sm font-semibold text-amber-900 mb-1">{l('ownerUnresolvedTitle', lang)}</p>
-                  <p className="text-sm text-amber-800 leading-snug">{l('ownerUnresolvedBody', lang)}</p>
+                  <p className="text-sm font-semibold text-amber-900 mb-1">{l(refusalTitleKey, lang)}</p>
+                  <p className="text-sm text-amber-800 leading-snug">{l(refusalBodyKey, lang)}</p>
                 </div>
               )}
 
