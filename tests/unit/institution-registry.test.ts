@@ -42,6 +42,25 @@ describe("mergeRegistry", () => {
     expect(mercury?.mode).toBe("currency")
   })
 
+  // ── Bug-hunter 2026-08-13: the two pre-migration failure shapes ──
+
+  it("a MODE-LESS catalog row keeps the SEED's reviewed mode — pre-migration prod rows must not demand numbers from Wise clients", () => {
+    const merged = mergeRegistry(INSTITUTION_SEED, [
+      { display_name: "Wise", metadata: { match_terms: ["wise"] } }, // prod shape today: no identity_mode
+    ])
+    expect(merged.find(e => e.canonical === "Wise")?.mode).toBe("currency")
+  })
+
+  it("match_terms UNION with the seed — a narrower catalog list never un-knows a reviewed alias", () => {
+    const merged = mergeRegistry(INSTITUTION_SEED, [
+      { display_name: "Chase", metadata: { match_terms: ["chase", "jpmorgan"] } }, // prod's 3-term shape (narrower than seed's 11)
+    ])
+    const chase = merged.find(e => e.canonical === "Chase")
+    // The seed's long-form alias survives: "JPMorgan Chase Bank, N.A." still resolves.
+    expect(resolveInstitution("JPMorgan Chase Bank, N.A.", merged)).toEqual({ canonical: "Chase", mode: "account_number", matched: true })
+    expect(chase?.matchTerms).toContain("jpmorgan chase bank na")
+  })
+
   it("a staff-added institution resolves by its display name even with no aliases", () => {
     const merged = mergeRegistry(INSTITUTION_SEED, [
       { display_name: "Grasshopper", metadata: { identity_mode: "account_number" } },

@@ -28,12 +28,35 @@ export function filterStatementPaths(uploadPaths: string[]): string[] {
   return uploadPaths.filter(p => STATEMENT_PATH_RE.test(p) && STATEMENT_EXT_RE.test(p))
 }
 
+/**
+ * Which declared bank ROW does this file belong to?
+ *
+ * PRIMARY: the row whose `statements` value actually CONTAINS this path —
+ * authoritative even after the client removes/reorders rows, because the
+ * storage path embeds the index the row had AT UPLOAD TIME, which the
+ * remove-handler's reindex then shifts (bug-hunter 2026-08-13: after removing
+ * row 0, row 1's file still says index 1 in its path but its data lives at
+ * index 0 — the old index-regex read the WRONG row's bank and number, and
+ * could attribute the file to a bank added later in that slot).
+ * FALLBACK: the path-embedded index (legacy submissions whose statements
+ * values predate this shape, or any read miss).
+ */
+function rowIndexForPath(path: string, submittedData: Record<string, unknown>): string | undefined {
+  const count = Number(submittedData["bank_accounts_count"] ?? 0)
+  for (let i = 0; i < count; i++) {
+    const v = submittedData[`bank_accounts_${i}_statements`]
+    const paths = Array.isArray(v) ? v.map(String) : typeof v === "string" ? [v] : []
+    if (paths.includes(path)) return String(i)
+  }
+  return path.match(/\/bank_accounts_(\d+)_statements_/)?.[1]
+}
+
 /** Prefer the per-bank bank name the client typed; fall back to the filename
  *  lead token. Fallback label only — the parser detects the real bank from
  *  file CONTENT. */
 export function bankLabelForPath(path: string, submittedData: Record<string, unknown>): string {
   const fileName = path.split("/").pop() ?? "statement"
-  const idx = path.match(/\/bank_accounts_(\d+)_statements_/)?.[1]
+  const idx = rowIndexForPath(path, submittedData)
   const typed = idx !== undefined ? String(submittedData[`bank_accounts_${idx}_bank_name`] ?? "").trim() : ""
   const fromName = fileName.replace(/^(bank_accounts_\d+_statements|bank_statements)_[a-z0-9]+_/i, "").split(/[_\-.]/)[0]
   return typed || fromName || "Bank"
@@ -44,7 +67,7 @@ export function bankLabelForPath(path: string, submittedData: Record<string, unk
  *  flowed NOWHERE — the number a client typed never reached the account
  *  identity, so every wizard upload keyed on bank name alone. */
 export function accountNumberForPath(path: string, submittedData: Record<string, unknown>): string | null {
-  const idx = path.match(/\/bank_accounts_(\d+)_statements_/)?.[1]
+  const idx = rowIndexForPath(path, submittedData)
   if (idx === undefined) return null
   const label = String(submittedData[`bank_accounts_${idx}_account_label`] ?? "").trim()
   return label || null

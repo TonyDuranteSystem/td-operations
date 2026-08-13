@@ -1352,15 +1352,23 @@ export function WizardClient({
                                 // 1's data under keys the renderer never reads
                                 // (the orphan-upload-paths hazard, master plan §9).
                                 const next = { ...prev }
+                                // AD-HOC row keys shift too (bug-hunter,
+                                // 2026-08-13): `no_number` (the bank-row
+                                // "no single account number" escape) is not a
+                                // repeaterField, so the old shift left a stale
+                                // waiver at the removed index — silently
+                                // waiving whatever bank slid into that slot,
+                                // and pre-waiving the next row added there.
+                                const subKeys = [...(field.repeaterFields?.map(rf => rf.name) ?? []), 'no_number']
                                 for (let j = idx; j < newCount; j++) {
-                                  field.repeaterFields?.forEach(rf => {
-                                    const from = `${field.name}_${j + 1}_${rf.name}`
-                                    const to = `${field.name}_${j}_${rf.name}`
+                                  subKeys.forEach(sub => {
+                                    const from = `${field.name}_${j + 1}_${sub}`
+                                    const to = `${field.name}_${j}_${sub}`
                                     if (from in next) next[to] = next[from]
                                     else delete next[to]
                                   })
                                 }
-                                field.repeaterFields?.forEach(rf => { delete next[`${field.name}_${newCount}_${rf.name}`] })
+                                subKeys.forEach(sub => { delete next[`${field.name}_${newCount}_${sub}`] })
                                 return next
                               })
                             }}

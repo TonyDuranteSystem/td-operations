@@ -64,26 +64,39 @@ export function checkWizardBankNumbers(params: {
   const missing: MissingBankNumber[] = []
   const grandfathered: MissingBankNumber[] = []
 
-  // Prior rows that already lacked a number — the grandfather set, keyed by
-  // normalized bank name (a renamed bank is a NEW declaration, gate applies).
-  const priorNumberless = new Set(
-    priorData
-      ? bankRows(priorData).filter(r => !r.label).map(r => r.bank.toLowerCase())
-      : [],
-  )
+  // Prior numberless rows — the grandfather BUDGET, counted per normalized
+  // bank name (bug-hunter 2026-08-13: a name-keyed SET grandfathered EVERY
+  // current numberless row of that bank — a re-editor adding a SECOND Chase
+  // account got both waved through numberless, silently MERGING two real
+  // accounts, the exact corruption this build kills). One prior numberless
+  // Chase grandfathers exactly ONE current numberless Chase; the second is
+  // refused with the normal guiding message. A renamed bank is a NEW
+  // declaration — the gate applies.
+  const priorBudget = new Map<string, number>()
+  if (priorData) {
+    for (const r of bankRows(priorData)) {
+      if (r.label) continue
+      const k = r.bank.toLowerCase()
+      priorBudget.set(k, (priorBudget.get(k) ?? 0) + 1)
+    }
+  }
 
   for (const row of bankRows(data)) {
     if (row.label || row.waived) continue
     const inst = resolveInstitution(row.bank, registry)
     if (inst.mode !== "account_number") continue
+    const k = row.bank.toLowerCase()
+    const budget = priorBudget.get(k) ?? 0
     const entry: MissingBankNumber = {
       index: row.index,
       bank: row.bank,
       canonical: inst.canonical,
-      grandfathered: priorNumberless.has(row.bank.toLowerCase()),
+      grandfathered: budget > 0,
     }
-    if (entry.grandfathered) grandfathered.push(entry)
-    else missing.push(entry)
+    if (entry.grandfathered) {
+      priorBudget.set(k, budget - 1)
+      grandfathered.push(entry)
+    } else missing.push(entry)
   }
   return { ok: missing.length === 0, missing, grandfathered }
 }

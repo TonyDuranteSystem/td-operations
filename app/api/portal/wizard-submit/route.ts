@@ -164,15 +164,37 @@ export async function POST(req: NextRequest) {
         try {
           const { checkWizardBankNumbers, bankGateMessage } = await import('@/lib/tax/wizard-bank-gate')
           const { loadInstitutionRegistry } = await import('@/lib/tax/institution-registry')
-          const { resolveClientSubmission } = await import('@/lib/tax/resolve-submission')
-          const gateYear = Number(data?.tax_year) || new Date().getFullYear() - 1
-          const prior = await resolveClientSubmission<{ submitted_data: Record<string, unknown> | null }>(
-            supabaseAdmin, account_id, gateYear, 'submitted_data',
-          )
+          const { SUBMISSION_DATA_STATUSES } = await import('@/lib/tax/resolve-submission')
+          // The gate's year is the PINNED eligibility year — never derived
+          // from a calendar (bug-hunter: the wizard sends no tax_year in data,
+          // so the old `Number(data?.tax_year) || currentYear-1` always used
+          // the calendar and looked up the WRONG prior for back-filers, and
+          // for everyone after the January rollover — stranding exactly the
+          // re-editors the grandfather protects). Same rule as the route's
+          // own tax-year comment further down.
+          const gateYear = taxEligibility?.taxYear ?? null
+          // Prior read with the ERROR SURFACED (bug-hunter: the shared
+          // resolver swallows supabase errors, so a DB blip read as "no prior"
+          // and WALLED a legitimately grandfathered client — inverting the
+          // fail-open promise). An error here skips the gate entirely.
+          let priorData: Record<string, unknown> | null = null
+          if (gateYear !== null) {
+            const { data: priorRow, error: priorErr } = await supabaseAdmin
+              .from('tax_return_submissions')
+              .select('submitted_data')
+              .eq('account_id', account_id)
+              .eq('tax_year', gateYear)
+              .in('status', SUBMISSION_DATA_STATUSES as unknown as string[])
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
+            if (priorErr) throw new Error(`prior-submission read failed: ${priorErr.message}`)
+            priorData = (priorRow?.submitted_data as Record<string, unknown> | null) ?? null
+          }
           const gate = checkWizardBankNumbers({
             data: (data ?? {}) as Record<string, unknown>,
             registry: await loadInstitutionRegistry(),
-            priorData: prior?.submitted_data ?? null,
+            priorData,
           })
           if (!gate.ok) {
             const msg = bankGateMessage(gate.missing)

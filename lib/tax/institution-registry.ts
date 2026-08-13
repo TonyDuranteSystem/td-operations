@@ -34,23 +34,39 @@ interface CatalogRow {
   metadata: { identity_mode?: string; match_terms?: unknown } | null
 }
 
-/** Pure merge — exported for tests. Catalog rows win by canonical name. */
+/** Pure merge — exported for tests. Catalog rows win by canonical name, with
+ *  two SAFETY rules the bug-hunter forced (2026-08-13, pre-migration hazard):
+ *  1. A catalog row with NO/invalid identity_mode NEVER overrides the seed's
+ *     reviewed mode — before the identity migration runs, production catalog
+ *     rows are mode-less, and letting them default to account_number would
+ *     DEMAND a number from every Wise/Revolut/Airwallex client. Mode falls
+ *     back: catalog (valid) → seed's entry → account_number (unknown inst.).
+ *  2. match_terms UNION with the seed's aliases, never replace — the prod
+ *     chase row carries 3 terms vs the seed's 11; replacement would silently
+ *     un-know "JPMorgan Chase Bank, N.A." and resurrect the name-drift split
+ *     this build exists to heal. */
 export function mergeRegistry(seed: InstitutionEntry[], rows: CatalogRow[]): InstitutionEntry[] {
   const byCanonical = new Map<string, InstitutionEntry>()
   for (const e of seed) byCanonical.set(e.canonical.toLowerCase(), e)
   for (const r of rows) {
     const canonical = (r.display_name ?? "").trim()
     if (!canonical) continue
+    const seedEntry = byCanonical.get(canonical.toLowerCase())
     const meta = r.metadata ?? {}
     const mode: IdentityMode = VALID_MODES.has(String(meta.identity_mode))
       ? (meta.identity_mode as IdentityMode)
-      : "account_number"
-    const terms = Array.isArray(meta.match_terms)
+      : seedEntry?.mode ?? "account_number"
+    const catalogTerms = Array.isArray(meta.match_terms)
       ? meta.match_terms.filter((t): t is string => typeof t === "string" && t.trim().length > 0)
       : []
-    // The display name itself always matches — a staff-added institution with
-    // no aliases yet must still resolve by its own name.
-    if (!terms.some(t => t.toLowerCase() === canonical.toLowerCase())) terms.push(canonical)
+    // UNION (case-insensitive) of catalog + seed aliases + the display name —
+    // a staff-added alias adds; nothing ever silently un-knows a reviewed one.
+    const seen = new Set<string>()
+    const terms: string[] = []
+    for (const t of [...catalogTerms, ...(seedEntry?.matchTerms ?? []), canonical]) {
+      const k = t.toLowerCase()
+      if (!seen.has(k)) { seen.add(k); terms.push(t) }
+    }
     byCanonical.set(canonical.toLowerCase(), { canonical, mode, matchTerms: terms })
   }
   return Array.from(byCanonical.values())

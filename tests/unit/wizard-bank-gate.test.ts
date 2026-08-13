@@ -61,6 +61,18 @@ describe("checkWizardBankNumbers", () => {
     expect(r.missing.map(m => m.canonical)).toEqual(["Mercury"]) // Chase grandfathered, Mercury refused
   })
 
+  it("grandfather is a BUDGET, not a blanket: one prior numberless Chase covers ONE current row — a second Chase account is refused (never silently merged)", () => {
+    const prior = { bank_accounts_count: 1, ...row(0, "Chase") }
+    const r = checkWizardBankNumbers({
+      data: { bank_accounts_count: 2, ...row(0, "Chase"), ...row(1, "Chase") },
+      priorData: prior,
+    })
+    expect(r.ok).toBe(false)
+    expect(r.grandfathered).toHaveLength(1)
+    expect(r.missing).toHaveLength(1)
+    expect(r.missing[0].canonical).toBe("Chase")
+  })
+
   it("grandfather does not apply when the prior row HAD a number (a regression, not a legacy state)", () => {
     const prior = { bank_accounts_count: 1, ...row(0, "Chase", { bank_accounts_0_account_label: "9999" }) }
     const r = checkWizardBankNumbers({ data: { bank_accounts_count: 1, ...row(0, "Chase") }, priorData: prior })
