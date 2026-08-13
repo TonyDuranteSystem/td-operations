@@ -3258,7 +3258,16 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     the old wording said "the remaining questions above", which
                     points at the categorization queue and sent clients back to
                     a list that was never what was stopping them. */}
-                {(!view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0) && (
+                {/* Never render BESIDE the failed-file lock. Both paragraphs
+                    used to show at once, and this one said "ONLY the Year
+                    coverage section is missing — answer there and you can
+                    confirm" while the red line above said confirm was locked by
+                    an unreadable file. Answering coverage would NOT have
+                    unlocked it. One blocker on screen at a time; the hard block
+                    wins because it's the one that actually gates Confirm.
+                    (2026-08-12, found on Antonio's QA of card 4a39e0fd.) */}
+                {!(view.ingestFailed > 0 && !view.failedFilesOverridden) &&
+                  (!view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0) && (
                   <p className="text-xs text-amber-700">
                     {view.coverage.incomplete > 0
                       ? (it ? 'Hai indicato che un export è incompleto — sostituisci il file, poi potrai confermare.' : 'You marked an export as incomplete — replace the file, then you can confirm.')

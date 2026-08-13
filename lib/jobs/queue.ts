@@ -298,11 +298,20 @@ export async function triggerWorker(): Promise<void> {
   const workerUrl = `${baseUrl}/api/jobs/process`
   const secret = process.env.JOB_WORKER_SECRET || process.env.TD_MCP_API_KEY
 
+  // Vercel Deployment Protection sits in FRONT of the app on the sandbox
+  // project, so this self-call was bounced with a 302 to the SSO page and the
+  // instant kick silently died — every sandbox upload then waited for the
+  // 5-minute process-jobs cron. Production has no protection wall and no bypass
+  // secret, so this header is absent there and nothing changes.
+  // (2026-08-12, card 4a39e0fd — diagnosed after Antonio's upload sat unprocessed.)
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+
   await fetch(workerUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(secret ? { Authorization: `Bearer ${secret}` } : {}),
+      ...(bypass ? { "x-vercel-protection-bypass": bypass, "x-vercel-set-bypass-cookie": "false" } : {}),
     },
     body: JSON.stringify({ trigger: "on-demand" }),
     signal: AbortSignal.timeout(5000), // 5s timeout for the trigger call
