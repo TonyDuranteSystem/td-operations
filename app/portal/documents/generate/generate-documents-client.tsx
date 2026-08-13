@@ -116,15 +116,32 @@ const LABELS: Record<string, Record<string, string>> = {
     en: 'These addresses come from your records with us and appear in the Operating Agreement exactly as shown. If anything is wrong, send us a message and we\'ll put the form in your portal so you can update them.',
     it: 'Questi indirizzi provengono dai tuoi dati registrati presso di noi e compaiono nell\'Atto Costitutivo esattamente come mostrati. Se qualcosa non è corretto, scrivici e ti mettiamo il modulo nel portale per aggiornarli.',
   },
+  // These two were REFERENCED by the refusal banner and never defined — scripted
+  // edits removed them and nobody rendered that path, so a client hitting it saw
+  // the literal strings "ownerUnresolvedTitle" and "ownerUnresolvedBody". A test
+  // now asserts every key this file references exists (see the label-coverage test).
+  ownerUnresolvedTitle: {
+    en: 'We can\'t tell who the owner of this company is',
+    it: 'Non riusciamo a determinare chi è il titolare di questa azienda',
+  },
+  ownerUnresolvedBody: {
+    en: 'We can\'t tell from your records which person should be named as the owner on the Operating Agreement — either nobody is marked as the owner, or more than one person is. Send us a message and we\'ll set it straight — it takes us a moment.',
+    it: 'Dai tuoi dati non riusciamo a stabilire quale persona debba essere indicata come titolare nell\'Atto Costitutivo — o nessuno è indicato come titolare, o lo è più di una persona. Scrivici e lo sistemiamo subito.',
+  },
+  // The reason a client cannot proceed goes in VISIBLE TEXT, never in a tooltip:
+  // our clients are on phones, where a tooltip does not exist at all, so a
+  // hover-only explanation is no explanation (Antonio, 2026-08-12).
+  cannotProceedPortalAccounts: {
+    en: 'All owners need a portal account before this can be generated. Send us a message and we\'ll set them up.',
+    it: 'Tutti i soci devono avere un account nel portale prima di poterlo generare. Scrivici e li configuriamo noi.',
+  },
   addressMissing: {
     en: 'Not on file — send us a message and we\'ll add it.',
     it: 'Non disponibile — scrivici e lo aggiungiamo.',
   },
-  address: { en: 'Address', it: 'Indirizzo' },
   amount: { en: 'Distribution Amount', it: 'Importo Distribuzione' },
   fiscalYear: { en: 'Fiscal Year', it: 'Anno Fiscale' },
   distributionDate: { en: 'Distribution Date', it: 'Data Distribuzione' },
-  currency: { en: 'Currency', it: 'Valuta' },
   companyName: { en: 'Company', it: 'Azienda' },
   ein: { en: 'EIN', it: 'EIN' },
   state: { en: 'State', it: 'Stato' },
@@ -137,7 +154,6 @@ const LABELS: Record<string, Record<string, string>> = {
   success: { en: 'Document generated successfully!', it: 'Documento generato con successo!' },
   generateAnother: { en: 'Generate Another', it: 'Genera Un Altro' },
   history: { en: 'Document History', it: 'Storico Documenti' },
-  noHistory: { en: 'No documents generated yet.', it: 'Nessun documento generato.' },
   clearSignature: { en: 'Clear Signature', it: 'Cancella Firma' },
   signBelow: { en: 'Sign below to complete the document', it: 'Firma qui sotto per completare il documento' },
   confirmSign: { en: 'Confirm & Download', it: 'Conferma e Scarica' },
@@ -785,13 +801,22 @@ export function GenerateDocumentsClient({ account, members, ownerUnresolved, his
             </div>
           )}
 
-          {/* Preview button */}
-          <div className="flex justify-end">
+          {/* Preview button.
+              STANDING RULE (Antonio, 2026-08-12): the reason a client cannot
+              proceed goes in VISIBLE TEXT, never in a tooltip. Our clients are on
+              phones, where a tooltip does not exist at all — a hover-only
+              explanation is no explanation. The blocking reason is rendered below
+              the button, in their language, and the tooltip is gone. */}
+          <div className="flex flex-col items-end gap-2">
+            {isOA && !oaCanProceed && !ownerUnresolved && (
+              <p className="text-sm text-amber-800 text-right max-w-md leading-snug">
+                {l('cannotProceedPortalAccounts', lang)}
+              </p>
+            )}
             <button
               onClick={handlePreview}
               disabled={(!isOA && (formData.amount <= 0 || members.length === 0)) || (isOA && !oaCanProceed)}
               className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-300 disabled:text-zinc-500 text-white rounded-lg font-medium text-sm transition"
-              title={isOA && !oaCanProceed ? 'All members must have portal accounts to proceed' : undefined}
             >
               {l('preview', lang)}
             </button>

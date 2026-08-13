@@ -230,6 +230,9 @@ export async function POST(request: NextRequest) {
   // is signed in"). Same helper and same query shape as the screen, so the two
   // cannot resolve different people.
   let ownerOfRecordContactId: string | null = null
+  let ownerRecordAddress: string | null = null
+  let ownerName: string | null = null
+  let ownerEmail: string | null = null
   if (!hasMemberRecords) {
     const { data: links, error: linksErr } = await supabaseAdmin
       .from('account_contacts')
@@ -282,6 +285,49 @@ export async function POST(request: NextRequest) {
     }
 
     ownerOfRecordContactId = ownerResolution.contactId
+
+    // The owner's NAME, ADDRESS and EMAIL — read here, BEFORE section 5 deletes any
+    // existing agreement. An earlier version refused further down, after the
+    // delete: the client lost the agreement they had, got nothing back, and was
+    // told we held no name for them. Destroying a document and then refusing is
+    // worse than the bug this job started with (Antonio, 2026-08-12).
+    const { data: ownerContact, error: ownerErr } = await supabaseAdmin
+      .from('contacts')
+      .select('full_name, first_name, last_name, email, address_line1, address_city, address_state, address_zip, address_country')
+      .eq('id', ownerOfRecordContactId)
+      .maybeSingle()
+
+    // FAIL CLOSED, like every sibling read in this file. Discarding this error
+    // turned a transient database problem into "we don't have a name on file for
+    // your owner" — a false statement to the client, with no alarm raised.
+    if (ownerErr) {
+      await reportSystemError({
+        source: 'server',
+        route: '/api/portal/operating-agreement/create',
+        method: 'POST',
+        http_status: 503,
+        message: `Operating Agreement for ${account.company_name} refused — the owner's contact record could not be read`,
+        context: { account_id, owner_contact_id: ownerOfRecordContactId, db_error: ownerErr.message },
+      })
+      return NextResponse.json({
+        error: 'We could not read the owner\'s details just now, so we have not created the agreement. Please try again in a moment — if it keeps happening, send us a message.',
+      }, { status: 503 })
+    }
+
+    ownerRecordAddress = formatOwnerContactAddress(ownerContact)
+    // The document NAMES the owner, never whoever is holding the mouse. Same helper
+    // as the screen, so the previewed and the stored name cannot differ.
+    ownerName = resolveOwnerName(ownerContact)
+    ownerEmail = ownerContact?.email ?? null
+
+    // No usable name is the same class of failure as no identifiable owner: we
+    // cannot say who owns this company. Refuse rather than print a placeholder —
+    // and refuse HERE, before anything is deleted.
+    if (!ownerName) {
+      return NextResponse.json({
+        error: 'We don\'t have a name on file for the owner of this company, so we can\'t put one on the Operating Agreement. Send us a message and we\'ll set it up.',
+      }, { status: 422 })
+    }
   }
 
   // No submission gate is needed any more: an address on the request was already
@@ -516,37 +562,6 @@ export async function POST(request: NextRequest) {
   // instead of a document reading "As on file with the Company" while their record
   // holds it — the same record-vs-document split this job exists to close, and
   // what the first cut of this change did on exactly this path.
-  let ownerRecordAddress: string | null = null
-  let ownerName: string | null = null
-  let ownerEmail: string | null = null
-  if (!hasMemberRecords && ownerOfRecordContactId) {
-    const { data: ownerContact } = await supabaseAdmin
-      .from('contacts')
-      .select('full_name, first_name, last_name, email, address_line1, address_city, address_state, address_zip, address_country')
-      .eq('id', ownerOfRecordContactId)
-      .maybeSingle()
-    ownerRecordAddress = formatOwnerContactAddress(ownerContact)
-    // The document NAMES the owner, never whoever is holding the mouse (Antonio,
-    // 2026-08-12: "A document that names the person holding the mouse is not a
-    // legal instrument, it is a form letter"). Same helper as the screen, so the
-    // previewed and the stored name cannot differ.
-    ownerName = resolveOwnerName(ownerContact)
-    ownerEmail = ownerContact?.email ?? null
-  }
-
-  // Which address the agreement stores — decided in one tested place, including
-  // WHICH member row a single-member agreement reads. `[0]` after an is_primary
-  // sort is not safe by itself: ties are unordered, so an account with no flagged
-  // primary could store a different member's address on two consecutive runs.
-  // No usable name is the same class of failure as no identifiable owner: we
-  // cannot say who owns this company. Refuse rather than print "N/A" as the sole
-  // member of a legal instrument. The screen blocks on the identical condition.
-  if (!hasMemberRecords && !ownerName) {
-    return NextResponse.json({
-      error: 'We don\'t have a name on file for the owner of this company, so we can\'t put one on the Operating Agreement. Send us a message and we\'ll set it up.',
-    }, { status: 422 })
-  }
-
   const soleMemberAddress = resolveSoleMemberAddress({
     hasMemberRecords,
     primaryMemberRow: pickSoleMemberRow(membersRows),
