@@ -19,6 +19,10 @@ import {
   finalizeReplyForStopReason,
   TRUNCATED_REPLY_NOTE,
   TRUNCATED_EMPTY_REPLY,
+  looksLikeDigInAsk,
+  QUICK_GEAR_TOOL_CEILING,
+  buildQuickGearWrapUpNudge,
+  shouldNudgeQuickGear,
 } from "@/lib/ai-agent/answer-guards"
 import { buildCoverage, coverageNote } from "@/lib/docai-windows"
 
@@ -329,5 +333,94 @@ describe("finalizeReplyForStopReason", () => {
     for (const text of ["short", "a".repeat(5000), "ends mid-sent"]) {
       expect(finalizeReplyForStopReason(text, "max_tokens")).not.toBe(text)
     }
+  })
+})
+
+// ── Quick-gear ceiling (dev job 5e87b099, 2026-08-14) ───────────────────────
+// Luca, Team Chat, Aumianna LLC/Smit Shah: asked for a plain "read this email,
+// draft a reply, attach the file" and got a 12-tool research spree instead.
+describe("looksLikeDigInAsk — the quick-gear ceiling's classifier", () => {
+  it("flags explicit investigation requests", () => {
+    for (const s of [
+      "Can you investigate why this client's invoice is wrong?",
+      "Please diagnose the sync issue.",
+      "Run a full audit on this account.",
+      "Why did this fail?",
+      "Can you dig in and figure out what happened here?",
+      "Look into this for me.",
+    ]) {
+      expect(looksLikeDigInAsk(s), s).toBe(true)
+    }
+  })
+
+  it("does NOT flag Luca's actual verbatim requests (Aumianna LLC, 2026-08-13)", () => {
+    expect(looksLikeDigInAsk("Read the email.")).toBe(false)
+    expect(looksLikeDigInAsk("I only wanted the email prepared and the file attached.")).toBe(false)
+  })
+
+  it("does NOT flag ordinary mechanical asks", () => {
+    for (const s of [
+      "Draft a reply and attach the file.",
+      "Create a draft like this one for this company.",
+      "Send it.",
+      "Attach the signed copy.",
+      "",
+    ]) {
+      expect(looksLikeDigInAsk(s), s).toBe(false)
+    }
+  })
+
+  it("deliberately does not treat bare 'check' as dig-in — the prompt itself uses that word for both gears", () => {
+    expect(looksLikeDigInAsk("Check this email and draft a reply.")).toBe(false)
+  })
+})
+
+describe("the quick-gear ceiling", () => {
+  it("the nudge is a check-in, not a hard stop — it tells the model to answer OR justify continuing", () => {
+    const n = buildQuickGearWrapUpNudge()
+    expect(n.toLowerCase()).toContain("stop here and answer")
+    expect(n.toLowerCase()).toContain("plain")
+    // must not simply command it to stop — genuine continued digging stays legitimate
+    expect(n.toLowerCase()).toContain("then continue")
+  })
+
+  it("is calibrated above the two legitimately-scoped comparison incidents (5 and 7 tool calls)", () => {
+    // Giulio Sembinelli Trainer LLC and Rise Profit LLC (2026-08-12) both stayed
+    // narrowly scoped at 5 and 7 tool calls for a materially similar template
+    // task — the ceiling must not clip either of them.
+    expect(QUICK_GEAR_TOOL_CEILING).toBeGreaterThan(7)
+  })
+
+  it("is well below the incident that prompted it (12 tool calls)", () => {
+    expect(QUICK_GEAR_TOOL_CEILING).toBeLessThan(12)
+  })
+})
+
+describe("shouldNudgeQuickGear — the exact gate wired into the loop", () => {
+  const base = { alreadyLatched: false, staffLooksLikeDigIn: false, pendingReadsCount: 0, toolCallCount: 9 }
+
+  it("fires for a plain ask past the ceiling with no reads in flight", () => {
+    expect(shouldNudgeQuickGear(base)).toBe(true)
+  })
+
+  it("does NOT fire below the ceiling", () => {
+    expect(shouldNudgeQuickGear({ ...base, toolCallCount: QUICK_GEAR_TOOL_CEILING - 1 })).toBe(false)
+  })
+
+  it("does NOT fire once already latched — one nudge only", () => {
+    expect(shouldNudgeQuickGear({ ...base, alreadyLatched: true })).toBe(false)
+  })
+
+  it("does NOT fire when the staff member's own message reads as dig-in", () => {
+    expect(shouldNudgeQuickGear({ ...base, staffLooksLikeDigIn: true })).toBe(false)
+  })
+
+  it("bug-hunter finding (2026-08-14): does NOT fire while a windowed read is genuinely mid-flight, even past the ceiling — the read-to-the-end guard already owns that turn", () => {
+    expect(shouldNudgeQuickGear({ ...base, pendingReadsCount: 1 })).toBe(false)
+    expect(shouldNudgeQuickGear({ ...base, pendingReadsCount: 1, toolCallCount: 20 })).toBe(false)
+  })
+
+  it("fires again once the read finishes and the ceiling is still crossed with a fresh (unlatched) turn", () => {
+    expect(shouldNudgeQuickGear({ ...base, pendingReadsCount: 0 })).toBe(true)
   })
 })

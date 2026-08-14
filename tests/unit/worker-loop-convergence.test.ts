@@ -94,3 +94,57 @@ describe("runWorkerLoop — step-limit convergence", () => {
     expect(mockFetch).toHaveBeenCalledTimes(1) // no synthesis call needed
   })
 })
+
+// ── Quick-gear ceiling wiring (dev job 5e87b099, 2026-08-14) ────────────────
+// Exercises the ACTUAL loop, not just the pure gate function — bug-hunter review
+// found the pure-function tests alone wouldn't catch an off-by-one or an
+// inverted condition in the real wiring.
+describe("runWorkerLoop — quick-gear ceiling wiring", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.ANTHROPIC_API_KEY = "test-key"
+  })
+
+  const finalAnswer = {
+    ok: true,
+    json: () =>
+      Promise.resolve({ content: [{ type: "text", text: "Done." }], stop_reason: "end_turn", usage: {} }),
+  }
+  const NUDGE_FRAGMENT = "If you have what you need, stop here and answer"
+
+  it("nudges to wrap up once a PLAIN ask crosses the tool-call ceiling", async () => {
+    for (let i = 0; i < 9; i++) mockFetch.mockResolvedValueOnce(toolUseResponse)
+    mockFetch.mockResolvedValueOnce(finalAnswer)
+
+    await runWorkerLoop("Draft a reply and attach the file.", [], "sys prompt", 15)
+
+    const sawNudge = mockFetch.mock.calls.some((c) =>
+      JSON.stringify(JSON.parse(c[1].body).messages).includes(NUDGE_FRAGMENT),
+    )
+    expect(sawNudge).toBe(true)
+  })
+
+  it("does NOT nudge a plain ask that stays under the ceiling", async () => {
+    for (let i = 0; i < 3; i++) mockFetch.mockResolvedValueOnce(toolUseResponse)
+    mockFetch.mockResolvedValueOnce(finalAnswer)
+
+    await runWorkerLoop("Draft a reply and attach the file.", [], "sys prompt", 15)
+
+    const sawNudge = mockFetch.mock.calls.some((c) =>
+      JSON.stringify(JSON.parse(c[1].body).messages).includes(NUDGE_FRAGMENT),
+    )
+    expect(sawNudge).toBe(false)
+  })
+
+  it("does NOT nudge when the staff member's own message reads as an explicit dig-in ask", async () => {
+    for (let i = 0; i < 9; i++) mockFetch.mockResolvedValueOnce(toolUseResponse)
+    mockFetch.mockResolvedValueOnce(finalAnswer)
+
+    await runWorkerLoop("Please investigate this account's history and figure out what happened.", [], "sys prompt", 15)
+
+    const sawNudge = mockFetch.mock.calls.some((c) =>
+      JSON.stringify(JSON.parse(c[1].body).messages).includes(NUDGE_FRAGMENT),
+    )
+    expect(sawNudge).toBe(false)
+  })
+})
