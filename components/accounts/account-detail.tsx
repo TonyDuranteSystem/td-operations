@@ -986,6 +986,7 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
       total_received: number
       has_referrer: boolean
       has_partner: boolean
+      released_at: string | null
     } | null
     parts: Array<{
       seq: number
@@ -1130,8 +1131,19 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
                 recording gap can leave genuinely-paid money looking uncounted). Nothing
                 fires without that second, explicit confirm. */}
             {plan.commission_release && (
-              <div className={`rounded-md border px-3 py-2 text-sm ${plan.commission_release.eligible ? 'bg-emerald-50 border-emerald-200' : 'bg-zinc-50'}`}>
-                {confirmingRelease === plan.offer_token ? (
+              <div className={`rounded-md border px-3 py-2 text-sm ${plan.commission_release.released_at ? 'bg-zinc-50' : plan.commission_release.eligible ? 'bg-emerald-50 border-emerald-200' : 'bg-zinc-50'}`}>
+                {/* ⛔ RELEASED, PERSISTENT (2026-08-14, bug-hunter, 6th pass) — without this branch
+                    the account page kept showing "ready to release" with an active button forever
+                    after a successful release; nothing on screen ever reflected that it had
+                    already happened. Financially harmless either way (the release route's own
+                    atomic claim refuses a repeat click cleanly), but staff had zero on-screen
+                    signal — this is that signal. */}
+                {plan.commission_release.released_at ? (
+                  <div className="text-xs text-muted-foreground">
+                    ✓ {plan.commission_release.has_partner ? "Partner's payout" : "Referrer's commission"} released on{' '}
+                    {new Date(plan.commission_release.released_at).toLocaleDateString('en-US')}.
+                  </div>
+                ) : confirmingRelease === plan.offer_token ? (
                   <div className="space-y-2">
                     <div className="font-medium">
                       Release the {plan.commission_release.has_partner ? "partner's payout" : "referrer's commission"}?

@@ -1,6 +1,6 @@
 /* eslint-disable no-restricted-syntax */
 import { describe, it, expect, vi } from "vitest"
-import { generateReferralCode, ensureReferralCode } from "@/lib/referral-utils"
+import { generateReferralCode, ensureReferralCode, calculateCommission } from "@/lib/referral-utils"
 import type { SupabaseClient } from "@supabase/supabase-js"
 
 // Thenable, chainable Supabase stub: resolves to `result` at any await point
@@ -72,5 +72,30 @@ describe("ensureReferralCode", () => {
       { error: null }, // update
     ])
     expect(await ensureReferralCode("c1", s)).toBe("marco-rossi")
+  })
+})
+
+describe("calculateCommission", () => {
+  // Regression for bug-hunter, 2026-08-14: `commissionPct || 10` silently overpaid a referrer
+  // whose commission was deliberately set to a real 0% — the release route's caller
+  // (resolveOfferCommission) already preserves an explicit 0 via `??`, so this function must too.
+  it("pays exactly $0 on an explicit 0% credit_note commission — never the 10% default", () => {
+    expect(calculateCommission("credit_note", 0, null, 3000, 3000)).toBe(0)
+  })
+
+  it("pays exactly $0 on an explicit 0% percentage commission", () => {
+    expect(calculateCommission("percentage", 0, null, 3000, 3000)).toBe(0)
+  })
+
+  it("falls back to the 10% default only when the rate is genuinely unset (null)", () => {
+    expect(calculateCommission("credit_note", null, null, 3000, 3000)).toBe(300)
+  })
+
+  it("applies a real positive rate normally", () => {
+    expect(calculateCommission("percentage", 15, null, 2000, 2000)).toBe(300)
+  })
+
+  it("price_difference is unaffected by the nullish-vs-falsy fix", () => {
+    expect(calculateCommission("price_difference", null, 5000, 3000, 4500)).toBe(500)
   })
 })

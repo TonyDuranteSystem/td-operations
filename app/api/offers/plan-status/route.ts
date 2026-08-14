@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
     // Narrow-cast: payment_plan postdates the deliberately-stale generated types.
     const offersQuery = supabaseAdmin
       .from("offers")
-      .select("token, client_name, currency, status, services, payment_plan, referrer_name, referrer_contact_id, referrer_account_id, partner_id, partner_payout_model" as never)
+      .select("token, client_name, currency, status, services, payment_plan, referrer_name, referrer_contact_id, referrer_account_id, partner_id, partner_payout_model, commission_released_at" as never)
       .eq("account_id", accountId)
       .not("payment_plan" as never, "is", null) as unknown as {
         then: PromiseLike<{
@@ -46,6 +46,7 @@ export async function GET(req: NextRequest) {
             referrer_account_id: string | null
             partner_id: string | null
             partner_payout_model: string | null
+            commission_released_at: string | null
           }> | null
           error: { message: string } | null
         }>["then"]
@@ -91,8 +92,20 @@ export async function GET(req: NextRequest) {
         client_name: o.client_name,
         currency: o.currency ?? status.plan[0]?.currency ?? "USD",
         fully_settled: status.fullySettled,
+        // ⛔ released_at SURFACED (2026-08-14, bug-hunter, 6th pass) — without it the account page
+        // had no way to distinguish "never released" from "released already" and kept showing an
+        // active Release button forever. Financially harmless (the release route's own atomic
+        // claim already refuses a repeat click cleanly) but left staff with zero on-screen signal
+        // that anything had happened, on every single reload.
         commission_release: (hasReferrer || hasPartner)
-          ? { eligible: settlement.eligible, total_agreed: settlement.totalAgreed, total_received: settlement.totalReceived, has_referrer: hasReferrer, has_partner: hasPartner }
+          ? {
+              eligible: settlement.eligible,
+              total_agreed: settlement.totalAgreed,
+              total_received: settlement.totalReceived,
+              has_referrer: hasReferrer,
+              has_partner: hasPartner,
+              released_at: o.commission_released_at,
+            }
           : null,
         parts: status.parts.map((p) => ({
           seq: p.part.seq,

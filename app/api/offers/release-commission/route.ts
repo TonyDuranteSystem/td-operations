@@ -55,7 +55,7 @@ import { isDashboardUser } from "@/lib/auth"
 import { computePlanSettlement, type PlanSettlement } from "@/lib/offers/payment-plan-state"
 import { createManualReferralCredit, resolveOfferCommission, type ManualReferralResult } from "@/lib/operations/referral"
 import { calculatePartnerPayout } from "@/lib/partners/payout-calc"
-import { hasWorkingPartnerPayout, shouldReleasePlanReferrerCredit } from "@/lib/partners/partner-deal"
+import { hasWorkingPartnerPayout, shouldReleasePlanReferrerCredit, buildPartnerDeal } from "@/lib/partners/partner-deal"
 
 export const dynamic = "force-dynamic"
 
@@ -75,6 +75,7 @@ interface OfferRow {
   partner_id: string | null
   partner_payout_model: string | null
   partner_payout_rate: number | string | null
+  partner_renewal_payout: number | string | null
 }
 
 async function releaseReferrerCredit(
@@ -131,6 +132,10 @@ async function releaseReferrerCredit(
       referredName: offer.client_name || offerToken,
       creditAmountUsd: commissionAmount,
       note: `Released — payment plan fully paid in full (offer ${offerToken}, ${settlement.totalAgreed} ${settlement.currency} total)`,
+      // ⛔ SCOPES DEDUP TO THIS DEAL (2026-08-14, bug-hunter, 6th pass + live E2E) — see the
+      // doc comment on ManualReferralParams.offerToken. Without this, the SAME referrer bringing
+      // the SAME client back for a second plan-based deal was silently paid only once.
+      offerToken,
     },
     supabaseAdmin,
   )
@@ -207,6 +212,32 @@ async function releasePartnerPayout(
     } as never)
 
   if (insErr) return { attempted: true, ok: false, message: `Partner payout failed: ${insErr.message}` }
+
+  // ⛔ THE RENEWAL LINKAGE (2026-08-14, bug-hunter, 6th pass) — without this, a partner's ONE-TIME
+  // setup payout releases correctly here, but the durable link the RECURRING renewal payout reads
+  // every future year (`accounts.partner_id` / `accounts.partner_deal`) is never written for a
+  // plan-based deal — only the non-deferred activation path writes it. Every future renewal
+  // payout to this partner would then silently no-op forever, with no error anywhere. Mirrors
+  // exactly what activation itself writes for a non-plan partner deal (`buildPartnerDeal`, same
+  // shape, same unconditional overwrite of the account's current deal) — this offer's setup
+  // payout just arrived later than usual, not through a different mechanism.
+  if (offer.account_id) {
+    const partnerDeal = buildPartnerDeal({
+      partnerId: offer.partner_id,
+      setupPayout: result.amount,
+      renewalPayout: offer.partner_renewal_payout != null ? Number(offer.partner_renewal_payout) : null,
+      currency: "USD",
+      offerToken,
+    })
+    if (partnerDeal) {
+      // eslint-disable-next-line no-restricted-syntax -- accounts is a P2.4-protected table, same exception activate-service.ts already uses for this exact write (partner_deal postdates generated types; no dedicated lib/operations/ helper exists for this narrow column)
+      await supabaseAdmin
+        .from("accounts")
+        .update({ partner_id: offer.partner_id, partner_deal: partnerDeal, updated_at: new Date().toISOString() } as Record<string, unknown> as never)
+        .eq("id", offer.account_id)
+    }
+  }
+
   if (result.error) {
     return { attempted: true, ok: true, message: `Partner payout needs manual review (${result.error}) — raised for approval.` }
   }
@@ -226,7 +257,7 @@ export async function POST(request: NextRequest) {
   // postdate the generated types.
   const offerQuery = supabaseAdmin
     .from("offers")
-    .select("token, client_name, account_id, contact_id, services, referrer_name, referrer_contact_id, referrer_account_id, referrer_type, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, partner_id, partner_payout_model, partner_payout_rate" as never)
+    .select("token, client_name, account_id, contact_id, services, referrer_name, referrer_contact_id, referrer_account_id, referrer_type, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, partner_id, partner_payout_model, partner_payout_rate, partner_renewal_payout" as never)
     .eq("token", offerToken)
     .maybeSingle() as unknown as { then: PromiseLike<{ data: OfferRow | null; error: { message: string } | null }>["then"] }
   const { data: offer, error: offerErr } = await offerQuery

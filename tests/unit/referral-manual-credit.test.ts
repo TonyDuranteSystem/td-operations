@@ -40,6 +40,7 @@ function makeDb(opts: { existing?: Array<Record<string, unknown>>; insertId?: st
     inserts: [] as Array<{ table: string; payload: Record<string, unknown> }>,
     updates: [] as Array<{ table: string; payload: Record<string, unknown>; col: string; val: unknown }>,
     dedupOr: '' as string,
+    eqCalls: [] as Array<[string, unknown]>,
   }
   const supabase = {
     from(table: string) {
@@ -47,7 +48,7 @@ function makeDb(opts: { existing?: Array<Record<string, unknown>>; insertId?: st
         select() { return this },
         or(expr: string) { state.dedupOr = expr; return this },
         neq() { return this },
-        eq() { return this },
+        eq(col: string, val: unknown) { state.eqCalls.push([col, val]); return this },
         limit() { return Promise.resolve({ data: opts.existing ?? [] }) },
         insert(payload: Record<string, unknown>) {
           state.inserts.push({ table, payload })
@@ -193,5 +194,48 @@ describe('createManualReferralCredit', () => {
       .toEqual({ created: false, reason: 'missing_party', detail: 'referrer' })
     expect(await createManualReferralCredit({ referrerContactId: 'c-1', referredName: 'X', creditAmountUsd: 10 }, supabase))
       .toEqual({ created: false, reason: 'missing_party', detail: 'referred' })
+  })
+
+  // Regression for bug-hunter, 2026-08-14 + live E2E: the same referrer bringing the same
+  // client back for a SECOND, separate deal was silently paid only once — the dedup matched
+  // on (referrer, referred) alone, found the FIRST deal's already-credited row, declined to
+  // recover it (nothing to self-heal), and reported "duplicate" while the second deal's
+  // commission was never issued.
+  describe('offerToken — scopes dedup to one deal (the payment-plan release caller)', () => {
+    it('is stamped on a newly created referral row when provided', async () => {
+      const { supabase, state } = makeDb({ insertId: 'ref-new' })
+      await createManualReferralCredit(
+        { referrerContactId: 'c-1', referredContactId: 'rc-1', referredName: 'X', creditAmountUsd: 200, offerToken: 'offer-A' },
+        supabase,
+      )
+      expect(state.inserts.find(i => i.table === 'referrals')!.payload.offer_token).toBe('offer-A')
+    })
+
+    it('is null on the row when omitted (existing callers, e.g. the manual referrals page, unaffected)', async () => {
+      const { supabase, state } = makeDb({ insertId: 'ref-new' })
+      await createManualReferralCredit(
+        { referrerContactId: 'c-1', referredContactId: 'rc-1', referredName: 'X', creditAmountUsd: 200 },
+        supabase,
+      )
+      expect(state.inserts.find(i => i.table === 'referrals')!.payload.offer_token).toBeNull()
+    })
+
+    it('adds an offer_token filter to the dedup query when provided', async () => {
+      const { supabase, state } = makeDb({ insertId: 'ref-new' })
+      await createManualReferralCredit(
+        { referrerContactId: 'c-1', referredContactId: 'rc-1', referredName: 'X', creditAmountUsd: 200, offerToken: 'offer-B' },
+        supabase,
+      )
+      expect(state.eqCalls).toContainEqual(['offer_token', 'offer-B'])
+    })
+
+    it('does NOT filter on offer_token when omitted — the original (referrer, referred)-only scope', async () => {
+      const { supabase, state } = makeDb({ existing: [{ id: 'ref-old', status: 'credited', credited_amount: 200, commission_amount: 200 }] })
+      await createManualReferralCredit(
+        { referrerContactId: 'c-1', referredContactId: 'rc-1', referredName: 'X', creditAmountUsd: 200 },
+        supabase,
+      )
+      expect(state.eqCalls.some(([col]) => col === 'offer_token')).toBe(false)
+    })
   })
 })

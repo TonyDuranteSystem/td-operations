@@ -108,6 +108,19 @@ export async function createInvoice(
       const { data: offerRow } = await planQuery.maybeSingle()
       const parsed = validatePaymentPlan(offerRow?.payment_plan)
       const part = parsed.ok && parsed.plan ? parsed.plan.find((p) => p.seq === invoiceData.tranche!.seq) : undefined
+      // ⛔ CURRENCY, NOT JUST AMOUNT (2026-08-14, bug-hunter, 6th pass) — the currency dropdown on
+      // this screen is fully editable even in tranche mode, and a number can agree with the plan
+      // while the currency silently doesn't (e.g. 1000 EUR raised against a part agreed at 1000
+      // USD). The amount check below cannot catch this — it compares bare numbers — and a
+      // currency-blind total then feeds directly into the settlement sum a referrer's or
+      // partner's commission is computed from. Checked first: comparing amounts across different
+      // currencies is meaningless anyway.
+      if (part && part.currency !== invoiceData.amount_currency) {
+        throw new Error(
+          `Part ${part.seq} of this plan is agreed in ${part.currency} — this invoice is in ` +
+          `${invoiceData.amount_currency}. They must match. Fix the currency, or fix the plan on the offer, then raise again.`,
+        )
+      }
       if (part && Math.abs(total - part.amount) > PLAN_TOTAL_TOLERANCE) {
         throw new Error(
           `Part ${part.seq} of this plan is agreed at ${part.amount} — this invoice totals ${total}. ` +
@@ -260,6 +273,14 @@ export async function updateInvoice(
       const { data: offerRow } = await planQuery.maybeSingle()
       const parsed = validatePaymentPlan(offerRow?.payment_plan)
       const part = parsed.ok && parsed.plan ? parsed.plan.find((p) => p.seq === current.tranche_seq) : undefined
+      // ⛔ CURRENCY, NOT JUST AMOUNT — same gap, same fix as createInvoice (2026-08-14, bug-hunter,
+      // 6th pass). Checked first: comparing amounts across different currencies is meaningless.
+      if (part && part.currency !== input.amount_currency) {
+        throw new Error(
+          `Part ${part.seq} of this plan is agreed in ${part.currency} — this invoice is in ` +
+          `${input.amount_currency}. They must match. Fix the currency, or fix the plan on the offer, then save again.`,
+        )
+      }
       if (part && Math.abs(total - part.amount) > PLAN_TOTAL_TOLERANCE) {
         throw new Error(
           `Part ${part.seq} of this plan is agreed at ${part.amount} — this invoice totals ${total}. ` +
