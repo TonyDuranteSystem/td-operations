@@ -16,7 +16,6 @@ import {
   clientFacingSchedule,
   decideSigningBill,
   PARTIAL_PAYMENT_LABEL,
-  refusePlanWithReferralPartner,
   laterParts,
   planCurrency,
   planTotal,
@@ -481,42 +480,11 @@ describe("⛔ an event trigger cannot promise a mechanism that does not exist", 
 })
 
 // ══════════════════════════════════════════════════════════════════════════════════════════
-//  ⛔ A PLAN AND A REFERRER CANNOT SHARE AN OFFER (architect ruling)
-//
-//  Because activation credits the WHOLE commission on the first payment — the referral credit path
-//  can only key one note per referral — a plan sold to a referred client would pay the partner in
-//  full for money that has not arrived. Refused at authoring so the hand-settlement card stays a
-//  safety net rather than the normal route.
-// ══════════════════════════════════════════════════════════════════════════════════════════
-
-describe("a plan is refused on an offer that carries a referrer", () => {
-  it("refuses when there is a referrer", () => {
-    expect(refusePlanWithReferralPartner(true)).toBeTruthy()
-  })
-
-  it("says nothing at all when there is no referrer — the ordinary case stays silent", () => {
-    expect(refusePlanWithReferralPartner(false)).toBeNull()
-  })
-
-  it("tells the author what to DO, not just that it is refused (R099)", () => {
-    const msg = refusePlanWithReferralPartner(true)!
-    expect(msg).toContain("drop the plan")
-    expect(msg).toContain("by hand")
-  })
-
-  it("names the actual reason — the commission timing, not a vague policy", () => {
-    expect(refusePlanWithReferralPartner(true)).toContain("credited in full on the first payment")
-  })
-
-  it("is English only and stays inside the banned-vocabulary guard", () => {
-    // Staff-facing — and the client never learns a referrer exists, so there is no localised
-    // variant to leak anywhere (Antonio, 2026-08-11).
-    const msg = refusePlanWithReferralPartner(true)!
-    expect(msg).toContain("Partial Payment")
-    expect(msg.toLowerCase()).not.toMatch(BANNED_WORDS)
-  })
-})
-
+//  A plan + a referrer is now LEGAL (Antonio, 2026-08-13) — refusePlanWithReferralPartner and
+//  its tests are removed. Commission is released ONCE, by a human, only after the whole plan is
+//  settled in real cash (see computePlanSettlement + the account-page release action). The
+//  refusal existed only because the old design needed per-part accrual, which the credit issuer
+//  cannot key; the new design never accrues, so the constraint that motivated it is gone.
 // ══════════════════════════════════════════════════════════════════════════════════════════
 //  ⛔ THE PLAN MUST AGREE WITH ITS OFFER AT SIGNING TOO (council blocker, 2026-08-11)
 //

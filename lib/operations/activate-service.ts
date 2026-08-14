@@ -20,8 +20,6 @@ import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { getWelcomeMessage, renderTemplate } from "@/lib/portal/welcome-message"
 import { creditReferrerForLead, decideReferralAutoCredit, issueReferralCreditNote, resolveOfferCommission, shouldRecoverReferralCredit } from "@/lib/operations/referral"
-import { validatePaymentPlan } from "@/lib/offers/payment-plan"
-import { raiseCommissionNeedsHandSettlement } from "@/lib/offers/tranche-commission-issue"
 import { shouldRunReferralCredit, buildPartnerDeal } from "@/lib/partners/partner-deal"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
@@ -1236,41 +1234,21 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   let referralNoteLine = ""
   try {
     if (offer && shouldRunReferralCredit(offer) && commissionSuppressedForPlan) {
-      // Suppress + surface. The card raiser dedupes on the offer token and swallows its own
-      // failures — by now the client has signed and paid, and a missing card is a bookkeeping
-      // problem while a thrown error strands a real client mid-activation.
-      let setupFeeTotal = 0
-      try {
-        const costSummary = Array.isArray(offer.cost_summary) ? offer.cost_summary : []
-        const firstSection = (costSummary[0] ?? {}) as { total?: string }
-        if (firstSection.total) {
-          setupFeeTotal = Number(String(firstSection.total).replace(/[€$,.\s]/g, (m) => m === "," ? "" : m === "." ? "." : "")) || 0
-          if (setupFeeTotal > 100000) setupFeeTotal = setupFeeTotal / 100
-        }
-      } catch { /* fee parse failed; the card still names the parts, total shows 0 */ }
-      const { commissionType, commissionAmount, commissionCurrency } = resolveOfferCommission(offer, setupFeeTotal)
-      const parsedPlan = validatePaymentPlan(offerPaymentPlanRaw)
-      // The DEAL's currency is the plan's own (validated single-currency) — the commission stays
-      // USD by the standing rule, and the card states the two separately so the deal figures are
-      // never mislabelled with the reward's currency.
-      const dealCurrency =
-        (parsedPlan.ok && parsedPlan.plan?.[0]?.currency) || activation.currency || "EUR"
-      const cardRaised = await raiseCommissionNeedsHandSettlement({
-        offerToken: activation.offer_token,
-        clientName: activation.client_name,
-        referrerName: offer.referrer_name || "(referrer on file)",
-        commissionType,
-        totalCommission: commissionAmount,
-        currency: commissionCurrency,
-        dealCurrency,
-        plan: parsedPlan.ok && parsedPlan.plan ? parsedPlan.plan : [],
-        accountId: autoAccountId,
-      })
-      referralNoteLine = `📎 Referral (HAND SETTLEMENT — payment plan): ${offer.referrer_name || "referrer"} — review card ${cardRaised ? "raised" : "FAILED to raise (see logs)"}`
+      // ⛔ NO CARD, NO ROW — DELIBERATELY (Antonio, 2026-08-13, replacing the hand-settlement
+      // card this branch used to raise). That card told staff to manually credit the referrer
+      // "as parts are paid" — correct advice for the per-part-accrual design we do not build, and
+      // WRONG advice under this one, where release is a single human-confirmed action once the
+      // whole plan is settled in real cash. A stale card describing an abandoned design is worse
+      // than no card: a staffer acting on it could credit by hand, and the real release action
+      // (computePlanSettlement + the account-page release, reading the offer directly) would then
+      // credit AGAIN — a genuine double-pay from following instructions nobody meant anymore.
+      // Nothing is written here. The referrer/partner is only ever credited from the account
+      // page, once, after a human confirms the real numbers.
+      referralNoteLine = `📎 Referral: commission deferred — deal is on a payment plan; release from the account page once fully paid`
       steps.push({
         step: "referral",
         status: "skipped",
-        detail: `Commission suppressed — deal is on a payment plan; hand-settlement card ${cardRaised ? "raised" : "raise FAILED"} for ${offer.referrer_name || "referrer"} (${commissionAmount} ${commissionCurrency} across ${parsedPlan.ok && parsedPlan.plan ? parsedPlan.plan.length : 0} parts)`,
+        detail: `Commission deferred — deal is on a payment plan for ${offer.referrer_name || "the referrer"}; release manually from the account page once every part is paid in real cash (no card raised, nothing pre-created)`,
       })
     } else if (offer && shouldRunReferralCredit(offer)) {
       const offerReferrerAccountId = offer.referrer_account_id || null
@@ -1483,14 +1461,12 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // independent of Step 3.5 (which handles offer.referrer_name partner/manual refs).
   try {
     if (leadId && commissionSuppressedForPlan) {
-      // Same guard, same reason: this rail also credits in full on the first payment. Skipping
-      // the call leaves any pending referral row PENDING — visible and unsettled on the referrals
-      // dashboard, which is honest — rather than converted-and-credited against money not yet
-      // received. It also never reaches this rail's own internal recovery branch.
-      // The review card is raised by the OFFER-referrer rail; a deal with only a Calendly lead
-      // referral has none, so the message must not point at a card that may not exist (council,
-      // 2026-08-11). The pending referral row itself stays visible on the referrals dashboard.
-      steps.push({ step: "referral_credit", status: "skipped", detail: "Commission suppressed — deal is on a payment plan. The lead referral stays PENDING on the referrals dashboard; settle it by hand as parts are paid." })
+      // Same reason as the offer-referrer rail: this leaves the pending `referrals` row exactly
+      // as it already sits (status='pending', a genuinely valid, always-visible state — nothing
+      // fragile invented here) rather than converting and crediting it against money not yet
+      // received. The account-page release action (2026-08-13) reads this same row directly once
+      // the plan is fully paid in real cash — no card, no separate mechanism needed for this rail.
+      steps.push({ step: "referral_credit", status: "skipped", detail: "Commission deferred — deal is on a payment plan. The lead referral stays visible (pending) on the referrals dashboard; release it from the account page once every part is paid." })
     } else if (leadId) {
       let setupFeeTotal = 0
       try {
@@ -1537,11 +1513,13 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // in the CRM partner detail page and clicks Approve / Mark Paid.
   try {
     if (offer?.partner_id && offer.partner_payout_model && offer.partner_payout_model !== "none" && commissionSuppressedForPlan) {
-      // Same guard as the other two commission rails (council blocker, 2026-08-11): the payout is
-      // computed from the activation amount — the WHOLE commitment — so a plan deal would write a
-      // plausible full-deal figure with nothing telling the approver only part one arrived. The
-      // hand-settlement card raised in Step 3.5 is the record for this deal's commission.
-      steps.push({ step: "partner_payout", status: "skipped", detail: "Suppressed — deal is on a payment plan; compute and record the partner payout by hand as parts are paid (no automatic card exists for partner payouts)" })
+      // Same reason as the other two commission rails: the payout is computed from the
+      // activation amount — the WHOLE commitment — so writing it now would state a plausible
+      // full-deal figure with nothing telling anyone only part one arrived. Partners get the
+      // IDENTICAL release mechanism as client referrers (Antonio, 2026-08-13): a human confirms
+      // the real numbers on the account page, once the whole plan is settled in real cash.
+      // Nothing is pre-written here — no row, no card.
+      steps.push({ step: "partner_payout", status: "skipped", detail: "Deferred — deal is on a payment plan; release the partner payout from the account page once every part is paid in real cash" })
     } else if (offer?.partner_id && offer.partner_payout_model && offer.partner_payout_model !== "none") {
       const { calculatePartnerPayout } = await import("@/lib/partners/payout-calc")
 

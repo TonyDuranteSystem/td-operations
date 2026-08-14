@@ -21,8 +21,10 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import {
+  PLAN_TOTAL_TOLERANCE,
   type PaymentPlan,
   type PaymentPlanPart,
+  planCurrency,
   validatePaymentPlan,
 } from "@/lib/offers/payment-plan"
 
@@ -183,4 +185,102 @@ export async function planStatusForOffer(offerToken: string): Promise<PlanStatus
   if (rowsErr) throw new Error(`tranche invoice lookup failed: ${rowsErr.message}`)
 
   return computePlanStatus(parsed.plan, (rows ?? []) as unknown as TrancheInvoiceRow[])
+}
+
+/** One part's cash-settlement standing — the input to a real "release commission" decision. */
+export interface PlanSettlementPart {
+  seq: number
+  /** What this part was actually billed for — the invoice's own amount once raised (the same
+   *  precedence `classify()` uses: invoice amount first, plan amount only as a fallback for a
+   *  part never raised), never the plan's stated figure once a real invoice disagrees with it. */
+  agreedAmount: number
+  /** REAL cash received against this part. Never inflated by a credit-only settlement — see the
+   *  ⛔ note on `settledInCash` below for why that distinction is the whole point of this type. */
+  amountPaid: number
+  /** True only when BOTH halves of Antonio's rule hold for this ONE part: the invoice reads
+   *  Paid, AND the cash actually received covers what was billed (within PLAN_TOTAL_TOLERANCE —
+   *  the same one-cent tolerance the rest of the plan math uses, absorbing float rounding, not a
+   *  real shortfall). An unraised part (no invoice at all) is never settled. */
+  settledInCash: boolean
+}
+
+export interface PlanSettlement {
+  offerToken: string
+  /** The plan's single currency — same rule as planCurrency: safe because validation already
+   *  refused a mixed-currency plan. */
+  currency: string
+  parts: PlanSettlementPart[]
+  /** Sum of every part's real agreed amount — what the client has actually been billed, part by
+   *  part, as raised. Computed from the SAME rows `parts` is built from, so it cannot silently
+   *  disagree with what `parts` itself says. */
+  totalAgreed: number
+  /** Sum of every part's REAL cash received. Credit-only settlements contribute nothing here. */
+  totalReceived: number
+  /**
+   * ⛔ THE RELEASE GATE — deliberately STRICTER than `PlanStatus.fullySettled`, and must never be
+   * simplified into reusing it directly (ai-architect + senior-engineer, both independently,
+   * 2026-08-13). `fullySettled` calls a part "paid" the moment `invoice_status==='Paid'` alone —
+   * which a PURE CREDIT settlement (Regenerate, or an invoice born Paid because existing account
+   * credit covered it at creation) can produce with ZERO real cash ever received. Antonio's rule
+   * for releasing a referrer's or partner's commission is narrower: "we received the money AND
+   * the invoice is marked Paid" — both halves, every part. `eligible` is that narrower answer;
+   * `fullySettled` stays the looser one every OTHER screen already correctly shows for "is this
+   * obligation closed" (a credit-covered deal is legitimately closed to the CLIENT — it just does
+   * not yet justify paying a referrer who was promised a share of real revenue).
+   *
+   * ⚠️ A KNOWN, HONEST FALSE NEGATIVE — read before "fixing" this. Job `c2751393` verified 115
+   * production invoices where the automatic bank-matcher settles a part correctly (status Paid,
+   * real money genuinely received) but leaves the owing figure wrong, and in 6 of those 115 it
+   * also failed to WRITE `amount_paid` at all — status says Paid, the money field says zero, and
+   * the cash genuinely arrived regardless. This gate cannot tell that apart from a real pure-credit
+   * settlement — both look identical on this row's two fields. The choice made here is deliberate:
+   * `eligible` can go FALSE on a deal that really is fully paid, but can never go TRUE on one that
+   * is not — a missed commission a human notices and releases by hand costs far less than an
+   * automatic-looking payout on money never received. This is why release stays a HUMAN action
+   * with the real numbers shown, not a fully automatic trigger: a person looking at the account can
+   * see "Paid" on every invoice and choose to release anyway, informed, which this gate alone
+   * cannot safely decide.
+   */
+  eligible: boolean
+}
+
+/**
+ * THE PURE CORE (same split as `computePlanStatus`/`planStatusForOffer` above, deliberately):
+ * given an already-computed `PlanStatus`, decide real-cash settlement with no database access —
+ * so the actual money predicate is unit-testable directly, without a live offer.
+ */
+export function computePlanSettlementFromStatus(offerToken: string, status: PlanStatus): PlanSettlement {
+  const parts: PlanSettlementPart[] = status.parts.map((p) => {
+    const invoice = p.invoice
+    const agreedAmount = invoice ? Number(invoice.amount ?? p.part.amount) : p.part.amount
+    const amountPaid = invoice ? Number(invoice.amount_paid ?? 0) : 0
+    const settledInCash =
+      invoice != null &&
+      invoice.invoice_status === "Paid" &&
+      amountPaid >= agreedAmount - PLAN_TOTAL_TOLERANCE
+    return { seq: p.part.seq, agreedAmount, amountPaid, settledInCash }
+  })
+
+  const round2 = (n: number) => Math.round(n * 100) / 100
+
+  return {
+    offerToken,
+    currency: planCurrency(status.plan),
+    parts,
+    totalAgreed: round2(parts.reduce((s, p) => s + p.agreedAmount, 0)),
+    totalReceived: round2(parts.reduce((s, p) => s + p.amountPaid, 0)),
+    eligible: parts.length > 0 && parts.every((p) => p.settledInCash),
+  }
+}
+
+/**
+ * Real-cash plan settlement — the single answer to "can this deal's referrer/partner commission
+ * be released?" Reuses `planStatusForOffer`'s own join (does not re-query) and applies the
+ * stricter cash+Paid predicate on top of those SAME rows, so this can never see a different
+ * invoice universe than every other screen reading the same offer's plan.
+ */
+export async function computePlanSettlement(offerToken: string): Promise<PlanSettlement | null> {
+  const status = await planStatusForOffer(offerToken)
+  if (!status) return null
+  return computePlanSettlementFromStatus(offerToken, status)
 }

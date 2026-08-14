@@ -69,8 +69,18 @@ describe("extractInviteeFields — real Calendly v2 shape", () => {
     expect(f.meetingUrl).toBe("https://us06web.zoom.us/j/84833905915?pwd=abc")
   })
 
-  it("captures the how-they-heard answer as referrerName", () => {
-    expect(extractInviteeFields(realPayload())!.referrerName).toBe("Referred by Guido")
+  // Regression guard for the 2026-08-13 change: a "how did you find out about
+  // us" answer is a marketing channel, not a person — it must NOT become a
+  // referrer's name (that field is gone entirely), and the raw answer must
+  // still survive verbatim in the lead's notes so nothing is lost.
+  it("does NOT extract a referrer from the how-they-heard answer", () => {
+    const f = extractInviteeFields(realPayload())!
+    expect("referrerName" in f).toBe(false)
+  })
+
+  it("still preserves the how-they-heard answer verbatim in the notes", () => {
+    const f = extractInviteeFields(realPayload())!
+    expect(buildLeadNotes(f)).toContain("Referred by Guido")
   })
 
   it("does NOT false-match phone as the referral code", () => {

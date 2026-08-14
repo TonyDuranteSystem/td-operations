@@ -158,8 +158,15 @@ export async function POST(req: NextRequest) {
 
     // Resolve a referral code (from the referral landing page → Calendly link)
     // to the referring client. Fail-safe: never block staging on this.
+    //
+    // ⛔ referrerName/referrerContactId are set ONLY here, from a verified referral
+    // CODE resolving to a REAL contact (Antonio, 2026-08-13). Never seeded from a
+    // free-text "how did you hear about us" answer — that field no longer exists
+    // on the parsed payload (see parse-invitee.ts). If no code resolves, this lead
+    // carries no referrer at all; staff choose one deliberately, later, in the
+    // offer's Referrer picker.
     let referrerContactId: string | null = null
-    let referrerName: string | null = fields.referrerName
+    let referrerName: string | null = null
     let referralCode: string | null = null
     if (fields.referralCode) {
       try {
@@ -170,7 +177,7 @@ export async function POST(req: NextRequest) {
           .maybeSingle()
         if (referrer) {
           referrerContactId = referrer.id
-          referrerName = referrer.full_name || fields.referrerName
+          referrerName = referrer.full_name || null
           referralCode = fields.referralCode
         }
       } catch {

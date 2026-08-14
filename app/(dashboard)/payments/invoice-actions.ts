@@ -14,6 +14,7 @@ import {
 import { createTDInvoice } from '@/lib/portal/td-invoice'
 import { applyAvailableCreditToInvoice } from '@/lib/operations/credit-netting'
 import { createHash } from 'crypto'
+import { PLAN_TOTAL_TOLERANCE, validatePaymentPlan } from '@/lib/offers/payment-plan'
 
 // Stable content hash for idempotency keys on manual CRM invoice creation.
 // Two clicks of "Create Invoice" with identical inputs produce the same key,
@@ -72,6 +73,34 @@ export async function createInvoice(
       )
 
   return safeAction(async () => {
+    // ⛔ A RAISED PART MUST MATCH WHAT THE PLAN ACTUALLY PROMISED (2026-08-13) — nothing checked
+    // this before. The form is free text: a mistyped amount here would let a part read as fully
+    // paid on less (or more) cash than the plan states, and — now that a plan's referrer/partner
+    // commission is released once the whole plan is genuinely settled — a short part could make
+    // the deal LOOK complete while the client owes more, or a long part could overstate what a
+    // referrer's commission should be based on. Checked against the SAME tolerance the rest of
+    // the plan math uses, so this can never be a stricter or looser opinion than any other rail.
+    if (invoiceData.tranche) {
+      const planQuery = supabaseAdmin
+        .from('offers')
+        .select('payment_plan' as never)
+        .eq('token', invoiceData.tranche.offer_token) as unknown as {
+          maybeSingle: () => Promise<{ data: { payment_plan?: unknown } | null }>
+        }
+      const { data: offerRow } = await planQuery.maybeSingle()
+      const parsed = validatePaymentPlan(offerRow?.payment_plan)
+      const part = parsed.ok && parsed.plan ? parsed.plan.find((p) => p.seq === invoiceData.tranche!.seq) : undefined
+      if (part && Math.abs(total - part.amount) > PLAN_TOTAL_TOLERANCE) {
+        throw new Error(
+          `Part ${part.seq} of this plan is agreed at ${part.amount} — this invoice totals ${total}. ` +
+          `They must match. Fix the amount, or fix the plan on the offer, then raise again.`,
+        )
+      }
+      // No matching part or an unparsable plan: not this guard's job to invent an opinion about
+      // — createTDInvoice and the money rails downstream already handle a plan that doesn't
+      // validate. Silently proceeding here matches that existing, deliberate degrade.
+    }
+
     // A later PART of a plan inherits the OFFER's pinned card-fee rate (council, 2026-08-11).
     // Part one gets the pin from the signing webhook; without this, a hand-raised part two on a
     // waived-fee deal would pin the CURRENT configured rate and charge a card fee the signed

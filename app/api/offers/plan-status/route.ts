@@ -16,7 +16,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { planStatusForOffer, isRaisable } from "@/lib/offers/payment-plan-state"
+import { planStatusForOffer, computePlanSettlementFromStatus, isRaisable } from "@/lib/offers/payment-plan-state"
 import { trancheInvoiceDescription } from "@/lib/offers/payment-plan"
 
 export async function GET(req: NextRequest) {
@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
     // Narrow-cast: payment_plan postdates the deliberately-stale generated types.
     const offersQuery = supabaseAdmin
       .from("offers")
-      .select("token, client_name, currency, status, services, payment_plan" as never)
+      .select("token, client_name, currency, status, services, payment_plan, referrer_name, referrer_contact_id, referrer_account_id, partner_id, partner_payout_model" as never)
       .eq("account_id", accountId)
       .not("payment_plan" as never, "is", null) as unknown as {
         then: PromiseLike<{
@@ -40,6 +40,11 @@ export async function GET(req: NextRequest) {
             status: string | null
             services: unknown
             payment_plan?: unknown
+            referrer_name: string | null
+            referrer_contact_id: string | null
+            referrer_account_id: string | null
+            partner_id: string | null
+            partner_payout_model: string | null
           }> | null
           error: { message: string } | null
         }>["then"]
@@ -63,11 +68,23 @@ export async function GET(req: NextRequest) {
         (Array.isArray(o.services) && (o.services[0] as { name?: string } | undefined)?.name) ||
         "Setup Fee"
 
+      // ⛔ RELEASE ELIGIBILITY (Antonio, 2026-08-13) — deliberately the STRICTER cash+Paid gate,
+      // never `status.fullySettled` (which a pure-credit settlement can satisfy with zero real
+      // cash — see the doc comment on `PlanSettlement.eligible`). This is read-only information
+      // for the account page's "Release commission" button; the actual release action
+      // re-verifies eligibility itself rather than trusting anything sent back from this route.
+      const settlement = computePlanSettlementFromStatus(o.token, status)
+      const hasReferrer = Boolean(o.referrer_name || o.referrer_contact_id || o.referrer_account_id)
+      const hasPartner = Boolean(o.partner_id && o.partner_payout_model && o.partner_payout_model !== "none")
+
       plans.push({
         offer_token: o.token,
         client_name: o.client_name,
         currency: o.currency ?? status.plan[0]?.currency ?? "USD",
         fully_settled: status.fullySettled,
+        commission_release: (hasReferrer || hasPartner)
+          ? { eligible: settlement.eligible, total_agreed: settlement.totalAgreed, total_received: settlement.totalReceived, has_referrer: hasReferrer, has_partner: hasPartner }
+          : null,
         parts: status.parts.map((p) => ({
           seq: p.part.seq,
           amount: p.part.amount,

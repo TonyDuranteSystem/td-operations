@@ -980,6 +980,13 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
     client_name: string | null
     currency: string
     fully_settled: boolean
+    commission_release: {
+      eligible: boolean
+      total_agreed: number
+      total_received: number
+      has_referrer: boolean
+      has_partner: boolean
+    } | null
     parts: Array<{
       seq: number
       amount: number
@@ -998,6 +1005,14 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
     description: string
   } | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  // ⛔ RELEASE — a human confirms the REAL numbers before anything is credited (Antonio,
+  // 2026-08-13). `confirming` opens the panel with the numbers the server just returned;
+  // `releasing` guards the button itself against a double-click firing two requests. The
+  // server is the actual idempotency gate — this is purely to keep one click meaning one
+  // request rather than a defense the money correctness depends on.
+  const [confirmingRelease, setConfirmingRelease] = useState<string | null>(null)
+  const [releasing, setReleasing] = useState(false)
+  const [releaseOutcome, setReleaseOutcome] = useState<{ token: string; message: string; ok: boolean } | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -1035,6 +1050,35 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
     awaiting_payment: 'Sent — awaiting payment',
     part_paid: 'Part-paid',
     paid: 'Paid',
+  }
+
+  // ⛔ THE ACTUAL RELEASE — one request, and the SERVER re-verifies eligibility from the
+  // database before crediting anything; nothing here is trusted (Antonio, 2026-08-13).
+  const handleReleaseCommission = async (offerToken: string) => {
+    setReleasing(true)
+    setReleaseOutcome(null)
+    try {
+      const res = await fetch('/api/offers/release-commission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offer_token: offerToken }),
+      })
+      // Route response: { ok, already_released, message, referrer?, partner?, settlement }.
+      // `message` is already the plain-English summary of whichever rail(s) fired — the referrer
+      // credit, the partner payout, or both, since an offer can carry either or both.
+      const d = await res.json().catch(() => ({})) as { ok?: boolean; message?: string; error?: string }
+      if (!res.ok) {
+        setReleaseOutcome({ token: offerToken, ok: false, message: d.error || d.message || 'Release failed.' })
+        return
+      }
+      setReleaseOutcome({ token: offerToken, ok: true, message: d.message || 'Released.' })
+      setConfirmingRelease(null)
+      setReloadKey((k) => k + 1)
+    } catch {
+      setReleaseOutcome({ token: offerToken, ok: false, message: 'Release failed — network error.' })
+    } finally {
+      setReleasing(false)
+    }
   }
 
   return (
@@ -1077,6 +1121,65 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
                 )}
               </div>
             ))}
+
+            {/* ⛔ RELEASE COMMISSION — only rendered when a referrer/partner exists on this
+                offer. `eligible` (real cash, every part, computed server-side) gates the
+                RECOMMENDATION; the button always opens the confirm panel with the real
+                numbers so a human can act on their own judgment even in the rare case the
+                automatic gate is too cautious (documented false-negative — a known matcher
+                recording gap can leave genuinely-paid money looking uncounted). Nothing
+                fires without that second, explicit confirm. */}
+            {plan.commission_release && (
+              <div className={`rounded-md border px-3 py-2 text-sm ${plan.commission_release.eligible ? 'bg-emerald-50 border-emerald-200' : 'bg-zinc-50'}`}>
+                {confirmingRelease === plan.offer_token ? (
+                  <div className="space-y-2">
+                    <div className="font-medium">Release the referrer&apos;s commission?</div>
+                    <div className="text-xs text-muted-foreground">
+                      Total agreed: {plan.currency === 'EUR' ? '€' : '$'}{plan.commission_release.total_agreed.toLocaleString('en-US')} ·
+                      {' '}Real cash received: {plan.currency === 'EUR' ? '€' : '$'}{plan.commission_release.total_received.toLocaleString('en-US')}
+                      {!plan.commission_release.eligible && ' · ⚠️ Not detected as fully cash-settled — verify before releasing.'}
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={releasing}
+                        className="text-xs font-medium rounded-md px-3 py-1.5 bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+                        onClick={() => handleReleaseCommission(plan.offer_token)}
+                      >
+                        {releasing ? 'Releasing…' : 'Confirm release'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={releasing}
+                        className="text-xs font-medium rounded-md px-3 py-1.5 border hover:bg-muted"
+                        onClick={() => setConfirmingRelease(null)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs">
+                      {plan.commission_release.has_partner ? 'Managed partner' : 'Referrer'} on file
+                      {plan.commission_release.eligible ? ' — fully paid in real cash. Ready to release.' : ' — not yet fully cash-settled.'}
+                    </div>
+                    <button
+                      type="button"
+                      className={`text-xs font-medium rounded-md px-3 py-1.5 ${plan.commission_release.eligible ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'border hover:bg-muted'}`}
+                      onClick={() => { setConfirmingRelease(plan.offer_token); setReleaseOutcome(null) }}
+                    >
+                      Release commission
+                    </button>
+                  </div>
+                )}
+                {releaseOutcome && releaseOutcome.token === plan.offer_token && (
+                  <div className={`text-xs mt-2 ${releaseOutcome.ok ? 'text-emerald-700' : 'text-red-600'}`}>
+                    {releaseOutcome.message}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>
