@@ -5,7 +5,7 @@ vi.mock('@/lib/portal/td-invoice', () => ({
   createTDInvoice: vi.fn(),
 }))
 
-import { createManualReferralCredit, defaultReferralCreditUsd } from '@/lib/operations/referral'
+import { createManualReferralCredit, defaultReferralCreditUsd, linkLeadReferralToOffer } from '@/lib/operations/referral'
 import { createTDInvoice } from '@/lib/portal/td-invoice'
 
 const invoiceMock = createTDInvoice as unknown as ReturnType<typeof vi.fn>
@@ -237,5 +237,88 @@ describe('createManualReferralCredit', () => {
       )
       expect(state.eqCalls.some(([col]) => col === 'offer_token')).toBe(false)
     })
+  })
+})
+
+/**
+ * Regression for council pass, 2026-08-14 — independently found by 3 reviewers (senior-engineer,
+ * bug-hunter, Finance-Auditor, the last with a worked $300 double-payment example): a referrer
+ * sourced from a LEAD (before any offer existed) has a pending `referrals` row the plan-release
+ * action didn't know about, so it created a second, disconnected row instead — leaving the
+ * original stuck "pending" forever and open to being paid again by hand.
+ */
+function makeLeadLinkDb(opts: { pending?: { id: string } | null } = {}) {
+  const state = {
+    updates: [] as Array<{ id: string; payload: Record<string, unknown> }>,
+    selectedLeadId: '' as string,
+  }
+  const supabase = {
+    from() {
+      return {
+        select() { return this },
+        eq(col: string, val: unknown) {
+          if (col === 'referred_lead_id') state.selectedLeadId = val as string
+          return this
+        },
+        or() { return this },
+        limit() { return this },
+        maybeSingle() { return Promise.resolve({ data: opts.pending ?? null }) },
+        update(payload: Record<string, unknown>) {
+          return {
+            eq(_col: string, id: string) {
+              state.updates.push({ id, payload })
+              return Promise.resolve({ error: null })
+            },
+          }
+        },
+      }
+    },
+  }
+  return { supabase: supabase as never, state }
+}
+
+describe('linkLeadReferralToOffer — reconciles a lead-sourced pending row before release credits it', () => {
+  const baseParams = {
+    leadId: 'lead-1',
+    referrerContactId: 'ref-c-1',
+    referrerAccountId: null,
+    referredContactId: 'client-c-1',
+    referredAccountId: 'client-a-1',
+    offerToken: 'offer-X',
+    commissionType: 'credit_note',
+    commissionPct: 10,
+    commissionAmount: 300,
+    commissionCurrency: 'USD',
+  }
+
+  it('converts a matching pending row: status, referred identity, offer_token, and the REAL commission terms', async () => {
+    const { supabase, state } = makeLeadLinkDb({ pending: { id: 'ref-pending-1' } })
+    await linkLeadReferralToOffer(baseParams, supabase)
+    expect(state.selectedLeadId).toBe('lead-1')
+    expect(state.updates).toEqual([{
+      id: 'ref-pending-1',
+      payload: {
+        status: 'converted',
+        referred_contact_id: 'client-c-1',
+        referred_account_id: 'client-a-1',
+        offer_token: 'offer-X',
+        commission_type: 'credit_note',
+        commission_pct: 10,
+        commission_amount: 300,
+        commission_currency: 'USD',
+      },
+    }])
+  })
+
+  it('is a no-op when no matching pending row exists (e.g. the referrer was typed directly on the offer)', async () => {
+    const { supabase, state } = makeLeadLinkDb({ pending: null })
+    await linkLeadReferralToOffer(baseParams, supabase)
+    expect(state.updates).toHaveLength(0)
+  })
+
+  it('is a no-op when neither referrer id is provided (never queries)', async () => {
+    const { supabase, state } = makeLeadLinkDb({ pending: { id: 'ref-pending-1' } })
+    await linkLeadReferralToOffer({ ...baseParams, referrerContactId: null, referrerAccountId: null }, supabase)
+    expect(state.updates).toHaveLength(0)
   })
 })

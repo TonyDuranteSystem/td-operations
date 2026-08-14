@@ -380,6 +380,77 @@ export async function creditReferrerForLead(
 }
 
 /**
+ * Convert a lead-sourced PENDING referral row into a normal, offer-scoped one — so the
+ * payment-plan "Release commission" action credits it IN PLACE instead of leaving it
+ * orphaned and creating a second, disconnected row.
+ *
+ * ⛔ WHY THIS EXISTS (2026-08-14, council full-tier pass — independently found by 3
+ * reviewers: senior-engineer, bug-hunter, Finance-Auditor, the last with a worked $300
+ * double-payment example). When staff pin a referrer on a LEAD (`set-lead-referrer`),
+ * `createPendingReferral` inserts a row keyed ONLY by `referred_lead_id`, `status:'pending'`
+ * — no `referred_contact_id`/`referred_account_id`/`offer_token`, because none of those
+ * exist yet. `createOffer` later auto-inherits that referrer onto the offer. For an
+ * ORDINARY (non-plan) deal, activation's `creditReferrerForLead` finds this exact row by
+ * `referred_lead_id` and converts it. For a PLAN-based deal, activation deliberately writes
+ * NOTHING (the whole point of deferring to this button) — so that pending row is never
+ * touched, and `createManualReferralCredit`'s dedup (scoped to `referred_account_id`/
+ * `referred_contact_id`/`offer_token`, none of which the pending row has) can never find it.
+ * Release used to just create a brand-new row: the referrer got paid correctly, but the
+ * original stayed "pending" forever, and a staff member later acting on that stale row
+ * (which a fuzzy name-only duplicate check does not reliably catch) would pay it AGAIN.
+ *
+ * This runs BEFORE `createManualReferralCredit`: if a matching pending row exists, it is
+ * converted here (same shape `creditReferrerForLead` writes, but using the offer's REAL
+ * commission terms, not a hardcoded 10%) — so `createManualReferralCredit`'s ORDINARY,
+ * unmodified dedup then finds and credits THIS row, not a new one. A no-op — and therefore
+ * safe to call unconditionally — whenever no matching pending row exists.
+ */
+export async function linkLeadReferralToOffer(
+  params: {
+    leadId: string
+    referrerContactId: string | null
+    referrerAccountId: string | null
+    referredContactId: string | null
+    referredAccountId: string | null
+    offerToken: string
+    commissionType: string
+    commissionPct: number | null
+    commissionAmount: number
+    commissionCurrency: string
+  },
+  supabase: SupabaseClient,
+): Promise<void> {
+  const referrerOr = [
+    params.referrerAccountId ? `referrer_account_id.eq.${params.referrerAccountId}` : null,
+    params.referrerContactId ? `referrer_contact_id.eq.${params.referrerContactId}` : null,
+  ].filter(Boolean).join(",")
+  if (!referrerOr) return
+  const { data } = await supabase
+    .from("referrals")
+    .select("id")
+    .eq("referred_lead_id" as never, params.leadId as never)
+    .eq("status", "pending")
+    .or(referrerOr)
+    .limit(1)
+    .maybeSingle()
+  const pending = data as { id: string } | null
+  if (!pending) return
+  await supabase
+    .from("referrals")
+    .update({
+      status: "converted",
+      referred_contact_id: params.referredContactId,
+      referred_account_id: params.referredAccountId,
+      offer_token: params.offerToken,
+      commission_type: params.commissionType,
+      commission_pct: params.commissionPct,
+      commission_amount: params.commissionAmount,
+      commission_currency: params.commissionCurrency,
+    } as Record<string, unknown> as never)
+    .eq("id", pending.id)
+}
+
+/**
  * Default referral-reward credit for a manual add: 10% of the referred client's
  * setup-fee total, taken DIRECTLY as USD (no FX), per the referral reward rule.
  * Pure — unit tested. Staff may override the result before confirming.

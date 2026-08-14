@@ -115,7 +115,13 @@ function formatDate(d: string | null): string {
 
 function formatCurrency(amount: number | null, currency?: string | null): string {
   if (amount == null) return '—'
-  const c = currency === 'EUR' ? '€' : '$'
+  // ⛔ FALLBACK, NOT SILENT $ (2026-08-14, council pass, senior-engineer) — the plan-currency
+  // validator accepts any non-empty currency string, no EUR/USD restriction, so a symbol-only
+  // map silently mislabels anything else as $ on exactly the screens meant to let a human catch
+  // a wrong number before money moves. TD only actually uses EUR/USD today, so this fallback is
+  // not expected to render in practice — it exists so an unexpected value is visibly honest
+  // (e.g. "GBP 500.00") instead of confidently wrong.
+  const c = currency === 'EUR' ? '€' : currency === 'USD' || !currency ? '$' : `${currency} `
   return `${c}${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
@@ -1095,7 +1101,7 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
               <div key={part.seq} className="flex items-center justify-between gap-3 text-sm border rounded-md px-3 py-2">
                 <div>
                   <div className="font-medium">
-                    Part {part.seq} — {plan.currency === 'EUR' ? '€' : '$'}{part.amount.toLocaleString('en-US')}
+                    Part {part.seq} — {formatCurrency(part.amount, plan.currency)}
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {stateLabel[part.state] ?? part.state}
@@ -1125,11 +1131,15 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
 
             {/* ⛔ RELEASE COMMISSION — only rendered when a referrer/partner exists on this
                 offer. `eligible` (real cash, every part, computed server-side) gates the
-                RECOMMENDATION; the button always opens the confirm panel with the real
-                numbers so a human can act on their own judgment even in the rare case the
-                automatic gate is too cautious (documented false-negative — a known matcher
-                recording gap can leave genuinely-paid money looking uncounted). Nothing
-                fires without that second, explicit confirm. */}
+                RECOMMENDATION only — the confirm panel opens regardless, so staff can see the
+                real numbers and attempt a release even when this screen shows it as not yet
+                settled (relevant for the documented false-negative — a known matcher recording
+                gap can leave genuinely-paid money looking uncounted here). CORRECTED
+                2026-08-14 (council pass — 3 reviewers independently flagged the prior wording):
+                this is NOT a client-side override. The server re-checks eligibility itself on
+                every request and refuses cleanly with a clear reason whenever it disagrees —
+                there is no bypass parameter anywhere. The only real recovery path for a true
+                false-negative is fixing the underlying invoice record first, then retrying. */}
             {plan.commission_release && (
               <div className={`rounded-md border px-3 py-2 text-sm ${plan.commission_release.released_at ? 'bg-zinc-50' : plan.commission_release.eligible ? 'bg-emerald-50 border-emerald-200' : 'bg-zinc-50'}`}>
                 {/* ⛔ RELEASED, PERSISTENT (2026-08-14, bug-hunter, 6th pass) — without this branch
@@ -1149,8 +1159,8 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
                       Release the {plan.commission_release.has_partner ? "partner's payout" : "referrer's commission"}?
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      Total agreed: {plan.currency === 'EUR' ? '€' : '$'}{plan.commission_release.total_agreed.toLocaleString('en-US')} ·
-                      {' '}Real cash received: {plan.currency === 'EUR' ? '€' : '$'}{plan.commission_release.total_received.toLocaleString('en-US')}
+                      Total agreed: {formatCurrency(plan.commission_release.total_agreed, plan.currency)} ·
+                      {' '}Real cash received: {formatCurrency(plan.commission_release.total_received, plan.currency)}
                       {!plan.commission_release.eligible && ' · ⚠️ Not detected as fully cash-settled — verify before releasing.'}
                     </div>
                     <div className="flex gap-2">
