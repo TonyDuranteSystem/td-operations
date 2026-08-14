@@ -1133,7 +1133,9 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
               <div className={`rounded-md border px-3 py-2 text-sm ${plan.commission_release.eligible ? 'bg-emerald-50 border-emerald-200' : 'bg-zinc-50'}`}>
                 {confirmingRelease === plan.offer_token ? (
                   <div className="space-y-2">
-                    <div className="font-medium">Release the referrer&apos;s commission?</div>
+                    <div className="font-medium">
+                      Release the {plan.commission_release.has_partner ? "partner's payout" : "referrer's commission"}?
+                    </div>
                     <div className="text-xs text-muted-foreground">
                       Total agreed: {plan.currency === 'EUR' ? '€' : '$'}{plan.commission_release.total_agreed.toLocaleString('en-US')} ·
                       {' '}Real cash received: {plan.currency === 'EUR' ? '€' : '$'}{plan.commission_release.total_received.toLocaleString('en-US')}

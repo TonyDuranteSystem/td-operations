@@ -81,6 +81,24 @@ export async function createInvoice(
     // referrer's commission should be based on. Checked against the SAME tolerance the rest of
     // the plan math uses, so this can never be a stricter or looser opinion than any other rail.
     if (invoiceData.tranche) {
+      // ⛔ NO DISCOUNT ON A PLAN PART (2026-08-14, bug-hunter, code-level pass) — the part's
+      // agreed amount already IS the definitive figure; a discount on top of it is a second,
+      // conflicting way of stating what's owed. Found reachable: this screen's discount field
+      // renders unconditionally even in tranche mode. The check above compares `total`
+      // (subtotal MINUS discount) against the plan — correctly — but the actual invoice this
+      // creates is NOT told about the discount at all (createTDInvoice takes only line items),
+      // so the persisted invoice and its PDF show the FULL undiscounted amount while this guard
+      // saw the discounted one. That gap let a mismatched real invoice sail through a check that
+      // had just "confirmed" it matched — and the inflated total would then overstate a
+      // referrer's or partner's commission, computed from the real invoice, not the form. If a
+      // client genuinely needs a discount on a part, change the PLAN'S part amount and re-raise,
+      // so there is one number, not two.
+      if ((invoiceData.discount || 0) > 0) {
+        throw new Error(
+          "A part of a payment plan cannot carry a separate discount — the plan's part amount is " +
+          "already the figure owed. To reduce it, edit the plan on the offer, then raise again.",
+        )
+      }
       const planQuery = supabaseAdmin
         .from('offers')
         .select('payment_plan' as never)

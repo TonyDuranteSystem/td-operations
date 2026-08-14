@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { planStatusForOffer, computePlanSettlementFromStatus, isRaisable } from "@/lib/offers/payment-plan-state"
 import { trancheInvoiceDescription } from "@/lib/offers/payment-plan"
+import { shouldRunReferralCredit } from "@/lib/partners/partner-deal"
 
 export async function GET(req: NextRequest) {
   try {
@@ -74,8 +75,13 @@ export async function GET(req: NextRequest) {
       // for the account page's "Release commission" button; the actual release action
       // re-verifies eligibility itself rather than trusting anything sent back from this route.
       const settlement = computePlanSettlementFromStatus(o.token, status)
-      const hasReferrer = Boolean(o.referrer_name || o.referrer_contact_id || o.referrer_account_id)
       const hasPartner = Boolean(o.partner_id && o.partner_payout_model && o.partner_payout_model !== "none")
+      // ⛔ EFFECTIVE, not raw. `shouldRunReferralCredit` is the SAME function the release action
+      // now gates on (2026-08-14 fix) — an offer with both a referrer and a partner is paid
+      // through the partner rail only. Reporting raw referrer presence here would show "Referrer
+      // on file" on a deal where clicking release only ever pays the partner — a screen promising
+      // something the action underneath does not do.
+      const hasReferrer = shouldRunReferralCredit(o)
 
       plans.push({
         offer_token: o.token,

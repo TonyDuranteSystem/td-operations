@@ -1,19 +1,38 @@
 /**
- * Release a referrer's commission AND/OR a managed partner's payout on a payment-plan deal —
- * the single human-confirmed action that replaces automatic per-part accrual (Antonio,
- * 2026-08-13). Partners get the IDENTICAL treatment to client referrers (Antonio's ruling 3) —
- * both rails are attempted here, independently, exactly as activation itself always ran them as
- * two separate rails (Step 3.5 client-referral, Step 3.6 partner-payout) that can both fire for
- * the same offer.
+ * Release a referrer's commission OR a managed partner's payout on a payment-plan deal — the
+ * single human-confirmed action that replaces automatic per-part accrual (Antonio, 2026-08-13).
  *
  * POST /api/offers/release-commission
  *   body: { offer_token: string }
  *
- * Nothing is credited until this route is called, and each rail credits EXACTLY ONCE per offer:
- *  - the referrer rail reuses `createManualReferralCredit`'s existing dedup + idempotency;
- *  - the partner rail refuses to insert a second `referral_payouts` row for the same offer token
- *    (excluding a `rejected` one, mirroring the referrer side's own "cancelled doesn't block a
- *    fresh attempt" rule).
+ * ⛔ REWRITTEN 2026-08-14 after a code-level adversarial pass found the first version had two
+ * real money bugs (bug-hunter, on the actual built/deployed commit — not the design, which had
+ * already been through three review rounds before any of this was written):
+ *
+ * 1. A referrer AND a partner on the SAME offer were both paid. This codebase already has a
+ *    rule against that — `shouldRunReferralCredit` (lib/partners/partner-deal.ts) — activation
+ *    has ALWAYS skipped the generic referral credit when an offer also carries a managed
+ *    partner, specifically "so the partner isn't paid twice." The first version of this route
+ *    computed `hasReferrer`/`hasPartner` as two independent booleans and ran both unconditionally
+ *    — directly contradicting that existing rule on the one path built today. Fixed by reusing
+ *    `shouldRunReferralCredit` itself rather than re-deriving the condition a second time.
+ *
+ * 2. Two near-simultaneous release requests (a slow request + an impatient page reload, or two
+ *    staff members open the same account) could both pass the "does a row already exist" check
+ *    and both write a real payment. Neither `referrals` nor `referral_payouts` carries a
+ *    database constraint backing that check — only a primary key. Fixed with a single atomic
+ *    claim on the offer itself (`offers.commission_released_at`, migration
+ *    `20260814-0100-offers-commission-released-at.sql`): a conditional UPDATE that only one
+ *    concurrent request can ever win, attempted BEFORE either rail runs. Every other request —
+ *    concurrent or later — sees the claim already taken and refuses cleanly, without touching
+ *    money. This is the same shape as this codebase's established `reviewed_at IS NULL` + `.is()`
+ *    guard pattern, applied to a new column instead of retrofitting uniqueness onto two tables
+ *    shared by many other flows.
+ *
+ * A third, non-blocking gap was also closed: the route used to hardcode a generic 10%
+ * credit-note commission regardless of what was actually agreed on the offer (a referrer
+ * negotiated at a different rate, or a price-difference arrangement, would have been silently
+ * miscalculated or refused). It now reads the offer's real commission terms.
  *
  * ⛔ ELIGIBILITY IS RE-VERIFIED HERE, SERVER-SIDE, ALWAYS — never trust a client-supplied
  * "eligible" flag. `/api/offers/plan-status` returns eligibility for DISPLAY only; this route
@@ -36,6 +55,7 @@ import { isDashboardUser } from "@/lib/auth"
 import { computePlanSettlement, type PlanSettlement } from "@/lib/offers/payment-plan-state"
 import { createManualReferralCredit, resolveOfferCommission, type ManualReferralResult } from "@/lib/operations/referral"
 import { calculatePartnerPayout } from "@/lib/partners/payout-calc"
+import { shouldRunReferralCredit } from "@/lib/partners/partner-deal"
 
 export const dynamic = "force-dynamic"
 
@@ -49,6 +69,9 @@ interface OfferRow {
   referrer_contact_id: string | null
   referrer_account_id: string | null
   referrer_type: string | null
+  referrer_commission_type: string | null
+  referrer_commission_pct: number | string | null
+  referrer_agreed_price: number | string | null
   partner_id: string | null
   partner_payout_model: string | null
   partner_payout_rate: number | string | null
@@ -59,9 +82,6 @@ async function releaseReferrerCredit(
   offerToken: string,
   settlement: PlanSettlement,
 ): Promise<{ attempted: boolean; ok: boolean; message: string; amount?: number }> {
-  const hasReferrer = Boolean(offer.referrer_name || offer.referrer_contact_id || offer.referrer_account_id)
-  if (!hasReferrer) return { attempted: false, ok: true, message: "" }
-
   if (!offer.referrer_contact_id && !offer.referrer_account_id) {
     // The exact free-text-only case this session's own investigation kept surfacing: a credit
     // note can only be posted against a REAL contact or account, never a bare string.
@@ -73,14 +93,30 @@ async function releaseReferrerCredit(
     }
   }
 
-  // Commission basis: the REAL total actually billed and cash-verified across every part —
-  // grounded in the same rows `settlement.eligible` was just proven true against, not a
-  // separately re-derived offer gross that could theoretically disagree with what was truly
-  // collected.
+  // ⛔ THE OFFER'S REAL COMMISSION TERMS — not hardcoded nulls. Fixed 2026-08-14: the first
+  // version passed null for type/pct/agreed_price unconditionally, so a referrer negotiated at
+  // anything other than the generic 10% credit-note default was silently miscalculated, and a
+  // price-difference arrangement (agreed_price genuinely null-safe only when actually 0) failed
+  // outright. Commission basis is still the REAL total actually billed and cash-verified across
+  // every part — grounded in the same rows `settlement.eligible` was just proven true against,
+  // not a separately re-derived offer gross.
   const commission = resolveOfferCommission(
-    { referrer_commission_type: null, referrer_type: offer.referrer_type, referrer_commission_pct: null, referrer_agreed_price: null },
+    {
+      referrer_commission_type: offer.referrer_commission_type,
+      referrer_type: offer.referrer_type,
+      referrer_commission_pct: offer.referrer_commission_pct != null ? Number(offer.referrer_commission_pct) : null,
+      referrer_agreed_price: offer.referrer_agreed_price != null ? Number(offer.referrer_agreed_price) : null,
+    },
     settlement.totalAgreed,
   )
+  if (!(commission.commissionAmount > 0)) {
+    return {
+      attempted: true,
+      ok: false,
+      message: `Referrer commission computed as ${commission.commissionAmount} — nothing to release. ` +
+        "Check the referrer's commission terms on the offer.",
+    }
+  }
   // ⛔ ROUNDED HERE — calculateCommission (lib/referral-utils.ts) applies none itself (verified
   // by reading it; a percentage of an odd total can produce a long decimal tail otherwise).
   const commissionAmount = Math.round(commission.commissionAmount * 100) / 100
@@ -115,21 +151,6 @@ async function releasePartnerPayout(
   offerToken: string,
   settlement: PlanSettlement,
 ): Promise<{ attempted: boolean; ok: boolean; message: string; amount?: number }> {
-  const hasPartner = Boolean(offer.partner_id && offer.partner_payout_model && offer.partner_payout_model !== "none")
-  if (!hasPartner) return { attempted: false, ok: true, message: "" }
-
-  // Dedup: refuse a second payout for this offer. `rejected` does NOT block a fresh attempt —
-  // same convention as the referrer rail treating `cancelled` as non-blocking.
-  const { data: existing } = await supabaseAdmin
-    .from("referral_payouts")
-    .select("id, status")
-    .eq("offer_token" as never, offerToken as never)
-    .neq("status", "rejected")
-    .limit(1)
-  if (existing && existing.length > 0) {
-    return { attempted: true, ok: true, message: "Partner payout already released — no second payout was created." }
-  }
-
   const { data: partnerRow } = await supabaseAdmin
     .from("client_partners")
     .select("td_base_costs")
@@ -188,16 +209,21 @@ export async function POST(request: NextRequest) {
   // postdate the generated types.
   const offerQuery = supabaseAdmin
     .from("offers")
-    .select("token, client_name, account_id, contact_id, services, referrer_name, referrer_contact_id, referrer_account_id, referrer_type, partner_id, partner_payout_model, partner_payout_rate" as never)
+    .select("token, client_name, account_id, contact_id, services, referrer_name, referrer_contact_id, referrer_account_id, referrer_type, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, partner_id, partner_payout_model, partner_payout_rate" as never)
     .eq("token", offerToken)
     .maybeSingle() as unknown as { then: PromiseLike<{ data: OfferRow | null; error: { message: string } | null }>["then"] }
   const { data: offer, error: offerErr } = await offerQuery
   if (offerErr) return NextResponse.json({ error: offerErr.message }, { status: 500 })
   if (!offer) return NextResponse.json({ error: `No offer found for token "${offerToken}"` }, { status: 404 })
 
-  const hasReferrer = Boolean(offer.referrer_name || offer.referrer_contact_id || offer.referrer_account_id)
   const hasPartner = Boolean(offer.partner_id && offer.partner_payout_model && offer.partner_payout_model !== "none")
-  if (!hasReferrer && !hasPartner) {
+  // ⛔ MUTUAL EXCLUSION — reuse the EXISTING rule, do not re-derive it. `shouldRunReferralCredit`
+  // is exactly the function activation itself has always used to decide this; an offer with both
+  // a referrer and a partner is compensated through the partner rail ONLY, "so the partner isn't
+  // paid twice" (its own words). Computing this independently, as the first version of this route
+  // did, is precisely how it paid both.
+  const runReferrer = shouldRunReferralCredit(offer)
+  if (!runReferrer && !hasPartner) {
     return NextResponse.json({ error: "This offer carries no referrer or managed partner — nothing to release." }, { status: 400 })
   }
 
@@ -216,20 +242,52 @@ export async function POST(request: NextRequest) {
     }, { status: 400 })
   }
 
-  // Both rails run independently — one failing must not block the other, matching activation's
-  // own try/catch-per-rail shape.
+  // ⛔ THE ATOMIC CLAIM (2026-08-14) — this is the actual fix for the double-release race, and it
+  // runs BEFORE either rail. Only the request whose UPDATE actually flips a row from null wins
+  // the right to proceed; every other concurrent or later call sees zero rows affected and
+  // refuses cleanly, having touched no money. A plain SELECT-then-write (what shipped first) is
+  // not atomic — two requests can both see "nothing yet" microseconds apart. A single conditional
+  // UPDATE is: Postgres serializes concurrent writers to the same row, so exactly one succeeds.
+  const { data: claimed, error: claimErr } = await supabaseAdmin
+    .from("offers")
+    // eslint-disable-next-line no-restricted-syntax -- commission_released_at postdates generated types (migration 20260814-0100)
+    .update({ commission_released_at: new Date().toISOString() } as never)
+    .eq("token", offerToken)
+    .is("commission_released_at" as never, null)
+    .select("token")
+  if (claimErr) return NextResponse.json({ error: `Could not claim release: ${claimErr.message}` }, { status: 500 })
+  if (!claimed || claimed.length === 0) {
+    return NextResponse.json({ ok: true, already_released: true, message: "Already released — no second credit or payout was issued." })
+  }
+
+  // Only ONE of these ever runs for a given offer, per the mutual-exclusion rule above — never
+  // both, and Promise.all here is just running the (at most one attempted) referrer path and the
+  // (at most one attempted) partner path concurrently; it does not mean both fire.
   const [referrerResult, partnerResult] = await Promise.all([
-    releaseReferrerCredit(offer, offerToken, settlement),
-    releasePartnerPayout(offer, offerToken, settlement),
+    runReferrer
+      ? releaseReferrerCredit(offer, offerToken, settlement)
+      : Promise.resolve({ attempted: false, ok: true, message: "" }),
+    hasPartner
+      ? releasePartnerPayout(offer, offerToken, settlement)
+      : Promise.resolve({ attempted: false, ok: true, message: "" }),
   ])
 
   const messages = [referrerResult, partnerResult].filter((r) => r.attempted).map((r) => r.message)
   const anyFailed = [referrerResult, partnerResult].some((r) => r.attempted && !r.ok)
-  const alreadyReleased = messages.length > 0 && messages.every((m) => m.includes("already released"))
+
+  // If the attempted rail failed outright, release the claim so a retry (after staff fix
+  // whatever was wrong — e.g. the free-text referrer) is not permanently locked out.
+  if (anyFailed) {
+    await supabaseAdmin
+      .from("offers")
+      // eslint-disable-next-line no-restricted-syntax -- same column as the claim above
+      .update({ commission_released_at: null } as never)
+      .eq("token", offerToken)
+  }
 
   return NextResponse.json({
     ok: !anyFailed,
-    already_released: alreadyReleased,
+    already_released: false,
     message: messages.join(" "),
     referrer: referrerResult.attempted ? referrerResult : undefined,
     partner: partnerResult.attempted ? partnerResult : undefined,
