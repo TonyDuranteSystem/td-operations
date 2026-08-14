@@ -18,7 +18,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { planStatusForOffer, computePlanSettlementFromStatus, isRaisable } from "@/lib/offers/payment-plan-state"
 import { trancheInvoiceDescription } from "@/lib/offers/payment-plan"
-import { shouldRunReferralCredit } from "@/lib/partners/partner-deal"
+import { hasWorkingPartnerPayout, shouldReleasePlanReferrerCredit } from "@/lib/partners/partner-deal"
 
 export async function GET(req: NextRequest) {
   try {
@@ -75,13 +75,16 @@ export async function GET(req: NextRequest) {
       // for the account page's "Release commission" button; the actual release action
       // re-verifies eligibility itself rather than trusting anything sent back from this route.
       const settlement = computePlanSettlementFromStatus(o.token, status)
-      const hasPartner = Boolean(o.partner_id && o.partner_payout_model && o.partner_payout_model !== "none")
-      // ⛔ EFFECTIVE, not raw. `shouldRunReferralCredit` is the SAME function the release action
-      // now gates on (2026-08-14 fix) — an offer with both a referrer and a partner is paid
-      // through the partner rail only. Reporting raw referrer presence here would show "Referrer
-      // on file" on a deal where clicking release only ever pays the partner — a screen promising
-      // something the action underneath does not do.
-      const hasReferrer = shouldRunReferralCredit(o)
+      // ⛔ EFFECTIVE, not raw — and the SAME two functions the release action itself gates on
+      // (lib/partners/partner-deal), so this screen can never promise something the button
+      // underneath does not do. FIXED 2026-08-14 (bug-hunter, 5th pass): `hasPartner` used to be
+      // computed inline here and `hasReferrer` via `shouldRunReferralCredit` — two definitions of
+      // "does a partner deal count" that could disagree (a renewal-only partner with no working
+      // payout model made BOTH read false, showing neither "Referrer on file" nor "Partner on
+      // file" despite a real referrer being owed). `hasWorkingPartnerPayout` /
+      // `shouldReleasePlanReferrerCredit` agree by construction.
+      const hasPartner = hasWorkingPartnerPayout(o)
+      const hasReferrer = shouldReleasePlanReferrerCredit(o)
 
       plans.push({
         offer_token: o.token,

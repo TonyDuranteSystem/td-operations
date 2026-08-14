@@ -223,15 +223,51 @@ export async function updateInvoice(
   return safeAction(async () => {
     const supabase = createClient()
 
-    // Verify still Draft
-    const { data: current } = await supabase
+    // Verify still Draft. Also reads the tranche columns (postdate generated types, same cast
+    // pattern the part1Query below already uses) — the plan guard right after needs them.
+    const currentQuery = supabase
       .from('payments')
-      .select('invoice_status')
-      .eq('id', paymentId)
-      .single()
+      .select('invoice_status, tranche_offer_token, tranche_seq' as never) as unknown as {
+        eq: (c: string, v: unknown) => {
+          single: () => Promise<{ data: { invoice_status: string; tranche_offer_token: string | null; tranche_seq: number | null } | null }>
+        }
+      }
+    const { data: current } = await currentQuery.eq('id', paymentId).single()
 
     if (current?.invoice_status !== 'Draft') {
       throw new Error('Can only edit Draft invoices')
+    }
+
+    // ⛔ SAME PLAN GUARD AS createInvoice, APPLIED HERE TOO (2026-08-14, bug-hunter, 5th pass on
+    // the release feature) — createInvoice's guard only runs at the moment a tranche invoice is
+    // FIRST raised. This dialog can reopen and re-save that SAME Draft invoice afterward, through
+    // the same discount field or a changed line item, with no awareness it belongs to a plan —
+    // silently re-diverging it from the agreed part amount through a second door, undermining the
+    // exact protection the create-time guard exists for. Same tolerance, same refusal wording.
+    if (current.tranche_offer_token) {
+      if ((input.discount || 0) > 0) {
+        throw new Error(
+          "A part of a payment plan cannot carry a separate discount — the plan's part amount is " +
+          "already the figure owed. To reduce it, edit the plan on the offer, then save again.",
+        )
+      }
+      const planQuery = supabaseAdmin
+        .from('offers')
+        .select('payment_plan' as never)
+        .eq('token', current.tranche_offer_token) as unknown as {
+          maybeSingle: () => Promise<{ data: { payment_plan?: unknown } | null }>
+        }
+      const { data: offerRow } = await planQuery.maybeSingle()
+      const parsed = validatePaymentPlan(offerRow?.payment_plan)
+      const part = parsed.ok && parsed.plan ? parsed.plan.find((p) => p.seq === current.tranche_seq) : undefined
+      if (part && Math.abs(total - part.amount) > PLAN_TOTAL_TOLERANCE) {
+        throw new Error(
+          `Part ${part.seq} of this plan is agreed at ${part.amount} — this invoice totals ${total}. ` +
+          `They must match. Fix the amount, or fix the plan on the offer, then save again.`,
+        )
+      }
+      // No matching part or an unparsable plan: same deliberate degrade as createInvoice — not
+      // this guard's job to invent an opinion the money rails downstream already handle.
     }
 
     // Update payment record (Draft status already verified above — no optimistic lock needed)

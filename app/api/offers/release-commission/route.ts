@@ -55,7 +55,7 @@ import { isDashboardUser } from "@/lib/auth"
 import { computePlanSettlement, type PlanSettlement } from "@/lib/offers/payment-plan-state"
 import { createManualReferralCredit, resolveOfferCommission, type ManualReferralResult } from "@/lib/operations/referral"
 import { calculatePartnerPayout } from "@/lib/partners/payout-calc"
-import { shouldRunReferralCredit } from "@/lib/partners/partner-deal"
+import { hasWorkingPartnerPayout, shouldReleasePlanReferrerCredit } from "@/lib/partners/partner-deal"
 
 export const dynamic = "force-dynamic"
 
@@ -151,6 +151,23 @@ async function releasePartnerPayout(
   offerToken: string,
   settlement: PlanSettlement,
 ): Promise<{ attempted: boolean; ok: boolean; message: string; amount?: number }> {
+  // ⛔ DEDUP ON offer_token (2026-08-14, bug-hunter, 5th pass) — unlike the referrer rail
+  // (createManualReferralCredit already self-heals against an existing `referrals` row), this
+  // insert had NO duplicate check at all beyond the outer atomic claim. The claim only prevents
+  // a CONCURRENT double-release; it does nothing for a SEQUENTIAL retry after the claim was
+  // released following an uncertain failure (see the POST handler's catch block) — without this,
+  // that retry would insert a second payout row for the same offer.
+  const { data: existingPayout } = await supabaseAdmin
+    .from("referral_payouts")
+    // eslint-disable-next-line no-restricted-syntax -- offer_token postdates generated types, same cast as the insert below
+    .select("id" as never)
+    .eq("offer_token" as never, offerToken as never)
+    .limit(1)
+    .maybeSingle()
+  if (existingPayout) {
+    return { attempted: true, ok: true, message: "Partner payout already released — no second payout was created." }
+  }
+
   const { data: partnerRow } = await supabaseAdmin
     .from("client_partners")
     .select("td_base_costs")
@@ -216,13 +233,15 @@ export async function POST(request: NextRequest) {
   if (offerErr) return NextResponse.json({ error: offerErr.message }, { status: 500 })
   if (!offer) return NextResponse.json({ error: `No offer found for token "${offerToken}"` }, { status: 404 })
 
-  const hasPartner = Boolean(offer.partner_id && offer.partner_payout_model && offer.partner_payout_model !== "none")
-  // ⛔ MUTUAL EXCLUSION — reuse the EXISTING rule, do not re-derive it. `shouldRunReferralCredit`
-  // is exactly the function activation itself has always used to decide this; an offer with both
-  // a referrer and a partner is compensated through the partner rail ONLY, "so the partner isn't
-  // paid twice" (its own words). Computing this independently, as the first version of this route
-  // did, is precisely how it paid both.
-  const runReferrer = shouldRunReferralCredit(offer)
+  // ⛔ MUTUAL EXCLUSION — an offer with both a referrer and a partner is compensated through the
+  // partner rail ONLY, so the partner isn't paid twice (the first version of this route computed
+  // these independently, which is precisely how it paid both). FIXED 2026-08-14 (bug-hunter, 5th
+  // pass): this used to reuse `shouldRunReferralCredit`, which suppresses the referrer on bare
+  // `partner_id` presence — silently paying NOBODY when the linked partner has no working payout
+  // model. `hasWorkingPartnerPayout`/`shouldReleasePlanReferrerCredit` (lib/partners/partner-deal)
+  // agree with each other by construction: the referrer runs exactly when the partner rail won't.
+  const hasPartner = hasWorkingPartnerPayout(offer)
+  const runReferrer = shouldReleasePlanReferrerCredit(offer)
   if (!runReferrer && !hasPartner) {
     return NextResponse.json({ error: "This offer carries no referrer or managed partner — nothing to release." }, { status: 400 })
   }
@@ -260,37 +279,60 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, already_released: true, message: "Already released — no second credit or payout was issued." })
   }
 
-  // Only ONE of these ever runs for a given offer, per the mutual-exclusion rule above — never
-  // both, and Promise.all here is just running the (at most one attempted) referrer path and the
-  // (at most one attempted) partner path concurrently; it does not mean both fire.
-  const [referrerResult, partnerResult] = await Promise.all([
-    runReferrer
-      ? releaseReferrerCredit(offer, offerToken, settlement)
-      : Promise.resolve({ attempted: false, ok: true, message: "" }),
-    hasPartner
-      ? releasePartnerPayout(offer, offerToken, settlement)
-      : Promise.resolve({ attempted: false, ok: true, message: "" }),
-  ])
+  // ⛔ EVERYTHING FROM HERE MUST RELEASE THE CLAIM ON ANY FAILURE — an EXCEPTION, not only a
+  // clean {ok:false} return. FIXED 2026-08-14 (bug-hunter, 5th pass): the original code only
+  // released the claim inside the `anyFailed` branch below, which only runs once both rail
+  // functions RETURN normally. A thrown error between the claim and that point (a dropped
+  // connection mid-write, an unexpected exception inside either rail) skipped release entirely —
+  // `commission_released_at` stayed permanently set with nothing ever paid, recoverable only by a
+  // manual database fix, with no staff-visible signal anything was wrong.
+  //
+  // Unconditionally releasing the claim on catch, and letting a retry run either rail again, is
+  // safe: `releaseReferrerCredit` → `createManualReferralCredit` already self-heals against an
+  // existing non-cancelled `referrals` row (recovers/no-ops rather than duplicating), and
+  // `releasePartnerPayout` now dedups on `offer_token` before inserting (added in this same
+  // pass — it previously had no guard beyond this claim). Both rails tolerate "ran twice."
+  try {
+    // Only ONE of these ever runs for a given offer, per the mutual-exclusion rule above — never
+    // both, and Promise.all here is just running the (at most one attempted) referrer path and
+    // the (at most one attempted) partner path concurrently; it does not mean both fire.
+    const [referrerResult, partnerResult] = await Promise.all([
+      runReferrer
+        ? releaseReferrerCredit(offer, offerToken, settlement)
+        : Promise.resolve({ attempted: false, ok: true, message: "" }),
+      hasPartner
+        ? releasePartnerPayout(offer, offerToken, settlement)
+        : Promise.resolve({ attempted: false, ok: true, message: "" }),
+    ])
 
-  const messages = [referrerResult, partnerResult].filter((r) => r.attempted).map((r) => r.message)
-  const anyFailed = [referrerResult, partnerResult].some((r) => r.attempted && !r.ok)
+    const messages = [referrerResult, partnerResult].filter((r) => r.attempted).map((r) => r.message)
+    const anyFailed = [referrerResult, partnerResult].some((r) => r.attempted && !r.ok)
 
-  // If the attempted rail failed outright, release the claim so a retry (after staff fix
-  // whatever was wrong — e.g. the free-text referrer) is not permanently locked out.
-  if (anyFailed) {
+    // If the attempted rail failed outright, release the claim so a retry (after staff fix
+    // whatever was wrong — e.g. the free-text referrer) is not permanently locked out.
+    if (anyFailed) {
+      await supabaseAdmin
+        .from("offers")
+        // eslint-disable-next-line no-restricted-syntax -- same column as the claim above
+        .update({ commission_released_at: null } as never)
+        .eq("token", offerToken)
+    }
+
+    return NextResponse.json({
+      ok: !anyFailed,
+      already_released: false,
+      message: messages.join(" "),
+      referrer: referrerResult.attempted ? referrerResult : undefined,
+      partner: partnerResult.attempted ? partnerResult : undefined,
+      settlement: { totalAgreed: settlement.totalAgreed, totalReceived: settlement.totalReceived, currency: settlement.currency },
+    }, { status: anyFailed ? 500 : 200 })
+  } catch (err) {
     await supabaseAdmin
       .from("offers")
       // eslint-disable-next-line no-restricted-syntax -- same column as the claim above
       .update({ commission_released_at: null } as never)
       .eq("token", offerToken)
+    const message = err instanceof Error ? err.message : "Unknown error"
+    return NextResponse.json({ error: `Release hit an unexpected error and was rolled back — safe to try again: ${message}` }, { status: 500 })
   }
-
-  return NextResponse.json({
-    ok: !anyFailed,
-    already_released: false,
-    message: messages.join(" "),
-    referrer: referrerResult.attempted ? referrerResult : undefined,
-    partner: partnerResult.attempted ? partnerResult : undefined,
-    settlement: { totalAgreed: settlement.totalAgreed, totalReceived: settlement.totalReceived, currency: settlement.currency },
-  }, { status: anyFailed ? 500 : 200 })
 }
