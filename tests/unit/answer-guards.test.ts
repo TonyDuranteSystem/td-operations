@@ -407,6 +407,10 @@ describe("shouldNudgeQuickGear — the exact gate wired into the loop", () => {
     expect(shouldNudgeQuickGear({ ...base, toolCallCount: QUICK_GEAR_TOOL_CEILING - 1 })).toBe(false)
   })
 
+  it("fires AT exactly the ceiling — the boundary bug-hunter found untested (>= vs >)", () => {
+    expect(shouldNudgeQuickGear({ ...base, toolCallCount: QUICK_GEAR_TOOL_CEILING })).toBe(true)
+  })
+
   it("does NOT fire once already latched — one nudge only", () => {
     expect(shouldNudgeQuickGear({ ...base, alreadyLatched: true })).toBe(false)
   })

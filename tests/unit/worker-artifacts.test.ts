@@ -157,6 +157,14 @@ describe('the combined phantom-file guard — excludes the real false positive, 
     expect(fires(reply, ['search_documents'], 0)).toBe(true)
   })
 
+  it('KNOWN, ACCEPTED GAP (bug-hunter, 2026-08-14): a compound reply using ONLY ambiguous "attached" wording for both a real and a phantom file still slips past — documented, not silently missed', () => {
+    // Both files are described the same, ambiguous way — nothing in the reply
+    // distinguishes "the lease I actually found" from "the settlement letter I
+    // invented". Closing this needs per-file attribution the guard doesn't do.
+    const reply = 'signed_lease.pdf is attached above, and settlement_letter.pdf is attached above too.'
+    expect(fires(reply, ['search_documents'], 0)).toBe(false)
+  })
+
   it('claimsFileGenerated is the narrower, unambiguous subset of claimsFileProduced', () => {
     expect(claimsFileGenerated("I've generated the document for you.")).toBe(true)
     expect(claimsFileGenerated('Test_Letter.pdf is attached above.')).toBe(false)

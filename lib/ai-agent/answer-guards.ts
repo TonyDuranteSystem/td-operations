@@ -308,6 +308,18 @@ export function claimsFileProduced(reply: string): boolean {
  * True only for the UNAMBIGUOUS "I created this" shape — never excused by
  * `foundAttachableDocumentThisTurn`, because finding one real, unrelated
  * document is not evidence about a SEPARATE, explicitly claimed creation.
+ *
+ * ⚠️ KNOWN, ACCEPTED RESIDUAL GAP (bug-hunter review, 2026-08-14): a reply that
+ * describes BOTH a real and a phantom file using ONLY the ambiguous "attached"
+ * wording for both — e.g. "signed_lease.pdf is attached above, and
+ * settlement_letter.pdf is attached above too" where only the lease is real —
+ * still slips past this guard, because neither `claimsFileGenerated` (no
+ * "generated/created" wording anywhere) nor `foundAttachableDocumentThisTurn`
+ * (search_documents genuinely succeeded) can tell the two files apart within
+ * one reply. Closing this fully needs per-file attribution the guard does not
+ * do today (it judges the whole reply, not each named file). Deliberately left
+ * open rather than guessed at — see the matching test in
+ * worker-artifacts.test.ts for the exact shape this does NOT catch.
  */
 export function claimsFileGenerated(reply: string): boolean {
   const text = (reply ?? "").trim()
