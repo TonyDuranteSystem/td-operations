@@ -78,19 +78,22 @@ export async function notifyIfIngestComplete(params: {
       return { notified: false, reason: "failed_or_quarantined_files" }
     }
 
-    // ── Target submission (carries the idempotency marker). No completed
-    //    submission → nothing to attach to / the client has no review screen yet.
+    // ── Target submission (carries the idempotency marker). THE SHARED
+    //    RESOLVER, not a local status rule: this used to be
+    //    `.eq('status','completed')` — the exact stale rule resolve-submission
+    //    was built to kill — so every `reviewed`-status account (the MAJORITY
+    //    shape in production: 47 of 79 2025 account-years had no `completed`
+    //    row) got `no_submission` and the "come review your P&L" package never
+    //    sent, while the FAILURE notifier fired regardless. The system alarmed
+    //    loudly but never gave the all-clear. (Bug-hunter M3 on the 2026-08-13
+    //    ship; Antonio's Wave-2 "fix now".) No submission with client data →
+    //    nothing to attach to / the client has no review screen yet.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = supabaseAdmin as any // financials_meta not yet in database.types.ts
-    const { data: sub } = await db
-      .from("tax_return_submissions")
-      .select("id, financials_meta")
-      .eq("account_id", accountId)
-      .eq("tax_year", taxYear)
-      .eq("status", "completed")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle() as { data: { id: string; financials_meta: Record<string, unknown> | null } | null }
+    const { resolveClientSubmission } = await import("@/lib/tax/resolve-submission")
+    const sub = await resolveClientSubmission<{ id: string; financials_meta: Record<string, unknown> | null }>(
+      db, accountId, taxYear, "id, financials_meta",
+    )
     if (!sub?.id) return { notified: false, reason: "no_submission" }
 
     const meta = (sub.financials_meta ?? {}) as Record<string, unknown>

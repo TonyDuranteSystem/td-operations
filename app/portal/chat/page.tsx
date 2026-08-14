@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils'
 export default async function PortalChatPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string }>
+  searchParams: Promise<{ view?: string; topic?: string }>
 }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -75,7 +75,10 @@ export default async function PortalChatPage({
   }
 
   const locale = getLocale(user)
-  const { view } = await searchParams
+  const { view, topic } = await searchParams
+  // Deep-linked topic (Wave 2): tax notification links open the chat ON the
+  // tax tab so the client's reply is tagged without them knowing anything.
+  const initialTopic = typeof topic === 'string' && topic.trim() ? topic.trim().slice(0, 100) : null
   // Teammates are scoped to chat only — the Journey Log (contact-oriented) is hidden.
   const isTeammate = !contactId
   const activeView = view === 'log' && !isTeammate ? 'log' : 'chat'
@@ -124,6 +127,7 @@ export default async function PortalChatPage({
           locale={locale}
           entities={entities}
           selectedEntityId={selectedEntityId}
+          initialTopic={initialTopic}
         />
       ) : (
         <div className="flex-1 overflow-y-auto">

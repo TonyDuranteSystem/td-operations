@@ -53,12 +53,17 @@ import {
   claimsAnotherSurfaceCanAct,
   buildPhantomFileNudge,
   claimsFileProduced,
+  claimsFileGenerated,
+  foundAttachableDocumentThisTurn,
   buildCorrectionNudge,
   looksLikeFailedLookup,
   assertsCannotDo,
   looksLikeIncompleteRead,
   finalizeReplyForStopReason,
   TRUNCATED_EMPTY_REPLY,
+  looksLikeDigInAsk,
+  shouldNudgeQuickGear,
+  buildQuickGearWrapUpNudge,
 } from "./answer-guards"
 import {
   type PendingRead,
@@ -4095,6 +4100,8 @@ export async function runWorkerLoop(
   let surfaceRedirectLatched = false
   // One rewrite only, like the others.
   let phantomFileLatched = false
+  // One nudge only, like the others (dev job 5e87b099, 2026-08-14).
+  let quickGearLatched = false
   // READ-TO-THE-END enforcement (2026-07-29, Antonio: "I can't rely on … obeying
   // the instruction"). The ledger is OUR record of files the model started but has
   // not finished reading, built from our own windowText markers. Unlike the other
@@ -4123,6 +4130,10 @@ export async function runWorkerLoop(
           .map((b) => b.text)
           .join("\n")
   const staffTurnIsCorrection = isCorrection(staffTurnText)
+  // Computed once from the CURRENT turn's own words, same as the correction
+  // check above — whether THIS ask reads as an explicit "go investigate", not
+  // whether an earlier turn in the conversation did.
+  const staffLooksLikeDigIn = looksLikeDigInAsk(staffTurnText)
 
   // Anthropic tool format. Client tools (executed by executeWorkerTool) carry an
   // input_schema; ANTHROPIC SERVER tools (web_search / web_fetch — run on Anthropic's
@@ -4279,7 +4290,22 @@ export async function runWorkerLoop(
           //     tool, and describes the result. Once even describing a Python sandbox
           //     that does not exist. The trace is the gate: artifacts is OUR record of
           //     what was actually produced, not something the model can assert.
-          if (!phantomFileLatched && artifacts.length === 0 && claimsFileProduced(reply)) {
+          //     EXCLUDED (ambiguous "attached" claims only) when search_documents
+          //     already found a real, existing record this turn (dev job 5e87b099,
+          //     2026-08-13): "Attaching: the signed 2024 Form 1065…" about a document
+          //     the worker actually found trips the same text pattern as a truly
+          //     phantom file, and forced it to discuss pdf_create/spreadsheet_create
+          //     it never needed and Luca never asked about. NEVER excluded for an
+          //     UNAMBIGUOUS "I've generated/created…" claim — finding one real,
+          //     unrelated document must not excuse a false claim about a different,
+          //     separately-claimed one (bug-hunter's compound-request finding,
+          //     2026-08-14: "find the lease AND make a settlement PDF, attach both").
+          if (
+            !phantomFileLatched &&
+            artifacts.length === 0 &&
+            claimsFileProduced(reply) &&
+            (claimsFileGenerated(reply) || !foundAttachableDocumentThisTurn(succeededTools))
+          ) {
             phantomFileLatched = true
             console.warn("[worker] claimed a file it never produced — forcing a real one")
             currentMessages = [
@@ -4418,6 +4444,38 @@ export async function runWorkerLoop(
         // every tool result as DATA, never instructions.
         content: fenceToolResult(toolBlock.name, result),
       })
+    }
+
+    // QUICK-GEAR CEILING (dev job 5e87b099, 2026-08-14, Luca/Aumianna LLC): a
+    // PLAIN ask — no dig-in language from the staff member THIS turn — that has
+    // already spent more tool calls than a scoped, mechanical task should need
+    // gets ONE nudge to wrap up. Appended into THIS turn's tool-results content
+    // array, never a new consecutive user turn (same reason the exhaustion-
+    // synthesis nudge further below does the same). Nudge-not-block: the model
+    // can still say "still checking X" and continue if it genuinely needs to.
+    //
+    // SKIPPED while a file is genuinely still being read (pendingReads.size > 0):
+    // bug-hunter review (2026-08-14) found that finishing ONE large scanned
+    // document can legitimately take several windowed-read continuations (the
+    // read-to-the-end guard allows up to MAX_READ_CONTINUATION_NUDGES = 8) with
+    // zero dig-in language — exactly Luca's own "read this email, attach the
+    // file" shape when the file is long. That guard already owns the situation;
+    // this one must not spend its one-shot latch fighting it mid-read. The gate
+    // itself lives in shouldNudgeQuickGear (answer-guards.ts) so it's directly
+    // unit-testable, not provable only by driving the whole loop.
+    if (
+      shouldNudgeQuickGear({
+        alreadyLatched: quickGearLatched,
+        staffLooksLikeDigIn,
+        pendingReadsCount: pendingReads.size,
+        toolCallCount: toolsUsed.length,
+      })
+    ) {
+      quickGearLatched = true
+      console.warn(
+        `[worker] quick-gear ceiling hit (${toolsUsed.length} tool calls, no dig-in language this turn) — nudging to wrap up`,
+      )
+      toolResults.push({ type: "text", text: buildQuickGearWrapUpNudge() })
     }
 
     currentMessages = [

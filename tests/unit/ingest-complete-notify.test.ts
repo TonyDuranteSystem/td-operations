@@ -25,6 +25,8 @@ const fixtures: Fixtures = {
 }
 const dispatches: Array<Record<string, unknown>> = []
 const updates: Array<{ table: string; payload: Record<string, unknown> }> = []
+/** Every status filter applied to the submissions table — how (eq vs in) and with what. */
+const submissionStatusFilters: Array<{ kind: "eq" | "in"; value: unknown }> = []
 
 function resolveFor(table: string, op: "select" | "insert" | "update") {
   if (table === "job_queue") return { data: fixtures.otherJobs, error: null }
@@ -40,8 +42,14 @@ function makeBuilder(table: string) {
   const b: Record<string, unknown> = {}
   const chain = () => b
   b.select = chain
-  b.eq = chain
-  b.in = chain
+  b.eq = (col: string, v: unknown) => {
+    if (table === "tax_return_submissions" && col === "status") submissionStatusFilters.push({ kind: "eq", value: v })
+    return b
+  }
+  b.in = (col: string, v: unknown) => {
+    if (table === "tax_return_submissions" && col === "status") submissionStatusFilters.push({ kind: "in", value: v })
+    return b
+  }
   b.neq = chain
   b.order = chain
   b.limit = chain
@@ -79,6 +87,7 @@ beforeEach(() => {
   fixtures.dispatchResult = { dispatched: true, chat: "ok", notification: "ok", email: "ok (1 sent)" }
   dispatches.length = 0
   updates.length = 0
+  submissionStatusFilters.length = 0
 })
 
 describe("notifyIfIngestComplete", () => {
@@ -175,5 +184,22 @@ describe("notifyIfIngestComplete", () => {
     ]
     const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
     expect(res.notified).toBe(true)
+  })
+
+  // ── Wave 2 (bug-hunter M3, Antonio's "fix now"): the ready notice must reach
+  //    `reviewed`-status accounts — the MAJORITY shape in production (47 of 79
+  //    2025 account-years had no `completed` row). The old local rule
+  //    `.eq('status','completed')` returned no_submission for all of them: the
+  //    system alarmed on failure but never gave the all-clear. The submission
+  //    lookup must go through the SHARED resolver's rule (status IN
+  //    completed+reviewed), never a bare eq. ──
+
+  it("resolves the submission with the SHARED rule: status IN (completed, reviewed) — never eq completed", async () => {
+    const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
+    expect(res.notified).toBe(true)
+    // The status filter used was IN with both data-bearing statuses…
+    expect(submissionStatusFilters).toContainEqual({ kind: "in", value: ["completed", "reviewed"] })
+    // …and the stale eq-completed rule is GONE from this module.
+    expect(submissionStatusFilters.filter(f => f.kind === "eq")).toHaveLength(0)
   })
 })

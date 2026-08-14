@@ -260,21 +260,37 @@ export function buildSurfaceRedirectNudge(): string {
 
 
 /**
- * Shapes of the worker claiming it produced a file.
- *
- * "attached above", "here's the PDF", "X.pdf is ready", "I've generated the document".
+ * AMBIGUOUS shapes: "attached above", "here's the PDF", "X.pdf is attached/ready".
+ * These describe an EXISTING document just as easily as an invented one — the
+ * wording alone doesn't say which — so they're the ones exempted below when a
+ * real document was actually found this turn.
  */
-const FILE_CLAIM_PATTERNS: RegExp[] = [
+const ATTACHMENT_CLAIM_PATTERNS: RegExp[] = [
   /\battached\s+(?:above|here|to\s+this)\b/i,
   /\bis\s+attached\b/i,
   /\bhere'?s\s+(?:the|your)\s+(?:pdf|document|letter|file)\b/i,
-  /\b[\w-]+\.pdf\b[^.]{0,40}\b(?:is\s+)?(?:ready|attached|generated|created)\b/i,
-  /\bI'?ve\s+(?:generated|created|produced|made)\s+(?:the|a|your)\s+(?:pdf|document|letter|file)\b/i,
-  /\b(?:pdf|document|file)\s+is\s+(?:ready|generated|created)\b/i,
+  /\b[\w-]+\.pdf\b[^.]{0,40}\b(?:is\s+)?(?:ready|attached)\b/i,
+  /\b(?:pdf|document|file)\s+is\s+ready\b/i,
 ]
 
 /**
- * True when the reply claims a file exists.
+ * UNAMBIGUOUS shapes: "I've generated/created/produced/made the document",
+ * "X.pdf is generated/created". These claim NEW CREATION happened, not merely
+ * that something is attached — so they are NEVER exempted, even when a real,
+ * UNRELATED document was also found this turn. Split out 2026-08-14 (bug-hunter
+ * review) after finding the compound-request gap: "find the signed lease and
+ * also make a settlement PDF, attach both" — search_documents finding the real
+ * lease must never excuse a false claim about the settlement letter.
+ */
+const GENERATION_CLAIM_PATTERNS: RegExp[] = [
+  /\bI'?ve\s+(?:generated|created|produced|made)\s+(?:the|a|your)\s+(?:pdf|document|letter|file)\b/i,
+  /\b[\w-]+\.pdf\b[^.]{0,40}\b(?:generated|created)\b/i,
+  /\b(?:pdf|document|file)\s+is\s+(?:generated|created)\b/i,
+]
+
+/**
+ * True when the reply claims a file exists, in either the ambiguous or the
+ * unambiguous shape.
  *
  * Paired with the turn's ACTUAL produced files: claiming one when none was produced is
  * the original bug reported by Luca on 10 July — told he could download a PDF that had
@@ -285,7 +301,46 @@ const FILE_CLAIM_PATTERNS: RegExp[] = [
 export function claimsFileProduced(reply: string): boolean {
   const text = (reply ?? "").trim()
   if (!text) return false
-  return FILE_CLAIM_PATTERNS.some((re) => re.test(text))
+  return ATTACHMENT_CLAIM_PATTERNS.some((re) => re.test(text)) || GENERATION_CLAIM_PATTERNS.some((re) => re.test(text))
+}
+
+/**
+ * True only for the UNAMBIGUOUS "I created this" shape — never excused by
+ * `foundAttachableDocumentThisTurn`, because finding one real, unrelated
+ * document is not evidence about a SEPARATE, explicitly claimed creation.
+ *
+ * ⚠️ KNOWN, ACCEPTED RESIDUAL GAP (bug-hunter review, 2026-08-14): a reply that
+ * describes BOTH a real and a phantom file using ONLY the ambiguous "attached"
+ * wording for both — e.g. "signed_lease.pdf is attached above, and
+ * settlement_letter.pdf is attached above too" where only the lease is real —
+ * still slips past this guard, because neither `claimsFileGenerated` (no
+ * "generated/created" wording anywhere) nor `foundAttachableDocumentThisTurn`
+ * (search_documents genuinely succeeded) can tell the two files apart within
+ * one reply. Closing this fully needs per-file attribution the guard does not
+ * do today (it judges the whole reply, not each named file). Deliberately left
+ * open rather than guessed at — see the matching test in
+ * worker-artifacts.test.ts for the exact shape this does NOT catch.
+ */
+export function claimsFileGenerated(reply: string): boolean {
+  const text = (reply ?? "").trim()
+  if (!text) return false
+  return GENERATION_CLAIM_PATTERNS.some((re) => re.test(text))
+}
+
+/**
+ * True when this turn already surfaced a REAL, existing document the "attached"
+ * language could legitimately be about — the false-positive class reported
+ * 2026-08-13 (Luca, Aumianna LLC): a draft describing existing stored records
+ * ("Attaching: the signed 2024 Form 1065, Form 8879-PE…") tripped the SAME
+ * pattern this guard uses for a truly phantom, never-produced file.
+ *
+ * Kept to search_documents alone, not the broader document-reading tools —
+ * per send_email's own tool description, search_documents results are the ONLY
+ * ones that carry a valid attach_ref this turn; a Drive/OCR read doesn't by
+ * itself mean the result is attachable, so it isn't evidence "attached" is safe.
+ */
+export function foundAttachableDocumentThisTurn(toolsUsed: readonly string[]): boolean {
+  return (toolsUsed ?? []).includes("search_documents")
 }
 
 /** The nudge for a claimed file that was never made. */
@@ -369,6 +424,90 @@ export function buildCorrectionNudge(): string {
     "",
     "Never claim a source 'agrees' with you unless you just read it this turn.",
     "If you cannot verify, say so plainly and accept the correction.",
+  ].join("\n")
+}
+
+// ── Quick-gear ceiling ───────────────────────────────────────────────────────
+//
+// Reported 2026-08-13 (Luca, Aumianna LLC/Smit Shah, Team Chat, dev job 5e87b099):
+// asked for a plain "read this email, draft a reply, attach the file" and got a
+// 12-tool research spree — KB, SOPs, past conversations, several client-history
+// pulls — for a task that named none of that. The system prompt already has a
+// QUICK vs DIG IN distinction, but it is prose only: nothing stops the worker
+// from treating a plain ask as an investigation. This is the same "instruction
+// alone doesn't hold" pattern the other guards in this file exist for — so it
+// gets the same floor: a deterministic check, not more wording.
+
+/**
+ * Shapes of the staff member explicitly asking for real investigation — mirrors
+ * the DIG IN gear language already in the system prompt ("investigate, check,
+ * diagnose, audit, or asks why"). Deliberately DROPS bare "check": the prompt
+ * itself uses that word for BOTH gears ("check this email" is its own QUICK-gear
+ * example elsewhere in the same prompt), so it cannot reliably signal depth here.
+ */
+const DIG_IN_PATTERNS: RegExp[] = [
+  /\binvestigat/i,
+  /\bdiagnos/i,
+  /\baudit/i,
+  /\bwhy\b/i,
+  /\bdig\s+in\b/i,
+  /\blook\s+into\b/i,
+  /\bfigure\s+out\b/i,
+]
+
+/** True when the staff member's own message reads as an explicit ask to dig in. */
+export function looksLikeDigInAsk(staffMessage: string): boolean {
+  const text = (staffMessage ?? "").trim()
+  if (!text) return false
+  return DIG_IN_PATTERNS.some((re) => re.test(text))
+}
+
+/**
+ * The exact gating decision for the quick-gear ceiling, pulled out of the loop
+ * itself so it is a plain, directly-testable function rather than only provable
+ * by driving the whole loop with fake windowed-read markers. Mirrors the shape
+ * of `hasSearchedForAbsence` etc: pure, no network, no state.
+ */
+export function shouldNudgeQuickGear(opts: {
+  alreadyLatched: boolean
+  staffLooksLikeDigIn: boolean
+  pendingReadsCount: number
+  toolCallCount: number
+}): boolean {
+  return (
+    !opts.alreadyLatched &&
+    !opts.staffLooksLikeDigIn &&
+    opts.pendingReadsCount === 0 &&
+    opts.toolCallCount >= QUICK_GEAR_TOOL_CEILING
+  )
+}
+
+/**
+ * Tool calls a plain, scoped ask gets before the server steps in. Calibrated
+ * 2026-08-14 against real incidents on the same surface: two legitimately-scoped
+ * "verify these company facts, fill the template" tasks used 5 and 7 tool calls;
+ * the incident that prompted this guard used 12, including KB/SOP/conversation
+ * searches the other two never needed for a materially similar ask.
+ */
+export const QUICK_GEAR_TOOL_CEILING = 8
+
+/**
+ * The nudge appended once a PLAIN ask (no dig-in language from the staff member)
+ * has used more tool calls than a quick, scoped task should need. A CHECK-IN,
+ * not a hard stop: bug-hunter review (2026-08-14) found the first draft of this
+ * text ("don't keep searching on your own") actively discouraged genuinely
+ * necessary continued work — e.g. a money-reconciliation ask with no dig-in
+ * wording, or several legitimate windowed-read continuations on one large file.
+ * So this only asks the model to justify continuing, never to stop outright.
+ * Nudge-not-block, same as every guard in this file.
+ */
+export function buildQuickGearWrapUpNudge(): string {
+  return [
+    "You've made several lookups for what reads like a plain, scoped request — not one asking you",
+    "to investigate, diagnose, or audit anything. If you have what you need, stop here and answer,",
+    "or do the specific mechanical thing you were asked to do (draft it, attach it, get it ready for",
+    "confirmation). If this genuinely still needs more digging, that's fine — just say in one line",
+    "what you're still checking and why, then continue.",
   ].join("\n")
 }
 

@@ -234,7 +234,11 @@ describe("notifyClientOfStatementIngestFailure", () => {
     const msg = String((inserts[0] as Record<string, unknown>).message)
     expect(msg).toContain("Relay_2025-06.csv")
     expect(msg).not.toContain("bank_accounts_0_statements")
-    expect(msg).toContain("no action is needed from you")
+    // Wave 2 (Antonio): the chat message states WHAT is wrong + the FIX — the
+    // SAME copy the file card renders — never "no action is needed" for a file
+    // the page tells the client to replace (the shipped contradiction).
+    expect(msg).not.toContain("no action is needed")
+    expect(msg).toContain("remove it below and upload the statement exactly as your bank exports it")
     // staff signal fired
     expect(reportedErrors).toHaveLength(1)
     expect(String(reportedErrors[0].message)).toContain("FAILED ingestion")

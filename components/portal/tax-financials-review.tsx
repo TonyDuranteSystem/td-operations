@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { groupKeyRoot } from '@/lib/tax/question-groups'
 import { resolveInstitution } from '@/lib/tax/bank-identity'
+import { diagnosisCopy } from '@/lib/tax/ingest-diagnosis'
 import { suggestedPhrase, gateSixText } from '@/lib/tax/disclosure-text'
 import ValidationBreakdownPanel from './validation-breakdown'
 
@@ -89,7 +90,10 @@ interface View {
   ingestFailed: number
   /** W9 (card 4a39e0fd): live per-file status — filename, state, and for
    *  failed files the plain-language what-happened + how-to-fix. */
-  file_statuses?: Array<{ path: string; file_name: string; state: 'pending' | 'succeeded' | 'failed' | 'quarantined'; client_error: string | null; empty?: boolean }>
+  file_statuses?: Array<{ path: string; file_name: string; state: 'pending' | 'succeeded' | 'failed' | 'quarantined'; client_error: string | null; empty?: boolean; diagnosis?: { code: string; found_years?: number[]; expected_year?: number; software?: string } | null }>
+  /** The LIVE institution registry (identity build 2026-08-13) — the form
+   *  resolves bank-name → identity mode against the catalog, not the seed. */
+  institutions?: Array<{ canonical: string; mode: 'account_number' | 'currency' | 'crypto'; matchTerms: string[] }>
   /** W9: staff unlocked the failed-file hard block from the CRM. */
   failedFilesOverridden?: boolean
   /** S1: statement files quarantined pending a one-tap format confirmation (staff). */
@@ -279,7 +283,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [uploadNote, setUploadNote] = useState<string | null>(null)
   // Institution identity mode (from the curated seed): banks need an account
   // number; multi-currency / crypto do not. Drives the required field + warning.
-  const uploadInst = useMemo(() => resolveInstitution(uploadBank), [uploadBank])
+  // Resolve against the LIVE registry from the payload when present (staff
+  // catalog changes reach the form without a deploy); code seed as fallback.
+  const uploadInst = useMemo(
+    () => resolveInstitution(uploadBank, view?.institutions?.length ? view.institutions : undefined),
+    [uploadBank, view?.institutions],
+  )
   const uploadNeedsAccount = uploadBank.trim().length > 0 && uploadInst.mode === 'account_number' && !uploadNoAcct
   // P&L expense-category drill-down (Luca's request, dev_task 1bee0ffe).
   const [openCat, setOpenCat] = useState<string | null>(null)
@@ -1226,6 +1235,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     fd.append('bank_name', bank)
     fd.append('account_kind', uploadKind)
     fd.append('account_number', account)
+    // The client's explicit "no single account number" choice travels to the
+    // server, so the server-side required-number gate knows the difference
+    // between "skipped" and "genuinely has no number" (multi-currency/crypto).
+    if (uploadNoAcct) fd.append('no_account_number', '1')
     const res = await fetch(`${API}/upload`, { method: 'POST', body: fd })
     const d = await res.json().catch(() => ({}))
     if (!res.ok) {
@@ -1253,6 +1266,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         ? 'Inserisci il numero di conto di questa banca prima di caricare — serve per non confondere due conti diversi.'
         : 'Enter this bank\'s account number before uploading — it\'s what keeps two different accounts apart.')
       return
+    }
+    // RE-ECHO (plan §B, Antonio's rule): the typed number is read BACK to the
+    // client before anything uploads — a typo here silently splits one real
+    // account into two, so the number is confirmed, not just typed.
+    if (uploadNeedsAccount && account) {
+      const echo = it
+        ? `Confermi il numero di conto?\n\n${uploadInst.canonical} — conto ${account}\n\nSe è sbagliato, il tuo P&L sarà sbagliato.`
+        : `Confirm the account number?\n\n${uploadInst.canonical} — account ${account}\n\nIf it's wrong, your P&L will be wrong.`
+      if (!window.confirm(echo)) return
     }
     if (files.length === 0) return
     setError(null)
@@ -1556,7 +1578,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     <span className={`text-xs ml-2 ${f.state === 'failed' ? 'text-red-700' : f.state === 'quarantined' ? 'text-sky-700' : 'text-zinc-500'}`}>
                       {f.state === 'pending' && (it ? 'Lettura in corso…' : 'Reading…')}
                       {f.state === 'quarantined' && (it ? 'Formato in verifica dal nostro team — nessuna azione richiesta' : 'Format being confirmed by our team — nothing needed from you')}
-                      {f.state === 'failed' && (it ? 'Non leggibile' : 'Could not be read')}
+                      {f.state === 'failed' && (
+                        f.diagnosis?.code === 'wrong_year'
+                          ? (it ? 'Anno sbagliato' : 'Wrong year')
+                          : f.diagnosis?.code === 'not_bank_statement'
+                            ? (it ? 'Non è un estratto conto' : 'Not a bank statement')
+                            : (it ? 'Non leggibile' : 'Could not be read')
+                      )}
                       {f.state === 'succeeded' && f.empty && (it ? 'Letto correttamente — nessuna transazione nel periodo (mese senza attività)' : 'Read correctly — no transactions in its period (a month with no activity)')}
                     </span>
                   </div>
@@ -1570,10 +1598,16 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     </button>
                   )}
                 </div>
-                {f.state === 'failed' && f.client_error && (
-                  <p className="mt-1 text-xs text-red-700">{f.client_error}</p>
-                )}
+                {/* Wave 2 (Antonio): the card says WHAT is wrong + the fix, in
+                    the client's language, from the ONE copy source the chat
+                    message also uses (lib/tax/ingest-diagnosis.ts). Legacy
+                    failures without a diagnosis keep the stored guide text. */}
                 {f.state === 'failed' && (
+                  <p className="mt-1 text-xs text-red-700">
+                    {f.diagnosis ? diagnosisCopy(f.diagnosis as never)[it ? 'it' : 'en'] : f.client_error}
+                  </p>
+                )}
+                {f.state === 'failed' && !f.diagnosis && (
                   <p className="mt-1 text-xs text-zinc-600">
                     {it
                       ? 'Rimuovi il file e carica l\'estratto conto corretto (CSV o PDF ufficiale della banca). Il nostro team è già stato avvisato.'
@@ -1595,7 +1629,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           {(view.accounts?.length ?? 0) > 0 && (
             <div className="mt-2">
               <div className="text-xs text-zinc-500">
-                {it ? 'I tuoi conti già caricati — tocca per riusare lo stesso (evita di riscrivere il numero):' : 'Your accounts on file — tap to reuse the same one (no retyping the number):'}
+                {/* Card e1cb2b44: the old parenthetical promised "no retyping
+                    the number" — false for accounts saved without one (the
+                    chip filled the bank and left the number empty next to a
+                    red warning). The promise now matches reality: chips WITH
+                    a number restore it; numberless ones just fill the bank. */}
+                {it ? 'I tuoi conti già caricati — tocca per riusare lo stesso:' : 'Your accounts on file — tap to reuse the same one:'}
               </div>
               <div className="mt-1 flex flex-wrap gap-1.5">
                 {view.accounts!.map(a => (

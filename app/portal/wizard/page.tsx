@@ -831,6 +831,23 @@ export default async function WizardPage({
     }
   }
 
+  // Identity build (2026-08-13, card 4a39e0fd): the LIVE institution registry
+  // (catalog merged over the code seed) rides to the client so each bank row
+  // resolves its IDENTITY MODE — banks require the account number, Wise-style
+  // services and crypto never ask. Failure = seed-only registry via the
+  // loader's own fallback, never a blocked wizard.
+  let institutions: Array<{ canonical: string; mode: 'account_number' | 'currency' | 'crypto'; matchTerms: string[] }> = []
+  if (wizardType === 'tax') {
+    try {
+      const { loadInstitutionRegistry } = await import('@/lib/tax/institution-registry')
+      institutions = (await loadInstitutionRegistry()).map(e => ({
+        canonical: e.canonical, mode: e.mode, matchTerms: e.matchTerms,
+      }))
+    } catch (e) {
+      console.error('[wizard] Institution registry load failed (non-blocking):', e)
+    }
+  }
+
   // Normalize entity type so the wizard config turns on the right steps. The
   // MMLLC "add members" step only renders for 'MMLLC'; the stored value is
   // "Multi Member LLC" (space), which the old exact-string check missed —
@@ -1114,6 +1131,7 @@ export default async function WizardPage({
           isLocked={isLocked}
           itinCount={itinCount}
           bankGuides={bankGuides}
+          institutions={institutions}
           configOverride={tdCommConfigOverride}
         />
       )}
