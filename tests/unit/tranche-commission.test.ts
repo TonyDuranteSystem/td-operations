@@ -20,7 +20,6 @@ import {
 } from "@/lib/offers/tranche-commission"
 import { validatePaymentPlan, type PaymentPlan } from "@/lib/offers/payment-plan"
 import { DEAD_INVOICE_STATUSES, computePlanStatus } from "@/lib/offers/payment-plan-state"
-import { buildCommissionReviewMessage } from "@/lib/offers/tranche-commission-issue"
 
 /**
  * Build a REAL validated plan. It throws on refusal on purpose: the first version used `.plan!`
@@ -339,58 +338,10 @@ describe("⛔ nothing can accrue while the credit path cannot key per part", () 
 })
 
 // ══════════════════════════════════════════════════════════════════════════════════════════
-//  THE INTERIM GUARD's card — Antonio's decision: suppress the automatic credit, surface the
-//  deal with everything needed to settle it. A card that only says "do this by hand" sends the
-//  reader back to the database to work out what and how much.
+//  THE HAND-SETTLEMENT CARD IS REMOVED (Antonio, 2026-08-13) — replaced by a single
+//  human-confirmed release action once the whole plan is settled in real cash. See
+//  computePlanSettlement + the account-page release action. buildCommissionReviewMessage /
+//  raiseCommissionNeedsHandSettlement and their tests are deleted with it — the card described
+//  an abandoned per-part-accrual design and telling staff to hand-credit "as parts are paid"
+//  under the new pay-once design would risk a real double-payment.
 // ══════════════════════════════════════════════════════════════════════════════════════════
-
-describe("the hand-settlement card carries the amount and the parts", () => {
-  // The REAL production shape: the reward is USD by the standing rule (netted against USD
-  // installments, no FX) while the deal itself is a EUR setup fee. The gate's commission cell
-  // (2026-08-11) caught the card labelling the DEAL figures with the reward's currency — the
-  // architect's ruling: a money card that misstates a currency is a trap for whoever reads it
-  // months later, so the two currencies are pinned separately here.
-  const msg = buildCommissionReviewMessage({
-    clientName: "Mario Rossi",
-    referrerName: "Studio Bianchi",
-    commissionType: "credit_note",
-    totalCommission: 250,
-    currency: "USD",
-    dealCurrency: "EUR",
-    plan: plan(1250, 1250),
-  })
-
-  it("names the client and the referrer", () => {
-    expect(msg).toContain("Mario Rossi")
-    expect(msg).toContain("Studio Bianchi")
-  })
-
-  it("states the total AND every part's share", () => {
-    expect(msg).toContain("250 USD")
-    expect(msg).toContain("part 1 of 2")
-    expect(msg).toContain("part 2 of 2")
-    expect(msg.match(/125 USD/g)?.length).toBe(2)
-  })
-
-  it("labels the deal figures with the DEAL's currency, never the reward's", () => {
-    expect(msg.match(/deal 1250 EUR/g)?.length).toBe(2)
-    expect(msg).not.toContain("deal 1250 USD")
-  })
-
-  it("says plainly that nothing was credited", () => {
-    // The dangerous misreading is that the card is a receipt rather than a to-do.
-    expect(msg).toContain("Nothing was credited automatically")
-    expect(msg).toContain("nothing has issued")
-  })
-
-  it("explains WHY, so the reader does not 'fix' it by wiring the accrual", () => {
-    expect(msg).toContain("silently swallowed")
-    expect(msg).toContain("under-paid")
-  })
-
-  it("never uses the banned renewal vocabulary, even on an internal card", () => {
-    // Staff-facing, but the wording rule is about not confusing the two arrangements ANYWHERE —
-    // and this text is the thing a human copies into an email.
-    expect(msg.toLowerCase()).not.toMatch(/\b(rat[ae]|instal?lments?)\b/)
-  })
-})

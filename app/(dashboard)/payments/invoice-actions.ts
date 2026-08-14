@@ -14,6 +14,7 @@ import {
 import { createTDInvoice } from '@/lib/portal/td-invoice'
 import { applyAvailableCreditToInvoice } from '@/lib/operations/credit-netting'
 import { createHash } from 'crypto'
+import { PLAN_TOTAL_TOLERANCE, validatePaymentPlan } from '@/lib/offers/payment-plan'
 
 // Stable content hash for idempotency keys on manual CRM invoice creation.
 // Two clicks of "Create Invoice" with identical inputs produce the same key,
@@ -72,6 +73,65 @@ export async function createInvoice(
       )
 
   return safeAction(async () => {
+    // ⛔ A RAISED PART MUST MATCH WHAT THE PLAN ACTUALLY PROMISED (2026-08-13) — nothing checked
+    // this before. The form is free text: a mistyped amount here would let a part read as fully
+    // paid on less (or more) cash than the plan states, and — now that a plan's referrer/partner
+    // commission is released once the whole plan is genuinely settled — a short part could make
+    // the deal LOOK complete while the client owes more, or a long part could overstate what a
+    // referrer's commission should be based on. Checked against the SAME tolerance the rest of
+    // the plan math uses, so this can never be a stricter or looser opinion than any other rail.
+    if (invoiceData.tranche) {
+      // ⛔ NO DISCOUNT ON A PLAN PART (2026-08-14, bug-hunter, code-level pass) — the part's
+      // agreed amount already IS the definitive figure; a discount on top of it is a second,
+      // conflicting way of stating what's owed. Found reachable: this screen's discount field
+      // renders unconditionally even in tranche mode. The check above compares `total`
+      // (subtotal MINUS discount) against the plan — correctly — but the actual invoice this
+      // creates is NOT told about the discount at all (createTDInvoice takes only line items),
+      // so the persisted invoice and its PDF show the FULL undiscounted amount while this guard
+      // saw the discounted one. That gap let a mismatched real invoice sail through a check that
+      // had just "confirmed" it matched — and the inflated total would then overstate a
+      // referrer's or partner's commission, computed from the real invoice, not the form. If a
+      // client genuinely needs a discount on a part, change the PLAN'S part amount and re-raise,
+      // so there is one number, not two.
+      if ((invoiceData.discount || 0) > 0) {
+        throw new Error(
+          "A part of a payment plan cannot carry a separate discount — the plan's part amount is " +
+          "already the figure owed. To reduce it, edit the plan on the offer, then raise again.",
+        )
+      }
+      const planQuery = supabaseAdmin
+        .from('offers')
+        .select('payment_plan' as never)
+        .eq('token', invoiceData.tranche.offer_token) as unknown as {
+          maybeSingle: () => Promise<{ data: { payment_plan?: unknown } | null }>
+        }
+      const { data: offerRow } = await planQuery.maybeSingle()
+      const parsed = validatePaymentPlan(offerRow?.payment_plan)
+      const part = parsed.ok && parsed.plan ? parsed.plan.find((p) => p.seq === invoiceData.tranche!.seq) : undefined
+      // ⛔ CURRENCY, NOT JUST AMOUNT (2026-08-14, bug-hunter, 6th pass) — the currency dropdown on
+      // this screen is fully editable even in tranche mode, and a number can agree with the plan
+      // while the currency silently doesn't (e.g. 1000 EUR raised against a part agreed at 1000
+      // USD). The amount check below cannot catch this — it compares bare numbers — and a
+      // currency-blind total then feeds directly into the settlement sum a referrer's or
+      // partner's commission is computed from. Checked first: comparing amounts across different
+      // currencies is meaningless anyway.
+      if (part && part.currency !== invoiceData.amount_currency) {
+        throw new Error(
+          `Part ${part.seq} of this plan is agreed in ${part.currency} — this invoice is in ` +
+          `${invoiceData.amount_currency}. They must match. Fix the currency, or fix the plan on the offer, then raise again.`,
+        )
+      }
+      if (part && Math.abs(total - part.amount) > PLAN_TOTAL_TOLERANCE) {
+        throw new Error(
+          `Part ${part.seq} of this plan is agreed at ${part.amount} — this invoice totals ${total}. ` +
+          `They must match. Fix the amount, or fix the plan on the offer, then raise again.`,
+        )
+      }
+      // No matching part or an unparsable plan: not this guard's job to invent an opinion about
+      // — createTDInvoice and the money rails downstream already handle a plan that doesn't
+      // validate. Silently proceeding here matches that existing, deliberate degrade.
+    }
+
     // A later PART of a plan inherits the OFFER's pinned card-fee rate (council, 2026-08-11).
     // Part one gets the pin from the signing webhook; without this, a hand-raised part two on a
     // waived-fee deal would pin the CURRENT configured rate and charge a card fee the signed
@@ -176,15 +236,59 @@ export async function updateInvoice(
   return safeAction(async () => {
     const supabase = createClient()
 
-    // Verify still Draft
-    const { data: current } = await supabase
+    // Verify still Draft. Also reads the tranche columns (postdate generated types, same cast
+    // pattern the part1Query below already uses) — the plan guard right after needs them.
+    const currentQuery = supabase
       .from('payments')
-      .select('invoice_status')
-      .eq('id', paymentId)
-      .single()
+      .select('invoice_status, tranche_offer_token, tranche_seq' as never) as unknown as {
+        eq: (c: string, v: unknown) => {
+          single: () => Promise<{ data: { invoice_status: string; tranche_offer_token: string | null; tranche_seq: number | null } | null }>
+        }
+      }
+    const { data: current } = await currentQuery.eq('id', paymentId).single()
 
     if (current?.invoice_status !== 'Draft') {
       throw new Error('Can only edit Draft invoices')
+    }
+
+    // ⛔ SAME PLAN GUARD AS createInvoice, APPLIED HERE TOO (2026-08-14, bug-hunter, 5th pass on
+    // the release feature) — createInvoice's guard only runs at the moment a tranche invoice is
+    // FIRST raised. This dialog can reopen and re-save that SAME Draft invoice afterward, through
+    // the same discount field or a changed line item, with no awareness it belongs to a plan —
+    // silently re-diverging it from the agreed part amount through a second door, undermining the
+    // exact protection the create-time guard exists for. Same tolerance, same refusal wording.
+    if (current.tranche_offer_token) {
+      if ((input.discount || 0) > 0) {
+        throw new Error(
+          "A part of a payment plan cannot carry a separate discount — the plan's part amount is " +
+          "already the figure owed. To reduce it, edit the plan on the offer, then save again.",
+        )
+      }
+      const planQuery = supabaseAdmin
+        .from('offers')
+        .select('payment_plan' as never)
+        .eq('token', current.tranche_offer_token) as unknown as {
+          maybeSingle: () => Promise<{ data: { payment_plan?: unknown } | null }>
+        }
+      const { data: offerRow } = await planQuery.maybeSingle()
+      const parsed = validatePaymentPlan(offerRow?.payment_plan)
+      const part = parsed.ok && parsed.plan ? parsed.plan.find((p) => p.seq === current.tranche_seq) : undefined
+      // ⛔ CURRENCY, NOT JUST AMOUNT — same gap, same fix as createInvoice (2026-08-14, bug-hunter,
+      // 6th pass). Checked first: comparing amounts across different currencies is meaningless.
+      if (part && part.currency !== input.amount_currency) {
+        throw new Error(
+          `Part ${part.seq} of this plan is agreed in ${part.currency} — this invoice is in ` +
+          `${input.amount_currency}. They must match. Fix the currency, or fix the plan on the offer, then save again.`,
+        )
+      }
+      if (part && Math.abs(total - part.amount) > PLAN_TOTAL_TOLERANCE) {
+        throw new Error(
+          `Part ${part.seq} of this plan is agreed at ${part.amount} — this invoice totals ${total}. ` +
+          `They must match. Fix the amount, or fix the plan on the offer, then save again.`,
+        )
+      }
+      // No matching part or an unparsable plan: same deliberate degrade as createInvoice — not
+      // this guard's job to invent an opinion the money rails downstream already handle.
     }
 
     // Update payment record (Draft status already verified above — no optimistic lock needed)

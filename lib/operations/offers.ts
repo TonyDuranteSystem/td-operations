@@ -25,7 +25,7 @@ import { normalizeFormationState } from "@/lib/formation/states"
 import { availableCreditForDisplay, unspentCreditByCurrency } from "@/lib/operations/credit-netting"
 import { resolveCreditSubject, subjectForDisplay, type CreditSubject } from "@/lib/operations/credit-subject"
 import { parsePriceQuirk, resolveOfferCurrency, ambiguousDotPrices } from "@/lib/offers/compute-offer-totals"
-import { refusePlanWithReferralPartner, signingPart, validatePaymentPlan } from "@/lib/offers/payment-plan"
+import { signingPart, validatePaymentPlan } from "@/lib/offers/payment-plan"
 import type { Json } from "@/lib/database.types"
 
 // ─── JSONB validation ───────────────────────────────────────
@@ -488,22 +488,15 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
           error: `Payment plan: ${planCheck.errors.join(" ")}`,
         }
       }
-
-      // ⛔ A plan and a referrer cannot share an offer until the referral credit path can pay a
-      // commission part by part. Refused HERE, at authoring, so the hand-settlement card stays a
-      // safety net rather than the normal route.
-      // partner_id included (council blocker, 2026-08-11): a managed-partner deal is a THIRD
-      // commission rail — its payout is computed from the activation amount, which is the WHOLE
-      // commitment, so a plan would write a full-deal payout figure on first-part payment with
-      // nothing telling the approver only part one arrived.
-      const hasReferrer = Boolean(
-        params.referrer_name || params.referrer_contact_id || params.referrer_account_id || params.partner_id,
-      )
-      // Staff-facing, English only — the client never learns a referrer exists.
-      const referrerRefusal = refusePlanWithReferralPartner(hasReferrer, params.client_name)
-      if (referrerRefusal) {
-        return { success: false, outcome: "validation_error", error: referrerRefusal }
-      }
+      // ⛔ A plan + a referrer/partner on the same offer is now LEGAL (Antonio, 2026-08-13,
+      // reversing the 2026-08-10 refusal). The defect the refusal existed to prevent — the
+      // referral-credit issuer can only key ONE credit per referral, so a per-part accrual would
+      // need it to accumulate across several credits, which it cannot do — does not apply to the
+      // design that replaces it: commission is now released ONCE, by a human, only after the
+      // WHOLE plan is settled in real cash. There is no accrual, no accumulation, no interim
+      // partial credit — so the issuer's existing single-credit-per-referral shape is exactly
+      // right, unchanged. See lib/offers/tranche-commission.ts (still dormant, unchanged) and the
+      // release action wired from the account page for the actual mechanism.
     }
 
     // 2. Require at least one of: client_name, and (lead_id OR account_id OR standalone allowed by MCP)
@@ -675,39 +668,10 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
       if (lr?.referrer_contact_id || lr?.referrer_account_id) referralAutoFilled = true
     }
 
-    // ⛔ 6c. THE REFUSAL, RE-EVALUATED ON THE *EFFECTIVE* REFERRER — the one this offer will
-    // actually be stored with (bug-hunter + system-counselor, both independently, 2026-08-13).
-    //
-    // The check at step 1 tests params only, and the two auto-fill blocks above run AFTER it:
-    // 6a re-fills the NAME from the lead whenever the caller sent none, and 6b inherits the
-    // PINNED ids "regardless of the name-autofill gate". So a caller that clears the referrer
-    // and sends a plan passes the first check and then has the referrer put back underneath it —
-    // storing exactly the plan+referrer shape the guard exists to make impossible.
-    //
-    // That is not hypothetical: the Create Offer dialog's own lock tells staff to "clear the
-    // referrer to use a split", and every Calendly lead carries a free-text referrer_name from
-    // the "how did you find us" answer. Following the instruction produced the forbidden offer.
-    //
-    // Placed here because this is the first point where refName/refContactId/refAccountId are
-    // final. The step-1 check STAYS: it fails fast on an obviously-bad call and names the field
-    // the caller actually sent.
-    if (params.payment_plan != null) {
-      const effectiveRefusal = refusePlanWithReferralPartner(
-        Boolean(refName || refContactId || refAccountId || params.partner_id),
-        params.client_name,
-      )
-      if (effectiveRefusal) {
-        return {
-          success: false,
-          outcome: "validation_error",
-          // Says WHERE the referrer came from — a caller that cleared the field would otherwise
-          // read this as the system contradicting itself.
-          error: referralAutoFilled
-            ? `${effectiveRefusal} (This offer's referrer was inherited from the lead — clear it on the LEAD record, not just on this form.)`
-            : effectiveRefusal,
-        }
-      }
-    }
+    // ⛔ 6c REMOVED (2026-08-13) — a plan+referrer offer is legal now; see the step-1 comment
+    // above for why. This step used to re-evaluate the refusal against the EFFECTIVE referrer
+    // (after the two auto-fill blocks above put one back that step 1 didn't see) — that ordering
+    // problem is moot once there is nothing left to refuse.
 
     // 7. Currency + bank details
     const currency = detectCurrency(params.currency, params.cost_summary, params.services)

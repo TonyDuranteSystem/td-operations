@@ -15,7 +15,7 @@ import { logAction } from "@/lib/mcp/action-log"
 import { getGreeting } from "@/lib/greeting"
 import { APP_BASE_URL } from "@/lib/config"
 import { publishOffer, resendOfferEmail } from "@/lib/offers/publish"
-import { clientFacingPartLabel, refusePlanWithReferralPartner, validatePaymentPlan } from "@/lib/offers/payment-plan"
+import { clientFacingPartLabel, validatePaymentPlan } from "@/lib/offers/payment-plan"
 import { createOffer, type OfferContractType, type OfferPaymentType, type OfferPaymentGateway } from "@/lib/operations/offers"
 import { FORMATION_STATE_CODES, normalizeFormationState } from "@/lib/formation/states"
 
@@ -523,12 +523,11 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
         // Three rules, mirroring offer creation:
         //   1. a payment_plan written here must VALIDATE — a malformed stored plan makes the card
         //      rail refuse and the pages hide amounts while the signing webhook bills the WHOLE
-        //      fee to a client who agreed to pay in parts;
-        //   2. a plan cannot be added to an offer that carries a referrer or a managed partner;
-        //   3. a referrer/partner cannot be added to an offer that carries a plan.
-        // Commission on a plan deal is settled BY HAND until job a5e61a46 lands — no automatic
-        // rail can pay it correctly, so the shape is refused everywhere it could be authored.
-        const REFERRER_KEYS = ["referrer_name", "referrer_contact_id", "referrer_account_id", "partner_id"] as const
+        //      fee to a client who agreed to pay in parts.
+        // ⛔ A plan + a referrer/partner is now LEGAL (Antonio, 2026-08-13) — the refusal that
+        // used to live here is removed; see lib/operations/offers.ts's step-1 comment for why.
+        // Commission is now released ONCE, by a human, only after the whole plan is settled in
+        // real cash — see the account-page release action.
         let planEcho = ""
         if ("payment_plan" in updates && updates.payment_plan != null) {
           const planCheck = validatePaymentPlan(updates.payment_plan)
@@ -548,30 +547,6 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
               .join("\n") +
             "\nIf any line is not what the client should see, fix the plan and save again."
         }
-        const touchesReferrer = REFERRER_KEYS.some((k) => k in updates && updates[k])
-        const addsPlan = "payment_plan" in updates && updates.payment_plan != null
-        if (touchesReferrer || addsPlan) {
-          const { data: current } = await supabaseAdmin
-            .from("offers")
-            .select("referrer_name, referrer_contact_id, referrer_account_id, partner_id")
-            .eq("token", token)
-            .maybeSingle()
-          // The stored plan needs its own narrow read — the column postdates the generated types.
-          const planQuery = supabaseAdmin.from("offers").select("payment_plan" as never).eq("token", token) as unknown as {
-            maybeSingle: () => Promise<{ data: { payment_plan?: unknown } | null }>
-          }
-          const { data: planRow } = await planQuery.maybeSingle()
-          const storedPlan = planRow?.payment_plan ?? null
-          const hasStoredReferrer = Boolean(
-            current?.referrer_name || current?.referrer_contact_id || current?.referrer_account_id || current?.partner_id,
-          )
-          const willHavePlan = addsPlan || storedPlan != null
-          const willHaveReferrer = touchesReferrer || hasStoredReferrer
-          if (willHavePlan && willHaveReferrer) {
-            return { content: [{ type: "text" as const, text: `❌ offer_update error: ${refusePlanWithReferralPartner(true, token)}` }] }
-          }
-        }
-
         if ("formation_state" in updates) {
           const raw = updates.formation_state
           if (raw === null || raw === "") {

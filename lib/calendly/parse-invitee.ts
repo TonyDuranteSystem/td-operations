@@ -31,7 +31,6 @@ export interface ParsedInvitee {
   /** IANA timezone of the invitee, e.g. "Europe/Berlin". */
   timezone: string | null
   reason: string | null
-  referrerName: string | null
   referralCode: string | null
   eventUri: string | null
   eventTypeName: string | null
@@ -157,15 +156,20 @@ export function extractInviteeFields(
   const phone = extractPhone(invitee, qa)
   const language = detectLanguage(qa)
 
-  // Reason + "how did you hear" from the form. Keep keyword matching; skip the
-  // phone/language answers so the fallback can't grab them by mistake.
+  // Reason from the form. Keep keyword matching for the reason question only —
+  // ⛔ this deliberately no longer extracts a "referrer" from a "how did you hear
+  // about us" answer (Antonio, 2026-08-13): that question is a marketing channel
+  // ("Instagram", "Google", "a friend told me"), not a person, and treating free
+  // text as a referrer's name attached a real, eventually-payable commission to
+  // words a client typed into a form field. The raw answer is never lost — the
+  // full Q&A is dumped verbatim into the lead's notes by buildLeadNotes below
+  // regardless of this classification. A REAL referrer is something staff choose
+  // deliberately in the offer's Referrer picker, or the verified referral-CODE
+  // path below (a real code resolving to a real contact) — never inferred here.
   let reason: string | null = null
-  let referrerName: string | null = null
   for (const item of qa) {
     const q = item.question.toLowerCase()
-    if (q.includes("hear about") || q.includes("find out") || q.includes("referral") || q.includes("come ci hai") || q.includes("conoscenza")) {
-      referrerName = item.answer || null
-    } else if (q.includes("reason") || q.includes("motivo") || q.includes("help") || q.includes("interest")) {
+    if (q.includes("reason") || q.includes("motivo") || q.includes("help") || q.includes("interest")) {
       reason = item.answer || null
     }
   }
@@ -173,11 +177,10 @@ export function extractInviteeFields(
     const firstMeaningful = qa.find(
       (item) =>
         item.answer !== phone &&
-        item.answer !== referrerName &&
         langFromAnswer(item.answer, false) === null &&
         !/^\+?[\d][\d\s().-]{6,}$/.test(item.answer)
     )
-    if (firstMeaningful && firstMeaningful.answer !== referrerName) reason = firstMeaningful.answer
+    if (firstMeaningful) reason = firstMeaningful.answer
   }
 
   const eventUri = (p.event as string) || null
@@ -207,7 +210,6 @@ export function extractInviteeFields(
     callTime,
     timezone,
     reason,
-    referrerName,
     referralCode,
     eventUri,
     eventTypeName: (scheduledEvent?.name as string) || null,

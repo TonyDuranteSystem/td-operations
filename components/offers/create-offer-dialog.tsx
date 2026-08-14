@@ -637,13 +637,11 @@ export function CreateOfferDialog({
   const totalAmount = servicesTotalAmount + preconditionsTotalAmount
 
   // ── WS-C split: build the plan exactly as the engine will read it ──────────
-  // A plan cannot share an offer with a referrer or a managed partner: activation credits
-  // the WHOLE commission on the first payment, so a referrer would be paid in full on part
-  // one. The engine refuses it; this screen must not let it be typed.
-  const splitLockedByCommission = Boolean(
-    referrer.name.trim() || referrer.contactId || referrer.accountId || partnerId,
-  )
-  const splitActive = splitEnabled && !splitLockedByCommission
+  // ⛔ A plan can share an offer with a referrer or a managed partner (Antonio, 2026-08-13,
+  // reversing the earlier lock). Commission is now released ONCE, by a human, only after the
+  // whole plan is settled in real cash — see the account-page release action — so there is
+  // nothing left for this screen to protect against by refusing to let a split be typed.
+  const splitActive = splitEnabled
 
   // Each typed amount, parsed WITHOUT the stored-price quirk (which turns "1.750" into 1.75).
   // An ambiguous or unreadable entry yields 0, so the plan cannot validate and the author is
@@ -697,15 +695,7 @@ export function CreateOfferDialog({
   // that a split was ever intended — the client signs and is billed the whole fee. Silence is
   // indistinguishable from "the author changed their mind". So the split now BLOCKS instead.
   //
-  // ⛔ AND THE SECOND DOOR: enabled-but-LOCKED must block too, never silently drop.
-  // `splitActive` is false when a referrer/partner is present, so gating the whole reason on it
-  // reopened the very hole this variable was added to close — author a valid plan FIRST, pick a
-  // referrer AFTER, and the section unmounts while the checkbox stays visibly ticked, the plan is
-  // posted as null, and the client is invoiced the whole fee. The referrer is exactly the field
-  // filled in late (it is remembered mid-call), so this is the likely ordering, not the exotic one.
-  const splitBlockReason: string | null = splitEnabled && splitLockedByCommission
-    ? "This offer now has a referrer or a managed partner, so it cannot be sold in parts — the commission would be credited in full on the first payment. Either remove the referrer/partner, or untick \"Client pays the setup fee in parts\". Your split has NOT been saved."
-    : !splitActive
+  const splitBlockReason: string | null = !splitActive
     ? null
     : ambiguousAmounts.length > 0
       ? `Part ${ambiguousAmounts[0].seq}: "${ambiguousAmounts[0].raw}" could mean ${currencySymbol}${ambiguousAmounts[0].asThousands.toLocaleString('en-US')} or ${currencySymbol}${ambiguousAmounts[0].asDecimal}. Write it without the dot (e.g. ${ambiguousAmounts[0].asThousands}).`
@@ -1510,24 +1500,15 @@ export function CreateOfferDialog({
               <input
                 type="checkbox"
                 checked={splitEnabled}
-                // ⛔ NEVER disabled while it is TICKED. The block message and the red warning both
-                // tell the author to "untick this box" — and disabling it in exactly that state
-                // made the instruction impossible to follow AND blocked offer creation entirely,
-                // including the harmless "ticked out of curiosity, nothing typed" case (hunter,
-                // pass 3). A dead end created by a guard is worse than the thing it guarded.
-                // Locked + unticked still prevents STARTING a split on a referred deal.
-                disabled={splitLockedByCommission && !splitEnabled}
                 onChange={e => setSplitEnabled(e.target.checked)}
               />
               Client pays the setup fee in parts
             </label>
-            {splitLockedByCommission && (
-              <p className={`text-xs mt-1 ${splitEnabled ? 'text-red-600 font-medium' : 'text-amber-600'}`}>
-                {/* When a plan was already authored, this is not an explanatory note — it is a
-                    warning that the work on screen will not be saved. Say so in those words. */}
-                {splitEnabled
-                  ? 'Your split will NOT be saved: this offer now carries a referrer or a managed partner, and commission is credited in full on the first payment. Remove the referrer/partner, or untick this box.'
-                  : 'Not available on this offer: it carries a referrer or a managed partner. Commission is credited in full on the first payment, so a split would pay it before the deal is fully paid. Clear it on the LEAD record (not just this form) to use a split, or settle the commission by hand.'}
+            {splitEnabled && (referrer.name.trim() || referrer.contactId || referrer.accountId || partnerId) && (
+              <p className="text-xs text-blue-600 mt-1">
+                This offer carries a referrer or a managed partner. Their commission is released
+                once, by hand, from the account page — only after the whole split is paid in full
+                cash. Nothing pays automatically on the first part.
               </p>
             )}
 

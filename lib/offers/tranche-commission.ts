@@ -184,14 +184,15 @@ export function trancheCommissionKey(offerToken: string, seq: number): string {
  * reading why it exists. That is the point: the previous version of this protection was a comment,
  * and a comment does not stop anybody.
  *
- * ⛔ FLIP THIS LAST. The order is: job `a5e61a46` lands → delete the authoring refusal in
- * `payment-plan.ts::refusePlanWithReferralPartner` → then flip this. Never before.
- *
- * TO FLIP IT, both must be true — verify them, do not assume:
- *   1. the credit-note issuer accepts a caller-supplied idempotency key and uses it;
- *   2. the referral row ACCUMULATES the credited amount rather than assigning it, and its status
- *      gate does not treat the first part as "done".
- * Tracked as its own job because it touches live money partners can already see.
+ * ⛔ SUPERSEDED, NOT PENDING (Antonio, 2026-08-13): this file's whole per-part-accrual design is
+ * DELIBERATELY DORMANT, permanently, not waiting on a lift order. Antonio's actual rule — pay the
+ * referrer/partner ONCE, only after the WHOLE plan is settled in real cash — needs no accrual at
+ * all: there is nothing to accumulate, so the single-credit-per-referral shape this interlock
+ * describes is already exactly right, unmodified. The authoring refusal this comment used to
+ * reference (`payment-plan.ts::refusePlanWithReferralPartner`) is deleted — a plan+referrer offer
+ * is legal now. See `computePlanSettlement` + the account-page release action for the real
+ * mechanism. Do not flip this constant to build that; it is not the road not yet finished, it is
+ * the road not taken.
  */
 export const ISSUER_SUPPORTS_PER_PART_KEY = false
 

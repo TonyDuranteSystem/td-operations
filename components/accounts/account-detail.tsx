@@ -115,7 +115,13 @@ function formatDate(d: string | null): string {
 
 function formatCurrency(amount: number | null, currency?: string | null): string {
   if (amount == null) return '—'
-  const c = currency === 'EUR' ? '€' : '$'
+  // ⛔ FALLBACK, NOT SILENT $ (2026-08-14, council pass, senior-engineer) — the plan-currency
+  // validator accepts any non-empty currency string, no EUR/USD restriction, so a symbol-only
+  // map silently mislabels anything else as $ on exactly the screens meant to let a human catch
+  // a wrong number before money moves. TD only actually uses EUR/USD today, so this fallback is
+  // not expected to render in practice — it exists so an unexpected value is visibly honest
+  // (e.g. "GBP 500.00") instead of confidently wrong.
+  const c = currency === 'EUR' ? '€' : currency === 'USD' || !currency ? '$' : `${currency} `
   return `${c}${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
@@ -980,6 +986,14 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
     client_name: string | null
     currency: string
     fully_settled: boolean
+    commission_release: {
+      eligible: boolean
+      total_agreed: number
+      total_received: number
+      has_referrer: boolean
+      has_partner: boolean
+      released_at: string | null
+    } | null
     parts: Array<{
       seq: number
       amount: number
@@ -998,6 +1012,14 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
     description: string
   } | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  // ⛔ RELEASE — a human confirms the REAL numbers before anything is credited (Antonio,
+  // 2026-08-13). `confirming` opens the panel with the numbers the server just returned;
+  // `releasing` guards the button itself against a double-click firing two requests. The
+  // server is the actual idempotency gate — this is purely to keep one click meaning one
+  // request rather than a defense the money correctness depends on.
+  const [confirmingRelease, setConfirmingRelease] = useState<string | null>(null)
+  const [releasing, setReleasing] = useState(false)
+  const [releaseOutcome, setReleaseOutcome] = useState<{ token: string; message: string; ok: boolean } | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -1037,6 +1059,35 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
     paid: 'Paid',
   }
 
+  // ⛔ THE ACTUAL RELEASE — one request, and the SERVER re-verifies eligibility from the
+  // database before crediting anything; nothing here is trusted (Antonio, 2026-08-13).
+  const handleReleaseCommission = async (offerToken: string) => {
+    setReleasing(true)
+    setReleaseOutcome(null)
+    try {
+      const res = await fetch('/api/offers/release-commission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offer_token: offerToken }),
+      })
+      // Route response: { ok, already_released, message, referrer?, partner?, settlement }.
+      // `message` is already the plain-English summary of whichever rail(s) fired — the referrer
+      // credit, the partner payout, or both, since an offer can carry either or both.
+      const d = await res.json().catch(() => ({})) as { ok?: boolean; message?: string; error?: string }
+      if (!res.ok) {
+        setReleaseOutcome({ token: offerToken, ok: false, message: d.error || d.message || 'Release failed.' })
+        return
+      }
+      setReleaseOutcome({ token: offerToken, ok: true, message: d.message || 'Released.' })
+      setConfirmingRelease(null)
+      setReloadKey((k) => k + 1)
+    } catch {
+      setReleaseOutcome({ token: offerToken, ok: false, message: 'Release failed — network error.' })
+    } finally {
+      setReleasing(false)
+    }
+  }
+
   return (
     <>
       <div className="bg-white rounded-lg border p-5 space-y-4">
@@ -1050,7 +1101,7 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
               <div key={part.seq} className="flex items-center justify-between gap-3 text-sm border rounded-md px-3 py-2">
                 <div>
                   <div className="font-medium">
-                    Part {part.seq} — {plan.currency === 'EUR' ? '€' : '$'}{part.amount.toLocaleString('en-US')}
+                    Part {part.seq} — {formatCurrency(part.amount, plan.currency)}
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {stateLabel[part.state] ?? part.state}
@@ -1077,6 +1128,82 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
                 )}
               </div>
             ))}
+
+            {/* ⛔ RELEASE COMMISSION — only rendered when a referrer/partner exists on this
+                offer. `eligible` (real cash, every part, computed server-side) gates the
+                RECOMMENDATION only — the confirm panel opens regardless, so staff can see the
+                real numbers and attempt a release even when this screen shows it as not yet
+                settled (relevant for the documented false-negative — a known matcher recording
+                gap can leave genuinely-paid money looking uncounted here). CORRECTED
+                2026-08-14 (council pass — 3 reviewers independently flagged the prior wording):
+                this is NOT a client-side override. The server re-checks eligibility itself on
+                every request and refuses cleanly with a clear reason whenever it disagrees —
+                there is no bypass parameter anywhere. The only real recovery path for a true
+                false-negative is fixing the underlying invoice record first, then retrying. */}
+            {plan.commission_release && (
+              <div className={`rounded-md border px-3 py-2 text-sm ${plan.commission_release.released_at ? 'bg-zinc-50' : plan.commission_release.eligible ? 'bg-emerald-50 border-emerald-200' : 'bg-zinc-50'}`}>
+                {/* ⛔ RELEASED, PERSISTENT (2026-08-14, bug-hunter, 6th pass) — without this branch
+                    the account page kept showing "ready to release" with an active button forever
+                    after a successful release; nothing on screen ever reflected that it had
+                    already happened. Financially harmless either way (the release route's own
+                    atomic claim refuses a repeat click cleanly), but staff had zero on-screen
+                    signal — this is that signal. */}
+                {plan.commission_release.released_at ? (
+                  <div className="text-xs text-muted-foreground">
+                    ✓ {plan.commission_release.has_partner ? "Partner's payout" : "Referrer's commission"} released on{' '}
+                    {new Date(plan.commission_release.released_at).toLocaleDateString('en-US')}.
+                  </div>
+                ) : confirmingRelease === plan.offer_token ? (
+                  <div className="space-y-2">
+                    <div className="font-medium">
+                      Release the {plan.commission_release.has_partner ? "partner's payout" : "referrer's commission"}?
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Total agreed: {formatCurrency(plan.commission_release.total_agreed, plan.currency)} ·
+                      {' '}Real cash received: {formatCurrency(plan.commission_release.total_received, plan.currency)}
+                      {!plan.commission_release.eligible && ' · ⚠️ Not detected as fully cash-settled — verify before releasing.'}
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={releasing}
+                        className="text-xs font-medium rounded-md px-3 py-1.5 bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+                        onClick={() => handleReleaseCommission(plan.offer_token)}
+                      >
+                        {releasing ? 'Releasing…' : 'Confirm release'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={releasing}
+                        className="text-xs font-medium rounded-md px-3 py-1.5 border hover:bg-muted"
+                        onClick={() => setConfirmingRelease(null)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs">
+                      {plan.commission_release.has_partner ? 'Managed partner' : 'Referrer'} on file
+                      {plan.commission_release.eligible ? ' — fully paid in real cash. Ready to release.' : ' — not yet fully cash-settled.'}
+                    </div>
+                    <button
+                      type="button"
+                      className={`text-xs font-medium rounded-md px-3 py-1.5 ${plan.commission_release.eligible ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'border hover:bg-muted'}`}
+                      onClick={() => { setConfirmingRelease(plan.offer_token); setReleaseOutcome(null) }}
+                    >
+                      Release commission
+                    </button>
+                  </div>
+                )}
+                {releaseOutcome && releaseOutcome.token === plan.offer_token && (
+                  <div className={`text-xs mt-2 ${releaseOutcome.ok ? 'text-emerald-700' : 'text-red-600'}`}>
+                    {releaseOutcome.message}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>

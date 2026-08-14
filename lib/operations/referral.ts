@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { calculateCommission } from "@/lib/referral-utils"
+import { computePlanSettlement } from "@/lib/offers/payment-plan-state"
 
 export const REFERRAL_COMMISSION_PCT = 10
 
@@ -380,6 +381,137 @@ export async function creditReferrerForLead(
 }
 
 /**
+ * Convert a lead-sourced PENDING referral row into a normal, offer-scoped one — so the
+ * payment-plan "Release commission" action credits it IN PLACE instead of leaving it
+ * orphaned and creating a second, disconnected row.
+ *
+ * ⛔ WHY THIS EXISTS (2026-08-14, council full-tier pass — independently found by 3
+ * reviewers: senior-engineer, bug-hunter, Finance-Auditor, the last with a worked $300
+ * double-payment example). When staff pin a referrer on a LEAD (`set-lead-referrer`),
+ * `createPendingReferral` inserts a row keyed ONLY by `referred_lead_id`, `status:'pending'`
+ * — no `referred_contact_id`/`referred_account_id`/`offer_token`, because none of those
+ * exist yet. `createOffer` later auto-inherits that referrer onto the offer. For an
+ * ORDINARY (non-plan) deal, activation's `creditReferrerForLead` finds this exact row by
+ * `referred_lead_id` and converts it. For a PLAN-based deal, activation deliberately writes
+ * NOTHING (the whole point of deferring to this button) — so that pending row is never
+ * touched, and `createManualReferralCredit`'s dedup (scoped to `referred_account_id`/
+ * `referred_contact_id`/`offer_token`, none of which the pending row has) can never find it.
+ * Release used to just create a brand-new row: the referrer got paid correctly, but the
+ * original stayed "pending" forever, and a staff member later acting on that stale row
+ * (which a fuzzy name-only duplicate check does not reliably catch) would pay it AGAIN.
+ *
+ * This runs BEFORE `createManualReferralCredit`: if a matching pending row exists, it is
+ * converted here (same shape `creditReferrerForLead` writes, but using the offer's REAL
+ * commission terms, not a hardcoded 10%) — so `createManualReferralCredit`'s ORDINARY,
+ * unmodified dedup then finds and credits THIS row, not a new one. A no-op — and therefore
+ * safe to call unconditionally — whenever no matching pending row exists.
+ */
+export async function linkLeadReferralToOffer(
+  params: {
+    leadId: string
+    referrerContactId: string | null
+    referrerAccountId: string | null
+    referredContactId: string | null
+    referredAccountId: string | null
+    offerToken: string
+    commissionType: string
+    commissionPct: number | null
+    commissionAmount: number
+    commissionCurrency: string
+  },
+  supabase: SupabaseClient,
+): Promise<void> {
+  const referrerOr = [
+    params.referrerAccountId ? `referrer_account_id.eq.${params.referrerAccountId}` : null,
+    params.referrerContactId ? `referrer_contact_id.eq.${params.referrerContactId}` : null,
+  ].filter(Boolean).join(",")
+  if (!referrerOr) return
+  const { data } = await supabase
+    .from("referrals")
+    .select("id")
+    .eq("referred_lead_id" as never, params.leadId as never)
+    .eq("status", "pending")
+    .or(referrerOr)
+    .limit(1)
+    .maybeSingle()
+  const pending = data as { id: string } | null
+  if (!pending) return
+  await supabase
+    .from("referrals")
+    .update({
+      status: "converted",
+      referred_contact_id: params.referredContactId,
+      referred_account_id: params.referredAccountId,
+      offer_token: params.offerToken,
+      commission_type: params.commissionType,
+      commission_pct: params.commissionPct,
+      commission_amount: params.commissionAmount,
+      commission_currency: params.commissionCurrency,
+    } as Record<string, unknown> as never)
+    .eq("id", pending.id)
+}
+
+/**
+ * Whether a referred party currently has a SIGNED offer carrying a payment plan
+ * that is NOT yet fully settled in real cash — the exact condition the account
+ * page's "Release commission" action exists to gate (`computePlanSettlement`).
+ *
+ * Every OLDER way of paying a referral — the CRM "Add referral" and per-row
+ * "Issue credit" buttons, and the `referral_create`/`referral_payout` MCP tools —
+ * predates that button and has no idea the plan-settlement gate exists. Without
+ * this check, any of them could pay a referrer or partner the moment a deal is
+ * signed, before the client has actually finished paying a plan spread across
+ * several parts — exactly the early-payment risk the release action was built to
+ * close. This is the one check all four call before letting money move, so an
+ * unsettled plan can only ever be paid through the button built for it.
+ *
+ * An offer with no plan, or a plan already fully paid, never blocks — this closes
+ * the early-pay bypass, it does not touch anything else. Nothing identifiable to
+ * check (no offer token, no referred contact or account) never blocks either —
+ * this guard can only refuse what it can actually see; callers that can't name a
+ * referred party keep behaving exactly as they always have.
+ */
+export async function blockedByUnsettledPlan(
+  params: { offerToken?: string | null; referredContactId?: string | null; referredAccountId?: string | null },
+  supabase: SupabaseClient,
+): Promise<{ blocked: false } | { blocked: true; message: string }> {
+  let candidateTokens: string[] = []
+
+  if (params.offerToken) {
+    candidateTokens = [params.offerToken]
+  } else if (params.referredContactId || params.referredAccountId) {
+    const or = [
+      params.referredContactId ? `contact_id.eq.${params.referredContactId}` : null,
+      params.referredAccountId ? `account_id.eq.${params.referredAccountId}` : null,
+    ].filter(Boolean).join(",")
+    // eslint-disable-next-line no-restricted-syntax -- payment_plan postdates the generated types for this table.
+    const { data } = await supabase
+      .from("offers")
+      .select("token")
+      .in("status", ["signed", "completed"])
+      .not("payment_plan" as never, "is", null)
+      .or(or)
+    candidateTokens = ((data ?? []) as { token: string }[]).map((r) => r.token)
+  }
+
+  for (const token of candidateTokens) {
+    const settlement = await computePlanSettlement(token)
+    if (settlement && settlement.parts.length > 0 && !settlement.eligible) {
+      const open = settlement.parts.filter((p) => !p.settledInCash).length
+      return {
+        blocked: true,
+        message:
+          `This client is on a payment plan that is not fully paid in real cash yet ` +
+          `(${open} of ${settlement.parts.length} part(s) still outstanding, offer ${token}). ` +
+          `Use the "Release commission" action on the account page once the whole plan is settled — ` +
+          `it carries the checks this path does not.`,
+      }
+    }
+  }
+  return { blocked: false }
+}
+
+/**
  * Default referral-reward credit for a manual add: 10% of the referred client's
  * setup-fee total, taken DIRECTLY as USD (no FX), per the referral reward rule.
  * Pure — unit tested. Staff may override the result before confirming.
@@ -477,6 +609,23 @@ export interface ManualReferralParams {
   /** USD credit amount — already resolved (auto 10% default or staff override). */
   creditAmountUsd: number
   note?: string | null
+  /**
+   * ⛔ SCOPES DEDUP TO ONE DEAL, NOT ONE RELATIONSHIP (2026-08-14, bug-hunter, 6th pass +
+   * live E2E). Omitted = the ORIGINAL behavior: dedup purely on (referrer, referred), for the
+   * general "add a referral" caller, which has no deal to scope to and where "this referrer has
+   * already been credited for this client, ever" is the correct rule.
+   *
+   * When provided (the payment-plan release caller), it is ADDED to the dedup match. Without
+   * this, a referrer who brings the SAME client back for a SECOND, separate deal was silently
+   * paid only once: the dedup query found the FIRST deal's already-credited row, correctly
+   * declined to recover it (nothing to self-heal — it was already properly paid), and returned
+   * `duplicate` — which the release route reports as an ordinary-looking success ("already
+   * released — no second credit was issued"), while the second deal's commission was never
+   * actually issued and the offer is now permanently marked released with no retry path.
+   * Proven live: 3 releases for one referrer against one shared test client produced 1 credited
+   * referral row and 1 real payment, not 3.
+   */
+  offerToken?: string | null
 }
 
 export type ManualReferralResult =
@@ -504,7 +653,7 @@ export async function createManualReferralCredit(
   params: ManualReferralParams,
   supabase: SupabaseClient,
 ): Promise<ManualReferralResult> {
-  const { referrerContactId, referrerAccountId, referredContactId, referredAccountId, referredName, creditAmountUsd, note } = params
+  const { referrerContactId, referrerAccountId, referredContactId, referredAccountId, referredName, creditAmountUsd, note, offerToken } = params
   const referrerType = params.referrerType === "partner" ? "partner" : "client"
 
   if (!(creditAmountUsd > 0)) return { created: false, reason: "invalid_amount" }
@@ -529,6 +678,10 @@ export async function createManualReferralCredit(
     .neq("status", "cancelled")
   if (referredAccountId) dq = dq.eq("referred_account_id", referredAccountId)
   else if (referredContactId) dq = dq.eq("referred_contact_id", referredContactId)
+  // See the `offerToken` doc comment on ManualReferralParams — scopes dedup to one deal when
+  // the caller has one. eslint-disable: offer_token postdates the generated types for this table.
+  // eslint-disable-next-line no-restricted-syntax
+  if (offerToken) dq = dq.eq("offer_token" as never, offerToken as never)
   const { data: existing } = await dq.limit(1)
   const existingRow = (existing ?? [])[0] as { id: string; status: string; credited_amount: number | null; commission_amount: number | null; commission_currency: string | null } | undefined
 
@@ -585,6 +738,7 @@ export async function createManualReferralCredit(
       commission_currency: "USD",
       credited_amount: 0,
       notes: note || "Manually added via referrals page",
+      offer_token: offerToken ?? null,
     } as Record<string, unknown> as never)
     .select("id")
     .single()

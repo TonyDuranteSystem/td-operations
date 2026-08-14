@@ -70,6 +70,41 @@ export function shouldRunReferralCredit(offer: {
   return !!offer.referrer_name && !offer.partner_id
 }
 
+/**
+ * Whether a managed partner will actually receive a payout for this offer — NOT bare
+ * `partner_id` presence. A partner can be linked with no working payout model (renewal-only
+ * deal, model `'none'`, or unset) — nothing pays through the partner rail in that case, so it
+ * must not be treated as "the partner is being compensated" by anything gating on it.
+ */
+export function hasWorkingPartnerPayout(offer: {
+  partner_id?: string | null
+  partner_payout_model?: string | null
+}): boolean {
+  return !!offer.partner_id && !!offer.partner_payout_model && offer.partner_payout_model !== "none"
+}
+
+/**
+ * Whether the payment-plan release action's referrer rail should run.
+ *
+ * ⛔ DELIBERATELY NOT `shouldRunReferralCredit` (bug-hunter, 2026-08-14, 5th pass on the release
+ * feature). That function suppresses the referrer on bare `partner_id` presence, regardless of
+ * whether the partner has any working payout model — reachable and silent: an offer with a real
+ * referrer AND a renewal-only (or payout-model-less) partner failed BOTH the referrer check
+ * (suppressed — some partner_id exists) and the release route's own partner check (correctly
+ * sees nothing to pay), so release refused with "no referrer or managed partner" and nobody was
+ * ever paid. The same gap already exists in activation's own Step 3.5/3.6 for non-plan deals —
+ * flagged, deliberately NOT fixed there in the same change: correcting the shared function
+ * changes every activation's referrer/partner decision, a wider blast radius than this feature
+ * owns today.
+ */
+export function shouldReleasePlanReferrerCredit(offer: {
+  referrer_name?: string | null
+  partner_id?: string | null
+  partner_payout_model?: string | null
+}): boolean {
+  return !!offer.referrer_name && !hasWorkingPartnerPayout(offer)
+}
+
 /** Parse the `accounts.partner_deal` jsonb back into a typed PartnerDeal. */
 export function parsePartnerDeal(raw: unknown): PartnerDeal | null {
   if (!raw || typeof raw !== "object") return null

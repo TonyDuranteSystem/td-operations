@@ -9,6 +9,7 @@
 import { describe, it, expect } from "vitest"
 import {
   computePlanStatus,
+  computePlanSettlementFromStatus,
   isRaisable,
   DEAD_INVOICE_STATUSES,
   type TrancheInvoiceRow,
@@ -223,6 +224,116 @@ describe("an auto-matched payment is recognised as paid despite its phantom owin
       due_date: null,
     }
     expect(Object.keys(row)).not.toContain("amount_due")
+  })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+//  ⛔ computePlanSettlementFromStatus — THE RELEASE GATE (Antonio, 2026-08-13)
+//
+//  "Paid off" means we received the money AND the invoice is marked Paid — both halves, every
+//  part. Deliberately STRICTER than fullySettled above: fullySettled treats a pure-credit
+//  settlement as closed (correct — the client's obligation IS closed), but this gate must not,
+//  because releasing a referrer's commission on money never received is the exact defect three
+//  review rounds existed to prevent.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+
+describe("computePlanSettlementFromStatus — the release gate", () => {
+  it("eligible when every part is genuinely cash-paid", () => {
+    const status = computePlanStatus(PLAN, [
+      row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1250, amount: 1250 }),
+      row({ tranche_seq: 2, invoice_status: "Paid", amount_paid: 1250, amount: 1250 }),
+    ])
+    const settlement = computePlanSettlementFromStatus("tok", status)
+    expect(settlement.eligible).toBe(true)
+    expect(settlement.totalAgreed).toBe(2500)
+    expect(settlement.totalReceived).toBe(2500)
+  })
+
+  it("⛔ NOT eligible on a PURE CREDIT settlement — the exact case Regenerate can produce", () => {
+    // invoice_status flips to Paid, amount_paid is never touched (credit-netting.ts never writes
+    // it). This is the regression the whole feature exists to prevent.
+    const status = computePlanStatus(PLAN, [
+      row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1250, amount: 1250 }),
+      row({ tranche_seq: 2, invoice_status: "Paid", amount_paid: 0, amount: 1250 }),
+    ])
+    const settlement = computePlanSettlementFromStatus("tok", status)
+    expect(settlement.eligible).toBe(false)
+    expect(settlement.parts[1].settledInCash).toBe(false)
+    expect(settlement.totalReceived).toBe(1250) // real cash only — the credit-settled part contributes nothing
+  })
+
+  it("not eligible when a part is unraised, unsent, part-paid, or sent-but-unpaid", () => {
+    const notRaised = computePlanSettlementFromStatus("tok", computePlanStatus(PLAN, []))
+    expect(notRaised.eligible).toBe(false)
+
+    const unsent = computePlanSettlementFromStatus("tok", computePlanStatus(PLAN, [
+      row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1250, amount: 1250 }),
+      row({ tranche_seq: 2, invoice_status: "Draft" }),
+    ]))
+    expect(unsent.eligible).toBe(false)
+
+    const partPaid = computePlanSettlementFromStatus("tok", computePlanStatus(PLAN, [
+      row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1250, amount: 1250 }),
+      row({ tranche_seq: 2, invoice_status: "Partial", amount_paid: 500, amount: 1250 }),
+    ]))
+    expect(partPaid.eligible).toBe(false)
+
+    const awaiting = computePlanSettlementFromStatus("tok", computePlanStatus(PLAN, [
+      row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1250, amount: 1250 }),
+      row({ tranche_seq: 2, invoice_status: "Sent", amount_paid: 0, amount: 1250 }),
+    ]))
+    expect(awaiting.eligible).toBe(false)
+  })
+
+  it("refuses a real one-cent shortfall, but absorbs float rounding within tolerance", () => {
+    const shortfall = computePlanSettlementFromStatus("tok", computePlanStatus(PLAN, [
+      row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1250, amount: 1250 }),
+      row({ tranche_seq: 2, invoice_status: "Paid", amount_paid: 1249.98, amount: 1250 }),
+    ]))
+    expect(shortfall.eligible).toBe(false)
+
+    const roundingOnly = computePlanSettlementFromStatus("tok", computePlanStatus(PLAN, [
+      row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1250, amount: 1250 }),
+      row({ tranche_seq: 2, invoice_status: "Paid", amount_paid: 1249.995, amount: 1250 }),
+    ]))
+    expect(roundingOnly.eligible).toBe(true)
+  })
+
+  it("trusts the invoice's OWN billed amount over the plan's stated figure — same precedence as classify()", () => {
+    // Mirrors classify()'s own rule (owed = live.amount ?? part.amount): once a real invoice
+    // exists, what it actually billed is the truth, not what the plan originally said.
+    const status = computePlanStatus(PLAN, [
+      row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1250, amount: 1250 }),
+      row({ tranche_seq: 2, invoice_status: "Paid", amount_paid: 1000, amount: 1000 }), // billed for less than the plan said
+    ])
+    const settlement = computePlanSettlementFromStatus("tok", status)
+    expect(settlement.parts[1].agreedAmount).toBe(1000)
+    expect(settlement.eligible).toBe(true) // fully paid against what was ACTUALLY billed
+    expect(settlement.totalAgreed).toBe(2250)
+  })
+
+  it("⚠️ the known false negative, pinned rather than hidden: the auto-matcher's rarer shape (job c2751393) reads as NOT eligible even though real cash arrived", () => {
+    // Verified production shape: 6 of 115 auto-matched invoices have amount_paid=0 despite the
+    // money genuinely arriving. This gate cannot distinguish that from a real credit-only
+    // settlement — by design (see the doc comment on `eligible`). The consequence is a human has
+    // to notice and release by hand; that is the intended, safer failure direction.
+    const status = computePlanStatus(PLAN, [
+      row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1250, amount: 1250 }),
+      row({ tranche_seq: 2, invoice_status: "Paid", amount_paid: 0, amount: 1250 }),
+    ])
+    expect(status.fullySettled).toBe(true) // the CLIENT's obligation genuinely is closed
+    const settlement = computePlanSettlementFromStatus("tok", status)
+    expect(settlement.eligible).toBe(false) // but the RELEASE gate correctly stays cautious
+  })
+
+  it("carries the offer token and the plan's currency through untouched", () => {
+    const status = computePlanStatus(PLAN, [
+      row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1250, amount: 1250 }),
+      row({ tranche_seq: 2, invoice_status: "Paid", amount_paid: 1250, amount: 1250 }),
+    ])
+    const settlement = computePlanSettlementFromStatus("nicholas-tosello-2026", status)
+    expect(settlement.offerToken).toBe("nicholas-tosello-2026")
+    expect(settlement.currency).toBe("EUR")
   })
 })
 

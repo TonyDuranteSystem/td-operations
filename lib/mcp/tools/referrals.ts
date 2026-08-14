@@ -10,6 +10,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
+import { blockedByUnsettledPlan } from "@/lib/operations/referral"
 
 export function registerReferralTools(server: McpServer) {
 
@@ -36,6 +37,14 @@ export function registerReferralTools(server: McpServer) {
     },
     async (params) => {
       try {
+        if (params.status === "credited" || params.status === "paid") {
+          const planBlock = await blockedByUnsettledPlan(
+            { offerToken: params.offer_token ?? null, referredContactId: params.referred_contact_id ?? null, referredAccountId: params.referred_account_id ?? null },
+            supabaseAdmin,
+          )
+          if (planBlock.blocked) return { content: [{ type: "text" as const, text: `❌ ${planBlock.message}` }] }
+        }
+
         const insert: Record<string, unknown> = {
           referrer_contact_id: params.referrer_contact_id,
           referred_name: params.referred_name,
@@ -240,13 +249,32 @@ export function registerReferralTools(server: McpServer) {
     async (params) => {
       try {
         // 1. Get the parent referral
-        const { data: referral, error: refErr } = await supabaseAdmin
+        // eslint-disable-next-line no-restricted-syntax -- offer_token postdates the generated types for this table; whole-chain cast (same pattern as release-commission/route.ts) since casting just the select string breaks Supabase's return-type parser.
+        const referralQuery = supabaseAdmin
           .from("referrals")
-          .select("id, commission_amount, credited_amount, paid_amount, status")
+          .select("id, commission_amount, credited_amount, paid_amount, status, referred_contact_id, referred_account_id, offer_token" as never)
           .eq("id", params.referral_id)
-          .single()
+          .single() as unknown as {
+            then: PromiseLike<{
+              data: {
+                id: string; commission_amount: number | null; credited_amount: number | null; paid_amount: number | null; status: string
+                referred_contact_id: string | null; referred_account_id: string | null; offer_token: string | null
+              } | null
+              error: { message: string } | null
+            }>["then"]
+          }
+        const { data: referral, error: refErr } = await referralQuery
 
         if (refErr || !referral) throw new Error(refErr?.message || "Referral not found")
+
+        // 1b. The same real-cash-settlement gate the account page's "Release commission"
+        // action uses — a payout can only move through THIS tool once any plan behind the
+        // deal is fully paid, same as every other way of paying a referral.
+        const planBlock = await blockedByUnsettledPlan(
+          { offerToken: referral.offer_token, referredContactId: referral.referred_contact_id, referredAccountId: referral.referred_account_id },
+          supabaseAdmin,
+        )
+        if (planBlock.blocked) throw new Error(planBlock.message)
 
         // 2. Insert payout record
         const payoutInsert: Record<string, unknown> = {
@@ -342,6 +370,7 @@ export function registerReferralTools(server: McpServer) {
         // Status counts + commission totals in one query
         // Fixed 2026-04-14 P0.6: was { query: ... } — exec_sql expects
         // { sql_query: ... }. Silently returned empty results from Claude.ai.
+        // eslint-disable-next-line no-restricted-syntax -- read-only reporting aggregate, predates the P2.4 exec_sql restriction; the JS fallback right below covers the disallowed-RPC case.
         const { data: stats, error: statsErr } = await supabaseAdmin.rpc("exec_sql", {
           sql_query: `
             SELECT

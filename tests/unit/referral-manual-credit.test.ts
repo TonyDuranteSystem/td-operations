@@ -5,10 +5,20 @@ vi.mock('@/lib/portal/td-invoice', () => ({
   createTDInvoice: vi.fn(),
 }))
 
-import { createManualReferralCredit, defaultReferralCreditUsd } from '@/lib/operations/referral'
+// Mock the plan-settlement calculator — blockedByUnsettledPlan defers ALL "is this
+// plan actually fully paid" math to it; these tests only prove the guard calls it
+// with the right offer(s) and reacts correctly, not the settlement math itself
+// (that's payment-plan-state.test.ts's job).
+vi.mock('@/lib/offers/payment-plan-state', () => ({
+  computePlanSettlement: vi.fn(),
+}))
+
+import { blockedByUnsettledPlan, createManualReferralCredit, defaultReferralCreditUsd, linkLeadReferralToOffer } from '@/lib/operations/referral'
 import { createTDInvoice } from '@/lib/portal/td-invoice'
+import { computePlanSettlement } from '@/lib/offers/payment-plan-state'
 
 const invoiceMock = createTDInvoice as unknown as ReturnType<typeof vi.fn>
+const settlementMock = computePlanSettlement as unknown as ReturnType<typeof vi.fn>
 
 describe('defaultReferralCreditUsd — 10% of referred setup fee, taken as USD', () => {
   it('computes 10% of the setup-fee total', () => {
@@ -40,6 +50,7 @@ function makeDb(opts: { existing?: Array<Record<string, unknown>>; insertId?: st
     inserts: [] as Array<{ table: string; payload: Record<string, unknown> }>,
     updates: [] as Array<{ table: string; payload: Record<string, unknown>; col: string; val: unknown }>,
     dedupOr: '' as string,
+    eqCalls: [] as Array<[string, unknown]>,
   }
   const supabase = {
     from(table: string) {
@@ -47,7 +58,7 @@ function makeDb(opts: { existing?: Array<Record<string, unknown>>; insertId?: st
         select() { return this },
         or(expr: string) { state.dedupOr = expr; return this },
         neq() { return this },
-        eq() { return this },
+        eq(col: string, val: unknown) { state.eqCalls.push([col, val]); return this },
         limit() { return Promise.resolve({ data: opts.existing ?? [] }) },
         insert(payload: Record<string, unknown>) {
           state.inserts.push({ table, payload })
@@ -193,5 +204,224 @@ describe('createManualReferralCredit', () => {
       .toEqual({ created: false, reason: 'missing_party', detail: 'referrer' })
     expect(await createManualReferralCredit({ referrerContactId: 'c-1', referredName: 'X', creditAmountUsd: 10 }, supabase))
       .toEqual({ created: false, reason: 'missing_party', detail: 'referred' })
+  })
+
+  // Regression for bug-hunter, 2026-08-14 + live E2E: the same referrer bringing the same
+  // client back for a SECOND, separate deal was silently paid only once — the dedup matched
+  // on (referrer, referred) alone, found the FIRST deal's already-credited row, declined to
+  // recover it (nothing to self-heal), and reported "duplicate" while the second deal's
+  // commission was never issued.
+  describe('offerToken — scopes dedup to one deal (the payment-plan release caller)', () => {
+    it('is stamped on a newly created referral row when provided', async () => {
+      const { supabase, state } = makeDb({ insertId: 'ref-new' })
+      await createManualReferralCredit(
+        { referrerContactId: 'c-1', referredContactId: 'rc-1', referredName: 'X', creditAmountUsd: 200, offerToken: 'offer-A' },
+        supabase,
+      )
+      expect(state.inserts.find(i => i.table === 'referrals')!.payload.offer_token).toBe('offer-A')
+    })
+
+    it('is null on the row when omitted (existing callers, e.g. the manual referrals page, unaffected)', async () => {
+      const { supabase, state } = makeDb({ insertId: 'ref-new' })
+      await createManualReferralCredit(
+        { referrerContactId: 'c-1', referredContactId: 'rc-1', referredName: 'X', creditAmountUsd: 200 },
+        supabase,
+      )
+      expect(state.inserts.find(i => i.table === 'referrals')!.payload.offer_token).toBeNull()
+    })
+
+    it('adds an offer_token filter to the dedup query when provided', async () => {
+      const { supabase, state } = makeDb({ insertId: 'ref-new' })
+      await createManualReferralCredit(
+        { referrerContactId: 'c-1', referredContactId: 'rc-1', referredName: 'X', creditAmountUsd: 200, offerToken: 'offer-B' },
+        supabase,
+      )
+      expect(state.eqCalls).toContainEqual(['offer_token', 'offer-B'])
+    })
+
+    it('does NOT filter on offer_token when omitted — the original (referrer, referred)-only scope', async () => {
+      const { supabase, state } = makeDb({ existing: [{ id: 'ref-old', status: 'credited', credited_amount: 200, commission_amount: 200 }] })
+      await createManualReferralCredit(
+        { referrerContactId: 'c-1', referredContactId: 'rc-1', referredName: 'X', creditAmountUsd: 200 },
+        supabase,
+      )
+      expect(state.eqCalls.some(([col]) => col === 'offer_token')).toBe(false)
+    })
+  })
+})
+
+/**
+ * Regression for council pass, 2026-08-14 — independently found by 3 reviewers (senior-engineer,
+ * bug-hunter, Finance-Auditor, the last with a worked $300 double-payment example): a referrer
+ * sourced from a LEAD (before any offer existed) has a pending `referrals` row the plan-release
+ * action didn't know about, so it created a second, disconnected row instead — leaving the
+ * original stuck "pending" forever and open to being paid again by hand.
+ */
+function makeLeadLinkDb(opts: { pending?: { id: string } | null } = {}) {
+  const state = {
+    updates: [] as Array<{ id: string; payload: Record<string, unknown> }>,
+    selectedLeadId: '' as string,
+  }
+  const supabase = {
+    from() {
+      return {
+        select() { return this },
+        eq(col: string, val: unknown) {
+          if (col === 'referred_lead_id') state.selectedLeadId = val as string
+          return this
+        },
+        or() { return this },
+        limit() { return this },
+        maybeSingle() { return Promise.resolve({ data: opts.pending ?? null }) },
+        update(payload: Record<string, unknown>) {
+          return {
+            eq(_col: string, id: string) {
+              state.updates.push({ id, payload })
+              return Promise.resolve({ error: null })
+            },
+          }
+        },
+      }
+    },
+  }
+  return { supabase: supabase as never, state }
+}
+
+describe('linkLeadReferralToOffer — reconciles a lead-sourced pending row before release credits it', () => {
+  const baseParams = {
+    leadId: 'lead-1',
+    referrerContactId: 'ref-c-1',
+    referrerAccountId: null,
+    referredContactId: 'client-c-1',
+    referredAccountId: 'client-a-1',
+    offerToken: 'offer-X',
+    commissionType: 'credit_note',
+    commissionPct: 10,
+    commissionAmount: 300,
+    commissionCurrency: 'USD',
+  }
+
+  it('converts a matching pending row: status, referred identity, offer_token, and the REAL commission terms', async () => {
+    const { supabase, state } = makeLeadLinkDb({ pending: { id: 'ref-pending-1' } })
+    await linkLeadReferralToOffer(baseParams, supabase)
+    expect(state.selectedLeadId).toBe('lead-1')
+    expect(state.updates).toEqual([{
+      id: 'ref-pending-1',
+      payload: {
+        status: 'converted',
+        referred_contact_id: 'client-c-1',
+        referred_account_id: 'client-a-1',
+        offer_token: 'offer-X',
+        commission_type: 'credit_note',
+        commission_pct: 10,
+        commission_amount: 300,
+        commission_currency: 'USD',
+      },
+    }])
+  })
+
+  it('is a no-op when no matching pending row exists (e.g. the referrer was typed directly on the offer)', async () => {
+    const { supabase, state } = makeLeadLinkDb({ pending: null })
+    await linkLeadReferralToOffer(baseParams, supabase)
+    expect(state.updates).toHaveLength(0)
+  })
+
+  it('is a no-op when neither referrer id is provided (never queries)', async () => {
+    const { supabase, state } = makeLeadLinkDb({ pending: { id: 'ref-pending-1' } })
+    await linkLeadReferralToOffer({ ...baseParams, referrerContactId: null, referrerAccountId: null }, supabase)
+    expect(state.updates).toHaveLength(0)
+  })
+})
+
+/**
+ * Stub for blockedByUnsettledPlan's offers lookup: `.from('offers').select('token')
+ * .in().not().or()` — the chain terminates (and the query actually fires) at `.or()`,
+ * matching real supabase-js where every filter method before it just narrows the
+ * builder and only the final link in the chain is awaited.
+ */
+function makePlanBlockDb(opts: { offerRows?: Array<{ token: string }> } = {}) {
+  const state = { orExpr: '' as string, queried: false }
+  const supabase = {
+    from() {
+      return {
+        select() { return this },
+        in() { return this },
+        not() { return this },
+        or(expr: string) {
+          state.orExpr = expr
+          state.queried = true
+          return Promise.resolve({ data: opts.offerRows ?? [] })
+        },
+      }
+    },
+  }
+  return { supabase: supabase as never, state }
+}
+
+describe('blockedByUnsettledPlan — the one gate all four older referral-payment paths call', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('blocks on an explicit offer token whose plan is not yet fully settled', async () => {
+    settlementMock.mockResolvedValue({
+      offerToken: 'offer-X', currency: 'USD',
+      parts: [{ seq: 1, agreedAmount: 500, amountPaid: 500, settledInCash: true }, { seq: 2, agreedAmount: 500, amountPaid: 0, settledInCash: false }],
+      totalAgreed: 1000, totalReceived: 500, eligible: false,
+    })
+    const { supabase } = makePlanBlockDb()
+    const res = await blockedByUnsettledPlan({ offerToken: 'offer-X' }, supabase)
+    expect(res.blocked).toBe(true)
+    if (res.blocked) {
+      expect(res.message).toContain('offer-X')
+      expect(res.message).toContain('1 of 2')
+    }
+    expect(settlementMock).toHaveBeenCalledWith('offer-X')
+  })
+
+  it('does not block when the named offer plan is already fully settled', async () => {
+    settlementMock.mockResolvedValue({
+      offerToken: 'offer-X', currency: 'USD',
+      parts: [{ seq: 1, agreedAmount: 500, amountPaid: 500, settledInCash: true }],
+      totalAgreed: 500, totalReceived: 500, eligible: true,
+    })
+    const { supabase } = makePlanBlockDb()
+    const res = await blockedByUnsettledPlan({ offerToken: 'offer-X' }, supabase)
+    expect(res.blocked).toBe(false)
+  })
+
+  it('does not block when the named offer carries no valid plan at all', async () => {
+    settlementMock.mockResolvedValue(null)
+    const { supabase } = makePlanBlockDb()
+    const res = await blockedByUnsettledPlan({ offerToken: 'offer-no-plan' }, supabase)
+    expect(res.blocked).toBe(false)
+  })
+
+  it('resolves candidate offers by referred account/contact when no token is given, and blocks on an unsettled one', async () => {
+    settlementMock.mockResolvedValue({
+      offerToken: 'offer-Y', currency: 'USD',
+      parts: [{ seq: 1, agreedAmount: 300, amountPaid: 0, settledInCash: false }],
+      totalAgreed: 300, totalReceived: 0, eligible: false,
+    })
+    const { supabase, state } = makePlanBlockDb({ offerRows: [{ token: 'offer-Y' }] })
+    const res = await blockedByUnsettledPlan({ referredAccountId: 'acct-1', referredContactId: 'contact-1' }, supabase)
+    expect(res.blocked).toBe(true)
+    expect(state.orExpr).toContain('contact_id.eq.contact-1')
+    expect(state.orExpr).toContain('account_id.eq.acct-1')
+    expect(settlementMock).toHaveBeenCalledWith('offer-Y')
+  })
+
+  it('does not block when the offers lookup finds no signed plan-bearing offer for that party', async () => {
+    const { supabase, state } = makePlanBlockDb({ offerRows: [] })
+    const res = await blockedByUnsettledPlan({ referredAccountId: 'acct-1' }, supabase)
+    expect(res.blocked).toBe(false)
+    expect(state.queried).toBe(true)
+    expect(settlementMock).not.toHaveBeenCalled()
+  })
+
+  it('never blocks, and never queries, when nothing identifiable is given', async () => {
+    const { supabase, state } = makePlanBlockDb()
+    const res = await blockedByUnsettledPlan({}, supabase)
+    expect(res.blocked).toBe(false)
+    expect(state.queried).toBe(false)
+    expect(settlementMock).not.toHaveBeenCalled()
   })
 })

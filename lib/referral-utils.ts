@@ -161,7 +161,12 @@ export function calculateCommission(
   switch (commissionType) {
     case "percentage":
     case "credit_note":
-      return ((commissionPct || 10) / 100) * setupFeeTotal
+      // ⛔ NULLISH, NOT `||` (bug-hunter, 2026-08-14) — `commissionPct || 10` treated an explicit,
+      // deliberate 0% (a comped/waived referral) as "not set" and silently substituted the 10%
+      // default, overpaying a referrer who was agreed to receive nothing. `resolveOfferCommission`
+      // already correctly preserves a real 0 on the way in (`?? 10`, not `|| 10`); this function
+      // undid that the moment it touched the value. Only `null`/`undefined` should fall back.
+      return ((commissionPct ?? 10) / 100) * setupFeeTotal
 
     case "price_difference":
       return (agreedPrice || 0) - basePriceForState

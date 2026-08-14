@@ -20,7 +20,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
-import { issueReferralCreditNote, REFERRAL_COMMISSION_PCT, sameReferredIdentity } from '@/lib/operations/referral'
+import { blockedByUnsettledPlan, issueReferralCreditNote, REFERRAL_COMMISSION_PCT, sameReferredIdentity } from '@/lib/operations/referral'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,6 +35,7 @@ interface ReferralRow {
   referred_account_id: string | null
   referred_lead_id: string | null
   referred_name: string | null
+  offer_token: string | null
 }
 
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
@@ -47,12 +48,13 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   const overrideAmount: number | null = typeof body?.amountUsd === 'number' && body.amountUsd > 0 ? Math.round(body.amountUsd * 100) / 100 : null
   const confirmDuplicate: boolean = body?.confirmDuplicate === true
 
-  const { data: refData } = await supabaseAdmin
+  // eslint-disable-next-line no-restricted-syntax -- offer_token postdates the generated types for this table; whole-chain cast (same pattern as release-commission/route.ts) since casting just the select string breaks Supabase's return-type parser.
+  const refQuery = supabaseAdmin
     .from('referrals')
-    .select('id, status, credited_amount, commission_amount, referrer_contact_id, referrer_account_id, referred_contact_id, referred_account_id, referred_lead_id, referred_name')
+    .select('id, status, credited_amount, commission_amount, referrer_contact_id, referrer_account_id, referred_contact_id, referred_account_id, referred_lead_id, referred_name, offer_token' as never)
     .eq('id', params.id)
-    .maybeSingle()
-  const ref = refData as ReferralRow | null
+    .maybeSingle() as unknown as { then: PromiseLike<{ data: ReferralRow | null; error: { message: string } | null }>['then'] }
+  const { data: ref } = await refQuery
   if (!ref) return NextResponse.json({ error: 'Referral not found.' }, { status: 404 })
   if (Number(ref.credited_amount) > 0 || ref.status === 'credited' || ref.status === 'paid') {
     return NextResponse.json({ ok: true, alreadyCredited: true })
@@ -76,6 +78,12 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   if (dupe && !confirmDuplicate) {
     return NextResponse.json({ needs: 'confirmDuplicate', duplicateOf: (dupe as ReferralRow).id })
   }
+
+  const planBlock = await blockedByUnsettledPlan(
+    { offerToken: ref.offer_token, referredContactId: ref.referred_contact_id, referredAccountId: ref.referred_account_id },
+    supabaseAdmin,
+  )
+  if (planBlock.blocked) return NextResponse.json({ error: planBlock.message }, { status: 400 })
 
   // Resolve the amount: override → recorded commission. The figure is taken as USD.
   const amount = overrideAmount ?? (Number(ref.commission_amount) > 0 ? Number(ref.commission_amount) : 0)
