@@ -142,10 +142,22 @@ export function normalizeAccountNumber(raw?: string | null): string {
   return s.replace(/[\s\-_.]+/g, "").toUpperCase()
 }
 
-/** Last 4 alphanumerics of an account number (safe short discriminator, PII-min). */
+/** Short discriminator for the account ref (PII-min). NUMERIC values truncate
+ *  to the last 4 digits; a NON-numeric nickname keeps its full normalized form
+ *  (bug-hunter 2026-08-13: last-4 on free text collided — "Checking account"
+ *  and "Savings account" both ended "…OUNT" → refs `Chase#OUNT` twice → two
+ *  real accounts merged; the re-echo shows the full label, not the truncated
+ *  key, so the client could never catch it). */
 export function accountLast4(raw?: string | null): string {
   const n = normalizeAccountNumber(raw)
-  return n.length <= 4 ? n : n.slice(-4)
+  // Numeric — possibly with a masked prefix as banks render it ("****1234",
+  // "••1234", "XXXX1234"): truncate to the last 4 digits.
+  const masked = n.match(/^[*•xX]*(\d+)$/)
+  if (masked) {
+    const digits = masked[1]
+    return digits.length <= 4 ? digits : digits.slice(-4)
+  }
+  return n
 }
 
 export interface AccountRefInput {

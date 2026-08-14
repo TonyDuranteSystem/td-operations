@@ -99,6 +99,11 @@ export interface IngestFileEntry {
    *  UI can render a neutral card (round 3: these files vanished from both
    *  lists and the client re-uploaded in confusion). */
   empty?: boolean
+  /** Wave 2: WHY the file failed when diagnosable (wrong_year /
+   *  not_bank_statement / empty_period / unreadable) — the review component
+   *  renders localized copy from lib/tax/ingest-diagnosis.ts, the SAME source
+   *  the chat message uses. Absent on legacy jobs → generic copy. */
+  diagnosis?: { code: string; found_years?: number[]; expected_year?: number; software?: string } | null
 }
 
 /** Full per-file entries (state + display name + failure copy) for file-card
@@ -109,12 +114,16 @@ export function buildIngestFileEntries(jobs: IngestJobRow[], taxYear: number): I
   // order, last matching write wins — callers pass rows in insertion order.
   const failDetail = new Map<string, string>()
   const emptyPaths = new Set<string>()
+  const diagByPath = new Map<string, IngestFileEntry["diagnosis"]>()
   for (const j of jobs) {
     const path = j.payload?.path
     if (!path || String(j.payload?.tax_year ?? "") !== String(taxYear)) continue
     if (j.status === "completed" && j.result?.ok !== false && typeof j.result?.summary === "string" && j.result.summary.includes("empty statement period")) {
       emptyPaths.add(path)
     }
+    // Latest diagnosis per path (same last-write-wins as the failure detail).
+    const diag = (j.result as { diagnosis?: IngestFileEntry["diagnosis"] } | null)?.diagnosis
+    if (diag) diagByPath.set(path, diag)
     for (const s of j.result?.steps ?? []) {
       if (typeof s.detail === "string" && !s.detail.startsWith(FORMAT_CONFIRMATION_MARKER)) {
         // Step details are "<file>: <guide text>" — keep the guide text only.
@@ -136,6 +145,7 @@ export function buildIngestFileEntries(jobs: IngestJobRow[], taxYear: number): I
       ? (failDetail.get(path) ?? "This file could not be processed after several tries. This is on our side — our team has been notified; nothing is needed from you.")
       : null,
     ...(state === "succeeded" && emptyPaths.has(path) ? { empty: true } : {}),
+    ...(diagByPath.has(path) ? { diagnosis: diagByPath.get(path) } : {}),
   }))
 }
 

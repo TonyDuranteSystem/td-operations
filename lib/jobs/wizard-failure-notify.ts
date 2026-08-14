@@ -136,11 +136,14 @@ async function resolveLocale(
   return "en"
 }
 
-const INGEST_FAILURE_MESSAGE: Record<"it" | "en", (fileName: string) => string> = {
-  en: (f) =>
-    `One of your bank statements (${f}) could not be read automatically. Our team has been notified and will take care of it — no action is needed from you unless we contact you.`,
-  it: (f) =>
-    `Uno dei tuoi estratti conto (${f}) non è stato letto automaticamente. Il nostro team è stato avvisato e se ne occuperà — non è richiesta alcuna azione da parte tua, a meno che non ti contattiamo noi.`,
+// Wave 2 (Antonio's rule): tell the client WHAT is wrong and the FIX — never
+// "no action is needed" for a file the page tells them to replace. The body
+// comes from lib/tax/ingest-diagnosis.ts, the SAME copy the file card renders,
+// so chat and page can never contradict again (the shipped copy did exactly
+// that: "no action needed" in chat, "delete and re-upload" on the page).
+const INGEST_FAILURE_MESSAGE: Record<"it" | "en", (fileName: string, body: string) => string> = {
+  en: (f, body) => `About your bank statement "${f}": ${body} You can do this in the portal under Taxes → your Profit & Loss review. Our team has been notified too.`,
+  it: (f, body) => `Riguardo al tuo estratto conto "${f}": ${body} Puoi farlo nel portale sotto Tasse → la revisione del tuo Conto Economico. Anche il nostro team è stato avvisato.`,
 }
 
 const INGEST_QUARANTINE_MESSAGE: Record<"it" | "en", (fileName: string) => string> = {
@@ -197,9 +200,13 @@ export async function notifyClientOfStatementIngestFailure(
     )
 
     const locale = await resolveLocale(null, accountId)
+    // Diagnosis (Wave 2): the ingest result says WHY when it can — wrong year,
+    // accounting export, unreadable. One copy source with the file card.
+    const { diagnosisCopy } = await import("@/lib/tax/ingest-diagnosis")
+    const diag = (currentResult.diagnosis ?? null) as Parameters<typeof diagnosisCopy>[0]
     const message = quarantined
       ? INGEST_QUARANTINE_MESSAGE[locale](displayName)
-      : INGEST_FAILURE_MESSAGE[locale](displayName)
+      : INGEST_FAILURE_MESSAGE[locale](displayName, diagnosisCopy(diag)[locale])
 
     const { error } = await supabaseAdmin.from("portal_messages").insert({
       account_id: accountId,

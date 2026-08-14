@@ -408,6 +408,12 @@ export async function GET(request: NextRequest) {
         file_name: fileNameForSource(source_file_id),
       })),
       accounts: Array.from(byAccount.values()).sort((a, b) => b.count - a.count),
+      // Identity build (2026-08-13): the LIVE institution registry, so the
+      // upload form resolves bank-name → identity mode against the catalog
+      // (staff reclassifications reach the form without a deploy) instead of
+      // the static code seed. Compact: name + mode + aliases only.
+      institutions: (await (await import('@/lib/tax/institution-registry')).loadInstitutionRegistry())
+        .map(e => ({ canonical: e.canonical, mode: e.mode, matchTerms: e.matchTerms })),
       aiState,
       aiRemaining,
       periods,

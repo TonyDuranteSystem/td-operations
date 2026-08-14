@@ -25,6 +25,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { pickChatSenderName } from '@/lib/portal/chat-sender-name'
 import { deriveFlowYear, buildFlowTopic } from '@/lib/flows/resolve-flows'
@@ -78,6 +79,15 @@ function flatten(row: ChatRow, ctx?: { serviceDeliveryId: string; topic: string 
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
+    // THE DOOR CHECK (Wave 2, bug-hunter M4). The 2026-07-21 invariant: every
+    // staff route locks its own door — /api/* is NOT covered by the
+    // middleware's client-role bounce, so "logged in" here could be a portal
+    // CLIENT. This room feed returns the account's WHOLE conversation (by
+    // design, for staff); without this line any client session holding an SD
+    // id could read it.
+    const denied = await requireStaffRoute()
+    if (denied) return denied
+
     const serviceDeliveryId = params.id
 
     // Resolve the flow's account + topic so the Workspace thread shows EVERY
@@ -153,6 +163,12 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const serviceDeliveryId = params.id
+
+    // THE DOOR CHECK (Wave 2, bug-hunter M4): "is logged in" is not "is
+    // staff" — without the role check a portal CLIENT's session could post
+    // into their own thread dressed as sender_type='admin'.
+    const denied = await requireStaffRoute()
+    if (denied) return denied
 
     // Staff sender — authenticated via the dashboard's Supabase session.
     const supabase = createClient()
@@ -230,7 +246,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       type: 'chat',
       title: 'New message from Tony Durante Team',
       body: message.slice(0, 100),
-      link: '/portal/chat',
+      // Deep link ONTO the topic tab (Wave 2) — the client's reply then
+      // inherits the topic without them doing anything.
+      link: topic ? `/portal/chat?topic=${encodeURIComponent(topic)}` : '/portal/chat',
     }).catch(() => {})
     notifyClientOfAdminMessage({
       account_id: sd.account_id || null,

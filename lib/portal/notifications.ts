@@ -316,7 +316,15 @@ export async function notifyClientOfAdminMessage({
   const { labelPortalChatNotification } = await import('@/lib/gmail-labels')
   const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const preview = escHtml(messagePreview.slice(0, 200) || '…')
-  const portalChatUrl = `${PORTAL_BASE_URL}/portal/chat`
+  // Topic deep link (Wave 2, card 4a39e0fd): when the message belongs to a
+  // topic, the email's "open chat" lands the client ON that tab — so their
+  // reply inherits the topic without them doing anything. Production fact
+  // behind this: in 14 months, zero client messages ever carried the tax topic;
+  // every reply landed in General, because a send inherits the tab the client
+  // is standing on and the chat opened on General.
+  const portalChatUrl = topic
+    ? `${PORTAL_BASE_URL}/portal/chat?topic=${encodeURIComponent(topic)}`
+    : `${PORTAL_BASE_URL}/portal/chat`
 
   for (const recipient of recipients) {
     // Skip email if this client already has active push subscriptions (PWA with

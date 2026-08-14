@@ -47,6 +47,11 @@ export interface JobResult {
    *  behind a statement line without a fragile path-shape join. */
   sourceFileId?: string
   fileName?: string
+  /** Wave 2 (card 4a39e0fd): WHY a statement file failed, when diagnosable
+   *  (wrong year / accounting export / empty period). The chat message and the
+   *  file card both render it via lib/tax/ingest-diagnosis.ts — one copy
+   *  source, so the two surfaces can never contradict. */
+  diagnosis?: { code: string; found_years?: number[]; expected_year?: number; software?: string }
   /**
    * With `ok:false`: this failure is PERMANENT — retrying cannot change the
    * outcome (an unreadable file, a wrong-year statement, a corrupt archive).

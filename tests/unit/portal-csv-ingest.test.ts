@@ -90,20 +90,71 @@ describe("ingestPortalCsv", () => {
     expect(upsertCalls).toHaveLength(0)
   })
 
-  it("unreadable file → guiding error, nothing inserted", async () => {
+  it("unreadable file → guiding error + 'unreadable' diagnosis, nothing inserted", async () => {
     parseMock.mockResolvedValue({ transactions: [], bank_name: "unknown", errors: ["Could not find required columns"] })
     const r = await ingestPortalCsv(INPUT)
     expect(r.ok).toBe(false)
-    expect(r.error).toContain("a CSV or the official PDF")
+    expect(r.error).toContain("the CSV or the official PDF")
     expect(r.error).toContain("Do not merge, combine, or edit")
+    expect(r.diagnosis?.code).toBe("unreadable")
     expect(upsertCalls).toHaveLength(0)
   })
 
-  it("wrong-period file → guiding error naming the year", async () => {
+  it("wrong-period file → 'wrong_year' diagnosis naming BOTH years (the PAMAG shape)", async () => {
     parseMock.mockResolvedValue({ transactions: [parsedTx("2024-05-01", "r1")], bank_name: "Mercury", errors: [] })
     const r = await ingestPortalCsv(INPUT)
     expect(r.ok).toBe(false)
-    expect(r.error).toContain("entire year 2025")
+    // Wave 2 (Antonio): say WHAT is wrong — the years the file holds and the
+    // year we need — never ask the client why.
+    expect(r.error).toContain("2024")
+    expect(r.error).toContain("we need 2025")
+    expect(r.diagnosis).toEqual({ code: "wrong_year", found_years: [2024], expected_year: 2025 })
+  })
+
+  it("accounting export (QuickBooks headers) → 'not_bank_statement' diagnosis (the Nova Ratio shape)", async () => {
+    parseMock.mockResolvedValue({ transactions: [], bank_name: "unknown", errors: [] })
+    const qbBuffer = Buffer.from('"Date","Transaction Type","Num","Posting","Memo/Description","Amount"\n', "utf8")
+    const r = await ingestPortalCsv({ ...INPUT, buffer: qbBuffer })
+    expect(r.ok).toBe(false)
+    expect(r.diagnosis?.code).toBe("not_bank_statement")
+    expect(r.diagnosis?.software).toBe("QuickBooks")
+    expect(r.error).toContain("accounting export")
+    expect(r.error).toContain("download the transactions CSV from your bank")
+  })
+
+  it("accounting export beats the format QUARANTINE — never 'we're confirming the format' for the wrong document", async () => {
+    // Sandbox QA found this precedence gap: a QB export is an unknown CSV
+    // layout, so S1 quarantined it and told the client "it will be processed
+    // shortly" — for a file that never will be. The sniff must win.
+    parseMock.mockResolvedValue({
+      transactions: [], bank_name: "unknown", errors: [],
+      quarantine: { mapping_id: "m1", fingerprint: "fp", bank_label: "?", ambiguities: ["cols"] },
+    })
+    const qbBuffer = Buffer.from('"Date","Transaction Type","Num","Posting","Memo/Description","Amount"\n', "utf8")
+    const r = await ingestPortalCsv({ ...INPUT, buffer: qbBuffer })
+    expect(r.ok).toBe(false)
+    expect(r.quarantine).toBeUndefined()
+    expect(r.diagnosis?.code).toBe("not_bank_statement")
+  })
+
+  it("a genuine unknown BANK csv still quarantines (the sniff is conservative)", async () => {
+    parseMock.mockResolvedValue({
+      transactions: [], bank_name: "unknown", errors: [],
+      quarantine: { mapping_id: "m1", fingerprint: "fp", bank_label: "?", ambiguities: ["cols"] },
+    })
+    const bankBuffer = Buffer.from("Booking Day,Details,Value,Saldo\n", "utf8")
+    const r = await ingestPortalCsv({ ...INPUT, buffer: bankBuffer })
+    expect(r.ok).toBe(false)
+    expect(r.quarantine).toBeDefined()
+    expect(r.diagnosis).toBeUndefined()
+  })
+
+  it("empty-but-valid month carries the 'empty_period' diagnosis", async () => {
+    parseMock.mockResolvedValue({ transactions: [], bank_name: "Relay", errors: ["Empty CSV"], recognized_empty: true })
+    const r = await ingestPortalCsv(INPUT)
+    expect(r.ok).toBe(true)
+    expect(r.emptyStatement).toBe(true)
+    expect(r.diagnosis?.code).toBe("empty_period")
   })
 
   it("identical file already ingested → alert, NO insert", async () => {

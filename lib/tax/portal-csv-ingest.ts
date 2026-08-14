@@ -34,6 +34,11 @@ export interface IngestResult {
   /** S1 quarantine: unknown CSV layout, mapping proposed but ambiguous —
    *  awaiting a one-tap staff format confirmation. Nothing inserted. */
   quarantine?: { mapping_id: string | null; fingerprint: string; bank_label: string; ambiguities: string[] }
+  /** Wave 2 (card 4a39e0fd): WHY the file failed, when we can tell — wrong
+   *  year / accounting export / empty period. Persisted into the job result so
+   *  the chat message and the file card render the SAME explanation from
+   *  lib/tax/ingest-diagnosis.ts. Absent = generic unreadable. */
+  diagnosis?: import("./ingest-diagnosis").IngestDiagnosis
   /** Dedup alert (L1/L2/L3) — informational; insert proceeds unless identical file. */
   alert?: string | null
   inserted: number
@@ -116,6 +121,23 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     taxYear,
     mappingStore: makeSupabaseMappingStore(supabaseAdmin),
   })
+  // ACCOUNTING-EXPORT SNIFF RUNS BEFORE QUARANTINE (Wave 2 sandbox QA found
+  // the precedence gap): a QuickBooks export is an unknown CSV layout, so the
+  // S1 quarantine intercepted it and told the client "we're confirming the
+  // format — it will be processed shortly" — for a file that will NEVER
+  // process as a bank statement. An export from accounting software is not a
+  // format to confirm; it is the wrong document, and the client must hear
+  // that immediately (Nova Ratio's real case). Two-signal conservative, so a
+  // genuine unknown bank CSV still quarantines for staff confirmation.
+  if (mimeType === "text/csv" && (parsed.quarantine || parsed.transactions.length === 0)) {
+    const { sniffAccountingExport, diagnosisCopy } = await import("./ingest-diagnosis")
+    const headerLine = buffer.toString("utf8", 0, 2000).split(/\r?\n/)[0] ?? ""
+    const sniff = sniffAccountingExport(headerLine)
+    if (sniff.isAccountingExport) {
+      const diagnosis = { code: "not_bank_statement" as const, software: sniff.software }
+      return { ...fail(diagnosisCopy(diagnosis).en), diagnosis }
+    }
+  }
   if (parsed.quarantine) {
     return {
       ok: false,
@@ -138,6 +160,7 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     return {
       ok: true,
       emptyStatement: true,
+      diagnosis: { code: "empty_period" },
       alert: `This statement was read correctly — it has no transactions for its period (a month with no account activity is normal).`,
       inserted: 0, parsed: 0, months: [], bankDetected: parsed.bank_name || bankLabel,
       uncategorizedRemaining: 0, sourceFileId,
@@ -153,13 +176,12 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     }
   }
   if (parsed.transactions.length === 0) {
+    // Zero transactions and NOT an accounting export (the sniff above already
+    // bounced those) → generic unreadable, with the parser's own hint.
+    const { diagnosisCopy } = await import("./ingest-diagnosis")
+    const diagnosis = { code: "unreadable" as const }
     const detail = parsed.errors.length ? ` (${parsed.errors[0]})` : ""
-    return fail(
-      `We could not read any transactions from this file${detail}. ` +
-      `Please upload each statement exactly as your bank exports it — a CSV or the official PDF for the full period. ` +
-      `Do not merge, combine, or edit the files: tools like merge-csv.com change the format and make the file unreadable. ` +
-      `Upload one file per bank account, just as the bank gives it to you.`,
-    )
+    return { ...fail(`${diagnosisCopy(diagnosis).en}${detail}`), diagnosis }
   }
 
   // 2. Categorize (legacy built-ins + member detection) and keep the tax year.
@@ -184,17 +206,25 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
   // Canonicalize the institution name and build the account identity ONCE per file
   // (one uploaded file = one account). Every row gets the canonical name + the
   // account_ref key so the account can never split on a name variant again.
-  const ident = buildAccountRef({ rawBankName: bankDetected, accountNumber })
+  // Identity build (2026-08-13): the registry is now LIVE CATALOG DATA merged
+  // over the code seed — staff reclassify an institution without a deploy.
+  const { loadInstitutionRegistry } = await import("./institution-registry")
+  const registry = await loadInstitutionRegistry()
+  const ident = buildAccountRef({ rawBankName: bankDetected, accountNumber, registry })
   const categorized = parsed.transactions
     .map(tx => categorizeTransaction(tx, memberNames, []))
     .filter(tx => tx.transaction_date.startsWith(String(taxYear)))
     .map(tx => ({ ...tx, bank_name: ident.canonical, account_ref: ident.account_ref }))
 
   if (categorized.length === 0) {
-    return fail(
-      `This file contains no ${taxYear} transactions (it covers a different period). ` +
-      `Please export the entire year ${taxYear} — January 1 to December 31 — and upload that file.`,
-    )
+    // WRONG YEAR — the PAMAG shape (2026 statements uploaded for a 2025
+    // return). The file parsed fine; name the years it actually holds.
+    const { diagnosisCopy } = await import("./ingest-diagnosis")
+    const foundYears = Array.from(new Set(
+      parsed.transactions.map(t => Number(String(t.transaction_date).slice(0, 4))).filter(y => Number.isInteger(y) && y > 1990),
+    )).sort()
+    const diagnosis = { code: "wrong_year" as const, found_years: foundYears, expected_year: taxYear }
+    return { ...fail(diagnosisCopy(diagnosis).en), diagnosis }
   }
 
   // 3. Duplicate analysis (L1/L2/L3) against what's already in the system.

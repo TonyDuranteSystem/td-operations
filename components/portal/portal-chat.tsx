@@ -97,7 +97,7 @@ function formatTime(dateStr: string): string {
   return format(parseISO(dateStr), 'MMM d, h:mm a')
 }
 
-export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string }) {
+export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId, initialTopic = null }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string; initialTopic?: string | null }) {
   const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics } = usePortalChat(scope, accountId || null, contactId)
   const router = useRouter()
   // Per-company scoping (2026-06-24). Multi-entity clients pick which company a
@@ -108,8 +108,26 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   const [popupOpen, setPopupOpen] = useState(false)
   // Multi-entity clients must confirm the target on the first send of a session.
   const [targetConfirmed, setTargetConfirmed] = useState(!isMultiEntity)
-  const [activeTopic, setActiveTopic] = useState<string | null>(null)
+  // Deep-linked topic (Wave 2, card 4a39e0fd — Antonio's ruling): a tax
+  // notification's "open chat" link lands the client ON the tax tab, so
+  // whatever they type is tagged without them doing or knowing anything.
+  // Production fact that forced this: in 14 months, ZERO client messages ever
+  // carried the tax topic — every reply landed in General, because a send
+  // inherits the tab the client is standing on and the chat opens on General.
+  // Only the deep-linked entry changes; a client opening the chat normally
+  // still lands on General (changing that default is PARKED — Antonio has not
+  // ruled on the whole-chat product question).
+  const [activeTopic, setActiveTopic] = useState<string | null>(initialTopic)
   const [creatingTopic, setCreatingTopic] = useState(false)
+  // Deep-link guard: if the linked topic has no messages for this client (an
+  // old link, a topic on a different company), fall back to General instead of
+  // stranding them on an empty tab they can't explain. Runs once, after load.
+  const initialTopicChecked = useRef(false)
+  useEffect(() => {
+    if (initialTopicChecked.current || loading || !initialTopic) return
+    initialTopicChecked.current = true
+    if (!topics.includes(initialTopic)) setActiveTopic(null)
+  }, [loading, topics, initialTopic])
   const [newTopicInput, setNewTopicInput] = useState('')
   // Map a real account_id → company name for the per-message company badge.
   const accountNameById = new Map(entities.filter(e => e.accountId).map(e => [e.accountId as string, e.label]))

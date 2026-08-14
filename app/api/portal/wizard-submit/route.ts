@@ -150,6 +150,64 @@ export async function POST(req: NextRequest) {
           { status: 409 },
         )
       }
+
+      // ─── BANK NUMBER GATE (identity build 2026-08-13, card 4a39e0fd) ───
+      // The wizard's uploads bypass any form-aware server, so THIS is the one
+      // bypass-proof enforcement point: every declared account_number-mode
+      // bank must carry its number (or the explicit no-number escape).
+      // Grandfather: a numberless bank identical to one on the client's PRIOR
+      // submission passes with a staff flag instead of a wall — the 13
+      // already-submitted clients re-editing are never stranded by a rule
+      // that postdates their submission. Fail-open on infrastructure errors:
+      // a registry/prior-read failure must never block a client's submit.
+      if (account_id) {
+        try {
+          const { checkWizardBankNumbers, bankGateMessage } = await import('@/lib/tax/wizard-bank-gate')
+          const { loadInstitutionRegistry } = await import('@/lib/tax/institution-registry')
+          const { SUBMISSION_DATA_STATUSES } = await import('@/lib/tax/resolve-submission')
+          // The gate's year is the PINNED eligibility year — never derived
+          // from a calendar (bug-hunter: the wizard sends no tax_year in data,
+          // so the old `Number(data?.tax_year) || currentYear-1` always used
+          // the calendar and looked up the WRONG prior for back-filers, and
+          // for everyone after the January rollover — stranding exactly the
+          // re-editors the grandfather protects). Same rule as the route's
+          // own tax-year comment further down.
+          const gateYear = taxEligibility?.taxYear ?? null
+          // Prior read with the ERROR SURFACED (bug-hunter: the shared
+          // resolver swallows supabase errors, so a DB blip read as "no prior"
+          // and WALLED a legitimately grandfathered client — inverting the
+          // fail-open promise). An error here skips the gate entirely.
+          let priorData: Record<string, unknown> | null = null
+          if (gateYear !== null) {
+            const { data: priorRow, error: priorErr } = await supabaseAdmin
+              .from('tax_return_submissions')
+              .select('submitted_data')
+              .eq('account_id', account_id)
+              .eq('tax_year', gateYear)
+              .in('status', SUBMISSION_DATA_STATUSES as unknown as string[])
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
+            if (priorErr) throw new Error(`prior-submission read failed: ${priorErr.message}`)
+            priorData = (priorRow?.submitted_data as Record<string, unknown> | null) ?? null
+          }
+          const gate = checkWizardBankNumbers({
+            data: (data ?? {}) as Record<string, unknown>,
+            registry: await loadInstitutionRegistry(),
+            priorData,
+          })
+          if (!gate.ok) {
+            const msg = bankGateMessage(gate.missing)
+            console.warn(`[wizard-submit] Bank number gate REFUSED account=${account_id}: ${gate.missing.map(m => m.bank).join(', ')}`)
+            return NextResponse.json({ error: msg.en, error_it: msg.it, reason: 'bank_number_required' }, { status: 400 })
+          }
+          if (gate.grandfathered.length > 0) {
+            console.warn(`[wizard-submit] Bank number gate GRANDFATHERED account=${account_id}: ${gate.grandfathered.map(m => m.bank).join(', ')}`)
+          }
+        } catch (e) {
+          console.error('[wizard-submit] Bank number gate errored — failing OPEN (submission proceeds):', e)
+        }
+      }
     }
 
     // ─── 1. DEDUPLICATION ───
