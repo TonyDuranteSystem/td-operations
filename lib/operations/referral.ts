@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { calculateCommission } from "@/lib/referral-utils"
+import { computePlanSettlement } from "@/lib/offers/payment-plan-state"
 
 export const REFERRAL_COMMISSION_PCT = 10
 
@@ -448,6 +449,66 @@ export async function linkLeadReferralToOffer(
       commission_currency: params.commissionCurrency,
     } as Record<string, unknown> as never)
     .eq("id", pending.id)
+}
+
+/**
+ * Whether a referred party currently has a SIGNED offer carrying a payment plan
+ * that is NOT yet fully settled in real cash — the exact condition the account
+ * page's "Release commission" action exists to gate (`computePlanSettlement`).
+ *
+ * Every OLDER way of paying a referral — the CRM "Add referral" and per-row
+ * "Issue credit" buttons, and the `referral_create`/`referral_payout` MCP tools —
+ * predates that button and has no idea the plan-settlement gate exists. Without
+ * this check, any of them could pay a referrer or partner the moment a deal is
+ * signed, before the client has actually finished paying a plan spread across
+ * several parts — exactly the early-payment risk the release action was built to
+ * close. This is the one check all four call before letting money move, so an
+ * unsettled plan can only ever be paid through the button built for it.
+ *
+ * An offer with no plan, or a plan already fully paid, never blocks — this closes
+ * the early-pay bypass, it does not touch anything else. Nothing identifiable to
+ * check (no offer token, no referred contact or account) never blocks either —
+ * this guard can only refuse what it can actually see; callers that can't name a
+ * referred party keep behaving exactly as they always have.
+ */
+export async function blockedByUnsettledPlan(
+  params: { offerToken?: string | null; referredContactId?: string | null; referredAccountId?: string | null },
+  supabase: SupabaseClient,
+): Promise<{ blocked: false } | { blocked: true; message: string }> {
+  let candidateTokens: string[] = []
+
+  if (params.offerToken) {
+    candidateTokens = [params.offerToken]
+  } else if (params.referredContactId || params.referredAccountId) {
+    const or = [
+      params.referredContactId ? `contact_id.eq.${params.referredContactId}` : null,
+      params.referredAccountId ? `account_id.eq.${params.referredAccountId}` : null,
+    ].filter(Boolean).join(",")
+    // eslint-disable-next-line no-restricted-syntax -- payment_plan postdates the generated types for this table.
+    const { data } = await supabase
+      .from("offers")
+      .select("token")
+      .in("status", ["signed", "completed"])
+      .not("payment_plan" as never, "is", null)
+      .or(or)
+    candidateTokens = ((data ?? []) as { token: string }[]).map((r) => r.token)
+  }
+
+  for (const token of candidateTokens) {
+    const settlement = await computePlanSettlement(token)
+    if (settlement && settlement.parts.length > 0 && !settlement.eligible) {
+      const open = settlement.parts.filter((p) => !p.settledInCash).length
+      return {
+        blocked: true,
+        message:
+          `This client is on a payment plan that is not fully paid in real cash yet ` +
+          `(${open} of ${settlement.parts.length} part(s) still outstanding, offer ${token}). ` +
+          `Use the "Release commission" action on the account page once the whole plan is settled — ` +
+          `it carries the checks this path does not.`,
+      }
+    }
+  }
+  return { blocked: false }
 }
 
 /**

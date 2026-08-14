@@ -20,7 +20,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
-import { createManualReferralCredit, defaultReferralCreditUsd } from '@/lib/operations/referral'
+import { blockedByUnsettledPlan, createManualReferralCredit, defaultReferralCreditUsd } from '@/lib/operations/referral'
 
 export const dynamic = 'force-dynamic'
 
@@ -124,6 +124,9 @@ export async function POST(request: NextRequest) {
   if (!referrerContactId && !referrerAccountId) return NextResponse.json({ error: 'Pick a referrer.' }, { status: 400 })
   if (!referredContactId && !referredAccountId) return NextResponse.json({ error: 'Pick the referred client.' }, { status: 400 })
   if (!referredName) return NextResponse.json({ error: 'Referred name is required.' }, { status: 400 })
+
+  const planBlock = await blockedByUnsettledPlan({ referredContactId, referredAccountId }, supabaseAdmin)
+  if (planBlock.blocked) return NextResponse.json({ error: planBlock.message }, { status: 400 })
 
   // Resolve the credit amount: explicit override, else 10% of the referred
   // account's paid setup fee (resolving the account from a contact if needed).

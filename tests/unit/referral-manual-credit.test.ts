@@ -5,10 +5,20 @@ vi.mock('@/lib/portal/td-invoice', () => ({
   createTDInvoice: vi.fn(),
 }))
 
-import { createManualReferralCredit, defaultReferralCreditUsd, linkLeadReferralToOffer } from '@/lib/operations/referral'
+// Mock the plan-settlement calculator — blockedByUnsettledPlan defers ALL "is this
+// plan actually fully paid" math to it; these tests only prove the guard calls it
+// with the right offer(s) and reacts correctly, not the settlement math itself
+// (that's payment-plan-state.test.ts's job).
+vi.mock('@/lib/offers/payment-plan-state', () => ({
+  computePlanSettlement: vi.fn(),
+}))
+
+import { blockedByUnsettledPlan, createManualReferralCredit, defaultReferralCreditUsd, linkLeadReferralToOffer } from '@/lib/operations/referral'
 import { createTDInvoice } from '@/lib/portal/td-invoice'
+import { computePlanSettlement } from '@/lib/offers/payment-plan-state'
 
 const invoiceMock = createTDInvoice as unknown as ReturnType<typeof vi.fn>
+const settlementMock = computePlanSettlement as unknown as ReturnType<typeof vi.fn>
 
 describe('defaultReferralCreditUsd — 10% of referred setup fee, taken as USD', () => {
   it('computes 10% of the setup-fee total', () => {
@@ -320,5 +330,98 @@ describe('linkLeadReferralToOffer — reconciles a lead-sourced pending row befo
     const { supabase, state } = makeLeadLinkDb({ pending: { id: 'ref-pending-1' } })
     await linkLeadReferralToOffer({ ...baseParams, referrerContactId: null, referrerAccountId: null }, supabase)
     expect(state.updates).toHaveLength(0)
+  })
+})
+
+/**
+ * Stub for blockedByUnsettledPlan's offers lookup: `.from('offers').select('token')
+ * .in().not().or()` — the chain terminates (and the query actually fires) at `.or()`,
+ * matching real supabase-js where every filter method before it just narrows the
+ * builder and only the final link in the chain is awaited.
+ */
+function makePlanBlockDb(opts: { offerRows?: Array<{ token: string }> } = {}) {
+  const state = { orExpr: '' as string, queried: false }
+  const supabase = {
+    from() {
+      return {
+        select() { return this },
+        in() { return this },
+        not() { return this },
+        or(expr: string) {
+          state.orExpr = expr
+          state.queried = true
+          return Promise.resolve({ data: opts.offerRows ?? [] })
+        },
+      }
+    },
+  }
+  return { supabase: supabase as never, state }
+}
+
+describe('blockedByUnsettledPlan — the one gate all four older referral-payment paths call', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('blocks on an explicit offer token whose plan is not yet fully settled', async () => {
+    settlementMock.mockResolvedValue({
+      offerToken: 'offer-X', currency: 'USD',
+      parts: [{ seq: 1, agreedAmount: 500, amountPaid: 500, settledInCash: true }, { seq: 2, agreedAmount: 500, amountPaid: 0, settledInCash: false }],
+      totalAgreed: 1000, totalReceived: 500, eligible: false,
+    })
+    const { supabase } = makePlanBlockDb()
+    const res = await blockedByUnsettledPlan({ offerToken: 'offer-X' }, supabase)
+    expect(res.blocked).toBe(true)
+    if (res.blocked) {
+      expect(res.message).toContain('offer-X')
+      expect(res.message).toContain('1 of 2')
+    }
+    expect(settlementMock).toHaveBeenCalledWith('offer-X')
+  })
+
+  it('does not block when the named offer plan is already fully settled', async () => {
+    settlementMock.mockResolvedValue({
+      offerToken: 'offer-X', currency: 'USD',
+      parts: [{ seq: 1, agreedAmount: 500, amountPaid: 500, settledInCash: true }],
+      totalAgreed: 500, totalReceived: 500, eligible: true,
+    })
+    const { supabase } = makePlanBlockDb()
+    const res = await blockedByUnsettledPlan({ offerToken: 'offer-X' }, supabase)
+    expect(res.blocked).toBe(false)
+  })
+
+  it('does not block when the named offer carries no valid plan at all', async () => {
+    settlementMock.mockResolvedValue(null)
+    const { supabase } = makePlanBlockDb()
+    const res = await blockedByUnsettledPlan({ offerToken: 'offer-no-plan' }, supabase)
+    expect(res.blocked).toBe(false)
+  })
+
+  it('resolves candidate offers by referred account/contact when no token is given, and blocks on an unsettled one', async () => {
+    settlementMock.mockResolvedValue({
+      offerToken: 'offer-Y', currency: 'USD',
+      parts: [{ seq: 1, agreedAmount: 300, amountPaid: 0, settledInCash: false }],
+      totalAgreed: 300, totalReceived: 0, eligible: false,
+    })
+    const { supabase, state } = makePlanBlockDb({ offerRows: [{ token: 'offer-Y' }] })
+    const res = await blockedByUnsettledPlan({ referredAccountId: 'acct-1', referredContactId: 'contact-1' }, supabase)
+    expect(res.blocked).toBe(true)
+    expect(state.orExpr).toContain('contact_id.eq.contact-1')
+    expect(state.orExpr).toContain('account_id.eq.acct-1')
+    expect(settlementMock).toHaveBeenCalledWith('offer-Y')
+  })
+
+  it('does not block when the offers lookup finds no signed plan-bearing offer for that party', async () => {
+    const { supabase, state } = makePlanBlockDb({ offerRows: [] })
+    const res = await blockedByUnsettledPlan({ referredAccountId: 'acct-1' }, supabase)
+    expect(res.blocked).toBe(false)
+    expect(state.queried).toBe(true)
+    expect(settlementMock).not.toHaveBeenCalled()
+  })
+
+  it('never blocks, and never queries, when nothing identifiable is given', async () => {
+    const { supabase, state } = makePlanBlockDb()
+    const res = await blockedByUnsettledPlan({}, supabase)
+    expect(res.blocked).toBe(false)
+    expect(state.queried).toBe(false)
+    expect(settlementMock).not.toHaveBeenCalled()
   })
 })
