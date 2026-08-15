@@ -24,6 +24,19 @@
  * run is wrapped and reported to cron_log on both success and failure, the
  * same way every other cron in this codebase is, so a broken sweep is visible
  * rather than silently going quiet.
+ *
+ * LEAD-ORIGINATED DEALS (bug-hunter, 2026-08-14, review of the built code):
+ * an offer created directly from a lead can still carry neither account_id
+ * nor contact_id by the time its plan settles — the offer-signed webhook
+ * resolves a contact for invoicing but never writes it back onto the offer,
+ * and account_id has the identical, already-documented staleness (see
+ * migration 20260622-1530's history). This is exactly the population most
+ * likely to hit it, since a referral is by definition a new client. When
+ * both are missing, this falls back to `findContactIdByEmail` — the
+ * codebase's own canonical, dedup/tombstone-aware lookup — rather than
+ * hand-rolling a second, unprotected email match (a review-caught mistake:
+ * the pattern that looked reusable elsewhere in this codebase is exactly the
+ * one without that protection).
  */
 
 import { NextRequest, NextResponse } from "next/server"
@@ -33,10 +46,12 @@ import { computePlanSettlement } from "@/lib/offers/payment-plan-state"
 import { hasWorkingPartnerPayout, shouldReleasePlanReferrerCredit } from "@/lib/partners/partner-deal"
 import { decidePlanReferrerNotification, buildPlanReferrerNotifyMessage } from "@/lib/notifications/plan-referrer-notify"
 import { emitPlanReferrerReadyToReleaseEvent } from "@/lib/portal/chat-events"
+import { findContactIdByEmail } from "@/lib/operations/find-contact-by-email"
 
 interface CandidateOffer {
   token: string
   client_name: string | null
+  client_email: string | null
   account_id: string | null
   contact_id: string | null
   referrer_name: string | null
@@ -59,7 +74,7 @@ export async function GET(req: NextRequest) {
     // eslint-disable-next-line no-restricted-syntax -- payment_plan/commission_released_at postdate the generated types for this table.
     const offerQuery = supabaseAdmin
       .from("offers")
-      .select("token, client_name, account_id, contact_id, referrer_name, partner_id, partner_payout_model, payment_plan, commission_released_at" as never)
+      .select("token, client_name, client_email, account_id, contact_id, referrer_name, partner_id, partner_payout_model, payment_plan, commission_released_at" as never)
       .in("status", ["signed", "completed"])
       .not("payment_plan" as never, "is", null)
       .is("commission_released_at" as never, null)
@@ -115,10 +130,24 @@ export async function GET(req: NextRequest) {
           clientName: offer.client_name || "This client",
         })
 
+        // A lead-originated offer (created before any account/contact link
+        // existed) can still have neither by the time its plan settles — the
+        // offer-signed webhook resolves a contact for invoicing but never
+        // writes it back onto the offer row, and offers.account_id has the
+        // same known staleness (see migration 20260622-1530's history). Fall
+        // back to the codebase's own canonical, dedup/tombstone-aware email
+        // lookup rather than leaving this deal permanently un-notifiable —
+        // this is exactly the population most likely to hit it, since a
+        // referral is by definition a brand-new client.
+        let contactId = offer.contact_id
+        if (!offer.account_id && !contactId) {
+          contactId = await findContactIdByEmail(offer.client_email)
+        }
+
         const emitResult = await emitPlanReferrerReadyToReleaseEvent({
           payment_id: sourcePayment.id,
           account_id: offer.account_id,
-          contact_id: offer.contact_id,
+          contact_id: contactId,
           message,
         })
 
