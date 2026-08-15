@@ -3327,6 +3327,24 @@ type WorkerUserContent =
 const DEFAULT_MAX_TOOL_LOOPS = Number(process.env.AGENT_MAX_TOOL_LOOPS) || 8
 const ANTHROPIC_TIMEOUT_MS = 240_000 // per-call ceiling; raised from 55s so max_tokens=16384 is usable for long pure-text responses. Stays under cron route's maxDuration=300 with 60s buffer.
 
+// EXTENDED THINKING (2026-08-15, dev job 5e87b099 follow-on: Luca/Antonio, the
+// worker acting on words instead of what was actually meant — Lorenzo Zarone /
+// "attach the screenshot" read as a claim about itself). Antonio's own framing:
+// he wants it to understand context, not react to wording — and a plain, single
+// fast pass with no reasoning step is a real, checkable difference between this
+// loop and how a reasoning session behaves. This is a MODEST budget, not the
+// deep-investigation kind: enough room to catch "wait, who does this refer to"
+// before committing to a reply, without materially changing latency for a chat
+// surface. Applies to every call this loop makes (main loop + exhaustion
+// synthesis) — one constant, so both can never drift out of sync with each
+// other. Revisit the size only with real before/after evidence, not a guess.
+export const WORKER_THINKING_BUDGET_TOKENS = 2048
+// max_tokens must exceed budget_tokens when thinking is enabled — thinking and
+// the actual reply share this one ceiling. Adds the thinking budget ON TOP of
+// the existing 16384 output ceiling rather than eating into it, so a long reply
+// is no more likely to get cut off than it was before.
+export const WORKER_MAX_TOKENS_WITH_THINKING = 16384 + WORKER_THINKING_BUDGET_TOKENS
+
 // Wall-clock budget for the WHOLE tool-use loop. Kept under the cron route's
 // maxDuration=300s with a 50s margin so the serverless function never gets
 // hard-killed mid-loop. The loop stops GRACEFULLY when this (or the iteration cap)
@@ -4180,6 +4198,16 @@ export async function runWorkerLoop(
     // to staff. Bounded by attempts AND by the turn's remaining wall clock, so a
     // retry can never push the function past its hard deadline.
     let res: Response | null = null
+    // THINKING-COMPAT FALLBACK (bug-hunter, 2026-08-15): the worker's model is ONE
+    // shared setting Antonio can change from a gear on any panel — six curated
+    // options (worker-models.ts), not all necessarily extended-thinking-capable,
+    // and this loop has no live way to have confirmed each one before shipping.
+    // A model that rejects the `thinking` field errors with a 400 naming it — so
+    // one retry of the SAME call with thinking removed, before giving up, means
+    // picking an incompatible model degrades that reply (no reasoning pass)
+    // instead of breaking every surface at once until someone reverts the setting.
+    let sendThinking = true
+    let thinkingFallbackTried = false
     for (let attempt = 0; ; attempt++) {
       res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -4190,7 +4218,12 @@ export async function runWorkerLoop(
       },
       body: JSON.stringify({
         model,
-        max_tokens: 16384,
+        max_tokens: sendThinking ? WORKER_MAX_TOKENS_WITH_THINKING : 16384,
+        // EXTENDED THINKING: a real reasoning pass before the model commits to a reply
+        // or a tool call — the direct fix for it reacting to a word instead of what was
+        // actually meant (see the constant's own comment for the incident this answers).
+        // Requires temperature at its default of 1, which this call already leaves unset.
+        ...(sendThinking ? { thinking: { type: "enabled", budget_tokens: WORKER_THINKING_BUDGET_TOKENS } } : {}),
         // Prompt caching: the system prompt + tool definitions are the large, stable
         // prefix re-sent on EVERY tool-use iteration of this loop (a dig-in question
         // can be ~10 iterations). A cache_control breakpoint on the system block caches
@@ -4205,6 +4238,17 @@ export async function runWorkerLoop(
       }),
       signal: controller.signal,
       })
+
+      if (!res.ok && res.status === 400 && sendThinking && !thinkingFallbackTried) {
+        const probe = await res.clone().json().catch(() => ({}))
+        if (JSON.stringify(probe).toLowerCase().includes("thinking")) {
+          console.warn(`[worker] model "${model}" rejected extended thinking — retrying this call without it`)
+          sendThinking = false
+          thinkingFallbackTried = true
+          continue
+        }
+      }
+
       if (res.ok || !isTransientStatus(res.status) || attempt >= MAX_TRANSIENT_RETRIES) break
       const delay = retryDelayMs(attempt + 1, res.headers.get("retry-after"))
       if (!canRetryWithin(Date.now() - loopStart, WORKER_WALL_CLOCK_BUDGET_MS, delay)) break
@@ -4527,7 +4571,8 @@ export async function runWorkerLoop(
         },
         body: JSON.stringify({
           model,
-          max_tokens: 16384,
+          max_tokens: WORKER_MAX_TOKENS_WITH_THINKING,
+          thinking: { type: "enabled", budget_tokens: WORKER_THINKING_BUDGET_TOKENS },
           system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
           // No tools → the model is forced to produce a text answer.
           messages: currentMessages,

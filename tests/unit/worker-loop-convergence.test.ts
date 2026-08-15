@@ -16,7 +16,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 const mockFetch = vi.fn()
 vi.stubGlobal("fetch", mockFetch)
 
-import { runWorkerLoop } from "@/lib/ai-agent/worker-tools"
+import {
+  runWorkerLoop,
+  WORKER_THINKING_BUDGET_TOKENS,
+  WORKER_MAX_TOKENS_WITH_THINKING,
+} from "@/lib/ai-agent/worker-tools"
 
 const toolUseResponse = {
   ok: true,
@@ -146,5 +150,124 @@ describe("runWorkerLoop — quick-gear ceiling wiring", () => {
       JSON.stringify(JSON.parse(c[1].body).messages).includes(NUDGE_FRAGMENT),
     )
     expect(sawNudge).toBe(false)
+  })
+})
+
+// ── Extended thinking (dev job 5e87b099 follow-on, 2026-08-15) ─────────────
+// Antonio: the worker should understand what was actually meant, not just react
+// to the words used (the Lorenzo Zarone "attach the screenshot" mix-up). Gives
+// the model a real reasoning pass before it commits to a reply or a tool call.
+describe("runWorkerLoop — extended thinking", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.ANTHROPIC_API_KEY = "test-key"
+  })
+
+  it("enables thinking with the configured budget on every call the main loop makes", async () => {
+    mockFetch.mockResolvedValueOnce(toolUseResponse).mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({ content: [{ type: "text", text: "Done." }], stop_reason: "end_turn", usage: {} }),
+    })
+
+    await runWorkerLoop("simple question", [], "sys prompt", 5)
+
+    for (const call of mockFetch.mock.calls) {
+      const body = JSON.parse(call[1].body)
+      expect(body.thinking).toEqual({ type: "enabled", budget_tokens: WORKER_THINKING_BUDGET_TOKENS })
+    }
+  })
+
+  it("enables thinking on the exhaustion-synthesis (no-tools) call too", async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            content: [{ type: "tool_use", id: "t1", name: "nonexistent_tool", input: {} }],
+            stop_reason: "tool_use",
+            usage: {},
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({ content: [{ type: "text", text: "Synthesized." }], stop_reason: "end_turn", usage: {} }),
+      })
+
+    await runWorkerLoop("investigate something", [], "sys prompt", 1)
+
+    const synthesisCall = mockFetch.mock.calls[1]
+    const body = JSON.parse(synthesisCall[1].body)
+    expect(body.thinking).toEqual({ type: "enabled", budget_tokens: WORKER_THINKING_BUDGET_TOKENS })
+    // No tools on this call — must stay true with thinking added.
+    expect(body.tools).toBeUndefined()
+  })
+
+  it("max_tokens stays strictly greater than the thinking budget — the API rejects the request otherwise", () => {
+    expect(WORKER_MAX_TOKENS_WITH_THINKING).toBeGreaterThan(WORKER_THINKING_BUDGET_TOKENS)
+  })
+
+  it("does not shrink the pre-thinking output ceiling — adds budget on top instead of eating into it", () => {
+    // Pinned so nobody "fixes" a max_tokens overrun later by quietly cutting the
+    // thinking budget out of the existing 16384 output ceiling instead of adding to it.
+    expect(WORKER_MAX_TOKENS_WITH_THINKING - WORKER_THINKING_BUDGET_TOKENS).toBe(16384)
+  })
+
+  it("bug-hunter finding (2026-08-15): a model that rejects the thinking field degrades gracefully instead of failing the whole surface", async () => {
+    // Antonio can switch the worker's model from a shared gear — not every
+    // selectable model is confirmed extended-thinking-capable. A model that
+    // rejects it responds with a 400 naming "thinking" in the error body.
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        clone: function () { return this },
+        json: () => Promise.resolve({ type: "error", error: { type: "invalid_request_error", message: "thinking.budget_tokens: not supported for this model" } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ content: [{ type: "text", text: "Answered anyway." }], stop_reason: "end_turn", usage: {} }),
+      })
+
+    const result = await runWorkerLoop("simple question", [], "sys prompt", 5)
+
+    expect(result.reply).toBe("Answered anyway.")
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    const firstBody = JSON.parse(mockFetch.mock.calls[0][1].body)
+    const secondBody = JSON.parse(mockFetch.mock.calls[1][1].body)
+    expect(firstBody.thinking).toBeDefined()
+    expect(secondBody.thinking).toBeUndefined()
+    expect(secondBody.max_tokens).toBe(16384) // falls back to the pre-thinking ceiling too
+  })
+
+  it("a 400 unrelated to thinking still surfaces as a real error, not silently swallowed", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      clone: function () { return this },
+      json: () => Promise.resolve({ type: "error", error: { type: "invalid_request_error", message: "messages: at least one message is required" } }),
+    })
+
+    await expect(runWorkerLoop("simple question", [], "sys prompt", 5)).rejects.toThrow(/Claude API error 400/)
+    expect(mockFetch).toHaveBeenCalledTimes(1) // no thinking-fallback retry — the error isn't about thinking
+  })
+
+  it("thinking blocks in the response don't break tool-call or text extraction", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          content: [
+            { type: "thinking", thinking: "reasoning about who 'attach' refers to...", signature: "sig" },
+            { type: "text", text: "Here is the answer." },
+          ],
+          stop_reason: "end_turn",
+          usage: {},
+        }),
+    })
+
+    const result = await runWorkerLoop("simple question", [], "sys prompt", 5)
+    expect(result.reply).toBe("Here is the answer.")
   })
 })
