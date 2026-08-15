@@ -44,6 +44,7 @@ export type ChatEventKind =
   | "decision_responded"      // client answered a client_decision_request (approval/choice/text)
   | "aged_credit_applied"     // an old credit note reduced a bill (WS-A: credits never expire)
   | "financials_confirm_unlocked" // staff overrode the failed-statement hard block (card 4a39e0fd)
+  | "plan_referrer_ready_to_release" // a payment-plan deal with a referrer/partner is now fully paid — release commission
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */
@@ -432,5 +433,29 @@ export async function emitDecisionRespondedEvent(params: {
     message,
     source: { table: "client_decision_requests", id: params.request_id },
     event_kind: "decision_responded",
+  })
+}
+
+/**
+ * Emit a "payment-plan deal ready for commission release" event. Fired by the
+ * `plan-referrer-notify` cron once a plan carrying a referrer/partner is
+ * genuinely fully paid — never on every payment, only on the transition to
+ * eligible. Idempotent on the settling payment's id, so re-running the sweep
+ * (or a retry) never double-posts for the same deal. Non-fatal by the same
+ * contract as every sibling emitter here.
+ */
+export async function emitPlanReferrerReadyToReleaseEvent(params: {
+  payment_id: string
+  contact_id?: string | null
+  account_id?: string | null
+  message: string
+}): Promise<EmitResult> {
+  return await emitClientChatEvent({
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    topic: "Referral",
+    message: params.message,
+    source: { table: "payments", id: params.payment_id },
+    event_kind: "plan_referrer_ready_to_release",
   })
 }

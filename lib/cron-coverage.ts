@@ -62,6 +62,10 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   // linked, legal name fixed, related companies declared). REPORT-ONLY until
   // TAX_RESTALE_SWEEP_DRY_RUN is "false". 4-hourly: the inputs change rarely.
   "/api/cron/tax-restale-sweep": "0 */4 * * *",
+  // Payment-plan deals with a referrer/partner that just became fully paid in
+  // real cash — flags staff toward the "Release commission" action. State-based
+  // sweep, deliberately not a hook on any single payment-confirmation path.
+  "/api/cron/plan-referrer-notify": "*/15 * * * *",
   "/api/cron/forms-archive-sweep": "*/15 * * * *",
   "/api/cron/airwallex-sync": "*/15 * * * *",
   "/api/cron/stripe-sync": "0 */6 * * *",
