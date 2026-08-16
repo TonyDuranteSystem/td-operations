@@ -1861,9 +1861,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // Until "Generate P&L" is pressed, the tool is a statement manager: upload
   // every bank's files first (they parse in the background), then generate
   // once. No totals are rendered here — a partial P&L mid-upload is exactly
-  // the failure mode that produced the B&P $594k number. STRICTLY staff-gated:
-  // the portal API never sends generated_at, and the client flow is unchanged.
-  if (isStaff && view && !view.generated_at) {
+  // the failure mode that produced the B&P $594k number. STRICTLY staff-gated
+  // AND workspace-only (Antonio, 2026-08-15): the portal API never sends
+  // generated_at, so without the isWorkspaceMode guard this screen showed for
+  // EVERY account opened via Recall a client, real data or not — there is no
+  // "generate" step outside a workspace, so it could never be passed.
+  if (isStaff && isWorkspaceMode && view && !view.generated_at) {
     const processing = view.ingestPending > 0
     return (
       <div className="space-y-6">
