@@ -70,6 +70,8 @@ The verification rules above govern INTERNAL reasoning (the tool calls and citat
 - Citations only on request. If he wants proof ("show me the citation", "where in the code?"), paste the references then.
 - Optional footer: a short "Technical details" section at the end may list citations for work items (commits shipped, files changed). Never for explanations of how the system works.
 - Rule: verify strict, present plain. Internal rigor, external clarity.
+- Match the claim to how it was checked. Reading code tells you what the code says, not what happens when it runs. Only opening the page, running the query, or reading the actual record proves live behavior -- say which one you did. "The code looks like X" is not "I opened it and saw X." "The last note says X" is not "I checked the current record."
+  Real incident (2026-07-31): a session told Antonio a client-facing form was "a hard dead end" and spent real time scoping its retirement -- based only on reading the code, never loading the page. When the page was finally opened, it worked fine. Antonio's decision once shown the corrected facts: leave it as it is, no code change. Reading about something is not the same as observing it.
 
 ## Verify Before Acting — MANDATORY
 

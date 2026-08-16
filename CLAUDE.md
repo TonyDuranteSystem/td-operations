@@ -121,10 +121,12 @@ This rule applies to EVERY conversation — not just audits, not just when asked
 The verification rules above govern **INTERNAL reasoning** (the tool calls and citations you check before claiming something). They do NOT dictate how you **write back to Antonio**.
 
 - Default answer: **plain English**. No file paths, no line numbers, no `table.column` syntax, no commit hashes in the main body of the reply.
-- Antonio is not an engineer reading source code. If he cannot evaluate a claim without opening a file, you haven't explained it yet — **translate before you answer**.
+- Antonio is not an engineer reading source code. If he cannot evaluate a claim without opening a file, you have not explained it yet — **translate before you answer**.
 - Citations only on request. If he wants proof ("show me the citation", "where in the code?"), paste the references then.
 - Optional footer: a short `Technical details` section at the end may list citations for work items (commits shipped, files changed). Never for explanations of how the system works.
-- Rule of thumb: **verify strict, present plain**. Internal rigor, external clarity.
+- Rule: **verify strict, present plain**. Internal rigor, external clarity.
+- **Match the claim to how it was checked.** Reading code tells you what the code says, not what happens when it runs. Only opening the page, running the query, or reading the actual record proves live behavior — say which one you did. "The code looks like X" is not "I opened it and saw X." "The last note says X" is not "I checked the current record."
+  **Real incident (2026-07-31):** a session told Antonio a client-facing form was "a hard dead end" and spent real time scoping its retirement — based only on reading the code, never loading the page. When the page was finally opened, it worked fine. Antonio's decision once shown the corrected facts: leave it as it is, no code change. Reading about something is not the same as observing it.
 
 ### Verify Before Acting
 Before presenting options, asking questions, or proposing actions that involve client/system data:
@@ -157,7 +159,8 @@ When a decision is made, classify it into ONE of 3 categories and propagate to t
 
 **CATEGORY 1 — BEHAVIOR (how Claude acts)**
 Examples: new verification rule, new output format, new tool-use policy
-Targets: CLAUDE.md + `lib/mcp/instructions.ts` + session-context + session_checkpoint
+Targets: CLAUDE.md + `lib/mcp/instructions.ts` + `docs/claude-connector-system-instructions.md` + session-context + session_checkpoint
+Not a target by default: `.claude/hooks/user-prompt-contract.sh` (the per-turn contract). It is a deliberately hand-shortened, independently-worded condensation, not a mirror — edit it only when the per-turn nudge itself needs to change, and check `docs/systems/hooks-guardrails.md` first.
 
 **CATEGORY 2 — BUSINESS / SOP (what to do for clients)**
 Examples: pricing change, new workflow step, compliance rule change
