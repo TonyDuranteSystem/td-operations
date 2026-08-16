@@ -781,16 +781,25 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // page didn't know, so it rendered live-looking controls that always failed.
   // `editable` is absent on the staff workspace payload (never locked) — only
   // an explicit false means locked.
-  const locked = view?.editable === false
+  //
+  // STAFF NEVER LOCKED (2026-08-16, Recall a client): `under_review` is the
+  // status staff themselves set the moment they start working an account —
+  // Recall's whole purpose is helping the client with exactly that account,
+  // so locking staff out during the one state they're most likely to open it
+  // in defeated the tool. The client-facing freeze exists to stop the CLIENT
+  // from self-editing while staff (or the client, after confirming) shouldn't
+  // — it was never meant to block staff themselves. Workspace mode was
+  // already exempt in practice (that payload never sends `editable`); this
+  // makes the exemption explicit and correct for account/Recall mode too,
+  // instead of accidentally following from a field workspaces never send.
+  const locked = !isStaff && view?.editable === false
   // Every mutating control on this screen is gated on this, not on `busy`
   // alone (2026-08-03, bug-hunter blocker). The first cut disabled only three
   // controls while the banner promised "you can't change anything here" — so
   // Confirm, Upload and Add-category stayed live under a message saying they
-  // weren't. `locked` can only ever be true in CLIENT mode (the staff workspace
-  // payload never carries `editable`, verified), so applying it broadly cannot
-  // lock staff out of their own tool. Deliberately NOT applied to read-only
-  // affordances — reloading, expanding a category, opening a section — because
-  // the banner also promises the client can still READ everything.
+  // weren't. Deliberately NOT applied to read-only affordances — reloading,
+  // expanding a category, opening a section — because the banner also
+  // promises the client can still READ everything.
   const busyOrLocked = busy !== null || locked
 
   /**
@@ -1417,13 +1426,22 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     }
   }
 
-  // Staff workspace only: stamp the workspace as generated (or re-generated
-  // after new uploads) — the server refuses while files are still processing.
+  // Staff only. In a workspace, this stamps it as generated (or re-generated
+  // after new uploads) — the workspace id is already in the URL, no body
+  // needed. In account/Recall mode there is no per-request id in the URL, so
+  // the account+year go in the body instead; the server refuses either way
+  // while files are still processing.
   const generate = async () => {
     setBusy('generate')
     setError(null)
     try {
-      const res = await fetch(`${API}/generate`, { method: 'POST' })
+      const res = await fetch(`${API}/generate`, {
+        method: 'POST',
+        ...(isWorkspaceMode ? {} : {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account_id: accountId, tax_year: taxYear }),
+        }),
+      })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || 'Could not generate — please try again.')
@@ -2680,7 +2698,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 🌍 {it ? 'Periodi fuori sede rilevati' : 'Time away from home base detected'}
               </h3>
               <p className="text-xs text-zinc-600 mb-3">
-                {view.residence_on_file || (!isStaff && view.residence_country)
+                {/* residence_on_file is workspace-only; residence_country is
+                    sent to BOTH staff and client in account/Recall mode (the
+                    route already resolves and uses it below) — checking it
+                    regardless of isStaff (2026-08-16) fixes staff via Recall
+                    being told "no residence on file" for an account that has
+                    one, while that same country builds the cards right under
+                    the banner. Wording still branches on isStaff below;
+                    only WHICH branch runs no longer does. */}
+                {view.residence_on_file || view.residence_country
                   ? (it
                     ? `Residenza fiscale registrata: ${locLabel(view.residence_country ?? '', it)}. Le spese fatte lì restano nella revisione normale; per i periodi all'estero basta UNA risposta.`
                     : `Fiscal residence on file: ${locLabel(view.residence_country ?? '', it)}. Spending there stays in the normal review; each period away needs just ONE answer.`)
