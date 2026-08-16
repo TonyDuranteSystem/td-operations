@@ -13,6 +13,9 @@
 
 # env files
 .env*.local
+
+# account-reset archives — can contain real client financial data
+scripts/.reset-archives/
 .env.sandbox.local
 .env.sandbox
 

@@ -39,6 +39,7 @@ export type CompletenessCode =
   | "ownership_incomplete"      // gate 5 fail — ownership % not fully resolved
   | "unattributed_owner_moves"  // contributions/distributions not matched to a member
   | "missing_fx_rate"           // a non-USD currency has no IRS rate on file
+  | "capital_continuity_gap"    // gate 7 fail — a member's beginning capital has no real prior-year source
 
 export interface CompletenessItem {
   code: CompletenessCode
@@ -100,6 +101,12 @@ export function buildCompletenessSummary(input: CompletenessInput): Completeness
   // Gate 5 — ownership %s not resolved (K-1 allocation needs them).
   const g5 = gate(gates, 5)
   if (g5?.status === "fail") items.push({ code: "ownership_incomplete", severity: "warn", detail: g5.detail })
+
+  // Gate 7 — a member's beginning capital has no real prior-year source (fell
+  // through to the silent-0 fallback). Warn: this is real money the client's
+  // own return understates or overstates, not a cosmetic gap.
+  const g7 = gate(gates, 7)
+  if (g7?.status === "fail") items.push({ code: "capital_continuity_gap", severity: "warn", detail: g7.detail })
 
   // Owner money in/out we couldn't match to a specific member by name.
   const um = draft.unattributed

@@ -114,11 +114,19 @@ export interface FinancialDraft {
   /** Gross USD volume of the conversion rows (Σ|amount|) — context for the
    *  translation adjustment and the "unexpectedly large" review alarm. */
   conversion_gross: number
+  /** Cumulative FX/CTA equity position — input beginningCta (carried from the
+   *  prior year, 0 when there is none / first adoption) plus this year's own
+   *  fx_translation_adjustment. Feeds the balance identity below AND is what a
+   *  future carry reads as ITS beginningCta, so the accumulated position
+   *  survives year to year instead of resetting every Jan 1. Purely additive:
+   *  when beginningCta is never supplied, ending_cta === fx_translation_adjustment
+   *  and every existing account/test is byte-for-byte unchanged. */
+  ending_cta: number
   /** Balance-sheet residual — total_assets − (total_liabilities + ending capital
-   *  + fx_translation_adjustment + uncategorized cash). ~0 when the sheet ties.
-   *  THE single source of the balance identity: gate 3, the portal screen, and
-   *  the Excel all read this field instead of each re-summing the components, so
-   *  a renderer can never again silently drop a term (the FX-missing-from-Excel
+   *  + ending_cta + uncategorized cash). ~0 when the sheet ties. THE single
+   *  source of the balance identity: gate 3, the portal screen, and the Excel
+   *  all read this field instead of each re-summing the components, so a
+   *  renderer can never again silently drop a term (the FX-missing-from-Excel
    *  bug). */
   balance_sheet_check: number
   /** Contribution/distribution amounts that matched no member by name — needs staff/client resolution. */
@@ -145,6 +153,10 @@ export interface BuildDraftInput {
    *  source (after prior return and statement balance columns) and the
    *  per-bank tie-out anchor. */
   providedBalances?: ProvidedBankBalance[]
+  /** Cumulative FX/CTA position carried from the prior year (see ending_cta on
+   *  FinancialDraft). Omit/0 for every account that predates this concept or
+   *  has no prior year — purely additive, changes nothing when absent. */
+  beginningCta?: number
 }
 
 /**
@@ -202,7 +214,7 @@ function priorBeginningCapital(prior: PriorReturnCaseRecord | null, memberName: 
 }
 
 export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
-  const { taxYear, transactions: rawTransactions, members, priorReturn, fxRates } = input
+  const { taxYear, transactions: rawTransactions, members, priorReturn, fxRates, beginningCta } = input
   const notes: string[] = []
 
   // ── Phase 2: normalize every amount + running balance to USD ──
@@ -437,6 +449,12 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
   const conversionRows = transactions.filter(t => t.category === "conversion")
   const fxTranslationAdjustment = conversionRows.reduce((s, t) => s + Number(t.amount), 0)
   const conversionGross = conversionRows.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+  // Cumulative position = whatever carried in (0 when there's none) + this
+  // year's own movement. Carrying this forward is what stops a carried-forward
+  // year from opening "off by" the prior year's stale FX position (round-2
+  // bug-hunter blocker) — the balance identity below uses THIS, not the bare
+  // single-year fxTranslationAdjustment.
+  const endingCta = (beginningCta ?? 0) + fxTranslationAdjustment
   if (Math.abs(fxTranslationAdjustment) > 0.01) {
     notes.push(`Foreign-exchange translation adjustment of ${fxTranslationAdjustment.toFixed(2)} USD — the difference between valuing currency exchanges at the IRS yearly-average rate and the amounts actually received. It is shown as an equity translation adjustment so the balance sheet ties; it is not income and is not added to any member's capital account.`)
     // Magnitude alarm (CPA/architect condition): genuine FX drift is small next
@@ -464,7 +482,8 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
     ending_capital_total: endingCapitalTotal,
     fx_translation_adjustment: fxTranslationAdjustment,
     conversion_gross: conversionGross,
-    balance_sheet_check: endingCash - (0 + endingCapitalTotal + fxTranslationAdjustment + pnl.uncategorizedTotal),
+    ending_cta: endingCta,
+    balance_sheet_check: endingCash - (0 + endingCapitalTotal + endingCta + pnl.uncategorizedTotal),
     unattributed: { contributions: unattributedContrib, distributions: unattributedDist },
     notes,
   }

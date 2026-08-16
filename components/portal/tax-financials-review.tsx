@@ -13,6 +13,7 @@ import { groupKeyRoot } from '@/lib/tax/question-groups'
 import { resolveInstitution } from '@/lib/tax/bank-identity'
 import { diagnosisCopy } from '@/lib/tax/ingest-diagnosis'
 import { suggestedPhrase, gateSixText } from '@/lib/tax/disclosure-text'
+import type { CompletenessCode } from '@/lib/tax/completeness'
 import ValidationBreakdownPanel from './validation-breakdown'
 
 /** Prominent processing card (Antonio, 2026-07-03: "hourglass or a timer and
@@ -43,7 +44,12 @@ interface AccountOnFile { account_ref: string; bank: string; acct: string; count
 
 interface CoverageQuestion { key: string; bank_key: string; kind: string; months: string[]; question: string; answer: 'no_activity' | 'had_activity' | null }
 
-interface CompletenessItem { code: string; severity: 'warn' | 'info'; amount?: number; detail?: string }
+// The canonical union (not a bare string) — round-5 bug-hunter minor: a loose
+// `code: string` gave the switch below no exhaustiveness check at all, which
+// is exactly how the capital_continuity_gap case went missing for a while in
+// the first place. Narrowing to CompletenessCode means the compiler now
+// catches a future code silently falling through to the raw-English default.
+interface CompletenessItem { code: CompletenessCode; severity: 'warn' | 'info'; amount?: number; detail?: string }
 interface CompletenessSummary { items: CompletenessItem[]; can_accept_as_is: boolean }
 
 interface View {
@@ -71,13 +77,17 @@ interface View {
     total_liabilities: number
     ending_capital_total: number
     fx_translation_adjustment?: number
+    ending_cta?: number
     balance_sheet_check?: number
     notes: string[]
   }
   gates: Gate[]
   providedBalances?: Array<{ bank_key: string; currency: string; opening_balance: number | null; closing_balance: number | null; source: 'client' | 'staff' }>
   /** Staff workspace only: the stored prior-return answer (case+status). */
-  prior_return?: { case: string | null; status: string | null } | null
+  prior_return?: { case: string | null; status: string | null; beginning_cta?: number } | null
+  /** Workspace mode only — pnl_workspaces.updated_at, for the optimistic-
+   *  concurrency check on the 'corrected' choice (round-4 minor). */
+  prior_return_updated_at?: string | null
   /** Staff workspace only: Validation Mode breakdown (same engine pass). */
   validation?: import('./validation-breakdown').ValidationBreakdownView
   canConfirm: boolean
@@ -266,6 +276,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // the red refusal jump onto cards that were never part of the failed call.
   const [cardError, setCardError] = useState<{ keys: string[]; message: string } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  // Prior-year correction (dev_task d909e086) — the auto-carry check/preview
+  // is ACCOUNT-mode only (apiBase '/api/portal/tax-financials'); the
+  // workspace tool doesn't have those two routes yet, deliberately scoped out
+  // for this round — its own prior-return route already gained a 'corrected'
+  // choice, which the manual form below uses on both surfaces.
+  const isWorkspaceMode = API.startsWith('/api/tools/pnl/')
+  const [carryCheck, setCarryCheck] = useState<{ offered: boolean; reason?: string; priorYear: number; expected_updated_at?: string; candidate?: { beginning_cash: number; beginning_cta: number; unresolved_members: string[]; member_links: Array<{ name: string; beginning_capital: number }> } } | null>(null)
+  const [priorCorrectionOpen, setPriorCorrectionOpen] = useState(false)
+  const [priorCorrectionValues, setPriorCorrectionValues] = useState<{ beginning_cash: string; beginning_cta: string; members: Array<{ name: string; beginning_capital: string }> }>({ beginning_cash: '0', beginning_cta: '0', members: [] })
   const [attestChecked, setAttestChecked] = useState(false)
   const [attested, setAttested] = useState(false)
   const [newBucket, setNewBucket] = useState('')
@@ -1362,8 +1381,19 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         return it
           ? `Non abbiamo un tasso di cambio ufficiale per ${item.detail} (${taxYear}), quindi quegli importi sono mostrati nella valuta originale. Aggiungiamo il tasso noi in revisione.`
           : `We don't have an official exchange rate on file for ${item.detail} (${taxYear}), so those amounts are shown in their original currency. We'll add the rate during review.`
-      default:
+      case 'capital_continuity_gap':
+        return it
+          ? 'Il saldo iniziale di uno dei soci non risulta dalla dichiarazione dell\'anno scorso, quindi per ora è impostato a zero. Lo confermiamo noi in fase di revisione.'
+          : 'One owner\'s starting capital balance isn\'t showing up from last year\'s return, so it\'s set at zero for now. We\'ll confirm the real figure during review.'
+      default: {
+        // Exhaustiveness check: if a new CompletenessCode is ever added
+        // without a case above, item.code no longer narrows to `never` here
+        // and this line fails to compile — the exact silent-fallback bug
+        // capital_continuity_gap just went through (round-5 bug-hunter minor).
+        const _exhaustive: never = item.code
+        void _exhaustive
         return item.detail ?? ''
+      }
     }
   }
 
@@ -1444,6 +1474,111 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || 'Could not save the prior-return answer — please try again.')
       }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // Account-mode only (see isWorkspaceMode above). Read-only preview — never
+  // writes. A distinct, explicit click, never run on page load (round-2/3
+  // bug-hunter performance finding: this computes an entire prior year).
+  // Returns whether it actually succeeded — openCorrectionForm depends on
+  // this (round-4 minor finding: the earlier version always opened the form
+  // even when this failed, so a fresh expected_updated_at was never actually
+  // guaranteed the way its own comment claimed).
+  const checkCarry = async (): Promise<boolean> => {
+    setBusy('carry-check')
+    setError(null)
+    try {
+      const res = await fetch(`/api/portal/tax-financials/prior-return-carry-check?account_id=${accountId}&tax_year=${taxYear}`)
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Could not check for a carry-forward opportunity.')
+      setCarryCheck(d)
+      return true
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      return false
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const applyCarry = async () => {
+    if (!carryCheck?.expected_updated_at) return
+    setBusy('carry-apply')
+    setError(null)
+    try {
+      const res = await fetch('/api/portal/tax-financials/prior-return-carry-confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, expected_updated_at: carryCheck.expected_updated_at }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || d.message || 'Could not apply the carry-forward.')
+      setCarryCheck(null)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // Pre-fills cash/capital from what's CURRENTLY computed (view.draft) — the
+  // most useful always-available starting point, whether that's a real prior
+  // figure or the 0-fallback staff are here specifically to correct.
+  // beginning_cta pre-fills from view.prior_return's REAL current value, not
+  // a hardcoded 0 (round-4 blocker: hardcoding it meant ANY correction, even
+  // to fix one member's typo, silently wiped a previously-carried FX/CTA
+  // position back to zero). Account mode also needs a FRESH
+  // expected_updated_at before it can submit anything (the concurrency guard
+  // on both new account-side routes) — reuses checkCarry for that even when
+  // staff only want the manual form, not its auto-carry suggestion, so the
+  // two actions never race each other's staleness check. If that check
+  // fails, the form does NOT open (round-4 minor: opening anyway meant
+  // submit was silently doomed to a 400 with no upfront explanation).
+  const openCorrectionForm = async () => {
+    setPriorCorrectionValues({
+      beginning_cash: String(view?.draft.beginning_cash ?? 0),
+      beginning_cta: String(view?.prior_return?.beginning_cta ?? 0),
+      members: (view?.draft.members ?? []).map(m => ({ name: m.name, beginning_capital: String(m.beginning_capital) })),
+    })
+    if (!isWorkspaceMode) {
+      const ok = await checkCarry()
+      if (!ok) return
+    }
+    setPriorCorrectionOpen(true)
+  }
+
+  const submitCorrection = async () => {
+    const cash = Number(priorCorrectionValues.beginning_cash)
+    const cta = Number(priorCorrectionValues.beginning_cta)
+    if (!Number.isFinite(cash) || !Number.isFinite(cta) || priorCorrectionValues.members.some(m => !Number.isFinite(Number(m.beginning_capital)))) {
+      setError('Every figure must be a number — enter 0 explicitly where the true value is zero.')
+      return
+    }
+    const members = priorCorrectionValues.members.map(m => ({ contact_id: null, name: m.name, beginning_capital: Number(m.beginning_capital) }))
+    setBusy('prior-correction')
+    setError(null)
+    try {
+      const res = isWorkspaceMode
+        ? await fetch(`${API}/prior-return`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ choice: 'corrected', beginning_cash: cash, beginning_cta: cta, members, expected_updated_at: view?.prior_return_updated_at }),
+          })
+        : await fetch(`${API}/prior-return-correction`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account_id: accountId, tax_year: taxYear, expected_updated_at: carryCheck?.expected_updated_at, beginning_cash: cash, beginning_cta: cta, members }),
+          })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || d.message || 'Could not save the correction.')
+      setPriorCorrectionOpen(false)
+      setCarryCheck(null)
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -2134,6 +2269,109 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                         {busy === 'prior-return-clear' ? 'Clearing…' : 'Clear this answer'}
                       </button>
                     )}
+                    {/* Prior-year correction (dev_task d909e086). Available
+                        REGARDLESS of the current case/status — unlike the two
+                        controls above, this is the deliberate human override
+                        for a record already "validated" but known to be
+                        factually wrong (the Dynamiq trap: a filed return that
+                        passed internal checks but had the wrong figures). */}
+                    {isStaff && g.id === 2 && !priorCorrectionOpen && (
+                      <div className="mt-1.5 flex flex-wrap gap-2">
+                        {!isWorkspaceMode && (
+                          <button
+                            type="button"
+                            disabled={busyOrLocked}
+                            onClick={() => void checkCarry()}
+                            className="rounded-full border border-blue-300 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:border-blue-400 disabled:opacity-50"
+                          >
+                            {busy === 'carry-check' ? 'Checking…' : 'Check for carry-forward from our own books'}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={busyOrLocked}
+                          onClick={() => void openCorrectionForm()}
+                          className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
+                        >
+                          Enter corrected numbers
+                        </button>
+                      </div>
+                    )}
+                    {isStaff && g.id === 2 && !isWorkspaceMode && carryCheck && !priorCorrectionOpen && (
+                      <div className="mt-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                        {carryCheck.offered && carryCheck.candidate ? (
+                          <>
+                            <p className="font-medium">
+                              {carryCheck.priorYear} looks trustworthy — beginning cash {carryCheck.candidate.beginning_cash.toFixed(2)}
+                              {carryCheck.candidate.member_links.map(m => `, ${m.name} ${m.beginning_capital.toFixed(2)}`).join('')}.
+                            </p>
+                            {carryCheck.candidate.unresolved_members.length > 0 && (
+                              <p className="mt-1 text-amber-800">No match found for: {carryCheck.candidate.unresolved_members.join(', ')} — they would still need a manual figure.</p>
+                            )}
+                            <button
+                              type="button"
+                              disabled={busyOrLocked}
+                              onClick={() => void applyCarry()}
+                              className="mt-2 rounded-full bg-blue-600 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                            >
+                              {busy === 'carry-apply' ? 'Applying…' : 'Use these numbers'}
+                            </button>
+                          </>
+                        ) : (
+                          <p>{carryCheck.reason ?? 'No carry-forward candidate available.'}</p>
+                        )}
+                      </div>
+                    )}
+                    {isStaff && g.id === 2 && priorCorrectionOpen && (
+                      <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 space-y-2">
+                        <label className="block text-xs font-medium text-amber-900">
+                          Beginning cash
+                          <input
+                            type="number" step="0.01"
+                            value={priorCorrectionValues.beginning_cash}
+                            onChange={e => setPriorCorrectionValues(v => ({ ...v, beginning_cash: e.target.value }))}
+                            className="mt-0.5 block w-40 rounded border border-amber-300 px-2 py-1 text-sm"
+                          />
+                        </label>
+                        <label className="block text-xs font-medium text-amber-900">
+                          Beginning currency-translation position (0 if none)
+                          <input
+                            type="number" step="0.01"
+                            value={priorCorrectionValues.beginning_cta}
+                            onChange={e => setPriorCorrectionValues(v => ({ ...v, beginning_cta: e.target.value }))}
+                            className="mt-0.5 block w-40 rounded border border-amber-300 px-2 py-1 text-sm"
+                          />
+                        </label>
+                        {priorCorrectionValues.members.map((m, i) => (
+                          <label key={m.name} className="block text-xs font-medium text-amber-900">
+                            {m.name} — beginning capital
+                            <input
+                              type="number" step="0.01"
+                              value={m.beginning_capital}
+                              onChange={e => setPriorCorrectionValues(v => ({ ...v, members: v.members.map((mm, mi) => mi === i ? { ...mm, beginning_capital: e.target.value } : mm) }))}
+                              className="mt-0.5 block w-40 rounded border border-amber-300 px-2 py-1 text-sm"
+                            />
+                          </label>
+                        ))}
+                        <div className="flex gap-2 pt-1">
+                          <button
+                            type="button"
+                            disabled={busyOrLocked}
+                            onClick={() => void submitCorrection()}
+                            className="rounded-full bg-amber-600 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+                          >
+                            {busy === 'prior-correction' ? 'Saving…' : 'Save corrected numbers'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPriorCorrectionOpen(false)}
+                            className="rounded-full border border-amber-300 px-3 py-1 text-xs text-amber-800 hover:bg-amber-100"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </li>
               ))}
@@ -2294,13 +2532,19 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   </div>
                 )}
                 <div className="flex justify-between border-t border-zinc-100 pt-1.5"><dt className="font-semibold text-zinc-900">{it ? 'Capitale soci' : 'Members’ capital'}</dt><dd className="font-semibold">{fmt(view.draft.ending_capital_total)}</dd></div>
-                {Math.abs(view.draft.fx_translation_adjustment ?? 0) > 0.01 && (
+                {/* Reads ending_cta (cumulative — this year's own movement PLUS
+                    whatever carried in from a prior year), not the bare
+                    single-year fx_translation_adjustment — otherwise a
+                    carried-forward CTA silently disappears from the client's
+                    own screen the moment a year has zero new conversions
+                    (round-4 bug-hunter major, mirrors the Excel fix). */}
+                {Math.abs(view.draft.ending_cta ?? view.draft.fx_translation_adjustment ?? 0) > 0.01 && (
                   <div className="flex justify-between">
                     <dt className="text-zinc-500">
                       {it ? 'Rettifica di conversione valutaria' : 'Foreign-exchange translation adjustment'}
                       <span className="ml-1 text-[11px] text-zinc-400">{it ? '(non è reddito)' : '(not income)'}</span>
                     </dt>
-                    <dd className="font-medium">{fmt(view.draft.fx_translation_adjustment ?? 0)}</dd>
+                    <dd className="font-medium">{fmt(view.draft.ending_cta ?? view.draft.fx_translation_adjustment ?? 0)}</dd>
                   </div>
                 )}
                 {isStaff && (

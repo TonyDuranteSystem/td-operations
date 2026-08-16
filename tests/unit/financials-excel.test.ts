@@ -34,6 +34,7 @@ function draft(over: Partial<FinancialDraft> = {}): FinancialDraft {
     total_liabilities: 0,
     ending_capital_total: 11000,
     fx_translation_adjustment: 0,
+    ending_cta: 0,
     conversion_gross: 0,
     balance_sheet_check: 0,
     unattributed: { contributions: 0, distributions: 0 },
@@ -107,13 +108,24 @@ describe('buildFinancialsWorkbook — renders from the draft', () => {
     // assets 11000 = capital 52861.05 + FX (−41861.05); the engine sets balance_sheet_check ≈ 0.
     const { buffer } = await buildFinancialsWorkbook({
       companyName: 'FX Co', taxYear: 2025,
-      draft: draft({ total_assets: 11000, ending_capital_total: 52861.05, fx_translation_adjustment: -41861.05, balance_sheet_check: 0 }),
+      draft: draft({ total_assets: 11000, ending_capital_total: 52861.05, fx_translation_adjustment: -41861.05, ending_cta: -41861.05, balance_sheet_check: 0 }),
       transactions: [], rates: {},
     })
     const bs = await cellsOf(buffer, 'Balance Sheet')
     expect(hasText(bs, /Foreign-exchange translation adjustment/i)).toBe(true)
     expect(bs).toContain(-41861.05)              // the FX line is present
     expect(await checkRowValue(buffer)).toBeCloseTo(0, 2)  // and the sheet TIES (was off by −41861.05)
+  })
+
+  it("shows a carried-forward CTA even with ZERO new FX movement this year (round-4 bug-hunter major: the line used to read fx_translation_adjustment alone, so a multi-year carried position vanished from the filed Excel the moment a year had no NEW conversions)", async () => {
+    const { buffer } = await buildFinancialsWorkbook({
+      companyName: "Carry Co", taxYear: 2025,
+      draft: draft({ fx_translation_adjustment: 0, ending_cta: 2500 }), // this year: no conversions; 2500 carried IN
+      transactions: [], rates: {},
+    })
+    const bs = await cellsOf(buffer, "Balance Sheet")
+    expect(hasText(bs, /Foreign-exchange translation adjustment/i)).toBe(true)
+    expect(bs).toContain(2500)
   })
 })
 

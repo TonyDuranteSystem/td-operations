@@ -21,7 +21,8 @@ import { type FxRates } from "./fx"
 import { evaluateGates, canConfirm, type GateResult } from "./verification-gates"
 import { buildCompletenessSummary, type CompletenessSummary } from "./completeness"
 import { resolveOwnership, type OwnershipResolution, type OwnershipSource } from "./ownership-resolution"
-import { validatedExtraction, type PriorReturnCaseRecord } from "./prior-return-case"
+import { validatedExtraction, priorBeginningCta, type PriorReturnCaseRecord } from "./prior-return-case"
+import { resolveClientSubmission } from "./resolve-submission"
 
 export interface FinancialsView {
   draft: FinancialDraft
@@ -77,17 +78,39 @@ export function extractWizardOwner(submittedData: Record<string, unknown>): Owne
   return name ? { name, pct: null } : null
 }
 
-export async function getFinancialsView(accountId: string, taxYear: number): Promise<FinancialsView> {
-  // Latest completed submission carries the wizard answers + the prior-return record.
-  const { data: sub } = await supabaseAdmin
-    .from("tax_return_submissions")
-    .select("submitted_data, prior_return_extracted")
-    .eq("account_id", accountId)
-    .eq("tax_year", taxYear)
-    .eq("status", "completed")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle() as { data: { submitted_data: Record<string, unknown> | null; prior_return_extracted: PriorReturnCaseRecord | null } | null }
+export async function getFinancialsView(
+  accountId: string,
+  taxYear: number,
+  opts: {
+    /** Skip the W6 ownership sync-back (default: run it, unchanged). Needed
+     *  when this view is being computed only to CHECK whether a prior year is
+     *  trustworthy enough to auto-carry from (prior-return-correction.ts) —
+     *  that check must be read-only; merely opening it must never silently
+     *  rewrite account_contacts.ownership_pct (round-3 bug-hunter major). */
+    skipOwnershipSync?: boolean
+  } = {},
+): Promise<FinancialsView> {
+  // Latest submission holding real client data carries the wizard answers +
+  // the prior-return record. Round-6 bug-hunter blocker: this used to be a
+  // raw `.eq("status", "completed")` query — the exact "Rule A" anti-pattern
+  // resolve-submission.ts documents as the cause of a real 2026-08-03
+  // production incident on this same table, and which every OTHER reader in
+  // this feature (the main view route, attest, the three new prior-return
+  // routes) was already fixed to avoid. This function — the one they all
+  // route through for the view itself — was the one call site the original
+  // fix missed. `status` flips completed→reviewed the moment staff run the
+  // ordinary "apply changes" step (a routine, common action, not an edge
+  // case — historically the MAJORITY state), at which point this query found
+  // NOTHING and silently returned an empty view: no wizard members, no
+  // validated prior return, beginning balances quietly falling back to
+  // statements instead of the client's real filed figures — on every
+  // reviewed account, undermining gate 7 / the carry-check / the correction
+  // form / the actual filed Excel (buildFinancialsWorkbookForAccount below
+  // calls this same function) at exactly the accounts most likely to need
+  // them.
+  const sub = await resolveClientSubmission<{ submitted_data: Record<string, unknown> | null; prior_return_extracted: PriorReturnCaseRecord | null }>(
+    supabaseAdmin, accountId, taxYear, "submitted_data, prior_return_extracted",
+  )
 
   const submittedData = sub?.submitted_data ?? {}
   const priorReturn = sub?.prior_return_extracted ?? null
@@ -155,7 +178,7 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
   const ownership = resolveOwnership({ priorK1s, wizardMembers, accountContacts })
 
   // W6 sync-back — only a complete, conflict-free resolution is auto-written.
-  if (ownership.complete && ownership.conflicts.length === 0) {
+  if (ownership.complete && ownership.conflicts.length === 0 && !opts.skipOwnershipSync) {
     await syncOwnershipBack(accountId, ownership)
   }
 
@@ -180,7 +203,7 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
     source: (r.source === "staff" ? "staff" : "client") as "client" | "staff",
   }))
 
-  const draft = buildFinancialDraft({ taxYear, transactions, members: ownership.members, priorReturn, defaultUncategorizedBySign: true, fxRates, providedBalances })
+  const draft = buildFinancialDraft({ taxYear, transactions, members: ownership.members, priorReturn, defaultUncategorizedBySign: true, fxRates, providedBalances, beginningCta: priorBeginningCta(priorReturn) })
   const gates = evaluateGates({ draft, ownership, priorReturn })
 
   // Completeness summary (dev_task 95127bb2): translate the failing/na gates +

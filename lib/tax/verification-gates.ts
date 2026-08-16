@@ -17,8 +17,8 @@
 
 import { pendingCount, pendingNet } from "./disclosure-text"
 import type { FinancialDraft } from "./financials-engine"
-import type { OwnershipResolution } from "./ownership-resolution"
-import type { PriorReturnCaseRecord } from "./prior-return-case"
+import { sameName, type OwnershipResolution } from "./ownership-resolution"
+import { validatedExtraction, type PriorReturnCaseRecord } from "./prior-return-case"
 
 const CASH_TOLERANCE = 1.0
 const PCT_TOLERANCE = 0.5
@@ -26,7 +26,7 @@ const PCT_TOLERANCE = 0.5
 export type GateStatus = "pass" | "na" | "fail"
 
 export interface GateResult {
-  id: 1 | 2 | 3 | 4 | 5 | 6
+  id: 1 | 2 | 3 | 4 | 5 | 6 | 7
   title: string
   status: GateStatus
   detail: string
@@ -83,6 +83,25 @@ export function evaluateGates(input: EvaluateGatesInput): GateResult[] {
       results.push({ id: 2, title: "Prior-year tie-out", status: "na", blocking: false, detail: "Prior return is on file with us — staff tie out the beginning balances during review." })
     } else if ((priorReturn.case === "filed_elsewhere" || priorReturn.case === "we_filed") && priorReturn.status === "quarantined") {
       results.push({ id: 2, title: "Prior-year tie-out", status: "fail", blocking: false, detail: "The prior return did not pass verification — staff are reviewing it." })
+    } else if (priorReturn.case === "carried_forward" || priorReturn.case === "staff_corrected") {
+      // Honest, distinct wording (round-2/3 bug-hunter finding): these two
+      // never came from a filed return, so the fall-through generic branch's
+      // "Last year's return shows..." would misrepresent a system-computed or
+      // staff-typed figure as something the client (or we) actually filed.
+      if (draft.beginning_cash === null) {
+        results.push({ id: 2, title: "Prior-year tie-out", status: "na", blocking: false, detail: "No usable beginning cash on the carried/corrected record — staff tie out manually." })
+      } else {
+        const derivable = draft.banks.filter(b => b.derived_beginning !== null)
+        const label = priorReturn.case === "carried_forward" ? "Beginning cash carried from our own corrected prior-year books" : "Beginning cash entered by staff to correct a prior filing error"
+        if (derivable.length < draft.banks.length) {
+          results.push({ id: 2, title: "Prior-year tie-out", status: "na", blocking: false, detail: `${label} (${draft.beginning_cash.toFixed(2)}) — not every account's CSV carries balances to cross-check against; staff confirm during review.` })
+        } else {
+          const currentBeginning = derivable.reduce((s, b) => s + (b.derived_beginning as number), 0)
+          results.push(close(currentBeginning, draft.beginning_cash)
+            ? { id: 2, title: "Prior-year tie-out", status: "pass", blocking: false, detail: `${label} (${draft.beginning_cash.toFixed(2)}) matches this year's beginning balances.` }
+            : { id: 2, title: "Prior-year tie-out", status: "fail", blocking: false, detail: `${label} is ${draft.beginning_cash.toFixed(2)}, but this year's opening balances add up to ${currentBeginning.toFixed(2)} — usually a bank account that isn't included this year, or an opening balance to re-check.` })
+        }
+      }
     } else if (draft.beginning_cash === null) {
       results.push({ id: 2, title: "Prior-year tie-out", status: "na", blocking: false, detail: "The prior return has no readable cash balance — staff tie out manually." })
     } else {
@@ -182,6 +201,49 @@ export function evaluateGates(input: EvaluateGatesInput): GateResult[] {
           // gateSixText() off the SAME two numbers.
           detail: `${pending} transaction(s) (net ${net.toFixed(2)}) are booked on OUR suggestion and not yet confirmed by you — they are already counted in the figures below. Answer them to make these numbers yours.`,
         })
+  }
+
+  // ── Gate 7: capital account continuity ──
+  //
+  // Added for the prior-year-carry remediation (dev_task dd26c22f). Every
+  // OTHER gate is blind to a single member's beginning capital being wrong:
+  // gate 4 (M-2) ties by construction because both sides of its identity
+  // derive from the SAME beginning-capital input, and gate 5 only checks
+  // income allocation, never capital. A member whose name doesn't match
+  // anything in the prior return's K-1s silently gets 0 beginning capital
+  // (financials-engine.ts's priorBeginningCapital fallback) with nothing,
+  // anywhere, saying so — until now.
+  //
+  // Deliberately scoped to ONLY the branches where that silent-0 fallback can
+  // fire: beginning_cash_source is "prior_return" OR (round-4 bug-hunter
+  // major) null with a validated extraction on file. The null case matters
+  // because priorEndingCash and priorBeginningCapital read DIFFERENT fields
+  // of the SAME extraction independently — a return whose Schedule L "ending
+  // cash" is unreadable but whose K-1s ARE readable leaves beginning_cash_source
+  // null (financials-engine.ts falls through every source) while every
+  // member's capital still resolves via priorBeginningCapital, unchecked,
+  // unless this branch also fires. Gated on validatedExtraction(priorReturn)
+  // !== null so a genuine first-year/never-filed/no-priorReturn company —
+  // ALSO beginning_cash_source null, via the identical "nothing available"
+  // path — still correctly reports na, never a false flag on every member
+  // (round-3 bug-hunter major finding, still honored).
+  //
+  // Side effect (not this gate's purpose, but verified true): this also
+  // catches dev_task fdec1847 (a prior return with zero K-1s validates
+  // instead of quarantining) — an empty k1s array fails every member
+  // identically, the same way a genuinely unmatched name does.
+  {
+    const extraction = validatedExtraction(priorReturn)
+    const capitalMayHaveUsedPriorReturn = draft.beginning_cash_source === "prior_return" || draft.beginning_cash_source === null
+    if (!capitalMayHaveUsedPriorReturn || !extraction) {
+      results.push({ id: 7, title: "Capital account continuity", status: "na", blocking: false, detail: "Beginning capital did not come from a prior-year return this year." })
+    } else {
+      const k1s = extraction.k1s
+      const unmatched = ownership.members.filter(m => !k1s.some(k => sameName(k.partner_name, m.name)))
+      results.push(unmatched.length === 0
+        ? { id: 7, title: "Capital account continuity", status: "pass", blocking: false, detail: "Every member's beginning capital carries a real prior-year figure." }
+        : { id: 7, title: "Capital account continuity", status: "fail", blocking: false, detail: `No prior-year capital figure found for: ${unmatched.map(m => m.name).join(", ")} — their beginning capital defaulted to 0. Staff should confirm the real figure.` })
+    }
   }
 
   return results

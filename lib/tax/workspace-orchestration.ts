@@ -17,7 +17,7 @@ import { type FxRates } from "./fx"
 import { evaluateGates, canConfirm } from "./verification-gates"
 import { buildCompletenessSummary } from "./completeness"
 import { resolveOwnership, type OwnershipSource } from "./ownership-resolution"
-import { validatedExtraction, type PriorReturnCaseRecord } from "./prior-return-case"
+import { validatedExtraction, priorBeginningCta, type PriorReturnCaseRecord } from "./prior-return-case"
 import { type FinancialsView } from "./financials-orchestration"
 import { filterMemberNames } from "./member-names"
 
@@ -103,7 +103,7 @@ export async function getWorkspaceFinancialsView(workspaceId: string): Promise<W
   // client portal keeps folding (its attestation-based review flow, 2026-06-17
   // policy). This also aligns the on-screen totals with the Excel download,
   // which has always computed unfolded + warning.
-  const draft = buildFinancialDraft({ taxYear, transactions, members: ownership.members, priorReturn, defaultUncategorizedBySign: false, fxRates })
+  const draft = buildFinancialDraft({ taxYear, transactions, members: ownership.members, priorReturn, defaultUncategorizedBySign: false, fxRates, beginningCta: priorBeginningCta(priorReturn) })
   const gates = evaluateGates({ draft, ownership, priorReturn })
   const missingFxCurrencies = foreignCurrencies.filter(c => !fxRates || !(fxRates[c] > 0))
   const completeness = buildCompletenessSummary({ gates, draft, missingFxCurrencies })

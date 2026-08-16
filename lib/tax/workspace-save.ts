@@ -376,6 +376,41 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
     console.error("[workspace-save] attestation reset failed:", e)
   }
 
+  // Prior-return propagation (round-3 bug-hunter blocker): without this, a
+  // staff correction made INSIDE the workspace (fixing a bad validated prior
+  // return) never reached the client's own account — the client's real
+  // tax_return_submissions row kept the wrong figure forever, silently
+  // diverged from the workspace's corrected copy with nothing ever comparing
+  // them. Only writes when the target account already HAS a submission row
+  // for this tax year (this save never fabricates one) — fire-and-forget,
+  // same contract as the two calls above: a failure here must never fail the
+  // save that already happened.
+  try {
+    const { data: ws } = await db.from("pnl_workspaces").select("prior_return_snapshot").eq("id", workspaceId).maybeSingle()
+    const snapshot = ws?.prior_return_snapshot ?? null
+    if (snapshot) {
+      // Round-5 bug-hunter blocker: canonical resolver, not a raw "newest
+      // row, any status" query — a stray pending/opened row (a resent,
+      // never-filled form) newer than the real completed/reviewed submission
+      // would otherwise silently receive the propagated correction while the
+      // client's actual file stays untouched. Same fix applied to the three
+      // new prior-return-* routes.
+      const { resolveClientSubmission } = await import("./resolve-submission")
+      const targetSub = await resolveClientSubmission<{ id: string }>(db, targetAccountId, taxYear, "id")
+      if (targetSub?.id) {
+        const { error } = await db
+          .from("tax_return_submissions")
+          .update({ prior_return_extracted: snapshot, updated_at: new Date().toISOString() })
+          .eq("id", targetSub.id)
+        if (error) throw new Error(error.message)
+      } else {
+        console.warn(`[workspace-save] no tax_return_submissions row for account ${targetAccountId} year ${taxYear} — prior-return snapshot not propagated (nothing to update).`)
+      }
+    }
+  } catch (e) {
+    console.error("[workspace-save] prior-return propagation failed (rows saved fine):", e)
+  }
+
   // Audit — every write to real client books is logged.
   try {
     await supabaseAdmin.from("action_log").insert({

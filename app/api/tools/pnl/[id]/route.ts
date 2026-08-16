@@ -194,7 +194,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     // the rendered totals no longer match the data → the UI asks to Regenerate.
     const { data: wsRow } = await db
       .from('pnl_workspaces')
-      .select('generated_at, linked_account_id, prior_return_snapshot')
+      .select('generated_at, linked_account_id, prior_return_snapshot, updated_at')
       .eq('id', workspaceId)
       .maybeSingle()
     const generatedAt = (wsRow?.generated_at as string | null) ?? null
@@ -309,12 +309,22 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
       accounts: Array.from(byAccount.values()).sort((a, b) => b.count - a.count),
       generated_at: generatedAt,
-      // Staff prior-return control (2026-07-06): case+status only — the UI
-      // decides whether to show the set/clear buttons (never over a validated
-      // extraction; the endpoint enforces the same server-side).
+      // Staff prior-return control (2026-07-06): case+status — the UI decides
+      // whether to show the set/clear buttons (never over a validated
+      // extraction; the endpoint enforces the same server-side). beginning_cta
+      // added (round-4 bug-hunter blocker) so the correction form can pre-fill
+      // the REAL current figure instead of silently zeroing it on any edit.
+      // expected_updated_at (round-4 minor) lets the 'corrected' choice on
+      // this workspace's prior-return route apply the same optimistic-
+      // concurrency guard the account-side routes already have.
       prior_return: wsRow?.prior_return_snapshot
-        ? { case: (wsRow.prior_return_snapshot as { case?: string }).case ?? null, status: (wsRow.prior_return_snapshot as { status?: string }).status ?? null }
+        ? {
+            case: (wsRow.prior_return_snapshot as { case?: string }).case ?? null,
+            status: (wsRow.prior_return_snapshot as { status?: string }).status ?? null,
+            beginning_cta: (await import('@/lib/tax/prior-return-case')).priorBeginningCta(wsRow.prior_return_snapshot as never),
+          }
         : null,
+      prior_return_updated_at: wsRow?.updated_at ?? null,
       stale,
       aiPending: aiPendingCount ?? 0,
       aiState,

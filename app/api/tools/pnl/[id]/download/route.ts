@@ -3,6 +3,18 @@
  * K-1 capital + detail sheets), STAFF ONLY. Rendered from the SAME workspace
  * draft the on-screen review uses (getWorkspaceFinancialsView → buildFinancialsWorkbook),
  * so the file always matches the screen.
+ *
+ * Prior-year gate (round-3 bug-hunter blocker 3): a workspace forked from a
+ * client copies that client's prior-year answer VERBATIM, including a wrong-
+ * but-"validated" one — so immediately after a fork, Download had NOTHING
+ * stopping Fork → Generate → Download from shipping a real client deliverable
+ * carrying the bad figures before anyone had a reason to notice. Refuses when
+ * gate 2 or gate 7 is actually FAILING (a genuine tie-out conflict, or a
+ * member with no real prior-year capital source) — "na" (nothing to check:
+ * first_year, never_filed, no prior return yet) is untouched, never refused.
+ * `?override=1` lets staff who have reviewed it proceed anyway — this is a
+ * speed bump for the common "just-forked, haven't looked yet" case, not a
+ * hard block; staff always retain the final call.
  */
 
 import { createClient } from '@/lib/supabase/server'
@@ -19,10 +31,11 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
 
-export async function GET(_request: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!isDashboardUser(user)) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  const override = new URL(request.url).searchParams.get('override') === '1'
 
   try {
     const { data: ws } = await db
@@ -38,6 +51,15 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     const view = await getWorkspaceFinancialsView(params.id)
     if (view.transactionCount === 0) {
       return NextResponse.json({ error: 'No transactions yet — upload the statements first.' }, { status: 422 })
+    }
+    if (!override) {
+      const failing = view.gates.filter(g => (g.id === 2 || g.id === 7) && g.status === 'fail')
+      if (failing.length > 0) {
+        return NextResponse.json({
+          error: `The prior-year figures haven't been resolved yet: ${failing.map(g => g.detail).join(' ')} Fix the prior-return answer, or add ?override=1 to download anyway.`,
+          gates: failing.map(g => ({ id: g.id, title: g.title, detail: g.detail })),
+        }, { status: 409 })
+      }
     }
 
     const txRows = await fetchAllPaged<{
