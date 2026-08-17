@@ -386,8 +386,21 @@ export async function GET(request: NextRequest) {
       console.error('[tax-financials] chain state failed (view unaffected):', e)
     }
 
+    // Round-4 code-level bug-hunter finding: `...view` spreads `priorReturn`
+    // (camelCase, per FinancialsView), but the client reads `prior_return`
+    // (snake_case) — a latent mismatch nothing had exercised, since staff-mode
+    // rendering of this route did not exist until the new account-side staff
+    // page (dev_task d909e086). Without this, the pre-existing first_year/
+    // never_filed staff buttons AND the new carry/correction controls would
+    // misread "no prior-return answer" on every real account. beginning_cta
+    // rides along so the correction form can pre-fill the REAL current
+    // figure instead of silently zeroing it (round-4 blocker).
+    const { priorBeginningCta } = await import('@/lib/tax/prior-return-case')
     return NextResponse.json({
       ...view,
+      prior_return: view.priorReturn
+        ? { case: view.priorReturn.case, status: view.priorReturn.status, beginning_cta: priorBeginningCta(view.priorReturn) }
+        : null,
       questions,
       coverage,
       expense_breakdown,

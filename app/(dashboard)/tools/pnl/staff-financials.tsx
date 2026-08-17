@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Building2, Loader2, Plus, Copy, Trash2, ArrowLeft, Save, X } from 'lucide-react'
+import { Building2, Loader2, Plus, Copy, Trash2, ArrowLeft, Save, X, Search } from 'lucide-react'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { TaxFinancialsReview } from '@/components/portal/tax-financials-review'
 
@@ -26,14 +26,20 @@ const inputCls = 'w-full h-10 rounded-md border px-3 text-sm focus:outline-none 
 /**
  * Standalone P&L tool (staff). A workspace is an ISOLATED sandbox: run a P&L /
  * Balance Sheet from scratch OR forked from a client, tweak freely, and only
- * push to a real client via an explicit, audited "Save to client". Nothing here
- * touches a client's real books until that button is pressed.
+ * push to a real client via an explicit, audited "Save to client". Nothing in
+ * a workspace touches a client's real books until that button is pressed.
+ *
+ * "Recall a client" is the one exception: it opens the client's real,
+ * already-submitted numbers directly (no fork, no staging) so staff can see
+ * what the client actually reported and fix it on the spot — a correction
+ * there writes to the client's real record immediately.
  */
 export function StaffFinancials({ defaultYear }: { defaultYear: number }) {
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([])
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState<{ id: string; name: string; taxYear: number; linkedAccountId: string | null } | null>(null)
-  const [mode, setMode] = useState<'blank' | 'fork' | null>(null)
+  const [recall, setRecall] = useState<{ accountId: string; accountName: string; taxYear: number } | null>(null)
+  const [mode, setMode] = useState<'blank' | 'fork' | 'recall' | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -50,6 +56,9 @@ export function StaffFinancials({ defaultYear }: { defaultYear: number }) {
   if (open) {
     return <OpenWorkspace ws={open} onBack={() => { setOpen(null); void load() }} />
   }
+  if (recall) {
+    return <OpenRecall target={recall} onBack={() => setRecall(null)} />
+  }
 
   return (
     <div className="space-y-6">
@@ -62,10 +71,15 @@ export function StaffFinancials({ defaultYear }: { defaultYear: number }) {
           className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium ${mode === 'fork' ? 'bg-blue-600 text-white' : 'border text-zinc-700 hover:border-blue-300'}`}>
           <Copy className="h-4 w-4" /> Fork a client
         </button>
+        <button type="button" onClick={() => setMode(mode === 'recall' ? null : 'recall')}
+          className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium ${mode === 'recall' ? 'bg-amber-600 text-white' : 'border text-zinc-700 hover:border-amber-300'}`}>
+          <Search className="h-4 w-4" /> Recall a client
+        </button>
       </div>
 
       {mode === 'blank' && <BlankForm defaultYear={defaultYear} onCreated={ws => { setMode(null); setOpen({ ...ws, linkedAccountId: null }) }} onDone={load} />}
       {mode === 'fork' && <ForkForm defaultYear={defaultYear} onDone={() => { setMode(null); void load() }} />}
+      {mode === 'recall' && <RecallForm defaultYear={defaultYear} onOpen={t => { setMode(null); setRecall(t) }} />}
 
       <div className="rounded-xl border bg-white">
         <div className="border-b px-4 py-3 text-sm font-medium text-zinc-700">Your workspaces</div>
@@ -210,6 +224,69 @@ function ForkForm({ defaultYear, onDone }: { defaultYear: number; onDone: () => 
   )
 }
 
+function RecallForm({ defaultYear, onOpen }: { defaultYear: number; onOpen: (target: { accountId: string; accountName: string; taxYear: number }) => void }) {
+  const [accountId, setAccountId] = useState<string | undefined>()
+  const [accountName, setAccountName] = useState<string | undefined>()
+  const [year, setYear] = useState(String(defaultYear))
+  const [checking, setChecking] = useState(false)
+  const [checkError, setCheckError] = useState<string | null>(null)
+  const [confirmTarget, setConfirmTarget] = useState<{ accountId: string; accountName: string; taxYear: number; einNumber: string | null; members: string[] } | null>(null)
+
+  async function checkIdentity() {
+    if (!accountId) return
+    setChecking(true); setCheckError(null)
+    try {
+      const res = await fetch(`/api/portal/tax-financials/identity?account_id=${accountId}`)
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Could not look up this client.')
+      setConfirmTarget({ accountId, accountName: d.company_name || accountName || 'Client', taxYear: Number(year), einNumber: d.ein_number ?? null, members: d.members ?? [] })
+    } catch (e) {
+      setCheckError(e instanceof Error ? e.message : 'Could not look up this client.')
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  if (confirmTarget) {
+    return (
+      <div className="rounded-xl border-2 border-amber-300 bg-amber-50/40 p-5 space-y-3 max-w-2xl">
+        <h3 className="text-sm font-semibold text-zinc-800">Open this client&apos;s real file — live?</h3>
+        <div className="rounded-lg border border-amber-200 bg-white p-3 text-sm space-y-1">
+          <div><span className="text-zinc-500">Company:</span> <span className="font-medium text-zinc-900">{confirmTarget.accountName}</span></div>
+          <div><span className="text-zinc-500">EIN:</span> <span className="font-medium text-zinc-900">{confirmTarget.einNumber || 'Not on file'}</span></div>
+          <div><span className="text-zinc-500">Members:</span> <span className="font-medium text-zinc-900">{confirmTarget.members.length > 0 ? confirmTarget.members.join(', ') : 'None on file'}</span></div>
+          <div><span className="text-zinc-500">Tax year:</span> <span className="font-medium text-zinc-900">{confirmTarget.taxYear}</span></div>
+        </div>
+        <p className="text-xs text-amber-800">Check this is the right client before continuing — any change made after this saves straight to their real file.</p>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => onOpen(confirmTarget)} className="inline-flex items-center gap-2 rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700">
+            <Search className="h-4 w-4" /> Yes, open it
+          </button>
+          <button type="button" onClick={() => setConfirmTarget(null)} className="rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:border-zinc-400">
+            Cancel
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-xl border bg-white p-5 space-y-4 max-w-2xl">
+      <h3 className="text-sm font-semibold text-zinc-800">Recall a client&apos;s real numbers</h3>
+      <p className="text-xs text-zinc-500">Opens what this client actually submitted — live. Any change you make here saves straight to their real file, no separate publish step.</p>
+      <div><label className="block text-xs font-medium text-zinc-600 mb-1">Client account (MMLLC)</label>
+        <AccountCombobox value={accountId} displayValue={accountName} onChange={(id, name) => { setAccountId(id); setAccountName(name) }} />
+      </div>
+      <div className="w-40"><label className="block text-xs font-medium text-zinc-600 mb-1">Tax year</label><input type="number" min={2000} max={2100} className={inputCls} value={year} onChange={e => setYear(e.target.value)} /></div>
+      {checkError && <p className="text-xs text-red-700">{checkError}</p>}
+      <button type="button" disabled={!accountId || checking} onClick={() => void checkIdentity()}
+        className="inline-flex items-center gap-2 rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50">
+        {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />} Recall
+      </button>
+    </div>
+  )
+}
+
 function DeleteWorkspace({ id, onDone }: { id: string; onDone: () => void }) {
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState(false)
@@ -242,6 +319,22 @@ function OpenWorkspace({ ws, onBack }: { ws: { id: string; name: string; taxYear
       </div>
       {saving && <SaveToClient workspaceId={ws.id} defaultAccountId={ws.linkedAccountId} onClose={() => setSaving(false)} />}
       <TaxFinancialsReview accountId="" taxYear={ws.taxYear} locale="en" mode="staff" apiBase={`/api/tools/pnl/${ws.id}`} />
+    </div>
+  )
+}
+
+function OpenRecall({ target, onBack }: { target: { accountId: string; accountName: string; taxYear: number }; onBack: () => void }) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 rounded-lg border bg-white px-4 py-3">
+        <button type="button" onClick={onBack} className="flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-700"><ArrowLeft className="h-4 w-4" /> Workspaces</button>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm font-medium text-zinc-800 truncate">{target.accountName}</span>
+          <span className="text-xs text-zinc-500">· {target.taxYear}</span>
+        </div>
+        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">Live — changes save immediately</span>
+      </div>
+      <TaxFinancialsReview accountId={target.accountId} taxYear={target.taxYear} locale="en" mode="staff" apiBase="/api/portal/tax-financials" />
     </div>
   )
 }

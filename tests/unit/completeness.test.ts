@@ -4,13 +4,13 @@ import type { GateResult } from "@/lib/tax/verification-gates"
 import type { FinancialDraft } from "@/lib/tax/financials-engine"
 
 // ── Minimal fixtures ──
-function gate(id: 1 | 2 | 3 | 4 | 5 | 6, status: "pass" | "na" | "fail", blocking = false): GateResult {
+function gate(id: 1 | 2 | 3 | 4 | 5 | 6 | 7, status: "pass" | "na" | "fail", blocking = false): GateResult {
   return { id, title: `gate ${id}`, status, detail: `detail ${id}`, blocking }
 }
 
-/** All six gates passing, no blocking failures. */
+/** All seven gates passing, no blocking failures. */
 function passingGates(): GateResult[] {
-  return [gate(1, "pass"), gate(2, "na"), gate(3, "pass"), gate(4, "pass"), gate(5, "pass"), gate(6, "pass", true)]
+  return [gate(1, "pass"), gate(2, "na"), gate(3, "pass"), gate(4, "pass"), gate(5, "pass"), gate(6, "pass", true), gate(7, "na")]
 }
 
 function draft(over: Partial<FinancialDraft> = {}): FinancialDraft {
@@ -30,6 +30,7 @@ function draft(over: Partial<FinancialDraft> = {}): FinancialDraft {
     total_liabilities: 0,
     ending_capital_total: 0,
     fx_translation_adjustment: 0,
+    ending_cta: 0,
     conversion_gross: 0,
     balance_sheet_check: 0,
     unattributed: { contributions: 0, distributions: 0 },
@@ -87,6 +88,15 @@ describe("buildCompletenessSummary", () => {
     const gates = passingGates().map(g => (g.id === 1 || g.id === 5) ? gate(g.id, "fail") : g)
     const r = buildCompletenessSummary(input({ gates }))
     expect(r.items.map(i => i.code)).toEqual(expect.arrayContaining(["reconciliation_gap", "ownership_incomplete"]))
+  })
+
+  it("emits capital_continuity_gap (gate 7) on failure, carrying the gate's detail (dev_task d909e086)", () => {
+    const gates = passingGates().map(g => g.id === 7 ? gate(7, "fail") : g)
+    const r = buildCompletenessSummary(input({ gates }))
+    const item = r.items.find(i => i.code === "capital_continuity_gap")
+    expect(item).toBeDefined()
+    expect(item?.severity).toBe("warn")
+    expect(item?.detail).toBe("detail 7")
   })
 
   it("emits no_prior_year (info) only when beginning cash came from statements", () => {

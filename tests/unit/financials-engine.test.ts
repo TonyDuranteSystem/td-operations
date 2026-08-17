@@ -78,8 +78,8 @@ describe("buildFinancialDraft + evaluateGates — coherent year", () => {
     expect(draft.ending_capital_total).toBe(37_000)
   })
 
-  it("all six gates pass and confirm is allowed", () => {
-    expect(gates.map(g => `${g.id}:${g.status}`)).toEqual(["1:pass", "2:pass", "3:pass", "4:pass", "5:pass", "6:pass"])
+  it("all seven gates pass and confirm is allowed", () => {
+    expect(gates.map(g => `${g.id}:${g.status}`)).toEqual(["1:pass", "2:pass", "3:pass", "4:pass", "5:pass", "6:pass", "7:pass"])
     expect(canConfirm(gates)).toBe(true)
   })
 })
@@ -424,6 +424,35 @@ describe("Dynamiq 2024 reproduction — the real per-bank figures now reconcile"
     const gates = evaluateGates({ draft, ownership: MEMBERS, priorReturn: null })
     expect(gates.find(g => g.id === 1)!.status).toBe("pass") // no false "off by" / "doesn't add up"
     expect(gates.find(g => g.id === 3)!.status).toBe("pass") // balance sheet ties
+  })
+})
+
+describe("beginningCta / ending_cta (dev_task d909e086 — carried-forward FX/CTA position)", () => {
+  it("omitted beginningCta: ending_cta === fx_translation_adjustment exactly, balance_sheet_check unchanged from before this field existed", () => {
+    const txs = [
+      tx({ amount: 5000, category: "income" }),
+      tx({ amount: -1000, category: "conversion" }),
+    ]
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: txs, members: MEMBERS.members, priorReturn: null, defaultUncategorizedBySign: true })
+    expect(draft.ending_cta).toBeCloseTo(draft.fx_translation_adjustment, 2)
+    expect(draft.balance_sheet_check).toBeCloseTo(
+      draft.ending_cash - (draft.ending_capital_total + draft.fx_translation_adjustment + draft.pnl.uncategorizedTotal), 2,
+    )
+  })
+
+  it("beginningCta carries through additively: ending_cta = beginningCta + this year's own movement", () => {
+    const txs = [tx({ amount: -1000, category: "conversion" })]
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: txs, members: MEMBERS.members, priorReturn: null, defaultUncategorizedBySign: true, beginningCta: 2500 })
+    expect(draft.fx_translation_adjustment).toBeCloseTo(-1000, 2)
+    expect(draft.ending_cta).toBeCloseTo(1500, 2) // 2500 + (-1000)
+  })
+
+  it("a nonzero beginningCta shifts the balance identity — a year that would otherwise 'tie' now correctly shows off-by-beginningCta if capital/cash don't also account for it", () => {
+    const txs = [tx({ amount: 5000, category: "income" })] // no conversions this year
+    const withoutCarry = buildFinancialDraft({ taxYear: 2025, transactions: txs, members: MEMBERS.members, priorReturn: null, defaultUncategorizedBySign: true })
+    const withCarry = buildFinancialDraft({ taxYear: 2025, transactions: txs, members: MEMBERS.members, priorReturn: null, defaultUncategorizedBySign: true, beginningCta: 300 })
+    expect(withoutCarry.balance_sheet_check).toBeCloseTo(0, 2) // ties: no FX, no carry
+    expect(withCarry.balance_sheet_check).toBeCloseTo(withoutCarry.balance_sheet_check - 300, 2) // the carried CTA is now unaccounted-for equity — correctly surfaced, not silently dropped
   })
 })
 

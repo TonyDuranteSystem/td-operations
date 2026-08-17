@@ -152,8 +152,15 @@ export async function buildFinancialsWorkbook(input: FinancialsExcelInput): Prom
   // income and never part of any member's tax-basis capital (CPA condition).
   // Mirrors the portal screen. Without this line the CHECK was off by exactly the
   // residual on any account with currency exchanges.
-  if (Math.abs(draft.fx_translation_adjustment) > 0.01) {
-    addRow(bs, "Foreign-exchange translation adjustment (not income, not in member capital)", draft.fx_translation_adjustment, false, 1)
+  // Reads ending_cta (this year's own movement PLUS whatever carried in from a
+  // prior year), not the bare single-year fx_translation_adjustment — the
+  // CHECK row below already moved to ending_cta; this line must show the same
+  // figure it's explaining, or a multi-year carried CTA account "ties" here
+  // while this line understates or omits it entirely (round-4 bug-hunter
+  // major finding — the exact "FX line missing from Excel" bug this line
+  // exists to prevent, reintroduced by only half-updating the field it reads).
+  if (Math.abs(draft.ending_cta) > 0.01) {
+    addRow(bs, "Foreign-exchange translation adjustment (cumulative — not income, not in member capital)", draft.ending_cta, false, 1)
   }
   // Reconciling line (2026-07-02): uncategorized rows move cash (they're inside
   // ending_cash) but not equity (excluded from netIncome) — so the sheet is out

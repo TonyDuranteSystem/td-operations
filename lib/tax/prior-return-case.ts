@@ -41,23 +41,161 @@ const UPLOAD_BUCKET = "onboarding-uploads" // same bucket as all portal wizard u
  *  filed PDF and feeds the current year's beginning balances — see
  *  locateAndExtractOurFiledReturn. `on_file` = we have the record but couldn't
  *  auto-read it (staff tie out, the original behavior). */
+/** A member match made when building a carried/corrected record — kept for
+ *  audit/UI display alongside the name-keyed `extracted.k1s` the engine
+ *  actually reads (round-3 bug-hunter blocker: the one chokepoint accessor,
+ *  validatedExtraction below, only understands `.extracted` — so a carried/
+ *  corrected record MUST populate it faithfully rather than inventing a
+ *  parallel shape the engine can't see). contact_id is null when the match
+ *  fell back to name (no linked account_contacts row on either side). */
+export interface CarryMemberLink {
+  contact_id: string | null
+  name: string
+  beginning_capital: number
+}
+
+/** Input to buildCarriedForwardRecord/buildStaffCorrectionRecord — PURE data,
+ *  no I/O. `unresolved_members` are names of THIS year's currently-active
+ *  members that could not be matched (by id or name) against the prior
+ *  year's ending state; they are deliberately EXCLUDED from `members` (so
+ *  their beginning capital falls through to the engine's existing 0-fallback)
+ *  and named here so gate 7 (verification-gates.ts) can flag them instead of
+ *  the silent zero passing unnoticed. */
+export interface CarryPayload {
+  beginning_cash: number
+  /** Cumulative FX/CTA position carried in from the prior year — 0 when the
+   *  prior year never tracked one (first adoption; see financials-engine.ts
+   *  ending_cta). Always a real number, never omitted — silence here must
+   *  never be misread as "confirmed zero" (round-3 bug-hunter major). */
+  beginning_cta: number
+  members: CarryMemberLink[]
+  unresolved_members: string[]
+}
+
 export type PriorReturnCaseRecord =
   | (PriorReturnRecord & { case: "filed_elsewhere" })
   | { case: "we_filed"; status: "on_file" | "claim_mismatch"; tax_return_id: string | null; note: string; recorded_at: string }
   | { case: "we_filed"; status: "validated" | "quarantined"; tax_return_id: string | null; note: string; recorded_at: string; extracted: PriorReturnExtraction; issues: PriorReturnValidationIssue[]; source: string }
   | { case: "first_year"; status: "first_year" | "claim_mismatch"; formation_date: string | null; note: string; recorded_at: string }
   | { case: "never_filed"; status: "never_filed"; cleanup_interest: "Yes" | "No"; declaration_accepted: boolean; recorded_at: string }
+  // Two DISTINCT cases (never reuse "we_filed" — round-2 bug-hunter finding:
+  // that shape/label is honestly "we found a filed PDF", which a synthesized
+  // or staff-typed figure is not, and gate 2 would print a misleading "last
+  // year's return shows..." for a number that was never on any return).
+  // carried_forward = system-computed from OUR OWN corrected prior-year books,
+  // offered to and confirmed by staff (never auto-applied silently — see
+  // prior-return-correction.ts). staff_corrected = a human directly enters
+  // the true figures, e.g. because a filed return is known to be wrong. Both
+  // deliberately reuse status "validated" + the `extracted` shape so the ONE
+  // existing accessor below (and therefore priorEndingCash/priorBeginningCapital
+  // and every ownership K-1 source) works on them with ZERO changes — the new
+  // fields alongside `extracted` are read only by the new gate 7 / CTA plumbing.
+  | { case: "carried_forward"; status: "validated"; recorded_at: string; extracted: PriorReturnExtraction; source: "our_corrected_books"; note: string; beginning_cta: number; member_links: CarryMemberLink[]; unresolved_members: string[]; computed_by: "system"; computed_at: string }
+  | { case: "staff_corrected"; status: "validated"; recorded_at: string; extracted: PriorReturnExtraction; source: "staff_manual_correction"; note: string; beginning_cta: number; member_links: CarryMemberLink[]; unresolved_members: string[]; computed_by: string; computed_at: string }
   | { case: string; status: "failed"; error: string; recorded_at: string }
 
-/** The validated prior-return extraction, from EITHER source (a client upload
- *  in the filed_elsewhere case, or OUR own filed return in the we_filed case).
- *  Single accessor so the engine + gates read both sources identically. PURE. */
+/** The validated prior-return extraction, from ANY trustworthy source (a
+ *  client upload in filed_elsewhere, OUR own filed return in we_filed, a
+ *  system-computed carry in carried_forward, or a staff-entered correction in
+ *  staff_corrected). Single accessor so the engine + gates read every source
+ *  identically. PURE. */
 export function validatedExtraction(prior: PriorReturnCaseRecord | null): PriorReturnExtraction | null {
   if (!prior || prior.status !== "validated") return null
-  if (prior.case === "filed_elsewhere" || prior.case === "we_filed") {
+  if (prior.case === "filed_elsewhere" || prior.case === "we_filed" || prior.case === "carried_forward" || prior.case === "staff_corrected") {
     return (prior as { extracted?: PriorReturnExtraction }).extracted ?? null
   }
   return null
+}
+
+/** The cumulative FX/CTA position to feed buildFinancialDraft's beginningCta —
+ *  0 for every case except carried_forward/staff_corrected (every other case
+ *  predates the concept, so 0 is the honest "no known prior position", not a
+ *  guess). PURE. */
+export function priorBeginningCta(prior: PriorReturnCaseRecord | null): number {
+  if (!prior || prior.status !== "validated") return 0
+  if (prior.case === "carried_forward" || prior.case === "staff_corrected") return prior.beginning_cta
+  return 0
+}
+
+/** PURE: turn a CarryPayload into the PriorReturnExtraction shape the engine
+ *  already reads (schedule_l ending cash/capital, k1s by name). The
+ *  `beginning` column is always zeroed — nothing downstream reads it for
+ *  these two cases (only `ending` feeds priorEndingCash/priorBeginningCapital)
+ *  and a fabricated non-zero beginning would misrepresent a figure nobody
+ *  computed. */
+function toPriorExtraction(payload: CarryPayload, priorYear: number): PriorReturnExtraction {
+  const totalCapital = payload.members.reduce((s, m) => s + m.beginning_capital, 0)
+  return {
+    form_type: "1065",
+    tax_year: priorYear,
+    ein: null,
+    schedule_l: {
+      beginning: { cash: 0, total_assets: 0, total_liabilities: 0, capital: 0 },
+      ending: { cash: payload.beginning_cash, total_assets: payload.beginning_cash, total_liabilities: 0, capital: totalCapital },
+    },
+    m2: { beginning_capital: null, ending_capital: totalCapital },
+    k1s: payload.members.map(m => ({ partner_name: m.name, ownership_pct: null, ending_capital: m.beginning_capital })),
+  }
+}
+
+function buildCorrectionRecord(params: {
+  kase: "carried_forward" | "staff_corrected"
+  source: "our_corrected_books" | "staff_manual_correction"
+  note: string
+  computedBy: string
+  payload: CarryPayload
+  priorYear: number
+  nowIso: string
+}): PriorReturnCaseRecord {
+  const { kase, source, note, computedBy, payload, priorYear, nowIso } = params
+  return {
+    case: kase,
+    status: "validated",
+    recorded_at: nowIso,
+    extracted: toPriorExtraction(payload, priorYear),
+    source,
+    note,
+    beginning_cta: payload.beginning_cta,
+    member_links: payload.members.map(m => ({ contact_id: m.contact_id, name: m.name, beginning_capital: m.beginning_capital })),
+    unresolved_members: payload.unresolved_members,
+    computed_by: computedBy,
+    computed_at: nowIso,
+  } as PriorReturnCaseRecord
+}
+
+/** System-computed carry from our own corrected prior-year books. Callers
+ *  (prior-return-correction.ts) are responsible for the trustworthiness check
+ *  BEFORE calling this — this function only shapes data, it does not decide
+ *  whether the carry is safe to offer. */
+export function buildCarriedForwardRecord(payload: CarryPayload, priorYear: number, nowIso: string): PriorReturnCaseRecord {
+  return buildCorrectionRecord({
+    kase: "carried_forward",
+    source: "our_corrected_books",
+    note: `Beginning balances carried from our own corrected ${priorYear} books.`,
+    computedBy: "system",
+    payload, priorYear, nowIso,
+  })
+}
+
+/** Staff directly enters the true beginning figures — e.g. a filed return is
+ *  known to be factually wrong even though it passed extraction validation.
+ *  Deliberately has NO canStaffSetPriorReturn-style guard: unlike the staff
+ *  first_year/never_filed/clear control (which must never discard a real
+ *  extraction), this IS the human override for exactly that case, and may
+ *  replace ANY existing case/status (round-3 bug-hunter blocker 1 — the
+ *  earlier plan's "mirror the existing guarded route" language was ambiguous
+ *  enough to accidentally inherit the guard; this function's contract is
+ *  explicit: no guard, ever, by design). Callers (the API route) are
+ *  responsible for staff auth and for requiring every CarryPayload field
+ *  present in the request — this function trusts what it's given. */
+export function buildStaffCorrectionRecord(payload: CarryPayload, priorYear: number, staffEmail: string, nowIso: string): PriorReturnCaseRecord {
+  return buildCorrectionRecord({
+    kase: "staff_corrected",
+    source: "staff_manual_correction",
+    note: `Beginning balances entered by staff (${staffEmail}) to correct a prior filing error.`,
+    computedBy: staffEmail,
+    payload, priorYear, nowIso,
+  })
 }
 
 export interface ProcessPriorReturnInput {
