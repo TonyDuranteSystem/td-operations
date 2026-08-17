@@ -70,7 +70,7 @@ function parseMigration(file: string, sql: string): { columns: AddedColumn[]; ta
 
   // Table name may be schema-qualified (public.offers) — same fix as CREATE TABLE below.
   const addColumnRe = /ALTER TABLE\s+([\w.]+)\s+ADD COLUMN(?:\s+IF NOT EXISTS)?\s+(\w+)/gi
-  for (const m of sql.matchAll(addColumnRe)) {
+  for (const m of Array.from(sql.matchAll(addColumnRe))) {
     const qualified = m[1]
     const table = qualified.includes(".") ? qualified.split(".").pop()! : qualified
     columns.push({ file, table, column: m[2] })
@@ -80,7 +80,7 @@ function parseMigration(file: string, sql: string): { columns: AddedColumn[]; ta
   // then keep only the part after the last dot. This exact miss (capturing
   // "public" as the table name) was caught live: see git history on this file.
   const createTableRe = /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+([\w.]+)/gi
-  for (const m of sql.matchAll(createTableRe)) {
+  for (const m of Array.from(sql.matchAll(createTableRe))) {
     const qualified = m[1]
     const table = qualified.includes(".") ? qualified.split(".").pop()! : qualified
     tables.push({ file, table })
