@@ -33,6 +33,17 @@ const dateDtf = new Intl.DateTimeFormat('en-CA', {
 
 const WEEKDAYS = new Set(['Mon', 'Tue', 'Wed', 'Thu', 'Fri'])
 
+/**
+ * Today's calendar date (`YYYY-MM-DD`) in the office's own timezone (ET), not
+ * the server/browser's UTC clock. `new Date().toISOString().split('T')[0]`
+ * reads tomorrow's date for the last ~4-5 hours of the ET business day —
+ * every invoice-dating call site in the billing engine must use this instead
+ * (dev job ea5751ef, council review of dev job 4a854806).
+ */
+export function getOfficeDateString(now: Date = new Date()): string {
+  return dateDtf.format(now)
+}
+
 export type OfficeClosedReason =
   | 'open'
   | 'before_hours'

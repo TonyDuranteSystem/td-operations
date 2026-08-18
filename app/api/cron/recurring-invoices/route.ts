@@ -31,6 +31,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
 import { addDaysToDate } from "@/lib/billing/recurring-invoice-schedule"
 import { generateRecurringInvoiceCycle, type RecurringInvoiceTemplateRow } from "@/lib/billing/recurring-invoice-generate"
+import { getOfficeDateString } from "@/lib/portal/office-hours"
 import type { Json } from "@/lib/database.types"
 
 export async function GET(req: NextRequest) {
@@ -44,7 +45,7 @@ export async function GET(req: NextRequest) {
   // Sandbox-only testing affordance (no effect in production): ?dry=1 reports
   // what WOULD be generated without creating invoices or writing anything.
   const dryRun = isSandbox && req.nextUrl.searchParams.get("dry") === "1"
-  const today = new Date().toISOString().split("T")[0]
+  const today = getOfficeDateString()
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- recurring_invoice_templates is a new sandbox-only table, not yet in generated types (regenerated on production promotion)

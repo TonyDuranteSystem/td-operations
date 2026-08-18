@@ -175,9 +175,20 @@ export async function createInvoice(
       })),
       currency: invoiceData.amount_currency as 'USD' | 'EUR',
       due_date: invoiceData.due_date || undefined,
+      issue_date: invoiceData.issue_date,
       message: invoiceData.message || undefined,
       installment: invoiceData.installment || undefined,
       idempotency_key: idempotencyKey,
+      // ⛔ These three were being silently dropped — the dialog collects and
+      // sends them, but nothing ever forwarded them to createTDInvoice, so
+      // "Mark as Paid" saved a Draft, a chosen payment method saved null,
+      // and a chosen bank fell back to auto-selection, all while the UI
+      // reported success as requested (bug-hunter finding, dev job
+      // ea5751ef). The Finance-tab equivalent action already did this
+      // correctly — this call site was the one that didn't.
+      mark_as_paid: invoiceData.mark_as_paid || undefined,
+      payment_method: invoiceData.payment_method || undefined,
+      bank_preference: invoiceData.bank_preference || undefined,
       ...(invoiceData.tranche
         ? {
             tranche_offer_token: invoiceData.tranche.offer_token,
@@ -486,6 +497,7 @@ export async function createCreditNote(
         quantity: item.quantity,
       })),
       currency: noteData.amount_currency as 'USD' | 'EUR',
+      issue_date: noteData.issue_date,
       mark_as_paid: true,
       paid_date: noteData.issue_date,
       idempotency_key: idempotencyKey,
