@@ -33,6 +33,7 @@ import { APP_BASE_URL } from "@/lib/config"
 import { emitActionNeeded } from "@/lib/notifications/act-event"
 import { emitClientChatEvent } from "@/lib/portal/chat-events"
 import { buildReviewHistoryEntry, type ReviewStatus } from "@/lib/tax/review-status"
+import { resolveLocale, WIZARD_SUBMITTED_MESSAGE } from "@/lib/jobs/wizard-failure-notify"
 
 export async function POST(req: NextRequest) {
   try {
@@ -457,11 +458,12 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>⚠ Stateme
         results.push({ step: "staff_card", status: card.created ? "ok" : "skipped", detail: card.reason ?? "What's New card created" })
       }
       if (sub.contact_id || sub.account_id) {
+        const locale = await resolveLocale(sub.contact_id ?? null, sub.account_id ?? null)
         const chat = await emitClientChatEvent({
           contact_id: sub.contact_id,
           account_id: sub.account_id,
           topic: "tax_review",
-          message: `We've received your tax information for ${sub.tax_year}. Our team will review it and let you know if anything needs changing.`,
+          message: WIZARD_SUBMITTED_MESSAGE[locale](sub.tax_year ?? null),
           source: { table: "tax_return_submissions", id: submission_id },
           event_kind: "wizard_submitted",
         })

@@ -1270,7 +1270,7 @@ export async function getPortalTaxReturns(accountId: string) {
     // against the banner tax return by tax_year inside the map below.
     supabaseAdmin
       .from('tax_return_submissions')
-      .select('id, tax_year, review_status')
+      .select('id, tax_year, review_status, confirmation_accepted')
       .eq('account_id', accountId)
       .order('created_at', { ascending: false })
       .limit(10),
@@ -1290,6 +1290,7 @@ export async function getPortalTaxReturns(accountId: string) {
       sd_stage: sdStage,
       review_status: (sub?.review_status ?? null) as string | null,
       submission_id: sub?.id ?? null,
+      confirmation_accepted: sub?.confirmation_accepted ?? false,
     }
   })
 }

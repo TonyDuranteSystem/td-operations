@@ -850,6 +850,7 @@ export default async function PortalDashboardPage() {
             locale={locale}
             reviewStatus={(tr.review_status as import('@/lib/tax/review-status').ReviewStatus | null) ?? undefined}
             submissionId={tr.submission_id ?? null}
+            confirmationAccepted={tr.confirmation_accepted ?? false}
             dataReceived={tr.data_received ?? false}
             sentToAccountant={tr.sent_to_accountant ?? false}
             showFinancialsLink={(tr.return_type === 'MMLLC' || tr.return_type === 'Corp') && tr.submission_id != null}

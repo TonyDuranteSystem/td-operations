@@ -77,6 +77,7 @@ import {
   isWizardFailureJobType,
   localeFromLanguage,
   WIZARD_FAILURE_JOB_TYPES,
+  WIZARD_SUBMITTED_MESSAGE,
 } from "@/lib/jobs/wizard-failure-notify"
 
 beforeEach(() => {
@@ -108,6 +109,35 @@ describe("localeFromLanguage", () => {
     expect(localeFromLanguage("English")).toBe("en")
     expect(localeFromLanguage("")).toBe("en")
     expect(localeFromLanguage(null)).toBe("en")
+  })
+})
+
+describe("WIZARD_SUBMITTED_MESSAGE", () => {
+  it("never promises a staff review — that step is not actually worked (see docs/systems/tax-returns.md)", () => {
+    expect(WIZARD_SUBMITTED_MESSAGE.en(2025)).not.toMatch(/review/i)
+    expect(WIZARD_SUBMITTED_MESSAGE.it(2025)).not.toMatch(/revision/i)
+  })
+
+  it("includes the tax year, with a single leading space and no double space, in both locales", () => {
+    expect(WIZARD_SUBMITTED_MESSAGE.en(2025)).toBe(
+      "We've received your information and are processing your 2025 transactions now. If anything needs your input, we'll show it right in your portal.",
+    )
+    expect(WIZARD_SUBMITTED_MESSAGE.it(2025)).toBe(
+      "Abbiamo ricevuto le tue informazioni e stiamo elaborando le tue transazioni 2025. Se qualcosa richiede il tuo intervento, te lo mostreremo direttamente nel portale.",
+    )
+    expect(WIZARD_SUBMITTED_MESSAGE.en(2025)).not.toMatch(/ {2,}/)
+    expect(WIZARD_SUBMITTED_MESSAGE.it(2025)).not.toMatch(/ {2,}/)
+  })
+
+  it("reads as a complete, grammatical sentence when the year is unknown (null)", () => {
+    expect(WIZARD_SUBMITTED_MESSAGE.en(null)).toBe(
+      "We've received your information and are processing your transactions now. If anything needs your input, we'll show it right in your portal.",
+    )
+    expect(WIZARD_SUBMITTED_MESSAGE.it(null)).toBe(
+      "Abbiamo ricevuto le tue informazioni e stiamo elaborando le tue transazioni. Se qualcosa richiede il tuo intervento, te lo mostreremo direttamente nel portale.",
+    )
+    expect(WIZARD_SUBMITTED_MESSAGE.en(null)).not.toMatch(/ {2,}/)
+    expect(WIZARD_SUBMITTED_MESSAGE.it(null)).not.toMatch(/ {2,}/)
   })
 })
 

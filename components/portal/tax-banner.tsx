@@ -14,6 +14,10 @@ interface TaxBannerProps {
   reviewStatus?: ReviewStatus | null
   /** New: submission id for the Confirm action */
   submissionId?: string | null
+  /** Whether the client has already clicked Confirm on their P&L + Balance
+   *  Sheet — decides whether the submitted/resubmitted banner asks them to
+   *  finish, or tells them they're done. */
+  confirmationAccepted?: boolean | null
   /** Legacy fallback for pre-Slice-2 submissions */
   dataReceived?: boolean
   sentToAccountant?: boolean
@@ -98,6 +102,7 @@ export function TaxBanner({
   locale,
   reviewStatus,
   submissionId,
+  confirmationAccepted = false,
   dataReceived = false,
   sentToAccountant = false,
   showFinancialsLink = false,
@@ -120,6 +125,78 @@ export function TaxBanner({
     switch (reviewStatus) {
       case 'submitted':
       case 'resubmitted': {
+        // Split by whether the client has actually hit Confirm — before this,
+        // the same "under review" wording rendered for both a client who still
+        // owed us categorization work AND one who'd already confirmed, which
+        // is what produced a client-confirmed live case of "the portal says
+        // I'm fine, I don't understand what to fix" (PAMAG LLC, 2026-08-17).
+        // Scoped to showFinancialsLink (MMLLC/Corp with a submission) — that's
+        // the only population with an actual categorize-and-confirm step
+        // waiting on tax-financials. Everyone else (bug-hunter catch, same
+        // day: this unconditionally sent SMLLC clients — no bank-statement
+        // step in their engagement at all — to a page asking them to upload
+        // statements that were never collected) keeps the original,
+        // entity-agnostic wording below.
+        if (showFinancialsLink) {
+          if (!confirmationAccepted) {
+            const title = locale === 'it'
+              ? `Azione richiesta — la tua dichiarazione ${taxYear} non è completa`
+              : `Action needed — your ${taxYear} tax return isn't finished`
+            const desc = locale === 'it'
+              ? `Devi ancora completare la categorizzazione delle transazioni e confermare il Conto Economico e lo Stato Patrimoniale prima che possiamo preparare la tua dichiarazione.`
+              : `You still need to finish categorizing your transactions and confirm your Profit & Loss and Balance Sheet before we can prepare your return.`
+            const cta = locale === 'it' ? 'Completa ora' : 'Finish now'
+            const editCta = locale === 'it' ? 'Modifica le tue risposte' : 'Edit your answers'
+            return (
+              <div className="block w-full rounded-xl border-2 border-amber-400 bg-amber-50 px-5 py-4 mb-6">
+                <div className="flex items-start gap-4">
+                  <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 border border-amber-300">
+                    <AlertTriangle className="h-5 w-5 text-amber-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-amber-900 text-sm sm:text-base">{title}</p>
+                    <p className="text-amber-700 text-xs sm:text-sm mt-1">{desc}</p>
+                    <a href={editHref} className="mt-2 inline-block text-xs font-semibold text-amber-700 underline hover:text-amber-900">
+                      {editCta}
+                    </a>
+                  </div>
+                  <a
+                    href="/portal/tax-financials"
+                    className="shrink-0 flex items-center gap-1.5 self-center rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+                  >
+                    {cta}
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </a>
+                </div>
+              </div>
+            )
+          }
+          const doneTitle = locale === 'it'
+            ? `Fatto — abbiamo tutto il necessario (${taxYear})`
+            : `You're done — we have what we need (${taxYear})`
+          const doneDesc = locale === 'it'
+            ? `Hai confermato il Conto Economico e lo Stato Patrimoniale per la ${returnLabel} ${taxYear}. Non è richiesta alcuna azione da parte tua.`
+            : `You've confirmed your ${returnLabel} ${taxYear} Profit & Loss and Balance Sheet. No further action needed from you.`
+          return (
+            <div className="block w-full rounded-xl border-2 border-blue-300 bg-blue-50 px-5 py-4 mb-6">
+              <div className="flex items-start gap-4">
+                <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 border border-blue-300">
+                  <CheckCircle className="h-5 w-5 text-blue-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-blue-900 text-sm sm:text-base">{doneTitle}</p>
+                  <p className="text-blue-700 text-xs sm:text-sm mt-1">{doneDesc}</p>
+                  {financialsLink}
+                </div>
+              </div>
+            </div>
+          )
+        }
+
+        // No financials flow for this account (not MMLLC/Corp, or no
+        // submission yet) — original wording, unchanged from before this
+        // whole fix, since there's no hidden categorize-and-confirm step to
+        // clarify for this population.
         const title = locale === 'it'
           ? `Dati fiscali inviati — in revisione (${taxYear})`
           : `Tax data submitted — under review (${taxYear})`
@@ -136,7 +213,6 @@ export function TaxBanner({
               <div className="flex-1 min-w-0">
                 <p className="font-semibold text-blue-900 text-sm sm:text-base">{title}</p>
                 <p className="text-blue-700 text-xs sm:text-sm mt-1">{desc}</p>
-                {financialsLink}
               </div>
               <EditButton cta={cta} />
             </div>
@@ -175,10 +251,7 @@ export function TaxBanner({
           : `Our team has requested changes. Check the portal chat for details, then update and resubmit your data.`
         const cta = locale === 'it' ? 'Modifica e reinvia' : 'Edit & resubmit'
         return (
-          <a
-            href={editHref}
-            className="block w-full rounded-xl border-2 border-amber-400 bg-amber-50 px-5 py-4 transition-all hover:bg-amber-100 hover:shadow-md mb-6"
-          >
+          <div className="block w-full rounded-xl border-2 border-amber-400 bg-amber-50 px-5 py-4 mb-6">
             <div className="flex items-start gap-4">
               <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 border border-amber-300">
                 <AlertTriangle className="h-5 w-5 text-amber-600" />
@@ -186,13 +259,17 @@ export function TaxBanner({
               <div className="flex-1 min-w-0">
                 <p className="font-semibold text-amber-900 text-sm sm:text-base">{title}</p>
                 <p className="text-amber-700 text-xs sm:text-sm mt-1">{desc}</p>
+                {financialsLink}
               </div>
-              <div className="shrink-0 flex items-center gap-1.5 self-center rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700">
+              <a
+                href={editHref}
+                className="shrink-0 flex items-center gap-1.5 self-center rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+              >
                 <Pencil className="h-3.5 w-3.5" />
                 {cta}
-              </div>
+              </a>
             </div>
-          </a>
+          </div>
         )
       }
 
@@ -213,6 +290,7 @@ export function TaxBanner({
               <div className="flex-1 min-w-0">
                 <p className="font-semibold text-emerald-900 text-sm sm:text-base">{title}</p>
                 <p className="text-emerald-700 text-xs sm:text-sm mt-1">{desc}</p>
+                {financialsLink}
               </div>
               <div className="shrink-0 flex items-center gap-2 self-center">
                 {submissionId && (
@@ -245,6 +323,7 @@ export function TaxBanner({
               <div className="flex-1 min-w-0">
                 <p className="font-semibold text-blue-900 text-sm sm:text-base">{title}</p>
                 <p className="text-blue-700 text-xs sm:text-sm mt-1">{desc}</p>
+                {financialsLink}
               </div>
             </div>
           </div>
@@ -260,10 +339,7 @@ export function TaxBanner({
           : `Your submission has been reopened by our team. Review your data and resubmit when ready.`
         const cta = locale === 'it' ? 'Rivedi e reinvia' : 'Review & resubmit'
         return (
-          <a
-            href={editHref}
-            className="block w-full rounded-xl border-2 border-amber-400 bg-amber-50 px-5 py-4 transition-all hover:bg-amber-100 hover:shadow-md mb-6"
-          >
+          <div className="block w-full rounded-xl border-2 border-amber-400 bg-amber-50 px-5 py-4 mb-6">
             <div className="flex items-start gap-4">
               <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 border border-amber-300">
                 <AlertTriangle className="h-5 w-5 text-amber-600" />
@@ -271,13 +347,17 @@ export function TaxBanner({
               <div className="flex-1 min-w-0">
                 <p className="font-semibold text-amber-900 text-sm sm:text-base">{title}</p>
                 <p className="text-amber-700 text-xs sm:text-sm mt-1">{desc}</p>
+                {financialsLink}
               </div>
-              <div className="shrink-0 flex items-center gap-1.5 self-center rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700">
+              <a
+                href={editHref}
+                className="shrink-0 flex items-center gap-1.5 self-center rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+              >
                 <Pencil className="h-3.5 w-3.5" />
                 {cta}
-              </div>
+              </a>
             </div>
-          </a>
+          </div>
         )
       }
     }
