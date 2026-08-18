@@ -2,12 +2,14 @@
 
 import { useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Users, Landmark, BarChart3, Receipt } from 'lucide-react'
+import { Users, Landmark, BarChart3, Receipt, Repeat } from 'lucide-react'
 import { ClientsInvoicesTab } from './clients-invoices-tab'
 import { OverviewTab } from './overview-tab'
 import { BankFeedTab, type BankFeedRecord, type OpenInvoice } from './bank-feed-tab'
 import { AllInvoicesTab, type InvoiceRecord } from './all-invoices-tab'
 import { ExpensesTab, type TDExpenseRecord } from './expenses-tab'
+import { RecurringTab } from './recurring-tab'
+import type { RecurringTemplateListRow } from '@/app/(dashboard)/payments/recurring-invoice-actions'
 
 interface ClientSummary {
   id: string
@@ -40,10 +42,12 @@ interface Props {
   isAdmin: boolean
   /** Card-fee master switch state — null for non-admins (hides the card). */
   cardFee?: { enabled: boolean; ratePercent: number } | null
+  recurringTemplates: RecurringTemplateListRow[]
 }
 
 const allTabs = [
   { id: 'clients', label: 'Clients & Invoices', icon: Users, tooltip: 'Create and manage invoices for each client. Track payments, credits, and balances.', adminOnly: false },
+  { id: 'recurring', label: 'Recurring', icon: Repeat, tooltip: 'Every recurring invoice schedule — turn one on or off.', adminOnly: false },
   { id: 'expenses', label: 'Expenses', icon: Receipt, tooltip: 'TD operating expenses — vendor bills, filing fees, software, services.', adminOnly: true },
   { id: 'bank', label: 'Bank Feed', icon: Landmark, tooltip: 'Match incoming bank transactions to open invoices. Auto-reconcile payments.', adminOnly: false },
   { id: 'overview', label: 'Overview', icon: BarChart3, tooltip: 'Financial summary — aging buckets, outstanding totals, and recent activity.', adminOnly: false },
@@ -53,7 +57,7 @@ export function FinanceDashboard({
   activeTab, clientList, selectedClientId,
   clientInvoices, clientCreditNotes, clientAuditLog, clientPaymentHistory,
   stats, agingBuckets, recentAuditLog, bankFeeds, bankOpenInvoices, bankFeedTotalCount,
-  allInvoicesFlat, tdExpenses, isAdmin, cardFee,
+  allInvoicesFlat, tdExpenses, isAdmin, cardFee, recurringTemplates,
 }: Props) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -145,6 +149,9 @@ export function FinanceDashboard({
               )}
             </div>
           </div>
+        )}
+        {tab === 'recurring' && (
+          <RecurringTab templates={recurringTemplates} />
         )}
         {tab === 'expenses' && (
           <ExpensesTab expenses={tdExpenses} />

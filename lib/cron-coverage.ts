@@ -53,6 +53,9 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/plaid-sync": "0 */6 * * *",
   "/api/cron/mercury-sync": "*/15 * * * *",
   "/api/cron/portal-recurring-invoices": "0 8 * * *",
+  // General-purpose recurring TD invoicing (dev job 4a854806) — reads
+  // recurring_invoice_templates and generates via createTDInvoice, Draft-only.
+  "/api/cron/recurring-invoices": "15 8 * * *",
   "/api/cron/refresh-issue-counts": "0 8 * * *",
   "/api/cron/payment-integrity-alarm": "0 9 * * *",
   "/api/cron/tax-reactivation": "30 10 * * *",

@@ -32,6 +32,15 @@ export interface TDInvoiceInput {
   }>
   currency?: 'USD' | 'EUR'
   due_date?: string
+  /**
+   * Override the invoice's summary description (shown in Finance and the
+   * invoice PDF). Omit to fall back to the first line item's description —
+   * the long-standing default every existing caller relies on. When a
+   * credit fully covers the bill, the credit-explanation string ("X − credit
+   * (Y) = $0 due") still wins over this override, since explaining a $0
+   * invoice matters more than a static label (dev job 4a854806).
+   */
+  description?: string
   notes?: string
   message?: string
   mark_as_paid?: boolean
@@ -116,6 +125,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     line_items,
     currency = 'USD',
     due_date,
+    description: descriptionOverride,
     notes,
     message,
     mark_as_paid = false,
@@ -277,9 +287,13 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   const today = new Date().toISOString().split('T')[0]
   const paidDateVal = paid ? (paid_date || today) : null
 
-  // Invoice summary description. When a credit fully covers the bill, spell out
-  // the math so it never reads as a bare "$0" — service − credit = $0 due.
-  const serviceDescription = line_items[0]?.description || 'Service invoice'
+  // Invoice summary description. `descriptionOverride` (e.g. a recurring
+  // template's own description, dev job 4a854806) wins over the line-item
+  // default — but NEVER over the credit-covered explanation below: a $0
+  // invoice must always say why, and a static override would silently hide
+  // that on every cycle a recurring schedule happens to be fully covered by
+  // credit.
+  const serviceDescription = descriptionOverride || line_items[0]?.description || 'Service invoice'
   const invoiceDescription = fullyCoveredByCredit && appliedCredit
     ? `${serviceDescription} − credit ($${appliedCredit.appliedTotal}) = $0 due (covered by credit)`
     : serviceDescription
