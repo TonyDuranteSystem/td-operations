@@ -7,6 +7,7 @@ import { redirect } from 'next/navigation'
 import { FinanceDashboard } from './finance-dashboard'
 import type { OpenInvoice } from './bank-feed-tab'
 import type { InvoiceRecord } from './all-invoices-tab'
+import { listRecurringInvoiceTemplates } from '@/app/(dashboard)/payments/recurring-invoice-actions'
 
 export const dynamic = 'force-dynamic'
 
@@ -352,6 +353,11 @@ export default async function FinancePage({
       }))
     : []
 
+  // ── Recurring invoice schedules — every staff member, matching the other
+  //    invoice-management tabs (not admin-only; a plain toggle, no money-
+  //    rate change like the card-fee switch). ──
+  const recurringTemplates = await listRecurringInvoiceTemplates()
+
   // ── Overview stats ──
   const allInvoices = invoiceSummary ?? []
   const totalOutstanding = allInvoices
@@ -384,6 +390,7 @@ export default async function FinancePage({
         tdExpenses={tdExpenses}
         isAdmin={userIsAdmin}
         cardFee={cardFee}
+        recurringTemplates={recurringTemplates}
       />
     </div>
   )

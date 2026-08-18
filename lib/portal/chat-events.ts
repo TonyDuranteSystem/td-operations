@@ -45,6 +45,7 @@ export type ChatEventKind =
   | "aged_credit_applied"     // an old credit note reduced a bill (WS-A: credits never expire)
   | "financials_confirm_unlocked" // staff overrode the failed-statement hard block (card 4a39e0fd)
   | "plan_referrer_ready_to_release" // a payment-plan deal with a referrer/partner is now fully paid — release commission
+  | "recurring_invoice_generated" // the recurring-invoices cron auto-generated a Draft invoice — review + send it
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */
@@ -457,5 +458,29 @@ export async function emitPlanReferrerReadyToReleaseEvent(params: {
     message: params.message,
     source: { table: "payments", id: params.payment_id },
     event_kind: "plan_referrer_ready_to_release",
+  })
+}
+
+/**
+ * Emit a "recurring invoice generated" event. Fired by the
+ * `recurring-invoices` cron immediately after createTDInvoice() succeeds for
+ * a due template — never on a skip/error. Idempotent on the newly-created
+ * payment's id, so a same-day cron retry never double-posts (createTDInvoice
+ * itself would also just return the same payment id via its own idempotency
+ * key, but this guard is independent of that).
+ */
+export async function emitRecurringInvoiceGeneratedEvent(params: {
+  payment_id: string
+  contact_id?: string | null
+  account_id?: string | null
+  message: string
+}): Promise<EmitResult> {
+  return await emitClientChatEvent({
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    topic: "Billing",
+    message: params.message,
+    source: { table: "payments", id: params.payment_id },
+    event_kind: "recurring_invoice_generated",
   })
 }
