@@ -27,7 +27,12 @@ const AIRWALLEX_EUR: BankDetails = {
   iban: "DK8989000023658198",
   bic: "SXPYDKKK",
   bank_name: "Banking Circle S.A. (via Airwallex)",
-  address: "10225 Ulmerton Rd, 3D, Largo, FL 33771",
+  // The BANK's own registered address (Banking Circle S.A., Denmark) — was
+  // wrongly set to Tony Durante LLC's own Florida office address. No current
+  // renderer displays this field (checked every contract/invoice/email
+  // consumer), but corrected for data hygiene and to prevent the wrong value
+  // from ever surfacing if an address field is added to a renderer later.
+  address: "Amerika Plads, 38, Copenhagen, Denmark, 2100",
 }
 
 const RELAY_USD: BankDetails = {

@@ -23,6 +23,7 @@ export async function createUnifiedInvoiceDraft(input: {
   return safeAction(async () => {
     const { createTDInvoice } = await import('@/lib/portal/td-invoice')
     const { getBankDetailsByPreference } = await import('@/app/offer/[token]/contract/bank-defaults')
+    const { fetchSettingsBanks, selectSettingsBank } = await import('@/lib/invoice-auto-send')
 
     // Resolve bank details from preference. For settings_bank:<id> values (from the
     // dynamic Invoice Settings dropdown), fall back to 'auto' for the inline payment
@@ -32,9 +33,24 @@ export async function createUnifiedInvoiceDraft(input: {
     const legacyPrefs = new Set(['auto', 'relay', 'mercury', 'revolut', 'airwallex'])
     const legacyPref = (legacyPrefs.has(bankPref) ? bankPref : 'auto') as 'auto' | 'relay' | 'mercury' | 'revolut' | 'airwallex'
     const bankDetails = getBankDetailsByPreference(legacyPref, input.currency)
-    const bankLabel = bankPref === 'auto' || !legacyPrefs.has(bankPref)
-      ? (input.currency === 'EUR' ? 'Airwallex (EUR)' : 'Mercury (USD)')
-      : bankPref.charAt(0).toUpperCase() + bankPref.slice(1)
+
+    // The label stamped on the invoice (payments.payment_method, e.g. "Wire
+    // Transfer (Chase JP Morgan)") must name the SPECIFIC bank picked, not a
+    // hardcoded currency-based guess — that guess was always "Mercury (USD)"
+    // / "Airwallex (EUR)" regardless of which of the real configured banks
+    // was actually selected, found live in production QA (dev job ea5751ef).
+    let bankLabel: string
+    if (bankPref === 'auto') {
+      bankLabel = input.currency === 'EUR' ? 'Airwallex (EUR)' : 'Mercury (USD)'
+    } else if (legacyPrefs.has(bankPref)) {
+      bankLabel = bankPref.charAt(0).toUpperCase() + bankPref.slice(1)
+    } else {
+      const banks = await fetchSettingsBanks()
+      const selected = selectSettingsBank(bankPref, banks)
+      bankLabel = selected
+        ? (selected.name || selected.bank_name)
+        : (input.currency === 'EUR' ? 'Airwallex (EUR)' : 'Mercury (USD)')
+    }
 
     // Build payment instructions for the message field
     const paymentMethod = input.payment_method || 'both'
