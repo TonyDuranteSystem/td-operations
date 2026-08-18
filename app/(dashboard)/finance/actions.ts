@@ -13,6 +13,7 @@ export async function createUnifiedInvoiceDraft(input: {
   description: string
   currency: 'USD' | 'EUR'
   due_date?: string
+  issue_date?: string
   message?: string
   payment_method?: 'bank_transfer' | 'card' | 'both'
   bank_preference?: string
@@ -60,6 +61,7 @@ export async function createUnifiedInvoiceDraft(input: {
       })),
       currency: input.currency,
       due_date: input.due_date || undefined,
+      issue_date: input.issue_date,
       message: fullMessage.trim() || undefined,
       payment_method: paymentMethod === 'card' ? 'Card' : paymentMethod === 'bank_transfer' ? `Wire Transfer (${bankLabel})` : `Wire Transfer (${bankLabel}) / Card`,
       bank_preference: bankPref,

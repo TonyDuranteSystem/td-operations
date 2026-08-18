@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isOfficeOpen, isOfficeHoliday, getOfficeStatus, usFederalHolidays } from '@/lib/portal/office-hours'
+import { isOfficeOpen, isOfficeHoliday, getOfficeStatus, usFederalHolidays, getOfficeDateString } from '@/lib/portal/office-hours'
 
 /**
  * All test dates are chosen to have unambiguous ET offsets:
@@ -125,5 +125,25 @@ describe('usFederalHolidays', () => {
   it('isOfficeHoliday matches a known holiday and rejects a normal day', () => {
     expect(isOfficeHoliday(new Date('2026-12-25T17:00:00Z'))).toBe(true)
     expect(isOfficeHoliday(new Date('2026-05-20T17:00:00Z'))).toBe(false)
+  })
+})
+
+describe('getOfficeDateString', () => {
+  it('reads the ET calendar date, not the UTC one, late in the ET evening (EDT)', () => {
+    // 2026-05-18 Mon 22:00 EDT = 2026-05-19 02:00 UTC — UTC has already
+    // rolled to the 19th while it's still the 18th in the office. This is
+    // exactly the bug dev job ea5751ef fixed: new Date().toISOString() here
+    // would read '2026-05-19'.
+    expect(getOfficeDateString(new Date('2026-05-19T02:00:00Z'))).toBe('2026-05-18')
+  })
+
+  it('reads the ET calendar date late in the ET evening (EST, winter offset)', () => {
+    // 2026-01-06 Tue 22:00 EST = 2026-01-07 03:00 UTC.
+    expect(getOfficeDateString(new Date('2026-01-07T03:00:00Z'))).toBe('2026-01-06')
+  })
+
+  it('agrees with the UTC date during ET daytime hours', () => {
+    // 2026-05-20 Wed 13:00 EDT = 17:00 UTC — no divergence at this hour.
+    expect(getOfficeDateString(new Date('2026-05-20T17:00:00Z'))).toBe('2026-05-20')
   })
 })

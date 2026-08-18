@@ -18,6 +18,7 @@ import { computeCreditApplication, consumeCredits, releaseStaleCreditClaims, cla
 import { categoryFromInstallmentLabel } from '@/lib/billing/payment-classification'
 import { DEAD_INVOICE_STATUSES } from '@/lib/offers/payment-plan-state'
 import { getConfiguredCardFeeRate } from '@/lib/payments/card-fee-config'
+import { getOfficeDateString } from '@/lib/portal/office-hours'
 
 // ─── Types ──────────────────────────────────────────
 
@@ -32,6 +33,25 @@ export interface TDInvoiceInput {
   }>
   currency?: 'USD' | 'EUR'
   due_date?: string
+  /**
+   * The date this invoice is issued on. Omit to default to today (in the
+   * business's own Eastern time, not the server's UTC clock). Every caller
+   * that lets a human pick a date (the New Invoice screen, a recurring
+   * template's own cycle date) should pass it — before this field existed,
+   * the picked date was silently discarded and every invoice was stamped
+   * with server-today regardless (dev job ea5751ef).
+   */
+  issue_date?: string
+  /**
+   * Override for the is_test flag this invoice inherits from its
+   * account/contact. Omit to let createTDInvoice look it up itself. Pass
+   * this explicitly ONLY when the caller has already resolved/filtered on
+   * is_test for its own reasons (e.g. the annual-installments cron already
+   * excludes test accounts before calling) — it skips a redundant lookup,
+   * it does not change the invariant that a test account's invoices are
+   * always flagged.
+   */
+  is_test?: boolean
   /**
    * Override the invoice's summary description (shown in Finance and the
    * invoice PDF). Omit to fall back to the first line item's description —
@@ -125,6 +145,8 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     line_items,
     currency = 'USD',
     due_date,
+    issue_date,
+    is_test: isTestOverride,
     description: descriptionOverride,
     notes,
     message,
@@ -167,6 +189,26 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   if (idempotency_key) {
     const existing = await findByIdempotencyKey(idempotency_key)
     if (existing) return existing
+  }
+
+  // 0b. Resolve is_test — the invoice always inherits the flag from who it's
+  // billed to, so a designated test account's invoices never show up in real
+  // revenue, real overdue chasing, or real bank-feed matching (both already
+  // filter on this column; neither has ever had anything to filter until
+  // now). account_id wins when both are set — a QA-only contact is a
+  // narrower, less consequential scope than a full account. Fails OPEN
+  // (never throws, defaults false) exactly like the same lookup pattern
+  // already used for service deliveries — a lookup hiccup must never block
+  // real invoice creation (dev job ea5751ef).
+  let isTest = isTestOverride ?? false
+  if (isTestOverride === undefined) {
+    if (account_id) {
+      const { data: acct } = await supabaseAdmin.from('accounts').select('is_test').eq('id', account_id).maybeSingle()
+      isTest = !!acct?.is_test
+    } else if (contact_id) {
+      const { data: cont } = await supabaseAdmin.from('contacts').select('is_test').eq('id', contact_id).maybeSingle()
+      isTest = !!cont?.is_test
+    }
   }
 
   // 1. Calculate totals
@@ -284,7 +326,16 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   const paymentStatus = paid ? 'Paid' : 'Pending'
   const invoiceStatus = paid ? 'Paid' : 'Draft'
 
-  const today = new Date().toISOString().split('T')[0]
+  // `today` is the REAL current day — used for the paid_date fallback, which
+  // must always anchor to the actual moment of payment, never to a
+  // caller-picked (possibly backdated) issue date. `effectiveIssueDate` is
+  // what actually gets stamped as this invoice's issue_date: the caller's
+  // choice if given, else today. Keeping these as two separate values
+  // matters — collapsing them into one would silently backdate paid_date
+  // whenever a manual invoice is backdated and marked paid at creation
+  // (senior-engineer finding, dev job ea5751ef).
+  const today = getOfficeDateString()
+  const effectiveIssueDate = issue_date || today
   const paidDateVal = paid ? (paid_date || today) : null
 
   // Invoice summary description. `descriptionOverride` (e.g. a recurring
@@ -334,8 +385,9 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         total,
         status: paymentStatus,
         invoice_status: invoiceStatus,
-        issue_date: today,
+        issue_date: effectiveIssueDate,
         due_date: due_date || null,
+        is_test: isTest,
         paid_date: paidDateVal,
         payment_method: payment_method || null,
         whop_payment_id: whop_payment_id || null,
@@ -496,12 +548,13 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         total,
         amount_paid: amountPaid,
         amount_due: amountDue,
-        issue_date: today,
+        issue_date: effectiveIssueDate,
         due_date: due_date || null,
         paid_date: paidDateVal,
         status: paid ? 'Paid' : 'Pending', // 'paid' includes credit-fully-covered, so a $0 covered invoice shows Paid in the portal
         source: 'td_invoice',
         td_payment_id: paymentId,
+        is_test: isTest,
         // Deliberately NO `notes`: payments.notes is INTERNAL staff context and
         // client_expenses belongs to the client's own bookkeeping — internal
         // notes must never be copied there (decided 2026-07-03).

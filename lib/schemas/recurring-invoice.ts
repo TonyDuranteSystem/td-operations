@@ -35,3 +35,27 @@ export const createRecurringInvoiceSchema = z
   })
 
 export type CreateRecurringInvoiceInput = z.infer<typeof createRecurringInvoiceSchema>
+
+/**
+ * Editable fields for an existing recurring schedule. Deliberately excludes
+ * `next_run_date` and `active` — those stay owned by the cron's
+ * success/failure invariant and the pause/resume toggle respectively;
+ * letting staff hand-edit either would reopen the exact backlog-dump hazard
+ * `fastForwardToNextOccurrence` exists to prevent (AI Architect + bug-hunter,
+ * dev job ea5751ef). `account_id` is also excluded — re-billing an existing
+ * schedule to a different client is a new schedule, not an edit.
+ */
+export const updateRecurringInvoiceSchema = z.object({
+  label: z.string().min(1, 'A short internal name is required').max(200),
+  description: z.string().min(1, 'Description required').max(500),
+  amount_currency: z.enum(['USD', 'EUR']).default('USD'),
+  due_date_offset_days: z.number().int().min(0),
+  frequency: z.enum(RECURRING_FREQUENCIES),
+  payment_method: z.enum(['bank_transfer', 'card', 'both']).optional(),
+  bank_preference: z.string().optional(),
+  message: z.string().optional(),
+  notes: z.string().optional(),
+  items: z.array(recurringInvoiceItemSchema).min(1, 'At least one line item required'),
+})
+
+export type UpdateRecurringInvoiceInput = z.infer<typeof updateRecurringInvoiceSchema>

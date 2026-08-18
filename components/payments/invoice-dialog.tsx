@@ -9,6 +9,7 @@ import { createInvoice, createCreditNote, createOneTimeCustomer } from '@/app/(d
 import { createRecurringInvoice } from '@/app/(dashboard)/payments/recurring-invoice-actions'
 import { INSTALLMENT_TYPES, type CreateInvoiceInput, type CreateCreditNoteInput, type InvoiceItem } from '@/lib/schemas/invoice'
 import { RECURRING_FREQUENCIES, type RecurringInvoiceFrequency, type CreateRecurringInvoiceInput } from '@/lib/schemas/recurring-invoice'
+import { getOfficeDateString } from '@/lib/portal/office-hours'
 
 const RECURRING_FREQUENCY_LABELS: Record<RecurringInvoiceFrequency, string> = {
   weekly: 'Weekly',
@@ -76,7 +77,7 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
   const [accountName, setAccountName] = useState<string | undefined>(defaultValues?.accountName)
   const [description, setDescription] = useState(defaultValues?.description ?? '')
   const [currency, setCurrency] = useState<'USD' | 'EUR'>(defaultValues?.currency ?? 'USD')
-  const [issueDate, setIssueDate] = useState(new Date().toISOString().split('T')[0])
+  const [issueDate, setIssueDate] = useState(getOfficeDateString())
   const [dueDate, setDueDate] = useState(defaultValues?.dueDate ?? '')
   const [discount, setDiscount] = useState('')
   const [message, setMessage] = useState('')
@@ -171,7 +172,7 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
     setAccountName(defaultValues?.accountName)
     setDescription(defaultValues?.description ?? '')
     setCurrency(defaultValues?.currency ?? 'USD')
-    setIssueDate(new Date().toISOString().split('T')[0])
+    setIssueDate(getOfficeDateString())
     setDueDate(defaultValues?.dueDate ?? '')
     setDiscount('')
     setMessage('')
@@ -250,6 +251,13 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
         if (result.success) {
           if (result.data?.invoiceNumber) {
             toast.success(`Recurring invoice set up — first bill ${result.data.invoiceNumber} created as Draft, repeats ${RECURRING_FREQUENCY_LABELS[recurringFrequency].toLowerCase()}`)
+          } else if (result.data?.deferredToDate) {
+            // The picked issue date is in the future — this is the correct,
+            // intended outcome, not a failure. Showing the generic error
+            // toast here would wrongly tell staff something went wrong on a
+            // schedule that's working exactly as configured (caught live in
+            // sandbox QA, dev job ea5751ef).
+            toast.success(`Recurring schedule created — first bill will generate on ${result.data.deferredToDate}, repeats ${RECURRING_FREQUENCY_LABELS[recurringFrequency].toLowerCase()}`)
           } else {
             toast.success('Recurring schedule created')
             toast.error(result.data?.generationError ? `First bill not generated yet: ${result.data.generationError} — it will retry automatically.` : 'First bill did not generate — check the Recurring tab in Finance.')

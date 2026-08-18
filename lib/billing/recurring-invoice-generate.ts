@@ -71,6 +71,11 @@ export async function generateRecurringInvoiceCycle(tmpl: RecurringInvoiceTempla
       line_items: tmpl.line_items,
       currency: tmpl.currency,
       due_date: dueDate,
+      // Every cycle is dated to the day it was actually scheduled for, not
+      // whichever day the cron (or a manual "generate now") happened to run
+      // — matches how due_date is already derived from runDate (dev job
+      // ea5751ef).
+      issue_date: runDate,
       description: tmpl.description || undefined,
       notes: tmpl.notes || undefined,
       message: tmpl.message || undefined,
@@ -164,6 +169,15 @@ export async function generateRecurringInvoiceCycle(tmpl: RecurringInvoiceTempla
       }
     }
 
+    // A cycle can come back already Paid — fully covered by an account
+    // credit (the common case), or, rarely, an existing invoice returned by
+    // createTDInvoice's own idempotency short-circuit after a duplicate cron
+    // invocation (already sent and already paid for real, no credit
+    // involved). "Release it" is wrong either way; the wording stays
+    // deliberately generic rather than credit-specific so it's still true
+    // in the rare second case (bug-hunter finding, dev job ea5751ef).
+    const alreadySettled = !looksLikeCreditNote && invoice.status === "Paid"
+
     try {
       await emitRecurringInvoiceGeneratedEvent({
         payment_id: invoice.paymentId,
@@ -171,7 +185,9 @@ export async function generateRecurringInvoiceCycle(tmpl: RecurringInvoiceTempla
         contact_id: tmpl.contact_id,
         message: looksLikeCreditNote
           ? `Recurring template "${tmpl.label}" generated a credit note (${invoice.invoiceNumber}) instead of a bill — check its line items.`
-          : `Recurring invoice ${invoice.invoiceNumber} ($${invoice.total} ${tmpl.currency}) generated from "${tmpl.label}" — release it.`,
+          : alreadySettled
+            ? `Recurring invoice ${invoice.invoiceNumber} generated from "${tmpl.label}" — already settled, nothing to send.`
+            : `Recurring invoice ${invoice.invoiceNumber} ($${invoice.total} ${tmpl.currency}) generated from "${tmpl.label}" — release it.`,
       })
     } catch (notifyErr) {
       // Non-fatal — the invoice already exists; a missed notification must

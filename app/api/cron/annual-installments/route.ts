@@ -192,6 +192,11 @@ export async function GET(req: NextRequest) {
           installment: installmentLabelEnum,
           payment_category: "installment_2",
           year,
+          // This cron's own query already excludes is_test accounts before
+          // the loop reaches here — passing the override skips a redundant
+          // per-invoice lookup for information already known (bug-hunter
+          // finding, dev job ea5751ef).
+          is_test: false,
         })
 
         // If credit fully covered the installment, createTDInvoice marked it Paid
