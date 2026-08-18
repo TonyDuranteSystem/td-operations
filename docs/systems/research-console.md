@@ -1,5 +1,5 @@
 # Research Console
-_Last verified against code: 2026-08-17 — Claude (initial build, confirmed working by Antonio in sandbox)_
+_Last verified against code: 2026-08-18 — Claude (**LIVE ON PRODUCTION**, PR #299. Shipped surgically on Antonio's explicit approval: code merged + deployed, then the `research_saved_searches` table created by Antonio directly in the production Supabase SQL editor — the automated migration-promotion path is fully blocked for production schema changes regardless of correct usage, a known pre-existing limitation, not specific to this feature. Verified post-ship with a real insert/read/delete round trip against production, not just a schema check.)_
 
 ## What it is
 A top-level CRM page (`/research`, admin-only) where Antonio or Luca build an advanced filter — pick one or more record types, add conditions field-by-field — and get back a live results list, in a choice of layouts, with an Excel export. Modeled on Salesforce/HubSpot/Zoho-style advanced search, not a chatbot. There is no free-text-question/AI-research layer — that direction (from the original work order) was explicitly superseded mid-build in favor of this filter-builder shape; see "Gotchas" below.
