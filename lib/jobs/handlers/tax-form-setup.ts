@@ -29,6 +29,7 @@ import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { emitActionNeeded } from "@/lib/notifications/act-event"
 import { emitClientChatEvent } from "@/lib/portal/chat-events"
 import { buildReviewHistoryEntry, type ReviewStatus } from "@/lib/tax/review-status"
+import { resolveLocale, WIZARD_SUBMITTED_MESSAGE } from "@/lib/jobs/wizard-failure-notify"
 
 interface TaxFormPayload {
   token: string
@@ -593,11 +594,12 @@ ${(entityType === "MMLLC" || entityType === "Corp") ? `<li>Bank statements auto-
     result.steps.push(step("staff_card", card.created ? "ok" : "skipped", card.reason ?? "What's New card created"))
   }
   if (p.submission_id && (p.contact_id || p.account_id)) {
+    const locale = await resolveLocale(p.contact_id ?? null, p.account_id ?? null)
     const chat = await emitClientChatEvent({
       contact_id: p.contact_id,
       account_id: p.account_id,
       topic: "tax_review",
-      message: `We've received your tax information${taxYear ? ` for ${taxYear}` : ""}. Our team will review it and let you know if anything needs changing.`,
+      message: WIZARD_SUBMITTED_MESSAGE[locale](taxYear ?? null),
       source: { table: "tax_return_submissions", id: p.submission_id },
       event_kind: "wizard_submitted",
     })

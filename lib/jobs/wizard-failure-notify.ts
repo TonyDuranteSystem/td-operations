@@ -75,6 +75,20 @@ const MESSAGE: Record<"it" | "en", string> = {
   it: "Abbiamo ricevuto le tue informazioni, ma si è verificato un problema tecnico durante l'elaborazione. Il nostro team è stato avvisato e se ne sta occupando — non è richiesta alcuna azione da parte tua.",
 }
 
+/**
+ * Fired the instant a client submits the tax wizard (both the portal wizard
+ * path and the legacy external tax-form path share this — previously two
+ * separately-hardcoded, English-only copies that had drifted into a subtle
+ * mismatch). Deliberately does NOT promise a staff review: review_status
+ * never actually gets worked by anyone (see docs/systems/tax-returns.md),
+ * so the old "our team will review it" copy was false for every client who
+ * saw it.
+ */
+export const WIZARD_SUBMITTED_MESSAGE: Record<"it" | "en", (year: number | null) => string> = {
+  en: (year) => `We've received your information and are processing your${year ? ` ${year}` : ""} transactions now. If anything needs your input, we'll show it right in your portal.`,
+  it: (year) => `Abbiamo ricevuto le tue informazioni e stiamo elaborando le tue transazioni${year ? ` ${year}` : ""}. Se qualcosa richiede il tuo intervento, te lo mostreremo direttamente nel portale.`,
+}
+
 /** Minimal shape of a job needed to notify the client. */
 export interface WizardFailureJob {
   id: string
@@ -94,7 +108,7 @@ export interface WizardFailureNotifyResult {
  * wizards (tax, onboarding, company_info) carry an account_id whose primary
  * linked contact's language we read. Defaults to English on any miss.
  */
-async function resolveLocale(
+export async function resolveLocale(
   contactId: string | null,
   accountId: string | null,
 ): Promise<"it" | "en"> {
