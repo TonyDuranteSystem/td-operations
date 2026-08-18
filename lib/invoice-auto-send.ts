@@ -65,7 +65,7 @@ export function selectSettingsBank(
   return null
 }
 
-async function fetchSettingsBanks(): Promise<SettingsBank[]> {
+export async function fetchSettingsBanks(): Promise<SettingsBank[]> {
   try {
     const { data } = await supabaseAdmin
       .from("invoice_settings")
