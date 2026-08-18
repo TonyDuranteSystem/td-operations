@@ -40,6 +40,7 @@ import {
   Radio,
   StickyNote,
   ShieldCheck,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -98,6 +99,7 @@ const STORAGE_KEY_V2 = 'td-sidebar-order-v3'
 
 const defaultNavigation: NavItem[] = [
   { id: 'home', name: 'Home', href: '/', icon: LayoutDashboard, tooltip: 'Dashboard overview — urgent tasks, unread messages, deadlines, and action items at a glance.' },
+  { id: 'research', name: 'Research', href: '/research', icon: SlidersHorizontal, adminOnly: true, tooltip: 'Build a filter, search across companies, contacts, leads, deals, services, payments, tasks, offers, leases, and operating agreements. Admin only.' },
   { id: 'notes', name: 'Notes', href: '/notes', icon: StickyNote, tooltip: 'Your post-its — active, snoozed (with when they come back), and done. Private by default; share one with a teammate or the whole team.' },
   { id: 'inbox', name: 'Inbox', href: '/inbox', icon: MessageSquare, tooltip: 'Company email (Gmail). Vendor emails, government correspondence, and client replies.' },
   { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare, tooltip: 'Direct messages from clients through the portal. Reply, tag, and create tasks from here.' },
@@ -507,10 +509,23 @@ export function Sidebar({
   // user's saved localStorage order is stale or predates a newly-added/moved
   // item — a nav entry can never silently disappear again. (Bug: items absent
   // from the saved order were previously dropped entirely.)
-  const mergedOrder = [
-    ...navOrder,
-    ...defaultNavigation.map(n => n.id).filter(id => !navOrder.includes(id)),
-  ]
+  const missingFromSaved = defaultNavigation.map(n => n.id).filter(id => !navOrder.includes(id))
+  // 'research' is a brand-new top-level item (2026-08-17) — for a returning
+  // user with a pre-existing custom order, plain append would drop it at the
+  // very bottom of a long list, invisible unless scrolled to. Insert it right
+  // after 'home' instead, once, the same place it sits in the fresh-user
+  // default order. Every OTHER newly-added item keeps the original
+  // append-at-end behavior — this is a one-off placement fix, not a change to
+  // the general merge rule.
+  // Guard on navOrder.length: before the load effect runs (first paint,
+  // navOrder still []), everything is "missing" and plain append already
+  // reproduces the correct default order — the special-case splice is only
+  // needed once a real saved order is loaded and doesn't yet contain it.
+  const researchIdx = navOrder.length > 0 ? missingFromSaved.indexOf('research') : -1
+  if (researchIdx !== -1) missingFromSaved.splice(researchIdx, 1)
+  const mergedOrder = researchIdx === -1
+    ? [...navOrder, ...missingFromSaved]
+    : [...navOrder.slice(0, 1), 'research', ...navOrder.slice(1), ...missingFromSaved]
 
   // Build ordered nav with badges applied
   const orderedNav = mergedOrder

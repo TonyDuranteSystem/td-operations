@@ -111,6 +111,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [mcp-tools.md](mcp-tools.md) | MCP tool server — endpoint, dual auth, registration/source-of-truth, R096 routing | ✅ written |
 | [partners-team.md](partners-team.md) | Partner payouts + internal team messaging + (planned) Portal Team Access | ✅ written |
 | [ai-agent.md](ai-agent.md) | In-dashboard AI assistant — Claude/GPT-4o, own tool set, staff-only | ✅ written |
+| [research-console.md](research-console.md) | Research Console — admin filter/search builder across CRM record types, view modes, Excel export | ✅ written |
 | _formation.md_ | Company formation lifecycle (lead → EIN → active) | ⬜ to seed |
 | _onboarding.md_ | Onboarding flow | ⬜ to seed |
 | _billing-invoicing.md_ | payments / client_invoices / client_expenses / td_expenses | ⬜ to seed |
