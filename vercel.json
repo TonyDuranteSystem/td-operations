@@ -137,6 +137,10 @@
       "schedule": "0 8 * * *"
     },
     {
+      "path": "/api/cron/recurring-invoices",
+      "schedule": "15 8 * * *"
+    },
+    {
       "path": "/api/cron/itin-processing-check",
       "schedule": "0 9 * * 1"
     },

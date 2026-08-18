@@ -1,12 +1,37 @@
 'use client'
 
 import { useState, useEffect, useTransition } from 'react'
-import { X, Loader2, Plus, Trash2, FileText, CreditCard, Landmark, Building2 as BankIcon, Send, CheckCircle2, UserPlus } from 'lucide-react'
+import { X, Loader2, Plus, Trash2, FileText, CreditCard, Landmark, Building2 as BankIcon, Send, CheckCircle2, UserPlus, Repeat } from 'lucide-react'
 import { toast } from 'sonner'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { ServiceTypeSelect } from '@/components/shared/service-type-select'
 import { createInvoice, createCreditNote, createOneTimeCustomer } from '@/app/(dashboard)/payments/invoice-actions'
+import { createRecurringInvoice } from '@/app/(dashboard)/payments/recurring-invoice-actions'
 import { INSTALLMENT_TYPES, type CreateInvoiceInput, type CreateCreditNoteInput, type InvoiceItem } from '@/lib/schemas/invoice'
+import { RECURRING_FREQUENCIES, type RecurringInvoiceFrequency, type CreateRecurringInvoiceInput } from '@/lib/schemas/recurring-invoice'
+
+const RECURRING_FREQUENCY_LABELS: Record<RecurringInvoiceFrequency, string> = {
+  weekly: 'Weekly',
+  biweekly: 'Every 2 weeks',
+  monthly: 'Monthly',
+  quarterly: 'Quarterly',
+  yearly: 'Yearly',
+}
+// Separate from the dropdown label above — "automatically every {X}" needs a
+// bare period noun ("week", not "Weekly"; "2 weeks", not "Every 2 weeks") or
+// the sentence reads as "every weekly" / "every every 2 weeks" (browser-QA
+// caught this, dev job 4a854806).
+const RECURRING_FREQUENCY_PERIOD: Record<RecurringInvoiceFrequency, string> = {
+  weekly: 'week',
+  biweekly: '2 weeks',
+  monthly: 'month',
+  quarterly: 'quarter',
+  yearly: 'year',
+}
+// Antonio (2026-08-17) named exactly these four on the New Invoice screen —
+// 'quarterly' stays supported by the schedule engine itself (e.g. for a
+// future admin tool) but is deliberately not offered here.
+const RECURRING_FREQUENCY_UI_OPTIONS = RECURRING_FREQUENCIES.filter((f) => f !== 'quarterly')
 
 export interface InvoiceDialogDefaults {
   accountId?: string
@@ -84,6 +109,17 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
   const [installment, setInstallment] = useState<string>(defaultValues?.installment ?? '')
   const [errors, setErrors] = useState<Record<string, string>>({})
 
+  // Recurring — deliberately isolated from the tranche/installment/discount
+  // machinery below (Antonio, 2026-08-17: "nothing to do with installments
+  // or other stuff that works today"). The toggle itself is force-hidden
+  // whenever this dialog is opened FOR a plan part or an installment
+  // (`isRecurringEligible` below), and the server action never accepts a
+  // tranche or installment value at all — so there's no combination of
+  // clicks that can make the two interact.
+  const [isRecurring, setIsRecurring] = useState(false)
+  const [recurringFrequency, setRecurringFrequency] = useState<RecurringInvoiceFrequency>('monthly')
+  const isRecurringEligible = mode !== 'credit' && !defaultValues?.tranche && !defaultValues?.installment
+
   // Phase 3 — New Customer quick-create
   const [showNewCustomer, setShowNewCustomer] = useState(false)
   const [ncFirstName, setNcFirstName] = useState('')
@@ -145,6 +181,8 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
     setMarkAsPaid(false)
     setInstallment(defaultValues?.installment ?? '')
     setErrors({})
+    setIsRecurring(false)
+    setRecurringFrequency('monthly')
     setShowNewCustomer(false)
     setNcFirstName('')
     setNcLastName('')
@@ -194,6 +232,35 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
     }
 
     startTransition(async () => {
+      if (isRecurring) {
+        const input: CreateRecurringInvoiceInput = {
+          account_id: accountId!,
+          label: description.trim(),
+          description: description.trim(),
+          amount_currency: currency,
+          issue_date: issueDate,
+          due_date: dueDate || undefined,
+          frequency: recurringFrequency,
+          payment_method: paymentMethod,
+          bank_preference: bankPreference,
+          message: message.trim() || undefined,
+          items: items.map((item) => ({ description: item.description, quantity: item.quantity, unit_price: item.unit_price })),
+        }
+        const result = await createRecurringInvoice(input)
+        if (result.success) {
+          if (result.data?.invoiceNumber) {
+            toast.success(`Recurring invoice set up — first bill ${result.data.invoiceNumber} created as Draft, repeats ${RECURRING_FREQUENCY_LABELS[recurringFrequency].toLowerCase()}`)
+          } else {
+            toast.success('Recurring schedule created')
+            toast.error(result.data?.generationError ? `First bill not generated yet: ${result.data.generationError} — it will retry automatically.` : 'First bill did not generate — check the Recurring tab in Finance.')
+          }
+          resetForm()
+          onClose()
+        } else {
+          toast.error(result.error ?? 'Error creating recurring invoice')
+        }
+        return
+      }
       if (isCredit) {
         const input: CreateCreditNoteInput = {
           account_id: accountId!,
@@ -283,6 +350,30 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
           </div>
 
           <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
+            {/* One-time / Recurring — isolated from installments, tranches, discounts */}
+            {isRecurringEligible && (
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsRecurring(false)}
+                  className={`flex-1 px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
+                    !isRecurring ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-zinc-200 text-zinc-600 hover:border-zinc-300'
+                  }`}
+                >
+                  One-time invoice
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsRecurring(true)}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
+                    isRecurring ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-zinc-200 text-zinc-600 hover:border-zinc-300'
+                  }`}
+                >
+                  <Repeat className="h-3.5 w-3.5" /> Recurring invoice
+                </button>
+              </div>
+            )}
+
             {/* Account */}
             <div>
               <div className="flex items-center justify-between mb-1">
@@ -404,8 +495,27 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
               {errors.description && <p className="text-xs text-red-600 mt-1">{errors.description}</p>}
             </div>
 
-            {/* Installment Tag (invoice only) */}
-            {!isCredit && (
+            {/* Repeats (recurring only) */}
+            {isRecurring && (
+              <div>
+                <label className="block text-sm font-medium mb-1">Repeats *</label>
+                <select
+                  value={recurringFrequency}
+                  onChange={e => setRecurringFrequency(e.target.value as RecurringInvoiceFrequency)}
+                  className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {RECURRING_FREQUENCY_UI_OPTIONS.map(f => (
+                    <option key={f} value={f}>{RECURRING_FREQUENCY_LABELS[f]}</option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-zinc-400 mt-1">
+                  This bill is created now, then a new one automatically every {RECURRING_FREQUENCY_PERIOD[recurringFrequency]} — as a draft you review and send. It never stops on its own; turn it off from Finance → Recurring.
+                </p>
+              </div>
+            )}
+
+            {/* Installment Tag (invoice only, not for recurring) */}
+            {!isCredit && !isRecurring && (
               <div>
                 <label className="block text-sm font-medium mb-1">Payment Type</label>
                 <select
@@ -533,7 +643,7 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
                   <span className="text-zinc-500">Subtotal</span>
                   <span>{currencySymbol}{subtotal.toFixed(2)}</span>
                 </div>
-                {!isCredit && (
+                {!isCredit && !isRecurring && (
                   <div className="flex justify-between items-center">
                     <span className="text-zinc-500">Discount</span>
                     <input
@@ -633,8 +743,9 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
               </div>
             )}
 
-            {/* Already Paid toggle (invoice only) */}
-            {!isCredit && (
+            {/* Already Paid toggle (one-time invoice only — a recurring bill's first
+                cycle is always a Draft to review, same as every later cycle) */}
+            {!isCredit && !isRecurring && (
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
                   type="checkbox"
@@ -657,41 +768,54 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
               >
                 Cancel
               </button>
-              {!isCredit && !markAsPaid && (
+              {isRecurring ? (
                 <button
                   type="submit"
                   disabled={isPending}
-                  onClick={() => setSendMode(false)}
-                  className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50 disabled:opacity-50 flex items-center gap-2 text-zinc-700"
+                  className="px-4 py-2 text-sm text-white rounded-md disabled:opacity-50 flex items-center gap-2 bg-blue-600 hover:bg-blue-700"
                 >
-                  {isPending && !sendMode ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-                  Save as Draft
-                </button>
-              )}
-              {markAsPaid ? (
-                <button
-                  type="submit"
-                  disabled={isPending}
-                  onClick={() => setSendMode(false)}
-                  className="px-4 py-2 text-sm text-white rounded-md disabled:opacity-50 flex items-center gap-2 bg-green-600 hover:bg-green-700"
-                >
-                  {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                  Create Paid Invoice
+                  {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Repeat className="h-4 w-4" />}
+                  Set Up Recurring Invoice
                 </button>
               ) : (
-                <button
-                  type="submit"
-                  disabled={isPending}
-                  onClick={() => setSendMode(!isCredit)}
-                  className={`px-4 py-2 text-sm text-white rounded-md disabled:opacity-50 flex items-center gap-2 ${
-                    isCredit
-                      ? 'bg-purple-600 hover:bg-purple-700'
-                      : 'bg-blue-600 hover:bg-blue-700'
-                  }`}
-                >
-                  {isPending && (sendMode || isCredit) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                  {isCredit ? 'Create Credit Note' : 'Create & Send'}
-                </button>
+                <>
+                  {!isCredit && !markAsPaid && (
+                    <button
+                      type="submit"
+                      disabled={isPending}
+                      onClick={() => setSendMode(false)}
+                      className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50 disabled:opacity-50 flex items-center gap-2 text-zinc-700"
+                    >
+                      {isPending && !sendMode ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                      Save as Draft
+                    </button>
+                  )}
+                  {markAsPaid ? (
+                    <button
+                      type="submit"
+                      disabled={isPending}
+                      onClick={() => setSendMode(false)}
+                      className="px-4 py-2 text-sm text-white rounded-md disabled:opacity-50 flex items-center gap-2 bg-green-600 hover:bg-green-700"
+                    >
+                      {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                      Create Paid Invoice
+                    </button>
+                  ) : (
+                    <button
+                      type="submit"
+                      disabled={isPending}
+                      onClick={() => setSendMode(!isCredit)}
+                      className={`px-4 py-2 text-sm text-white rounded-md disabled:opacity-50 flex items-center gap-2 ${
+                        isCredit
+                          ? 'bg-purple-600 hover:bg-purple-700'
+                          : 'bg-blue-600 hover:bg-blue-700'
+                      }`}
+                    >
+                      {isPending && (sendMode || isCredit) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                      {isCredit ? 'Create Credit Note' : 'Create & Send'}
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </form>

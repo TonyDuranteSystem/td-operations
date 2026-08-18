@@ -22,6 +22,7 @@ export const WHATS_NEW_DEFAULT_STEPS: Record<string, string> = {
   members_updated: 'Review the updated member details and reconcile the account',
   contact_updated: 'Review the contact details the client submitted',
   plan_referrer_ready_to_release: 'Open the account page and click "Release commission"',
+  recurring_invoice_generated: 'Review the Draft invoice in Finance and send it to the client',
 }
 
 /** Resolve the suggested next step for an event: catalog override → code default → ''. */
