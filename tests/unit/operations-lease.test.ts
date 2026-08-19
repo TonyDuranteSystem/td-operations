@@ -12,9 +12,26 @@ vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }))
 
 // ─── Mock state ──────────────────────────────────────────
 
-let accountRow: { id: string; company_name: string; ein_number: string | null; state_of_formation: string | null } | null = null
-let accountContactLinks: Array<{ contact_id: string }> = []
+let accountRow: { id: string; company_name: string; ein_number: string | null; state_of_formation: string | null; entity_type?: string | null } | null = null
+let accountContactLinks: Array<{ contact_id: string; role?: string | null }> = []
 let contactRow: { id: string; full_name: string; email: string | null; language: string | null } | null = null
+// members table — empty by default (every existing test's account behaves
+// like an SMLLC: no members rows, falls through to the account_contacts
+// default pick, same as before this fix).
+let membersRows: Array<{
+  member_type: string
+  full_name: string | null
+  company_name: string | null
+  contact_id: string | null
+  representative_name: string | null
+  representative_email: string | null
+  is_primary: boolean | null
+  is_signer: boolean | null
+}> = []
+// Extra contacts keyed by id, for tests that resolve a signer OTHER than
+// contactRow (e.g. a company member's representative). contactRow itself
+// stays reachable by "contact-1" so existing tests are untouched.
+let extraContactsById: Record<string, { id: string; full_name: string; email: string | null; language?: string | null }> = {}
 let duplicateLeases: Array<{ id: string; token: string; status: string }> = []
 let lastSuiteLeases: Array<{ suite_number: string }> = []
 // The account's OWN prior lease(s) — the reuse-the-suite lookup (ordered by
@@ -41,6 +58,8 @@ vi.mock("@/lib/supabase-admin", () => ({
       let orderCol: string | undefined
       let orderAsc = true
       let _limitVal: number | undefined
+      let inCol: string | undefined
+      let inVals: string[] = []
 
       Object.assign(chain, {
         select: vi.fn((cols: string) => {
@@ -57,6 +76,11 @@ vi.mock("@/lib/supabase-admin", () => ({
         }),
         eq: vi.fn((col: string, value: string | number) => {
           filters[col] = value
+          return chain
+        }),
+        in: vi.fn((col: string, vals: string[]) => {
+          inCol = col
+          inVals = vals
           return chain
         }),
         not: vi.fn(() => chain),
@@ -91,10 +115,30 @@ vi.mock("@/lib/supabase-admin", () => ({
         if (table === "accounts") {
           return { data: accountRow, error: null }
         }
+        if (table === "members") {
+          return { data: membersRows, error: null }
+        }
         if (table === "account_contacts") {
           return { data: accountContactLinks, error: null }
         }
         if (table === "contacts") {
+          // Scoped-to-account representative-email lookup: .in("id", ids).eq("email", v)
+          if (inCol === "id") {
+            const candidates = inVals
+              .map((id) => (id === contactRow?.id ? contactRow : extraContactsById[id]))
+              .filter((c): c is NonNullable<typeof c> => !!c)
+            const match = candidates.find((c) => filters.email === undefined || c.email === filters.email)
+            return { data: match ?? null, error: null }
+          }
+          if (filters.id !== undefined) {
+            if (filters.id === contactRow?.id) return { data: contactRow, error: null }
+            return { data: extraContactsById[filters.id as string] ?? null, error: null }
+          }
+          if (filters.email !== undefined) {
+            if (contactRow?.email === filters.email) return { data: contactRow, error: null }
+            const found = Object.values(extraContactsById).find((c) => c.email === filters.email)
+            return { data: found ?? null, error: null }
+          }
           return { data: contactRow, error: null }
         }
         if (table === "lease_agreements") {
@@ -141,6 +185,8 @@ beforeEach(() => {
     email: "jane@example.com",
     language: "en",
   }
+  membersRows = []
+  extraContactsById = {}
   duplicateLeases = []
   priorAccountLeases = [] // default: brand-new account, no prior lease
   lastSuiteLeases = [{ suite_number: "3D-150" }]
@@ -195,6 +241,84 @@ describe("createLease — not_found paths", () => {
     const result = await createLease({ account_id: "acct-1", contact_id: "missing-contact" })
     expect(result.outcome).toBe("not_found")
     expect(result.error).toContain("Contact")
+  })
+})
+
+// ─── Multi-Member LLC signer resolution (dev job 9ad76300-6181-4250-a1de-c77f37933f82) ──
+//
+// createLease() used to resolve the tenant contact via an UNORDERED
+// account_contacts.limit(1) pick — no reference to the members table at
+// all. On Prowave LLC this named the 99% company member's representative
+// (Marco Pasetto) instead of the flagged 1% individual signer (Matteo
+// Mangili). These tests reproduce that exact shape through the real
+// createLease() call, not just the underlying resolver in isolation.
+
+describe("createLease — Multi-Member LLC signer resolution", () => {
+  beforeEach(() => {
+    // Every test in this block is a Multi-Member LLC — the classification
+    // itself (entity_type reaching the resolver) is part of what's under
+    // test, not incidental setup.
+    accountRow = { ...accountRow!, entity_type: "Multi Member LLC" }
+  })
+
+  it("THE PROWAVE CASE — picks the flagged members-table signer, not the first account_contacts row", async () => {
+    membersRows = [
+      { member_type: "individual", full_name: "Matteo Mangili", company_name: null, contact_id: "matteo-id", representative_name: null, representative_email: null, is_primary: true, is_signer: true },
+      { member_type: "company", full_name: null, company_name: "Indaco LTD", contact_id: "marco-id", representative_name: "Marco Pasetto", representative_email: "info@sheltax.com", is_primary: false, is_signer: false },
+    ]
+    // account_contacts row order puts Marco FIRST — exactly what the old
+    // unordered .limit(1) pick would have returned.
+    accountContactLinks = [
+      { contact_id: "marco-id" },
+      { contact_id: "matteo-id" },
+    ]
+    extraContactsById = {
+      "marco-id": { id: "marco-id", full_name: "Marco Pasetto", email: "info@sheltax.com" },
+      "matteo-id": { id: "matteo-id", full_name: "Matteo Mangili", email: "info@matteomangili.com" },
+    }
+    insertReturnsRow = { id: "lease-1", token: "prowave-llc-2026", access_code: "abc123", suite_number: "3D-151", contract_year: 2026, contact_id: "matteo-id" }
+
+    const { createLease } = await import("@/lib/operations/lease")
+    const result = await createLease({ account_id: "acct-1", contract_year: 2026 })
+    expect(result.success).toBe(true)
+    const insert = insertCalls[0].payload as Record<string, unknown>
+    expect(insert.contact_id).toBe("matteo-id")
+    expect(insert.tenant_contact_name).toBe("Matteo Mangili")
+    expect(insert.tenant_email).toBe("info@matteomangili.com")
+  })
+
+  it("a Multi-Member LLC with zero flagged signers refuses to guess", async () => {
+    membersRows = [
+      { member_type: "individual", full_name: "A", company_name: null, contact_id: "a-id", representative_name: null, representative_email: null, is_primary: false, is_signer: false },
+      { member_type: "individual", full_name: "B", company_name: null, contact_id: "b-id", representative_name: null, representative_email: null, is_primary: false, is_signer: false },
+    ]
+    const { createLease } = await import("@/lib/operations/lease")
+    const result = await createLease({ account_id: "acct-1" })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain("Flag exactly one member")
+    expect(insertCalls.length).toBe(0)
+  })
+
+  it("a Multi-Member LLC with two flagged signers refuses to guess", async () => {
+    membersRows = [
+      { member_type: "individual", full_name: "A", company_name: null, contact_id: "a-id", representative_name: null, representative_email: null, is_primary: true, is_signer: true },
+      { member_type: "individual", full_name: "B", company_name: null, contact_id: "b-id", representative_name: null, representative_email: null, is_primary: true, is_signer: true },
+    ]
+    const { createLease } = await import("@/lib/operations/lease")
+    const result = await createLease({ account_id: "acct-1" })
+    expect(result.success).toBe(false)
+    expect(insertCalls.length).toBe(0)
+  })
+
+  it("an explicit contact_id still wins over the members-table resolver", async () => {
+    membersRows = [
+      { member_type: "individual", full_name: "Matteo Mangili", company_name: null, contact_id: "matteo-id", representative_name: null, representative_email: null, is_primary: true, is_signer: true },
+    ]
+    extraContactsById = { "override-id": { id: "override-id", full_name: "Staff Override", email: "staff@example.com" } }
+    const { createLease } = await import("@/lib/operations/lease")
+    await createLease({ account_id: "acct-1", contact_id: "override-id" })
+    const insert = insertCalls[0].payload as Record<string, unknown>
+    expect(insert.contact_id).toBe("override-id")
   })
 })
 

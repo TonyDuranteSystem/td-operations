@@ -21,6 +21,7 @@ import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
 import { resolveSigningSet, describeSigningBlock, signerDisplayName, type ResolvedSigner, type SigningBlock } from "@/lib/members/signing-set"
 import { reportSystemError } from "@/lib/system-errors"
+import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 
 interface WelcomePackagePayload {
   account_id: string
@@ -62,7 +63,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   // ─── 1. FETCH ACCOUNT ───
   const { data: account, error: accErr } = await supabaseAdmin
     .from("accounts")
-    .select("id, company_name, ein_number, state_of_formation, formation_date, physical_address, registered_agent_address, registered_agent_provider, drive_folder_id, welcome_package_status, entity_type")
+    .select("id, company_name, ein_number, state_of_formation, formation_date, physical_address, registered_agent_address, registered_agent_provider, drive_folder_id, welcome_package_status, entity_type, member_structure")
     .eq("id", p.account_id)
     .single()
 
@@ -188,7 +189,14 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
       result.steps.push(step("oa", "skipped", `State "${account.state_of_formation}" not supported`))
     } else {
       // Use entity_type from accounts table (set at account creation from contract)
-      const entityType = ((account.entity_type as string | null) || "").toLowerCase().includes("multi") ? "MMLLC" : "SMLLC"
+      // Shared classification (lib/portal/entity-type.ts) — catches a
+      // multi-owner shape whose entity_type text alone wouldn't say so (5
+      // real accounts). Second-pass fix, dev job 9ad76300-6181-4250-a1de-c77f37933f82: this job fires
+      // automatically on EIN receipt with no human review — the signer was
+      // already resolving correctly below, but this text-only check built
+      // the document itself (no roster, no other signature rows) as
+      // single-member regardless.
+      const entityType = isMultiMemberEntity(account.entity_type as string | null, account.member_structure as string | null) ? "MMLLC" : "SMLLC"
       const isMMLC = entityType === "MMLLC"
 
       let membersJson: Record<string, unknown>[] | null = null
@@ -224,6 +232,16 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
         }
       }
 
+      // Who the document names as Manager/Member — from the members table's
+      // flagged signer (decoupled from ownership %, same rule as the lease
+      // and SS-4), not from `contact` (the generic first-linked-contact used
+      // above for portal/banking purposes). Independent of signingBlock:
+      // that rule is about who can be SENT a signature request; this one is
+      // about who is flagged as the actual signer — both must resolve.
+      // Dev job 9ad76300-6181-4250-a1de-c77f37933f82.
+      const { resolveAccountSigner } = await import("@/lib/members/resolve-signer")
+      const signerResolution = await resolveAccountSigner(p.account_id)
+
       // An agreement is never issued with fewer signers than members (Antonio,
       // 2026-08-09). The portal path refuses with the reason on screen; here
       // there is no screen, so the reason has to reach a human by itself —
@@ -242,26 +260,36 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
             blocked_by: signingBlock.members.map(m => m.name),
           },
         })
+      } else if (signerResolution.outcome !== "resolved") {
+        result.steps.push(step("oa", "error", signerResolution.message))
+        await reportSystemError({
+          source: "server",
+          route: "lib/jobs/handlers/welcome-package-setup",
+          message: signerResolution.message,
+          context: { account_id: p.account_id, company: account.company_name },
+        })
       }
 
       const oaToken = `${companySlug}-oa-${year}`
-      const { data: oa, error: oaErr } = signingBlock?.blocked
+      const oaBlocked = signingBlock?.blocked || signerResolution.outcome !== "resolved"
+      const signerContact = signerResolution.outcome === "resolved" ? signerResolution.contact : null
+      const { data: oa, error: oaErr } = oaBlocked || !signerContact
         ? { data: null, error: null }
         : await supabaseAdmin
         .from("oa_agreements")
         .insert({
           token: oaToken,
           account_id: p.account_id,
-          contact_id: contact.id,
+          contact_id: signerContact.id,
           company_name: account.company_name,
           state_of_formation: state,
           formation_date: account.formation_date || today,
           ein_number: account.ein_number,
           entity_type: entityType,
-          manager_name: contact.full_name,
-          member_name: contact.full_name,
+          manager_name: signerContact.full_name,
+          member_name: signerContact.full_name,
           member_address: account.physical_address || null,
-          member_email: contact.email || null,
+          member_email: signerContact.email || null,
           members: membersJson as unknown as Json,
           // Equals the member count for an MMLLC: the block above prevents this
           // insert entirely when any member cannot be sent a signature request,
@@ -283,7 +311,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
         .select("id, token")
         .single()
 
-      if (signingBlock?.blocked) {
+      if (oaBlocked) {
         // Already recorded above as an error step + reported. Nothing was
         // inserted, deliberately — do NOT add a second "insert failed" step
         // that would read as a database fault instead of a policy stop.
@@ -345,10 +373,13 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
 
   // ─── 4. LEASE AGREEMENT ───
   {
+    // No explicit contact_id — createLease resolves the tenant/signer itself
+    // from the account's members table (is_signer flag), not from `contact`
+    // (the generic first-linked-contact fetched above for OA/banking/portal
+    // purposes, which is the wrong source for a Multi-Member LLC's signer).
     const { createLease } = await import("@/lib/operations/lease")
     const leaseResult = await createLease({
       account_id: p.account_id,
-      contact_id: contact.id,
       suite_number: p.suite_number,
       effective_date: today,
       term_start_date: today,

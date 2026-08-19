@@ -10,6 +10,13 @@ interface OAMember {
   fullName: string
   address: string
   ownershipPct: number
+  // The flag the server actually resolves the document's Manager from — see
+  // lib/portal/queries.ts::getPortalMembers. Dev job 9ad76300-6181-4250-a1de-c77f37933f82: this
+  // component renders the "Download PDF" path, which never touches the
+  // server at all, so this is the ONLY thing standing between it and the
+  // same wrong-Manager defect the server-side fix already closed elsewhere.
+  isPrimary?: boolean
+  isSigner?: boolean
 }
 
 interface OAAccount {
@@ -31,7 +38,10 @@ interface Props {
 
 const OperatingAgreementTemplate = forwardRef<HTMLDivElement, Props>(
   function OperatingAgreementTemplate({ account, members, effectiveDate, signatureImage }, ref) {
-    const primaryMember = members[0]
+    // is_signer first, matching the server's resolveAccountSigner exactly —
+    // is_primary and is_signer are independently-settable flags and not
+    // guaranteed to agree.
+    const primaryMember = members.find(m => m.isSigner) ?? members.find(m => m.isPrimary) ?? members[0]
     const isMMLC = members.length > 1 || account.entityType?.toLowerCase().includes('multi')
 
     const oaData: OAData = useMemo(() => ({

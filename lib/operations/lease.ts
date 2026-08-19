@@ -11,8 +11,11 @@
  *   - CRM admin transition route (app/api/portal/admin/transition/route.ts)
  *   - CRM "Place Client" button (app/api/crm/admin-actions/place-client/route.ts)
  *   - CRM "Generate Document" for leases (app/api/crm/admin-actions/generate-document/route.ts)
+ *   - Annual renewal on first-installment payment (lib/installment-handler.ts) —
+ *     the highest-volume, fully unattended caller; missing from this list until
+ *     a QA-Tester pass caught the omission (dev job 9ad76300-6181-4250-a1de-c77f37933f82, 2026-08-19).
  *
- * Why: before this, 8 different call sites each rebuilt the same
+ * Why: before this, 9 different call sites each rebuilt the same
  * create logic — token from companySlug+year, suite auto-assign from
  * last-lease max, FL office defaults, duplicate-check (in most sites
  * but not all), logAction (in most sites but not all). Slight
@@ -29,9 +32,14 @@ import { logAction } from "@/lib/mcp/action-log"
 export interface CreateLeaseParams {
   account_id: string
   /**
-   * Optional — if omitted, the operation fetches the first linked
-   * contact from account_contacts. Pass this when the caller already
-   * has the contact in hand (most CRM routes do) to save a query.
+   * Optional — if omitted, the operation resolves the correct signer
+   * itself via lib/members/resolve-signer.ts::resolveAccountSigner
+   * (the members.is_signer flag, never the first linked contact). Pass
+   * this only when the caller has already resolved a signer through
+   * some other legitimate path — an explicit contact_id always wins
+   * and skips the resolver entirely, so don't pass a generic "primary
+   * contact" fetched for an unrelated purpose (Prowave LLC incident,
+   * dev job 9ad76300-6181-4250-a1de-c77f37933f82).
    */
   contact_id?: string
   /** Auto-assigned ("3D-NNN") if not provided. */
@@ -137,35 +145,39 @@ export async function createLease(
       return { success: false, outcome: "not_found", error: `Account ${params.account_id} not found` }
     }
 
-    // 2. Resolve contact
-    let contactId = params.contact_id
-    if (!contactId) {
-      const { data: contactLinks } = await supabaseAdmin
-        .from("account_contacts")
-        .select("contact_id")
-        .eq("account_id", params.account_id)
-        .limit(1)
-      if (!contactLinks?.length) {
-        return {
-          success: false,
-          outcome: "not_found",
-          error: `No contact linked to account ${account.company_name}. Link a contact first.`,
-        }
+    // 2. Resolve contact. An explicit contact_id always wins (a caller that
+    // already knows who signs). Otherwise resolve via resolveAccountSigner —
+    // the members-table signer rule shared with SS-4 (is_signer flag,
+    // decoupled from ownership %; company member via its representative),
+    // falling back to a role-aware account_contacts default for SMLLC/legacy
+    // accounts with no members rows. Replaces the old unordered
+    // account_contacts.limit(1) pick that named the wrong tenant on a
+    // Multi-Member LLC's lease (dev job 9ad76300-6181-4250-a1de-c77f37933f82 — Prowave LLC).
+    let contact: { id: string; full_name: string; email: string | null; language?: string | null }
+    if (params.contact_id) {
+      const { data: explicitContact, error: contactErr } = await supabaseAdmin
+        .from("contacts")
+        .select("id, full_name, email, language")
+        .eq("id", params.contact_id)
+        .maybeSingle()
+
+      if (contactErr) {
+        return { success: false, outcome: "error", error: contactErr.message }
       }
-      contactId = contactLinks[0].contact_id as string
-    }
-
-    const { data: contact, error: contactErr } = await supabaseAdmin
-      .from("contacts")
-      .select("id, full_name, email, language")
-      .eq("id", contactId)
-      .maybeSingle()
-
-    if (contactErr) {
-      return { success: false, outcome: "error", error: contactErr.message }
-    }
-    if (!contact) {
-      return { success: false, outcome: "not_found", error: `Contact ${contactId} not found` }
+      if (!explicitContact) {
+        return { success: false, outcome: "not_found", error: `Contact ${params.contact_id} not found` }
+      }
+      contact = explicitContact
+    } else {
+      const { resolveAccountSigner } = await import("@/lib/members/resolve-signer")
+      const resolved = await resolveAccountSigner(params.account_id)
+      if (resolved.outcome === "blocked") {
+        return { success: false, outcome: "error", error: resolved.message }
+      }
+      if (resolved.outcome === "not_found") {
+        return { success: false, outcome: "not_found", error: resolved.message }
+      }
+      contact = resolved.contact
     }
 
     // 3. Duplicate check (unless opted out)

@@ -19,6 +19,7 @@ import { canPerform } from "@/lib/permissions"
 import { formatCountyAndState } from "@/lib/addresses"
 import { decideSs4Signer, ss4SignerAlertMessage, pickDefaultSs4SignerLink, type Ss4SignerMember } from "@/lib/operations/ss4-signer"
 import { refreshSS4 } from "@/lib/operations/ss4-refresh"
+import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
@@ -48,7 +49,7 @@ async function fetchAccountAndContact(accountId: string) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: account, error: accErr } = await (supabaseAdmin as any)
     .from("accounts")
-    .select("id, company_name, ein_number, entity_type, state_of_formation, formation_date, registered_agent_id")
+    .select("id, company_name, ein_number, entity_type, member_structure, state_of_formation, formation_date, registered_agent_id")
     .eq("id", accountId)
     .single()
 
@@ -83,13 +84,32 @@ async function fetchAccountAndContact(accountId: string) {
 async function generateOA(accountId: string, params: Record<string, unknown>) {
   const result = await fetchAccountAndContact(accountId)
   if ("error" in result) return { error: result.error }
-  const { account, contact } = result
+  const { account } = result
 
-  const entityType = (params.entity_type as string) || (() => {
-    const raw = (account.entity_type || "").toUpperCase().trim()
-    if (raw.includes("MULTI")) return "MMLLC"
-    return "SMLLC"
-  })()
+  // Same shared classification the resolver uses (lib/portal/entity-type.ts)
+  // — catches a multi-owner shape whose entity_type text alone wouldn't say
+  // so (e.g. a multi-member C-Corp election, 5 real accounts). Second-pass
+  // fix, dev job 9ad76300-6181-4250-a1de-c77f37933f82: this button's own dialog never sends
+  // params.entity_type at all, so a text-only fallback here ran for every
+  // single generation — the signer resolved correctly (it always used the
+  // shared classification) while the document itself was built and filed as
+  // single-member: no roster, one signer, no signature row for the other
+  // owners.
+  const entityType = (params.entity_type as string) || (isMultiMemberEntity(account.entity_type, account.member_structure) ? "MMLLC" : "SMLLC")
+
+  // Who the document names as Manager/Member — from the members table's
+  // flagged signer (decoupled from ownership %, same rule as the lease and
+  // SS-4), not from fetchAccountAndContact's unordered `contact` pick (this
+  // function never used `contact` for anything else, so it's dropped above).
+  // Dev job 9ad76300-6181-4250-a1de-c77f37933f82 / 9ad76300-6181-4250-a1de-c77f37933f82 — the CRM's own "Generate OA" button
+  // built the correct member roster below but then named a different, wrong
+  // person as Manager.
+  const { resolveAccountSigner } = await import("@/lib/members/resolve-signer")
+  const signerResolution = await resolveAccountSigner(accountId)
+  if (signerResolution.outcome !== "resolved") {
+    return { error: signerResolution.message }
+  }
+  const signerContact = signerResolution.contact
 
   // Validate state
   const rawState = (account.state_of_formation || "").toUpperCase().trim()
@@ -234,16 +254,21 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
     .insert({
       token,
       account_id: accountId,
-      contact_id: contact.id,
+      contact_id: signerContact.id,
       company_name: account.company_name,
       state_of_formation: state,
       formation_date: account.formation_date || today,
       ein_number: account.ein_number || null,
       entity_type: entityType,
-      manager_name: (params.manager_name as string) || contact.full_name,
-      member_name: contact.full_name,
-      member_address: contact.residency || null,
-      member_email: contact.email || null,
+      // No caller override — the dialog's editable box that used to send this
+      // was removed 2026-08-18 for silently defeating the resolver, but the
+      // server still honored a stale build's cached request. Closed now: the
+      // resolver is the only source, matching every other identity field in
+      // this codebase. Dev job 9ad76300-6181-4250-a1de-c77f37933f82.
+      manager_name: signerContact.full_name,
+      member_name: signerContact.full_name,
+      member_address: signerContact.residency || null,
+      member_email: signerContact.email || null,
       members: membersJson,
       effective_date: effectiveDate,
       business_purpose: "any and all lawful business activities",
