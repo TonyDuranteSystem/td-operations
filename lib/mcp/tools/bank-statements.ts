@@ -259,8 +259,12 @@ export function registerBankStatementTools(server: McpServer) {
           const { recategorizeAccountYear } = await import("@/lib/tax/categorization-engine")
           const recat = await recategorizeAccountYear(account_id, tax_year, { aiAssist: true })
           uncategorizedCount = recat.uncategorizedRemaining
-          recatNote = `Categorization pass: ${recat.recategorized} updated (${recat.aiCategorized} by AI, tagged ai:high), ${recat.transferPairs} transfer pairs excluded from P&L`
-          if (recat.aiErrors.length > 0) recatNote += ` — AI assist notes: ${recat.aiErrors.join("; ")}`
+          if (recat.handsOffSkipped) {
+            recatNote = `⛔ Categorization pass SKIPPED — the client has already confirmed this account's ${tax_year} return. Re-sorting a confirmed return needs staff to reopen it first, not this tool.`
+          } else {
+            recatNote = `Categorization pass: ${recat.recategorized} updated (${recat.aiCategorized} by AI, tagged ai:high), ${recat.transferPairs} transfer pairs excluded from P&L`
+            if (recat.aiErrors.length > 0) recatNote += ` — AI assist notes: ${recat.aiErrors.join("; ")}`
+          }
         } catch (e) {
           recatNote = `⚠️ Categorization pass failed (transactions ingested fine): ${e instanceof Error ? e.message : String(e)}`
         }
@@ -334,11 +338,6 @@ export function registerBankStatementTools(server: McpServer) {
           const rate = await getIrsRate(curr, tax_year)
           if (rate) rates[curr] = rate
           else rates[curr] = 1 // Fallback to 1:1
-        }
-
-        const toUSD = (amount: number, currency: string) => {
-          const rate = rates[currency] || 1
-          return rate === 1 ? amount : amount / rate
         }
 
         // Category groupings used by the text summary below (the workbook's own
@@ -419,20 +418,33 @@ export function registerBankStatementTools(server: McpServer) {
           })
         }
 
-        // Summary
+        // Summary — ALL figures below (totalIncome/totalCogs/grossProfit/
+        // totalExpenses/netIncome/totalDistributions/member income_share) come
+        // straight from engineView.draft, which financials-engine.ts already
+        // converts to USD before computing a single total (every bank
+        // currency merged into one). There is no separate "native total" left
+        // to show once that merge happens, so — unlike a per-row amount —
+        // these must NEVER be re-wrapped in the local toUSD() or labeled with
+        // primaryCurrency: that combination silently divided an already-USD
+        // figure a second time, showing a wrong, inflated dollar amount under
+        // a currency label that was never accurate for a merged total either
+        // (fixed 2026-08-19; verified the filed Excel was never affected —
+        // financials-excel.ts prints draft.pnl.netIncome directly, with no
+        // such wrapper, and applies its own toUSD only to fresh raw per-row
+        // amounts for the detail sheet, which is a genuine first conversion).
         const rateNote = primaryCurrency !== "USD"
-          ? `\nIRS ${tax_year} rate: 1 ${primaryCurrency} / ${irsRate} = USD`
+          ? `\nIRS ${tax_year} rate: 1 ${primaryCurrency} / ${irsRate} = USD (per-transaction currencies below the summary are still native)`
           : ""
 
         const summary = [
           `✅ P&L generated for ${ctx.companyName} (${tax_year})`,
           rateNote,
           "",
-          `Revenue: ${primaryCurrency} ${totalIncome.toFixed(2)} ($${toUSD(totalIncome, primaryCurrency).toFixed(2)})`,
-          cogs.length > 0 ? `COGS: ${primaryCurrency} ${totalCogs.toFixed(2)} ($${toUSD(totalCogs, primaryCurrency).toFixed(2)})` : "",
-          `Gross Profit: ${primaryCurrency} ${grossProfit.toFixed(2)} ($${toUSD(grossProfit, primaryCurrency).toFixed(2)})`,
-          `Operating Expenses: ${primaryCurrency} ${totalExpenses.toFixed(2)} ($${toUSD(totalExpenses, primaryCurrency).toFixed(2)})`,
-          `Net Income: ${primaryCurrency} ${netIncome.toFixed(2)} ($${toUSD(netIncome, primaryCurrency).toFixed(2)})`,
+          `Revenue: $${totalIncome.toFixed(2)}`,
+          cogs.length > 0 ? `COGS: $${totalCogs.toFixed(2)}` : "",
+          `Gross Profit: $${grossProfit.toFixed(2)}`,
+          `Operating Expenses: $${totalExpenses.toFixed(2)}`,
+          `Net Income: $${netIncome.toFixed(2)}`,
           "",
           "K-1 Allocation:",
           // Same members + percentages as the filed workbook (engineView.draft
@@ -440,9 +452,11 @@ export function registerBankStatementTools(server: McpServer) {
           // built straight from account_contacts with no null-guard and no
           // role filter, which is how a duplicate/orphan contact link once
           // produced a literal "null null" phantom member here (WSCP LLC,
-          // 2026-08-18). Reusing the engine's own resolved list means this
-          // text can never again disagree with the numbers it's describing.
-          ...engineView.draft.members.map(m => `  ${m.name} (${m.pct}%): $${toUSD(netIncome * m.pct / 100, primaryCurrency).toFixed(2)}`),
+          // 2026-08-18). Reusing the engine's own resolved list — including
+          // its own already-computed income_share, not a second hand-rolled
+          // copy of the same formula — means this text can never again
+          // disagree with the numbers it's describing.
+          ...engineView.draft.members.map(m => `  ${m.name} (${m.pct}%): $${m.income_share.toFixed(2)}`),
           // A member can be on file with NO resolved ownership % (real cases
           // exist today — see lib/tax/ownership-resolution.ts) — the engine
           // correctly excludes them from the allocation above rather than
@@ -450,8 +464,12 @@ export function registerBankStatementTools(server: McpServer) {
           // summary with no trace. Name them instead.
           ...engineView.ownership.missing.map(name => `  ⚠ ${name}: ownership % missing — not included above`),
           "",
-          `Distributions: ${primaryCurrency} ${totalDistributions.toFixed(2)}`,
-          ...Object.entries(distByMember).map(([name, amt]) => `  ${name}: ${primaryCurrency} ${amt.toFixed(2)}`),
+          `Distributions: $${totalDistributions.toFixed(2)}`,
+          // Per-member breakdown below is grouped by raw bank counterparty text
+          // (not the resolved roster), so the same person spelled differently
+          // across statements can appear as two lines — pre-existing, flagged
+          // separately, not this fix's scope.
+          ...Object.entries(distByMember).map(([name, amt]) => `  ${name}: ${primaryCurrency} ${amt.toFixed(2)} (native, unconverted)`),
           "",
           `Year-end cash: ${Object.entries(accountBalances).map(([k, v]) => `${k}: ${v.toFixed(2)}`).join(", ") || "N/A"}`,
           uncategorized.length > 0 ? `\n⚠️ ${uncategorized.length} uncategorized transactions — review before sending to India` : "",

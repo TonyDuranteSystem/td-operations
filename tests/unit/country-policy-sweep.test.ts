@@ -11,9 +11,11 @@ import {
   isFullYearPolicyRow,
   resolveCountryPolicies,
   LOCATION_ANSWER_SOURCES,
+  pickMajorityOwnerResidenceIso,
   type WorkspacePolicyRow,
   type AccountPolicyRow,
 } from '@/lib/tax/country-policy-sweep'
+import type { WizardMemberResidence } from '@/lib/tax/financials-orchestration'
 
 let seq = 0
 const wsAnswer = (over: Partial<WorkspacePolicyRow> = {}): WorkspacePolicyRow => ({
@@ -166,5 +168,52 @@ describe('LOCATION_ANSWER_SOURCES', () => {
   it('period scope stays deterministic-only; country scope includes AI reads (F3)', () => {
     expect(LOCATION_ANSWER_SOURCES.period).toEqual(['text', 'map'])
     expect(LOCATION_ANSWER_SOURCES.country).toEqual(['text', 'map', 'ai'])
+  })
+})
+
+describe('pickMajorityOwnerResidenceIso', () => {
+  const r = (over: Partial<WizardMemberResidence> = {}): WizardMemberResidence => ({ pct: null, residenceCountry: null, ...over })
+
+  it("highest pct wins — Antonio's own Dubai/Italy example", () => {
+    expect(pickMajorityOwnerResidenceIso([
+      r({ pct: 40, residenceCountry: 'United Arab Emirates' }),
+      r({ pct: 60, residenceCountry: 'Italy' }),
+    ])).toBe('IT')
+  })
+
+  it('a member with no declared pct never outranks one who has one (nulls-last, NOT nulls-first-on-DESC)', () => {
+    expect(pickMajorityOwnerResidenceIso([
+      r({ pct: null, residenceCountry: 'Italy' }),
+      r({ pct: 30, residenceCountry: 'United Arab Emirates' }),
+    ])).toBe('AE')
+  })
+
+  it('both null pct — first in array order wins (stable sort)', () => {
+    expect(pickMajorityOwnerResidenceIso([
+      r({ pct: null, residenceCountry: 'Italy' }),
+      r({ pct: null, residenceCountry: 'United Arab Emirates' }),
+    ])).toBe('IT')
+  })
+
+  it('majority owner is a company (no wizard residence fact) — returns null, does NOT cascade to the minority member', () => {
+    expect(pickMajorityOwnerResidenceIso([
+      r({ pct: 40, residenceCountry: 'Italy' }),
+      r({ pct: 60, residenceCountry: null }), // company member, majority owner
+    ])).toBeNull()
+  })
+
+  it('top-ranked member left the field blank — returns null, does not cascade', () => {
+    expect(pickMajorityOwnerResidenceIso([
+      r({ pct: 70, residenceCountry: null }),
+      r({ pct: 30, residenceCountry: 'Italy' }),
+    ])).toBeNull()
+  })
+
+  it('top-ranked country string has no known ISO mapping — returns null', () => {
+    expect(pickMajorityOwnerResidenceIso([r({ pct: 100, residenceCountry: 'Nowhereland' })])).toBeNull()
+  })
+
+  it('empty list → null', () => {
+    expect(pickMajorityOwnerResidenceIso([])).toBeNull()
   })
 })

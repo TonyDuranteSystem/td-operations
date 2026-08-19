@@ -997,11 +997,17 @@ export function registerTaxTools(server: McpServer) {
         if (!account) return { content: [{ type: "text" as const, text: "❌ Account not found" }] }
         if (!account.drive_folder_id) return { content: [{ type: "text" as const, text: "❌ Account has no Drive folder" }] }
 
-        // Get primary contact
+        // Get primary contact. is_primary-first, then contact_id for a
+        // deterministic pick when none/several rows are marked primary — this
+        // used to be an UNORDERED account_contacts scan (any role, whichever
+        // row Postgres happened to return first), the same "contacts not
+        // members" defect pattern fixed elsewhere in this batch (2026-08-19).
         const { data: contactLink } = await supabaseAdmin
           .from("account_contacts")
           .select("contacts(full_name, first_name, last_name, email)")
           .eq("account_id", account_id)
+          .order("is_primary", { ascending: false })
+          .order("contact_id", { ascending: true })
           .limit(1)
           .single()
 
