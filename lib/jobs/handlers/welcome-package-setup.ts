@@ -22,6 +22,7 @@ import type { Json } from "@/lib/database.types"
 import { resolveSigningSet, describeSigningBlock, signerDisplayName, type ResolvedSigner, type SigningBlock } from "@/lib/members/signing-set"
 import { reportSystemError } from "@/lib/system-errors"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
+import { autoDocumentCreationEnabled } from "@/lib/jobs/auto-document-creation-switch"
 
 interface WelcomePackagePayload {
   account_id: string
@@ -176,6 +177,8 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
 
   if (existingOa?.length) {
     result.steps.push(step("oa", "skipped", `Already exists: ${existingOa[0].token} (${existingOa[0].status})`))
+  } else if (!autoDocumentCreationEnabled()) {
+    result.steps.push(step("oa", "skipped", "Automatic Operating Agreement creation is off — create it manually from the account page."))
   } else {
     const STATE_MAP: Record<string, string> = {
       "NEW MEXICO": "NM", "NM": "NM",
@@ -372,7 +375,9 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   await updateJobProgress(job.id, result)
 
   // ─── 4. LEASE AGREEMENT ───
-  {
+  if (!autoDocumentCreationEnabled()) {
+    result.steps.push(step("lease", "skipped", "Automatic lease creation is off — create it manually from the account page."))
+  } else {
     // No explicit contact_id — createLease resolves the tenant/signer itself
     // from the account's members table (is_signer flag), not from `contact`
     // (the generic first-linked-contact fetched above for OA/banking/portal
