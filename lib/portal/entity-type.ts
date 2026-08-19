@@ -23,3 +23,26 @@ export function normalizeEntityType(raw: string | null | undefined): string {
   if (norm.includes('multimember') || norm === 'mmllc') return 'MMLLC'
   return raw
 }
+
+/**
+ * Is this account a multi-owner company, for purposes of "does it need a
+ * member roster / multiple signers / the MMLLC signer-blocking rule" — NOT
+ * just "is entity_type literally an LLC with that text." A non-LLC shape
+ * (e.g. a multi-member C-Corp election) still needs the same treatment, and
+ * `entity_type` text alone can't say so; `accounts.member_structure` can.
+ *
+ * The ONE shared test — every caller that decides "build a member roster /
+ * multiple signature rows" vs "single owner" MUST use this, not its own
+ * text-only check. Dev job 9ad76300-6181-4250-a1de-c77f37933f82 (2026-08-19 second pass): the resolver
+ * (lib/members/resolve-signer.ts) got this two-part test, but 3 of the
+ * document-building call sites kept their own text-only version, so for the
+ * 5 real accounts with this shape the SIGNER resolved correctly while the
+ * DOCUMENT still got built and filed as single-member — no roster, one
+ * signer, the other owners never got a signature row at all.
+ */
+export function isMultiMemberEntity(
+  entityType: string | null | undefined,
+  memberStructure: string | null | undefined,
+): boolean {
+  return normalizeEntityType(entityType) === 'MMLLC' || memberStructure === 'multi_member'
+}

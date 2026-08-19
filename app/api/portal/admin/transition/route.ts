@@ -8,6 +8,8 @@ import { createSD } from '@/lib/operations/service-delivery'
 import { syncTier } from '@/lib/operations/sync-tier'
 import { collectFilesRecursive, processFile } from '@/lib/mcp/tools/doc'
 import { sendPortalWelcomeEmail } from '@/lib/portal/auto-create'
+import { isMultiMemberEntity } from '@/lib/portal/entity-type'
+import { hasCollectedSignatures } from '@/lib/portal/oa-regenerate-guard'
 import { defaultInstallmentAmount } from '@/lib/billing/installment-defaults'
 import type { MailingAddressRow } from '@/lib/addresses'
 import { LLC_MANAGEMENT_BUNDLE_TYPES } from '@/lib/services'
@@ -86,7 +88,7 @@ export async function POST(request: NextRequest) {
 
   const { data: allAccounts } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, mailing_address:addresses!business_mailing_address_id(is_td_provided), drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes')
+    .select('id, company_name, entity_type, member_structure, state_of_formation, ein_number, formation_date, status, physical_address, mailing_address:addresses!business_mailing_address_id(is_td_provided), drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes')
     .in('id', allAccountIds)
     .eq('status', 'Active')
 
@@ -203,26 +205,136 @@ export async function POST(request: NextRequest) {
       const { data: existingOA } = await supabaseAdmin.from('oa_agreements')
         .select('id, status').eq('account_id', acct.id).maybeSingle()
       if (!existingOA) {
-        const entityType = acct.entity_type?.toLowerCase().includes('multi') ? 'MMLLC' : 'SMLLC'
+        // Shared classification (lib/portal/entity-type.ts) — catches a
+        // multi-owner shape whose entity_type text alone wouldn't say so
+        // (5 real accounts). Second-pass fix, dev job 9ad76300-6181-4250-a1de-c77f37933f82: the signer
+        // was already resolving correctly via resolveAccountSigner below,
+        // but this text-only check built the document itself as
+        // single-member regardless.
+        const entityType = isMultiMemberEntity(acct.entity_type, acct.member_structure) ? 'MMLLC' : 'SMLLC'
         const slug = acct.company_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
         const today = new Date().toISOString().slice(0, 10)
-        const { data: newOa } = await supabaseAdmin.from('oa_agreements').insert({
-          token: `${slug}-oa-${new Date().getFullYear()}`,
-          account_id: acct.id, contact_id: contact.id,
-          company_name: acct.company_name,
-          state_of_formation: acct.state_of_formation || 'Wyoming',
-          formation_date: acct.formation_date || today,
-          ein_number: acct.ein_number || null,
-          entity_type: entityType, manager_name: contact.full_name,
-          member_name: contact.full_name, member_email: contact.email,
-          effective_date: today,
-          business_purpose: 'any and all lawful business activities',
-          initial_contribution: '$0.00', fiscal_year_end: 'December 31',
-          accounting_method: 'Cash', duration: 'Perpetual',
-          principal_address: '10225 Ulmerton Rd, Suite 3D, Largo, FL 33771',
-          language: 'en', status: 'draft',
-        }).select('id').single()
-        acctLines.push(newOa ? 'OA: auto-created (draft)' : 'OA: creation failed')
+        // Who the document names as Manager/Member — resolved PER ACCOUNT
+        // from the members table's flagged signer, never from `contact` (the
+        // one contact resolved once for the whole batch this route runs
+        // over — reusing it here would stamp the same person's name across
+        // every different company that contact happens to be linked to).
+        // Dev job 9ad76300-6181-4250-a1de-c77f37933f82.
+        const { resolveAccountSigner } = await import('@/lib/members/resolve-signer')
+        const signerResolution = await resolveAccountSigner(acct.id)
+        if (signerResolution.outcome !== 'resolved') {
+          acctLines.push(`OA: creation failed — ${signerResolution.message}`)
+        } else {
+          const signerContact = signerResolution.contact
+
+          // For MMLLC, build the member roster + one signature row per real
+          // member — same gap class as place-client's createOA, same fix
+          // (dev job 9ad76300-6181-4250-a1de-c77f37933f82, second pass): without `members` and
+          // `total_signers` a multi-member agreement is stored (and filed)
+          // as a one-signer document, and the other real owners never get a
+          // signature row to sign at all.
+          let membersJson: Array<{ name: string; email: string | null; address: string | null; ownership_pct: number; initial_contribution: string }> | null = null
+          let signerSeeds: Array<{ name: string; email: string | null; contact_id: string | null }> = []
+          if (entityType === 'MMLLC') {
+            const { data: memberRows } = await supabaseAdmin
+              .from('members')
+              .select('full_name, company_name, email, ownership_pct, member_type, contact_id, address_street, address_city, address_state, address_zip, address_country')
+              .eq('account_id', acct.id)
+              .order('is_primary', { ascending: false })
+
+            if (!memberRows?.length) {
+              acctLines.push(`OA: creation failed — "${acct.company_name}" is a Multi Member LLC but has no rows in its Members section.`)
+            } else {
+              const ownershipTotal = memberRows.reduce((s, m) => s + (Number(m.ownership_pct) || 0), 0)
+              if (Math.abs(ownershipTotal - 100) > 0.01) {
+                acctLines.push(`OA: creation failed — Members ownership for "${acct.company_name}" totals ${ownershipTotal}%, must total 100%.`)
+              } else {
+                const contactIds = memberRows.map(m => m.contact_id).filter((id): id is string => !!id)
+                const { data: memberContacts } = contactIds.length
+                  ? await supabaseAdmin.from('contacts').select('id, residency, email').in('id', contactIds)
+                  : { data: [] as Array<{ id: string; residency: string | null; email: string | null }> }
+                const contactById = new Map((memberContacts ?? []).map(c => [c.id, c]))
+
+                membersJson = memberRows.map(m => {
+                  const c = m.contact_id ? contactById.get(m.contact_id) : undefined
+                  const memberAddress = [m.address_street, m.address_city, m.address_state, m.address_zip, m.address_country].filter(Boolean).join(', ')
+                  return {
+                    name: m.full_name ?? m.company_name ?? 'Unknown',
+                    email: m.email ?? c?.email ?? null,
+                    address: memberAddress || c?.residency || null,
+                    ownership_pct: Number(m.ownership_pct),
+                    initial_contribution: '$0.00',
+                  }
+                })
+                signerSeeds = memberRows.map(m => {
+                  const c = m.contact_id ? contactById.get(m.contact_id) : undefined
+                  return {
+                    name: m.full_name ?? m.company_name ?? 'Unknown',
+                    email: m.email ?? c?.email ?? null,
+                    contact_id: m.contact_id ?? null,
+                  }
+                })
+              }
+            }
+          }
+
+          // Skip the insert entirely if MMLLC roster validation above failed
+          // (a line was already pushed explaining why).
+          if (entityType !== 'MMLLC' || membersJson) {
+            const { data: newOa } = await supabaseAdmin.from('oa_agreements').insert({
+              token: `${slug}-oa-${new Date().getFullYear()}`,
+              account_id: acct.id, contact_id: signerContact.id,
+              company_name: acct.company_name,
+              state_of_formation: acct.state_of_formation || 'Wyoming',
+              formation_date: acct.formation_date || today,
+              ein_number: acct.ein_number || null,
+              entity_type: entityType, manager_name: signerContact.full_name,
+              member_name: signerContact.full_name, member_email: signerContact.email,
+              members: membersJson,
+              effective_date: today,
+              business_purpose: 'any and all lawful business activities',
+              initial_contribution: '$0.00', fiscal_year_end: 'December 31',
+              accounting_method: 'Cash', duration: 'Perpetual',
+              principal_address: '10225 Ulmerton Rd, Suite 3D, Largo, FL 33771',
+              language: 'en', status: 'draft',
+              total_signers: entityType === 'MMLLC' ? Math.max(signerSeeds.length, 1) : 1,
+            }).select('id').single()
+
+            if (newOa && entityType === 'MMLLC' && signerSeeds.length) {
+              const { error: sigErr } = await supabaseAdmin.from('oa_signatures').insert(
+                signerSeeds.map((s, idx) => ({
+                  oa_id: newOa.id,
+                  member_index: idx,
+                  member_name: s.name,
+                  member_email: s.email,
+                  contact_id: s.contact_id,
+                })),
+              )
+              if (sigErr) {
+                // Every oa_agreements hard-delete site must go through the
+                // shared guard (R100 / tests/unit/oa-regenerate-guard.test.ts)
+                // — this row is a fresh insert from this same call with no
+                // window to have been signed, but re-reading and checking
+                // rather than assuming keeps that true under a hypothetical
+                // race. FAIL CLOSED: a failed re-read does NOT count as
+                // "safe to delete" — it used to fall into the same branch as
+                // a genuine unsigned row.
+                const { data: freshOa, error: freshOaErr } = await supabaseAdmin.from('oa_agreements').select('status, signed_count').eq('id', newOa.id).maybeSingle()
+                if (!freshOaErr && freshOa && !hasCollectedSignatures(freshOa)) {
+                  await supabaseAdmin.from('oa_signatures').delete().eq('oa_id', newOa.id)
+                  await supabaseAdmin.from('oa_agreements').delete().eq('id', newOa.id)
+                  acctLines.push(`OA: creation failed — could not create member signature rows (${sigErr.message})`)
+                } else {
+                  acctLines.push(`OA: creation failed — could not create member signature rows (${sigErr.message}); incomplete draft left in place for manual review`)
+                }
+              } else {
+                acctLines.push('OA: auto-created (draft)')
+              }
+            } else {
+              acctLines.push(newOa ? 'OA: auto-created (draft)' : 'OA: creation failed')
+            }
+          }
+        }
       } else {
         acctLines.push(`OA: exists (${existingOA.status})`)
       }
@@ -232,10 +344,14 @@ export async function POST(request: NextRequest) {
         .select('id, status, suite_number').eq('account_id', acct.id).maybeSingle()
       const hasLeaseDriveDoc = allDocs.find(d => d.document_type_name === 'Office Lease' && d.drive_link)
       if (!existingLease && !hasLeaseDriveDoc) {
+        // No explicit contact_id — createLease resolves the tenant/signer
+        // itself from the account's members table (is_signer flag), not from
+        // `contact` (the generic first-linked-contact used elsewhere in this
+        // flow for OA/portal purposes, which is the wrong source for a
+        // Multi-Member LLC's signer).
         const { createLease } = await import('@/lib/operations/lease')
         const leaseResult = await createLease({
           account_id: acct.id,
-          contact_id: contact.id,
           language: 'en',
           actor: 'crm-admin:transition',
           summary: `Auto-created lease during CRM portal transition for ${acct.company_name}`,

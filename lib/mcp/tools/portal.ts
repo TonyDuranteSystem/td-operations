@@ -197,28 +197,42 @@ export function registerPortalTools(server: McpServer) {
         const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
         const token = `${companySlug}-oa-${new Date().getFullYear()}`
         const today = new Date().toISOString().slice(0, 10)
-        const { data: newOa } = await supabaseAdmin.from("oa_agreements").insert({
-          token, account_id: account.id, contact_id: contact.id,
-          company_name: account.company_name,
-          state_of_formation: account.state_of_formation || "Wyoming",
-          formation_date: account.formation_date || today,
-          ein_number: account.ein_number || null,
-          entity_type: entityType, manager_name: contact.full_name,
-          member_name: contact.full_name, member_email: contact.email,
-          effective_date: today,
-          business_purpose: "any and all lawful business activities",
-          initial_contribution: "$0.00", fiscal_year_end: "December 31",
-          accounting_method: "Cash", duration: "Perpetual",
-          principal_address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
-          language: "en", status: "draft",
-        }).select("id").single()
-        if (newOa) {
-          oaStatus = "AUTO-CREATED (draft)"
-          pendingDocs.push("Operating Agreement")
-          logAction({ action_type: "create", table_name: "oa_agreements", record_id: newOa.id, account_id: account.id, summary: `Auto-created OA for ${account.company_name} (legacy onboard)` })
-        } else {
+        // Who the document names as Manager/Member — resolved PER ACCOUNT
+        // from the members table's flagged signer, never from `contact` (the
+        // one contact resolved once for the whole batch this function runs
+        // over — reusing it here would stamp the same person's name across
+        // every different company that contact happens to be linked to).
+        // Dev job 9ad76300-6181-4250-a1de-c77f37933f82.
+        const { resolveAccountSigner } = await import("@/lib/members/resolve-signer")
+        const signerResolution = await resolveAccountSigner(account.id)
+        if (signerResolution.outcome !== "resolved") {
           oaStatus = "FAILED to create"
-          flags.push("ERROR: OA creation failed")
+          flags.push(`ERROR: OA creation failed — ${signerResolution.message}`)
+        } else {
+          const signerContact = signerResolution.contact
+          const { data: newOa } = await supabaseAdmin.from("oa_agreements").insert({
+            token, account_id: account.id, contact_id: signerContact.id,
+            company_name: account.company_name,
+            state_of_formation: account.state_of_formation || "Wyoming",
+            formation_date: account.formation_date || today,
+            ein_number: account.ein_number || null,
+            entity_type: entityType, manager_name: signerContact.full_name,
+            member_name: signerContact.full_name, member_email: signerContact.email,
+            effective_date: today,
+            business_purpose: "any and all lawful business activities",
+            initial_contribution: "$0.00", fiscal_year_end: "December 31",
+            accounting_method: "Cash", duration: "Perpetual",
+            principal_address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+            language: "en", status: "draft",
+          }).select("id").single()
+          if (newOa) {
+            oaStatus = "AUTO-CREATED (draft)"
+            pendingDocs.push("Operating Agreement")
+            logAction({ action_type: "create", table_name: "oa_agreements", record_id: newOa.id, account_id: account.id, summary: `Auto-created OA for ${account.company_name} (legacy onboard)` })
+          } else {
+            oaStatus = "FAILED to create"
+            flags.push("ERROR: OA creation failed")
+          }
         }
       }
       lines.push(`OA: ${oaStatus}`)
@@ -235,10 +249,14 @@ export function registerPortalTools(server: McpServer) {
       } else if (hasLeaseDriveDoc) {
         leaseStatus = "Signed (detected from Drive)"
       } else {
+        // No explicit contact_id — createLease resolves the tenant/signer
+        // itself from the account's members table (is_signer flag), not from
+        // `contact` (the generic first-linked-contact used elsewhere in this
+        // flow for OA/portal purposes, which is the wrong source for a
+        // Multi-Member LLC's signer).
         const { createLease } = await import("@/lib/operations/lease")
         const leaseResult = await createLease({
           account_id: account.id,
-          contact_id: contact.id,
           actor: "claude.ai:portal-transition",
           summary: `Auto-created lease for ${account.company_name} (legacy onboard)`,
           language: "en",

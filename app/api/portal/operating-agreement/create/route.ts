@@ -202,11 +202,31 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // ── 3. FETCH PRIMARY CONTACT ──
+  // ── 3. FETCH THE DOCUMENT'S SIGNER (Manager/Member fields) ──
+  // Deliberately NOT the logged-in contactId. Whoever is logged in and clicks
+  // "Create & Send" is not necessarily who the company's own records name as
+  // Manager — a minority co-owner with portal access could self-generate the
+  // whole company's Operating Agreement and get their own name printed as
+  // Manager instead of the real owner. Resolve the actual signer the same way
+  // the lease and SS-4 do (members.is_signer, decoupled from ownership %;
+  // role-aware default when there's no members roster at all — i.e. SMLLC),
+  // then fetch THEIR contact record for the document fields below. Dev job
+  // 9ad76300-6181-4250-a1de-c77f37933f82 / 9ad76300-6181-4250-a1de-c77f37933f82 — Prowave LLC's lease had this exact defect; the same
+  // shape existed here too, just on the Manager field instead of the tenant.
+  const { resolveAccountSigner } = await import('@/lib/members/resolve-signer')
+  const signerResolution = await resolveAccountSigner(account_id)
+  if (signerResolution.outcome === 'blocked') {
+    return NextResponse.json({ error: signerResolution.message }, { status: 422 })
+  }
+  if (signerResolution.outcome === 'not_found') {
+    return NextResponse.json({ error: signerResolution.message }, { status: 404 })
+  }
+  const signerContactId = signerResolution.contact.id
+
   const { data: contact } = await supabaseAdmin
     .from('contacts')
     .select('full_name, email, address_line1, address_city, address_state, address_zip, address_country')
-    .eq('id', contactId)
+    .eq('id', signerContactId)
     .single()
 
   if (!contact) return NextResponse.json({ error: 'Primary contact not found' }, { status: 404 })
@@ -366,13 +386,12 @@ export async function POST(request: NextRequest) {
     : null
 
   // ── 7. INSERT OA_AGREEMENTS ──
-  const primaryMember = isMMLC ? membersRows[0] : null
   const { data: oa, error: insertErr } = await supabaseAdmin
     .from('oa_agreements')
     .insert({
       token,
       account_id,
-      contact_id: contactId,
+      contact_id: signerContactId,
       company_name: account.company_name,
       state_of_formation: account.state_of_formation ?? null,
       // Never null: the templates interpolate this straight into Article 1.1
@@ -383,8 +402,12 @@ export async function POST(request: NextRequest) {
       formation_date: account.formation_date || effective_date || new Date().toISOString().split('T')[0],
       ein_number: account.ein_number ?? null,
       entity_type: entityType,
+      // `contact` is already the RESOLVED signer's own record (step 3), not
+      // necessarily the logged-in clicker — same value serves manager_name and
+      // member_name for both entity shapes; no separate MMLLC/SMLLC fallback
+      // needed any more.
       manager_name: contact.full_name,
-      member_name: isMMLC ? (primaryMember?.full_name ?? contact.full_name) : contact.full_name,
+      member_name: contact.full_name,
       // A Single Member LLC has ONE OWNER and no member roster — by design. Their
       // address is read from their contact record, the same record the screen
       // displays read-only, so preview and stored document agree. It used to be the
@@ -393,7 +416,7 @@ export async function POST(request: NextRequest) {
         line1: contact.address_line1, city: contact.address_city, state: contact.address_state,
         zip: contact.address_zip, country: contact.address_country,
       }),
-      member_email: isMMLC ? (primaryMember?.email ?? contact.email) : contact.email,
+      member_email: contact.email,
       members: membersJson,
       effective_date: effective_date,
       business_purpose: 'any and all lawful business activities',
@@ -429,10 +452,12 @@ export async function POST(request: NextRequest) {
   // ── 8. FOR MMLLC: INSERT OA_SIGNATURES + SEND PORTAL CHAT ──
   const notifyOutcomes: Awaited<ReturnType<typeof notifyClientActionRequired>>[] = []
   // Is the person who just pressed the button themselves a signer? For a
-  // single-member company they always are. For a multi-member one the creator
+  // single-member company they almost always are — but not guaranteed: on the
+  // rare account carrying more than one linked contact, the resolved signer
+  // (step 3) may not be whoever clicked. For a multi-member one the creator
   // may be an administrator who is not among the members — offering them a
   // "Sign now" button lands them on a read-only page with nothing to click.
-  let callerCanSign = !isMMLC
+  let callerCanSign = !isMMLC && contactId === signerContactId
 
   if (isMMLC) {
     // One row per SIGNER, not per member. A company member's row carries its
@@ -531,12 +556,16 @@ export async function POST(request: NextRequest) {
     }
   } else {
     // ── SMLLC: NOTIFY THE SOLE SIGNER ──
-    // The sole member IS the person who just created it, so this is a reminder
+    // Usually the person who just created it, so this is normally a reminder
     // rather than an announcement — but it still has to exist: the create screen
     // ends on "Signing process started!" with only a "Generate another" button,
     // and the agreement previously never reached the action-required list.
+    // Notify the RESOLVED signer, not necessarily whoever clicked: on the rare
+    // account with more than one linked contact, the correct owner may not be
+    // the one who generated it (`callerCanSign` below already handles telling
+    // that person the truth about whether THEY can sign).
     notifyOutcomes.push(await notifyClientActionRequired({
-      contact_id: contactId,
+      contact_id: signerContactId,
       account_id,
       topic: 'Operating Agreement',
       title: {

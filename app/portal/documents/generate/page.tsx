@@ -7,6 +7,7 @@ import { cookies } from 'next/headers'
 import { getLocale } from '@/lib/portal/i18n'
 import { GenerateDocumentsClient } from './generate-documents-client'
 import { formatMemberAddress } from '@/lib/members/member-address'
+import { pickDefaultSs4SignerLink } from '@/lib/operations/ss4-signer'
 
 export const dynamic = 'force-dynamic'
 
@@ -63,13 +64,20 @@ export default async function GenerateDocumentsPage() {
       address_state: string | null; address_zip: string | null; address_country: string | null
     } | null
   }>
-  // Prefer an owner-ish role (any casing), then any member-ish role, then the
-  // first linked contact — never leave the members list silently empty.
-  const ownerLink =
-    contactLinks.find(l => /owner|sole member/i.test(l.role ?? '')) ??
-    contactLinks.find(l => /member/i.test(l.role ?? '')) ??
-    contactLinks[0] ??
-    null
+  // Same algorithm the server uses for the SMLLC/no-members default pick
+  // (lib/operations/ss4-signer.ts::pickDefaultSs4SignerLink) — whole-string
+  // role match plus a stable lowest-contact_id tiebreak, NOT a substring
+  // regex. The old `/owner|sole member/i` substring test could wrongly match
+  // an unrelated role containing that text (e.g. "Non-Owner Signatory"), and
+  // being unordered-query-dependent meant this preview could pick a
+  // different default than what actually got stored. Dev job 9ad76300-6181-4250-a1de-c77f37933f82,
+  // second pass.
+  const pickedLink = pickDefaultSs4SignerLink(contactLinks)
+  // pickDefaultSs4SignerLink's return type (Ss4SignerLink) only carries
+  // contact_id/role — it always returns one of contactLinks' own elements,
+  // so this re-find recovers the `contacts` join data on the exact link it
+  // picked, not a fresh lookup that could disagree.
+  const ownerLink = pickedLink ? contactLinks.find(l => l.contact_id === pickedLink.contact_id) ?? null : null
   const ownerContact = ownerLink?.contacts ?? null
 
   const mappedMembers = rawMembers.length > 0
@@ -85,6 +93,12 @@ export default async function GenerateDocumentsPage() {
           zip: m.address_zip, country: m.address_country,
         }),
         isPrimary: m.is_primary ?? false,
+        // The flag the server actually resolves the document's Manager from
+        // — see lib/portal/queries.ts::getPortalMembers. Dev job 9ad76300-6181-4250-a1de-c77f37933f82.
+        // No cast: getPortalMembers already returns is_signer on every row,
+        // so dropping the column there is a compile error here, not a
+        // silent `undefined -> false` fallthrough to isPrimary.
+        isSigner: m.is_signer ?? false,
         // Extended fields for OA signing flow
         contact_id: m.contact_id ?? null,
         email: m.email ?? null,
@@ -105,6 +119,7 @@ export default async function GenerateDocumentsPage() {
             country: ownerContact.address_country,
           }),
           isPrimary: true,
+          isSigner: true,
           contact_id: ownerLink?.contact_id ?? contactId,
           email: null,
           member_id: undefined,
