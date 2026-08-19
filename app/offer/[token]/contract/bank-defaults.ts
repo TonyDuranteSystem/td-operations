@@ -28,10 +28,16 @@ const AIRWALLEX_EUR: BankDetails = {
   bic: "SXPYDKKK",
   bank_name: "Banking Circle S.A. (via Airwallex)",
   // The BANK's own registered address (Banking Circle S.A., Denmark) — was
-  // wrongly set to Tony Durante LLC's own Florida office address. No current
-  // renderer displays this field (checked every contract/invoice/email
-  // consumer), but corrected for data hygiene and to prevent the wrong value
-  // from ever surfacing if an address field is added to a renderer later.
+  // wrongly set to Tony Durante LLC's own Florida office address. This value
+  // is snapshotted into offers.bank_details at offer-creation time
+  // (getBankDetailsByPreference, called from lib/operations/offers.ts) and IS
+  // rendered live to real clients: app/offer/[token]/[code]/page.tsx's
+  // "Coordinate Bancarie" panel (shown after signing, before payment) prints
+  // it unlabeled as "Indirizzo"/"Address" directly under the bank name. This
+  // was reported by a real client seeing TD's own address presented as the
+  // bank's (2026-08-18). All 49 pre-existing offers with the wrong value
+  // baked into their stored bank_details were backfilled in production on
+  // 2026-08-18 — see docs/systems/offers.md.
   address: "Amerika Plads, 38, Copenhagen, Denmark, 2100",
 }
 
