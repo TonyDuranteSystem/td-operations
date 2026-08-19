@@ -377,11 +377,22 @@ export async function GET(request: NextRequest) {
     // never a control (review cond.: a stopped client run must be VISIBLE).
     let aiState: string = 'idle'
     let aiRemaining = 0
+    // The live pending-job count (W10, 2026-08-18): confirmBlockers and the
+    // client-facing "still finishing automatically" banner both need to know
+    // whether the chain is ACTIVELY running right now, not just its resting
+    // state — a client confirming (or seeing a rendered P&L) while a chunk is
+    // mid-run reads numbers that are about to change under them (WSCP case).
+    // aiState/aiPending/aiNextRetryAt all come from this one chainStateForScope
+    // call, so they can never disagree with each other.
+    let aiPending = 0
+    let aiNextRetryAt: number | null = null
     try {
       const { chainStateForScope } = await import('@/lib/jobs/chain-watchdog')
       const chain = await chainStateForScope({ jobType: 'recategorize_ai', accountId, taxYear })
       aiState = chain.state
       aiRemaining = chain.remaining
+      aiPending = chain.liveJobs
+      aiNextRetryAt = chain.nextRetryAt
     } catch (e) {
       console.error('[tax-financials] chain state failed (view unaffected):', e)
     }
@@ -429,6 +440,8 @@ export async function GET(request: NextRequest) {
         .map(e => ({ canonical: e.canonical, mode: e.mode, matchTerms: e.matchTerms })),
       aiState,
       aiRemaining,
+      aiPending,
+      aiNextRetryAt,
       periods,
       country_cards,
       period_answers,

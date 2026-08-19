@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
-  decideRestale, describeRestaleResult, restaleIsDryRun,
+  decideRestale, describeRestaleResult, restaleIsDryRun, isAccountYearHandsOff,
   RESTALE_MAX_ACCOUNTS_PER_RUN, sweepBudgetExhausted, RESTALE_TIME_BUDGET_MS,
 } from '@/lib/tax/restale-sweep'
 
@@ -70,6 +70,32 @@ describe('decideRestale — who may be re-sorted', () => {
     expect(decideRestale(c({ transactions: 0 }))).toEqual({
       eligible: false, reason: 'no_transactions',
     })
+  })
+})
+
+describe('isAccountYearHandsOff — shared with the AI-chain watchdog guard', () => {
+  it('open, unconfirmed, no review rows — not hands-off', () => {
+    expect(isAccountYearHandsOff({ confirmed: false })).toBe(false)
+    expect(isAccountYearHandsOff({ confirmed: false, reviewStatuses: [] })).toBe(false)
+  })
+
+  it('confirmed is hands-off on its own, even with no review rows', () => {
+    expect(isAccountYearHandsOff({ confirmed: true })).toBe(true)
+  })
+
+  it('a confirmed or under_review row is hands-off even if confirmation_accepted is false', () => {
+    expect(isAccountYearHandsOff({ confirmed: false, reviewStatuses: ['confirmed'] })).toBe(true)
+    expect(isAccountYearHandsOff({ confirmed: false, reviewStatuses: ['under_review'] })).toBe(true)
+  })
+
+  it('one hands-off row among several is enough', () => {
+    expect(isAccountYearHandsOff({ confirmed: false, reviewStatuses: ['submitted', null, 'confirmed'] })).toBe(true)
+  })
+
+  it('open review states stay open', () => {
+    for (const s of ['submitted', 'resubmitted', 'revision_requested', 'approved', 'reopened', null]) {
+      expect(isAccountYearHandsOff({ confirmed: false, reviewStatuses: [s] })).toBe(false)
+    }
   })
 })
 
