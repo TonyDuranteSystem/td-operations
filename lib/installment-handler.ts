@@ -28,6 +28,7 @@ import { resolveSecondInstallmentAdvance } from "@/lib/services/stages"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { reactivateOnHoldTaxReturns } from "@/lib/tax/reactivation"
 import { parsePartnerDeal, shouldPayRenewal } from "@/lib/partners/partner-deal"
+import { reportSystemError } from "@/lib/system-errors"
 
 interface InstallmentResult {
   steps: Array<{ step: string; status: string; detail?: string }>
@@ -374,48 +375,66 @@ export async function onFirstInstallmentPaid(
   // Idempotent: createLease guards on (account, contract_year); on a duplicate
   // we still (re-)send the existing lease so a partial prior run completes.
   try {
-    if (!contactId) {
-      steps.push({ step: "lease", status: "skipped", detail: "No linked contact — cannot create lease" })
-    } else {
-      const { createLease, sendLeaseToPortal } = await import("@/lib/operations/lease")
-      const leaseResult = await createLease({
-        account_id: accountId,
-        contact_id: contactId,
-        contract_year: year,
-        effective_date: `${year}-01-01`,
-        term_start_date: `${year}-01-01`,
-        term_end_date: `${year}-12-31`,
-        actor: "system:first-installment",
-        summary: `Renewal lease ${year} auto-created on 1st installment for ${account.company_name}`,
-        details: { source: "first-installment", year },
-      })
+    // No explicit contact_id — createLease resolves the tenant/signer itself
+    // from the account's members table (falls back cleanly to "not_found" if
+    // nothing is linked at all, same outcome the old `if (!contactId)` guard
+    // produced).
+    const { createLease, sendLeaseToPortal } = await import("@/lib/operations/lease")
+    const leaseResult = await createLease({
+      account_id: accountId,
+      contract_year: year,
+      effective_date: `${year}-01-01`,
+      term_start_date: `${year}-01-01`,
+      term_end_date: `${year}-12-31`,
+      actor: "system:first-installment",
+      summary: `Renewal lease ${year} auto-created on 1st installment for ${account.company_name}`,
+      details: { source: "first-installment", year },
+    })
 
-      if (leaseResult.success && leaseResult.lease) {
-        // Only auto-send a lease THIS run created. Never blind-send a
-        // pre-existing same-year lease — it may be a staff work-in-progress
-        // draft (custom rent/dates) that a human has not finished reviewing.
-        const sent = await sendLeaseToPortal(leaseResult.lease.token)
-        if (sent.success) {
-          steps.push({
-            step: "lease",
-            status: "created+sent",
-            detail: `${leaseResult.lease.token} (${sent.already ? "already in portal" : "now in portal to sign"})`,
-          })
-        } else {
-          steps.push({ step: "lease", status: "error", detail: `Lease ${leaseResult.lease.token} created but send failed: ${sent.error}` })
-        }
-      } else if (leaseResult.outcome === "duplicate" && leaseResult.existing) {
+    if (leaseResult.success && leaseResult.lease) {
+      // Only auto-send a lease THIS run created. Never blind-send a
+      // pre-existing same-year lease — it may be a staff work-in-progress
+      // draft (custom rent/dates) that a human has not finished reviewing.
+      const sent = await sendLeaseToPortal(leaseResult.lease.token)
+      if (sent.success) {
         steps.push({
           step: "lease",
-          status: "exists",
-          detail: `A ${year} lease already exists (${leaseResult.existing.status}) — left as-is, not auto-sent. Review/send manually if needed.`,
+          status: "created+sent",
+          detail: `${leaseResult.lease.token} (${sent.already ? "already in portal" : "now in portal to sign"})`,
         })
       } else {
-        steps.push({ step: "lease", status: "error", detail: leaseResult.error || "Lease not created" })
+        steps.push({ step: "lease", status: "error", detail: `Lease ${leaseResult.lease.token} created but send failed: ${sent.error}` })
       }
+    } else if (leaseResult.outcome === "duplicate" && leaseResult.existing) {
+      steps.push({
+        step: "lease",
+        status: "exists",
+        detail: `A ${year} lease already exists (${leaseResult.existing.status}) — left as-is, not auto-sent. Review/send manually if needed.`,
+      })
+    } else {
+      const detail = leaseResult.error || "Lease not created"
+      steps.push({ step: "lease", status: "error", detail })
+      // This is the fully-automatic path — nobody is watching it fire. Before
+      // the resolver fix, this step always produced SOME lease (possibly
+      // naming the wrong person); now it can correctly refuse instead of
+      // guessing, which means it can also silently produce NOTHING unless
+      // this alert exists. Bug-Hunter finding, dev job 9ad76300-6181-4250-a1de-c77f37933f82.
+      await reportSystemError({
+        source: "server",
+        route: "lib/installment-handler.ts:onFirstInstallmentPaid",
+        message: `Renewal lease for ${account.company_name} (${year}) was not created: ${detail}`,
+        context: { account_id: accountId, year },
+      })
     }
   } catch (e) {
-    steps.push({ step: "lease", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    const detail = e instanceof Error ? e.message : String(e)
+    steps.push({ step: "lease", status: "error", detail })
+    await reportSystemError({
+      source: "server",
+      route: "lib/installment-handler.ts:onFirstInstallmentPaid",
+      message: `Renewal lease for ${account.company_name} (${year}) threw an error: ${detail}`,
+      context: { account_id: accountId, year },
+    })
   }
 
   // ─── Partner renewal payout — installment 1 share (recurring, USD) ───

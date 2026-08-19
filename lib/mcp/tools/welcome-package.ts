@@ -144,21 +144,32 @@ Prerequisites:
               }
             }
 
+            // Who the document names as Manager/Member — from the members
+            // table's flagged signer, not from `contact` (the generic
+            // first-linked-contact used elsewhere in this tool for
+            // banking/portal purposes). Dev job 9ad76300-6181-4250-a1de-c77f37933f82.
+            const { resolveAccountSigner } = await import("@/lib/members/resolve-signer")
+            const signerResolution = await resolveAccountSigner(account_id)
+
+            if (signerResolution.outcome !== "resolved") {
+              steps.push({ step: "OA", status: "error", detail: signerResolution.message })
+            } else {
+            const signerContact = signerResolution.contact
             const { data: oa, error: oaErr } = await supabaseAdmin
               .from("oa_agreements")
               .insert({
                 token: oaToken,
                 account_id,
-                contact_id: contact.id,
+                contact_id: signerContact.id,
                 company_name: account.company_name,
                 state_of_formation: state,
                 formation_date: account.formation_date || today,
                 ein_number: account.ein_number,
                 entity_type: entityType,
-                manager_name: contact.full_name,
-                member_name: contact.full_name,
+                manager_name: signerContact.full_name,
+                member_name: signerContact.full_name,
                 member_address: account.physical_address || null,
-                member_email: contact.email || null,
+                member_email: signerContact.email || null,
                 members: membersJson as unknown as Json,
                 effective_date: account.formation_date || today,
                 business_purpose: "any and all lawful business activities",
@@ -182,6 +193,7 @@ Prerequisites:
               oaAdminUrl = `${BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}?preview=td`
               steps.push({ step: "OA", status: "created", detail: oa.token })
             }
+            }
           }
         }
 
@@ -200,10 +212,14 @@ Prerequisites:
           leaseAdminUrl = `${BASE_URL}/lease/${existingLease[0].token}/${existingLease[0].access_code}?preview=td`
           steps.push({ step: "Lease", status: "existing", detail: `${existingLease[0].token} (suite ${existingLease[0].suite_number}, ${existingLease[0].status})` })
         } else {
+          // No explicit contact_id — createLease resolves the tenant/signer
+          // itself from the account's members table (is_signer flag), not
+          // from `contact` (the generic first-linked-contact used above for
+          // OA/banking/portal purposes, which is the wrong source for a
+          // Multi-Member LLC's signer).
           const { createLease } = await import("@/lib/operations/lease")
           const leaseResult = await createLease({
             account_id,
-            contact_id: contact.id,
             suite_number,
             effective_date: today,
             term_start_date: today,

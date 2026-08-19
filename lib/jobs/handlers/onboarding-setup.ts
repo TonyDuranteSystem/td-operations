@@ -778,12 +778,20 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   }
 
   // ─── 2. AUTO-CREATE LEASE AGREEMENT ───
+  // No explicit contact_id — createLease resolves the tenant/signer itself
+  // from the account's members table (is_signer flag). Previously this
+  // passed the wizard payload's contact_id directly, trusted unconditionally
+  // — but the wizard's identity check does not validate that value for every
+  // submitter type (a client's own limited-access "teammate" login is not
+  // checked against it at all), so an unverified value could otherwise flow
+  // straight onto the tenant field. The resolver only trusts real members/
+  // account_contacts data, never a submitted payload field. Dev job
+  // 9ad76300-6181-4250-a1de-c77f37933f82 / 9ad76300-6181-4250-a1de-c77f37933f82.
   if (account_id && company_name && contact_id) {
     try {
       const { createLease } = await import("@/lib/operations/lease")
       const leaseResult = await createLease({
         account_id,
-        contact_id,
         effective_date: today,
         term_start_date: today,
         actor: "system:onboarding-setup",
@@ -824,12 +832,16 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           const companySlug = company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
           const oaToken = `${companySlug}-oa-${year}`
 
-          // Fetch contact details for OA
-          const { data: oaContact } = await supabaseAdmin
-            .from("contacts")
-            .select("id, full_name, email, language")
-            .eq("id", contact_id)
-            .single()
+          // Who the document names as Manager/Member — from the members
+          // table's flagged signer, never the wizard payload's contact_id
+          // directly (unvalidated for every submitter type — see the lease
+          // step above for the same reasoning). Dev job 9ad76300-6181-4250-a1de-c77f37933f82.
+          const { resolveAccountSigner } = await import("@/lib/members/resolve-signer")
+          const signerResolution = await resolveAccountSigner(account_id)
+          const oaContact = signerResolution.outcome === "resolved" ? signerResolution.contact : null
+          if (signerResolution.outcome !== "resolved") {
+            result.steps.push(step("oa", "error", signerResolution.message))
+          }
 
           // Fetch account details for OA
           const { data: oaAccount } = await supabaseAdmin
@@ -870,7 +882,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
               .insert({
                 token: oaToken,
                 account_id,
-                contact_id,
+                contact_id: oaContact.id,
                 company_name: oaAccount.company_name,
                 state_of_formation: stateCode,
                 formation_date: oaAccount.formation_date || today,

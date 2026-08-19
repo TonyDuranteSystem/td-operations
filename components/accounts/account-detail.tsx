@@ -797,7 +797,6 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
         companyName={account.company_name}
         state={account.state_of_formation}
         entityType={account.entity_type}
-        contactName={primaryContact?.full_name || ''}
         formationDate={account.formation_date}
         ein={account.ein_number}
       />

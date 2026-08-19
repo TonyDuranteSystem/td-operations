@@ -111,26 +111,19 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           return { content: [{ type: "text" as const, text: `❌ State "${account.state_of_formation}" not supported for OA. Supported: ${OA_SUPPORTED_STATES.join(", ")}` }] }
         }
 
-        // ─── 2. FETCH PRIMARY CONTACT ───
-        const { data: contactLinks } = await supabaseAdmin
-          .from("account_contacts")
-          .select("contact_id")
-          .eq("account_id", params.account_id)
-          .limit(1)
-
-        if (!contactLinks?.length) {
-          return { content: [{ type: "text" as const, text: `❌ No contacts linked to account "${account.company_name}". Link a contact first.` }] }
+        // ─── 2. RESOLVE THE SIGNER ───
+        // Who the document names as Manager/Member — from the members
+        // table's flagged signer (decoupled from ownership %, same rule as
+        // the lease and SS-4), not the account's arbitrary first linked
+        // contact. Dev job 9ad76300-6181-4250-a1de-c77f37933f82. `manager_name` remains an explicit,
+        // deliberate override param for this tool (staff/AI typing a name
+        // on purpose) — only the DEFAULT changes.
+        const { resolveAccountSigner } = await import("@/lib/members/resolve-signer")
+        const signerResolution = await resolveAccountSigner(params.account_id)
+        if (signerResolution.outcome !== "resolved") {
+          return { content: [{ type: "text" as const, text: `❌ ${signerResolution.message}` }] }
         }
-
-        const { data: contact, error: contactErr } = await supabaseAdmin
-          .from("contacts")
-          .select("id, full_name, email, phone, residency, language")
-          .eq("id", contactLinks[0].contact_id)
-          .single()
-
-        if (contactErr || !contact) {
-          return { content: [{ type: "text" as const, text: `❌ Contact not found: ${contactErr?.message || "no data"}` }] }
-        }
+        const contact = signerResolution.contact
 
         // ─── 3. VALIDATE EFFECTIVE DATE (60-day cap) ───
         const today = new Date().toISOString().slice(0, 10)

@@ -12,7 +12,6 @@ interface GenerateOADialogProps {
   companyName: string
   state: string | null
   entityType: string | null
-  contactName: string
   formationDate: string | null
   ein: string | null
 }
@@ -26,7 +25,7 @@ function minDateISO() {
 }
 
 export function GenerateOADialog({
-  open, onClose, accountId, companyName, state, entityType, contactName, formationDate, ein,
+  open, onClose, accountId, companyName, state, entityType, formationDate, ein,
 }: GenerateOADialogProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -38,7 +37,6 @@ export function GenerateOADialog({
     entity_type?: string
   } | null>(null)
 
-  const [managerName, setManagerName] = useState(contactName)
   const [effectiveDate, setEffectiveDate] = useState(todayISO())
 
   // Recreate flow: shown when a 409 is returned (OA already exists)
@@ -51,9 +49,8 @@ export function GenerateOADialog({
       setExistingOA(null)
       setRecreatDate(todayISO())
       setEffectiveDate(todayISO())
-      setManagerName(contactName)
     }
-  }, [open, contactName])
+  }, [open])
 
   if (!open) return null
 
@@ -68,7 +65,6 @@ export function GenerateOADialog({
           body: JSON.stringify({
             action: 'generate_oa',
             account_id: accountId,
-            manager_name: managerName,
             effective_date: effectiveDate,
           }),
         })
@@ -103,7 +99,6 @@ export function GenerateOADialog({
           body: JSON.stringify({
             action: 'generate_oa',
             account_id: accountId,
-            manager_name: managerName,
             effective_date: recreateDate,
             force_recreate: true,
           }),
@@ -252,15 +247,11 @@ export function GenerateOADialog({
               <hr />
 
               <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Manager Name</label>
-                  <input
-                    type="text"
-                    value={managerName}
-                    onChange={e => setManagerName(e.target.value)}
-                    className="mt-1 w-full text-sm px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
+                <p className="text-xs text-zinc-500">
+                  The Manager name is resolved automatically from the account&apos;s Members
+                  section — the person flagged as the signer there. To change who that is,
+                  update the Members section first, then generate.
+                </p>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Effective Date</label>
                   <input

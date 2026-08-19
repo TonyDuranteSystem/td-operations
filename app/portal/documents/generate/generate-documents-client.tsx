@@ -33,6 +33,9 @@ interface HistoryItem {
 interface ExtendedMemberInfo extends MemberInfo {
   address?: string | null
   isPrimary?: boolean
+  // The flag the server actually resolves the document's Manager from —
+  // see lib/portal/queries.ts::getPortalMembers. Dev job 9ad76300-6181-4250-a1de-c77f37933f82.
+  isSigner?: boolean
   contact_id?: string | null
   email?: string | null
   member_id?: string
@@ -150,6 +153,15 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   const [oaNotified, setOaNotified] = useState(true)
   const [oaCanSignNow, setOaCanSignNow] = useState(false)
   const [oaCreateError, setOaCreateError] = useState<string | null>(null)
+  // "Is this wrong?" never lets the client pick a different name at generation
+  // time — it sends them to correct the actual member records instead
+  // (Antonio, dev job 9ad76300-6181-4250-a1de-c77f37933f82 / 9ad76300-6181-4250-a1de-c77f37933f82).
+  const [memberInfoRequestStatus, setMemberInfoRequestStatus] = useState<'idle' | 'opening' | 'error'>('idle')
+  // Surfaces the SERVER's real reason (e.g. "no primary member set — contact
+  // support"), not a fixed generic string — R099, and the specific gap
+  // caught in dev job 9ad76300-6181-4250-a1de-c77f37933f82 where this screen was the one place that
+  // still swallowed it.
+  const [memberInfoRequestError, setMemberInfoRequestError] = useState<string | null>(null)
 
   const documentRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -194,6 +206,11 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
     // on screen and the document that gets signed cannot differ.
     address: m.address || '',
     ownershipPct: m.ownershipPct ?? 100 / members.length,
+    // Who the template picks as Manager — is_signer first, matching the
+    // server. Dev job 9ad76300-6181-4250-a1de-c77f37933f82 (the "Download PDF" path never reaches the
+    // server at all, so this is the ONLY place that decides its Manager).
+    isPrimary: m.isPrimary ?? false,
+    isSigner: m.isSigner ?? false,
   }))
 
   // Initialize signature pad (non-async ref callback)
@@ -423,6 +440,25 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
     if (succeeded) router.refresh()
   }
 
+  const handleUpdateMemberInfo = async () => {
+    setMemberInfoRequestStatus('opening')
+    setMemberInfoRequestError(null)
+    try {
+      const res = await fetch('/api/portal/member-info-form/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: account.id }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not open the member information form.')
+      setMemberInfoRequestStatus('idle')
+      window.location.href = data.form_url
+    } catch (err) {
+      setMemberInfoRequestStatus('error')
+      setMemberInfoRequestError(err instanceof Error && err.message ? err.message : 'Could not open the form — please try again or contact support@tonydurante.us.')
+    }
+  }
+
   const handleReset = () => {
     setStage('selection')
     setSelectedType(null)
@@ -644,6 +680,35 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                       {!oaPreflight.ownershipOk && ' (should be 100%)'}
                     </span>
                   </div>
+                  {/* Manager — who the agreement will name, resolved from the
+                      member records, never from whoever is currently logged
+                      in and clicking Generate. */}
+                  {(() => {
+                    // is_signer first — the same flag the server actually
+                    // resolves the Manager from; is_primary is a fallback
+                    // display only for the (currently unseen in production)
+                    // case where an account has no is_signer flag set at
+                    // all. Dev job 9ad76300-6181-4250-a1de-c77f37933f82.
+                    const resolvedManager = members.find(m => m.isSigner) ?? members.find(m => m.isPrimary) ?? members[0]
+                    return resolvedManager ? (
+                      <div className="pt-2 mt-1 border-t border-zinc-200 flex items-start justify-between gap-3 flex-wrap">
+                        <span className="text-sm text-zinc-700">
+                          Manager on this agreement: <strong>{resolvedManager.fullName}</strong>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleUpdateMemberInfo}
+                          disabled={memberInfoRequestStatus === 'opening'}
+                          className="text-xs text-violet-600 hover:text-violet-500 disabled:opacity-50 underline underline-offset-2"
+                        >
+                          {memberInfoRequestStatus === 'opening' ? 'Opening…' : "Not right? Update your member information"}
+                        </button>
+                      </div>
+                    ) : null
+                  })()}
+                  {memberInfoRequestStatus === 'error' && memberInfoRequestError && (
+                    <p className="text-xs text-red-600">{memberInfoRequestError}</p>
+                  )}
                 </div>
               )}
               <div>

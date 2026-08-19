@@ -468,7 +468,7 @@ export async function getPortalMembers(accountId: string) {
     // member address the portal displayed — and every one it pre-filled into an
     // Operating Agreement — silently dropped its postal code, while the stored
     // agreement (which selects the column) carried one.
-    .select('id, member_type, full_name, company_name, ein, email, phone, ownership_pct, is_primary, contact_id, representative_name, representative_email, representative_phone, address_street, address_city, address_state, address_zip, address_country, representative_address_street, representative_address_city, representative_address_state, representative_address_zip, representative_address_country')
+    .select('id, member_type, full_name, company_name, ein, email, phone, ownership_pct, is_primary, is_signer, contact_id, representative_name, representative_email, representative_phone, address_street, address_city, address_state, address_zip, address_country, representative_address_street, representative_address_city, representative_address_state, representative_address_zip, representative_address_country')
     .eq('account_id', accountId)
     .order('is_primary', { ascending: false })
 
@@ -503,6 +503,13 @@ export async function getPortalMembers(accountId: string) {
           role: 'Member',
           ownership_pct: m.ownership_pct,
           is_primary: m.is_primary ?? false,
+          // The flag the server actually resolves the document's Manager
+          // from (is_signer, not is_primary — the two are independently
+          // settable and not guaranteed to agree). Dev job 9ad76300-6181-4250-a1de-c77f37933f82: without
+          // this, the client-side preview and the "Download PDF" path (which
+          // never reaches the server at all) had no way to show or produce
+          // the same name the stored document actually gets.
+          is_signer: m.is_signer ?? false,
           first_name: m.company_name ?? '',
           last_name: '',
           email: m.representative_email,
@@ -541,6 +548,7 @@ export async function getPortalMembers(accountId: string) {
         role: 'Member',
         ownership_pct: m.ownership_pct,
         is_primary: m.is_primary ?? false,
+        is_signer: m.is_signer ?? false,
         first_name: contact?.first_name ?? nameParts[0] ?? '',
         last_name: contact?.last_name ?? nameParts.slice(1).join(' ') ?? '',
         email: m.email,
