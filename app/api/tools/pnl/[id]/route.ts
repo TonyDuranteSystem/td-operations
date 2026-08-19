@@ -214,26 +214,14 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     // same cards from the client's books). Residence anchor = the linked
     // client's declared fiscal-residence country from the CRM; periods there
     // are home life, never cards.
-    const { residenceCountryToIso } = await import('@/lib/tax/merchant-locations')
-    let residenceCountry: string | null = null
-    let residenceOnFile = false
-    if (wsRow?.linked_account_id) {
-      const { data: acRows } = await db
-        .from('account_contacts')
-        .select('contact_id')
-        .eq('account_id', wsRow.linked_account_id)
-      const contactIds = ((acRows ?? []) as Array<{ contact_id: string }>).map(r => r.contact_id)
-      if (contactIds.length > 0) {
-        const { data: contactRows } = await db
-          .from('contacts')
-          .select('address_country')
-          .in('id', contactIds)
-        for (const c of (contactRows ?? []) as Array<{ address_country: string | null }>) {
-          const iso = residenceCountryToIso(c.address_country)
-          if (iso) { residenceCountry = iso; residenceOnFile = true; break }
-        }
-      }
-    }
+    // Members-first resolution, same shared function the automatic sweep
+    // uses (lib/tax/country-policy-sweep.ts::resolveAccountResidenceIso) —
+    // this route used to hand-roll its own copy (any linked contact, first
+    // resolvable, no member/role filter), which could disagree with the
+    // sweep about the same account's residence country.
+    const { resolveAccountResidenceIso } = await import('@/lib/tax/country-policy-sweep')
+    const residenceCountry = wsRow?.linked_account_id ? await resolveAccountResidenceIso(wsRow.linked_account_id) : null
+    const residenceOnFile = residenceCountry !== null
     const locatedRows = await fetchAllPaged<Record<string, unknown>>(async (from, to) => {
       const { data, error } = await db
         .from('pnl_workspace_transactions')

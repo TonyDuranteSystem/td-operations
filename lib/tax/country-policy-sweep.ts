@@ -108,10 +108,40 @@ export function resolveCountryPolicies(input: {
   return Array.from(byCode.values()).sort((a, b) => a.loc_code.localeCompare(b.loc_code))
 }
 
-/** The linked client's declared fiscal-residence country (ISO) — same
- *  resolution as the workspace GET route. Null when unknown. */
+/**
+ * The linked client's declared fiscal-residence country (ISO). Null when
+ * unknown. Also called from app/api/tools/pnl/[id]/route.ts (the staff P&L
+ * workspace) rather than duplicating this resolution a second time.
+ *
+ * MEMBERS FIRST (2026-08-19): this used to scan every account_contacts row —
+ * any role, any person linked to the account, not just owners — and returned
+ * the first resolvable country in whatever order the query happened to
+ * return. A non-owner (an authorized signer, a bookkeeper contact) could
+ * decide the "home" country ahead of the actual member. Now it reads the
+ * curated `members` table first, through the SAME whole-address resolver the
+ * Operating Agreement uses (lib/members/member-address.ts) — so a
+ * company-type member's country is always its OWN address.address_country,
+ * never a representative's or a linked contact's (the exact Whalecot Consulting
+ * defect fixed 2026-08-12: a company shown at its individual owner's personal
+ * foreign address). The account_contacts scan is now a fallback for a
+ * per-row gap — a member on file whose own address is blank — not just for
+ * an account with zero curated members.
+ */
 export async function resolveAccountResidenceIso(accountId: string | null): Promise<string | null> {
   if (!accountId) return null
+
+  const { resolveMemberAddress } = await import("@/lib/members/member-address")
+  const { data: memberRows } = await db
+    .from("members")
+    .select("member_type, address_street, address_city, address_state, address_zip, address_country")
+    .eq("account_id", accountId)
+  for (const m of (memberRows ?? []) as Array<{ member_type: string | null; address_street: string | null; address_city: string | null; address_state: string | null; address_zip: string | null; address_country: string | null }>) {
+    const iso = residenceCountryToIso(resolveMemberAddress(m).country)
+    if (iso) return iso
+  }
+
+  // Fallback: no curated member resolved a country (no members on file, or
+  // every member's own address is blank) — same broad scan as before.
   const { data: acRows } = await db
     .from("account_contacts")
     .select("contact_id")
