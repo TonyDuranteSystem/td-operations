@@ -84,7 +84,12 @@ export async function chainStateForScope(
   jobs = key.jobType === "recategorize_workspace_ai"
     ? jobs.eq("related_entity_id", key.workspaceId)
     : jobs.eq("account_id", key.accountId).eq("payload->>tax_year", String(key.taxYear))
-  const { data } = await jobs
+  // FAIL CLOSED (2026-08-19). An unchecked error here used to silently read
+  // as "zero live jobs" — the exact "everything looks fine" default that lets
+  // a client confirm while a chunk is genuinely still running mid-write. A
+  // failed read must surface as a failure, never as a false-safe "idle".
+  const { data, error } = await jobs
+  if (error) throw new Error(`chainStateForScope job read failed for ${scopeId(key)}: ${error.message}`)
   const rows = (data ?? []) as JobRow[]
   const liveJobs = rows.filter(r => r.status === "pending" || r.status === "processing").length
   const terminals = rows
@@ -164,11 +169,17 @@ export async function runChainWatchdog(now = Date.now()): Promise<WatchdogResult
         // Workspace scopes (recategorize_workspace_ai) have no submission to
         // check; only account+year scopes carry one.
         if (key.jobType === "recategorize_ai") {
-          const { data: subs } = await db
+          const { data: subs, error: subsError } = await db
             .from("tax_return_submissions")
             .select("confirmation_accepted, review_status")
             .eq("account_id", key.accountId)
             .eq("tax_year", key.taxYear)
+          // FAIL CLOSED (2026-08-19): an unchecked error here used to default
+          // to "not confirmed" and proceed to re-enqueue — throwing routes
+          // through the per-scope catch below (recorded in out.errors, this
+          // scope skipped this tick, retried automatically next cron cycle),
+          // never a silent assumption that nothing needs protecting.
+          if (subsError) throw new Error(`confirmed-submission read failed: ${subsError.message}`)
           const rows = (subs ?? []) as Array<{ confirmation_accepted: boolean | null; review_status: string | null }>
           const handsOff = isAccountYearHandsOff({
             confirmed: rows.some(s => s.confirmation_accepted === true),

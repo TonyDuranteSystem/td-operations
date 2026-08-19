@@ -185,7 +185,10 @@ describe("ingestPortalCsv", () => {
     // deterministic pass runs inline (1 call); the AI pass is ENQUEUED as a
     // background job (not a dangling promise — prod fire-and-forget fix).
     expect(recatMock).toHaveBeenCalledTimes(1)
-    expect(recatMock.mock.calls[0][2]).toBeUndefined()
+    // skipConfirmedCheck: a new upload must categorize even if the account is
+    // still marked confirmed at this exact point — the confirmation reset
+    // happens later, only if the upload actually inserts new rows.
+    expect(recatMock.mock.calls[0][2]).toEqual({ skipConfirmedCheck: true })
     // AI pass enqueued via a DIRECT job_queue insert (no enqueueJobs/triggerWorker).
     expect(jobInserts).toHaveLength(1)
     const aiJob = jobInserts[0] as { job_type: string; payload: unknown }

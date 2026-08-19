@@ -54,6 +54,12 @@ export async function POST(request: NextRequest) {
 
     const { recategorizeAccountYear } = await import('@/lib/tax/categorization-engine')
     const recat = await recategorizeAccountYear(accountId, taxYear)
+    if (recat.handsOffSkipped) {
+      return NextResponse.json(
+        { error: 'The client has already confirmed this return — reopen it first if the numbers really need to change.' },
+        { status: 409 },
+      )
+    }
 
     // Same idempotent AI-enqueue as the client's own upload path
     // (lib/tax/portal-csv-ingest.ts) — at most one pending recategorize_ai job

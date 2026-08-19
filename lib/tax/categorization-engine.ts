@@ -145,6 +145,11 @@ export interface RecategorizeResult {
   /** True when aiAssist ran but the candidate filter found NOTHING to send —
    *  the chain brain treats this as DONE, never a no-progress failure. */
   aiNoCandidates?: boolean
+  /** True when the run was refused because the client has already confirmed
+   *  this account+year — see the confirmed-return guard below. Like
+   *  aiNoCandidates, this is DONE, never a no-progress failure: nothing is
+   *  broken, there is simply nothing this run is allowed to do. */
+  handsOffSkipped?: boolean
 }
 
 export interface RecategorizeOptions {
@@ -162,6 +167,21 @@ export interface RecategorizeOptions {
    *  AI pass costs money and is not deterministic, so it has no place in a
    *  preview. */
   dryRun?: boolean
+  /**
+   * Opt out of the confirmed-return guard below (2026-08-19). SAFE BY DEFAULT:
+   * every caller refuses to touch an already-confirmed account+year unless it
+   * explicitly passes this. Only the two callers that themselves flip
+   * confirmation_accepted back to false as part of the SAME operation may pass
+   * it — portal-csv-ingest.ts (a new client upload legitimately needs
+   * categorizing even though the prior confirmation hasn't been reset yet at
+   * the point this runs) and workspace-save.ts (a staff "Save to client" is an
+   * intentional overwrite that resets confirmation right after). Every other
+   * caller — the AI retry job, the bulk MCP tool, the staff "Re-run P&L"
+   * button — has no such follow-up and must never write over a return the
+   * client already signed off on; a duplicate/orphan contact link on WSCP LLC
+   * silently changing a confirmed K-1 is the incident this guard exists for.
+   */
+  skipConfirmedCheck?: boolean
 }
 
 /** The bank_transactions columns this engine reads (matches the select below).
@@ -423,6 +443,27 @@ export async function recategorizeAccountYear(
   taxYear: number,
   opts?: RecategorizeOptions,
 ): Promise<RecategorizeResult> {
+  // CONFIRMED-RETURN GUARD (2026-08-19) — see RecategorizeOptions.skipConfirmedCheck
+  // for the full rationale and the two exempted callers. Checked before any
+  // real work (rows, rules, roster) so a confirmed return costs one small
+  // query, never a wasted full pass.
+  if (!opts?.skipConfirmedCheck) {
+    const { data: subs, error: subsError } = await supabaseAdmin
+      .from("tax_return_submissions")
+      .select("confirmation_accepted")
+      .eq("account_id", accountId)
+      .eq("tax_year", taxYear)
+    // FAIL CLOSED. A failed read must never read as "definitely not
+    // confirmed" — that is the exact silent-fail-open shape this same audit
+    // found and fixed elsewhere tonight (chain-watchdog.ts). Throwing here
+    // surfaces as a normal job/route failure to whichever caller invoked us.
+    if (subsError) throw new Error(`confirmed-return guard read failed for ${accountId} ${taxYear}: ${subsError.message}`)
+    const confirmed = ((subs ?? []) as Array<{ confirmation_accepted: boolean | null }>).some(s => s.confirmation_accepted === true)
+    if (confirmed) {
+      return { scanned: 0, recategorized: 0, categoryChanged: 0, marksChanged: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0, aiStats: EMPTY_AI_STATS(), handsOffSkipped: true }
+    }
+  }
+
   // Paginated read — a >1000-tx account otherwise had only the first 1000 rows
   // recategorized, leaving the rest uncategorized and breaking transfer-pair
   // matching across the full year.

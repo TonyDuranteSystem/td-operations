@@ -3,10 +3,27 @@
  * (master plan §8). applyRules is pure; rules are injected.
  */
 
-import { describe, it, expect } from 'vitest'
-import { applyRules, computeRecategorizationUpdates, decideAiSuggestion, type CategorizationRule } from '@/lib/tax/categorization-engine'
+import { describe, it, expect, vi } from 'vitest'
+import { applyRules, computeRecategorizationUpdates, decideAiSuggestion, recategorizeAccountYear, type CategorizationRule } from '@/lib/tax/categorization-engine'
 import type { AiSuggestion } from '@/lib/tax/ai-categorizer'
 import { ASK_CLIENT_NOTE, type ParsedTransaction } from '@/lib/bank-statement-parser'
+
+// Confirmed-return guard (2026-08-19b) — the ONLY table this reaches is
+// tax_return_submissions when the guard actually blocks; hitting any other
+// table proves the guard did NOT stop the run (used deliberately in the
+// skipConfirmedCheck test below, where reaching bank_transactions is the
+// expected/desired outcome).
+let guardSubs: Array<{ confirmation_accepted: boolean | null }> = []
+vi.mock('@/lib/supabase-admin', () => ({
+  supabaseAdmin: {
+    from: (table: string) => {
+      if (table === 'tax_return_submissions') {
+        return { select: () => ({ eq: () => ({ eq: () => Promise.resolve({ data: guardSubs, error: null }) }) }) }
+      }
+      throw new Error(`reached ${table} — the confirmed-return guard did not stop the run here`)
+    },
+  },
+}))
 
 const tx = (description: string, amount: number, over: Partial<ParsedTransaction> = {}): ParsedTransaction => ({
   transaction_date: '2025-06-01', description, counterparty: '', amount,
@@ -580,5 +597,35 @@ describe('a stale ask-mark is cleared when the row books as a member payment', (
     expect(updates.get('cl')?.category).toBe('distribution')
     expect(updates.get('cl')?.notes).toBeUndefined()
     expect(markChangedIds.has('cl')).toBe(false)
+  })
+})
+
+describe('recategorizeAccountYear — confirmed-return guard (2026-08-19b)', () => {
+  it('a confirmed account-year refuses before touching anything else', async () => {
+    guardSubs = [{ confirmation_accepted: true }]
+    const result = await recategorizeAccountYear('acc-1', 2025)
+    expect(result).toEqual({
+      scanned: 0, recategorized: 0, categoryChanged: 0, marksChanged: 0, transferPairs: 0,
+      aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0,
+      aiStats: { batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false },
+      handsOffSkipped: true,
+    })
+  })
+
+  it('an unconfirmed account-year is NOT blocked — the guard falls through (proven by reaching the next real query)', async () => {
+    guardSubs = [{ confirmation_accepted: false }]
+    // No other table is mocked, so proceeding past the guard surfaces as this
+    // specific rejection — proof the guard did not stop the run.
+    await expect(recategorizeAccountYear('acc-1', 2025)).rejects.toThrow('reached bank_transactions')
+  })
+
+  it('skipConfirmedCheck bypasses the guard even for a genuinely confirmed account-year (the 2 legitimate callers)', async () => {
+    guardSubs = [{ confirmation_accepted: true }]
+    await expect(recategorizeAccountYear('acc-1', 2025, { skipConfirmedCheck: true })).rejects.toThrow('reached bank_transactions')
+  })
+
+  it('no submission row at all — not confirmed, guard falls through', async () => {
+    guardSubs = []
+    await expect(recategorizeAccountYear('acc-1', 2025)).rejects.toThrow('reached bank_transactions')
   })
 })

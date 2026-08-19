@@ -68,6 +68,47 @@ export function extractWizardMembers(submittedData: Record<string, unknown>): Ow
   return out
 }
 
+export interface WizardMemberResidence {
+  /** Ownership percentage, or null when the wizard didn't collect one for this member. */
+  pct: number | null
+  /** Raw (unnormalized) value of member_{idx}_member_residence_country — where
+   *  this INDIVIDUAL member physically lives today, distinct from citizenship
+   *  (components/portal/wizard/wizard-configs.ts). Always null for a company
+   *  member: the wizard only asks member_company_country there, which is the
+   *  company's REGISTRATION jurisdiction (a legal-status fact, parallel to
+   *  citizenship) — not where anyone lives, so it is not a residence
+   *  substitute. Callers normalize with residenceCountryToIso. */
+  residenceCountry: string | null
+}
+
+/** Pull each member's ownership % + individual physical-residence country out
+ *  of the wizard's flattened repeater keys. Built for the tax-purpose
+ *  residence-country fix (Antonio, 2026-08-19): the company's own address is
+ *  not a member's address — each member declares where they actually live in
+ *  their own tax-wizard step, not in the OA/CRM record. Exported for tests. */
+export function extractWizardMemberResidences(submittedData: Record<string, unknown>): WizardMemberResidence[] {
+  const byIdx = new Map<number, Record<string, unknown>>()
+  const countRaw = Number(submittedData.member_count)
+  const maxIdx = Number.isFinite(countRaw) && countRaw > 0 ? countRaw - 1 : Infinity
+  for (const [key, value] of Object.entries(submittedData)) {
+    const m = key.match(/^member_(\d+)_member_(.+)$/)
+    if (!m) continue
+    const idx = Number(m[1])
+    if (idx > maxIdx) continue
+    if (!byIdx.has(idx)) byIdx.set(idx, {})
+    byIdx.get(idx)![m[2]] = value
+  }
+  const out: WizardMemberResidence[] = []
+  for (const [, fields] of Array.from(byIdx.entries()).sort((a, b) => a[0] - b[0])) {
+    const pctRaw = Number(fields.ownership_pct)
+    const pct = Number.isFinite(pctRaw) && fields.ownership_pct !== "" && fields.ownership_pct !== null && fields.ownership_pct !== undefined ? pctRaw : null
+    const isCompany = String(fields.type ?? "") === "company"
+    const residenceCountry = isCompany || !fields.residence_country ? null : String(fields.residence_country)
+    out.push({ pct, residenceCountry })
+  }
+  return out
+}
+
 /** The submitting owner from the LEGACY wizard's owner step — pct intentionally
  *  null: that form never asked the owner's own %, and we never infer it as the
  *  remainder (a member's typo would silently shift the owner's share).
