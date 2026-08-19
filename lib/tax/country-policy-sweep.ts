@@ -26,6 +26,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { fetchAllPaged } from "@/lib/bank-transactions-fetch"
 import { PERIOD_SWEEPABLE_CATEGORIES } from "@/lib/tax/presence-periods"
 import { residenceCountryToIso } from "@/lib/tax/merchant-locations"
+import type { WizardMemberResidence } from "@/lib/tax/financials-orchestration"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -109,33 +110,87 @@ export function resolveCountryPolicies(input: {
 }
 
 /**
+ * Among a wizard's declared members, the majority owner's residence country
+ * (Antonio, 2026-08-19 — "ship it" as a stopgap: one country still governs
+ * the whole company; true per-member attribution would need a
+ * transaction→member link nothing in the schema carries today — every
+ * candidate column was checked system-wide and none is populated for this).
+ * Highest declared ownership_pct wins; a member with no declared pct never
+ * outranks one who has one (the Postgres NULLS-FIRST-on-DESC gotcha is a
+ * proven, repeated bug class in this codebase — same nulls-last discipline
+ * applied here in a plain JS sort). If the majority owner is a company (the
+ * wizard never asks a residence-equivalent question for one — see
+ * WizardMemberResidence) or left the field blank, this returns null RATHER
+ * than falling through to the next member: silently substituting a minority
+ * member's country for an unresolved majority owner would misrepresent whose
+ * "home" the answer is actually about. resolveAccountResidenceIso then tries
+ * the next SOURCE (the members table), never the next member.
+ */
+export function pickMajorityOwnerResidenceIso(residences: WizardMemberResidence[]): string | null {
+  if (residences.length === 0) return null
+  const ranked = [...residences].sort((a, b) => {
+    if (a.pct === null && b.pct === null) return 0
+    if (a.pct === null) return 1
+    if (b.pct === null) return -1
+    return b.pct - a.pct
+  })
+  return residenceCountryToIso(ranked[0].residenceCountry)
+}
+
+/**
  * The linked client's declared fiscal-residence country (ISO). Null when
  * unknown. Also called from app/api/tools/pnl/[id]/route.ts (the staff P&L
  * workspace) rather than duplicating this resolution a second time.
  *
- * MEMBERS FIRST (2026-08-19): this used to scan every account_contacts row —
- * any role, any person linked to the account, not just owners — and returned
- * the first resolvable country in whatever order the query happened to
- * return. A non-owner (an authorized signer, a bookkeeper contact) could
- * decide the "home" country ahead of the actual member. Now it reads the
- * curated `members` table first, through the SAME whole-address resolver the
- * Operating Agreement uses (lib/members/member-address.ts) — so a
- * company-type member's country is always its OWN address.address_country,
- * never a representative's or a linked contact's (the exact Whalecot Consulting
- * defect fixed 2026-08-12: a company shown at its individual owner's personal
- * foreign address). The account_contacts scan is now a fallback for a
- * per-row gap — a member on file whose own address is blank — not just for
- * an account with zero curated members.
+ * WIZARD FIRST (2026-08-19, Antonio's correction): the company's own address
+ * on file (OA/CRM) is not a member's address for tax purposes — each member
+ * declares where they physically live in their own tax-wizard step
+ * (member_{idx}_member_residence_country, distinct from citizenship). Pass
+ * `taxYear` so this can be tried; every existing caller has a tax year in
+ * scope for the workspace/account it's already querying. Falls through when
+ * there's no submission, no `taxYear`, or the wizard didn't resolve the
+ * majority owner's country.
+ *
+ * MEMBERS FALLBACK (2026-08-19, majority-owner-ordered): this used to scan
+ * every account_contacts row — any role, any person linked to the account,
+ * not just owners — and returned the first resolvable country in whatever
+ * order the query happened to return. A non-owner (an authorized signer, a
+ * bookkeeper contact) could decide the "home" country ahead of the actual
+ * member. Now it reads the curated `members` table first, majority-owner
+ * first (the same tiebreak as the wizard path, so an unordered scan doesn't
+ * quietly prefer a minority member when the wizard can't answer), through
+ * the SAME whole-address resolver the Operating Agreement uses
+ * (lib/members/member-address.ts) — so a company-type member's country is
+ * always its OWN address.address_country, never a representative's or a
+ * linked contact's (the exact Whalecot Consulting defect fixed 2026-08-12: a
+ * company shown at its individual owner's personal foreign address). The
+ * account_contacts scan is now a fallback for a per-row gap — a member on
+ * file whose own address is blank — not just for an account with zero
+ * curated members.
  */
-export async function resolveAccountResidenceIso(accountId: string | null): Promise<string | null> {
+export async function resolveAccountResidenceIso(accountId: string | null, taxYear?: number | null): Promise<string | null> {
   if (!accountId) return null
+
+  if (Number.isInteger(taxYear)) {
+    const { resolveClientSubmission } = await import("./resolve-submission")
+    const sub = await resolveClientSubmission<{ submitted_data: Record<string, unknown> | null }>(
+      db, accountId, taxYear as number, "submitted_data",
+    )
+    if (sub?.submitted_data) {
+      const { extractWizardMemberResidences } = await import("./financials-orchestration")
+      const wizardIso = pickMajorityOwnerResidenceIso(extractWizardMemberResidences(sub.submitted_data))
+      if (wizardIso) return wizardIso
+    }
+  }
 
   const { resolveMemberAddress } = await import("@/lib/members/member-address")
   const { data: memberRows } = await db
     .from("members")
-    .select("member_type, address_street, address_city, address_state, address_zip, address_country")
+    .select("member_type, address_street, address_city, address_state, address_zip, address_country, ownership_pct")
     .eq("account_id", accountId)
-  for (const m of (memberRows ?? []) as Array<{ member_type: string | null; address_street: string | null; address_city: string | null; address_state: string | null; address_zip: string | null; address_country: string | null }>) {
+    .order("ownership_pct", { ascending: false, nullsFirst: false })
+    .order("id", { ascending: true })
+  for (const m of (memberRows ?? []) as Array<{ member_type: string | null; address_street: string | null; address_city: string | null; address_state: string | null; address_zip: string | null; address_country: string | null; ownership_pct: number | null }>) {
     const iso = residenceCountryToIso(resolveMemberAddress(m).country)
     if (iso) return iso
   }
@@ -427,7 +482,7 @@ export async function runCountryPolicySweep(workspaceId: string): Promise<Countr
       .eq("active", true)
     : { data: [] }
 
-  const residenceCountry = await resolveAccountResidenceIso(ws.linked_account_id ?? null)
+  const residenceCountry = await resolveAccountResidenceIso(ws.linked_account_id ?? null, taxYear)
   const policies = resolveCountryPolicies({
     workspaceAnswers: (wsAnswerRows ?? []) as WorkspacePolicyRow[],
     accountPolicies: (acctPolicyRows ?? []) as AccountPolicyRow[],

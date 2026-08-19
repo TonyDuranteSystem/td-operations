@@ -305,7 +305,12 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
   // 5. Deterministic categorization passes now (rules + transfer pairs)…
   let uncategorizedRemaining = 0
   try {
-    const recat = await recategorizeAccountYear(accountId, taxYear)
+    // A new upload must always be categorized even if the prior submission is
+    // still marked confirmed at this exact point — the resetFinancialsAttestation
+    // call further down (only if inserted > 0) is what un-confirms it; this
+    // categorization pass runs BEFORE that reset, so it must opt out of the
+    // new confirmed-return guard rather than be silently skipped.
+    const recat = await recategorizeAccountYear(accountId, taxYear, { skipConfirmedCheck: true })
     uncategorizedRemaining = recat.uncategorizedRemaining
   } catch (e) {
     console.error("[portal-csv-ingest] categorization pass failed (rows ingested fine):", e)

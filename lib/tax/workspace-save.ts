@@ -333,7 +333,7 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
         .from("pnl_period_answers")
         .select("id, loc_codes, period_start, period_end, choice, actor_role, created_at, undone_at, policy_revoked_at")
         .eq("workspace_id", workspaceId)
-      const residenceCountry = await resolveAccountResidenceIso(targetAccountId)
+      const residenceCountry = await resolveAccountResidenceIso(targetAccountId, wsTaxYear)
       // Workspace-level policies only: account-level ones already live on the
       // account (promoting them back to themselves would be a no-op loop).
       const policies = resolveCountryPolicies({
@@ -365,7 +365,10 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
 
   // Client-path follow-ups (called, never modified).
   try {
-    await recategorizeAccountYear(targetAccountId, taxYear)
+    // Staff "Save to client" is a deliberate overwrite — resetFinancialsAttestation
+    // right below un-confirms the target immediately after, so this pass must
+    // opt out of the new confirmed-return guard rather than be silently skipped.
+    await recategorizeAccountYear(targetAccountId, taxYear, { skipConfirmedCheck: true })
   } catch (e) {
     console.error("[workspace-save] recategorization failed (rows saved fine):", e)
   }
