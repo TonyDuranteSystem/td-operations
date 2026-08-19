@@ -4,13 +4,23 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { revalidatePath } from 'next/cache'
 import { safeAction, updateWithLock, type ActionResult } from '@/lib/server-action'
-import { createAccountSchema, type CreateAccountInput } from '@/lib/schemas/account-create'
+import { createAccountSchema, primaryContactSchema, type CreateAccountInput, type PrimaryContactInput } from '@/lib/schemas/account-create'
 import { normalizeEIN } from '@/lib/jobs/validation'
 import { triggerEINReceivedWorkflow } from '@/lib/operations/ein-received'
 import { syncTier, syncContactTiersForAccount } from '@/lib/operations/sync-tier'
 import { syncPortalLoginEmail } from '@/lib/operations/portal-login-email'
 import { createSD } from '@/lib/operations/service-delivery'
+import { createAccount as createAccountOp, createAndLinkContact as createAndLinkContactOp } from '@/lib/operations/account'
 import type { Json } from '@/lib/database.types'
+
+// Matches safeAction's own actor derivation (lib/server-action.ts) — needed
+// here because the operations-layer functions take actor as a param instead
+// of deriving it themselves.
+async function getDashboardActor(): Promise<string> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  return `dashboard:${user?.email?.split('@')[0] ?? 'unknown'}`
+}
 
 export async function updateAccountField(
   accountId: string,
@@ -250,28 +260,51 @@ export async function updateAccountContactRole(
 }
 
 export async function createAccount(
-  input: CreateAccountInput
-): Promise<ActionResult<{ id: string }>> {
-  const parsed = createAccountSchema.safeParse(input)
-  if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
+  input: CreateAccountInput,
+  primaryContact: PrimaryContactInput
+): Promise<ActionResult<{ id: string }> & { warning?: string }> {
+  const parsedAccount = createAccountSchema.safeParse(input)
+  if (!parsedAccount.success) return { success: false, error: parsedAccount.error.issues[0].message }
 
-  return safeAction(async () => {
-    const supabase = createClient()
-    const now = new Date().toISOString()
-    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    const { data, error } = await supabase
-      .from('accounts')
-      .insert({ ...parsed.data, created_at: now, updated_at: now })
-      .select('id')
-      .single()
-    if (error) throw new Error(error.message)
-    revalidatePath('/accounts')
-    return data
-  }, {
-    action_type: 'create', table_name: 'accounts',
-    summary: `Created: ${parsed.data.company_name}`,
-    details: { ...parsed.data },
+  const parsedContact = primaryContactSchema.safeParse(primaryContact)
+  if (!parsedContact.success) return { success: false, error: parsedContact.error.issues[0].message }
+
+  const actor = await getDashboardActor()
+  const result = await createAccountOp({ ...parsedAccount.data, actor })
+
+  if (!result.success || !result.account_id) {
+    return { success: false, error: result.error || 'Failed to create account' }
+  }
+
+  revalidatePath('/accounts')
+
+  const linkResult = await createAndLinkContactOp({
+    account_id: result.account_id,
+    first_name: parsedContact.data.first_name,
+    middle_name: parsedContact.data.middle_name || null,
+    last_name: parsedContact.data.last_name,
+    email: parsedContact.data.email || null,
+    address_line1: parsedContact.data.address_line1 || null,
+    address_city: parsedContact.data.address_city || null,
+    address_state: parsedContact.data.address_state || null,
+    address_zip: parsedContact.data.address_zip || null,
+    address_country: parsedContact.data.address_country || null,
+    role: 'owner',
+    is_primary: true,
+    actor,
   })
+  if (!linkResult.success) {
+    // The account itself was created successfully — don't hide that
+    // behind an error toast. Surface the contact failure as a warning
+    // so staff can add the contact by hand from the account page.
+    return {
+      success: true,
+      data: { id: result.account_id },
+      warning: `Account created, but adding the primary contact failed: ${linkResult.error}`,
+    }
+  }
+
+  return { success: true, data: { id: result.account_id } }
 }
 
 export async function addAccountNote(
@@ -405,42 +438,34 @@ export async function createAndLinkContact(
   email: string | null,
   role: string = 'owner',
 ): Promise<ActionResult & { contactId?: string }> {
-  const supabase = createClient()
-
-  // Parse name into first/last
-  const parts = fullName.trim().split(/\s+/)
-  const firstName = parts[0] || ''
-  const lastName = parts.slice(1).join(' ') || ''
-
-  // Create the contact
-  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-  const { data: contact, error: createErr } = await supabase
-    .from('contacts')
-    .insert({
-      full_name: fullName.trim(),
-      first_name: firstName,
-      last_name: lastName,
-      email: email || null,
-      status: 'active',
-    })
-    .select('id')
-    .single()
-
-  if (createErr || !contact) {
-    return { success: false, error: createErr?.message || 'Failed to create contact' }
+  const trimmed = fullName.trim()
+  if (!trimmed) {
+    return { success: false, error: 'Contact name is required' }
   }
+  // This panel still takes one free-text field — split the same way the
+  // form used to, unchanged for this surface (a single-word name is still
+  // allowed here, unlike the New Account dialog's dedicated first/middle/
+  // last inputs, which require both — see createAccount above).
+  const parts = trimmed.split(/\s+/)
+  const firstName = parts[0] || ''
+  const lastName = parts.slice(1).join(' ')
 
-  // Link to the account
-  const { error: linkErr } = await supabase
-    .from('account_contacts')
-    .insert({ account_id: accountId, contact_id: contact.id, role })
+  const actor = await getDashboardActor()
+  const result = await createAndLinkContactOp({
+    account_id: accountId,
+    first_name: firstName,
+    last_name: lastName,
+    email,
+    role,
+    actor,
+  })
 
-  if (linkErr) {
-    return { success: false, error: linkErr.message }
+  if (!result.success) {
+    return { success: false, error: result.error || 'Failed to add contact' }
   }
 
   revalidatePath(`/accounts/${accountId}`)
-  return { success: true, contactId: contact.id }
+  return { success: true, contactId: result.contact_id }
 }
 
 /**

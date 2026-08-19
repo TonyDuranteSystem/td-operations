@@ -11,6 +11,7 @@ import {
   Pencil, Plus, Search, Loader2, Stethoscope, X, Activity, BadgeCheck, Send,
   Rocket, Upload, Hash, DollarSign, ListOrdered, Bell,
 } from 'lucide-react'
+import { ACCOUNT_TYPE } from '@/lib/constants'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
 import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
@@ -2371,10 +2372,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
     { label: 'Partnership', value: 'Partnership' },
   ]
 
-  const ACCOUNT_TYPE_OPTIONS = [
-    { label: 'Client', value: 'Client' },
-    { label: 'One-Time', value: 'One-Time' },
-  ]
+  const ACCOUNT_TYPE_OPTIONS = ACCOUNT_TYPE.map(t => ({ label: t, value: t }))
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
