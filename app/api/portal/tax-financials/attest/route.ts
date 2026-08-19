@@ -82,6 +82,21 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Same guard, next pipeline stage (W10, 2026-08-18): never attest while
+    // smart categorization is actively running. Ingestion finishing is not
+    // enough — a chunk can still be mid-run reclassifying transactions after
+    // every file has landed, and confirming then attests to numbers about to
+    // change under the client (WSCP case). The UI disables Confirm via
+    // confirmBlockers while aiPending > 0; this enforces it server-side too.
+    const { chainStateForScope } = await import('@/lib/jobs/chain-watchdog')
+    const aiChain = await chainStateForScope({ jobType: 'recategorize_ai', accountId, taxYear })
+    if (aiChain.state === 'running') {
+      return NextResponse.json(
+        { error: 'We are still finishing the automatic classification of your transactions. Please wait a moment and try again.' },
+        { status: 409 },
+      )
+    }
+
     // Every blocking gate must pass right now. No gate is blocking today (see
     // the header) — kept so a future blocking gate is enforced automatically.
     const { getFinancialsView } = await import('@/lib/tax/financials-orchestration')

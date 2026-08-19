@@ -31,19 +31,6 @@ async function getAccountContext(accountId: string) {
     .eq("id", accountId)
     .single()
 
-  // Get contacts (members) via junction table
-  const { data: links } = await supabaseAdmin
-    .from("account_contacts")
-    .select("contact_id, role, ownership_pct, contacts(first_name, last_name)")
-    .eq("account_id", accountId)
-
-  const contactLinks = ((links || []) as unknown) as Array<{
-    contact_id: string
-    role: string
-    ownership_pct: number | null
-    contacts: { first_name: string; last_name: string } | null
-  }>
-
   // The SHARED roster — curated members ∪ linked contacts, with the one
   // usable-name rule. This tool used to build its own list from the contact
   // links alone with no rule at all, which made staff processing disagree with
@@ -52,20 +39,10 @@ async function getAccountContext(accountId: string) {
   const { fetchMemberRoster } = await import("@/lib/tax/member-roster")
   const memberNames = (await fetchMemberRoster(supabaseAdmin, accountId)).names
 
-  // Default ownership: split evenly if not set
-  const totalMembers = contactLinks.length || 1
-  const members = contactLinks
-    .filter(l => l.contacts)
-    .map(l => ({
-      name: `${l.contacts!.first_name} ${l.contacts!.last_name}`.trim(),
-      ownership_pct: l.ownership_pct ?? (100 / totalMembers),
-    }))
-
   return {
     companyName: account?.company_name || "Unknown",
     driveFolderId: account?.drive_folder_id || "",
     memberNames,
-    members,
     relatedEntities: [] as string[], // Can be populated from a future config table
   }
 }
@@ -458,7 +435,20 @@ export function registerBankStatementTools(server: McpServer) {
           `Net Income: ${primaryCurrency} ${netIncome.toFixed(2)} ($${toUSD(netIncome, primaryCurrency).toFixed(2)})`,
           "",
           "K-1 Allocation:",
-          ...ctx.members.map(m => `  ${m.name} (${m.ownership_pct}%): $${toUSD(netIncome * m.ownership_pct / 100, primaryCurrency).toFixed(2)}`),
+          // Same members + percentages as the filed workbook (engineView.draft
+          // .members) — this used to be a second, independently-scraped list
+          // built straight from account_contacts with no null-guard and no
+          // role filter, which is how a duplicate/orphan contact link once
+          // produced a literal "null null" phantom member here (WSCP LLC,
+          // 2026-08-18). Reusing the engine's own resolved list means this
+          // text can never again disagree with the numbers it's describing.
+          ...engineView.draft.members.map(m => `  ${m.name} (${m.pct}%): $${toUSD(netIncome * m.pct / 100, primaryCurrency).toFixed(2)}`),
+          // A member can be on file with NO resolved ownership % (real cases
+          // exist today — see lib/tax/ownership-resolution.ts) — the engine
+          // correctly excludes them from the allocation above rather than
+          // guessing, but silence would mean they simply vanish from this
+          // summary with no trace. Name them instead.
+          ...engineView.ownership.missing.map(name => `  ⚠ ${name}: ownership % missing — not included above`),
           "",
           `Distributions: ${primaryCurrency} ${totalDistributions.toFixed(2)}`,
           ...Object.entries(distByMember).map(([name, amt]) => `  ${name}: ${primaryCurrency} ${amt.toFixed(2)}`),
