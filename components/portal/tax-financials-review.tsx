@@ -832,6 +832,22 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       label: `${view.ingestPending} ${view.ingestPending === 1 ? 'file is' : 'files are'} still being read`,
       labelIt: `${view.ingestPending} file in lettura`,
     })
+    // WSCP case (2026-08-18): the P&L can look fully rendered while the AI
+    // chain is mid-run — confirming here would attest to numbers about to
+    // change under the client. Gated on the live count (aiState === 'running'
+    // is the exact same condition, since liveJobs > 0 is the only way to
+    // reach that state — see decideChainState).
+    if ((view.aiPending ?? 0) > 0) {
+      const n = view.aiRemaining ?? 0
+      // n can be 0 while a job is still 'processing' (its last batch just
+      // cleared the candidate count a moment before the row flips to
+      // completed) — say so without a hollow "0 transactions" count.
+      out.push({
+        key: 'ai_categorizing',
+        label: n > 0 ? `still classifying ${n} transaction${n === 1 ? '' : 's'} automatically` : 'still finishing automatic categorization',
+        labelIt: n > 0 ? `classificazione automatica di ${n} transazion${n === 1 ? 'e' : 'i'} in corso` : 'classificazione automatica in fase di completamento',
+      })
+    }
     if (view.ingestFailed > 0 && !view.failedFilesOverridden) out.push({
       key: 'failed',
       label: `${view.ingestFailed} ${view.ingestFailed === 1 ? 'file' : 'files'} we could not read`,
@@ -2115,9 +2131,36 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         </>
       )}
 
-      {/* Client-visible, TEXT-ONLY (Phase 3R): a paused/stopped AI chain must
-          be visible — never look finished — but the client gets no control;
-          recovery is automatic and staff is alerted on exhaustion. */}
+      {/* Client-visible: an ACTIVELY RUNNING AI chain gets the same visual
+          weight as the ingest-pending card above (Antonio, 2026-08-18 —
+          the small text note below was too easy to miss; a client must not
+          be able to look at this page while categorization is mid-run and
+          see nothing telling them so). No control — recovery is automatic. */}
+      {!isStaff && view && view.aiState === 'running' && (
+        <>
+          <ProgressCard
+            title={it ? 'Stiamo finendo la classificazione automatica…' : 'We\'re finishing the automatic categorization…'}
+            detail={it
+              ? 'Stiamo ancora ordinando le tue transazioni nelle categorie corrette — i numeri qui sotto potrebbero ancora cambiare.'
+              : 'We\'re still sorting your transactions into the right categories — the numbers below may still change.'}
+            eta={it ? 'Questa pagina si aggiorna da sola.' : 'This page updates on its own.'}
+          />
+          {/* The one instruction that must not be missed (Antonio, 2026-08-18):
+              bigger and red, separate from the informational blue card above. */}
+          <p className="mt-2 text-base font-bold text-red-700">
+            {it
+              ? 'Non confermare ancora — riceverai un messaggio quando i tuoi numeri saranno pronti.'
+              : 'Please don\'t confirm yet — you will receive a message when it\'s ready.'}
+          </p>
+        </>
+      )}
+
+      {/* Paused (waiting to retry) or stopped (staff alerted) — TEXT-ONLY by
+          design (Phase 3R): rare states (23 real retries across all clients
+          in the last month and a half, none past the second attempt), and
+          nothing is actively happening during the wait, so the ingest-style
+          big card would overstate it. The client gets no control either way
+          — recovery is automatic, or staff has already been notified. */}
       {!isStaff && view && (view.aiState === 'retry_scheduled' || view.aiState === 'exhausted') && (
         <p className="text-xs text-zinc-500 mt-2">
           {it

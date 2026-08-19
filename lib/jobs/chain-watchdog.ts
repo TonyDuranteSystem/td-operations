@@ -23,6 +23,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { aiCategorizationDisabled } from "@/lib/tax/ai-categorizer"
 import { decideChainState, AI_CHAIN_JOB_PRIORITY, AI_CHAIN_BACKOFF_MS } from "./chain-state"
+import { isAccountYearHandsOff } from "@/lib/tax/restale-sweep"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -74,7 +75,7 @@ async function candidatesRemaining(s: ScopeKey): Promise<number> {
 export async function chainStateForScope(
   key: ScopeKey,
   now = Date.now(),
-): Promise<{ state: "running" | "retry_scheduled" | "exhausted" | "idle"; nextRetryAt: number | null; remaining: number }> {
+): Promise<{ state: "running" | "retry_scheduled" | "exhausted" | "idle"; nextRetryAt: number | null; remaining: number; liveJobs: number }> {
   let jobs = db
     .from("job_queue")
     .select("id, status, completed_at, payload")
@@ -94,18 +95,21 @@ export async function chainStateForScope(
     : null
   const remaining = await candidatesRemaining(key)
   const s = decideChainState({ liveJobs, candidatesRemaining: remaining, lastTerminal, killSwitchOn: aiCategorizationDisabled(), now })
-  return { state: s.state, nextRetryAt: s.state === "retry_scheduled" ? s.nextRetryAt : null, remaining }
+  return { state: s.state, nextRetryAt: s.state === "retry_scheduled" ? s.nextRetryAt : null, remaining, liveJobs }
 }
 
 export interface WatchdogResult {
   scopes: number
   reEnqueued: string[]
   exhaustedAlerts: string[]
+  /** recategorize_ai scopes where a retry was due but the submission is
+   *  already confirmed (or under staff review) — see the guard below. */
+  skippedConfirmed: string[]
   errors: string[]
 }
 
 export async function runChainWatchdog(now = Date.now()): Promise<WatchdogResult> {
-  const out: WatchdogResult = { scopes: 0, reEnqueued: [], exhaustedAlerts: [], errors: [] }
+  const out: WatchdogResult = { scopes: 0, reEnqueued: [], exhaustedAlerts: [], skippedConfirmed: [], errors: [] }
   const killSwitchOn = aiCategorizationDisabled()
   if (killSwitchOn) return out
 
@@ -153,6 +157,25 @@ export async function runChainWatchdog(now = Date.now()): Promise<WatchdogResult
       })
 
       if (state.state === "retry_scheduled" && now >= state.nextRetryAt) {
+        // CONFIRMED SUBMISSIONS ARE NEVER TOUCHED (mirrors tax-restale-sweep's
+        // rule, same reason): once the client has attested, or staff is
+        // actively reviewing, those numbers are off-limits to a background
+        // retry — a correction there is staff reopening it, never a cron.
+        // Workspace scopes (recategorize_workspace_ai) have no submission to
+        // check; only account+year scopes carry one.
+        if (key.jobType === "recategorize_ai") {
+          const { data: subs } = await db
+            .from("tax_return_submissions")
+            .select("confirmation_accepted, review_status")
+            .eq("account_id", key.accountId)
+            .eq("tax_year", key.taxYear)
+          const rows = (subs ?? []) as Array<{ confirmation_accepted: boolean | null; review_status: string | null }>
+          const handsOff = isAccountYearHandsOff({
+            confirmed: rows.some(s => s.confirmation_accepted === true),
+            reviewStatuses: rows.map(s => s.review_status),
+          })
+          if (handsOff) { out.skippedConfirmed.push(id); continue }
+        }
         const payload = key.jobType === "recategorize_workspace_ai"
           ? { workspace_id: key.workspaceId, chunk_index: 0, auto_retry: lastTerminal.auto_retry + 1 }
           : { account_id: key.accountId, tax_year: key.taxYear, chunk_index: 0, auto_retry: lastTerminal.auto_retry + 1 }

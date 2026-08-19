@@ -62,15 +62,36 @@ export interface RestaleDecision {
     | "staff_reviewing"
 }
 
-/** Review states where a background job must keep its hands off. */
-const HANDS_OFF: ReadonlySet<string> = new Set(["confirmed", "under_review"])
+/** Review states where a background job must keep its hands off. Exported so
+ *  any other automated writer can share this exact definition instead of
+ *  re-deriving it — the chain watchdog's confirmed-submission guard
+ *  (chain-watchdog.ts) reuses it rather than duplicating the two literals. */
+export const HANDS_OFF_REVIEW_STATUSES: ReadonlySet<string> = new Set(["confirmed", "under_review"])
+
+/**
+ * Is this account-year off-limits to a BACKGROUND writer right now — the
+ * client has attested (`confirmed`), or staff is actively working it (a
+ * review_status in HANDS_OFF_REVIEW_STATUSES)? `confirmation_accepted` alone
+ * is not proof a return is still open — a return marked `confirmed` in the
+ * review loop, or one a staff member is actively reviewing, is equally
+ * off-limits (QA 2026-08-04). One hands-off row among several protects the
+ * whole account-year.
+ *
+ * Shared by `decideRestale` below and the AI-chain watchdog's
+ * confirmed-submission guard (chain-watchdog.ts) — one definition of
+ * "hands off", used everywhere a background job might otherwise touch a
+ * client's numbers after they signed off.
+ */
+export function isAccountYearHandsOff(c: { confirmed: boolean; reviewStatuses?: (string | null)[] }): boolean {
+  if (c.confirmed) return true
+  return (c.reviewStatuses ?? []).some(s => s !== null && HANDS_OFF_REVIEW_STATUSES.has(s))
+}
 
 /**
  * May the sweep re-sort this account-year?
  *
  * Two refusals, both deliberate:
- *  - `already_confirmed` — the client has signed off on those numbers. Moving
- *    a figure under a confirmed return would change what somebody attested to.
+ *  - `already_confirmed` / `staff_reviewing` — see isAccountYearHandsOff.
  *    A confirmed return is corrected by staff reopening it, never by a cron.
  *  - `no_transactions` — nothing to sort; skip the work.
  *
@@ -79,12 +100,8 @@ const HANDS_OFF: ReadonlySet<string> = new Set(["confirmed", "under_review"])
  * sweep cannot overwrite a human decision no matter how often it runs.
  */
 export function decideRestale(c: RestaleCandidate): RestaleDecision {
-  if (c.confirmed) return { eligible: false, reason: "already_confirmed" }
-  // The second signal. `confirmation_accepted` alone is NOT proof a return is
-  // still open — a return marked `confirmed` in the review loop, or one a staff
-  // member is actively reviewing, is equally off-limits (QA 2026-08-04).
-  if ((c.reviewStatuses ?? []).some(s => s !== null && HANDS_OFF.has(s))) {
-    return { eligible: false, reason: "staff_reviewing" }
+  if (isAccountYearHandsOff(c)) {
+    return c.confirmed ? { eligible: false, reason: "already_confirmed" } : { eligible: false, reason: "staff_reviewing" }
   }
   if (c.transactions <= 0) return { eligible: false, reason: "no_transactions" }
   return { eligible: true, reason: "eligible" }

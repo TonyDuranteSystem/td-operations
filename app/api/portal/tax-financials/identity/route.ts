@@ -5,11 +5,19 @@
  * before staff land on a real client's live file, show company name, EIN,
  * and member names so a wrong pick among similarly-named clients is caught
  * before anything opens, not after. Deliberately NOT the full financials
- * view — this is an identity check, not a financial computation, so it
- * reads straight from the account's own CRM record (real name, real EIN,
- * real linked contacts) rather than the client's self-reported wizard data
- * or the computed capital table, either of which could be missing or wrong
- * for exactly the account that most needs a careful look before opening.
+ * view — this is an identity check, not a financial computation.
+ *
+ * REVISED 2026-08-19: the member list now goes through fetchMemberRoster
+ * (lib/tax/member-roster.ts) instead of a raw account_contacts scan. That
+ * scan had the same "null null" defect fixed the same day in the
+ * bank-statement P&L tool, and — worse on THIS screen specifically — it
+ * silently missed any member whose only record is a company name (no linked
+ * contact at all), so a company owner could be absent from the very check
+ * meant to catch a wrong pick. fetchMemberRoster still reads the account's
+ * curated members first; it only widens to linked contacts (which can
+ * include client-submitted member info) as a documented fallback for
+ * accounts with no curated roster — the original goal (don't trust only
+ * self-reported data) is why the roster is members-first, not contacts-only.
  */
 
 import { createClient } from '@/lib/supabase/server'
@@ -34,13 +42,8 @@ export async function GET(request: NextRequest) {
     .maybeSingle()
   if (!account) return NextResponse.json({ error: 'Account not found.' }, { status: 404 })
 
-  const { data: contactRows } = await supabaseAdmin
-    .from('account_contacts')
-    .select('contacts(full_name)')
-    .eq('account_id', accountId)
-  const members = ((contactRows ?? []) as Array<{ contacts: { full_name: string | null } | null }>)
-    .map(r => r.contacts?.full_name)
-    .filter((n): n is string => !!n)
+  const { fetchMemberRoster } = await import('@/lib/tax/member-roster')
+  const { names: members } = await fetchMemberRoster(supabaseAdmin, accountId)
 
   return NextResponse.json({
     company_name: account.company_name,
