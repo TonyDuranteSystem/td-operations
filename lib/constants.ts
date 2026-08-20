@@ -8,6 +8,26 @@ export const COMPANY_TYPE = [
   'Single Member LLC', 'Multi Member LLC', 'C-Corp Elected',
 ] as const
 
+// Verified against production (2026-08-19): every accounts.account_type value
+// ever used is one of these three (Client 300, One-Time 31, Partner 2). Full
+// list — used to EDIT an existing account's type (so a legacy 'Partner'
+// account still displays/reselects correctly).
+export const ACCOUNT_TYPE = [
+  'Client', 'One-Time', 'Partner',
+] as const
+
+export type AccountType = typeof ACCOUNT_TYPE[number]
+
+// 'Partner' deliberately excluded — it only exempts a company from the
+// data-completeness audit and is unrelated to the real partner/commission
+// system (client_partners, added via the Partners page's own "New Partner"
+// flow). Offering it during account creation looked like it registered a
+// referral partner; it didn't. Antonio, 2026-08-19: pulled after confirming
+// the real partner flow already covers that, so this option only confused.
+export const CREATABLE_ACCOUNT_TYPE = [
+  'Client', 'One-Time',
+] as const
+
 export const MEMBER_STRUCTURE = [
   'single_member', 'multi_member',
 ] as const
