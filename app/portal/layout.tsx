@@ -114,7 +114,9 @@ export default async function PortalLayout({
               teammateCapabilities={identity.capabilities}
             />
             <main className="flex-1 overflow-y-auto overscroll-y-contain">
-              <div className="h-14 lg:hidden" />
+              {/* Spacer for the persistent top bar (fixed, h-14, all breakpoints
+                  since the 2026-08-20 redesign — see portal-sidebar.tsx). */}
+              <div className="h-14" />
               <div className="px-4 pt-4 sm:px-6 lg:px-8">
                 <OfficeClock />
               </div>
@@ -276,7 +278,9 @@ export default async function PortalLayout({
           />
         <main className="flex-1 overflow-y-auto overscroll-y-contain">
           <PullToRefresh />
-          <div className="h-14 lg:hidden" />
+          {/* Spacer for the persistent top bar (fixed, h-14, all breakpoints
+              since the 2026-08-20 redesign — see portal-sidebar.tsx). */}
+          <div className="h-14" />
           {/* International office clock — shows US (ET) office time + Open/Closed
               status + the client's own local time, on every page. */}
           <div className="px-4 pt-4 sm:px-6 lg:px-8">
