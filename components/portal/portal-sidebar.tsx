@@ -316,7 +316,6 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   // Locale-aware section labels — used by the Personal / Companies headers.
   const personalLabel = SECTION_LABELS['nav.section.personal']?.[locale] ?? SECTION_LABELS['nav.section.personal']?.en ?? 'Personal'
   const totalEntities = accounts.length + inProgress.length
-  const isMultiEntity = totalEntities > 1
   const companiesLabel = (totalEntities > 1
     ? SECTION_LABELS['nav.section.companies']
     : SECTION_LABELS['nav.section.company'])?.[locale] ?? 'Companies'
@@ -428,10 +427,6 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     return base
   })()
 
-  // For single-LLC clients, show the company name as the section header.
-  // For multi-LLC clients, the CompanySwitcher provides the selector.
-  const selectedCompanyName = accounts.find(a => a.id === selectedAccountId)?.company_name ?? null
-
   const renderNavItem = (item: NavItem) => {
     const isDocsItem = item.href === '/portal/documents'
     const isSignItem = item.href === '/portal/sign'
@@ -502,24 +497,36 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
   return (
     <>
-      {/* Mobile header. `top` is offset by --portal-vb-h (the View-as banner's
-          measured height, 0 when not in View-as) so the bar sits BELOW the
-          banner instead of being covered by it on phones. See view-as-banner.tsx. */}
+      {/* Persistent header bar — every screen, phone and desktop alike
+          (2026-08-20 redesign: the company switcher used to be buried inside
+          the "Companies" nav section below and Antonio couldn't find it).
+          `top` is offset by --portal-vb-h (the View-as banner's measured
+          height, 0 when not in View-as) so the bar sits BELOW the banner
+          instead of being covered by it. See view-as-banner.tsx. */}
       <div
-        className="fixed left-0 right-0 z-40 h-14 bg-white border-b flex items-center px-4 lg:hidden"
+        className="fixed left-0 right-0 z-40 h-14 bg-white border-b flex items-center gap-3 px-4"
         style={{ top: 'var(--portal-vb-h, 0px)' }}
       >
         <button
           onClick={() => setMobileOpen(true)}
-          className="p-2 -ml-2 rounded-md hover:bg-zinc-100"
+          className="p-2 -ml-2 rounded-md hover:bg-zinc-100 lg:hidden shrink-0"
           aria-label="Open menu"
         >
           <Menu className="h-5 w-5" />
         </button>
-        <div className="ml-3 flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center justify-center">TD</div>
+        <div className="w-7 h-7 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center justify-center shrink-0">TD</div>
+        {!isPartner && !dualRole && showCompaniesSection ? (
+          <CompanySwitcher
+            variant="topbar"
+            accounts={accounts}
+            selectedAccountId={selectedAccountId}
+            inProgress={inProgress}
+            selectedFormationId={selectedFormationId}
+            userName={fullName || user.email?.split('@')[0]}
+          />
+        ) : (
           <span className="font-semibold text-sm">{t('nav.portal')}</span>
-        </div>
+        )}
       </div>
 
       {/* Mobile overlay */}
@@ -533,7 +540,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
       {/* Sidebar */}
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 w-64 bg-white border-r flex flex-col transition-transform lg:translate-x-0 lg:static lg:z-auto',
+          'fixed inset-y-0 left-0 z-50 w-64 bg-white border-r flex flex-col transition-transform lg:translate-x-0 lg:static lg:z-auto lg:pt-14',
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         )}
       >
@@ -615,35 +622,17 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
             </div>
           )}
 
-          {/* Companies section — nested under Personal per Antonio's model. */}
-          {/* For single-LLC clients, the company name is the section header. */}
-          {/* For multi-LLC clients, the CompanySwitcher dropdown picks which company. */}
-          {showCompaniesSection && (isMultiEntity || visibleCompanyItems.length > 0) && (
+          {/* Companies section — nested under Personal per Antonio's model.
+              The switcher itself now lives in the persistent top bar
+              (2026-08-20 redesign) — this is just the section's nav links. */}
+          {showCompaniesSection && visibleCompanyItems.length > 0 && (
             <div className="pt-4">
               <div className="px-3 py-1.5 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
                 {companiesLabel}
               </div>
-              {isMultiEntity && !dualRole ? (
-                <div className="px-0 py-1">
-                  <CompanySwitcher
-                    accounts={accounts}
-                    selectedAccountId={selectedAccountId}
-                    inProgress={inProgress}
-                    selectedFormationId={selectedFormationId}
-                    userName={fullName || user.email?.split('@')[0]}
-                  />
-                </div>
-              ) : selectedCompanyName ? (
-                <div className="px-3 py-1.5 flex items-center gap-2 text-sm text-zinc-900 font-medium">
-                  <Briefcase className="h-4 w-4 text-blue-600 shrink-0" />
-                  <span className="truncate">{selectedCompanyName}</span>
-                </div>
-              ) : null}
-              {visibleCompanyItems.length > 0 && (
-                <div className="space-y-0.5 mt-1">
-                  {visibleCompanyItems.map(renderNavItem)}
-                </div>
-              )}
+              <div className="space-y-0.5 mt-1">
+                {visibleCompanyItems.map(renderNavItem)}
+              </div>
             </div>
           )}
 
