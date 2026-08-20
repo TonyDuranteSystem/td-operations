@@ -341,7 +341,7 @@ export async function GET(request: NextRequest) {
         .eq('account_id', accountId)
         .eq('active', true)
       const { resolveAccountResidenceIso } = await import('@/lib/tax/country-policy-sweep')
-      residence_country = await resolveAccountResidenceIso(accountId)
+      residence_country = await resolveAccountResidenceIso(accountId, taxYear)
       const { buildLocationCards } = await import('@/lib/tax/location-cards')
       const built = buildLocationCards({
         locatedRows: locatedRows.map(r => ({
@@ -395,6 +395,14 @@ export async function GET(request: NextRequest) {
       aiNextRetryAt = chain.nextRetryAt
     } catch (e) {
       console.error('[tax-financials] chain state failed (view unaffected):', e)
+      // FAIL CLOSED (2026-08-19): the pre-try defaults (idle/0) read as "all
+      // clear" to confirmBlockers' `(aiPending ?? 0) > 0` check — a read
+      // failure must never look identical to "nothing is running". Reusing
+      // the existing 'running' treatment means the client sees the same
+      // honest "still working" card/banner they'd see if it were genuinely
+      // running, instead of a silently-wrong all-clear.
+      aiState = 'running'
+      aiPending = 1
     }
 
     // Round-4 code-level bug-hunter finding: `...view` spreads `priorReturn`

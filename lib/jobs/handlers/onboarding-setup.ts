@@ -33,6 +33,7 @@ import { resolveMemberContactId } from "@/lib/members/resolve-member-contact"
 import { upsertMemberRow } from "@/lib/members/write-member-row"
 import { normalizePersonName, normalizeEmail } from "@/lib/members/member-identity"
 import { createSD } from "@/lib/operations/service-delivery"
+import { autoDocumentCreationEnabled } from "@/lib/jobs/auto-document-creation-switch"
 import type { Json } from "@/lib/database.types"
 
 interface OnboardingPayload {
@@ -787,7 +788,9 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   // straight onto the tenant field. The resolver only trusts real members/
   // account_contacts data, never a submitted payload field. Dev job
   // 9ad76300-6181-4250-a1de-c77f37933f82 / 9ad76300-6181-4250-a1de-c77f37933f82.
-  if (account_id && company_name && contact_id) {
+  if (!autoDocumentCreationEnabled()) {
+    result.steps.push(step("lease", "skipped", "Automatic lease creation is off — create it manually from the account page."))
+  } else if (account_id && company_name) {
     try {
       const { createLease } = await import("@/lib/operations/lease")
       const leaseResult = await createLease({
@@ -813,7 +816,9 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   }
 
   // ─── 2b. AUTO-CREATE OPERATING AGREEMENT ───
-  if (account_id && company_name && contact_id && state_of_formation) {
+  if (!autoDocumentCreationEnabled()) {
+    result.steps.push(step("oa", "skipped", "Automatic Operating Agreement creation is off — create it manually from the account page."))
+  } else if (account_id && company_name && state_of_formation) {
     try {
       const { data: existingOa } = await supabaseAdmin
         .from("oa_agreements")
@@ -913,8 +918,12 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             } else {
               result.steps.push(step("oa", "ok", `${newOa.token} (${entityType}, draft)`))
             }
-          } else {
-            result.steps.push(step("oa", "error", "Could not fetch contact/account details for OA"))
+          } else if (!oaAccount) {
+            // A missing signer was already reported above (line ~848) with its
+            // own specific reason — only report here for a genuinely distinct
+            // failure (the account record itself couldn't be re-fetched), so
+            // one real cause never reads as two different-sounding errors.
+            result.steps.push(step("oa", "error", "Could not fetch account details for OA"))
           }
         }
       }

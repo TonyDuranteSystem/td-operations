@@ -53,7 +53,12 @@ export async function handleRecategorizeAi(job: Job, ctx?: JobRunContext): Promi
     batchesFailed: r.aiStats.batchesFailed,
     progressed,
     chunkIndex,
-    noCandidates: r.aiNoCandidates === true,
+    // A confirmed-return refusal is exactly like "nothing to do" — DONE, not
+    // a broken chain (2026-08-19). Conflating the two would burn the retry
+    // ladder and fire a false "needs staff attention" email for a client who
+    // simply already confirmed — the same class of bug noCandidates itself
+    // was added to fix (see its own comment in lib/jobs/chain-state.ts).
+    noCandidates: r.aiNoCandidates === true || r.handsOffSkipped === true,
   })
 
   const { supabaseAdmin } = await import("@/lib/supabase-admin")

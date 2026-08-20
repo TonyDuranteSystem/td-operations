@@ -29,7 +29,7 @@ export function registerOaTools(server: McpServer) {
     "oa_create",
     `Create a new Operating Agreement for a Single Member LLC (SMLLC) or Multi-Member LLC (MMLLC). All LLCs are manager-managed.
 
-For SMLLC: pulls member info from primary linked contact (default).
+The Manager/Member name is ALWAYS resolved from the account's real signer (the members table's flagged signer, or the SMLLC's linked contact) — it cannot be typed in. If the resolved name looks wrong, the fix is correcting the account's member records, not overriding this tool.
 For MMLLC: pass entity_type="MMLLC" and members array with name, ownership_pct, initial_contribution for each member.
 
 Prerequisites:
@@ -50,7 +50,6 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       entity_type: z.enum(["SMLLC", "MMLLC"]).optional().describe("Entity type: SMLLC (default) or MMLLC"),
-      manager_name: z.string().optional().describe("Manager name (default: primary contact full_name). All LLCs are manager-managed."),
       members: z.array(z.object({
         name: z.string().describe("Member full name"),
         address: z.string().optional().describe("Member address"),
@@ -115,9 +114,12 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
         // Who the document names as Manager/Member — from the members
         // table's flagged signer (decoupled from ownership %, same rule as
         // the lease and SS-4), not the account's arbitrary first linked
-        // contact. Dev job 9ad76300-6181-4250-a1de-c77f37933f82. `manager_name` remains an explicit,
-        // deliberate override param for this tool (staff/AI typing a name
-        // on purpose) — only the DEFAULT changes.
+        // contact, and not a freeform typed name either. The `manager_name`
+        // override param was removed 2026-08-19 (Antonio, closing the last
+        // unvalidated identity override across all 9 OA-creation sites) —
+        // matching every other site: the resolver is the only source, a
+        // legal document must never be able to disagree with the system of
+        // record.
         const { resolveAccountSigner } = await import("@/lib/members/resolve-signer")
         const signerResolution = await resolveAccountSigner(params.account_id)
         if (signerResolution.outcome !== "resolved") {
@@ -200,7 +202,6 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
         // ─── 7. BUILD DATES ───
         const formationDate = params.formation_date || account.formation_date || today
         const ein = params.ein_number || account.ein_number || null
-        const managerName = params.manager_name || contact.full_name
 
         // ─── 8. BUILD MEMBERS JSON (for MMLLC) ───
         const membersJson = entityType === "MMLLC" && params.members
@@ -227,7 +228,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
             formation_date: formationDate,
             ein_number: ein,
             entity_type: entityType,
-            manager_name: managerName,
+            manager_name: contact.full_name,
             member_name: contact.full_name,
             member_address: contact.residency || null,
             member_email: contact.email || null,
@@ -307,7 +308,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           record_id: oa.id,
           account_id: params.account_id,
           summary: `Created ${entityType} Operating Agreement for ${account.company_name} (${state})${totalSigners > 1 ? ` — ${totalSigners} signers` : ""}`,
-          details: { token: oa.token, state, entity_type: entityType, manager: managerName, member: contact.full_name, total_signers: totalSigners },
+          details: { token: oa.token, state, entity_type: entityType, manager: contact.full_name, member: contact.full_name, total_signers: totalSigners },
         })
 
         const oaUrl = `${OA_BASE_URL}/${oa.token}/${oa.access_code}`
@@ -319,7 +320,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           `Token: ${oa.token}`,
           `State: ${state}`,
           `Entity Type: ${entityType}`,
-          `Manager: ${managerName}`,
+          `Manager: ${contact.full_name}`,
           entityType === "SMLLC"
             ? `Member: ${contact.full_name} (100%)`
             : `Members: ${params.members!.map(m => `${m.name} (${m.ownership_pct}%)`).join(", ")}`,

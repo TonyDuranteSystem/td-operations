@@ -186,6 +186,12 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       aiRemaining = chain.remaining
     } catch (e) {
       console.error('[tools/pnl] chain state failed (view unaffected):', e)
+      // FAIL CLOSED (2026-08-19): the pre-try default (idle) reads as "all
+      // clear" — a read failure must not look identical to "nothing is
+      // running". aiPending (computed separately above) already reflects the
+      // real live-job count regardless of this failure; this just keeps the
+      // state label honest about the fact that state itself is unknown.
+      aiState = 'running'
     }
 
     // Generate stage (Antonio, 2026-07-02): NULL generated_at = upload mode —
@@ -194,7 +200,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     // the rendered totals no longer match the data → the UI asks to Regenerate.
     const { data: wsRow } = await db
       .from('pnl_workspaces')
-      .select('generated_at, linked_account_id, prior_return_snapshot, updated_at')
+      .select('generated_at, linked_account_id, prior_return_snapshot, updated_at, tax_year')
       .eq('id', workspaceId)
       .maybeSingle()
     const generatedAt = (wsRow?.generated_at as string | null) ?? null
@@ -220,7 +226,12 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     // resolvable, no member/role filter), which could disagree with the
     // sweep about the same account's residence country.
     const { resolveAccountResidenceIso } = await import('@/lib/tax/country-policy-sweep')
-    const residenceCountry = wsRow?.linked_account_id ? await resolveAccountResidenceIso(wsRow.linked_account_id) : null
+    // wsRow.tax_year != null guard: Number(null) is 0, an integer that would
+    // wastefully (though harmlessly) send resolveAccountResidenceIso down the
+    // wizard path querying tax_return_submissions for a year that can't exist.
+    const residenceCountry = wsRow?.linked_account_id
+      ? await resolveAccountResidenceIso(wsRow.linked_account_id, wsRow.tax_year != null ? Number(wsRow.tax_year) : null)
+      : null
     const residenceOnFile = residenceCountry !== null
     const locatedRows = await fetchAllPaged<Record<string, unknown>>(async (from, to) => {
       const { data, error } = await db
