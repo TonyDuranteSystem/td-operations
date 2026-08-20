@@ -1,12 +1,18 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { X, Loader2, Plus } from 'lucide-react'
+import { X, Loader2, Plus, Search, UserCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { ACCOUNT_STATUS, COMPANY_TYPE, CREATABLE_ACCOUNT_TYPE } from '@/lib/constants'
-import { createAccount } from '@/app/(dashboard)/accounts/actions'
+import { createAccount, searchContacts } from '@/app/(dashboard)/accounts/actions'
 import type { CreateAccountInput, PrimaryContactInput } from '@/lib/schemas/account-create'
 import { useRouter } from 'next/navigation'
+
+interface ExistingContactResult {
+  id: string
+  full_name: string
+  email: string | null
+}
 
 interface CreateAccountDialogProps {
   open: boolean
@@ -40,6 +46,11 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
   const [addressZip, setAddressZip] = useState('')
   const [addressCountry, setAddressCountry] = useState('')
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [existingContactQuery, setExistingContactQuery] = useState('')
+  const [existingContactResults, setExistingContactResults] = useState<ExistingContactResult[]>([])
+  const [searchingExisting, setSearchingExisting] = useState(false)
+  const [selectedExistingContact, setSelectedExistingContact] = useState<ExistingContactResult | null>(null)
+  const [memberSetupReminder, setMemberSetupReminder] = useState<{ accountId: string } | null>(null)
 
   if (!open) return null
 
@@ -62,6 +73,23 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
     setAddressZip('')
     setAddressCountry('')
     setErrors({})
+    setExistingContactQuery('')
+    setExistingContactResults([])
+    setSelectedExistingContact(null)
+  }
+
+  const handleSearchExisting = async (query: string) => {
+    setExistingContactQuery(query)
+    if (query.length < 2) { setExistingContactResults([]); return }
+    setSearchingExisting(true)
+    try {
+      const results = await searchContacts(query)
+      setExistingContactResults(results)
+    } catch {
+      setExistingContactResults([])
+    } finally {
+      setSearchingExisting(false)
+    }
   }
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -73,8 +101,10 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
     if (!entityType) nextErrors.entity_type = 'Entity type is required'
     if (!memberStructure) nextErrors.member_structure = 'Member structure is required'
     if (!stateOfFormation.trim()) nextErrors.state_of_formation = 'State of formation is required'
-    if (!firstName.trim()) nextErrors.first_name = 'First name is required'
-    if (!lastName.trim()) nextErrors.last_name = 'Last name is required'
+    if (!selectedExistingContact) {
+      if (!firstName.trim()) nextErrors.first_name = 'First name is required'
+      if (!lastName.trim()) nextErrors.last_name = 'Last name is required'
+    }
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors)
       return
@@ -91,25 +121,36 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
         ein_number: einNumber.trim() || undefined,
         notes: notes.trim() || undefined,
       }
-      const primaryContact: PrimaryContactInput = {
-        first_name: firstName.trim(),
-        middle_name: middleName.trim() || undefined,
-        last_name: lastName.trim(),
-        email: contactEmail.trim() || undefined,
-        address_line1: addressLine1.trim() || undefined,
-        address_city: addressCity.trim() || undefined,
-        address_state: addressState.trim() || undefined,
-        address_zip: addressZip.trim() || undefined,
-        address_country: addressCountry.trim() || undefined,
-      }
 
-      const result = await createAccount(input, primaryContact)
+      const result = selectedExistingContact
+        ? await createAccount(input, null, selectedExistingContact.id)
+        : await createAccount(input, {
+            first_name: firstName.trim(),
+            middle_name: middleName.trim() || undefined,
+            last_name: lastName.trim(),
+            email: contactEmail.trim() || undefined,
+            address_line1: addressLine1.trim() || undefined,
+            address_city: addressCity.trim() || undefined,
+            address_state: addressState.trim() || undefined,
+            address_zip: addressZip.trim() || undefined,
+            address_country: addressCountry.trim() || undefined,
+          } satisfies PrimaryContactInput)
 
       if (result.success) {
         if (result.warning) {
           toast.warning(result.warning)
         } else {
           toast.success('Account created')
+        }
+        // Multi-Member accounts created from THIS dialog are never covered
+        // by the client formation workflow's own member/signer collection —
+        // this dialog is a manual/staff path only. Block on a real
+        // acknowledgment instead of a toast that could be missed (Antonio,
+        // 2026-08-19, dev_task 693273fd).
+        if (result.data?.id && result.needsMemberSetup) {
+          setMemberSetupReminder({ accountId: result.data.id })
+          resetForm()
+          return
         }
         resetForm()
         onClose()
@@ -122,6 +163,14 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
     })
   }
 
+  const handleMemberSetupAcknowledge = () => {
+    if (!memberSetupReminder) return
+    const accountId = memberSetupReminder.accountId
+    setMemberSetupReminder(null)
+    onClose()
+    router.push(`/accounts/${accountId}`)
+  }
+
   const handleClose = () => {
     resetForm()
     onClose()
@@ -129,11 +178,31 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
 
   return (
     <>
-      {/* Backdrop */}
-      <div className="fixed inset-0 z-50 bg-black/50" onClick={handleClose} />
+      {/* Backdrop — not click-to-dismiss while the member-setup reminder is
+          showing, so it can't be missed by an accidental click outside it. */}
+      <div className="fixed inset-0 z-50 bg-black/50" onClick={memberSetupReminder ? undefined : handleClose} />
 
       {/* Dialog */}
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        {memberSetupReminder ? (
+        <div
+          className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4"
+          onClick={e => e.stopPropagation()}
+        >
+          <h2 className="text-lg font-semibold">Multi-Member company created</h2>
+          <p className="text-sm text-zinc-600">
+            This account was created outside the client formation process, so its member roster wasn&apos;t collected. Go to the company page now to add the other members and confirm who the primary contact is and who signs documents.
+          </p>
+          <div className="flex justify-end">
+            <button
+              onClick={handleMemberSetupAcknowledge}
+              className="px-4 py-2 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800"
+            >
+              Go set up members
+            </button>
+          </div>
+        </div>
+        ) : (
         <div
           className="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
           onClick={e => e.stopPropagation()}
@@ -268,85 +337,151 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
                 page once it's created (Members section, handles ownership %/signer). */}
             <div className="border-t pt-4 space-y-3">
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Primary Contact</h3>
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className={labelCls}>First Name *</label>
-                  <input
-                    type="text"
-                    value={firstName}
-                    onChange={e => setFirstName(e.target.value)}
-                    placeholder="Jane"
-                    className={inputCls}
-                  />
-                  {errors.first_name && <p className={errorCls}>{errors.first_name}</p>}
+
+              {/* Search for an existing person already in the system, so
+                  staff can deliberately reuse that record instead of typing
+                  a new one that might collide with them (dev_task 693273fd). */}
+              {selectedExistingContact ? (
+                <div className="flex items-center justify-between px-3 py-2 border rounded-md bg-blue-50 border-blue-200">
+                  <div className="flex items-center gap-2 text-sm">
+                    <UserCheck className="h-4 w-4 text-blue-600" />
+                    <span className="font-medium">{selectedExistingContact.full_name}</span>
+                    {selectedExistingContact.email && (
+                      <span className="text-xs text-zinc-500">{selectedExistingContact.email}</span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedExistingContact(null)}
+                    className="text-xs text-zinc-500 hover:text-zinc-700"
+                  >
+                    Change
+                  </button>
                 </div>
-                <div>
-                  <label className={labelCls}>Middle Name</label>
-                  <input
-                    type="text"
-                    value={middleName}
-                    onChange={e => setMiddleName(e.target.value)}
-                    placeholder="(if any)"
-                    className={inputCls}
-                  />
+              ) : (
+                <div className="space-y-1">
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-400" />
+                    <input
+                      type="text"
+                      value={existingContactQuery}
+                      onChange={e => handleSearchExisting(e.target.value)}
+                      placeholder="Search for an existing contact (optional)..."
+                      className={`${inputCls} pl-8`}
+                    />
+                  </div>
+                  {searchingExisting && (
+                    <div className="flex items-center gap-2 text-xs text-zinc-400 py-1">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Searching...
+                    </div>
+                  )}
+                  {existingContactResults.length > 0 && (
+                    <div className="divide-y border rounded-md bg-white max-h-32 overflow-y-auto">
+                      {existingContactResults.map(r => (
+                        <button
+                          key={r.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedExistingContact(r)
+                            setExistingContactQuery('')
+                            setExistingContactResults([])
+                          }}
+                          className="flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-blue-50 transition-colors"
+                        >
+                          <div>
+                            <span className="font-medium">{r.full_name}</span>
+                            {r.email && <span className="text-xs text-zinc-400 ml-2">{r.email}</span>}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <label className={labelCls}>Last Name *</label>
-                  <input
-                    type="text"
-                    value={lastName}
-                    onChange={e => setLastName(e.target.value)}
-                    placeholder="Smith"
-                    className={inputCls}
-                  />
-                  {errors.last_name && <p className={errorCls}>{errors.last_name}</p>}
-                </div>
-              </div>
-              <div>
-                <label className={labelCls}>Email</label>
-                <input
-                  type="email"
-                  value={contactEmail}
-                  onChange={e => setContactEmail(e.target.value)}
-                  placeholder="jane@example.com"
-                  className={inputCls}
-                />
-              </div>
-              <div>
-                <label className={labelCls}>Address</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    placeholder="Street address"
-                    className={`${inputCls} col-span-2`}
-                    value={addressLine1}
-                    onChange={e => setAddressLine1(e.target.value)}
-                  />
-                  <input
-                    placeholder="City"
-                    className={inputCls}
-                    value={addressCity}
-                    onChange={e => setAddressCity(e.target.value)}
-                  />
-                  <input
-                    placeholder="State / Province"
-                    className={inputCls}
-                    value={addressState}
-                    onChange={e => setAddressState(e.target.value)}
-                  />
-                  <input
-                    placeholder="ZIP / Postal code"
-                    className={inputCls}
-                    value={addressZip}
-                    onChange={e => setAddressZip(e.target.value)}
-                  />
-                  <input
-                    placeholder="Country"
-                    className={inputCls}
-                    value={addressCountry}
-                    onChange={e => setAddressCountry(e.target.value)}
-                  />
-                </div>
-              </div>
+              )}
+
+              {!selectedExistingContact && (
+                <>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className={labelCls}>First Name *</label>
+                      <input
+                        type="text"
+                        value={firstName}
+                        onChange={e => setFirstName(e.target.value)}
+                        placeholder="Jane"
+                        className={inputCls}
+                      />
+                      {errors.first_name && <p className={errorCls}>{errors.first_name}</p>}
+                    </div>
+                    <div>
+                      <label className={labelCls}>Middle Name</label>
+                      <input
+                        type="text"
+                        value={middleName}
+                        onChange={e => setMiddleName(e.target.value)}
+                        placeholder="(if any)"
+                        className={inputCls}
+                      />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Last Name *</label>
+                      <input
+                        type="text"
+                        value={lastName}
+                        onChange={e => setLastName(e.target.value)}
+                        placeholder="Smith"
+                        className={inputCls}
+                      />
+                      {errors.last_name && <p className={errorCls}>{errors.last_name}</p>}
+                    </div>
+                  </div>
+                  <div>
+                    <label className={labelCls}>Email</label>
+                    <input
+                      type="email"
+                      value={contactEmail}
+                      onChange={e => setContactEmail(e.target.value)}
+                      placeholder="jane@example.com"
+                      className={inputCls}
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Address</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        placeholder="Street address"
+                        className={`${inputCls} col-span-2`}
+                        value={addressLine1}
+                        onChange={e => setAddressLine1(e.target.value)}
+                      />
+                      <input
+                        placeholder="City"
+                        className={inputCls}
+                        value={addressCity}
+                        onChange={e => setAddressCity(e.target.value)}
+                      />
+                      <input
+                        placeholder="State / Province"
+                        className={inputCls}
+                        value={addressState}
+                        onChange={e => setAddressState(e.target.value)}
+                      />
+                      <input
+                        placeholder="ZIP / Postal code"
+                        className={inputCls}
+                        value={addressZip}
+                        onChange={e => setAddressZip(e.target.value)}
+                      />
+                      <input
+                        placeholder="Country"
+                        className={inputCls}
+                        value={addressCountry}
+                        onChange={e => setAddressCountry(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Notes */}
@@ -381,6 +516,7 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
             </div>
           </form>
         </div>
+        )}
       </div>
     </>
   )

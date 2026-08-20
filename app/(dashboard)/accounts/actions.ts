@@ -259,36 +259,75 @@ export async function updateAccountContactRole(
   })
 }
 
+/**
+ * Creates a new account. The primary contact comes from EITHER a freshly
+ * typed name/email (primaryContact) OR an existing contact picked from
+ * search (existingContactId) — exactly one of the two is expected; when
+ * existingContactId is set, primaryContact is ignored and no identity
+ * matching runs at all (staff already resolved the ambiguity by picking
+ * the exact record). This dialog is a manual/staff-driven creation path —
+ * verified as the ONLY caller of createAccountOp in the whole codebase, so
+ * unlike the client formation workflow (which collects the full member
+ * roster, primary contact, and signer as part of its own process), an
+ * account created here is NEVER covered by that collection step. A
+ * Multi-Member account created here therefore always needs that follow-up
+ * work done by hand — flagged via `needsMemberSetup` regardless of which
+ * contact-entry method was used (Antonio, 2026-08-19, dev_task 693273fd).
+ */
 export async function createAccount(
   input: CreateAccountInput,
-  primaryContact: PrimaryContactInput
-): Promise<ActionResult<{ id: string }> & { warning?: string }> {
+  primaryContact: PrimaryContactInput | null,
+  existingContactId?: string | null,
+): Promise<ActionResult<{ id: string }> & { warning?: string; needsMemberSetup?: boolean }> {
   const parsedAccount = createAccountSchema.safeParse(input)
   if (!parsedAccount.success) return { success: false, error: parsedAccount.error.issues[0].message }
 
-  const parsedContact = primaryContactSchema.safeParse(primaryContact)
-  if (!parsedContact.success) return { success: false, error: parsedContact.error.issues[0].message }
+  let parsedContact: PrimaryContactInput | null = null
+  if (!existingContactId) {
+    const result = primaryContactSchema.safeParse(primaryContact)
+    if (!result.success) return { success: false, error: result.error.issues[0].message }
+    parsedContact = result.data
+  }
 
   const actor = await getDashboardActor()
-  const result = await createAccountOp({ ...parsedAccount.data, actor })
+  const created = await createAccountOp({ ...parsedAccount.data, actor })
 
-  if (!result.success || !result.account_id) {
-    return { success: false, error: result.error || 'Failed to create account' }
+  if (!created.success || !created.account_id) {
+    return { success: false, error: created.error || 'Failed to create account' }
   }
 
   revalidatePath('/accounts')
 
+  const isMultiMember = parsedAccount.data.member_structure === 'multi_member'
+
+  if (existingContactId) {
+    // Staff explicitly picked this exact person — no ambiguity to resolve.
+    // Single-Member: they ARE the account's owner and main contact.
+    // Multi-Member: they're only a starting point; NOT auto-marked as the
+    // account's main contact — that's exactly what needsMemberSetup exists
+    // to send staff back to confirm, alongside the rest of the roster.
+    const linkResult = await linkContactToAccount(created.account_id, existingContactId, 'owner', !isMultiMember)
+    if (!linkResult.success) {
+      return {
+        success: true,
+        data: { id: created.account_id },
+        warning: `Account created, but linking the existing contact failed: ${linkResult.error}`,
+      }
+    }
+    return { success: true, data: { id: created.account_id }, needsMemberSetup: isMultiMember }
+  }
+
   const linkResult = await createAndLinkContactOp({
-    account_id: result.account_id,
-    first_name: parsedContact.data.first_name,
-    middle_name: parsedContact.data.middle_name || null,
-    last_name: parsedContact.data.last_name,
-    email: parsedContact.data.email || null,
-    address_line1: parsedContact.data.address_line1 || null,
-    address_city: parsedContact.data.address_city || null,
-    address_state: parsedContact.data.address_state || null,
-    address_zip: parsedContact.data.address_zip || null,
-    address_country: parsedContact.data.address_country || null,
+    account_id: created.account_id,
+    first_name: parsedContact!.first_name,
+    middle_name: parsedContact!.middle_name || null,
+    last_name: parsedContact!.last_name,
+    email: parsedContact!.email || null,
+    address_line1: parsedContact!.address_line1 || null,
+    address_city: parsedContact!.address_city || null,
+    address_state: parsedContact!.address_state || null,
+    address_zip: parsedContact!.address_zip || null,
+    address_country: parsedContact!.address_country || null,
     role: 'owner',
     is_primary: true,
     actor,
@@ -299,12 +338,12 @@ export async function createAccount(
     // so staff can add the contact by hand from the account page.
     return {
       success: true,
-      data: { id: result.account_id },
+      data: { id: created.account_id },
       warning: `Account created, but adding the primary contact failed: ${linkResult.error}`,
     }
   }
 
-  return { success: true, data: { id: result.account_id } }
+  return { success: true, data: { id: created.account_id }, warning: linkResult.warning, needsMemberSetup: isMultiMember }
 }
 
 export async function addAccountNote(
@@ -374,6 +413,7 @@ export async function linkContactToAccount(
   accountId: string,
   contactId: string,
   role: string = 'owner',
+  isPrimary: boolean = false,
 ): Promise<ActionResult> {
   return safeAction(async () => {
     const supabase = createClient()
@@ -390,7 +430,7 @@ export async function linkContactToAccount(
 
     const { error } = await supabase
       .from('account_contacts')
-      .insert({ account_id: accountId, contact_id: contactId, role })
+      .insert({ account_id: accountId, contact_id: contactId, role, is_primary: isPrimary })
 
     if (error) throw new Error(error.message)
     revalidatePath(`/accounts/${accountId}`)
@@ -437,7 +477,7 @@ export async function createAndLinkContact(
   fullName: string,
   email: string | null,
   role: string = 'owner',
-): Promise<ActionResult & { contactId?: string }> {
+): Promise<ActionResult & { contactId?: string; warning?: string }> {
   const trimmed = fullName.trim()
   if (!trimmed) {
     return { success: false, error: 'Contact name is required' }
@@ -465,7 +505,7 @@ export async function createAndLinkContact(
   }
 
   revalidatePath(`/accounts/${accountId}`)
-  return { success: true, contactId: result.contact_id }
+  return { success: true, contactId: result.contact_id, warning: result.warning }
 }
 
 /**

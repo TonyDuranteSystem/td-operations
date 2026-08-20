@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { createAccountSchema } from "@/lib/schemas/account-create"
+import { createAccountSchema, primaryContactSchema } from "@/lib/schemas/account-create"
 
 const BASE = {
   company_name: "Test LLC",
@@ -61,5 +61,89 @@ describe("createAccountSchema — required fields", () => {
     const { member_structure: _member_structure, ...rest } = BASE
     const result = createAccountSchema.safeParse(rest)
     expect(result.success).toBe(false)
+  })
+})
+
+// primaryContactSchema had ZERO test coverage before this — this is the one
+// server-side gate on the New Account dialog's contact fields; if a
+// client-side check is ever bypassed (disabled JS, a direct API call), this
+// schema is what actually stops a blank name or a malformed email from
+// being saved (found via an R093-verifier-prompted independent re-check,
+// 2026-08-19, dev_task 693273fd).
+const VALID_CONTACT = {
+  first_name: "Jane",
+  last_name: "Smith",
+  email: "jane@example.com",
+}
+
+describe("primaryContactSchema — required fields", () => {
+  it("accepts a fully valid contact", () => {
+    const result = primaryContactSchema.safeParse(VALID_CONTACT)
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects a blank first_name", () => {
+    const result = primaryContactSchema.safeParse({ ...VALID_CONTACT, first_name: "" })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects a missing first_name", () => {
+    const { first_name: _first_name, ...rest } = VALID_CONTACT
+    const result = primaryContactSchema.safeParse(rest)
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects a blank last_name", () => {
+    const result = primaryContactSchema.safeParse({ ...VALID_CONTACT, last_name: "" })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects a missing last_name", () => {
+    const { last_name: _last_name, ...rest } = VALID_CONTACT
+    const result = primaryContactSchema.safeParse(rest)
+    expect(result.success).toBe(false)
+  })
+
+  it("allows middle_name to be omitted", () => {
+    const { middle_name: _middle_name, ...rest } = VALID_CONTACT as typeof VALID_CONTACT & { middle_name?: string }
+    const result = primaryContactSchema.safeParse(rest)
+    expect(result.success).toBe(true)
+  })
+})
+
+describe("primaryContactSchema — email", () => {
+  it("allows email to be omitted entirely", () => {
+    const { email: _email, ...rest } = VALID_CONTACT
+    const result = primaryContactSchema.safeParse(rest)
+    expect(result.success).toBe(true)
+  })
+
+  it("allows an explicitly empty email string", () => {
+    const result = primaryContactSchema.safeParse({ ...VALID_CONTACT, email: "" })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects a malformed email instead of silently saving it", () => {
+    const result = primaryContactSchema.safeParse({ ...VALID_CONTACT, email: "not-an-email" })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe("primaryContactSchema — address fields are all optional", () => {
+  it("accepts a contact with no address fields at all", () => {
+    const result = primaryContactSchema.safeParse(VALID_CONTACT)
+    expect(result.success).toBe(true)
+  })
+
+  it("accepts a contact with a full address", () => {
+    const result = primaryContactSchema.safeParse({
+      ...VALID_CONTACT,
+      address_line1: "1 Main St",
+      address_city: "Boston",
+      address_state: "MA",
+      address_zip: "02108",
+      address_country: "USA",
+    })
+    expect(result.success).toBe(true)
   })
 })

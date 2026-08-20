@@ -19,14 +19,21 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { resolveMemberContactId } from "@/lib/members/resolve-member-contact"
-import { normalizeEmail, matchContactByName } from "@/lib/members/member-identity"
+import { normalizeEmail, normalizePersonName, escapeLikePattern } from "@/lib/members/member-identity"
+import { normalizeEIN } from "@/lib/jobs/validation"
 import type { Database } from "@/lib/database.types"
 
 // Legal suffixes stripped for near-duplicate company-name comparison only —
-// never written to the database. Longest-first so "l.l.c" doesn't leave a
-// stray "l.c" behind when "llc" alone would have matched.
+// never written to the database. Punctuation is already converted to spaces
+// before this runs (see normalizeCompanyName), so "LLC"/"L.L.C."/"L L C" all
+// collapse to the same "l l c" input — a separate "l.l.c" entry is not just
+// redundant, it's actively wrong: unescaped periods in a RegExp mean "any
+// character", so `\bl.l.c\b` also strips the middle of the ordinary word
+// "lilac" (l-i-l-a-c), corrupting "Lilac Consulting LLC" into "consulting"
+// and wrongly flagging it as a duplicate of any other "...Consulting LLC"
+// (Senior Engineer review, 2026-08-19).
 const COMPANY_SUFFIXES = [
-  "l l c", "llc", "l.l.c", "incorporated", "inc", "corporation", "corp", "ltd", "limited", "co",
+  "l l c", "llc", "incorporated", "inc", "corporation", "corp", "ltd", "limited", "co",
 ]
 
 /** Lowercase, strip punctuation + legal suffixes, collapse whitespace. */
@@ -36,6 +43,19 @@ function normalizeCompanyName(name: string): string {
     n = n.replace(new RegExp(`\\b${suffix.replace(/\s+/g, "\\s+")}\\b`, "g"), " ")
   }
   return n.replace(/\s+/g, " ").trim()
+}
+
+/** Lowercase + strip periods/commas + collapse whitespace — no suffix
+ * stripping. Used as the exact-match fallback when a name normalizes to
+ * nothing but a legal suffix (e.g. a company literally named "LLC"), so two
+ * identical such names still count as a duplicate instead of silently
+ * bypassing the guard. Periods/commas are REMOVED (not turned into spaces,
+ * unlike normalizeCompanyName) specifically so "LLC" and "L.L.C." collapse
+ * to the same string here — the periods-to-spaces approach would instead
+ * split "L.L.C." into separate letters and never match plain "LLC" (found
+ * via independent re-verification, 2026-08-19, dev_task 693273fd). */
+function normalizeCompanyNameRaw(name: string): string {
+  return name.normalize("NFC").toLowerCase().replace(/[.,]/g, "").replace(/\s+/g, " ").trim()
 }
 
 /**
@@ -52,11 +72,17 @@ function normalizeCompanyName(name: string): string {
 export function isNearDuplicateCompanyName(a: string, b: string): boolean {
   const na = normalizeCompanyName(a)
   const nb = normalizeCompanyName(b)
-  if (!na || !nb) return false
-  if (na === nb) return true
-  const [shorter, longer] = na.length <= nb.length ? [na, nb] : [nb, na]
-  if (shorter.length < 6) return false
-  return longer.includes(shorter)
+  if (na && nb) {
+    if (na === nb) return true
+    const [shorter, longer] = na.length <= nb.length ? [na, nb] : [nb, na]
+    if (shorter.length >= 6 && longer.includes(shorter)) return true
+  }
+  // Either side normalized to nothing but a legal suffix (e.g. "LLC" alone) —
+  // the suffix-stripped comparison above can't see these at all. Fall back
+  // to an exact match on the raw (suffix-preserved) names so two literally
+  // identical inputs are still caught.
+  if (!na || !nb) return normalizeCompanyNameRaw(a) === normalizeCompanyNameRaw(b)
+  return false
 }
 
 // ─── Types ──────────────────────────────────────────────────
@@ -292,6 +318,18 @@ export async function createAccount(
       return { success: false, outcome: "error", error: "company_name is required" }
     }
 
+    // Same format check every other EIN write path already enforces
+    // (updateAccountField) — an unnormalized/malformed value saved here
+    // would violate what document generation and the EIN-received workflow
+    // both assume.
+    let normalizedEin: string | null = null
+    if (params.ein_number && params.ein_number.trim()) {
+      normalizedEin = normalizeEIN(params.ein_number)
+      if (!normalizedEin) {
+        return { success: false, outcome: "error", error: `Invalid EIN format: "${params.ein_number}". Expected 9 digits (e.g., 30-1482516).` }
+      }
+    }
+
     // Near-duplicate guard — this insert had zero successful executions
     // before the RLS fix, so this path has never been exercised against
     // TD's known duplicate-account history. Not a hard unique constraint
@@ -319,7 +357,7 @@ export async function createAccount(
         member_structure: params.member_structure ?? null,
         state_of_formation: params.state_of_formation ?? null,
         status: params.status ?? "Pending Formation",
-        ein_number: params.ein_number ?? null,
+        ein_number: normalizedEin,
         notes: params.notes ?? null,
         account_type: params.account_type ?? "Client",
         // DB default is 'active' — wrong for a brand-new account (grants
@@ -367,19 +405,48 @@ export async function createAccount(
 //
 // contacts has the identical staff-facing RLS gap as accounts (SELECT
 // only, no INSERT) — same dev_task 7ebb1e0c pragma, different table.
-// Reuses resolveMemberContactId (the same find-or-create-by-email+name
-// identity match the formation/onboarding paths use) instead of a blind
-// insert, so re-adding an already-known person doesn't fork a duplicate
-// contact record.
+//
+// Identity-matching design (rewritten 2026-08-19 — dev_task 693273fd — after
+// the original version was found to have real failure modes in BOTH
+// directions, confirmed against live production data, not hypothetical):
+//   - Matching on email + FULL name (first+middle+last), the way
+//     resolveMemberContactId already safely does it elsewhere (formation,
+//     onboarding), is kept as the ONLY path that auto-links without asking a
+//     human — an exact match on both signals together is unambiguous.
+//   - A prior version of this function excluded the middle name from that
+//     match "so a shorter-named existing contact is still recognized." That
+//     was itself unsafe: two DIFFERENT real people can share one email (a
+//     family LLC) with the same first+last name — confirmed live, 8 emails
+//     in production today are shared by two distinct contacts, mostly
+//     couples/family (e.g. Angelo Capalbo Ghelli / Patrizia Capalbo). Auto-
+//     linking on a partial-name match could silently attach a new account to
+//     the wrong person.
+//   - So: same email, but the name doesn't match any contact on that email
+//     exactly → do NOT guess either way (the same "never guess, ask a human"
+//     rule this codebase just adopted for document-signer resolution, see
+//     lib/members/resolve-signer.ts, dev_task 9ad76300 — a lease was signed
+//     by the wrong person after a similar silent pick). Create a new contact
+//     (the safe default — a recoverable duplicate, not a wrongly-merged
+//     identity) and surface a non-blocking warning naming who's already on
+//     that email and what they're linked to, so staff can decide.
+//   - Separately — regardless of email — an EXACT name match against a
+//     DIFFERENT contact (any email, or none) also produces a non-blocking
+//     warning with that contact's companies/roles. This is what actually
+//     answers "does the system recognize the same person across roles":
+//     it surfaces the context to a human rather than having the algorithm
+//     decide. Real example this was built against: Damiano Mocellin is on
+//     file today as two separate contacts (one per email) — owner of his
+//     own company, and a member of a second company (which his own company
+//     also separately holds a stake in) — confirmed live, 2026-08-19.
 //
 // Name is split into parts rather than one free-text field: first/last name
 // feed IRS forms, tax filings, and portal personalization elsewhere, and a
 // naive space-split of one field mis-parsed multi-word names. Middle name
 // has no dedicated column anywhere in the schema, so it's folded into the
-// composed full name (for documents) but deliberately EXCLUDED from the
-// identity-matching name (see below) — matching on the full name including
-// a middle name would miss an existing contact on file as "John Smith" when
-// this call provides "John Michael Smith", forking a duplicate.
+// composed full name used for the stored record and any generated document.
+
+const ADDRESS_COLUMNS = ["address_line1", "address_city", "address_state", "address_zip", "address_country"] as const
+type AddressFields = Record<(typeof ADDRESS_COLUMNS)[number], string | null>
 
 export interface CreateAndLinkContactParams {
   account_id: string
@@ -402,6 +469,50 @@ export interface CreateAndLinkContactResult {
   outcome: "linked" | "already_linked" | "error"
   contact_id?: string
   error?: string
+  /** Non-blocking — a possibly-related existing contact was found (same
+   * email under a different name, or the same name under a different
+   * email). The write already happened; this is only for staff review. */
+  warning?: string
+}
+
+/** This contact's companies and roles, for a human-readable warning
+ * ("already linked to: Orizzonti LLC (owner), Oh My Creatives LLC (Member)"). */
+async function describeContactRoles(contactId: string): Promise<string> {
+  const { data: links, error } = await supabaseAdmin
+    .from("account_contacts")
+    .select("role, accounts(company_name)")
+    .eq("contact_id", contactId)
+  if (error) {
+    // A transient failure here must never read as "no company yet" — that
+    // would understate a real collision to the human this warning exists
+    // to inform (Bug Hunter review, 2026-08-19, dev_task 693273fd).
+    console.error(`[createAndLinkContact] describeContactRoles failed for ${contactId}:`, error.message)
+    return "unable to verify — lookup failed"
+  }
+  const roles = (links || [])
+    .map((l) => {
+      const companyName = (l as { accounts: { company_name: string } | null }).accounts?.company_name
+      return companyName ? `${companyName} (${l.role || "linked"})` : null
+    })
+    .filter((s): s is string => !!s)
+  return roles.length > 0 ? roles.join(", ") : "no company yet"
+}
+
+/** Only fill a field that's currently blank on the existing contact — never
+ * overwrite real data (a prior version of this function unconditionally
+ * overwrote, e.g. replacing an on-file address with whatever a new,
+ * unrelated account's form happened to submit). */
+function blankFieldsOnly(existing: Partial<AddressFields>, incoming: AddressFields): Record<string, unknown> {
+  const patch: Record<string, unknown> = {}
+  for (const col of ADDRESS_COLUMNS) {
+    // Trim before judging blankness — a whitespace-only existing value
+    // (e.g. " ") is not real data and should still be refreshed (Senior
+    // Engineer review, 2026-08-19, dev_task 693273fd).
+    const incomingVal = (incoming[col] ?? "").trim()
+    const existingVal = (existing[col] ?? "").trim()
+    if (incomingVal && !existingVal) patch[col] = incomingVal
+  }
+  return patch
 }
 
 export async function createAndLinkContact(
@@ -422,12 +533,10 @@ export async function createAndLinkContact(
     // both being present at its own Zod-schema layer instead.
 
     const now = new Date().toISOString()
-    // Used ONLY for identity matching — never stored, never shown.
-    const matchingName = [firstName, lastName].filter(Boolean).join(" ")
-    // Used for the stored record and any documents generated from it.
     const legalName = [firstName, middleName, lastName].filter(Boolean).join(" ")
+    const normalizedLegalName = normalizePersonName(legalName)
     const email = normalizeEmail(params.email)
-    const addressFields = {
+    const addressFields: AddressFields = {
       address_line1: params.address_line1 || null,
       address_city: params.address_city || null,
       address_state: params.address_state || null,
@@ -435,30 +544,70 @@ export async function createAndLinkContact(
       address_country: params.address_country || null,
     }
 
-    // Pre-check with the middle name excluded, so an existing contact on
-    // file under a shorter name is still recognized. Only fill address
-    // fields that are currently blank — never overwrite what's on file.
     let resolvedContactId: string | null = null
+    const warnings: string[] = []
+
     if (email) {
       const { data: sameEmailContacts } = await supabaseAdmin
         .from("contacts")
-        .select("id, full_name")
-        .ilike("email", email)
-      resolvedContactId = matchContactByName(sameEmailContacts || [], matchingName)
-      if (resolvedContactId) {
-        const refresh: Record<string, unknown> = {}
-        for (const [k, v] of Object.entries(addressFields)) {
-          if (v) refresh[k] = v
-        }
+        .select("id, full_name, email, address_line1, address_city, address_state, address_zip, address_country")
+        .ilike("email", `%${escapeLikePattern(email)}%`)
+        .is("merged_into", null)
+      // The %-wrapped ilike can still over-match in principle (e.g. a longer
+      // email containing this one as a substring); narrow to a real
+      // case-insensitive equality check in JS, same discipline as
+      // lib/operations/find-contact-by-email.ts.
+      const candidates = (sameEmailContacts || []).filter((c) => (c.email || "").trim().toLowerCase() === email)
+
+      const exactMatch = candidates.find((c) => normalizePersonName(c.full_name) === normalizedLegalName)
+      if (exactMatch) {
+        resolvedContactId = exactMatch.id
+        const refresh = blankFieldsOnly(exactMatch, addressFields)
         if (Object.keys(refresh).length > 0) {
           refresh.updated_at = now
           // eslint-disable-next-line no-restricted-syntax -- operations-layer write on a protected table; not on dev_task 7ebb1e0c's list (new code path), tracked here instead
           await supabaseAdmin.from("contacts").update(refresh).eq("id", resolvedContactId)
         }
+      } else if (candidates.length > 0) {
+        // This email is already on file, but under a different name (or
+        // names) — could be the same person entered inconsistently, or a
+        // shared family/company inbox belonging to someone else entirely.
+        // Never guess: create a new contact, and let a human decide.
+        const others = await Promise.all(
+          candidates.map(async (c) => `${c.full_name || "(no name)"} — ${await describeContactRoles(c.id)}`)
+        )
+        warnings.push(`This email is already on file for a different name: ${others.join("; ")}. Verify this isn't the same person before continuing.`)
       }
     }
 
     if (!resolvedContactId) {
+      // No confident email+name match. Before creating, check for an exact
+      // name match under a DIFFERENT email (or no email) — the Damiano
+      // Mocellin case: same real person, different email per company role.
+      // Runs independently of the email-based check above (not "else if") —
+      // a bug in the first council pass made these mutually exclusive via an
+      // `if (!warning)` guard, silently dropping the second warning whenever
+      // the first one fired (Bug Hunter review, 2026-08-19, dev_task 693273fd).
+      {
+        // Collapse whitespace before building the search pattern — the
+        // original code searched on the raw joined name while comparing
+        // against the whitespace-collapsed `normalizedLegalName`, so stray
+        // whitespace variance could silently defeat the match (Senior
+        // Engineer review, same pass).
+        const searchName = legalName.trim().replace(/\s+/g, " ")
+        const { data: sameNameContacts } = await supabaseAdmin
+          .from("contacts")
+          .select("id, full_name, email")
+          .ilike("full_name", `%${escapeLikePattern(searchName)}%`)
+          .is("merged_into", null)
+        const nameMatch = (sameNameContacts || []).find(
+          (c) => normalizePersonName(c.full_name) === normalizedLegalName && (!email || normalizeEmail(c.email) !== email)
+        )
+        if (nameMatch) {
+          warnings.push(`A contact named "${legalName}" already exists — linked to: ${await describeContactRoles(nameMatch.id)}. Verify this isn't the same person before continuing.`)
+        }
+      }
+
       resolvedContactId = await resolveMemberContactId({
         email: params.email ?? null,
         name: legalName,
@@ -514,6 +663,8 @@ export async function createAndLinkContact(
       }
     }
 
+    const warning = warnings.length > 0 ? warnings.join(" | ") : undefined
+
     logAction({
       actor: params.actor || "system",
       action_type: "create",
@@ -522,13 +673,14 @@ export async function createAndLinkContact(
       account_id: params.account_id,
       contact_id: resolvedContactId,
       summary: `${existingLink ? "Linked existing contact" : "Added contact"}: ${legalName}`,
-      details: { full_name: legalName, email: params.email, role: params.role || "owner", is_primary: params.is_primary ?? false },
+      details: { full_name: legalName, email: params.email, role: params.role || "owner", is_primary: params.is_primary ?? false, warning },
     })
 
     return {
       success: true,
       outcome: existingLink ? "already_linked" : "linked",
       contact_id: resolvedContactId,
+      warning,
     }
   } catch (err) {
     return {

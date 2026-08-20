@@ -4,9 +4,11 @@
  * These are the operations-layer replacements for the raw RLS-scoped inserts
  * that never succeeded in production (accounts/contacts had no staff INSERT
  * policy — see dev_task 7ebb1e0c). Covers: near-duplicate-name guard (not
- * just exact matches), the portal_tier/account_type defaults, structured
- * name capture with middle-name-safe contact matching, address refresh on an
- * existing match, and action_log writes.
+ * just exact matches), the portal_tier/account_type defaults, EIN
+ * normalization, and — rewritten 2026-08-19, dev_task 693273fd, second pass —
+ * identity matching that never silently guesses: an exact email+name match
+ * auto-links, anything less certain creates a new contact and surfaces a
+ * non-blocking warning instead of merging or missing an existing person.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
@@ -20,7 +22,19 @@ let accountInsertResult: { data: { id: string } | null; error: { message: string
   data: { id: "acct-new-1" },
   error: null,
 }
-let sameEmailContacts: Array<{ id: string; full_name: string | null }> = []
+let sameEmailContacts: Array<{
+  id: string
+  full_name: string | null
+  email: string | null
+  address_line1?: string | null
+  address_city?: string | null
+  address_state?: string | null
+  address_zip?: string | null
+  address_country?: string | null
+}> = []
+let sameNameContacts: Array<{ id: string; full_name: string | null; email: string | null }> = []
+let contactRolesByContactId: Record<string, Array<{ role: string | null; accounts: { company_name: string } | null }>> = {}
+let contactRolesError: { message: string } | null = null
 let accountContactsExistingLink: { account_id: string } | null = null
 let accountContactsInsertError: { message: string } | null = null
 let contactsInsertResult: { data: { id: string } | null; error: { message: string } | null } = {
@@ -33,6 +47,13 @@ const contactsUpdateCalls: Array<{ id: string; patch: Record<string, unknown> }>
 const accountContactsInsertCalls: Array<Record<string, unknown>> = []
 const contactsInsertCalls: Array<Record<string, unknown>> = []
 const actionLogCalls: Array<Record<string, unknown>> = []
+// Spies proving escapeLikePattern's real effect + the merged_into filter are
+// actually invoked, not silently made a no-op by a permissive mock (QA-Tester
+// finding, council review 2026-08-19, dev_task 693273fd).
+const emailIlikeCalls: string[] = []
+const nameIlikeCalls: string[] = []
+const emailIsCalls: Array<[string, unknown]> = []
+const nameIsCalls: Array<[string, unknown]> = []
 
 const resolveMemberContactIdMock = vi.fn<[Record<string, unknown>], Promise<string | null>>()
 
@@ -64,13 +85,26 @@ vi.mock("@/lib/supabase-admin", () => ({
       }
       if (table === "account_contacts") {
         return {
-          select: vi.fn(() => ({
-            eq: vi.fn(() => ({
+          select: vi.fn((cols: string) => {
+            if (cols.includes("accounts(company_name)")) {
+              return {
+                eq: vi.fn((_col: string, contactId: string) =>
+                  Promise.resolve(
+                    contactRolesError
+                      ? { data: null, error: contactRolesError }
+                      : { data: contactRolesByContactId[contactId] || [], error: null }
+                  )
+                ),
+              }
+            }
+            return {
               eq: vi.fn(() => ({
-                maybeSingle: vi.fn(() => Promise.resolve({ data: accountContactsExistingLink, error: null })),
+                eq: vi.fn(() => ({
+                  maybeSingle: vi.fn(() => Promise.resolve({ data: accountContactsExistingLink, error: null })),
+                })),
               })),
-            })),
-          })),
+            }
+          }),
           insert: vi.fn((payload: Record<string, unknown>) => {
             accountContactsInsertCalls.push(payload)
             return Promise.resolve({ error: accountContactsInsertError })
@@ -80,7 +114,23 @@ vi.mock("@/lib/supabase-admin", () => ({
       if (table === "contacts") {
         return {
           select: vi.fn(() => ({
-            ilike: vi.fn(() => Promise.resolve({ data: sameEmailContacts, error: null })),
+            ilike: vi.fn((col: string, pattern: string) => {
+              if (col === "email") emailIlikeCalls.push(pattern)
+              if (col === "full_name") nameIlikeCalls.push(pattern)
+              return {
+                is: vi.fn((col2: string, val2: unknown) => {
+                  if (col === "email") {
+                    emailIsCalls.push([col2, val2])
+                    return Promise.resolve({ data: sameEmailContacts, error: null })
+                  }
+                  if (col === "full_name") {
+                    nameIsCalls.push([col2, val2])
+                    return Promise.resolve({ data: sameNameContacts, error: null })
+                  }
+                  return Promise.resolve({ data: [], error: null })
+                }),
+              }
+            }),
           })),
           update: vi.fn((patch: Record<string, unknown>) => ({
             eq: vi.fn((_col: string, id: string) => {
@@ -107,6 +157,9 @@ beforeEach(() => {
   allAccounts = []
   accountInsertResult = { data: { id: "acct-new-1" }, error: null }
   sameEmailContacts = []
+  sameNameContacts = []
+  contactRolesByContactId = {}
+  contactRolesError = null
   accountContactsExistingLink = null
   accountContactsInsertError = null
   contactsInsertResult = { data: { id: "contact-fallback-1" }, error: null }
@@ -115,6 +168,10 @@ beforeEach(() => {
   accountContactsInsertCalls.length = 0
   contactsInsertCalls.length = 0
   actionLogCalls.length = 0
+  emailIlikeCalls.length = 0
+  nameIlikeCalls.length = 0
+  emailIsCalls.length = 0
+  nameIsCalls.length = 0
   resolveMemberContactIdMock.mockReset()
   resolveMemberContactIdMock.mockResolvedValue("contact-resolved-1")
 })
@@ -129,6 +186,29 @@ describe("createAccount — validation", () => {
     expect(result.outcome).toBe("error")
     expect(result.error).toContain("company_name")
     expect(accountInsertCalls.length).toBe(0)
+  })
+})
+
+describe("createAccount — EIN normalization", () => {
+  it("normalizes a plain 9-digit EIN to XX-XXXXXXX", async () => {
+    const { createAccount } = await import("@/lib/operations/account")
+    await createAccount({ company_name: "Digitsolution Agency LLC", ein_number: "301482516" })
+    expect(accountInsertCalls[0].ein_number).toBe("30-1482516")
+  })
+
+  it("rejects a malformed EIN instead of saving it raw", async () => {
+    const { createAccount } = await import("@/lib/operations/account")
+    const result = await createAccount({ company_name: "Digitsolution Agency LLC", ein_number: "pending" })
+    expect(result.success).toBe(false)
+    expect(result.outcome).toBe("error")
+    expect(result.error).toContain("Invalid EIN")
+    expect(accountInsertCalls.length).toBe(0)
+  })
+
+  it("leaves ein_number null when not supplied", async () => {
+    const { createAccount } = await import("@/lib/operations/account")
+    await createAccount({ company_name: "Digitsolution Agency LLC" })
+    expect(accountInsertCalls[0].ein_number).toBeNull()
   })
 })
 
@@ -181,6 +261,30 @@ describe("createAccount — near-duplicate guard", () => {
     allAccounts = [{ id: "acct-existing-7", company_name: "Test" }]
     const { createAccount } = await import("@/lib/operations/account")
     const result = await createAccount({ company_name: "test" })
+    expect(result.success).toBe(false)
+    expect(result.outcome).toBe("duplicate")
+  })
+
+  it("does not mistake 'Lilac Consulting LLC' for a duplicate of another '...Consulting LLC' (a suffix-stripping regex bug found in review: unescaped periods in 'l.l.c' matched the middle of the word 'lilac')", async () => {
+    allAccounts = [{ id: "acct-existing-8", company_name: "Blue Sky Consulting LLC" }]
+    const { createAccount } = await import("@/lib/operations/account")
+    const result = await createAccount({ company_name: "Lilac Consulting LLC" })
+    expect(result.success).toBe(true)
+    expect(result.outcome).toBe("created")
+  })
+
+  it("still catches two accounts named literally just 'LLC' as an exact duplicate (a suffix-only name normalizes to empty, which used to silently bypass the guard)", async () => {
+    allAccounts = [{ id: "acct-existing-9", company_name: "LLC" }]
+    const { createAccount } = await import("@/lib/operations/account")
+    const result = await createAccount({ company_name: "LLC" })
+    expect(result.success).toBe(false)
+    expect(result.outcome).toBe("duplicate")
+  })
+
+  it("catches two suffix-only names that differ only by punctuation ('LLC' vs 'L.L.C.') — the raw fallback used to compare unstripped punctuation, so these looked different even though they normalize to the same word", async () => {
+    allAccounts = [{ id: "acct-existing-10", company_name: "L.L.C." }]
+    const { createAccount } = await import("@/lib/operations/account")
+    const result = await createAccount({ company_name: "LLC" })
     expect(result.success).toBe(false)
     expect(result.outcome).toBe("duplicate")
   })
@@ -270,35 +374,9 @@ describe("createAndLinkContact — validation", () => {
   })
 })
 
-describe("createAndLinkContact — name composition", () => {
-  it("composes the legal full name from first + middle + last for a brand-new contact", async () => {
-    resolveMemberContactIdMock.mockResolvedValue(null)
-    contactsInsertResult = { data: { id: "contact-fallback-1" }, error: null }
-    const { createAndLinkContact } = await import("@/lib/operations/account")
-    await createAndLinkContact({ account_id: "acct-1", first_name: "Dante", middle_name: "Michael", last_name: "Basso" })
-    expect(contactsInsertCalls[0].full_name).toBe("Dante Michael Basso")
-    expect(contactsInsertCalls[0].first_name).toBe("Dante")
-    expect(contactsInsertCalls[0].last_name).toBe("Basso")
-  })
-
-  it("passes the middle-name-inclusive legal name to resolveMemberContactId as the create-fallback name", async () => {
-    const { createAndLinkContact } = await import("@/lib/operations/account")
-    await createAndLinkContact({
-      account_id: "acct-1",
-      first_name: "Dante",
-      middle_name: "Michael",
-      last_name: "Basso",
-      email: "dante@example.com",
-    })
-    expect(resolveMemberContactIdMock).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "Dante Michael Basso" })
-    )
-  })
-})
-
-describe("createAndLinkContact — middle-name-safe identity matching", () => {
-  it("finds an existing contact on file WITHOUT a middle name, even when one is provided now", async () => {
-    sameEmailContacts = [{ id: "contact-existing-john", full_name: "John Smith" }]
+describe("createAndLinkContact — exact email+name match auto-links (the only case that never asks)", () => {
+  it("auto-links when the full legal name (including middle) exactly matches an existing contact on that email", async () => {
+    sameEmailContacts = [{ id: "contact-existing-john", full_name: "John Michael Smith", email: "john@example.com" }]
     const { createAndLinkContact } = await import("@/lib/operations/account")
     const result = await createAndLinkContact({
       account_id: "acct-1",
@@ -309,15 +387,181 @@ describe("createAndLinkContact — middle-name-safe identity matching", () => {
     })
     expect(result.success).toBe(true)
     expect(result.contact_id).toBe("contact-existing-john")
-    // Reused the existing record — never called the create-fallback insert,
-    // and never even reached resolveMemberContactId's own (middle-name-
-    // inclusive) matching attempt.
+    expect(result.warning).toBeUndefined()
     expect(contactsInsertCalls.length).toBe(0)
     expect(resolveMemberContactIdMock).not.toHaveBeenCalled()
   })
 
-  it("fills blank address fields on the matched existing contact without overwriting anything", async () => {
-    sameEmailContacts = [{ id: "contact-existing-john", full_name: "John Smith" }]
+  it("correctly picks the matching person out of TWO contacts that share one email (the family-LLC case) instead of merging or guessing", async () => {
+    sameEmailContacts = [
+      { id: "contact-father", full_name: "John Smith", email: "family@biz.com" },
+      { id: "contact-son", full_name: "John David Smith", email: "family@biz.com" },
+    ]
+    const { createAndLinkContact } = await import("@/lib/operations/account")
+    const result = await createAndLinkContact({
+      account_id: "acct-1",
+      first_name: "John",
+      middle_name: "David",
+      last_name: "Smith",
+      email: "family@biz.com",
+    })
+    expect(result.contact_id).toBe("contact-son")
+    expect(result.warning).toBeUndefined()
+  })
+
+  it("fills blank address fields on the matched existing contact without overwriting a value that's already there", async () => {
+    sameEmailContacts = [
+      { id: "contact-existing-john", full_name: "John Smith", email: "john@example.com", address_city: "Boston", address_line1: null },
+    ]
+    const { createAndLinkContact } = await import("@/lib/operations/account")
+    await createAndLinkContact({
+      account_id: "acct-1",
+      first_name: "John",
+      last_name: "Smith",
+      email: "john@example.com",
+      address_city: "Miami",
+      address_line1: "1 Main St",
+    })
+    expect(contactsUpdateCalls.length).toBe(1)
+    expect(contactsUpdateCalls[0].id).toBe("contact-existing-john")
+    // Boston was already there — must NOT be overwritten with Miami.
+    expect(contactsUpdateCalls[0].patch.address_city).toBeUndefined()
+    // address_line1 was blank — the new value fills it.
+    expect(contactsUpdateCalls[0].patch.address_line1).toBe("1 Main St")
+  })
+
+  it("skips the address refresh entirely when nothing is blank to fill", async () => {
+    sameEmailContacts = [
+      { id: "contact-existing-john", full_name: "John Smith", email: "john@example.com", address_city: "Boston" },
+    ]
+    const { createAndLinkContact } = await import("@/lib/operations/account")
+    await createAndLinkContact({ account_id: "acct-1", first_name: "John", last_name: "Smith", email: "john@example.com", address_city: "Miami" })
+    expect(contactsUpdateCalls.length).toBe(0)
+  })
+})
+
+describe("createAndLinkContact — anything less than an exact match creates new + warns instead of guessing", () => {
+  it("does NOT auto-link when the stored name lacks the middle name just submitted — creates a new contact and warns instead of silently merging or silently duplicating", async () => {
+    sameEmailContacts = [{ id: "contact-existing-john", full_name: "John Smith", email: "john@example.com" }]
+    contactRolesByContactId["contact-existing-john"] = [{ role: "owner", accounts: { company_name: "Smith LLC" } }]
+    resolveMemberContactIdMock.mockResolvedValue("contact-resolved-1")
+    const { createAndLinkContact } = await import("@/lib/operations/account")
+    const result = await createAndLinkContact({
+      account_id: "acct-1",
+      first_name: "John",
+      middle_name: "Michael",
+      last_name: "Smith",
+      email: "john@example.com",
+    })
+    expect(result.success).toBe(true)
+    expect(result.contact_id).toBe("contact-resolved-1")
+    expect(result.warning).toBeTruthy()
+    expect(result.warning).toContain("John Smith")
+    expect(result.warning).toContain("Smith LLC")
+  })
+
+  it("warns when an email is shared with a completely different name on file (does not assume same person)", async () => {
+    sameEmailContacts = [{ id: "contact-other-person", full_name: "Someone Else", email: "shared@biz.com" }]
+    contactRolesByContactId["contact-other-person"] = [{ role: "Member", accounts: { company_name: "Shared LLC" } }]
+    const { createAndLinkContact } = await import("@/lib/operations/account")
+    const result = await createAndLinkContact({ account_id: "acct-1", first_name: "New", last_name: "Person", email: "shared@biz.com" })
+    expect(result.success).toBe(true)
+    expect(result.warning).toContain("Someone Else")
+    expect(result.warning).toContain("Shared LLC")
+  })
+
+  it("warns on an exact name match under a DIFFERENT email, listing that person's other companies/roles (the Damiano Mocellin case)", async () => {
+    sameNameContacts = [{ id: "contact-damiano", full_name: "Damiano Mocellin", email: "info@orizzonti.us" }]
+    contactRolesByContactId["contact-damiano"] = [
+      { role: "owner", accounts: { company_name: "Orizzonti LLC" } },
+      { role: "Member", accounts: { company_name: "Oh My Creatives LLC" } },
+    ]
+    const { createAndLinkContact } = await import("@/lib/operations/account")
+    const result = await createAndLinkContact({
+      account_id: "acct-1",
+      first_name: "Damiano",
+      last_name: "Mocellin",
+      email: "hello@ohmycreatives.com",
+    })
+    expect(result.success).toBe(true)
+    expect(result.warning).toContain("Damiano Mocellin")
+    expect(result.warning).toContain("Orizzonti LLC")
+    expect(result.warning).toContain("Oh My Creatives LLC")
+  })
+
+  it("does not warn on a same-name match when no email was given at all and none exists on the matched contact either (still surfaces — email absence isn't a reason to hide a real name collision)", async () => {
+    sameNameContacts = [{ id: "contact-existing", full_name: "Jane Smith", email: null }]
+    contactRolesByContactId["contact-existing"] = [{ role: "owner", accounts: { company_name: "Jane's LLC" } }]
+    const { createAndLinkContact } = await import("@/lib/operations/account")
+    const result = await createAndLinkContact({ account_id: "acct-1", first_name: "Jane", last_name: "Smith" })
+    expect(result.warning).toContain("Jane Smith")
+  })
+
+  it("does not warn when there is no email match and no name match — and actually completes the save, not just the warning check", async () => {
+    const { createAndLinkContact } = await import("@/lib/operations/account")
+    const result = await createAndLinkContact({ account_id: "acct-1", first_name: "Brand", last_name: "New", email: "brand.new@example.com" })
+    expect(result.warning).toBeUndefined()
+    expect(result.success).toBe(true)
+    expect(result.outcome).toBe("linked")
+    expect(result.contact_id).toBe("contact-resolved-1")
+    expect(accountContactsInsertCalls.length).toBe(1)
+  })
+})
+
+describe("createAndLinkContact — both warnings fire independently (not mutually exclusive)", () => {
+  it("surfaces BOTH the email-collision warning and the exact-name-match (Damiano) warning when both conditions are true — a prior bug's `if (!warning)` guard silently dropped the second one whenever the first fired", async () => {
+    sameEmailContacts = [{ id: "contact-other-person", full_name: "Someone Else", email: "shared@biz.com" }]
+    contactRolesByContactId["contact-other-person"] = [{ role: "Member", accounts: { company_name: "Shared LLC" } }]
+    sameNameContacts = [{ id: "contact-damiano", full_name: "Damiano Mocellin", email: "info@orizzonti.us" }]
+    contactRolesByContactId["contact-damiano"] = [{ role: "owner", accounts: { company_name: "Orizzonti LLC" } }]
+
+    const { createAndLinkContact } = await import("@/lib/operations/account")
+    const result = await createAndLinkContact({
+      account_id: "acct-1",
+      first_name: "Damiano",
+      last_name: "Mocellin",
+      email: "shared@biz.com",
+    })
+    expect(result.warning).toContain("Someone Else")
+    expect(result.warning).toContain("Damiano Mocellin")
+    expect(result.warning).toContain("Orizzonti LLC")
+  })
+})
+
+describe("createAndLinkContact — ILIKE wildcard escaping is actually applied (not a mock no-op)", () => {
+  it("escapes % and _ before building both the email and the full-name search patterns", async () => {
+    const { createAndLinkContact } = await import("@/lib/operations/account")
+    await createAndLinkContact({
+      account_id: "acct-1",
+      first_name: "Jane_50%",
+      last_name: "O'Brien",
+      email: "jane_doe@gmail.com",
+    })
+    expect(emailIlikeCalls[0]).toBe("%jane\\_doe@gmail.com%")
+    expect(nameIlikeCalls[0]).toBe("%Jane\\_50\\% O'Brien%")
+  })
+
+  it("collapses internal double-spaces (a typo within a single name field) before building the name search pattern, matching the whitespace-collapsed comparison used to judge an exact match", async () => {
+    const { createAndLinkContact } = await import("@/lib/operations/account")
+    await createAndLinkContact({ account_id: "acct-1", first_name: "Jane  Ann", last_name: "Smith", email: null })
+    expect(nameIlikeCalls[0]).toBe("%Jane Ann Smith%")
+  })
+})
+
+describe("createAndLinkContact — excludes merged contacts from identity candidates", () => {
+  it("filters merged_into IS NULL on both the email and the name candidate queries", async () => {
+    const { createAndLinkContact } = await import("@/lib/operations/account")
+    await createAndLinkContact({ account_id: "acct-1", first_name: "Brand", last_name: "New", email: "brand.new@example.com" })
+    expect(emailIsCalls[0]).toEqual(["merged_into", null])
+    expect(nameIsCalls[0]).toEqual(["merged_into", null])
+  })
+})
+
+describe("createAndLinkContact — refresh treats a whitespace-only existing value as blank", () => {
+  it("fills a field whose on-file value is only whitespace instead of treating it as already-set", async () => {
+    sameEmailContacts = [
+      { id: "contact-existing-john", full_name: "John Smith", email: "john@example.com", address_city: "   ", address_line1: null },
+    ]
     const { createAndLinkContact } = await import("@/lib/operations/account")
     await createAndLinkContact({
       account_id: "acct-1",
@@ -327,23 +571,18 @@ describe("createAndLinkContact — middle-name-safe identity matching", () => {
       address_city: "Miami",
     })
     expect(contactsUpdateCalls.length).toBe(1)
-    expect(contactsUpdateCalls[0].id).toBe("contact-existing-john")
-    expect(contactsUpdateCalls[0].patch).toMatchObject({ address_city: "Miami" })
-    expect(contactsUpdateCalls[0].patch.address_line1).toBeUndefined()
+    expect(contactsUpdateCalls[0].patch.address_city).toBe("Miami")
   })
+})
 
-  it("skips the address refresh entirely when no address fields are provided", async () => {
-    sameEmailContacts = [{ id: "contact-existing-john", full_name: "John Smith" }]
+describe("createAndLinkContact — a describeContactRoles lookup failure never crashes the write", () => {
+  it("still creates the contact and returns a degraded (not misleadingly empty) warning instead of throwing", async () => {
+    sameEmailContacts = [{ id: "contact-other-person", full_name: "Someone Else", email: "shared@biz.com" }]
+    contactRolesError = { message: "connection reset" }
     const { createAndLinkContact } = await import("@/lib/operations/account")
-    await createAndLinkContact({ account_id: "acct-1", first_name: "John", last_name: "Smith", email: "john@example.com" })
-    expect(contactsUpdateCalls.length).toBe(0)
-  })
-
-  it("falls through to resolveMemberContactId when no same-email contact matches by name", async () => {
-    sameEmailContacts = [{ id: "contact-someone-else", full_name: "Someone Else" }]
-    const { createAndLinkContact } = await import("@/lib/operations/account")
-    await createAndLinkContact({ account_id: "acct-1", first_name: "John", last_name: "Smith", email: "john@example.com" })
-    expect(resolveMemberContactIdMock).toHaveBeenCalled()
+    const result = await createAndLinkContact({ account_id: "acct-1", first_name: "New", last_name: "Person", email: "shared@biz.com" })
+    expect(result.success).toBe(true)
+    expect(result.warning).toContain("unable to verify")
   })
 })
 

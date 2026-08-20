@@ -323,13 +323,25 @@ function ContactsSection({
       const { createAndLinkContact } = await import('@/app/(dashboard)/accounts/actions')
       const result = await createAndLinkContact(account.id, searchQuery.trim(), newEmail.trim() || null, selectedRole)
       if (result.success) {
-        toast.success(`${searchQuery.trim()} created and linked as ${selectedRole}`)
+        if (result.warning) {
+          // Longer duration + a real delay before reload — an immediate
+          // reload wiped this toast before it could ever render (BLOCKER,
+          // council review 2026-08-19, dev_task 693273fd). Duration matches
+          // the ss4Note warning pattern already used elsewhere in this file.
+          toast.warning(result.warning, { duration: 12000 })
+        } else {
+          toast.success(`${searchQuery.trim()} created and linked as ${selectedRole}`)
+        }
         setShowSearch(false)
         setShowCreateForm(false)
         setSearchQuery('')
         setNewEmail('')
         setSearchResults([])
-        window.location.reload()
+        // Delay matches the toast's own duration above — a page reload kills
+        // the toast outright regardless of its configured duration, so the
+        // two numbers must agree or the stated 12s window is a lie (Bug
+        // Hunter + Senior Engineer review, 2026-08-19, dev_task 693273fd).
+        setTimeout(() => window.location.reload(), result.warning ? 12000 : 250)
       } else {
         toast.error(result.error ?? 'Failed to create contact')
       }
