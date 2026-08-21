@@ -39,7 +39,7 @@ describe('clientLoginContactIds', () => {
 })
 
 describe('clientLoginNeedsSetupIds', () => {
-  it('flags only client logins with must_change_password literally true', () => {
+  it('flags client logins with a truthy must_change_password, matching the real password gate exactly', () => {
     const ids = clientLoginNeedsSetupIds([
       { app_metadata: { role: 'client', contact_id: 'stuck' }, user_metadata: { must_change_password: true } },
       { app_metadata: { role: 'client', contact_id: 'done' }, user_metadata: { must_change_password: false } },
@@ -56,11 +56,11 @@ describe('clientLoginNeedsSetupIds', () => {
     expect(ids.size).toBe(0)
   })
 
-  it('ignores a truthy-but-not-literal-true value (defensive against a future string/number flag)', () => {
+  it('flags any truthy value, not just the literal boolean true — same coercion as the real password gate (!!user.user_metadata?.must_change_password in app/portal/layout.tsx), so this can never silently disagree with what PasswordGate actually shows the client', () => {
     const ids = clientLoginNeedsSetupIds([
       { app_metadata: { role: 'client', contact_id: 'c1' }, user_metadata: { must_change_password: 'true' as unknown as boolean } },
     ])
-    expect(ids.size).toBe(0)
+    expect([...ids]).toEqual(['c1'])
   })
 
   it('returns an empty set for an empty list', () => {

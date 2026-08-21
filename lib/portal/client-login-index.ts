@@ -85,7 +85,7 @@ export function clientLoginNeedsSetupIds(users: AuthUserLike[]): Set<string> {
     if (meta?.role !== 'client') continue
     const id = meta?.contact_id
     if (typeof id !== 'string' || id.length === 0) continue
-    if (u?.user_metadata?.must_change_password === true) ids.add(id)
+    if (u?.user_metadata?.must_change_password) ids.add(id)
   }
   return ids
 }
