@@ -60,6 +60,18 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     const mapped = categoryForAnswer(body.answer)
     if (!mapped) return NextResponse.json({ error: `Unknown answer: ${body.answer}` }, { status: 400 })
 
+    // Hard-stop parity (2026-08-21, live-QA bug-hunter blocker): this route
+    // had NO structural-problem check — reachable both from the (correctly
+    // gated) main categorization queue AND from the "Time away from home
+    // base" inline review card, which was NOT gated. Worse here than the
+    // portal twin: a forked workspace's answer can auto-learn a PERMANENT,
+    // account-scoped rule onto the real linked client below — never let that
+    // happen from a workspace whose own data is known-unreliable.
+    const { getWorkspaceStructuralProblem } = await import('@/lib/tax/workspace-orchestration')
+    if (await getWorkspaceStructuralProblem(params.id)) {
+      return NextResponse.json({ error: 'This workspace has an unresolved data problem (an unreadable statement, or a missing-months question) — fix that first before answering anything else.' }, { status: 422 })
+    }
+
     // Override telemetry (Phase 0.5): rows the AI auto-booked (notes ai:high@vN)
     // that a human is about to re-answer are the PRODUCTION precision meter —
     // captured BEFORE the update overwrites the notes. Chunked ×200: a single

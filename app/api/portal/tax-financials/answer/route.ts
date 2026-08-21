@@ -103,6 +103,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Your submission is locked (under review or already confirmed) — ask us to reopen it before changing answers.' }, { status: 409 })
     }
 
+    // Hard-stop parity (2026-08-21, live-QA bug-hunter blocker): this route
+    // had NO structural-problem check — reachable both from the (correctly
+    // gated) main categorization queue AND from the "Time away from home
+    // base" inline review card, which was NOT gated. A blocked account could
+    // have real categorization decisions written while the P&L/BS themselves
+    // were correctly hidden. Checking here covers both entry points at once.
+    const { getAccountStructuralProblem } = await import('@/lib/tax/financials-orchestration')
+    if (await getAccountStructuralProblem(accountId, taxYear)) {
+      return NextResponse.json({ error: 'This year has an unresolved data problem (an unreadable statement, or a missing-months question) — fix that first before answering anything else.' }, { status: 422 })
+    }
+
     // Override telemetry (Phase 0.5, 2026-07-03): AI-booked rows (notes
     // ai:high@vN) the client is about to re-answer are the PRODUCTION precision
     // meter — captured BEFORE the update overwrites the notes. Chunked ×200: a

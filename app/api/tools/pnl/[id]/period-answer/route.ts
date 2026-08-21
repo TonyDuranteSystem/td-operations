@@ -57,6 +57,16 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       return NextResponse.json({ error: 'period_start and period_end are required.' }, { status: 400 })
     }
 
+    // Hard-stop parity (2026-08-21, live-QA bug-hunter blocker): this route
+    // had NO structural-problem check — reachable from the "Time away from
+    // home base" section, which was not gated. A blocked workspace could
+    // have real categorization decisions swept while the P&L/BS themselves
+    // were correctly hidden. Same check the client-portal twin now has.
+    const { getWorkspaceStructuralProblem } = await import('@/lib/tax/workspace-orchestration')
+    if (await getWorkspaceStructuralProblem(workspaceId)) {
+      return NextResponse.json({ error: 'This workspace has an unresolved data problem (an unreadable statement, or a missing-months question) — fix that first before answering anything else.' }, { status: 422 })
+    }
+
     const result = await applyLocationAnswer({
       workspaceId,
       locCodes,
