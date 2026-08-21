@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 /* eslint-disable no-restricted-syntax, @typescript-eslint/no-explicit-any */
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   const { services, reviewed_by, audit_sections } = await req.json()
 
   const { error } = await (supabaseAdmin as any)
@@ -34,6 +37,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   const { section, confirmed, audit_sections } = await req.json()
 
   const { data, error } = await (supabaseAdmin as any)

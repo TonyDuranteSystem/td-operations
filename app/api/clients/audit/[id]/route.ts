@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabaseAdmin as any)
     .from('accounts')
@@ -27,6 +30,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
 /* eslint-disable no-restricted-syntax */
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   const { account, contact, contacts } = await req.json()
 
   if (account && Object.keys(account).length > 0) {
