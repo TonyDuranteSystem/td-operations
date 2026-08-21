@@ -9,8 +9,21 @@ import { toast } from 'sonner'
  * given contact in a new tab. Render this only for true admins and only when the
  * contact has a portal login (the API also enforces both, returning a clean
  * `no_login` reason otherwise — surfaced per R099).
+ *
+ * `note`: set by the account page when `contactId` is a stand-in for a
+ * different co-member who hasn't finished their own portal setup — shown to
+ * staff at click time so it's clear WHO they're actually looking at and why
+ * (KS Media Consulting LLC, 2026-08-21).
  */
-export function ViewAsClientButton({ contactId, label = 'View as client' }: { contactId: string; label?: string }) {
+export function ViewAsClientButton({
+  contactId,
+  label = 'View as client',
+  note,
+}: {
+  contactId: string
+  label?: string
+  note?: string | null
+}) {
   const [loading, setLoading] = useState(false)
 
   async function handleClick() {
@@ -31,6 +44,7 @@ export function ViewAsClientButton({ contactId, label = 'View as client' }: { co
         return
       }
       if (data.ok && data.url) {
+        if (note) toast.info(note)
         window.open(data.url, '_blank', 'noopener,noreferrer')
       } else {
         throw new Error('Could not open the client view. Please try again.')

@@ -6,8 +6,8 @@ import { AccountDetail } from '@/components/accounts/account-detail'
 import { APP_BASE_URL } from '@/lib/config'
 import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
-import { isOwnerRole, pickViewAsContactId } from '@/lib/portal/pick-view-as-contact'
-import { getClientLoginContactIds } from '@/lib/portal/client-login-index'
+import { isOwnerRole, pickViewAsFallback } from '@/lib/portal/pick-view-as-contact'
+import { getClientLoginContactIds, getClientLoginNeedsSetupIds } from '@/lib/portal/client-login-index'
 import { resolveAccountSigner } from '@/lib/members/resolve-signer'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import { resolveFlows } from '@/lib/flows/resolve-flows'
@@ -58,7 +58,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   }
 
   // Fetch related data in parallel
-  const [contactsResult, servicesResult, paymentsResult, dealsResult, taxReturnsResult, documentsResult, offerResult, , wizardProgressResult, signerResult] = await Promise.all([
+  const [contactsResult, servicesResult, paymentsResult, dealsResult, taxReturnsResult, documentsResult, offerResult, , wizardProgressResult, signerResult, currentMembersResult] = await Promise.all([
     // Contacts via junction table
     supabase
       .from('account_contacts')
@@ -127,6 +127,15 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     // question (lib/members/resolve-signer.ts) and already uses supabaseAdmin
     // internally, so it isn't blocked by members' client-only RLS policy.
     resolveAccountSigner(params.id),
+    // Current members roster (supabaseAdmin — same client-only RLS reason as
+    // resolveAccountSigner above). Used ONLY to bound the View-as fallback's
+    // candidate pool to people who are STILL actually members, never to
+    // account_contacts alone — deleting a member (DELETE /api/accounts/[id]/
+    // members) does not clean up their account_contacts link, so a departed
+    // co-member's stale link can otherwise sit there indefinitely and get
+    // surfaced as a "legitimate" View-as substitute (bug-hunter finding,
+    // 2026-08-21, same review pass that shipped this fallback).
+    supabaseAdmin.from('members').select('contact_id').eq('account_id', params.id),
   ])
 
   const contacts: Contact[] = (contactsResult.data ?? []).map(c => {
@@ -527,18 +536,38 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   // between the two, silently ignoring which one the resolver actually
   // picked — the same wrong-person failure this fix exists to close, just
   // moved one layer down (senior-engineer confirmation pass, 2026-08-21).
+  //
+  // PREFER A CONTACT WHO HAS ACTUALLY FINISHED SETUP over one who merely has
+  // a login, bounded to CURRENT members so a departed co-member's stale
+  // account_contacts link (member removal never cleans that table up) can
+  // never be surfaced as a substitute — full rule + KS Media Consulting LLC
+  // origin story in `pickViewAsFallback`'s own doc comment
+  // (lib/portal/pick-view-as-contact.ts), unit-tested there directly.
+  // Deliberately scoped to View-as target selection ONLY — `primaryContact`
+  // above (the e-sign prefill) is untouched and still follows the resolved
+  // signer alone, because who legally signs documents must never shift just
+  // because a different co-member happened to log into the portal.
+  const currentMemberContactIds = currentMembersResult.data && currentMembersResult.data.length > 0
+    ? new Set(currentMembersResult.data.map((m) => m.contact_id as string))
+    : null
+
   let viewAsContactId: string | null = null
+  let viewAsNote: string | null = null
   if (canViewAs && contacts.length > 0) {
     try {
-      const loginHolders = await getClientLoginContactIds()
-      if (resolvedSignerContact && loginHolders.has(resolvedSignerContact.id)) {
-        viewAsContactId = resolvedSignerContact.id
-      } else {
-        viewAsContactId = pickViewAsContactId(
-          contacts.map((c) => ({ id: c.id, role: (c as Contact & { role?: string }).role })),
-          loginHolders,
-        )
-      }
+      const [loginHolders, needsSetupIds] = await Promise.all([
+        getClientLoginContactIds(),
+        getClientLoginNeedsSetupIds(),
+      ])
+      const fallback = pickViewAsFallback({
+        contacts: contacts.map((c) => ({ id: c.id, role: (c as Contact & { role?: string }).role, full_name: c.full_name })),
+        resolvedSignerId: resolvedSignerContact?.id ?? null,
+        loginHolders,
+        needsSetupIds,
+        currentMemberContactIds,
+      })
+      viewAsContactId = fallback.contactId
+      viewAsNote = fallback.note
     } catch (e) {
       // Auth listing failure must not break the account page — just hide the button.
       console.error('[accounts/[id]] view-as target resolution failed:', e)
@@ -554,7 +583,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         >
           ✍️ Create e-sign document
         </Link>
-        {canViewAs && viewAsContactId && <ViewAsClientButton contactId={viewAsContactId} />}
+        {canViewAs && viewAsContactId && <ViewAsClientButton contactId={viewAsContactId} note={viewAsNote} />}
       </div>
       {formationSd && (
         <FormationWorkspaceBanner

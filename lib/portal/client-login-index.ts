@@ -38,19 +38,23 @@ import { listAllAuthUsers } from '@/lib/auth-admin-helpers'
 /** How long a snapshot stays usable. Short enough that staff never fight it. */
 export const CLIENT_LOGIN_CACHE_TTL_MS = 60_000
 
+type AuthUserLike = {
+  app_metadata?: { role?: string; contact_id?: string } | null
+  user_metadata?: { must_change_password?: unknown } | null
+}
+
 interface Snapshot {
   ids: Set<string>
+  needsSetupIds: Set<string>
   expiresAt: number
 }
 
 let snapshot: Snapshot | null = null
 /** In-flight fetch, so N concurrent page renders trigger ONE scan, not N. */
-let inFlight: Promise<Set<string>> | null = null
+let inFlight: Promise<Snapshot> | null = null
 
 /** Pure: extract the contact ids that own a CLIENT login from an auth user list. */
-export function clientLoginContactIds(
-  users: Array<{ app_metadata?: { role?: string; contact_id?: string } | null }>,
-): Set<string> {
+export function clientLoginContactIds(users: AuthUserLike[]): Set<string> {
   const ids = new Set<string>()
   for (const u of users) {
     const meta = u?.app_metadata
@@ -61,10 +65,57 @@ export function clientLoginContactIds(
   return ids
 }
 
+/**
+ * Pure: contact ids whose CLIENT login exists but has never finished the
+ * first-time "Set Your Password" step — same truthiness convention as the
+ * password gate itself (`!!user.user_metadata?.must_change_password`), so a
+ * legacy login predating this flag (absent, not `false`) correctly counts as
+ * usable rather than stuck. Deliberately does NOT use `last_sign_in_at` —
+ * that timestamp is also stamped by an admin's "View as client" session
+ * (restored afterward, but not instantly/reliably — auth-oauth.md 2026-06-15),
+ * so it is not a trustworthy "this person genuinely logged in" signal. The
+ * password flag can only ever be cleared by the account's own owner
+ * completing their own password-set flow (`/api/portal/change-password`),
+ * never by staff browsing — so it is tamper-resistant where the timestamp is not.
+ */
+export function clientLoginNeedsSetupIds(users: AuthUserLike[]): Set<string> {
+  const ids = new Set<string>()
+  for (const u of users) {
+    const meta = u?.app_metadata
+    if (meta?.role !== 'client') continue
+    const id = meta?.contact_id
+    if (typeof id !== 'string' || id.length === 0) continue
+    if (u?.user_metadata?.must_change_password) ids.add(id)
+  }
+  return ids
+}
+
 /** Drop the cached snapshot — call after creating or removing a portal login. */
 export function invalidateClientLoginIndex(): void {
   snapshot = null
   inFlight = null
+}
+
+async function loadSnapshot(now: number): Promise<Snapshot> {
+  if (snapshot && snapshot.expiresAt > now) return snapshot
+  if (inFlight) return inFlight
+
+  inFlight = (async () => {
+    try {
+      const users = (await listAllAuthUsers()) as AuthUserLike[]
+      const next: Snapshot = {
+        ids: clientLoginContactIds(users),
+        needsSetupIds: clientLoginNeedsSetupIds(users),
+        expiresAt: now + CLIENT_LOGIN_CACHE_TTL_MS,
+      }
+      snapshot = next
+      return next
+    } finally {
+      inFlight = null
+    }
+  })()
+
+  return inFlight
 }
 
 /**
@@ -72,21 +123,17 @@ export function invalidateClientLoginIndex(): void {
  * `now` is injectable for tests.
  */
 export async function getClientLoginContactIds(now: number = Date.now()): Promise<Set<string>> {
-  if (snapshot && snapshot.expiresAt > now) return snapshot.ids
-  if (inFlight) return inFlight
+  const s = await loadSnapshot(now)
+  return s.ids
+}
 
-  inFlight = (async () => {
-    try {
-      const users = await listAllAuthUsers()
-      const ids = clientLoginContactIds(
-        users as Array<{ app_metadata?: { role?: string; contact_id?: string } | null }>,
-      )
-      snapshot = { ids, expiresAt: now + CLIENT_LOGIN_CACHE_TTL_MS }
-      return ids
-    } finally {
-      inFlight = null
-    }
-  })()
-
-  return inFlight
+/**
+ * Contact ids whose CLIENT login has never finished first-time password
+ * setup — from the SAME cached scan `getClientLoginContactIds` uses, so
+ * calling both on one page render costs one auth-user scan, not two.
+ * `now` is injectable for tests.
+ */
+export async function getClientLoginNeedsSetupIds(now: number = Date.now()): Promise<Set<string>> {
+  const s = await loadSnapshot(now)
+  return s.needsSetupIds
 }
