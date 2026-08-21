@@ -1,7 +1,14 @@
 /**
- * DELETE /api/tools/pnl/[id]/statement?source_file_id= — remove one uploaded
- * statement's rows from a workspace (STAFF ONLY). Source-keyed cascade against
- * the ISOLATED workspace table; never touches a client's books.
+ * DELETE /api/tools/pnl/[id]/statement?source_file_id= (or ?failed_path=) —
+ * remove one uploaded statement from a workspace (STAFF ONLY). Source-keyed
+ * cascade against the ISOLATED workspace table; never touches a client's
+ * books.
+ *
+ * failed_path (2026-08-21, live-QA bug-hunter finding): a file that failed
+ * ingestion never inserted any pnl_workspace_transactions rows, so it has no
+ * source_file_id — the delete-by-source path above could never reach it,
+ * which wedged the workspace's hard-stop block PERMANENTLY. Mirrors the
+ * client-portal route's same two-path split.
  */
 
 import { createClient } from '@/lib/supabase/server'
@@ -20,9 +27,19 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
   if (!isDashboardUser(user)) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
 
   const sourceFileId = new URL(request.url).searchParams.get('source_file_id')
-  if (!sourceFileId) return NextResponse.json({ error: 'source_file_id is required.' }, { status: 400 })
+  const failedPath = new URL(request.url).searchParams.get('failed_path')
+  if (!sourceFileId && !failedPath) {
+    return NextResponse.json({ error: 'source_file_id or failed_path is required.' }, { status: 400 })
+  }
 
   try {
+    if (!sourceFileId && failedPath) {
+      const { clearFailedWorkspaceStatementFile } = await import('@/lib/tax/statement-uploads')
+      const cleared = await clearFailedWorkspaceStatementFile(params.id, failedPath)
+      if (!cleared.ok) return NextResponse.json({ error: cleared.error }, { status: 409 })
+      return NextResponse.json({ ok: true, deleted: 0, cleared: cleared.cleared })
+    }
+
     const { data, error } = await db
       .from('pnl_workspace_transactions')
       .delete()

@@ -127,7 +127,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       .eq('job_type', 'ingest_workspace_statement')
       .eq('related_entity_id', workspaceId)
       .in('status', ['pending', 'processing', 'failed', 'completed'])
-    const { computeIngestFileStates, summarizeIngestFileStates } = await import('@/lib/tax/ingest-file-status')
+    const { computeIngestFileStates, summarizeIngestFileStates, buildIngestFileEntries } = await import('@/lib/tax/ingest-file-status')
     const ingestJobRows = (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean; steps?: Array<{ detail?: string }> } | null; payload: { tax_year?: number | string; path?: string } | null }>
     // taxYear here is a formality: workspace job payloads never carry
     // tax_year (a workspace has exactly one, via related_entity_id scoping
@@ -137,6 +137,13 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     const stateCounts = summarizeIngestFileStates(fileStates)
     const ingestPending = stateCounts.pending + stateCounts.quarantined
     const ingestFailed = stateCounts.failed
+    // Per-file cards for the UI (2026-08-21, live-QA bug-hunter finding):
+    // this route computed ingestFailed as a COUNT but never sent the actual
+    // file entries, so the hard-stop banner could say "a file we couldn't
+    // read" with no card, no filename, and — since the workspace delete
+    // route only ever supported source_file_id, which a failed file never
+    // has — no way to clear it. Same builder the client portal uses.
+    const file_statuses = buildIngestFileEntries(ingestJobRows, 0)
 
     // S1 (2026-07-07): files QUARANTINED for a one-tap format confirmation —
     // extracted from the failed jobs' marker steps, deduped by mapping id,
@@ -331,6 +338,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       buckets,
       ingestPending,
       ingestFailed,
+      file_statuses,
       format_proposals,
       attested: false, // workspaces have no attestation
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
