@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { notifyClientOfAdminMessage } from "@/lib/portal/notifications"
 import { buildFormUrl, buildAdminPreviewUrl } from "@/lib/forms/smart-url"
+import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 
 export const dynamic = "force-dynamic"
 
@@ -23,6 +24,9 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const contactId = params.id
 
   const { data: contact, error: contactErr } = await supabaseAdmin

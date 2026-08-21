@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export const dynamic = 'force-dynamic'
 
 // GET /api/clients/audit/[id]/contacts?q=term — search contacts to link
 export async function GET(req: NextRequest, { params: _params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   const q = req.nextUrl.searchParams.get('q')?.trim() ?? ''
   if (q.length < 2) return NextResponse.json({ contacts: [] })
 
@@ -21,6 +24,8 @@ export async function GET(req: NextRequest, { params: _params }: { params: { id:
 // POST /api/clients/audit/[id]/contacts — link existing contact or create+link new one
 /* eslint-disable no-restricted-syntax */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   const body = await req.json()
 
   // Link existing contact

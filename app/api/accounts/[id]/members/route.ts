@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { explainFailure } from "@/lib/errors/explain-failure"
 import { refreshSS4, type Ss4RefreshResult } from "@/lib/operations/ss4-refresh"
 import { autoRefreshOa } from "@/lib/operations/oa-refresh"
+import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 
 export const dynamic = "force-dynamic"
 
@@ -38,6 +39,8 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const { data, error } = await supabaseAdmin
       .from("members")
@@ -57,6 +60,8 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const body = await req.json()
     const now = new Date().toISOString()
@@ -143,6 +148,8 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const body = await req.json()
     const { member_id, ...fields } = body
@@ -193,6 +200,8 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const body = await req.json()
     const { member_id } = body

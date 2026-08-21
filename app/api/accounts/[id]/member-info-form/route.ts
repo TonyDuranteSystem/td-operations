@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { getOrCreateMemberInfoRequest, resolveMemberInfoContact } from "@/lib/members/member-info-request"
 import { notifyClientOfAdminMessage } from "@/lib/portal/notifications"
+import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 
 export const dynamic = "force-dynamic"
 
@@ -21,6 +22,8 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   const [{ data: request }, contactId] = await Promise.all([
     supabaseAdmin
       .from("member_info_requests")
@@ -52,6 +55,9 @@ export async function POST(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+
   const accountId = params.id
 
   const result = await getOrCreateMemberInfoRequest(accountId)

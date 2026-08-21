@@ -7,6 +7,7 @@ import {
   findPlaidMercuryDuplicates,
   type CascadeFeed,
 } from '@/lib/audit/bank-feed-cascade'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 // The supabaseAdmin singleton can return stale data for the accounts row in warm
 // Lambda instances (the singleton is initialized once; a write from another instance
@@ -36,6 +37,8 @@ function freshAdminClient() {
 export const dynamic = 'force-dynamic'
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   const id = params.id
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

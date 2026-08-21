@@ -13,8 +13,13 @@
  *   member of the same account first, preserving the exactly-one-signer
  *   invariant the SS-4 guard (decideSs4Signer) depends on.
  *
- * [id] = service_delivery_id. Staff-only (gated by middleware — /api/flows is
- * not in the public allowlist). Mirrors the sibling activate-ra / chat routes.
+ * [id] = service_delivery_id. Staff-only via requireStaffRoute() (lib/auth/
+ * require-staff-route.ts) — the earlier "gated by middleware" comment here was FALSE
+ * (security audit, 2026-08-21, dev job 9d80395e-cef4-4c76-998b-c23a5f99684b):
+ * middleware never checks role on /api/* paths, only on dashboard page
+ * navigations, so this route (like its sibling activate-ra / chat routes,
+ * unaudited — see the dev job) was reachable by any authenticated session
+ * including an ordinary portal client.
  */
 
 export const dynamic = 'force-dynamic'
@@ -24,6 +29,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { extractMembersFromWizardData } from '@/lib/utils/wizard-members'
 import { logAction } from '@/lib/mcp/action-log'
 import { refreshSS4 } from '@/lib/operations/ss4-refresh'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 type PanelMember = {
   member_id: string | null
@@ -37,6 +43,8 @@ type PanelMember = {
 const noStore = { headers: { 'Cache-Control': 'no-store, max-age=0' } }
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const serviceDeliveryId = params.id
 
@@ -144,6 +152,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const serviceDeliveryId = params.id
     const body = await req.json().catch(() => ({}))
