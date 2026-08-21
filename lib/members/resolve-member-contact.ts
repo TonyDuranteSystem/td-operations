@@ -14,7 +14,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { matchContactByName, normalizeEmail } from '@/lib/members/member-identity'
+import { matchContactByName, normalizeEmail, escapeLikePattern } from '@/lib/members/member-identity'
 
 export interface ResolveMemberContactInput {
   /** The member's email (individual member's email, or a company rep's email). */
@@ -46,24 +46,57 @@ export async function resolveMemberContactId(input: ResolveMemberContactInput): 
   if (!email) return null
 
   // Fetch ALL contacts on this email (case-insensitive), then match by name.
-  const { data: sameEmailContacts } = await supabaseAdmin
+  // Escaped + re-verified by exact equality below — an unescaped `_`/`%` in a
+  // real email (e.g. "jane_doe@gmail.com") would otherwise be read as a LIKE
+  // wildcard and could over-match an unrelated contact (found in a council
+  // review, 2026-08-19, dev_task 693273fd, tracing a real misattribution
+  // scenario through this exact query).
+  const { data: sameEmailCandidates } = await supabaseAdmin
     .from('contacts')
-    .select('id, full_name')
-    .ilike('email', email)
+    .select('id, full_name, email')
+    .ilike('email', `%${escapeLikePattern(email)}%`)
+    .is('merged_into', null)
+  const sameEmailContacts = (sameEmailCandidates || []).filter(
+    (c) => (c.email || '').trim().toLowerCase() === email
+  )
 
-  const matchedId = matchContactByName(sameEmailContacts || [], name)
+  const matchedId = matchContactByName(sameEmailContacts, name)
 
   if (matchedId) {
-    // Refresh only the fields the caller actually provided.
+    // Refresh only fields that are currently BLANK on the matched contact —
+    // never overwrite real data with whatever this caller happens to submit.
+    // (The comment above always claimed this; the code never actually
+    // checked the existing value until this fix — same council review.)
     if (input.refresh) {
-      const updates: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(input.refresh)) {
-        if (v !== null && v !== undefined && v !== '') updates[k] = v
+      const { data: existing, error: existingErr } = await supabaseAdmin
+        .from('contacts')
+        .select(Object.keys(input.refresh).join(', ') || 'id')
+        .eq('id', matchedId)
+        .maybeSingle()
+      if (existingErr) {
+        console.error(`[resolveMemberContactId] existing-value read failed for ${matchedId}, skipping refresh:`, existingErr.message)
       }
-      if (Object.keys(updates).length > 0) {
-        updates.updated_at = input.now
-        // eslint-disable-next-line no-restricted-syntax -- shared member provisioning; deferred migration per dev_task 7ebb1e0c
-        await supabaseAdmin.from('contacts').update(updates).eq('id', matchedId)
+      // A failed or missing read must NOT be treated as "everything is
+      // blank" — that would silently overwrite real data on a transient
+      // failure, the exact bug class this refresh logic was fixed for
+      // (Senior Engineer review, 2026-08-19, dev_task 693273fd).
+      if (existing) {
+        const updates: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(input.refresh)) {
+          const incomingVal = typeof v === 'string' ? v.trim() : v
+          const hasValue = incomingVal !== null && incomingVal !== undefined && incomingVal !== ''
+          const existingRaw = existing[k as keyof typeof existing]
+          // Trim before judging blankness — a whitespace-only existing value
+          // must count as blank too (Bug Hunter review, same pass).
+          const existingVal = typeof existingRaw === 'string' ? existingRaw.trim() : existingRaw
+          const existingIsBlank = existingVal === null || existingVal === undefined || existingVal === ''
+          if (hasValue && existingIsBlank) updates[k] = incomingVal
+        }
+        if (Object.keys(updates).length > 0) {
+          updates.updated_at = input.now
+          // eslint-disable-next-line no-restricted-syntax -- shared member provisioning; deferred migration per dev_task 7ebb1e0c
+          await supabaseAdmin.from('contacts').update(updates).eq('id', matchedId)
+        }
       }
     }
     return matchedId

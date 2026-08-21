@@ -4,13 +4,23 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { revalidatePath } from 'next/cache'
 import { safeAction, updateWithLock, type ActionResult } from '@/lib/server-action'
-import { createAccountSchema, type CreateAccountInput } from '@/lib/schemas/account-create'
+import { createAccountSchema, primaryContactSchema, type CreateAccountInput, type PrimaryContactInput } from '@/lib/schemas/account-create'
 import { normalizeEIN } from '@/lib/jobs/validation'
 import { triggerEINReceivedWorkflow } from '@/lib/operations/ein-received'
 import { syncTier, syncContactTiersForAccount } from '@/lib/operations/sync-tier'
 import { syncPortalLoginEmail } from '@/lib/operations/portal-login-email'
 import { createSD } from '@/lib/operations/service-delivery'
+import { createAccount as createAccountOp, createAndLinkContact as createAndLinkContactOp } from '@/lib/operations/account'
 import type { Json } from '@/lib/database.types'
+
+// Matches safeAction's own actor derivation (lib/server-action.ts) — needed
+// here because the operations-layer functions take actor as a param instead
+// of deriving it themselves.
+async function getDashboardActor(): Promise<string> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  return `dashboard:${user?.email?.split('@')[0] ?? 'unknown'}`
+}
 
 export async function updateAccountField(
   accountId: string,
@@ -249,29 +259,91 @@ export async function updateAccountContactRole(
   })
 }
 
+/**
+ * Creates a new account. The primary contact comes from EITHER a freshly
+ * typed name/email (primaryContact) OR an existing contact picked from
+ * search (existingContactId) — exactly one of the two is expected; when
+ * existingContactId is set, primaryContact is ignored and no identity
+ * matching runs at all (staff already resolved the ambiguity by picking
+ * the exact record). This dialog is a manual/staff-driven creation path —
+ * verified as the ONLY caller of createAccountOp in the whole codebase, so
+ * unlike the client formation workflow (which collects the full member
+ * roster, primary contact, and signer as part of its own process), an
+ * account created here is NEVER covered by that collection step. A
+ * Multi-Member account created here therefore always needs that follow-up
+ * work done by hand — flagged via `needsMemberSetup` regardless of which
+ * contact-entry method was used (Antonio, 2026-08-19, dev_task 693273fd).
+ */
 export async function createAccount(
-  input: CreateAccountInput
-): Promise<ActionResult<{ id: string }>> {
-  const parsed = createAccountSchema.safeParse(input)
-  if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
+  input: CreateAccountInput,
+  primaryContact: PrimaryContactInput | null,
+  existingContactId?: string | null,
+): Promise<ActionResult<{ id: string }> & { warning?: string; needsMemberSetup?: boolean }> {
+  const parsedAccount = createAccountSchema.safeParse(input)
+  if (!parsedAccount.success) return { success: false, error: parsedAccount.error.issues[0].message }
 
-  return safeAction(async () => {
-    const supabase = createClient()
-    const now = new Date().toISOString()
-    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    const { data, error } = await supabase
-      .from('accounts')
-      .insert({ ...parsed.data, created_at: now, updated_at: now })
-      .select('id')
-      .single()
-    if (error) throw new Error(error.message)
-    revalidatePath('/accounts')
-    return data
-  }, {
-    action_type: 'create', table_name: 'accounts',
-    summary: `Created: ${parsed.data.company_name}`,
-    details: { ...parsed.data },
+  let parsedContact: PrimaryContactInput | null = null
+  if (!existingContactId) {
+    const result = primaryContactSchema.safeParse(primaryContact)
+    if (!result.success) return { success: false, error: result.error.issues[0].message }
+    parsedContact = result.data
+  }
+
+  const actor = await getDashboardActor()
+  const created = await createAccountOp({ ...parsedAccount.data, actor })
+
+  if (!created.success || !created.account_id) {
+    return { success: false, error: created.error || 'Failed to create account' }
+  }
+
+  revalidatePath('/accounts')
+
+  const isMultiMember = parsedAccount.data.member_structure === 'multi_member'
+
+  if (existingContactId) {
+    // Staff explicitly picked this exact person — no ambiguity to resolve.
+    // Single-Member: they ARE the account's owner and main contact.
+    // Multi-Member: they're only a starting point; NOT auto-marked as the
+    // account's main contact — that's exactly what needsMemberSetup exists
+    // to send staff back to confirm, alongside the rest of the roster.
+    const linkResult = await linkContactToAccount(created.account_id, existingContactId, 'owner', !isMultiMember)
+    if (!linkResult.success) {
+      return {
+        success: true,
+        data: { id: created.account_id },
+        warning: `Account created, but linking the existing contact failed: ${linkResult.error}`,
+      }
+    }
+    return { success: true, data: { id: created.account_id }, needsMemberSetup: isMultiMember }
+  }
+
+  const linkResult = await createAndLinkContactOp({
+    account_id: created.account_id,
+    first_name: parsedContact!.first_name,
+    middle_name: parsedContact!.middle_name || null,
+    last_name: parsedContact!.last_name,
+    email: parsedContact!.email || null,
+    address_line1: parsedContact!.address_line1 || null,
+    address_city: parsedContact!.address_city || null,
+    address_state: parsedContact!.address_state || null,
+    address_zip: parsedContact!.address_zip || null,
+    address_country: parsedContact!.address_country || null,
+    role: 'owner',
+    is_primary: true,
+    actor,
   })
+  if (!linkResult.success) {
+    // The account itself was created successfully — don't hide that
+    // behind an error toast. Surface the contact failure as a warning
+    // so staff can add the contact by hand from the account page.
+    return {
+      success: true,
+      data: { id: created.account_id },
+      warning: `Account created, but adding the primary contact failed: ${linkResult.error}`,
+    }
+  }
+
+  return { success: true, data: { id: created.account_id }, warning: linkResult.warning, needsMemberSetup: isMultiMember }
 }
 
 export async function addAccountNote(
@@ -341,6 +413,7 @@ export async function linkContactToAccount(
   accountId: string,
   contactId: string,
   role: string = 'owner',
+  isPrimary: boolean = false,
 ): Promise<ActionResult> {
   return safeAction(async () => {
     const supabase = createClient()
@@ -357,7 +430,7 @@ export async function linkContactToAccount(
 
     const { error } = await supabase
       .from('account_contacts')
-      .insert({ account_id: accountId, contact_id: contactId, role })
+      .insert({ account_id: accountId, contact_id: contactId, role, is_primary: isPrimary })
 
     if (error) throw new Error(error.message)
     revalidatePath(`/accounts/${accountId}`)
@@ -404,43 +477,35 @@ export async function createAndLinkContact(
   fullName: string,
   email: string | null,
   role: string = 'owner',
-): Promise<ActionResult & { contactId?: string }> {
-  const supabase = createClient()
-
-  // Parse name into first/last
-  const parts = fullName.trim().split(/\s+/)
-  const firstName = parts[0] || ''
-  const lastName = parts.slice(1).join(' ') || ''
-
-  // Create the contact
-  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-  const { data: contact, error: createErr } = await supabase
-    .from('contacts')
-    .insert({
-      full_name: fullName.trim(),
-      first_name: firstName,
-      last_name: lastName,
-      email: email || null,
-      status: 'active',
-    })
-    .select('id')
-    .single()
-
-  if (createErr || !contact) {
-    return { success: false, error: createErr?.message || 'Failed to create contact' }
+): Promise<ActionResult & { contactId?: string; warning?: string }> {
+  const trimmed = fullName.trim()
+  if (!trimmed) {
+    return { success: false, error: 'Contact name is required' }
   }
+  // This panel still takes one free-text field — split the same way the
+  // form used to, unchanged for this surface (a single-word name is still
+  // allowed here, unlike the New Account dialog's dedicated first/middle/
+  // last inputs, which require both — see createAccount above).
+  const parts = trimmed.split(/\s+/)
+  const firstName = parts[0] || ''
+  const lastName = parts.slice(1).join(' ')
 
-  // Link to the account
-  const { error: linkErr } = await supabase
-    .from('account_contacts')
-    .insert({ account_id: accountId, contact_id: contact.id, role })
+  const actor = await getDashboardActor()
+  const result = await createAndLinkContactOp({
+    account_id: accountId,
+    first_name: firstName,
+    last_name: lastName,
+    email,
+    role,
+    actor,
+  })
 
-  if (linkErr) {
-    return { success: false, error: linkErr.message }
+  if (!result.success) {
+    return { success: false, error: result.error || 'Failed to add contact' }
   }
 
   revalidatePath(`/accounts/${accountId}`)
-  return { success: true, contactId: contact.id }
+  return { success: true, contactId: result.contact_id, warning: result.warning }
 }
 
 /**
