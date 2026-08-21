@@ -33,16 +33,33 @@ export function SettingsForm({ accountId }: SettingsFormProps) {
     }
 
     setLoading(true)
-    const supabase = createClient()
-    const { error } = await supabase.auth.updateUser({ password: newPassword })
-    setLoading(false)
 
-    if (error) {
-      toast.error(error.message)
-    } else {
+    // Routed through our own server (not supabase.auth.updateUser() from the
+    // browser) so the View-as read-only lock in middleware.ts can actually see
+    // and block this while a staff member is viewing a client's account
+    // (dev job 3d47f472).
+    const res = await fetch('/api/portal/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: newPassword }),
+    })
+    const data = await res.json().catch(() => ({}))
+
+    if (res.ok) {
+      // The server-side password update invalidates the current session as a
+      // side effect — re-authenticate with the password just set so the client
+      // doesn't get silently bounced to login on their next action.
+      if (data.email) {
+        const supabase = createClient()
+        await supabase.auth.signInWithPassword({ email: data.email, password: newPassword })
+      }
+      setLoading(false)
       toast.success('Password updated')
       setNewPassword('')
       setConfirmPassword('')
+    } else {
+      setLoading(false)
+      toast.error(data.error || 'Could not update your password — please try again.')
     }
   }
 

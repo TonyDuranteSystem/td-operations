@@ -24,25 +24,35 @@ export default function ChangePasswordPage() {
     }
 
     setLoading(true)
-    const supabase = createClient()
 
-    // Update password
-    const { error: pwError } = await supabase.auth.updateUser({ password })
-    if (pwError) {
-      toast.error(pwError.message)
+    // Routed through our own server (not supabase.auth.updateUser() from the
+    // browser) so the View-as read-only lock in middleware.ts can actually see
+    // and block this while a staff member is viewing a client's account
+    // (dev job 3d47f472). Also clears must_change_password in the same call.
+    const res = await fetch('/api/portal/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    })
+
+    const data = await res.json().catch(() => ({}))
+
+    if (!res.ok) {
       setLoading(false)
+      toast.error(data.error || 'Could not set your password — please try again.')
       return
     }
 
-    // Clear must_change_password flag
-    await fetch('/api/portal/onboarding-complete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clear_password_flag: true }),
-    })
+    // The server-side password update invalidates the current session as a side
+    // effect — re-authenticate with the password just set so the client lands in
+    // the portal instead of bouncing back to the login screen right after success.
+    if (data.email) {
+      const supabase = createClient()
+      await supabase.auth.signInWithPassword({ email: data.email, password })
+    }
 
-    toast.success('Password set successfully')
     setLoading(false)
+    toast.success('Password set successfully')
     router.push('/portal')
     router.refresh()
   }
