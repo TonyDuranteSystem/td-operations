@@ -126,34 +126,63 @@ export default function ResetPasswordPage() {
 
     setLoading(true)
 
-    // Try updating via both clients — one will have the session
-    const ssrClient = createClient()
-    const implicitClient = createSupabaseClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      { auth: { flowType: 'implicit', persistSession: true } }
-    )
+    // Try our own server first (not supabase.auth.updateUser() from the
+    // browser) so the View-as read-only lock in middleware.ts can actually see
+    // and block this if a staff member is viewing a client's account and
+    // lands here (dev job 3d47f472) — that lock only ever sees requests that
+    // reach our server. Only fall back to the client-side implicit-flow call
+    // on a 401 — that specifically means our server found no session at all,
+    // which is the genuine case for the hash-fragment recovery flow (that
+    // session lives in the browser only and never reaches us via cookies).
+    // Any OTHER failure (blocked read-only view, validation, etc.) must NOT
+    // fall back, or the fallback would silently reopen the exact bypass this
+    // fix exists to close.
+    const res = await fetch('/api/portal/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    })
 
-    // Try SSR client first (has session from auth callback), then implicit
-    let result = await ssrClient.auth.updateUser({ password })
-    if (result.error) {
-      result = await implicitClient.auth.updateUser({ password })
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}))
+      // The server-side password update invalidates the current session as a
+      // side effect — re-authenticate with the password just set so the client
+      // lands in the portal instead of bouncing back to login right after success.
+      if (data.email) {
+        const ssrClient = createClient()
+        await ssrClient.auth.signInWithPassword({ email: data.email, password })
+      }
+      setLoading(false)
+      toast.success(t.success)
+      router.push('/portal')
+      return
+    }
+
+    if (res.status === 401) {
+      const implicitClient = createSupabaseClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        { auth: { flowType: 'implicit', persistSession: true } }
+      )
+      const result = await implicitClient.auth.updateUser({ password })
+      setLoading(false)
+      if (result.error) {
+        toast.error(result.error.message)
+      } else {
+        await fetch('/api/portal/onboarding-complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clear_password_flag: true }),
+        })
+        toast.success(t.success)
+        router.push('/portal')
+      }
+      return
     }
 
     setLoading(false)
-
-    if (result.error) {
-      toast.error(result.error.message)
-    } else {
-      // Clear must_change_password flag if it was set
-      await fetch('/api/portal/onboarding-complete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clear_password_flag: true }),
-      })
-      toast.success(t.success)
-      router.push('/portal')
-    }
+    const data = await res.json().catch(() => ({}))
+    toast.error(data.error || 'Could not update your password — please try again.')
   }
 
   return (
