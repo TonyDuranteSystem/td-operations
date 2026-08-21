@@ -73,6 +73,26 @@ describe("computeIngestFileStates", () => {
     expect(states.get("p")).toBe("succeeded")
   })
 
+  // 2026-08-20 hard-stop plan: workspace jobs (ingest_workspace_statement)
+  // never carry tax_year in their payload at all — a workspace has exactly
+  // one tax year, via related_entity_id scoping at the query level, not this
+  // field. Before this fix, a MISSING tax_year was treated as "" !== "2025"
+  // and silently dropped every workspace file — this is the regression test
+  // for that (the staff GET route wiring this shared helper up for the
+  // first time would otherwise have shipped with every workspace reporting
+  // zero files, always).
+  it("a job with NO tax_year in its payload at all is never filtered out, regardless of the year argument passed", () => {
+    const noYear = [row({ payload: { path: "ws/f1.csv" }, status: "completed", result: { ok: true } })]
+    expect(computeIngestFileStates(noYear, 2025).get("ws/f1.csv")).toBe("succeeded")
+    expect(computeIngestFileStates(noYear, 1999).get("ws/f1.csv")).toBe("succeeded")
+    expect(computeIngestFileStates(noYear, 0).get("ws/f1.csv")).toBe("succeeded")
+  })
+
+  it("a job that DOES carry tax_year is still correctly excluded on a mismatch (the fix must not weaken the existing client-account scoping)", () => {
+    const wrongYear = [row({ payload: { tax_year: 2024, path: "acct/old.csv" }, status: "completed", result: { ok: true } })]
+    expect(computeIngestFileStates(wrongYear, 2025).size).toBe(0)
+  })
+
   it("summarize counts every state", () => {
     const states = computeIngestFileStates(
       [

@@ -52,6 +52,19 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
     if (view.transactionCount === 0) {
       return NextResponse.json({ error: 'No transactions yet — upload the statements first.' }, { status: 422 })
     }
+
+    // 2026-08-20 hard-stop plan: refuse the SAME numbers the on-screen review
+    // hides when there's a structural data problem — a direct hit on this
+    // route otherwise bypasses the screen entirely. Deliberately NOT covered
+    // by ?override=1 above (that's a speed bump for an unreviewed prior-year
+    // figure staff can judge for themselves; this is "the input data itself
+    // is known incomplete", which no override should waive for either
+    // audience, per Antonio's ruling).
+    const { getWorkspaceStructuralProblem } = await import('@/lib/tax/workspace-orchestration')
+    if (await getWorkspaceStructuralProblem(params.id)) {
+      return NextResponse.json({ error: 'This workspace has an unresolved data problem (an unreadable statement, or a missing-months question) — the numbers are not final and cannot be downloaded yet. Fix that first.' }, { status: 422 })
+    }
+
     if (!override) {
       const failing = view.gates.filter(g => (g.id === 2 || g.id === 7) && g.status === 'fail')
       if (failing.length > 0) {

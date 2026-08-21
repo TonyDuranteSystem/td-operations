@@ -35,9 +35,17 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
 
+    // 2026-08-20 hard-stop plan: refuse the SAME numbers the on-screen
+    // review hides when the underlying data has a structural problem — a
+    // direct hit on this route otherwise bypasses the screen entirely. No
+    // override for this specific case.
+    const { buildFinancialsWorkbookForAccount, getAccountStructuralProblem } = await import('@/lib/tax/financials-orchestration')
+    if (await getAccountStructuralProblem(accountId, taxYear)) {
+      return NextResponse.json({ error: 'This year has an unresolved data problem (an unreadable statement, or a missing-months question) — the numbers are not final and cannot be downloaded yet. Fix that first.' }, { status: 422 })
+    }
+
     // The SAME workbook the accountant hand-off archives — one engine, one
     // filing artifact (buildFinancialsWorkbookForAccount).
-    const { buildFinancialsWorkbookForAccount } = await import('@/lib/tax/financials-orchestration')
     const result = await buildFinancialsWorkbookForAccount(accountId, taxYear)
     if (!result) {
       return NextResponse.json({ error: 'No transactions yet — upload the statements first.' }, { status: 422 })

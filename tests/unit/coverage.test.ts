@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { coverageQuestions, unansweredCoverage, incompleteCoverage, type CoverageTx } from "@/lib/tax/coverage"
+import { coverageQuestions, unansweredCoverage, incompleteCoverage, hasStructuralProblem, type CoverageTx } from "@/lib/tax/coverage"
 
 function tx(date: string, bank = "Mercury", type: string | null = "Checking"): CoverageTx {
   return { bank_name: bank, account_type: type, transaction_date: date }
@@ -56,5 +56,41 @@ describe("answers", () => {
   it("'had activity' answers mark the export incomplete", () => {
     const answers = { [qs[0].key]: { answer: "had_activity" as const, at: "2026-01-01" } }
     expect(incompleteCoverage(qs, answers)).toHaveLength(1)
+  })
+})
+
+describe("hasStructuralProblem", () => {
+  const clean = { ingestFailed: 0, failedFilesOverridden: false, unansweredCoverage: 0, incompleteCoverage: 0 }
+
+  it("nothing wrong → false", () => {
+    expect(hasStructuralProblem(clean)).toBe(false)
+  })
+
+  it("an unreadable file → true", () => {
+    expect(hasStructuralProblem({ ...clean, ingestFailed: 1 })).toBe(true)
+  })
+
+  it("a staff override on the failed file → false again (honors the existing CRM unlock, never re-blocks a case staff already cleared)", () => {
+    expect(hasStructuralProblem({ ...clean, ingestFailed: 1, failedFilesOverridden: true })).toBe(false)
+  })
+
+  it("an override with no actual failed file changes nothing — still clean", () => {
+    expect(hasStructuralProblem({ ...clean, failedFilesOverridden: true })).toBe(false)
+  })
+
+  it("an unanswered coverage question → true, independent of ingest state", () => {
+    expect(hasStructuralProblem({ ...clean, unansweredCoverage: 1 })).toBe(true)
+  })
+
+  it("a coverage question answered 'had activity' (confirmed incomplete) → true", () => {
+    expect(hasStructuralProblem({ ...clean, incompleteCoverage: 1 })).toBe(true)
+  })
+
+  it("multiple problems at once → still just true, not double-counted or falsy", () => {
+    expect(hasStructuralProblem({ ingestFailed: 2, failedFilesOverridden: false, unansweredCoverage: 3, incompleteCoverage: 1 })).toBe(true)
+  })
+
+  it("override does NOT suppress an unrelated coverage problem — only the failed-file leg", () => {
+    expect(hasStructuralProblem({ ingestFailed: 1, failedFilesOverridden: true, unansweredCoverage: 1, incompleteCoverage: 0 })).toBe(true)
   })
 })

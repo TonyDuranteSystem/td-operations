@@ -139,3 +139,56 @@ export async function getWorkspaceFinancialsView(workspaceId: string): Promise<W
   // the standalone workspace scratch tool has no account to anchor to.
   return { draft, gates, canConfirm: canConfirm(gates), completeness, ownership, priorReturn, transactionCount: transactions.length, providedBalances: [], validation }
 }
+
+/**
+ * Does THIS workspace, right now, have a structural data problem (an
+ * unreadable statement file, or an unresolved/incomplete missing-months
+ * question)? Same predicate the GET route surfaces to the UI
+ * (lib/tax/coverage.ts::hasStructuralProblem), computed fresh here for the
+ * ONE other place it must be enforced server-side: save-to-client
+ * (lib/tax/workspace-save.ts). Deliberately re-queries rather than trusting
+ * a client-sent flag — the same discipline this file's existingCount/
+ * inFlightJobs checks already use.
+ */
+export async function getWorkspaceStructuralProblem(workspaceId: string): Promise<boolean> {
+  const { data: ws } = await db
+    .from("pnl_workspaces")
+    .select("tax_year, coverage_answers")
+    .eq("id", workspaceId)
+    .maybeSingle()
+  if (!ws) return false // no workspace to save from — the caller's own existence check handles this
+
+  const { data: ingestJobs } = await supabaseAdmin
+    .from("job_queue")
+    .select("status, result, payload")
+    .eq("job_type", "ingest_workspace_statement")
+    .eq("related_entity_id", workspaceId)
+    .in("status", ["pending", "processing", "failed", "completed"])
+  const { computeIngestFileStates, summarizeIngestFileStates } = await import("./ingest-file-status")
+  const fileStates = computeIngestFileStates(
+    (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean; steps?: Array<{ detail?: string }> } | null; payload: { tax_year?: number | string; path?: string } | null }>,
+    0, // workspace job payloads never carry tax_year — see ingest-file-status.ts's documented no-op
+  )
+  const stateCounts = summarizeIngestFileStates(fileStates)
+
+  const sources = await fetchAllPaged<{ bank_name: string; account_type: string | null; transaction_date: string }>(async (from, to) => {
+    const { data, error } = await db
+      .from("pnl_workspace_transactions")
+      .select("bank_name, account_type, transaction_date")
+      .eq("workspace_id", workspaceId)
+      .order("id", { ascending: true })
+      .range(from, to)
+    if (error) throw new Error(error.message)
+    return (data ?? []) as Array<{ bank_name: string; account_type: string | null; transaction_date: string }>
+  })
+  const { coverageQuestions, unansweredCoverage, incompleteCoverage, hasStructuralProblem } = await import("./coverage")
+  const answers = (ws.coverage_answers ?? {}) as import("./coverage").CoverageAnswers
+  const covQs = coverageQuestions(sources, Number(ws.tax_year))
+
+  return hasStructuralProblem({
+    ingestFailed: stateCounts.failed,
+    failedFilesOverridden: false, // workspaces have no CRM override mechanism today
+    unansweredCoverage: unansweredCoverage(covQs, answers).length,
+    incompleteCoverage: incompleteCoverage(covQs, answers).length,
+  })
+}

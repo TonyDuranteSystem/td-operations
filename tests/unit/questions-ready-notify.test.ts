@@ -70,7 +70,7 @@ describe("notifyQuestionsReady", () => {
     expect(dispatches).toHaveLength(1)
     const d = dispatches[0]
     expect(d.account_id).toBe("a1")
-    expect(d.link).toBe("/portal/tax-financials?year=2024&focus=questions")
+    expect(d.link).toBe("/portal/tax-financials?year=2024#needs-your-decision")
     const msg = d.message as { en: string; it: string }
     expect(msg.en).toContain("7")
     expect(msg.it).toContain("7")

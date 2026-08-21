@@ -102,3 +102,37 @@ export function unansweredCoverage(questions: CoverageQuestion[], answers: Cover
 export function incompleteCoverage(questions: CoverageQuestion[], answers: CoverageAnswers): CoverageQuestion[] {
   return questions.filter(q => answers[q.key]?.answer === "had_activity")
 }
+
+/**
+ * Structural data problem (2026-08-20, Antonio's hard-stop ruling) — as
+ * opposed to routine in-progress work (open categorization decisions,
+ * pending AI, unanswered location periods), which stays a provisional
+ * "not final yet" banner, never a hard stop.
+ *
+ * A structural problem means the UNDERLYING bank data itself is known to be
+ * incomplete or unreadable — a P&L built on top of it isn't "90% done", it
+ * could be badly wrong (a missing month could hide the year's biggest
+ * transaction). When true, callers must refuse to generate/display/download/
+ * save the numbers — identically for the client portal and the staff
+ * workspace tool. No override for either audience: Antonio's words, "if
+ * something is wrong, it is wrong," reject a softer staff-only bypass.
+ *
+ * ONE function, imported everywhere this is enforced (display, both Excel
+ * downloads, save-to-client) — this repo has already been burned once by the
+ * same completeness check computed independently in multiple places and
+ * quietly drifting (card 4a39e0fd / the resolve-submission incident).
+ *
+ * `failedFilesOverridden`: honors the EXISTING staff CRM override for a
+ * failed file (lib/tax/confirm-unlock.ts) — a deliberate override already
+ * lets Confirm proceed; this must agree, not silently re-block it. Workspaces
+ * have no such override today, so callers there pass `false`.
+ */
+export function hasStructuralProblem(input: {
+  ingestFailed: number
+  failedFilesOverridden: boolean
+  unansweredCoverage: number
+  incompleteCoverage: number
+}): boolean {
+  const failed = input.ingestFailed > 0 && !input.failedFilesOverridden
+  return failed || input.unansweredCoverage > 0 || input.incompleteCoverage > 0
+}
