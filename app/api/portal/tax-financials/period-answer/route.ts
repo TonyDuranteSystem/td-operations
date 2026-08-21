@@ -60,6 +60,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Your submission is locked (under review or already confirmed) — ask us to reopen it before changing answers.' }, { status: 409 })
     }
 
+    // Hard-stop parity (2026-08-21, live-QA bug-hunter blocker): this route
+    // had NO structural-problem check at all — the "Time away from home
+    // base" section that calls it sits outside the hasStructuralProblem
+    // wrap in the UI, so a blocked account could still have real
+    // categorization decisions swept (and, for scope='country', a STANDING
+    // policy written that replays next year) while the P&L/BS themselves
+    // were correctly hidden. Same check every other write path in this
+    // feature already uses — never trust the client for this.
+    const { getAccountStructuralProblem } = await import('@/lib/tax/financials-orchestration')
+    if (await getAccountStructuralProblem(accountId, taxYear)) {
+      return NextResponse.json({ error: 'This year has an unresolved data problem (an unreadable statement, or a missing-months question) — fix that first before answering anything else.' }, { status: 422 })
+    }
+
     const { applyBooksLocationAnswer } = await import('@/lib/tax/books-location-answer')
     const result = await applyBooksLocationAnswer({
       accountId,

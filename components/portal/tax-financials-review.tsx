@@ -2639,7 +2639,16 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           {/* Phase B2 (2026-07-08): visible to the CLIENT too — the portal GET
               now serves the same cards from the books. Staff-only wording
               (CRM references, third-person "the client") is mode-switched. */}
-          {((view.periods?.length ?? 0) > 0 || (view.period_answers?.length ?? 0) > 0 || (view.country_cards?.length ?? 0) > 0) && (
+          {/* Gated on !hasStructuralProblem (2026-08-21, live-QA bug-hunter
+              BLOCKER): this section was outside the hard-stop wrap entirely
+              — not just a display leak like the other three fixed sections,
+              but a live WRITE path (the sweep buttons and the "review one by
+              one" drill-down both post real categorization answers, and a
+              country sweep also writes a standing policy that replays next
+              year). The actual write routes now refuse server-side too
+              (never trust client-side hiding alone for this) — this gate is
+              the UX half, so a blocked account doesn't show dead buttons. */}
+          {!view.hasStructuralProblem && ((view.periods?.length ?? 0) > 0 || (view.period_answers?.length ?? 0) > 0 || (view.country_cards?.length ?? 0) > 0) && (
             <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 sm:p-5">
               <h3 className="text-sm font-bold text-indigo-900 mb-1">
                 🌍 {it ? 'Periodi fuori sede rilevati' : 'Time away from home base detected'}

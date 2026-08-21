@@ -216,6 +216,18 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
     deleted = del?.length ?? 0
   }
 
+  // Re-check immediately before writing (2026-08-21, live-QA bug-hunter
+  // minor finding): the decision above is a plain read-then-act, not atomic
+  // with this insert — a second session re-opening this SAME workspace could
+  // reintroduce a failed file in the gap (widened by the backup+delete work
+  // on a replace). Narrows the window to essentially nothing; true atomicity
+  // would need a DB-level lock, judged not worth the complexity for what the
+  // bug-hunter itself flagged as rare (workspaces are effectively
+  // single-operator scratch spaces).
+  if (await getWorkspaceStructuralProblem(workspaceId)) {
+    return { ok: false, action: "refuse", reason: "This workspace's data problem was resolved a moment ago but has reappeared since — please refresh and try again.", inserted: 0, deleted, failed: 0 }
+  }
+
   // Insert workspace rows into the client's books — same dedup contract as the
   // portal path (identical row shape; ignoreDuplicates keeps merge idempotent).
   // SILENT-DROP GUARD (S2 slice 1, 2026-07-08): per-row errors used to be

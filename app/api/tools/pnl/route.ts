@@ -110,16 +110,22 @@ async function createFork(input: { actor: string; taxYear: number; sourceAccount
     return NextResponse.json({ error: 'The standalone P&L tool currently supports Multi-Member LLC clients only.' }, { status: 400 })
   }
 
-  // Prior-return snapshot from the client's latest completed submission.
-  const { data: sub } = await db
-    .from('tax_return_submissions')
-    .select('prior_return_extracted, financials_meta')
-    .eq('account_id', input.sourceAccountId)
-    .eq('tax_year', input.taxYear)
-    .eq('status', 'completed')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  // Prior-return snapshot + the source's real coverage/override state, from
+  // the client's actual submission row. FIXED (2026-08-21, live-QA bug-hunter
+  // major finding): this used to be a raw `.eq('status','completed')` query
+  // — the exact "Rule A" anti-pattern this codebase was already burned by
+  // once (2026-08-03, 47/79 account-years silently broken) — instead of the
+  // ONE shared resolver every other structural-problem call site in this
+  // feature already uses. 'reviewed' is the documented MAJORITY real status
+  // (lib/tax/resolve-submission.ts), so the raw query returned null for most
+  // real accounts, silently dropping their real coverage_answers AND
+  // failed_files_override below — wrongly refusing to fork a perfectly
+  // healthy account with a 409 that flatly contradicted what the same
+  // account's own portal view showed.
+  const { resolveClientSubmission } = await import('@/lib/tax/resolve-submission')
+  const sub = await resolveClientSubmission<{ prior_return_extracted: unknown; financials_meta: Record<string, unknown> | null }>(
+    db, input.sourceAccountId, input.taxYear, 'prior_return_extracted, financials_meta',
+  )
 
   // Refuse to fork a client whose REAL data already has a structural problem
   // (2026-08-20 hard-stop plan). Copying transactions never copies job_queue
