@@ -21,6 +21,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { extractDbaFieldsFromOcr } from '@/lib/dba-ocr'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 type DbaDetailRow = {
   id: string
@@ -39,6 +40,8 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { id: string; dbaId: string } },
 ) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const accountId = params.id
     const dbaId = params.dbaId

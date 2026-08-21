@@ -17,7 +17,10 @@
  *      finance team's existing match path.
  *   6. Return { sd_id, payment_id }.
  *
- * Auth: middleware-protected /api/clients/audit/* — no per-route check.
+ * Auth: requireStaffRoute() (lib/auth/require-staff-route.ts) — the "middleware-protected,
+ * no per-route check" comment this replaced was FALSE (security audit,
+ * 2026-08-21, dev job 9d80395e-cef4-4c76-998b-c23a5f99684b): middleware never
+ * checks role on /api/* paths, only on dashboard page navigations.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -25,6 +28,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createTDInvoice } from '@/lib/portal/td-invoice'
 import { manualMatch } from '@/lib/bank-feed-matcher'
 import { createBackfilledSD } from '@/lib/operations/service-delivery'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,6 +39,8 @@ interface CreateServiceBody {
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   const accountId = params.id
   let body: CreateServiceBody
   try {

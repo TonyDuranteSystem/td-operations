@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,6 +37,8 @@ interface ContactBlock {
 
 /* eslint-disable no-restricted-syntax */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   const { action, actor, force } = await req.json()
 
   if (action !== 'activate' && action !== 'deactivate') {

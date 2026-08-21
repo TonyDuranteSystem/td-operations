@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -18,6 +19,8 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: { id: string; flag_id: string } }
 ) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   const accountId = params.id
   const flagId = params.flag_id
 

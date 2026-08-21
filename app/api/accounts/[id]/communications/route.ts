@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
 import type { InboxConversation } from "@/lib/types"
+import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 
 export const dynamic = "force-dynamic"
 
@@ -9,6 +10,8 @@ export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const accountId = params.id
 
