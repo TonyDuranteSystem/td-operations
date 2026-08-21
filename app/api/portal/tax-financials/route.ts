@@ -214,7 +214,7 @@ export async function GET(request: NextRequest) {
 
     // Coverage questions (§3.4): the months an export doesn't span — gate 1
     // can't see what a file left out; the client's answer closes the hole.
-    const { coverageQuestions, unansweredCoverage, incompleteCoverage } = await import('@/lib/tax/coverage')
+    const { coverageQuestions, unansweredCoverage, incompleteCoverage, hasStructuralProblem: hasStructuralProblemFn } = await import('@/lib/tax/coverage')
     const answers = (sub?.financials_meta?.coverage_answers ?? {}) as import('@/lib/tax/coverage').CoverageAnswers
     const covQs = coverageQuestions((sources ?? []).map(r => ({ bank_name: r.bank_name, account_type: r.account_type, transaction_date: r.transaction_date })), taxYear)
     const coverage = {
@@ -222,6 +222,11 @@ export async function GET(request: NextRequest) {
       unanswered: unansweredCoverage(covQs, answers).length,
       incomplete: incompleteCoverage(covQs, answers).length,
     }
+    // W9: staff override of the failed-file hard block (set only by the CRM
+    // unlock route; cleared by any file mutation) — computed once here so
+    // both the response field and hasStructuralProblem below read the SAME
+    // value and can never disagree.
+    const failedFilesOverridden = (sub?.financials_meta as Record<string, unknown> | null)?.failed_files_override != null
 
     // Flexible expense buckets (#2) — the live catalog list the review groups by
     // and the "add a bucket" field offers.
@@ -422,6 +427,12 @@ export async function GET(request: NextRequest) {
         : null,
       questions,
       coverage,
+      hasStructuralProblem: hasStructuralProblemFn({
+        ingestFailed,
+        failedFilesOverridden,
+        unansweredCoverage: coverage.unanswered,
+        incompleteCoverage: coverage.incomplete,
+      }),
       expense_breakdown,
       buckets,
       ingestPending,
@@ -431,7 +442,7 @@ export async function GET(request: NextRequest) {
       // W9: staff override of the failed-file hard block (set only by the CRM
       // unlock route; cleared by any file mutation). The client UI re-enables
       // Confirm when true — the server attest gate honors the same flag.
-      failedFilesOverridden: (sub?.financials_meta as Record<string, unknown> | null)?.failed_files_override != null,
+      failedFilesOverridden,
       editable,
       reviewStatus: lockStatus,
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({

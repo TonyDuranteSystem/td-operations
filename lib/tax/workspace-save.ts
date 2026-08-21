@@ -39,7 +39,15 @@ export function decideSaveToClient(input: {
   existingCount: number
   inFlightJobs: number
   mode?: SaveMode
+  /** 2026-08-20 hard-stop plan: an unreadable file or an unresolved/
+   *  incomplete missing-months question means the workspace's numbers
+   *  could be badly wrong, not just provisional — refuse outright, no
+   *  override, same rule for staff as for the client (Antonio's ruling). */
+  hasStructuralProblem?: boolean
 }): SaveDecision {
+  if (input.hasStructuralProblem) {
+    return { action: "refuse", reason: "This workspace has an unresolved data problem — a statement that couldn't be read, or a missing-months question that isn't answered. Fix that first; the numbers can't be trusted to save until it's resolved." }
+  }
   if (input.inFlightJobs > 0) {
     return { action: "refuse", reason: "The client's statements are still being processed — try again once ingestion finishes." }
   }
@@ -186,7 +194,9 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
     .eq("tax_year", taxYear)
 
   const inFlightJobs = await countInFlightIngestJobs(targetAccountId, taxYear)
-  const decision = decideSaveToClient({ existingCount: existingCount ?? 0, inFlightJobs, mode })
+  const { getWorkspaceStructuralProblem } = await import("./workspace-orchestration")
+  const structuralProblem = await getWorkspaceStructuralProblem(workspaceId)
+  const decision = decideSaveToClient({ existingCount: existingCount ?? 0, inFlightJobs, mode, hasStructuralProblem: structuralProblem })
   if (decision.action === "refuse") {
     return { ok: false, action: "refuse", reason: decision.reason, inserted: 0, deleted: 0, failed: 0 }
   }
@@ -412,6 +422,39 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
     }
   } catch (e) {
     console.error("[workspace-save] prior-return propagation failed (rows saved fine):", e)
+  }
+
+  // Coverage-answer propagation (2026-08-20, bug-hunter blocker on the
+  // hard-stop plan): without this, a staff member who resolves a
+  // missing-months question INSIDE the workspace and then saves would have
+  // the client see the SAME question reappear as unanswered moments later —
+  // the client's tax_return_submissions row never learns the answer, so the
+  // portal recomputes the identical gap from the now-populated
+  // bank_transactions and blocks again, right after being told their review
+  // is ready. Same fire-and-forget contract as prior-return propagation
+  // above: never fails the save that already happened. Merges into whatever
+  // coverage_answers the client's submission already has — never overwrites
+  // an answer the client already gave on their own account.
+  try {
+    const { data: wsAnswers } = await db.from("pnl_workspaces").select("coverage_answers").eq("id", workspaceId).maybeSingle()
+    const answers = (wsAnswers?.coverage_answers ?? null) as Record<string, unknown> | null
+    if (answers && Object.keys(answers).length > 0) {
+      const { resolveClientSubmission } = await import("./resolve-submission")
+      const targetSub = await resolveClientSubmission<{ id: string; financials_meta: Record<string, unknown> | null }>(db, targetAccountId, taxYear, "id, financials_meta")
+      if (targetSub?.id) {
+        const meta = (targetSub.financials_meta ?? {}) as Record<string, unknown>
+        const existingAnswers = (meta.coverage_answers ?? {}) as Record<string, unknown>
+        const { error } = await db
+          .from("tax_return_submissions")
+          .update({ financials_meta: { ...meta, coverage_answers: { ...existingAnswers, ...answers } }, updated_at: new Date().toISOString() })
+          .eq("id", targetSub.id)
+        if (error) throw new Error(error.message)
+      } else {
+        console.warn(`[workspace-save] no tax_return_submissions row for account ${targetAccountId} year ${taxYear} — coverage answers not propagated (nothing to update).`)
+      }
+    }
+  } catch (e) {
+    console.error("[workspace-save] coverage-answer propagation failed (rows saved fine):", e)
   }
 
   // Audit — every write to real client books is logged.

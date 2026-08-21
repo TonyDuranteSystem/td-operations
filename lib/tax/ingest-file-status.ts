@@ -16,6 +16,14 @@
  * - Jobs are grouped by payload.path — one FILE can have several job rows
  *   (reaper re-enqueues, resubmits). Counting jobs told a client "3 files
  *   couldn't be read" for 1 file.
+ * - The tax_year filter only applies when a job's payload actually carries a
+ *   tax_year (client-account jobs do, since one account spans many years).
+ *   Workspace jobs (`ingest_workspace_statement`) never carry it — a
+ *   workspace has exactly one tax year, so the caller's own
+ *   `related_entity_id` scoping already does the filtering; treating a
+ *   missing payload field as "no match" would silently zero out every
+ *   workspace file instead of skipping the check (2026-08-20, tax-workspace
+ *   hard-stop plan).
  * - A file is `succeeded` if ANY of its jobs completed with result.ok !== false
  *   — earlier failed attempts for the same path are then irrelevant.
  * - `quarantined` (checked before `failed`): the latest failure carries the
@@ -53,7 +61,7 @@ export function computeIngestFileStates(
   const byPath = new Map<string, { succeeded: boolean; pending: boolean; failed: boolean; quarantined: boolean }>()
   for (const j of jobs) {
     if (j.status === "cancelled") continue
-    if (String(j.payload?.tax_year ?? "") !== String(taxYear)) continue
+    if (j.payload?.tax_year !== undefined && String(j.payload.tax_year) !== String(taxYear)) continue
     const path = j.payload?.path
     if (!path) continue
     const e = byPath.get(path) ?? { succeeded: false, pending: false, failed: false, quarantined: false }

@@ -30,4 +30,24 @@ describe('decideSaveToClient', () => {
   it('honors an explicit Replace on a non-empty target', () => {
     expect(decideSaveToClient({ existingCount: 120, inFlightJobs: 0, mode: 'replace' }).action).toBe('replace')
   })
+
+  // 2026-08-20 hard-stop plan: an unreadable statement or an unresolved
+  // missing-months question means the workspace's numbers could be badly
+  // wrong, not just provisional — refuse outright, checked BEFORE mode/
+  // existingCount, no override for either audience.
+  it('refuses a structural data problem before anything else, even an empty target with no mode needed', () => {
+    const d = decideSaveToClient({ existingCount: 0, inFlightJobs: 0, hasStructuralProblem: true })
+    expect(d.action).toBe('refuse')
+    expect(d.reason).toMatch(/unresolved data problem/i)
+  })
+
+  it('refuses a structural problem even with an explicit Merge/Replace mode already chosen', () => {
+    expect(decideSaveToClient({ existingCount: 120, inFlightJobs: 0, mode: 'merge', hasStructuralProblem: true }).action).toBe('refuse')
+    expect(decideSaveToClient({ existingCount: 120, inFlightJobs: 0, mode: 'replace', hasStructuralProblem: true }).action).toBe('refuse')
+  })
+
+  it('hasStructuralProblem: false (or omitted) does not change any existing outcome', () => {
+    expect(decideSaveToClient({ existingCount: 0, inFlightJobs: 0, hasStructuralProblem: false }).action).toBe('insert')
+    expect(decideSaveToClient({ existingCount: 120, inFlightJobs: 0, mode: 'merge', hasStructuralProblem: false }).action).toBe('merge')
+  })
 })

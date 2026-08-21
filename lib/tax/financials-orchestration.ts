@@ -296,6 +296,51 @@ export async function buildFinancialsWorkbookForAccount(
   return buildFinancialsWorkbook({ companyName, taxYear, draft: view.draft, transactions: txRows, rates })
 }
 
+/**
+ * Does this account+year, right now, have a structural data problem (an
+ * unreadable statement file, or an unresolved/incomplete missing-months
+ * question)? Same predicate the review-screen GET route surfaces
+ * (lib/tax/coverage.ts::hasStructuralProblem), computed fresh here for the
+ * OTHER place it must be enforced server-side: the Excel download route
+ * (app/api/portal/tax-financials/download/route.ts) — a direct hit on that
+ * endpoint bypasses whatever the review screen shows, so it needs its own
+ * server-side check, not a UI-only hide (2026-08-20 hard-stop plan, all
+ * three council reviewers independently flagged the download route as
+ * unguarded).
+ */
+export async function getAccountStructuralProblem(accountId: string, taxYear: number): Promise<boolean> {
+  const sub = await resolveClientSubmission<{ financials_meta: Record<string, unknown> | null }>(
+    supabaseAdmin, accountId, taxYear, "financials_meta",
+  )
+  const meta = (sub?.financials_meta ?? {}) as Record<string, unknown>
+
+  const { data: ingestJobs } = await supabaseAdmin
+    .from("job_queue")
+    .select("status, result, payload")
+    .eq("job_type", "ingest_bank_statement")
+    .eq("account_id", accountId)
+    .in("status", ["pending", "processing", "failed", "completed"])
+  const { computeIngestFileStates, summarizeIngestFileStates } = await import("./ingest-file-status")
+  const stateCounts = summarizeIngestFileStates(computeIngestFileStates(
+    (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean; steps?: Array<{ detail?: string }> } | null; payload: { tax_year?: number | string; path?: string } | null }>,
+    taxYear,
+  ))
+
+  const sources = await fetchAllBankTransactionsByYear<{ bank_name: string; account_type: string | null; transaction_date: string }>(
+    accountId, taxYear, "bank_name, account_type, transaction_date",
+  )
+  const { coverageQuestions, unansweredCoverage, incompleteCoverage, hasStructuralProblem } = await import("./coverage")
+  const answers = (meta.coverage_answers ?? {}) as import("./coverage").CoverageAnswers
+  const covQs = coverageQuestions(sources, taxYear)
+
+  return hasStructuralProblem({
+    ingestFailed: stateCounts.failed,
+    failedFilesOverridden: meta.failed_files_override != null,
+    unansweredCoverage: unansweredCoverage(covQs, answers).length,
+    incompleteCoverage: incompleteCoverage(covQs, answers).length,
+  })
+}
+
 /** Write resolved percentages back to account_contacts where they differ. */
 export async function syncOwnershipBack(accountId: string, ownership: OwnershipResolution): Promise<number> {
   let updated = 0

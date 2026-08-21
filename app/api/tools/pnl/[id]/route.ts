@@ -112,29 +112,31 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       .map(([slug, total]) => ({ slug, label: bucketLabelMap.get(slug) ?? OTHER_BUCKET_LABEL, total }))
       .sort((a, b) => b.total - a.total)
 
-    // In-flight / failed workspace ingest jobs (by distinct file path).
+    // In-flight / failed workspace ingest jobs (by distinct file path). Same
+    // shared per-file classifier the client portal uses (lib/tax/ingest-file-
+    // status.ts) — this route used to hand-roll its own copy with no
+    // 'quarantined' branch, so a file merely awaiting a routine one-tap
+    // format confirm was miscounted as genuinely failed here while the
+    // client route correctly treated the identical state as still-pending
+    // (2026-08-20 hard-stop plan review, senior-engineer + bug-hunter both
+    // caught the disagreement independently). One implementation now, so the
+    // two screens can never disagree about what "failed" means again.
     const { data: ingestJobs } = await supabaseAdmin
       .from('job_queue')
       .select('status, result, payload, created_at')
       .eq('job_type', 'ingest_workspace_statement')
       .eq('related_entity_id', workspaceId)
       .in('status', ['pending', 'processing', 'failed', 'completed'])
-    const byPath = new Map<string, { succeeded: boolean; pending: boolean; failed: boolean }>()
-    for (const j of (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean } | null; payload: { path?: string } | null }>) {
-      const path = j.payload?.path
-      if (!path) continue
-      const e = byPath.get(path) ?? { succeeded: false, pending: false, failed: false }
-      if (j.status === 'completed' && j.result?.ok !== false) e.succeeded = true
-      else if (j.status === 'pending' || j.status === 'processing') e.pending = true
-      else if (j.status === 'failed' || (j.status === 'completed' && j.result?.ok === false)) e.failed = true
-      byPath.set(path, e)
-    }
-    let ingestPending = 0, ingestFailed = 0
-    for (const e of Array.from(byPath.values())) {
-      if (e.succeeded) continue
-      if (e.pending) ingestPending++
-      else if (e.failed) ingestFailed++
-    }
+    const { computeIngestFileStates, summarizeIngestFileStates } = await import('@/lib/tax/ingest-file-status')
+    const ingestJobRows = (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean; steps?: Array<{ detail?: string }> } | null; payload: { tax_year?: number | string; path?: string } | null }>
+    // taxYear here is a formality: workspace job payloads never carry
+    // tax_year (a workspace has exactly one, via related_entity_id scoping
+    // above), so computeIngestFileStates's tax_year check is a documented
+    // no-op for this call regardless of the value passed.
+    const fileStates = computeIngestFileStates(ingestJobRows, 0)
+    const stateCounts = summarizeIngestFileStates(fileStates)
+    const ingestPending = stateCounts.pending + stateCounts.quarantined
+    const ingestFailed = stateCounts.failed
 
     // S1 (2026-07-07): files QUARANTINED for a one-tap format confirmation —
     // extracted from the failed jobs' marker steps, deduped by mapping id,
@@ -146,7 +148,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     for (const j of jobsNewestFirst) {
       if (j.status !== 'failed') continue
       const path = j.payload?.path
-      if (!path || byPath.get(path)?.succeeded || byPath.get(path)?.pending) continue
+      if (!path || fileStates.get(path) === 'succeeded' || fileStates.get(path) === 'pending') continue
       for (const s of j.result?.steps ?? []) {
         const d = s.detail ?? ''
         const idx = d.indexOf('FORMAT_CONFIRMATION_NEEDED:')
@@ -200,7 +202,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     // the rendered totals no longer match the data → the UI asks to Regenerate.
     const { data: wsRow } = await db
       .from('pnl_workspaces')
-      .select('generated_at, linked_account_id, prior_return_snapshot, updated_at, tax_year')
+      .select('generated_at, linked_account_id, prior_return_snapshot, updated_at, tax_year, coverage_answers')
       .eq('id', workspaceId)
       .maybeSingle()
     const generatedAt = (wsRow?.generated_at as string | null) ?? null
@@ -215,6 +217,32 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
         .maybeSingle()
       stale = !!newest?.created_at && String(newest.created_at) > generatedAt
     }
+
+    // Coverage questions (§3.4) — the workspace twin of the client portal's
+    // check, wired up for the first time (2026-08-20 hard-stop plan; this
+    // route used to hardcode an empty result, so a genuinely partial-year
+    // workspace looked exactly like a complete one). Same pure function,
+    // same `sources` shape already fetched above for the file cards —
+    // answers live on this workspace's own coverage_answers column, the
+    // twin of tax_return_submissions.financials_meta.coverage_answers.
+    const { coverageQuestions, unansweredCoverage, incompleteCoverage, hasStructuralProblem } = await import('@/lib/tax/coverage')
+    const wsTaxYear = wsRow?.tax_year != null ? Number(wsRow.tax_year) : new Date().getFullYear()
+    const coverageAnswers = (wsRow?.coverage_answers ?? {}) as import('@/lib/tax/coverage').CoverageAnswers
+    const covQs = coverageQuestions(sources.map(r => ({ bank_name: String(r.bank_name ?? ''), account_type: (r.account_type as string | null) ?? null, transaction_date: String(r.transaction_date ?? '') })), wsTaxYear)
+    const coverage = {
+      questions: covQs.map(q => ({ ...q, answer: coverageAnswers[q.key]?.answer ?? null })),
+      unanswered: unansweredCoverage(covQs, coverageAnswers).length,
+      incomplete: incompleteCoverage(covQs, coverageAnswers).length,
+    }
+    // Workspaces have no CRM override mechanism (that's a real-account/
+    // submission concept) — Antonio's ruling is no staff bypass anyway, so
+    // this is always false here, never a hidden escape hatch.
+    const structuralProblem = hasStructuralProblem({
+      ingestFailed,
+      failedFilesOverridden: false,
+      unansweredCoverage: coverage.unanswered,
+      incompleteCoverage: coverage.incomplete,
+    })
 
     // Location-period triage (Phase 2b; since Phase B2 the portal serves the
     // same cards from the client's books). Residence anchor = the linked
@@ -297,8 +325,8 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       period_answers: periodAnswers,
       residence_country: residenceCountry,
       residence_on_file: residenceOnFile,
-      // Coverage is a client-completeness nudge — not used in the staff scratch tool.
-      coverage: { questions: [], unanswered: 0, incomplete: 0 },
+      coverage,
+      hasStructuralProblem: structuralProblem,
       expense_breakdown,
       buckets,
       ingestPending,
