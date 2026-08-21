@@ -2351,7 +2351,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   </li>
                 ))}
               </ul>
-              {needs.length > 0 && (
+              {needs.length > 0 && !view.hasStructuralProblem && (
                 <div className="mt-3 space-y-1.5">
                   {needs.slice(0, 4).map(g => (
                     <div key={g.group_key} className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-sm">
@@ -2378,7 +2378,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               (AI leaned personal/unsure). Tier 3 (collapsed to bucket
               summaries): everything booked automatically — open only to audit
               or correct. Guide box tells the client what they MUST vs CAN do. */}
-          {view.questions.length > 0 && (
+          {view.questions.length > 0 && !view.hasStructuralProblem && (
             <section id="needs-your-decision" className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 scroll-mt-4">
               {(() => {
                 const bucketLabel = new Map(view.buckets.map(b => [b.slug, b.label]))
@@ -2867,8 +2867,17 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               are client-actionable — every gate is non-blocking, and the
               one interactive control inside (prior-year correction) is
               already isStaff-gated. Showing it to the client was pure
-              clutter with nothing to act on. Staff still see it for QA. */}
-          {isStaff && (
+              clutter with nothing to act on. Staff still see it for QA.
+              Also hidden on a structural problem (2026-08-21, live-QA
+              bug-hunter finding): several gates render real computed
+              dollar figures (balance-off amount, K-1 mismatch, etc.) —
+              exactly the numbers the hard-stop exists to withhold, so
+              "no override for either audience" wasn't actually true for
+              staff. The prior-year-correction control this also hides is
+              unrelated to fixing a coverage gap or a failed file, so
+              nothing needed to escape the block is lost — the coverage-
+              answer buttons and statement manager below stay untouched. */}
+          {isStaff && !view.hasStructuralProblem && (
           <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
             <h2 className="text-sm font-semibold text-zinc-900 mb-3">{it ? 'Verifiche' : 'Verifications'}</h2>
             <ul className="space-y-2">
@@ -3040,11 +3049,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               caveat nobody reliably reads. Routine in-progress work (open
               decisions, pending AI, location periods) is NOT this — that
               case falls through to the else branch unchanged, exactly as
-              already shipped. Deliberately does NOT touch Verifications
-              (staff-only diagnostic, stays visible) or the coverage-answer /
-              statement-manager controls below (the only way to actually fix
-              the problem — hiding those alongside the numbers would leave no
-              way out except a raw database edit, bug-hunter finding). */}
+              already shipped. Deliberately does NOT touch the coverage-
+              answer / statement-manager controls below (the only way to
+              actually fix the problem — hiding those alongside the numbers
+              would leave no way out except a raw database edit, bug-hunter
+              finding). Verifications is a SEPARATE gate, further up
+              (isStaff && !view.hasStructuralProblem) — it used to be
+              deliberately left visible too, until a later live-QA pass
+              found it renders real computed figures on a blocked account;
+              it's now hidden alongside these. */}
           {view.hasStructuralProblem ? (
             <section className="rounded-xl border-2 border-red-300 bg-red-50 px-5 py-5">
               <h2 className="text-base font-bold text-red-900">
@@ -3635,8 +3648,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
 
           {/* Completeness summary (dev_task 95127bb2) — translate the checks
               that didn't fully pass into plain language so the client can
-              provide more or accept as-is. */}
-          {!attested && view.completeness.items.length > 0 && (
+              provide more or accept as-is. Gated on !hasStructuralProblem
+              (2026-08-21, live-QA finding): this panel's own copy says
+              "these numbers are ready", which is flatly false while the
+              hard-stop banner above says the opposite — and it surfaces
+              real diagnostic dollar figures from the same unreliable data
+              the hard-stop withholds. */}
+          {!attested && !view.hasStructuralProblem && view.completeness.items.length > 0 && (
             <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 sm:p-5 space-y-4">
               <div>
                 <h2 className="text-sm font-semibold text-zinc-900">{it ? 'Cosa abbiamo trovato' : 'What we found'}</h2>
@@ -3665,12 +3683,26 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
 
           {/* Download + Attest */}
           <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 space-y-4">
-            <a
-              href={`${API}/download?account_id=${accountId}&tax_year=${taxYear}`}
-              className="inline-flex items-center rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900"
-            >
-              {it ? 'Scarica Excel (P&L + Stato Patrimoniale)' : 'Download Excel (P&L + Balance Sheet)'}
-            </a>
+            {/* The link itself was already refused server-side on a structural
+                problem (both download routes 422 before building anything) —
+                but a plain <a> with no disabled state, sitting right next to a
+                box that used to say "these numbers are ready", was a dead,
+                confusing control (2026-08-21 live-QA finding). Hidden instead
+                of shown-then-erroring. */}
+            {view.hasStructuralProblem ? (
+              <p className="text-xs text-zinc-500">
+                {it
+                  ? 'Il download sarà disponibile una volta risolto il problema sopra.'
+                  : 'Download will be available once the issue above is fixed.'}
+              </p>
+            ) : (
+              <a
+                href={`${API}/download?account_id=${accountId}&tax_year=${taxYear}`}
+                className="inline-flex items-center rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900"
+              >
+                {it ? 'Scarica Excel (P&L + Stato Patrimoniale)' : 'Download Excel (P&L + Balance Sheet)'}
+              </a>
+            )}
 
             {!isStaff && (attested ? (
               <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
