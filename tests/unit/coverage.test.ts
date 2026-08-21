@@ -60,7 +60,7 @@ describe("answers", () => {
 })
 
 describe("hasStructuralProblem", () => {
-  const clean = { ingestFailed: 0, failedFilesOverridden: false, unansweredCoverage: 0, incompleteCoverage: 0 }
+  const clean = { ingestFailed: 0, failedFilesOverridden: false, quarantined: 0, unansweredCoverage: 0, incompleteCoverage: 0 }
 
   it("nothing wrong → false", () => {
     expect(hasStructuralProblem(clean)).toBe(false)
@@ -87,10 +87,26 @@ describe("hasStructuralProblem", () => {
   })
 
   it("multiple problems at once → still just true, not double-counted or falsy", () => {
-    expect(hasStructuralProblem({ ingestFailed: 2, failedFilesOverridden: false, unansweredCoverage: 3, incompleteCoverage: 1 })).toBe(true)
+    expect(hasStructuralProblem({ ingestFailed: 2, failedFilesOverridden: false, quarantined: 0, unansweredCoverage: 3, incompleteCoverage: 1 })).toBe(true)
   })
 
   it("override does NOT suppress an unrelated coverage problem — only the failed-file leg", () => {
-    expect(hasStructuralProblem({ ingestFailed: 1, failedFilesOverridden: true, unansweredCoverage: 1, incompleteCoverage: 0 })).toBe(true)
+    expect(hasStructuralProblem({ ingestFailed: 1, failedFilesOverridden: true, quarantined: 0, unansweredCoverage: 1, incompleteCoverage: 0 })).toBe(true)
+  })
+
+  // 2026-08-21, round-3 bug-hunter blocker: a file awaiting a staff format
+  // confirmation is neither a plain failure nor a coverage gap (a bank with
+  // zero ingested rows generates no coverage question at all) — without this
+  // leg, a quarantined-only account reported completely clean.
+  it("a quarantined file (format confirmation pending) → true, on its own", () => {
+    expect(hasStructuralProblem({ ...clean, quarantined: 1 })).toBe(true)
+  })
+
+  it("the failed-file override does NOT suppress a quarantined file — they're different legs with different resolutions", () => {
+    expect(hasStructuralProblem({ ...clean, quarantined: 1, failedFilesOverridden: true })).toBe(true)
+  })
+
+  it("quarantined + everything else clean → still true (this is the exact real-world shape that shipped broken: zero plain failures, zero coverage gaps, one quarantined file)", () => {
+    expect(hasStructuralProblem({ ingestFailed: 0, failedFilesOverridden: false, quarantined: 1, unansweredCoverage: 0, incompleteCoverage: 0 })).toBe(true)
   })
 })

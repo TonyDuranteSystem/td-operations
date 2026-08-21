@@ -135,31 +135,18 @@ async function createFork(input: { actor: string; taxYear: number; sourceAccount
   // (senior-engineer finding, council review). Simplest correct fix: check
   // the source's OWN live state before copying anything, and refuse outright
   // — a disposable test copy of known-broken data is never useful anyway.
-  const { data: sourceJobs } = await supabaseAdmin
-    .from('job_queue')
-    .select('status, result, payload')
-    .eq('job_type', 'ingest_bank_statement')
-    .eq('account_id', input.sourceAccountId)
-    .in('status', ['pending', 'processing', 'failed', 'completed'])
-  const { computeIngestFileStates, summarizeIngestFileStates } = await import('@/lib/tax/ingest-file-status')
-  const sourceFileStates = computeIngestFileStates(
-    (sourceJobs ?? []) as Array<{ status: string; result: { ok?: boolean; steps?: Array<{ detail?: string }> } | null; payload: { tax_year?: number | string; path?: string } | null }>,
-    input.taxYear,
-  )
-  const sourceCounts = summarizeIngestFileStates(sourceFileStates)
+  //
+  // Calls the ONE shared resolver (2026-08-21, round-3 bug-hunter minor
+  // finding) instead of re-deriving the same predicate inline — this file
+  // used to duplicate the exact job-fetch + coverage-question + predicate
+  // sequence that lives in getAccountStructuralProblem, and that duplication
+  // is how the quarantined-file gap (round-3 blocker) went unnoticed here
+  // even after being fixed in the shared function: this call site kept its
+  // own stale copy of the logic and never inherited the fix.
+  const { getAccountStructuralProblem } = await import('@/lib/tax/financials-orchestration')
+  const sourceStructuralProblem = await getAccountStructuralProblem(input.sourceAccountId, input.taxYear)
   const sourceMeta = (sub?.financials_meta ?? {}) as Record<string, unknown>
   const sourceCoverageAnswers = (sourceMeta.coverage_answers ?? {}) as import('@/lib/tax/coverage').CoverageAnswers
-  const { coverageQuestions, unansweredCoverage, incompleteCoverage, hasStructuralProblem } = await import('@/lib/tax/coverage')
-  const sourceSources = await fetchAllBankTransactionsByYear<{ bank_name: string; account_type: string | null; transaction_date: string }>(
-    input.sourceAccountId, input.taxYear, 'bank_name, account_type, transaction_date',
-  )
-  const sourceCovQs = coverageQuestions(sourceSources, input.taxYear)
-  const sourceStructuralProblem = hasStructuralProblem({
-    ingestFailed: sourceCounts.failed,
-    failedFilesOverridden: sourceMeta.failed_files_override != null,
-    unansweredCoverage: unansweredCoverage(sourceCovQs, sourceCoverageAnswers).length,
-    incompleteCoverage: incompleteCoverage(sourceCovQs, sourceCoverageAnswers).length,
-  })
   if (sourceStructuralProblem) {
     return NextResponse.json({
       error: 'This client\'s real data has an unresolved problem (an unreadable statement or a missing-months question) — fix that on their real account first, then fork. A test copy of known-incomplete data would only reproduce the same problem invisibly.',
@@ -237,6 +224,25 @@ async function createFork(input: { actor: string; taxYear: number; sourceAccount
     ownership_pct: pctByName.get(normalizeForMatch(name)) ?? null,
   }))
   await insertMembers(ws.id, members)
+
+  // Re-check immediately before copying transactions (2026-08-21, round-3
+  // bug-hunter minor finding): the guard above and this copy aren't atomic —
+  // a new ingest failure landing on the SOURCE account in the gap (member
+  // roster fetch + insert, above) would let a workspace fork "clean" from a
+  // source that just became broken, since job_queue history is never copied
+  // and the new workspace's own structural-problem check would then see
+  // nothing wrong either. Very low realistic risk (needs a source-account
+  // ingest job to both complete AND fail in a sub-second window during a
+  // single fork request), but cheap to close: nothing has been copied into
+  // the workspace yet at this point, so refusing here just means deleting
+  // the still-empty shell (members cascade) instead of leaving a fork whose
+  // own history can never reveal what it was forked from.
+  if (await getAccountStructuralProblem(input.sourceAccountId, input.taxYear)) {
+    await db.from('pnl_workspaces').delete().eq('id', ws.id)
+    return NextResponse.json({
+      error: 'This client\'s real data developed an unresolved problem while this fork was being created — fix that on their real account first, then fork again.',
+    }, { status: 409 })
+  }
 
   // Copy the client's transactions for the year into the workspace (private copy).
   const txRows = await fetchAllBankTransactionsByYear<Record<string, unknown>>(

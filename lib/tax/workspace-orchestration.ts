@@ -188,6 +188,7 @@ export async function getWorkspaceStructuralProblem(workspaceId: string): Promis
   return hasStructuralProblem({
     ingestFailed: stateCounts.failed,
     failedFilesOverridden: false, // workspaces have no CRM override mechanism today
+    quarantined: stateCounts.quarantined,
     unansweredCoverage: unansweredCoverage(covQs, answers).length,
     incompleteCoverage: incompleteCoverage(covQs, answers).length,
   })

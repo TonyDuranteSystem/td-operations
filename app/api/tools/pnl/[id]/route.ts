@@ -247,6 +247,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     const structuralProblem = hasStructuralProblem({
       ingestFailed,
       failedFilesOverridden: false,
+      quarantined: stateCounts.quarantined,
       unansweredCoverage: coverage.unanswered,
       incompleteCoverage: coverage.incomplete,
     })

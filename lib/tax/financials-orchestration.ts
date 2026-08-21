@@ -336,6 +336,7 @@ export async function getAccountStructuralProblem(accountId: string, taxYear: nu
   return hasStructuralProblem({
     ingestFailed: stateCounts.failed,
     failedFilesOverridden: meta.failed_files_override != null,
+    quarantined: stateCounts.quarantined,
     unansweredCoverage: unansweredCoverage(covQs, answers).length,
     incompleteCoverage: incompleteCoverage(covQs, answers).length,
   })

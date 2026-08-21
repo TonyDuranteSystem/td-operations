@@ -50,7 +50,11 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
 
     if (!result.ok) {
       // Refused (concurrency, or non-empty target needing a mode) — 409 so the UI prompts.
-      return NextResponse.json({ ok: false, action: result.action, error: result.reason }, { status: 409 })
+      // backupPath forwarded (2026-08-21, round-3 bug-hunter major finding):
+      // on the rare Replace-then-reappeared-problem refusal, the client's
+      // rows are already deleted and a restore point exists — staff need
+      // that path immediately, not a separate action_log lookup.
+      return NextResponse.json({ ok: false, action: result.action, error: result.reason, backupPath: result.backupPath }, { status: 409 })
     }
     return NextResponse.json(result)
   } catch (err) {

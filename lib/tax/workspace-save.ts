@@ -225,7 +225,44 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
   // bug-hunter itself flagged as rare (workspaces are effectively
   // single-operator scratch spaces).
   if (await getWorkspaceStructuralProblem(workspaceId)) {
-    return { ok: false, action: "refuse", reason: "This workspace's data problem was resolved a moment ago but has reappeared since — please refresh and try again.", inserted: 0, deleted, failed: 0 }
+    // FIXED (2026-08-21, round-3 bug-hunter major finding): on a Replace,
+    // this refusal fires AFTER the client's real rows are already backed up
+    // and deleted (lines above) — the client's books for this account+year
+    // are now genuinely empty. The old response silently dropped backupPath
+    // (present in SaveToClientResult, embedded on the sibling delete-failure
+    // throw a few lines up, but not here) and returned before ever reaching
+    // the action_log write below, which only runs on the final success path
+    // — so nothing durable recorded that a delete happened or where the
+    // restore point is. That directly contradicted this file's own header
+    // promise that Replace is reversible via an audited backup. Both are
+    // fixed the same way regardless of mode: report the backup path when one
+    // exists, and log what actually happened to the client's real books.
+    if (deleted > 0) {
+      try {
+        await supabaseAdmin.from("action_log").insert({
+          actor,
+          action_type: "pnl_workspace_save_to_client_refused_after_delete",
+          table_name: "bank_transactions",
+          record_id: workspaceId,
+          account_id: targetAccountId,
+          summary: `Replace save refused after the client's ${deleted} existing row(s) for tax year ${taxYear} were already deleted — the workspace's data problem reappeared before the replacement rows could be written. Backup: ${backupPath ?? "none"}.`,
+          details: { workspace_id: workspaceId, tax_year: taxYear, deleted, backup_path: backupPath ?? null },
+        } as never)
+      } catch (e) {
+        console.error("[workspace-save] audit log insert failed for refused-after-delete (delete already applied):", e)
+      }
+    }
+    return {
+      ok: false,
+      action: "refuse",
+      reason: deleted > 0
+        ? "This workspace's data problem was resolved a moment ago but has reappeared since. The client's existing records for this year were already cleared as part of this Replace and have NOT been restored — a backup was saved before deleting; contact engineering to restore it, then try the save again once the workspace is fixed."
+        : "This workspace's data problem was resolved a moment ago but has reappeared since — please refresh and try again.",
+      inserted: 0,
+      deleted,
+      failed: 0,
+      backupPath,
+    }
   }
 
   // Insert workspace rows into the client's books — same dedup contract as the

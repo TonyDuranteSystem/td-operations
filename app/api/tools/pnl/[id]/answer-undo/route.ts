@@ -27,6 +27,14 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     const ids = Array.isArray(body.transaction_ids) ? body.transaction_ids.filter(Boolean) : []
     if (ids.length === 0) return NextResponse.json({ error: 'transaction_ids are required.' }, { status: 400 })
 
+    // Hard-stop parity (2026-08-21, round-3 bug-hunter minor finding): the
+    // forward answer route already refuses on a structural problem; undo had
+    // no such check — same asymmetry fixed on the portal twin.
+    const { getWorkspaceStructuralProblem } = await import('@/lib/tax/workspace-orchestration')
+    if (await getWorkspaceStructuralProblem(params.id)) {
+      return NextResponse.json({ error: 'This workspace has an unresolved data problem (an unreadable statement, or a missing-months question) — fix that first before changing anything else.' }, { status: 422 })
+    }
+
     let reverted = 0
     for (let i = 0; i < ids.length; i += 200) {
       const { data, error } = await db
