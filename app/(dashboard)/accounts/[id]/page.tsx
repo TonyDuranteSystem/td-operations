@@ -7,7 +7,7 @@ import { APP_BASE_URL } from '@/lib/config'
 import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import { isOwnerRole, pickViewAsContactId } from '@/lib/portal/pick-view-as-contact'
-import { getClientLoginContactIds } from '@/lib/portal/client-login-index'
+import { getClientLoginContactIds, getClientLoginNeedsSetupIds } from '@/lib/portal/client-login-index'
 import { resolveAccountSigner } from '@/lib/members/resolve-signer'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import { resolveFlows } from '@/lib/flows/resolve-flows'
@@ -527,17 +527,52 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   // between the two, silently ignoring which one the resolver actually
   // picked — the same wrong-person failure this fix exists to close, just
   // moved one layer down (senior-engineer confirmation pass, 2026-08-21).
+  //
+  // PREFER A CONTACT WHO HAS ACTUALLY FINISHED SETUP over one who merely has
+  // a login (KS Media Consulting LLC, 2026-08-21: the resolved signer Botond
+  // Dudas had a login that was never completed, so View-as landed staff on
+  // his stuck "Set Your Password" screen — useless for the support/debug this
+  // button exists for — even though his co-member Aron Toth had genuinely
+  // used the portal for months. Antonio's explicit call: View-as must still
+  // be able to show SOMETHING when at least one member on the account has
+  // finished setup, with a note explaining who got substituted and why).
+  // This is scoped ONLY to View-as target selection — `primaryContact` above
+  // (the e-sign prefill) is untouched and still follows the resolved signer
+  // alone, because who legally signs documents must never shift just because
+  // a different co-member happened to log into the portal.
   let viewAsContactId: string | null = null
+  let viewAsNote: string | null = null
   if (canViewAs && contacts.length > 0) {
     try {
-      const loginHolders = await getClientLoginContactIds()
-      if (resolvedSignerContact && loginHolders.has(resolvedSignerContact.id)) {
+      const [loginHolders, needsSetupIds] = await Promise.all([
+        getClientLoginContactIds(),
+        getClientLoginNeedsSetupIds(),
+      ])
+      const hasFinishedSetup = (id: string) => loginHolders.has(id) && !needsSetupIds.has(id)
+
+      if (resolvedSignerContact && hasFinishedSetup(resolvedSignerContact.id)) {
         viewAsContactId = resolvedSignerContact.id
       } else {
-        viewAsContactId = pickViewAsContactId(
-          contacts.map((c) => ({ id: c.id, role: (c as Contact & { role?: string }).role })),
-          loginHolders,
-        )
+        const readyContacts = contacts.filter((c) => hasFinishedSetup(c.id))
+        if (readyContacts.length > 0) {
+          viewAsContactId = pickViewAsContactId(
+            readyContacts.map((c) => ({ id: c.id, role: (c as Contact & { role?: string }).role })),
+            loginHolders,
+          )
+          if (resolvedSignerContact && viewAsContactId !== resolvedSignerContact.id) {
+            const shown = contacts.find((c) => c.id === viewAsContactId)
+            viewAsNote = `${resolvedSignerContact.full_name || 'The primary contact'} hasn't finished setting up their portal account yet — showing you ${shown?.full_name || 'another member'}'s view instead, since they have.`
+          }
+        } else if (resolvedSignerContact && loginHolders.has(resolvedSignerContact.id)) {
+          // Nobody on the account has finished setup — same as before: land
+          // on the resolved signer's own stuck screen, nothing else to show.
+          viewAsContactId = resolvedSignerContact.id
+        } else {
+          viewAsContactId = pickViewAsContactId(
+            contacts.map((c) => ({ id: c.id, role: (c as Contact & { role?: string }).role })),
+            loginHolders,
+          )
+        }
       }
     } catch (e) {
       // Auth listing failure must not break the account page — just hide the button.
@@ -554,7 +589,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         >
           ✍️ Create e-sign document
         </Link>
-        {canViewAs && viewAsContactId && <ViewAsClientButton contactId={viewAsContactId} />}
+        {canViewAs && viewAsContactId && <ViewAsClientButton contactId={viewAsContactId} note={viewAsNote} />}
       </div>
       {formationSd && (
         <FormationWorkspaceBanner

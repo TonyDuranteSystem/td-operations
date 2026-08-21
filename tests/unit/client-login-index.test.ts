@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { clientLoginContactIds } from '@/lib/portal/client-login-index'
+import { clientLoginContactIds, clientLoginNeedsSetupIds } from '@/lib/portal/client-login-index'
 
 describe('clientLoginContactIds', () => {
   it('keeps only CLIENT logins that carry a contact id', () => {
@@ -35,5 +35,35 @@ describe('clientLoginContactIds', () => {
       { app_metadata: { role: 'team', contact_id: 'x' } },
     ])
     expect(ids.size).toBe(0)
+  })
+})
+
+describe('clientLoginNeedsSetupIds', () => {
+  it('flags only client logins with must_change_password literally true', () => {
+    const ids = clientLoginNeedsSetupIds([
+      { app_metadata: { role: 'client', contact_id: 'stuck' }, user_metadata: { must_change_password: true } },
+      { app_metadata: { role: 'client', contact_id: 'done' }, user_metadata: { must_change_password: false } },
+      { app_metadata: { role: 'client', contact_id: 'legacy' }, user_metadata: {} },
+      { app_metadata: { role: 'client', contact_id: 'nometa' } },
+    ])
+    expect([...ids]).toEqual(['stuck'])
+  })
+
+  it('never flags a non-client role even if the flag is true', () => {
+    const ids = clientLoginNeedsSetupIds([
+      { app_metadata: { role: 'admin', contact_id: 'staff' }, user_metadata: { must_change_password: true } },
+    ])
+    expect(ids.size).toBe(0)
+  })
+
+  it('ignores a truthy-but-not-literal-true value (defensive against a future string/number flag)', () => {
+    const ids = clientLoginNeedsSetupIds([
+      { app_metadata: { role: 'client', contact_id: 'c1' }, user_metadata: { must_change_password: 'true' as unknown as boolean } },
+    ])
+    expect(ids.size).toBe(0)
+  })
+
+  it('returns an empty set for an empty list', () => {
+    expect(clientLoginNeedsSetupIds([]).size).toBe(0)
   })
 })
