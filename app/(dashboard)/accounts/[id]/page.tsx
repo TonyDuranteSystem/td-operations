@@ -8,6 +8,7 @@ import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import { isOwnerRole, pickViewAsContactId } from '@/lib/portal/pick-view-as-contact'
 import { getClientLoginContactIds } from '@/lib/portal/client-login-index'
+import { resolveAccountSigner } from '@/lib/members/resolve-signer'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import { resolveFlows } from '@/lib/flows/resolve-flows'
 import { FormationWorkspaceBanner } from '@/components/flows/formation-workspace-banner'
@@ -57,7 +58,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   }
 
   // Fetch related data in parallel
-  const [contactsResult, servicesResult, paymentsResult, dealsResult, taxReturnsResult, documentsResult, offerResult, , wizardProgressResult] = await Promise.all([
+  const [contactsResult, servicesResult, paymentsResult, dealsResult, taxReturnsResult, documentsResult, offerResult, , wizardProgressResult, signerResult] = await Promise.all([
     // Contacts via junction table
     supabase
       .from('account_contacts')
@@ -113,12 +114,35 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
       .select('status, current_step, wizard_type, updated_at, account_id, data')
       .eq('account_id', params.id)
       .order('updated_at', { ascending: false }),
+    // Who actually signs/represents this account — the shared resolver
+    // (is_signer-first for MMLLC, blocks rather than guesses on 0/2+ flagged,
+    // falls back to account_contacts for SMLLC/legacy). account_contacts.role
+    // is free text that frequently leaves everyone 'Member' with nobody
+    // marked owner (B&P International, 2026-08-20: View-as and the e-sign
+    // prefill both landed on the wrong co-member because they only read
+    // account_contacts). Do NOT hand-roll a members.is_primary lookup here —
+    // is_primary and is_signer are independently-settable and not guaranteed
+    // to agree (components/portal/operating-agreement-template.tsx:41-44);
+    // resolveAccountSigner is the single shared primitive for this exact
+    // question (lib/members/resolve-signer.ts) and already uses supabaseAdmin
+    // internally, so it isn't blocked by members' client-only RLS policy.
+    resolveAccountSigner(params.id),
   ])
 
   const contacts: Contact[] = (contactsResult.data ?? []).map(c => {
     const contact = c.contact as unknown as Contact
     return { ...contact, role: c.role }
   })
+
+  // The resolved signer's contact id, when the resolver found exactly one
+  // unambiguous match among this account's linked contacts. A 'blocked' or
+  // 'not_found' outcome (no members rows, or an MMLLC with 0/2+ signers
+  // flagged) falls through to the pre-existing role/positional logic below —
+  // never guess a second time.
+  const resolvedSignerContact =
+    signerResult.outcome === 'resolved'
+      ? contacts.find((c) => c.id === signerResult.contact.id) ?? null
+      : null
 
   const services: Service[] = (servicesResult.data ?? []).map(sd => ({
     id: sd.id,
@@ -468,26 +492,53 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     .map((tr) => tr.tax_year)
     .sort((a, b) => b - a)[0] ?? null
 
-  // Primary contact for the e-sign prefill: the owner-role link if one exists
-  // (case-insensitive — production holds BOTH 'owner' and 'Owner'), else the
-  // first contact in the now-deterministic query order.
+  // Primary contact for the e-sign prefill: the resolved signer if the shared
+  // resolver found one unambiguously, else the owner-role link (case-insensitive
+  // — production holds BOTH 'owner' and 'Owner'), else the first contact in the
+  // now-deterministic query order.
   const canViewAs = admin
   const primaryContact =
-    contacts.find((c) => isOwnerRole((c as Contact & { role?: string }).role)) ?? contacts[0]
+    resolvedSignerContact ??
+    contacts.find((c) => isOwnerRole((c as Contact & { role?: string }).role)) ??
+    contacts[0]
 
   // "View as client" target: ONLY a contact that actually has a client portal
   // login — the button opens that person's portal, so a login is the
   // precondition, not an after-click discovery (Nexo Agency incident,
   // 2026-07-27: the owner-role link had no login and the button always errored).
-  // Owner preferred among login-holders; button hidden when nobody qualifies.
+  // The resolved signer is preferred over account_contacts' free-text role
+  // (B&P International incident, 2026-08-20: two co-members were both plain
+  // 'Member' in account_contacts with nobody marked owner there, so this fell
+  // back to an arbitrary contact-id tiebreak and picked the WRONG person — the
+  // one who hadn't finished portal setup — while the actual signer, correctly
+  // flagged via `members.is_signer`, was never considered). Preferred among
+  // login-holders; button hidden when nobody qualifies. NOTE: this treats "who
+  // signs legal documents for this account" and "who staff should view as" as
+  // the same person — reasonable (the signer is the account's most
+  // authoritative contact) but a real product framing choice, not a fact;
+  // worth Antonio's explicit sign-off rather than assuming it.
+  //
+  // The resolved signer is checked FIRST and directly — NOT by injecting a
+  // synthetic 'owner' role into pickViewAsContactId's own search. That was
+  // tried and reverted: if a DIFFERENT contact already carries a stale/wrong
+  // account_contacts.role='Owner' tag (the resolver exists precisely because
+  // that field is unreliable) and also holds a login, pickViewAsContactId's
+  // internal "first owner-role match in contact-id order" would coin-flip
+  // between the two, silently ignoring which one the resolver actually
+  // picked — the same wrong-person failure this fix exists to close, just
+  // moved one layer down (senior-engineer confirmation pass, 2026-08-21).
   let viewAsContactId: string | null = null
   if (canViewAs && contacts.length > 0) {
     try {
       const loginHolders = await getClientLoginContactIds()
-      viewAsContactId = pickViewAsContactId(
-        contacts.map((c) => ({ id: c.id, role: (c as Contact & { role?: string }).role })),
-        loginHolders,
-      )
+      if (resolvedSignerContact && loginHolders.has(resolvedSignerContact.id)) {
+        viewAsContactId = resolvedSignerContact.id
+      } else {
+        viewAsContactId = pickViewAsContactId(
+          contacts.map((c) => ({ id: c.id, role: (c as Contact & { role?: string }).role })),
+          loginHolders,
+        )
+      }
     } catch (e) {
       // Auth listing failure must not break the account page — just hide the button.
       console.error('[accounts/[id]] view-as target resolution failed:', e)
