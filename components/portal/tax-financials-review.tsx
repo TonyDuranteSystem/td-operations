@@ -54,6 +54,12 @@ interface CompletenessSummary { items: CompletenessItem[]; can_accept_as_is: boo
 
 interface View {
   coverage: { questions: CoverageQuestion[]; unanswered: number; incomplete: number }
+  // 2026-08-20 hard-stop plan: an unreadable file, or a missing-months
+  // question unanswered/answered incomplete. Server-computed (both GET
+  // routes) via lib/tax/coverage.ts::hasStructuralProblem — never derive
+  // this client-side, so the screen can't silently disagree with the
+  // save/download routes that enforce the same rule.
+  hasStructuralProblem: boolean
   completeness: CompletenessSummary
   draft: {
     // `folded*` (2026-08-03): what the CLIENT-side by-sign policy pulled INTO
@@ -420,6 +426,24 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     const t = setInterval(() => { void load(true) }, active ? 20000 : retryWait!)
     return () => clearInterval(t)
   }, [view, load])
+
+  // #needs-your-decision deep link (2026-08-20): the "some items need your
+  // decision" notice links here so a client doesn't land on the page and have
+  // to scroll past the P&L, Balance Sheet and location review to find out why
+  // they were messaged. Fires ONCE, only after real content exists — reading
+  // window.location.hash directly (not useSearchParams/next/navigation) so
+  // this needs no Suspense boundary at any of the three places that mount
+  // this component. Guarded by state, not a ref, to match this file's
+  // existing one-shot patterns (e.g. watchedPaths) rather than introduce the
+  // file's first useRef for a single boolean.
+  const [hashScrolled, setHashScrolled] = useState(false)
+  useEffect(() => {
+    if (hashScrolled || !view || typeof window === 'undefined') return
+    if (window.location.hash === '#needs-your-decision') {
+      document.getElementById('needs-your-decision')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+    setHashScrolled(true)
+  }, [hashScrolled, view])
 
   // W9 pop-up feed: when a WATCHED (this-session) upload reaches its outcome
   // IN A VIEW LOADED AFTER THE ARMING, announce it once. The seq guard is the
@@ -855,6 +879,26 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     })
     return out
   }, [view])
+
+  /**
+   * THE Tier-1 "needs your decision" list — hoisted here (2026-08-20) so the
+   * top-of-page summary card and the full review section below read the SAME
+   * array instead of two independent derivations that could quietly drift
+   * apart. Was previously computed inline, deep in the JSX, only where the
+   * full section rendered — a client (or Antonio, in staff mode) had to
+   * scroll past the whole P&L, Balance Sheet and location review to find out
+   * what this even was. `isSuspected`/`inFilter` intentionally stay local to
+   * where they're still used (the full section's period-filter UI) — only
+   * the resulting list is shared.
+   */
+  const needs = useMemo(() => {
+    if (!view) return [] as QuestionGroup[]
+    const isSuspected = (g: QuestionGroup) => (g.suspected_count ?? 0) > 0
+    return view.questions.filter(g =>
+      (!periodFilter || periodFilter.keys.has(groupKeyRoot(g.group_key)))
+      && ((g.current_category ?? 'uncategorized') === 'uncategorized' || isSuspected(g)),
+    )
+  }, [view, periodFilter])
 
   // One merchant-group question card (chips, bucket select, bulk checkbox).
   // COMPONENT-scope since 2026-07-06 so the country/period cards can render it
@@ -2061,8 +2105,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
 
       {/* Validation Mode (V1, staff-only) — rendered FIRST so toggling it
           shows the explanation immediately, no scrolling (Antonio 2026-07-07).
-          Same engine pass as the report, invariant-checked. */}
-      {isStaff && validationMode && view.validation && (
+          Same engine pass as the report, invariant-checked. A structurally
+          SEPARATE render path from the main P&L/BS/Capital block below (this
+          sits well before it in the JSX) — the 2026-08-20 hard-stop wrap on
+          that block does NOT cover this one, so it needs its own
+          !hasStructuralProblem check or staff could still see a full numeric
+          breakdown of known-broken data here (senior-engineer finding). */}
+      {isStaff && validationMode && view.validation && !view.hasStructuralProblem && (
         <ValidationBreakdownPanel validation={view.validation} api={API} />
       )}
 
@@ -2268,21 +2317,567 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             </section>
           )}
 
-          {/* Staff workspace: unclassified money is EXCLUDED from the totals
-              (never silently folded into income — the B&P $594k lesson). Say
-              it loudly and point at the questions list below. */}
-          {isStaff && view.draft.pnl.uncategorizedCount > 0 && (
-            <section className="rounded-xl border-2 border-red-300 bg-red-50 px-5 py-4">
-              <p className="text-sm font-bold text-red-900">
-                ⚠ {view.draft.pnl.uncategorizedCount} transaction(s) (net {fmt(view.draft.pnl.uncategorizedTotal)}) are UNCLASSIFIED — excluded from these totals.
+
+          {/* TOP-OF-PAGE ACTION SUMMARY (2026-08-20, Antonio's redesign — the
+              Titan/Gabriele Finelli finding). Antonio's own words: "he has
+              everything there... it's almost a mess... collapse [it] so the
+              client will see clearly what he has to do." Before this, the
+              only place a client could learn what's blocking their Confirm
+              was the "Needs your decision" section far down the page (past
+              the full P&L, Balance Sheet, capital table and location
+              review) — or the disabled Confirm button at the very bottom.
+              This reads confirmBlockers (already the single source of truth
+              for what blocks Confirm — card 85f6f0b2's Door-1 rule) so it
+              can never tell a different story than the button itself does.
+              Renders in BOTH client and staff modes — this was Antonio's own
+              complaint about the staff view too, not just the client's. */}
+          {confirmBlockers.length > 0 && (
+            <section className="rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-4 sm:px-5">
+              <h2 className="text-base font-bold text-amber-900 flex items-center gap-2">
+                <span aria-hidden="true">🖐</span>
+                {it
+                  ? `${confirmBlockers.length === 1 ? 'C’è una cosa' : `Ci sono ${confirmBlockers.length} cose`} da sistemare`
+                  : `${confirmBlockers.length === 1 ? 'One thing needs' : `${confirmBlockers.length} things need`} your input`}
+              </h2>
+              <p className="text-xs text-amber-800 mt-1">
+                {it
+                  ? 'Tutto il resto è già pronto — queste sono le uniche voci che bloccano il tuo bilancio.'
+                  : 'Everything else is already prepared — these are the only items holding up your return.'}
               </p>
-              <p className="text-xs text-red-800 mt-1">
-                The P&amp;L and Balance Sheet below are incomplete until every transaction is categorized. Answer the questions in the review list below — do not download or save to a client before that.
-              </p>
+              <ul className="mt-3 space-y-1.5">
+                {confirmBlockers.map(b => (
+                  <li key={b.key} className="text-sm text-amber-900">
+                    {it ? b.labelIt : b.label}
+                  </li>
+                ))}
+              </ul>
+              {needs.length > 0 && !view.hasStructuralProblem && (
+                <div className="mt-3 space-y-1.5">
+                  {needs.slice(0, 4).map(g => (
+                    <div key={g.group_key} className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-sm">
+                      <span className="truncate text-zinc-800">{g.label}</span>
+                      <span className="shrink-0 text-xs text-zinc-500">
+                        {g.count}× · {fmt(g.total)}{g.currency && g.currency !== 'USD' ? ` ${g.currency}` : ''}
+                      </span>
+                    </div>
+                  ))}
+                  {needs.length > 4 && (
+                    <p className="text-xs text-amber-700">
+                      {it ? `+ altre ${needs.length - 4}` : `+ ${needs.length - 4} more`}
+                    </p>
+                  )}
+                </div>
+              )}
             </section>
           )}
 
-          {/* Gates */}
+
+          {/* TRIAGE-FIRST REVIEW (Antonio, 2026-07-03): the screen is a WORK
+              QUEUE, not an archive. Tier 1 (expanded): only groups that need a
+              human decision. Tier 2 (collapsed): booked but worth a glance
+              (AI leaned personal/unsure). Tier 3 (collapsed to bucket
+              summaries): everything booked automatically — open only to audit
+              or correct. Guide box tells the client what they MUST vs CAN do. */}
+          {view.questions.length > 0 && !view.hasStructuralProblem && (
+            <section id="needs-your-decision" className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 scroll-mt-4">
+              {(() => {
+                const bucketLabel = new Map(view.buckets.map(b => [b.slug, b.label]))
+                // Review-one-by-one period filter (zero writes): narrows every
+                // tier to the merchants seen inside the selected period.
+                // Compare on the merchant ROOT: presence-periods emits bare
+                // rowRootKey keys, while group_key now carries a
+                // direction+currency suffix (per-direction split 2026-07-05).
+                const inFilter = (g: QuestionGroup) => !periodFilter || periodFilter.keys.has(groupKeyRoot(g.group_key))
+                const isSuspected = (g: QuestionGroup) => (g.suspected_count ?? 0) > 0
+                // `needs` itself is now the hoisted, component-level memo
+                // (same name, same filter, same THE-MARK-NOT-THE-CATEGORY
+                // reasoning — see its definition near confirmBlockers) so the
+                // top-of-page summary card and this full section can never
+                // silently disagree about what still needs a decision.
+                const booked = view.questions.filter(g => inFilter(g) && (g.current_category ?? 'uncategorized') !== 'uncategorized' && !isSuspected(g))
+                const glance = booked.filter(g => g.ai_lean === 'personal' || g.ai_lean === 'unsure' || !g.ai_lean)
+                const autoBooked = booked.filter(g => g.ai_lean === 'business')
+                const needsIn = needs.filter(g => g.direction !== 'out')
+                const needsOut = needs.filter(g => g.direction === 'out')
+
+                const renderCard = renderQuestionCard
+
+                const toggle = (key: string) => setOpenSections(s => {
+                  const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n
+                })
+
+                return (
+                  <>
+                    {periodFilter && (
+                      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-900">
+                        <span>🌍 {it ? 'Stai controllando solo' : 'Reviewing only'}: <strong>{periodFilter.label}</strong></span>
+                        <button
+                          onClick={() => setPeriodFilter(null)}
+                          className="rounded-full border border-indigo-300 bg-white px-2.5 py-0.5 font-medium text-indigo-700 hover:border-indigo-600"
+                        >
+                          {it ? 'Mostra tutto' : 'Show all'} ✕
+                        </button>
+                      </div>
+                    )}
+                    {/* Guide: what this screen is, what you MUST do, what you CAN do.
+                        Collapsed by default (2026-08-20, same openSections Set the
+                        Tier 2/3 toggles already use) — this used to be always-open,
+                        full prose sitting above the actual decision list, which was
+                        exactly the "too much before I can tell what to do" problem
+                        the top-of-page summary card now exists to fix. The always-
+                        visible summary line stays outside the toggle: it's real
+                        signal (a live count), not instructional prose. */}
+                    <div className="rounded-lg border border-zinc-200 bg-zinc-50 mb-4 text-xs text-zinc-600">
+                      <button
+                        type="button"
+                        onClick={() => toggle('guide')}
+                        className="flex w-full items-center justify-between p-3 sm:p-4 text-left"
+                      >
+                        <span className="text-sm font-semibold text-zinc-900">{it ? 'Come funziona questa revisione' : 'How this review works'}</span>
+                        <span className="text-zinc-400 text-xs">{openSections.has('guide') ? '▲' : '▼'}</span>
+                      </button>
+                      {openSections.has('guide') && (
+                        <div className="px-3 pb-3 sm:px-4 sm:pb-4 space-y-1.5">
+                          <p>
+                            {it
+                              ? 'Abbiamo letto i tuoi estratti conto e registrato automaticamente ogni transazione — l\'etichetta blu ✓ mostra come è stata registrata ciascuna voce.'
+                              : 'We read your bank statements and booked every transaction automatically — the blue ✓ chip shows how each item is booked.'}
+                          </p>
+                          <p>
+                            <strong>{it ? 'Cosa DEVI fare: ' : 'What you MUST do: '}</strong>
+                            {/* Counts EVERYTHING that blocks Confirm, from the same
+                                expression the Confirm button uses — not just the
+                                merchant decisions (the false all-clear Antonio hit). */}
+                            {confirmBlockers.length === 0
+                              ? (it ? 'niente — puoi confermare.' : 'nothing — you can confirm.')
+                              : confirmBlockers.map(b => (it ? b.labelIt : b.label)).join(it ? '; ' : '; ') + '.'}
+                          </p>
+                          <p>
+                            <strong>{it ? 'Cosa PUOI fare (facoltativo): ' : 'What you CAN do (optional): '}</strong>
+                            {it
+                              ? 'aprire le sezioni qui sotto per controllare ciò che abbiamo registrato e correggerlo con un tocco — ad esempio segnare come “Personale” una spesa che era tua e non della società.'
+                              : 'open the sections below to double-check anything we booked and correct it with one tap — for example marking something as “Personal” if it was yours, not the company\'s.'}
+                          </p>
+                          <p>
+                            {it
+                              ? 'Ogni risposta viene ricordata e applicata automaticamente l\'anno prossimo. Quando “Serve una tua decisione” è vuoto, hai finito.'
+                              : 'Every answer is remembered and applied automatically next year. When “Needs your decision” is empty, you\'re done.'}
+                          </p>
+                        </div>
+                      )}
+                      <p className="px-3 pb-3 sm:px-4 sm:pb-4 text-zinc-500">
+                        {booked.length} {it ? 'gruppi registrati automaticamente' : 'groups booked automatically'} · <strong className="text-zinc-800">{needs.length} {it ? 'da decidere' : 'need your decision'}</strong>
+                      </p>
+                    </div>
+
+                    {/* TIER 1 — Needs your decision (the work queue). Money in /
+                        Money out are collapsible but START OPEN while they hold
+                        work (a hidden queue = dead Confirm button with no visible
+                        reason); an emptied section vanishes on its own. Long
+                        sections cap at 10 cards with "Show all N". */}
+                    {needs.length > 0 ? (
+                      <div className="mb-5 rounded-xl border-2 border-amber-300 bg-amber-50/50 p-3 sm:p-4">
+                        <h3 className="text-sm font-bold text-amber-900 mb-2">
+                          🖐 {it ? `Serve una tua decisione · ${needs.length}` : `Needs your decision · ${needs.length}`}
+                        </h3>
+                        {([
+                          { key: 'in', list: needsIn, label: it ? 'Soldi in entrata' : 'Money in' },
+                          { key: 'out', list: needsOut, label: it ? 'Soldi in uscita' : 'Money out' },
+                        ] as const).map(({ key, list, label }) => {
+                          if (list.length === 0) return null
+                          const open = !closedNeeds.has(key)
+                          const showAll = showAllNeeds.has(key)
+                          const shown = showAll ? list : list.slice(0, 10)
+                          // Net total only when the whole section is one currency —
+                          // summing EUR+USD into one number would be a lie.
+                          const curs = new Set(list.map(g => g.currency ?? ''))
+                          const net = curs.size === 1 ? list.reduce((s, g) => s + g.total, 0) : null
+                          const onlyCur = curs.size === 1 ? Array.from(curs)[0] : ''
+                          return (
+                            <div key={key} className={key === 'in' && needsOut.length > 0 ? 'mb-3' : ''}>
+                              <button
+                                type="button"
+                                onClick={() => setClosedNeeds(s => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n })}
+                                className="flex w-full items-center justify-between py-1 text-left"
+                              >
+                                <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+                                  {label} · {list.length}{net !== null ? ` · ${fmt(net)}${onlyCur && onlyCur !== 'USD' ? ` ${onlyCur}` : ''}` : ''}
+                                </span>
+                                <span className="text-amber-700 text-xs">{open ? '▲' : '▼'}</span>
+                              </button>
+                              {open && (
+                                <>
+                                  <div className="space-y-2">{shown.map(renderCard)}</div>
+                                  {list.length > shown.length && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowAllNeeds(s => new Set(s).add(key))}
+                                      className="mt-2 w-full rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-800 hover:border-amber-500"
+                                    >
+                                      {it ? `Mostra tutte e ${list.length}` : `Show all ${list.length}`}
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <div className={`mb-5 rounded-xl border-2 px-4 py-4 text-sm font-semibold ${
+                        confirmBlockers.length === 0
+                          ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                          : 'border-amber-300 bg-amber-50 text-amber-900'
+                      }`}>
+                        {/* Scoped honestly: this section is about merchant
+                            decisions, so it says THAT — and when something else
+                            still blocks Confirm it names it instead of implying
+                            the client is finished. */}
+                        {confirmBlockers.length === 0
+                          ? `✓ ${it ? 'Tutto registrato — non serve nessuna decisione.' : 'All booked — nothing needs your decision.'}`
+                          : `✓ ${it ? 'Nessuna spesa da decidere qui. Resta da fare: ' : 'No merchant decisions left here. Still to do: '}${confirmBlockers.map(b => (it ? b.labelIt : b.label)).join('; ')}.`}
+                      </div>
+                    )}
+
+                    {/* TIER 2 — Booked, worth a glance (collapsed). */}
+                    {glance.length > 0 && (
+                      <div className="mb-4 rounded-lg border border-zinc-200">
+                        <button type="button" onClick={() => toggle('glance')} className="flex w-full items-center justify-between px-3 py-2.5 text-left">
+                          <span className="text-sm font-medium text-zinc-800">
+                            👀 {it ? `Registrate — vale la pena dare un'occhiata · ${glance.length}` : `Booked — worth a glance · ${glance.length}`}
+                          </span>
+                          <span className="text-zinc-400 text-xs">{openSections.has('glance') ? '▲' : '▼'}</span>
+                        </button>
+                        {openSections.has('glance') && (
+                          <div className="space-y-2 px-3 pb-3">
+                            <p className="text-[11px] text-zinc-500">{it ? 'Già incluse nei totali; l\'AI le ha segnalate come possibilmente personali o incerte.' : 'Already in the totals; the AI flagged these as possibly personal or uncertain.'}</p>
+                            {glance.map(renderCard)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* TIER 3 — Booked automatically, collapsed to bucket summaries. */}
+                    {autoBooked.length > 0 && (
+                      <div className="mb-2 rounded-lg border border-zinc-200">
+                        <button type="button" onClick={() => toggle('auto')} className="flex w-full items-center justify-between px-3 py-2.5 text-left">
+                          <span className="text-sm font-medium text-zinc-800">
+                            ✅ {it ? `Registrate automaticamente · ${autoBooked.length} gruppi` : `Booked automatically · ${autoBooked.length} groups`}
+                          </span>
+                          <span className="text-zinc-400 text-xs">{openSections.has('auto') ? '▲' : '▼'}</span>
+                        </button>
+                        {openSections.has('auto') && (
+                          <div className="px-3 pb-3">
+                            <p className="text-[11px] text-zinc-500 mb-2">
+                              {it ? 'Tutto qui è già nei totali. Apri una categoria solo per verificare o correggere.' : 'Everything here is already in the totals. Open a category only to double-check or correct.'}
+                            </p>
+                            {(() => {
+                              const byBucket = new Map<string, QuestionGroup[]>()
+                              for (const g of autoBooked) {
+                                const key = g.ai_bucket && bucketLabel.has(g.ai_bucket) ? g.ai_bucket : '__other__'
+                                if (!byBucket.has(key)) byBucket.set(key, [])
+                                byBucket.get(key)!.push(g)
+                              }
+                              return Array.from(byBucket.entries()).map(([slug, groups]) => {
+                                const label = slug === '__other__' ? (it ? 'Altro' : 'Other') : (bucketLabel.get(slug) ?? slug)
+                                const total = groups.reduce((s, g) => s + g.total, 0)
+                                const key = `bucket:${slug}`
+                                return (
+                                  <div key={slug} className="border-t border-zinc-100 first:border-t-0">
+                                    <button type="button" onClick={() => toggle(key)} className="flex w-full items-center justify-between py-2 text-left">
+                                      <span className="text-xs font-semibold text-zinc-700">{label} · {groups.length} {it ? 'voci' : 'merchants'}</span>
+                                      <span className="text-xs text-zinc-500">{fmt(total)} <span className="text-zinc-300 ml-1">{openSections.has(key) ? '▲' : '▼'}</span></span>
+                                    </button>
+                                    {openSections.has(key) && <div className="space-y-2 pb-2">{groups.map(renderCard)}</div>}
+                                  </div>
+                                )
+                              })
+                            })()}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
+              {/* Add a new bucket — flexible, shared vocabulary (#2). A bucket added
+                  here is saved globally and offered to everyone next time. Hidden in
+                  the staff workspace tool: a scratch workspace must NOT write to the
+                  global expense-category catalog (sealed leak #1). */}
+              {!isStaff && (
+              <div className="mt-1 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3">
+                <span className="text-xs text-zinc-500">{it ? 'Manca una categoria?' : 'Missing a category?'}</span>
+                {/* The INPUT must be gated too, not just the button beside it
+                    (browser QA 2026-08-03): Enter submits, so on a locked file
+                    the button greyed out while typing-then-Enter still created a
+                    category — under a banner saying nothing could be changed. */}
+                <input
+                  value={newBucket}
+                  disabled={busyOrLocked}
+                  onChange={e => setNewBucket(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !busyOrLocked) void addBucket() }}
+                  placeholder={it ? 'Aggiungi categoria…' : 'Add a category…'}
+                  className="rounded-md border border-zinc-300 px-2 py-1 text-xs disabled:opacity-50 disabled:bg-zinc-100"
+                />
+                <button
+                  disabled={busyOrLocked || newBucket.trim().length < 2}
+                  onClick={() => void addBucket()}
+                  className="rounded-md border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 disabled:opacity-50"
+                >
+                  {it ? 'Aggiungi' : 'Add'}
+                </button>
+              </div>
+              )}
+            </section>
+          )}
+
+          {/* LOCATION-PERIOD TRIAGE (Phase 2b, staff-only v1): one question per
+              detected presence stretch instead of hundreds of merchant rows.
+              Interrogative copy + top merchants so a wrong detection is
+              falsifiable at a glance; answers apply ONLY from the confirm
+              dialog and are fully undoable (exact prior-state restore). */}
+          {/* Phase B2 (2026-07-08): visible to the CLIENT too — the portal GET
+              now serves the same cards from the books. Staff-only wording
+              (CRM references, third-person "the client") is mode-switched. */}
+          {((view.periods?.length ?? 0) > 0 || (view.period_answers?.length ?? 0) > 0 || (view.country_cards?.length ?? 0) > 0) && (
+            <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 sm:p-5">
+              <h3 className="text-sm font-bold text-indigo-900 mb-1">
+                🌍 {it ? 'Periodi fuori sede rilevati' : 'Time away from home base detected'}
+              </h3>
+              <p className="text-xs text-zinc-600 mb-3">
+                {/* residence_on_file is workspace-only; residence_country is
+                    sent to BOTH staff and client in account/Recall mode (the
+                    route already resolves and uses it below) — checking it
+                    regardless of isStaff (2026-08-16) fixes staff via Recall
+                    being told "no residence on file" for an account that has
+                    one, while that same country builds the cards right under
+                    the banner. Wording still branches on isStaff below;
+                    only WHICH branch runs no longer does. */}
+                {view.residence_on_file || view.residence_country
+                  ? (it
+                    ? `Residenza fiscale registrata: ${locLabel(view.residence_country ?? '', it)}. Le spese fatte lì restano nella revisione normale; per i periodi all'estero basta UNA risposta.`
+                    : `Fiscal residence on file: ${locLabel(view.residence_country ?? '', it)}. Spending there stays in the normal review; each period away needs just ONE answer.`)
+                  : isStaff
+                    ? (it
+                      ? 'Nessuna residenza fiscale registrata nel CRM per questo cliente — mostriamo tutti i periodi rilevati.'
+                      : 'No fiscal residence on file in the CRM for this client — showing every detected period.')
+                    : (it
+                      ? 'Spese rilevate in questi paesi, già registrate come aziendali (regola: fuori dal paese di residenza = azienda). Non serve fare nulla — tocca solo per correggere.'
+                      : 'Spending we detected in these countries, already booked as business (rule: outside your home country = business). Nothing is required — tap only to correct it.')}
+              </p>
+              {periodError && (
+                <div className="mb-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
+                  ⚠ {periodError}
+                </div>
+              )}
+              <div className="space-y-3">
+                {/* S3 — country-policy cards: one tap books EVERY still-open
+                    located transaction of that country for the whole year
+                    (isolated purchases too, not just travel windows). */}
+                {(view.country_cards ?? []).map(c => (
+                  <div key={`country-${c.loc_code}`} className="rounded-lg border border-indigo-300 bg-indigo-50/60 p-3 sm:p-4">
+                    <div className="text-sm font-semibold text-zinc-900">
+                      {it
+                        ? `${locLabel(c.loc_code, it)}, tutto l'anno — ${c.count} transazioni · $${fmt(c.total)}`
+                        : `${locLabel(c.loc_code, it)}, whole year — ${c.count} transactions · $${fmt(c.total)}`}
+                    </div>
+                    <div className="mt-1 text-xs text-zinc-600">
+                      {/* Antonio's ruling (card 85f6f0b2): the residence default
+                          ALREADY decided this — spending outside the home
+                          country is business. So the card states what we booked
+                          and why, and never implies a decision is owed. It is
+                          informational, not a Confirm blocker. */}
+                      {it
+                        ? `Registrate come spese aziendali, perché fuori dal tuo paese di residenza. Tocca solo se qualcosa era personale.`
+                        : `Booked as business spending, because it's outside your home country. Tap only if some of it was personal.`}
+                      {c.merchants.length > 0 && (
+                        <span className="text-zinc-500"> ({it ? 'principali' : 'top merchants'}: {c.merchants.join(', ')})</span>
+                      )}
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <button
+                        disabled={busyOrLocked}
+                        onClick={() => setCountryConfirm({ card: c, choice: 'business' })}
+                        className="rounded-full border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                      >
+                        {it ? 'Tutto aziendale' : 'All business'}
+                      </button>
+                      <button
+                        disabled={busyOrLocked}
+                        onClick={() => setCountryConfirm({ card: c, choice: 'personal' })}
+                        className="rounded-full border border-amber-500 bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                      >
+                        {it ? 'Tutto personale' : 'All personal'}
+                      </button>
+                      <button
+                        disabled={busyOrLocked}
+                        onClick={() => setInlineReview(k => k === `country-${c.loc_code}` ? null : `country-${c.loc_code}`)}
+                        className="rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
+                      >
+                        {it ? 'Controllo una per una' : 'Review one-by-one'} {inlineReview === `country-${c.loc_code}` ? '▲' : '▼'}
+                      </button>
+                    </div>
+                    {renderInlineReview(`country-${c.loc_code}`, c.keys)}
+                  </div>
+                ))}
+                {(view.periods ?? []).map(p => {
+                  const key = `period-${p.primary}-${p.start}`
+                  return (
+                    <div key={key} className="rounded-lg border border-indigo-200 bg-white p-3 sm:p-4">
+                      <div className="text-sm font-semibold text-zinc-900">
+                        {it
+                          ? `Eri in ${periodLabel(p, it)} dal ${fmtDay(p.start, it)} al ${fmtDay(p.end, it)}?`
+                          : `Were you in ${periodLabel(p, it)}, ${fmtDay(p.start, it)} – ${fmtDay(p.end, it)}?`}
+                      </div>
+                      <div className="mt-1 text-xs text-zinc-600">
+                        {it
+                          ? `${p.row_count} transazioni sul posto · $${fmt(p.dollar_total)}`
+                          : `${p.row_count} in-person transactions · $${fmt(p.dollar_total)}`}
+                      <span className="block mt-0.5">
+                        {/* Same ruling as the country cards: already booked by
+                            the residence default; the tap is a correction, not
+                            an obligation. */}
+                        {it
+                          ? 'Già registrate come spese aziendali. Tocca solo se erano personali.'
+                          : 'Already booked as business spending. Tap only if it was personal.'}
+                      </span>
+                        {p.top_merchants.length > 0 && (
+                          <span className="text-zinc-500"> ({it ? 'principali' : 'top merchants'}: {p.top_merchants.join(', ')})</span>
+                        )}
+                      </div>
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <button
+                          disabled={busyOrLocked}
+                          onClick={() => setPeriodConfirm({ period: p, choice: 'business' })}
+                          className="rounded-full border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                        >
+                          {it ? 'Tutto aziendale' : 'All business'}
+                        </button>
+                        <button
+                          disabled={busyOrLocked}
+                          onClick={() => setPeriodConfirm({ period: p, choice: 'personal' })}
+                          className="rounded-full border border-amber-500 bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                        >
+                          {it ? 'Tutto personale' : 'All personal'}
+                        </button>
+                        <button
+                          disabled={busyOrLocked}
+                          onClick={() => setInlineReview(k => k === key ? null : key)}
+                          className="rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
+                        >
+                          {it ? 'Controllo una per una' : 'Review one-by-one'} {inlineReview === key ? '▲' : '▼'}
+                        </button>
+                      </div>
+                      {renderInlineReview(key, p.group_keys)}
+                    </div>
+                  )
+                })}
+                {(view.period_answers ?? []).map(b => (
+                  <div key={b.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
+                    <span>
+                      ✓ {b.actor_role === 'system'
+                        ? (it ? 'Registrato automaticamente secondo la regola fissa del paese' : 'Booked automatically under the standing country policy')
+                        : b.actor_role === 'client'
+                          ? (isStaff
+                            ? (it ? 'Il cliente ha attestato' : 'Client attested')
+                            : (it ? 'Hai risposto tu' : 'You answered'))
+                          : isStaff
+                            ? (it ? 'Registrato dallo staff su indicazione del cliente' : 'Staff booked on client\'s instruction')
+                            : (it ? 'Registrato dal nostro team' : 'Booked by our team')}
+                      {': '}
+                      <strong className="text-zinc-800">{b.loc_codes.map(c => locLabel(c, it)).join(' / ')} {fmtDay(b.period_start, it)} – {fmtDay(b.period_end, it)} = {b.choice === 'business' ? (it ? 'aziendale' : 'business') : (it ? 'personale' : 'personal')}</strong>
+                      {` (${b.row_count} ${it ? 'righe' : 'rows'}, $${fmt(b.dollar_total)})`}
+                    </span>
+                    <span className="flex items-center gap-2">
+                      {b.actor_role === 'system' && (
+                        <span className="text-[11px] text-zinc-400">
+                          {it ? 'Annullare ferma anche la regola fissa' : 'Undo also stops the standing policy'}
+                        </span>
+                      )}
+                      {/* Clients can revert only their OWN answers (the server
+                          enforces the same rule) — staff/system batches show a
+                          "message us" hint instead of a dead button. */}
+                      {(isStaff || b.actor_role === 'client') ? (
+                        <button
+                          disabled={busyOrLocked}
+                          onClick={() => void undoPeriodAnswer(b.id)}
+                          className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 font-medium text-zinc-600 hover:border-red-400 hover:text-red-600 disabled:opacity-50"
+                        >
+                          {it ? 'Annulla' : 'Undo'}
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-zinc-400">
+                          {it ? 'Scrivici in chat per modificarla' : 'Message us to change it'}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Coverage questions (§3.4) — what the exports don't span */}
+          {view.coverage.questions.length > 0 && (
+            <section className="rounded-xl border border-sky-200 bg-sky-50/50 p-4 sm:p-5">
+              <h2 className="text-sm font-semibold text-zinc-900">{it ? 'Copertura dell\'anno' : 'Year coverage'}</h2>
+              <p className="text-xs text-zinc-500 mt-1 mb-4">
+                {it
+                  ? 'Alcuni conti non coprono tutto l\'anno. Dicci se in quei mesi c\'era attività — se sì, ricarica l\'export completo.'
+                  : 'Some accounts don\'t span the whole year. Tell us whether there was activity in those months — if yes, re-upload the complete export.'}
+              </p>
+              <div className="space-y-3">
+                {view.coverage.questions.map(q => (
+                  <div key={q.key} className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4">
+                    <div className="text-sm text-zinc-800">{q.question}</div>
+                    {q.answer === 'no_activity' ? (
+                      <div className="mt-2 text-xs text-emerald-700">{it ? '✓ Nessuna attività — registrato.' : '✓ No activity — recorded.'}</div>
+                    ) : q.answer === 'had_activity' ? (
+                      <div className="mt-2 text-xs text-amber-700">
+                        {it
+                          ? 'Hai indicato che c\'era attività: elimina il file qui sotto e carica l\'export dell\'intero anno.'
+                          : 'You said there was activity: delete the file below and upload the entire-year export.'}
+                      </div>
+                    ) : (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button
+                          disabled={busyOrLocked}
+                          onClick={() => void answerCoverage(q, 'no_activity')}
+                          className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
+                        >
+                          {it ? 'No — nessuna attività in quei mesi' : 'No — no activity in those months'}
+                        </button>
+                        <button
+                          disabled={busyOrLocked}
+                          onClick={() => void answerCoverage(q, 'had_activity')}
+                          className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
+                        >
+                          {it ? 'Sì — c\'era attività (devo ricaricare)' : 'Yes — there was activity (I need to re-upload)'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+
+          {/* Gates — staff-only (2026-08-20, Antonio): none of the 7 checks
+              are client-actionable — every gate is non-blocking, and the
+              one interactive control inside (prior-year correction) is
+              already isStaff-gated. Showing it to the client was pure
+              clutter with nothing to act on. Staff still see it for QA.
+              Also hidden on a structural problem (2026-08-21, live-QA
+              bug-hunter finding): several gates render real computed
+              dollar figures (balance-off amount, K-1 mismatch, etc.) —
+              exactly the numbers the hard-stop exists to withhold, so
+              "no override for either audience" wasn't actually true for
+              staff. The prior-year-correction control this also hides is
+              unrelated to fixing a coverage gap or a failed file, so
+              nothing needed to escape the block is lost — the coverage-
+              answer buttons and statement manager below stay untouched. */}
+          {isStaff && !view.hasStructuralProblem && (
           <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
             <h2 className="text-sm font-semibold text-zinc-900 mb-3">{it ? 'Verifiche' : 'Verifications'}</h2>
             <ul className="space-y-2">
@@ -2441,6 +3036,58 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               ))}
             </ul>
           </section>
+          )}
+
+          {/* HARD STOP (2026-08-20, Antonio's ruling): a structural data
+              problem — an unreadable file, or a missing-months question left
+              open or answered "yes, incomplete" — means the numbers below
+              aren't provisional, they could be badly wrong (a missing month
+              could hide the year's biggest transaction). Identical for
+              client and staff, no override for either — this REPLACES the
+              "not final yet" banner + P&L + Balance Sheet + Capital table
+              with one plain message, rather than showing numbers next to a
+              caveat nobody reliably reads. Routine in-progress work (open
+              decisions, pending AI, location periods) is NOT this — that
+              case falls through to the else branch unchanged, exactly as
+              already shipped. Deliberately does NOT touch the coverage-
+              answer / statement-manager controls below (the only way to
+              actually fix the problem — hiding those alongside the numbers
+              would leave no way out except a raw database edit, bug-hunter
+              finding). Verifications is a SEPARATE gate, further up
+              (isStaff && !view.hasStructuralProblem) — it used to be
+              deliberately left visible too, until a later live-QA pass
+              found it renders real computed figures on a blocked account;
+              it's now hidden alongside these. */}
+          {view.hasStructuralProblem ? (
+            <section className="rounded-xl border-2 border-red-300 bg-red-50 px-5 py-5">
+              <h2 className="text-base font-bold text-red-900">
+                {it ? 'Non possiamo ancora preparare il Conto Economico e lo Stato Patrimoniale' : 'We can\'t build your Profit & Loss and Balance Sheet yet'}
+              </h2>
+              <p className="text-sm text-red-800 mt-2">
+                {it
+                  ? 'Uno o più estratti conto hanno un problema reale — un file che non siamo riusciti a leggere, o mesi mancanti non ancora chiariti. I numeri qui sotto potrebbero essere sbagliati, non solo incompleti, quindi non li mostriamo finché il problema non è risolto.'
+                  : 'One or more of your bank statements has a real problem — a file we couldn\'t read, or missing months that haven\'t been sorted out. The numbers below could be wrong, not just incomplete, so we\'re not showing them until it\'s fixed.'}
+              </p>
+              <p className="text-xs text-red-700 mt-2">
+                {it
+                  ? 'Rispondi alle domande sulla copertura qui sopra, o elimina e ricarica il file che non abbiamo potuto leggere (sezione estratti conto qui sotto) — poi torna qui.'
+                  : 'Answer the coverage question(s) above, or delete and re-upload the file we couldn\'t read (bank statements section below) — then come back here.'}
+              </p>
+            </section>
+          ) : (
+            <>
+          {confirmBlockers.length > 0 && (
+            <section className="rounded-xl border-2 border-red-300 bg-red-50 px-5 py-4">
+              <p className="text-sm font-bold text-red-900">
+                ⚠ {it ? 'Questi numeri non sono ancora definitivi.' : 'These numbers are not final yet.'}
+              </p>
+              <p className="text-xs text-red-800 mt-1">
+                {it
+                  ? `Diventeranno definitivi una volta risolto quanto sopra: ${confirmBlockers.map(b => b.labelIt).join('; ')}.`
+                  : `They'll be final once everything above is resolved: ${confirmBlockers.map(b => b.label).join('; ')}.`}
+              </p>
+            </section>
+          )}
 
           {/* P&L + Balance Sheet */}
           <div className="grid gap-4 sm:grid-cols-2">
@@ -2726,192 +3373,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               </table>
             </section>
           )}
-
-          {/* LOCATION-PERIOD TRIAGE (Phase 2b, staff-only v1): one question per
-              detected presence stretch instead of hundreds of merchant rows.
-              Interrogative copy + top merchants so a wrong detection is
-              falsifiable at a glance; answers apply ONLY from the confirm
-              dialog and are fully undoable (exact prior-state restore). */}
-          {/* Phase B2 (2026-07-08): visible to the CLIENT too — the portal GET
-              now serves the same cards from the books. Staff-only wording
-              (CRM references, third-person "the client") is mode-switched. */}
-          {((view.periods?.length ?? 0) > 0 || (view.period_answers?.length ?? 0) > 0 || (view.country_cards?.length ?? 0) > 0) && (
-            <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 sm:p-5">
-              <h3 className="text-sm font-bold text-indigo-900 mb-1">
-                🌍 {it ? 'Periodi fuori sede rilevati' : 'Time away from home base detected'}
-              </h3>
-              <p className="text-xs text-zinc-600 mb-3">
-                {/* residence_on_file is workspace-only; residence_country is
-                    sent to BOTH staff and client in account/Recall mode (the
-                    route already resolves and uses it below) — checking it
-                    regardless of isStaff (2026-08-16) fixes staff via Recall
-                    being told "no residence on file" for an account that has
-                    one, while that same country builds the cards right under
-                    the banner. Wording still branches on isStaff below;
-                    only WHICH branch runs no longer does. */}
-                {view.residence_on_file || view.residence_country
-                  ? (it
-                    ? `Residenza fiscale registrata: ${locLabel(view.residence_country ?? '', it)}. Le spese fatte lì restano nella revisione normale; per i periodi all'estero basta UNA risposta.`
-                    : `Fiscal residence on file: ${locLabel(view.residence_country ?? '', it)}. Spending there stays in the normal review; each period away needs just ONE answer.`)
-                  : isStaff
-                    ? (it
-                      ? 'Nessuna residenza fiscale registrata nel CRM per questo cliente — mostriamo tutti i periodi rilevati.'
-                      : 'No fiscal residence on file in the CRM for this client — showing every detected period.')
-                    : (it
-                      ? 'Spese rilevate in questi paesi, già registrate come aziendali (regola: fuori dal paese di residenza = azienda). Non serve fare nulla — tocca solo per correggere.'
-                      : 'Spending we detected in these countries, already booked as business (rule: outside your home country = business). Nothing is required — tap only to correct it.')}
-              </p>
-              {periodError && (
-                <div className="mb-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
-                  ⚠ {periodError}
-                </div>
-              )}
-              <div className="space-y-3">
-                {/* S3 — country-policy cards: one tap books EVERY still-open
-                    located transaction of that country for the whole year
-                    (isolated purchases too, not just travel windows). */}
-                {(view.country_cards ?? []).map(c => (
-                  <div key={`country-${c.loc_code}`} className="rounded-lg border border-indigo-300 bg-indigo-50/60 p-3 sm:p-4">
-                    <div className="text-sm font-semibold text-zinc-900">
-                      {it
-                        ? `${locLabel(c.loc_code, it)}, tutto l'anno — ${c.count} transazioni · $${fmt(c.total)}`
-                        : `${locLabel(c.loc_code, it)}, whole year — ${c.count} transactions · $${fmt(c.total)}`}
-                    </div>
-                    <div className="mt-1 text-xs text-zinc-600">
-                      {/* Antonio's ruling (card 85f6f0b2): the residence default
-                          ALREADY decided this — spending outside the home
-                          country is business. So the card states what we booked
-                          and why, and never implies a decision is owed. It is
-                          informational, not a Confirm blocker. */}
-                      {it
-                        ? `Registrate come spese aziendali, perché fuori dal tuo paese di residenza. Tocca solo se qualcosa era personale.`
-                        : `Booked as business spending, because it's outside your home country. Tap only if some of it was personal.`}
-                      {c.merchants.length > 0 && (
-                        <span className="text-zinc-500"> ({it ? 'principali' : 'top merchants'}: {c.merchants.join(', ')})</span>
-                      )}
-                    </div>
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <button
-                        disabled={busyOrLocked}
-                        onClick={() => setCountryConfirm({ card: c, choice: 'business' })}
-                        className="rounded-full border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-                      >
-                        {it ? 'Tutto aziendale' : 'All business'}
-                      </button>
-                      <button
-                        disabled={busyOrLocked}
-                        onClick={() => setCountryConfirm({ card: c, choice: 'personal' })}
-                        className="rounded-full border border-amber-500 bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
-                      >
-                        {it ? 'Tutto personale' : 'All personal'}
-                      </button>
-                      <button
-                        disabled={busyOrLocked}
-                        onClick={() => setInlineReview(k => k === `country-${c.loc_code}` ? null : `country-${c.loc_code}`)}
-                        className="rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
-                      >
-                        {it ? 'Controllo una per una' : 'Review one-by-one'} {inlineReview === `country-${c.loc_code}` ? '▲' : '▼'}
-                      </button>
-                    </div>
-                    {renderInlineReview(`country-${c.loc_code}`, c.keys)}
-                  </div>
-                ))}
-                {(view.periods ?? []).map(p => {
-                  const key = `period-${p.primary}-${p.start}`
-                  return (
-                    <div key={key} className="rounded-lg border border-indigo-200 bg-white p-3 sm:p-4">
-                      <div className="text-sm font-semibold text-zinc-900">
-                        {it
-                          ? `Eri in ${periodLabel(p, it)} dal ${fmtDay(p.start, it)} al ${fmtDay(p.end, it)}?`
-                          : `Were you in ${periodLabel(p, it)}, ${fmtDay(p.start, it)} – ${fmtDay(p.end, it)}?`}
-                      </div>
-                      <div className="mt-1 text-xs text-zinc-600">
-                        {it
-                          ? `${p.row_count} transazioni sul posto · $${fmt(p.dollar_total)}`
-                          : `${p.row_count} in-person transactions · $${fmt(p.dollar_total)}`}
-                      <span className="block mt-0.5">
-                        {/* Same ruling as the country cards: already booked by
-                            the residence default; the tap is a correction, not
-                            an obligation. */}
-                        {it
-                          ? 'Già registrate come spese aziendali. Tocca solo se erano personali.'
-                          : 'Already booked as business spending. Tap only if it was personal.'}
-                      </span>
-                        {p.top_merchants.length > 0 && (
-                          <span className="text-zinc-500"> ({it ? 'principali' : 'top merchants'}: {p.top_merchants.join(', ')})</span>
-                        )}
-                      </div>
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <button
-                          disabled={busyOrLocked}
-                          onClick={() => setPeriodConfirm({ period: p, choice: 'business' })}
-                          className="rounded-full border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-                        >
-                          {it ? 'Tutto aziendale' : 'All business'}
-                        </button>
-                        <button
-                          disabled={busyOrLocked}
-                          onClick={() => setPeriodConfirm({ period: p, choice: 'personal' })}
-                          className="rounded-full border border-amber-500 bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
-                        >
-                          {it ? 'Tutto personale' : 'All personal'}
-                        </button>
-                        <button
-                          disabled={busyOrLocked}
-                          onClick={() => setInlineReview(k => k === key ? null : key)}
-                          className="rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
-                        >
-                          {it ? 'Controllo una per una' : 'Review one-by-one'} {inlineReview === key ? '▲' : '▼'}
-                        </button>
-                      </div>
-                      {renderInlineReview(key, p.group_keys)}
-                    </div>
-                  )
-                })}
-                {(view.period_answers ?? []).map(b => (
-                  <div key={b.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
-                    <span>
-                      ✓ {b.actor_role === 'system'
-                        ? (it ? 'Registrato automaticamente secondo la regola fissa del paese' : 'Booked automatically under the standing country policy')
-                        : b.actor_role === 'client'
-                          ? (isStaff
-                            ? (it ? 'Il cliente ha attestato' : 'Client attested')
-                            : (it ? 'Hai risposto tu' : 'You answered'))
-                          : isStaff
-                            ? (it ? 'Registrato dallo staff su indicazione del cliente' : 'Staff booked on client\'s instruction')
-                            : (it ? 'Registrato dal nostro team' : 'Booked by our team')}
-                      {': '}
-                      <strong className="text-zinc-800">{b.loc_codes.map(c => locLabel(c, it)).join(' / ')} {fmtDay(b.period_start, it)} – {fmtDay(b.period_end, it)} = {b.choice === 'business' ? (it ? 'aziendale' : 'business') : (it ? 'personale' : 'personal')}</strong>
-                      {` (${b.row_count} ${it ? 'righe' : 'rows'}, $${fmt(b.dollar_total)})`}
-                    </span>
-                    <span className="flex items-center gap-2">
-                      {b.actor_role === 'system' && (
-                        <span className="text-[11px] text-zinc-400">
-                          {it ? 'Annullare ferma anche la regola fissa' : 'Undo also stops the standing policy'}
-                        </span>
-                      )}
-                      {/* Clients can revert only their OWN answers (the server
-                          enforces the same rule) — staff/system batches show a
-                          "message us" hint instead of a dead button. */}
-                      {(isStaff || b.actor_role === 'client') ? (
-                        <button
-                          disabled={busyOrLocked}
-                          onClick={() => void undoPeriodAnswer(b.id)}
-                          className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 font-medium text-zinc-600 hover:border-red-400 hover:text-red-600 disabled:opacity-50"
-                        >
-                          {it ? 'Annulla' : 'Undo'}
-                        </button>
-                      ) : (
-                        <span className="text-[11px] text-zinc-400">
-                          {it ? 'Scrivici in chat per modificarla' : 'Message us to change it'}
-                        </span>
-                      )}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </section>
+            </>
           )}
+          {/* end HARD STOP ternary — the fragment above (not-final-yet banner
+              + P&L + Balance Sheet + Capital table) is hidden together when
+              view.hasStructuralProblem is true; Verifications, the
+              coverage-answer buttons and the statement manager below are
+              deliberately OUTSIDE this wrap — they're the only way to
+              actually fix the problem (bug-hunter finding). */}
 
           {/* Re-run confirm (2026-07-06) */}
           {rerunConfirm && (
@@ -3171,300 +3640,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             </div>
           )}
 
-          {/* TRIAGE-FIRST REVIEW (Antonio, 2026-07-03): the screen is a WORK
-              QUEUE, not an archive. Tier 1 (expanded): only groups that need a
-              human decision. Tier 2 (collapsed): booked but worth a glance
-              (AI leaned personal/unsure). Tier 3 (collapsed to bucket
-              summaries): everything booked automatically — open only to audit
-              or correct. Guide box tells the client what they MUST vs CAN do. */}
-          {view.questions.length > 0 && (
-            <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
-              {(() => {
-                const bucketLabel = new Map(view.buckets.map(b => [b.slug, b.label]))
-                // Review-one-by-one period filter (zero writes): narrows every
-                // tier to the merchants seen inside the selected period.
-                // Compare on the merchant ROOT: presence-periods emits bare
-                // rowRootKey keys, while group_key now carries a
-                // direction+currency suffix (per-direction split 2026-07-05).
-                const inFilter = (g: QuestionGroup) => !periodFilter || periodFilter.keys.has(groupKeyRoot(g.group_key))
-                // A group needs a decision when it is undecided OR when we
-                // suspect one of its payments went to an owner.
-                //
-                // THE MARK, NOT THE CATEGORY, EARNS TIER 1 (2026-08-04). The
-                // first design forced these into Tier 1 by rewriting the
-                // category to 'uncategorized', which collided with the AI pass,
-                // the re-sort and the two surfaces' different treatment of
-                // undecided rows. Promoting on the mark instead gives the same
-                // prominence with none of that — and it is the ONLY thing that
-                // re-asks a payee the client once answered "business expense"
-                // for, since the learned rule keeps booking it as an expense.
-                // Without this line the question lands in the section the page
-                // explicitly labels optional, and would simply never be seen.
-                const isSuspected = (g: QuestionGroup) => (g.suspected_count ?? 0) > 0
-                const needs = view.questions.filter(g => inFilter(g) && ((g.current_category ?? 'uncategorized') === 'uncategorized' || isSuspected(g)))
-                const booked = view.questions.filter(g => inFilter(g) && (g.current_category ?? 'uncategorized') !== 'uncategorized' && !isSuspected(g))
-                const glance = booked.filter(g => g.ai_lean === 'personal' || g.ai_lean === 'unsure' || !g.ai_lean)
-                const autoBooked = booked.filter(g => g.ai_lean === 'business')
-                const needsIn = needs.filter(g => g.direction !== 'out')
-                const needsOut = needs.filter(g => g.direction === 'out')
 
-                const renderCard = renderQuestionCard
-
-                const toggle = (key: string) => setOpenSections(s => {
-                  const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n
-                })
-
-                return (
-                  <>
-                    {periodFilter && (
-                      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-900">
-                        <span>🌍 {it ? 'Stai controllando solo' : 'Reviewing only'}: <strong>{periodFilter.label}</strong></span>
-                        <button
-                          onClick={() => setPeriodFilter(null)}
-                          className="rounded-full border border-indigo-300 bg-white px-2.5 py-0.5 font-medium text-indigo-700 hover:border-indigo-600"
-                        >
-                          {it ? 'Mostra tutto' : 'Show all'} ✕
-                        </button>
-                      </div>
-                    )}
-                    {/* Guide: what this screen is, what you MUST do, what you CAN do. */}
-                    <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 sm:p-4 mb-4 text-xs text-zinc-600 space-y-1.5">
-                      <p className="text-sm font-semibold text-zinc-900">{it ? 'Come funziona questa revisione' : 'How this review works'}</p>
-                      <p>
-                        {it
-                          ? 'Abbiamo letto i tuoi estratti conto e registrato automaticamente ogni transazione — l\'etichetta blu ✓ mostra come è stata registrata ciascuna voce.'
-                          : 'We read your bank statements and booked every transaction automatically — the blue ✓ chip shows how each item is booked.'}
-                      </p>
-                      <p>
-                        <strong>{it ? 'Cosa DEVI fare: ' : 'What you MUST do: '}</strong>
-                        {/* Counts EVERYTHING that blocks Confirm, from the same
-                            expression the Confirm button uses — not just the
-                            merchant decisions (the false all-clear Antonio hit). */}
-                        {confirmBlockers.length === 0
-                          ? (it ? 'niente — puoi confermare.' : 'nothing — you can confirm.')
-                          : confirmBlockers.map(b => (it ? b.labelIt : b.label)).join(it ? '; ' : '; ') + '.'}
-                      </p>
-                      <p>
-                        <strong>{it ? 'Cosa PUOI fare (facoltativo): ' : 'What you CAN do (optional): '}</strong>
-                        {it
-                          ? 'aprire le sezioni qui sotto per controllare ciò che abbiamo registrato e correggerlo con un tocco — ad esempio segnare come “Personale” una spesa che era tua e non della società.'
-                          : 'open the sections below to double-check anything we booked and correct it with one tap — for example marking something as “Personal” if it was yours, not the company\'s.'}
-                      </p>
-                      <p>
-                        {it
-                          ? 'Ogni risposta viene ricordata e applicata automaticamente l\'anno prossimo. Quando “Serve una tua decisione” è vuoto, hai finito.'
-                          : 'Every answer is remembered and applied automatically next year. When “Needs your decision” is empty, you\'re done.'}
-                      </p>
-                      <p className="text-zinc-500">
-                        {booked.length} {it ? 'gruppi registrati automaticamente' : 'groups booked automatically'} · <strong className="text-zinc-800">{needs.length} {it ? 'da decidere' : 'need your decision'}</strong>
-                      </p>
-                    </div>
-
-                    {/* TIER 1 — Needs your decision (the work queue). Money in /
-                        Money out are collapsible but START OPEN while they hold
-                        work (a hidden queue = dead Confirm button with no visible
-                        reason); an emptied section vanishes on its own. Long
-                        sections cap at 10 cards with "Show all N". */}
-                    {needs.length > 0 ? (
-                      <div className="mb-5 rounded-xl border-2 border-amber-300 bg-amber-50/50 p-3 sm:p-4">
-                        <h3 className="text-sm font-bold text-amber-900 mb-2">
-                          🖐 {it ? `Serve una tua decisione · ${needs.length}` : `Needs your decision · ${needs.length}`}
-                        </h3>
-                        {([
-                          { key: 'in', list: needsIn, label: it ? 'Soldi in entrata' : 'Money in' },
-                          { key: 'out', list: needsOut, label: it ? 'Soldi in uscita' : 'Money out' },
-                        ] as const).map(({ key, list, label }) => {
-                          if (list.length === 0) return null
-                          const open = !closedNeeds.has(key)
-                          const showAll = showAllNeeds.has(key)
-                          const shown = showAll ? list : list.slice(0, 10)
-                          // Net total only when the whole section is one currency —
-                          // summing EUR+USD into one number would be a lie.
-                          const curs = new Set(list.map(g => g.currency ?? ''))
-                          const net = curs.size === 1 ? list.reduce((s, g) => s + g.total, 0) : null
-                          const onlyCur = curs.size === 1 ? Array.from(curs)[0] : ''
-                          return (
-                            <div key={key} className={key === 'in' && needsOut.length > 0 ? 'mb-3' : ''}>
-                              <button
-                                type="button"
-                                onClick={() => setClosedNeeds(s => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n })}
-                                className="flex w-full items-center justify-between py-1 text-left"
-                              >
-                                <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
-                                  {label} · {list.length}{net !== null ? ` · ${fmt(net)}${onlyCur && onlyCur !== 'USD' ? ` ${onlyCur}` : ''}` : ''}
-                                </span>
-                                <span className="text-amber-700 text-xs">{open ? '▲' : '▼'}</span>
-                              </button>
-                              {open && (
-                                <>
-                                  <div className="space-y-2">{shown.map(renderCard)}</div>
-                                  {list.length > shown.length && (
-                                    <button
-                                      type="button"
-                                      onClick={() => setShowAllNeeds(s => new Set(s).add(key))}
-                                      className="mt-2 w-full rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-800 hover:border-amber-500"
-                                    >
-                                      {it ? `Mostra tutte e ${list.length}` : `Show all ${list.length}`}
-                                    </button>
-                                  )}
-                                </>
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    ) : (
-                      <div className={`mb-5 rounded-xl border-2 px-4 py-4 text-sm font-semibold ${
-                        confirmBlockers.length === 0
-                          ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
-                          : 'border-amber-300 bg-amber-50 text-amber-900'
-                      }`}>
-                        {/* Scoped honestly: this section is about merchant
-                            decisions, so it says THAT — and when something else
-                            still blocks Confirm it names it instead of implying
-                            the client is finished. */}
-                        {confirmBlockers.length === 0
-                          ? `✓ ${it ? 'Tutto registrato — non serve nessuna decisione.' : 'All booked — nothing needs your decision.'}`
-                          : `✓ ${it ? 'Nessuna spesa da decidere qui. Resta da fare: ' : 'No merchant decisions left here. Still to do: '}${confirmBlockers.map(b => (it ? b.labelIt : b.label)).join('; ')}.`}
-                      </div>
-                    )}
-
-                    {/* TIER 2 — Booked, worth a glance (collapsed). */}
-                    {glance.length > 0 && (
-                      <div className="mb-4 rounded-lg border border-zinc-200">
-                        <button type="button" onClick={() => toggle('glance')} className="flex w-full items-center justify-between px-3 py-2.5 text-left">
-                          <span className="text-sm font-medium text-zinc-800">
-                            👀 {it ? `Registrate — vale la pena dare un'occhiata · ${glance.length}` : `Booked — worth a glance · ${glance.length}`}
-                          </span>
-                          <span className="text-zinc-400 text-xs">{openSections.has('glance') ? '▲' : '▼'}</span>
-                        </button>
-                        {openSections.has('glance') && (
-                          <div className="space-y-2 px-3 pb-3">
-                            <p className="text-[11px] text-zinc-500">{it ? 'Già incluse nei totali; l\'AI le ha segnalate come possibilmente personali o incerte.' : 'Already in the totals; the AI flagged these as possibly personal or uncertain.'}</p>
-                            {glance.map(renderCard)}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* TIER 3 — Booked automatically, collapsed to bucket summaries. */}
-                    {autoBooked.length > 0 && (
-                      <div className="mb-2 rounded-lg border border-zinc-200">
-                        <button type="button" onClick={() => toggle('auto')} className="flex w-full items-center justify-between px-3 py-2.5 text-left">
-                          <span className="text-sm font-medium text-zinc-800">
-                            ✅ {it ? `Registrate automaticamente · ${autoBooked.length} gruppi` : `Booked automatically · ${autoBooked.length} groups`}
-                          </span>
-                          <span className="text-zinc-400 text-xs">{openSections.has('auto') ? '▲' : '▼'}</span>
-                        </button>
-                        {openSections.has('auto') && (
-                          <div className="px-3 pb-3">
-                            <p className="text-[11px] text-zinc-500 mb-2">
-                              {it ? 'Tutto qui è già nei totali. Apri una categoria solo per verificare o correggere.' : 'Everything here is already in the totals. Open a category only to double-check or correct.'}
-                            </p>
-                            {(() => {
-                              const byBucket = new Map<string, QuestionGroup[]>()
-                              for (const g of autoBooked) {
-                                const key = g.ai_bucket && bucketLabel.has(g.ai_bucket) ? g.ai_bucket : '__other__'
-                                if (!byBucket.has(key)) byBucket.set(key, [])
-                                byBucket.get(key)!.push(g)
-                              }
-                              return Array.from(byBucket.entries()).map(([slug, groups]) => {
-                                const label = slug === '__other__' ? (it ? 'Altro' : 'Other') : (bucketLabel.get(slug) ?? slug)
-                                const total = groups.reduce((s, g) => s + g.total, 0)
-                                const key = `bucket:${slug}`
-                                return (
-                                  <div key={slug} className="border-t border-zinc-100 first:border-t-0">
-                                    <button type="button" onClick={() => toggle(key)} className="flex w-full items-center justify-between py-2 text-left">
-                                      <span className="text-xs font-semibold text-zinc-700">{label} · {groups.length} {it ? 'voci' : 'merchants'}</span>
-                                      <span className="text-xs text-zinc-500">{fmt(total)} <span className="text-zinc-300 ml-1">{openSections.has(key) ? '▲' : '▼'}</span></span>
-                                    </button>
-                                    {openSections.has(key) && <div className="space-y-2 pb-2">{groups.map(renderCard)}</div>}
-                                  </div>
-                                )
-                              })
-                            })()}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )
-              })()}
-              {/* Add a new bucket — flexible, shared vocabulary (#2). A bucket added
-                  here is saved globally and offered to everyone next time. Hidden in
-                  the staff workspace tool: a scratch workspace must NOT write to the
-                  global expense-category catalog (sealed leak #1). */}
-              {!isStaff && (
-              <div className="mt-1 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3">
-                <span className="text-xs text-zinc-500">{it ? 'Manca una categoria?' : 'Missing a category?'}</span>
-                {/* The INPUT must be gated too, not just the button beside it
-                    (browser QA 2026-08-03): Enter submits, so on a locked file
-                    the button greyed out while typing-then-Enter still created a
-                    category — under a banner saying nothing could be changed. */}
-                <input
-                  value={newBucket}
-                  disabled={busyOrLocked}
-                  onChange={e => setNewBucket(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && !busyOrLocked) void addBucket() }}
-                  placeholder={it ? 'Aggiungi categoria…' : 'Add a category…'}
-                  className="rounded-md border border-zinc-300 px-2 py-1 text-xs disabled:opacity-50 disabled:bg-zinc-100"
-                />
-                <button
-                  disabled={busyOrLocked || newBucket.trim().length < 2}
-                  onClick={() => void addBucket()}
-                  className="rounded-md border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 disabled:opacity-50"
-                >
-                  {it ? 'Aggiungi' : 'Add'}
-                </button>
-              </div>
-              )}
-            </section>
-          )}
-
-          {/* Coverage questions (§3.4) — what the exports don't span */}
-          {view.coverage.questions.length > 0 && (
-            <section className="rounded-xl border border-sky-200 bg-sky-50/50 p-4 sm:p-5">
-              <h2 className="text-sm font-semibold text-zinc-900">{it ? 'Copertura dell\'anno' : 'Year coverage'}</h2>
-              <p className="text-xs text-zinc-500 mt-1 mb-4">
-                {it
-                  ? 'Alcuni conti non coprono tutto l\'anno. Dicci se in quei mesi c\'era attività — se sì, ricarica l\'export completo.'
-                  : 'Some accounts don\'t span the whole year. Tell us whether there was activity in those months — if yes, re-upload the complete export.'}
-              </p>
-              <div className="space-y-3">
-                {view.coverage.questions.map(q => (
-                  <div key={q.key} className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4">
-                    <div className="text-sm text-zinc-800">{q.question}</div>
-                    {q.answer === 'no_activity' ? (
-                      <div className="mt-2 text-xs text-emerald-700">{it ? '✓ Nessuna attività — registrato.' : '✓ No activity — recorded.'}</div>
-                    ) : q.answer === 'had_activity' ? (
-                      <div className="mt-2 text-xs text-amber-700">
-                        {it
-                          ? 'Hai indicato che c\'era attività: elimina il file qui sotto e carica l\'export dell\'intero anno.'
-                          : 'You said there was activity: delete the file below and upload the entire-year export.'}
-                      </div>
-                    ) : (
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        <button
-                          disabled={busyOrLocked}
-                          onClick={() => void answerCoverage(q, 'no_activity')}
-                          className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
-                        >
-                          {it ? 'No — nessuna attività in quei mesi' : 'No — no activity in those months'}
-                        </button>
-                        <button
-                          disabled={busyOrLocked}
-                          onClick={() => void answerCoverage(q, 'had_activity')}
-                          className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
-                        >
-                          {it ? 'Sì — c\'era attività (devo ricaricare)' : 'Yes — there was activity (I need to re-upload)'}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
 
           {/* Files + add-a-statement uploader (shared with the empty state). */}
           {renderFormatProposals()}
@@ -3472,8 +3648,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
 
           {/* Completeness summary (dev_task 95127bb2) — translate the checks
               that didn't fully pass into plain language so the client can
-              provide more or accept as-is. */}
-          {!attested && view.completeness.items.length > 0 && (
+              provide more or accept as-is. Gated on !hasStructuralProblem
+              (2026-08-21, live-QA finding): this panel's own copy says
+              "these numbers are ready", which is flatly false while the
+              hard-stop banner above says the opposite — and it surfaces
+              real diagnostic dollar figures from the same unreliable data
+              the hard-stop withholds. */}
+          {!attested && !view.hasStructuralProblem && view.completeness.items.length > 0 && (
             <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 sm:p-5 space-y-4">
               <div>
                 <h2 className="text-sm font-semibold text-zinc-900">{it ? 'Cosa abbiamo trovato' : 'What we found'}</h2>
@@ -3502,12 +3683,26 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
 
           {/* Download + Attest */}
           <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 space-y-4">
-            <a
-              href={`${API}/download?account_id=${accountId}&tax_year=${taxYear}`}
-              className="inline-flex items-center rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900"
-            >
-              {it ? 'Scarica Excel (P&L + Stato Patrimoniale)' : 'Download Excel (P&L + Balance Sheet)'}
-            </a>
+            {/* The link itself was already refused server-side on a structural
+                problem (both download routes 422 before building anything) —
+                but a plain <a> with no disabled state, sitting right next to a
+                box that used to say "these numbers are ready", was a dead,
+                confusing control (2026-08-21 live-QA finding). Hidden instead
+                of shown-then-erroring. */}
+            {view.hasStructuralProblem ? (
+              <p className="text-xs text-zinc-500">
+                {it
+                  ? 'Il download sarà disponibile una volta risolto il problema sopra.'
+                  : 'Download will be available once the issue above is fixed.'}
+              </p>
+            ) : (
+              <a
+                href={`${API}/download?account_id=${accountId}&tax_year=${taxYear}`}
+                className="inline-flex items-center rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900"
+              >
+                {it ? 'Scarica Excel (P&L + Stato Patrimoniale)' : 'Download Excel (P&L + Balance Sheet)'}
+              </a>
+            )}
 
             {!isStaff && (attested ? (
               <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">

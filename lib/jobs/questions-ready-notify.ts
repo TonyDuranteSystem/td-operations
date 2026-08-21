@@ -19,7 +19,8 @@
  *   so without one the deep link would bounce the client to /portal.
  * - The action-required engine's own 10-minute dedup on the link suppresses
  *   double-fires from racing chain tails. The link is year-scoped and distinct
- *   from the save/ingest notices (`focus=questions`) so those never mask this.
+ *   from the save/ingest notices (its own `#needs-your-decision` anchor) so
+ *   those never mask this.
  *
  * A LATER clean chain completion (e.g. staff re-runs the AI pass and new
  * questions appear) notifies again by design — new questions are new work.
@@ -72,7 +73,12 @@ export async function notifyQuestionsReady(params: {
         en: `We've finished categorizing your ${taxYear} transactions automatically. ${remaining} item(s) can only be classified by you — each takes one tap in the portal. Once they're answered you can confirm your Profit & Loss.`,
         it: `Abbiamo finito di registrare automaticamente le tue transazioni ${taxYear}. ${remaining} voce/i possono essere classificate solo da te — un tocco ciascuna nel portale. Una volta risposte potrai confermare il tuo Conto Economico.`,
       },
-      link: `/portal/tax-financials?year=${taxYear}&focus=questions`,
+      // #needs-your-decision (2026-08-20): a real anchor the page scrolls to
+      // on load, replacing the old ?focus=questions — nothing ever read that
+      // query param, so the "click brings you straight to it" promise in the
+      // message text above was never actually true. See the component's own
+      // hash-scroll effect.
+      link: `/portal/tax-financials?year=${taxYear}#needs-your-decision`,
     })
     return { notified: true }
   } catch (e) {

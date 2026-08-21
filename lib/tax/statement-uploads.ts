@@ -219,3 +219,47 @@ export async function clearFailedStatementFile(
   }
   return { ok: true, cleared: clearedCount }
 }
+
+/**
+ * Workspace twin of clearFailedStatementFile (2026-08-21, live-QA bug-hunter
+ * finding): a workspace's failed ingest job has no source_file_id (nothing
+ * was ever inserted), so the existing source-keyed delete route could never
+ * reach it — since the hard-stop plan shipped, that meant a failed file
+ * wedged the workspace's block PERMANENTLY, with no card, no filename, and
+ * no way to clear it. Same job-cancel approach as the account version, but
+ * scoped by related_entity_id (a workspace, not account_id) and WITHOUT a
+ * tax_year filter — workspace ingest job payloads never carry one (a
+ * workspace has exactly one year, via the related_entity_id scoping itself;
+ * see lib/tax/ingest-file-status.ts's own note on this). No editability
+ * check either — workspaces are staff scratch space with no confirm-lock
+ * concept to respect.
+ */
+export async function clearFailedWorkspaceStatementFile(
+  workspaceId: string,
+  path: string,
+): Promise<{ ok: boolean; cleared: number; error?: string }> {
+  const { data: cancelled, error } = await supabaseAdmin
+    .from("job_queue")
+    .update({ status: "cancelled", error: "Cleared: staff removed this failed statement file" })
+    .eq("job_type", "ingest_workspace_statement")
+    .eq("related_entity_id", workspaceId)
+    .eq("payload->>path", path)
+    .eq("status", "failed")
+    .select("id")
+  if (error) return { ok: false, cleared: 0, error: error.message }
+  let clearedCount = (cancelled ?? []).length
+  const { data: legacyCancelled } = await supabaseAdmin
+    .from("job_queue")
+    .update({ status: "cancelled", error: "Cleared: staff removed this failed statement file (legacy completed-with-error row)" })
+    .eq("job_type", "ingest_workspace_statement")
+    .eq("related_entity_id", workspaceId)
+    .eq("payload->>path", path)
+    .eq("status", "completed")
+    .eq("result->>ok", "false")
+    .select("id")
+  clearedCount += (legacyCancelled ?? []).length
+  if (clearedCount === 0) {
+    return { ok: false, cleared: 0, error: "This file is not in a failed state (it may still be processing, or its data is already in — delete it from its file card instead)." }
+  }
+  return { ok: true, cleared: clearedCount }
+}

@@ -113,13 +113,52 @@ async function createFork(input: { actor: string; taxYear: number; sourceAccount
   // Prior-return snapshot from the client's latest completed submission.
   const { data: sub } = await db
     .from('tax_return_submissions')
-    .select('prior_return_extracted')
+    .select('prior_return_extracted, financials_meta')
     .eq('account_id', input.sourceAccountId)
     .eq('tax_year', input.taxYear)
     .eq('status', 'completed')
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
+
+  // Refuse to fork a client whose REAL data already has a structural problem
+  // (2026-08-20 hard-stop plan). Copying transactions never copies job_queue
+  // history — a fresh workspace has no jobs at all, so it would silently
+  // report "nothing wrong" even when the source is missing a whole failed
+  // file, defeating the entire point of the hard-stop for the fork path
+  // (senior-engineer finding, council review). Simplest correct fix: check
+  // the source's OWN live state before copying anything, and refuse outright
+  // — a disposable test copy of known-broken data is never useful anyway.
+  const { data: sourceJobs } = await supabaseAdmin
+    .from('job_queue')
+    .select('status, result, payload')
+    .eq('job_type', 'ingest_bank_statement')
+    .eq('account_id', input.sourceAccountId)
+    .in('status', ['pending', 'processing', 'failed', 'completed'])
+  const { computeIngestFileStates, summarizeIngestFileStates } = await import('@/lib/tax/ingest-file-status')
+  const sourceFileStates = computeIngestFileStates(
+    (sourceJobs ?? []) as Array<{ status: string; result: { ok?: boolean; steps?: Array<{ detail?: string }> } | null; payload: { tax_year?: number | string; path?: string } | null }>,
+    input.taxYear,
+  )
+  const sourceCounts = summarizeIngestFileStates(sourceFileStates)
+  const sourceMeta = (sub?.financials_meta ?? {}) as Record<string, unknown>
+  const sourceCoverageAnswers = (sourceMeta.coverage_answers ?? {}) as import('@/lib/tax/coverage').CoverageAnswers
+  const { coverageQuestions, unansweredCoverage, incompleteCoverage, hasStructuralProblem } = await import('@/lib/tax/coverage')
+  const sourceSources = await fetchAllBankTransactionsByYear<{ bank_name: string; account_type: string | null; transaction_date: string }>(
+    input.sourceAccountId, input.taxYear, 'bank_name, account_type, transaction_date',
+  )
+  const sourceCovQs = coverageQuestions(sourceSources, input.taxYear)
+  const sourceStructuralProblem = hasStructuralProblem({
+    ingestFailed: sourceCounts.failed,
+    failedFilesOverridden: sourceMeta.failed_files_override != null,
+    unansweredCoverage: unansweredCoverage(sourceCovQs, sourceCoverageAnswers).length,
+    incompleteCoverage: incompleteCoverage(sourceCovQs, sourceCoverageAnswers).length,
+  })
+  if (sourceStructuralProblem) {
+    return NextResponse.json({
+      error: 'This client\'s real data has an unresolved problem (an unreadable statement or a missing-months question) — fix that on their real account first, then fork. A test copy of known-incomplete data would only reproduce the same problem invisibly.',
+    }, { status: 409 })
+  }
 
   const { data: ws, error: wsErr } = await db
     .from('pnl_workspaces')
@@ -137,6 +176,11 @@ async function createFork(input: { actor: string; taxYear: number; sourceAccount
       // (2026-07-06; positive confirmation only, no formation date = null).
       prior_return_snapshot: sub?.prior_return_extracted
         ?? deriveFirstYearFromFormation((account.formation_date as string | null) ?? null, input.taxYear),
+      // Carry the source's already-resolved coverage answers so the fork
+      // doesn't re-ask a question the client already closed on the real
+      // account (2026-08-20; the same transactions are being copied below,
+      // so the same per-bank month gaps recompute identically).
+      coverage_answers: sourceCoverageAnswers,
     })
     .select('id')
     .single()
