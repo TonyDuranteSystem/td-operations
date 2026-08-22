@@ -389,7 +389,12 @@ export function registerBankStatementTools(server: McpServer) {
         // This tool previously used the legacy transaction-based generator, which
         // had drifted from the engine (raw last balance for assets, no name-drift
         // identity healing, single-rate multi-currency). One engine, one file.
-        const { buildFinancialsWorkbookForAccount } = await import("@/lib/tax/financials-orchestration")
+        const { buildFinancialsWorkbookForAccount, getAccountOwnershipProblem } = await import("@/lib/tax/financials-orchestration")
+        // 2026-08-22 (Antonio): same "no override, check before running
+        // anything" rule as the client-portal download route — this tool
+        // builds the identical artifact and must not bypass it.
+        const ownershipProblem = await getAccountOwnershipProblem(account_id, tax_year)
+        if (ownershipProblem) throw new Error(ownershipProblem)
         const built = await buildFinancialsWorkbookForAccount(account_id, tax_year)
         if (!built) throw new Error("No transactions available to build the P&L for this account and year")
         const { buffer, fileName } = built

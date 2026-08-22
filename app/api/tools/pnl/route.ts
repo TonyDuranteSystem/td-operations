@@ -143,7 +143,7 @@ async function createFork(input: { actor: string; taxYear: number; sourceAccount
   // is how the quarantined-file gap (round-3 blocker) went unnoticed here
   // even after being fixed in the shared function: this call site kept its
   // own stale copy of the logic and never inherited the fix.
-  const { getAccountStructuralProblem } = await import('@/lib/tax/financials-orchestration')
+  const { getAccountStructuralProblem, getAccountOwnershipProblem } = await import('@/lib/tax/financials-orchestration')
   const sourceStructuralProblem = await getAccountStructuralProblem(input.sourceAccountId, input.taxYear)
   const sourceMeta = (sub?.financials_meta ?? {}) as Record<string, unknown>
   const sourceCoverageAnswers = (sourceMeta.coverage_answers ?? {}) as import('@/lib/tax/coverage').CoverageAnswers
@@ -151,6 +151,16 @@ async function createFork(input: { actor: string; taxYear: number; sourceAccount
     return NextResponse.json({
       error: 'This client\'s real data has an unresolved problem (an unreadable statement or a missing-months question) — fix that on their real account first, then fork. A test copy of known-incomplete data would only reproduce the same problem invisibly.',
     }, { status: 409 })
+  }
+
+  // 2026-08-22 (Antonio, explicit ruling): forking a client whose real
+  // ownership split is broken is NOT an allowed way to go fix it — staff fix
+  // ownership directly on the real account (the existing member editor
+  // already there), same "no exception" as the structural-problem check
+  // above. A disposable test copy of a known-wrong split is never useful.
+  const sourceOwnershipProblem = await getAccountOwnershipProblem(input.sourceAccountId, input.taxYear)
+  if (sourceOwnershipProblem) {
+    return NextResponse.json({ error: `${sourceOwnershipProblem} Fix it on the real account, then fork.` }, { status: 409 })
   }
 
   const { data: ws, error: wsErr } = await db
@@ -242,6 +252,11 @@ async function createFork(input: { actor: string; taxYear: number; sourceAccount
     return NextResponse.json({
       error: 'This client\'s real data developed an unresolved problem while this fork was being created — fix that on their real account first, then fork again.',
     }, { status: 409 })
+  }
+  const reCheckOwnershipProblem = await getAccountOwnershipProblem(input.sourceAccountId, input.taxYear)
+  if (reCheckOwnershipProblem) {
+    await db.from('pnl_workspaces').delete().eq('id', ws.id)
+    return NextResponse.json({ error: `${reCheckOwnershipProblem} Fix it on the real account, then fork again.` }, { status: 409 })
   }
 
   // Copy the client's transactions for the year into the workspace (private copy).

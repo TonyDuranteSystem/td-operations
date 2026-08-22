@@ -5,19 +5,23 @@
  * NEVER silent: a gate that can't run says why, a gate that fails says what
  * to fix. The client sees passed gates as checkmarks (Slice 8).
  *
- * NO GATE BLOCKS CONFIRM any more (2026-08-03, Antonio). Gate 6 was the only
- * `blocking` one and, on the client draft, could never fail — see its comment
- * below. The client may confirm with items still undecided; the system's job is
- * to state plainly what is a suggestion and what they decided, not to bar the
- * door. Confirm is still gated on the coverage questions and on ingestion
- * finishing — those live in the route/UI, not here.
+ * NO GATE BLOCKED CONFIRM from 2026-08-03 until 2026-08-22 (Antonio). Gate 6
+ * was the only `blocking` one and, on the client draft, could never fail —
+ * see its comment below. The client may confirm with items still undecided;
+ * the system's job is to state plainly what is a suggestion and what they
+ * decided, not to bar the door. That stands for every gate EXCEPT gate 5's
+ * new "entered but doesn't add to 100%" branch (2026-08-22) — a real client
+ * attested a return with two members entered at 60%/60%, and Antonio drew the
+ * line there: an actively wrong number, not just an undecided one, does block.
+ * Confirm is still separately gated on the coverage questions and on
+ * ingestion finishing — those live in the route/UI, not here.
  *
  * Tolerances: $1 on cash identities (plan-specified), 0.5% on ownership.
  */
 
 import { pendingCount, pendingNet } from "./disclosure-text"
 import type { FinancialDraft } from "./financials-engine"
-import { sameName, type OwnershipResolution } from "./ownership-resolution"
+import { sameName, describeBrokenOwnership, type OwnershipResolution } from "./ownership-resolution"
 import { validatedExtraction, type PriorReturnCaseRecord } from "./prior-return-case"
 
 const CASH_TOLERANCE = 1.0
@@ -145,8 +149,25 @@ export function evaluateGates(input: EvaluateGatesInput): GateResult[] {
   }
 
   // ── Gate 5: K-1 allocation — Σ shares == net income AND Σ % == 100 ──
+  //
+  // 2026-08-22 (Antonio, round-5 bug-hunter finding — a real client attested
+  // a return with two members entered at 60%/60%): a member set that's simply
+  // not filled in yet ("missing") stays exactly as before — informational,
+  // never blocking, same as every other in-progress state in this file. A set
+  // where every member DOES have a stated %, and those don't add to 100 (a
+  // real, entered contradiction), is different: the K-1 dollar split is
+  // provably wrong, not incomplete. That case is its own branch and BLOCKS —
+  // the only gate blocking confirm since gate 6 stopped in 2026-08-03, and per
+  // Antonio's explicit instruction, also checked upfront by the
+  // generate/download/fork routes before they compute anything (see
+  // getAccountOwnershipProblem / getWorkspaceOwnershipProblem). Uses
+  // describeBrokenOwnership() — the SAME function those routes call — so the
+  // message here can never disagree with what actually blocked them.
   {
-    if (!ownership.complete) {
+    const broken = describeBrokenOwnership(ownership)
+    if (broken) {
+      results.push({ id: 5, title: "K-1 allocation", status: "fail", blocking: true, detail: broken })
+    } else if (!ownership.complete) {
       const parts = [
         ownership.missing.length ? `missing % for ${ownership.missing.join(", ")}` : "",
         Math.abs(ownership.totalPct - 100) > PCT_TOLERANCE ? `percentages sum to ${ownership.totalPct}%` : "",

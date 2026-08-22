@@ -65,6 +65,16 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       return NextResponse.json({ error: 'This workspace has an unresolved data problem (an unreadable statement, or a missing-months question) — the numbers are not final and cannot be downloaded yet. Fix that first.' }, { status: 422 })
     }
 
+    // 2026-08-22 (Antonio, round-5 bug-hunter finding): check ownership BEFORE
+    // building anything, no override — same "known-wrong input" principle as
+    // the structural-problem check above. `view` already has this resolved
+    // (getWorkspaceFinancialsView), so this costs nothing extra.
+    const { describeBrokenOwnership } = await import('@/lib/tax/ownership-resolution')
+    const ownershipProblem = describeBrokenOwnership(view.ownership)
+    if (ownershipProblem) {
+      return NextResponse.json({ error: ownershipProblem }, { status: 422 })
+    }
+
     if (!override) {
       const failing = view.gates.filter(g => (g.id === 2 || g.id === 7) && g.status === 'fail')
       if (failing.length > 0) {
