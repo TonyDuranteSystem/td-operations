@@ -126,13 +126,29 @@ export function incompleteCoverage(questions: CoverageQuestion[], answers: Cover
  * failed file (lib/tax/confirm-unlock.ts) — a deliberate override already
  * lets Confirm proceed; this must agree, not silently re-block it. Workspaces
  * have no such override today, so callers there pass `false`.
+ *
+ * `quarantined` (2026-08-21, round-3 bug-hunter blocker): a file awaiting a
+ * staff format confirmation is NOT counted by `ingestFailed` — it's a
+ * distinct ingest-file state (lib/tax/ingest-file-status.ts) precisely
+ * because it isn't shown to the client as "delete and re-upload". But that
+ * means before this field existed, a quarantined-only file produced NO
+ * structural-problem signal at all: it isn't a plain failure, and a bank with
+ * zero ingested rows generates no coverage question either (coverageQuestions
+ * only sees banks present in the data). The numbers rendered/downloaded/saved
+ * were then silently missing that bank's transactions while reporting as
+ * complete. Always blocking, no override — `failedFilesOverridden` is
+ * specifically the EXISTING mechanism for a genuinely-failed file staff has
+ * chosen to proceed past; quarantine's own resolution is the one-tap format
+ * confirmation itself, which transitions the file out of "quarantined"
+ * entirely (computeIngestFileStates re-resolves per path, succeeded wins).
  */
 export function hasStructuralProblem(input: {
   ingestFailed: number
   failedFilesOverridden: boolean
+  quarantined: number
   unansweredCoverage: number
   incompleteCoverage: number
 }): boolean {
   const failed = input.ingestFailed > 0 && !input.failedFilesOverridden
-  return failed || input.unansweredCoverage > 0 || input.incompleteCoverage > 0
+  return failed || input.quarantined > 0 || input.unansweredCoverage > 0 || input.incompleteCoverage > 0
 }

@@ -430,6 +430,7 @@ export async function GET(request: NextRequest) {
       hasStructuralProblem: hasStructuralProblemFn({
         ingestFailed,
         failedFilesOverridden,
+        quarantined: stateCounts.quarantined,
         unansweredCoverage: coverage.unanswered,
         incompleteCoverage: coverage.incomplete,
       }),

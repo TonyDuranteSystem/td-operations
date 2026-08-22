@@ -46,6 +46,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Your submission is locked (under review or already confirmed) — ask us to reopen it before changing answers.' }, { status: 409 })
     }
 
+    // Hard-stop parity (2026-08-21, round-3 bug-hunter minor finding): the
+    // forward answer route already refuses on a structural problem; undo had
+    // no such check, an asymmetry with what "the whole categorization queue
+    // is blocked" is supposed to mean even though undo only reverts rows to
+    // uncategorized (no new output) and every display surface stays hidden
+    // regardless.
+    const { getAccountStructuralProblem } = await import('@/lib/tax/financials-orchestration')
+    if (await getAccountStructuralProblem(accountId, taxYear)) {
+      return NextResponse.json({ error: 'This year has an unresolved data problem (an unreadable statement, or a missing-months question) — fix that first before changing anything else.' }, { status: 422 })
+    }
+
     let reverted = 0
     for (let i = 0; i < transactionIds.length; i += 200) {
       const { data, error } = await supabaseAdmin
