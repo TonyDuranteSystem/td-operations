@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { decidePolishLanguage } from "@/lib/portal/polish-language"
+import { decidePolishLanguage, pickLastClientMessage } from "@/lib/portal/polish-language"
 
 /**
  * AI Polish's target-language decision (dev job 9c251e65).
@@ -66,5 +66,53 @@ describe("decidePolishLanguage", () => {
     // has no field for a stored/account-level language at all.
     const result = decidePolishLanguage({ preserveLanguage: false, lastClientMessage: REAL_ITALIAN })
     expect(result).toEqual({ kind: "language", language: "Italian" })
+  })
+})
+
+/**
+ * Regression test for the live-QA incident (2026-08-22): an automated
+ * out-of-office auto-reply (sender_type='system') landed right after a real
+ * client message and got misread as "what the client said," because the old
+ * filter (`sender_type !== 'admin'`) treats any non-admin row — including
+ * automated system notices — as client speech. pickLastClientMessage fixes
+ * this with a positive match on 'client' only.
+ */
+describe("pickLastClientMessage", () => {
+  it("skips a trailing automated 'system' notice and finds the real client message underneath it — the exact incident repro", () => {
+    const rows = [
+      { sender_type: "system", message: "We are currently closed. Our office is open Monday to Friday, 9 AM – 3 PM Eastern Time. We will get back to you on the next business day." },
+      { sender_type: "client", message: REAL_ITALIAN },
+      { sender_type: "admin", message: "We've issued invoice INV-002555 for $1. Please open your portal to view and pay it." },
+    ]
+    expect(pickLastClientMessage(rows)).toBe(REAL_ITALIAN)
+  })
+
+  it("skips a trailing admin message the same way", () => {
+    const rows = [
+      { sender_type: "admin", message: "Sounds good, talking to the bank now." },
+      { sender_type: "client", message: REAL_ENGLISH },
+    ]
+    expect(pickLastClientMessage(rows)).toBe(REAL_ENGLISH)
+  })
+
+  it("returns null when there is no client row at all (only system/admin noise)", () => {
+    const rows = [
+      { sender_type: "system", message: "Banking application submitted: Relay. Our team will review and submit it on your behalf." },
+      { sender_type: "admin", message: "On it." },
+    ]
+    expect(pickLastClientMessage(rows)).toBeNull()
+  })
+
+  it("returns null for an empty conversation", () => {
+    expect(pickLastClientMessage([])).toBeNull()
+  })
+
+  it("picks the MOST RECENT client row when there are several (rows are newest-first)", () => {
+    const rows = [
+      { sender_type: "client", message: "Second message — this one is newest." },
+      { sender_type: "admin", message: "Got it, one sec." },
+      { sender_type: "client", message: "First message — this one is older." },
+    ]
+    expect(pickLastClientMessage(rows)).toBe("Second message — this one is newest.")
   })
 })

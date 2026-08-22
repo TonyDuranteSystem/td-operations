@@ -4,7 +4,7 @@ import { isDashboardUser } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { callAI } from '@/lib/portal/ai-provider'
 import { fetchKBContext, buildKBQuery } from '@/lib/portal/kb-context'
-import { decidePolishLanguage } from '@/lib/portal/polish-language'
+import { decidePolishLanguage, pickLastClientMessage } from '@/lib/portal/polish-language'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -111,8 +111,9 @@ export async function POST(request: NextRequest) {
     const { data: conversation } = await conversationQuery
     // `conversation` is newest-first (the query's own order); read the client's
     // MOST RECENT message directly off it, before reversing to ascending for the
-    // prompt's own chronological display below.
-    const lastClientMessage = (conversation ?? []).find(m => m.sender_type !== 'admin')?.message ?? null
+    // prompt's own chronological display below. pickLastClientMessage matches
+    // sender_type='client' only — never 'system' (automated notices) or 'admin'.
+    const lastClientMessage = pickLastClientMessage(conversation ?? [])
     const conversationHistory = (conversation ?? []).reverse()
 
     // What language to write in — read the client's own words, never a stored
@@ -156,7 +157,9 @@ export async function POST(request: NextRequest) {
     ].filter(Boolean).join('\n')
 
     const conversationText = conversationHistory.length
-      ? conversationHistory.map(m => `${m.sender_type === 'admin' ? 'Antonio' : 'Client'}: ${m.message}`).join('\n')
+      ? conversationHistory
+          .map(m => `${m.sender_type === 'admin' ? 'Antonio' : m.sender_type === 'system' ? 'System' : 'Client'}: ${m.message}`)
+          .join('\n')
       : ''
 
     const systemPrompt = `You are a writing assistant for Antonio, who runs Tony Durante LLC (US business formation & tax consulting).
