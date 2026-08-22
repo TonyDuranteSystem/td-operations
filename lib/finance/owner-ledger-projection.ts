@@ -47,6 +47,7 @@ import {
   type TaughtMapping,
   type TaughtPayerIndex,
 } from "@/lib/finance/payer-learning-rules"
+import { looksLikeStripePayoutDeposit, matchPayoutForDeposit, type StripePayoutRow } from "@/lib/finance/stripe-payouts"
 
 import { reportSystemError } from "@/lib/system-errors"
 import { validatePaymentPlan } from "@/lib/offers/payment-plan"
@@ -145,6 +146,13 @@ export interface ClientEvidenceContext {
    * available for a payer the bank cannot describe usefully — because a person supplied it.
    */
   taught?: TaughtPayerIndex
+  /**
+   * Feed ids CONFIRMED as TD's own real Stripe payout (dev job `8a417a38`, 2026-08-22) — ground
+   * truth from Stripe's own payout list (lib/finance/stripe-payouts.ts), not a coincidence of
+   * wording or amount. Precomputed per sweep by `resolveConfirmedPayoutFeedIds` so a single real
+   * payout can never confirm two different deposits (one-payout-one-use).
+   */
+  confirmedTdPayoutFeedIds?: Set<string>
 }
 
 export function isClientInvoicePayment(
@@ -155,10 +163,12 @@ export function isClientInvoicePayment(
   // Money LEAVING the account is never a client paying an invoice.
   if (feed.status === "outgoing") return false
 
-  // Already reconciled against an invoice — never second-guess the matcher. Both the status
-  // and the link are checked: either alone is enough to mean "this money is already a client's
-  // settled payment", and a row that lost one of the two must still be protected.
-  if (feed.status === "matched" || feed.matched_payment_id) return true
+  // A TRUE SETTLEMENT — an invoice actually reconciled and closed against this feed. Never
+  // second-guessed by anything below, including the payout veto: reversing a completed
+  // settlement automatically is a separate, much bigger decision this function does not make
+  // (verified 2026-08-22: no production row has ever had status "matched" while also matching
+  // a confirmed real payout, so this protection is not currently masking a live contradiction).
+  if (feed.status === "matched") return true
 
   // A Stripe card charge carries its own payment reference — the certain link.
   if (extractStripePaymentIntent(feed)) return true
@@ -170,6 +180,28 @@ export function isClientInvoicePayment(
 
   // A payer email — resolves to a contact, and only client payments carry one.
   if (extractFeedEmails(feed).length > 0) return true
+
+  // ── A REAL, CONFIRMED STRIPE PAYOUT — TD'S OWN MONEY, NOT A COINCIDENCE (dev job `8a417a38`,
+  // 2026-08-22, and Antonio's correction the same day: "Stripe Payouts are Stripe Payouts.
+  // There is no way to guess anything"). Several real Stripe transfers were misfiled as
+  // maybe-client-money because a SEPARATE, unconfirmed candidate guess (see the pending-candidate
+  // check just below) was checked first and never let this evidence get consulted. Stripe's own
+  // payout list is ground truth: if `resolveConfirmedPayoutFeedIds` already matched this exact,
+  // signature-carrying deposit (amount + date + currency, gated on Stripe's own wording) to a
+  // real payout, it is certainly TD's own money — a proven fact, which must outrank an
+  // UNCONFIRMED guess (the pending-candidate check below) and every heuristic that follows.
+  // Placed BELOW the certain client-identity links above (payment intent / invoice reference /
+  // email) so those keep winning in the vanishingly unlikely event a row carries both, and BELOW
+  // the true-settlement check above (a real settlement is a stronger, different kind of fact).
+  if (evidence.confirmedTdPayoutFeedIds?.has(feed.id)) return false
+
+  // ⛔ A PENDING, UNCONFIRMED CANDIDATE — the matcher proposed this row as a POSSIBLE match for
+  // an invoice but never confirmed it (status stays something other than "matched", most often
+  // "needs_review"). This still protects a real client payment whose invoice pairing simply
+  // hasn't been reviewed yet — but it is a GUESS, not a settlement, so (per Antonio, 2026-08-22)
+  // it must never outrank Stripe's own confirmed payout list above. Checked here — AFTER the
+  // payout veto — precisely so a confirmed real payout can override it.
+  if (feed.matched_payment_id) return true
 
   // ⛔ A HUMAN HAS ALREADY TRIAGED THIS AS CLIENT MONEY (2026-07-29).
   // Rejecting a candidate, or un-matching a wrong match, clears the invoice pointer and returns
@@ -410,6 +442,56 @@ export function isOwnerLedgerFeed(
   evidence: ClientEvidenceContext = {},
 ): boolean {
   return !isClientInvoicePayment(feed, openInvoices, evidence)
+}
+
+/**
+ * Which feeds are CONFIRMED as TD's own real Stripe payout — greedy, ONE-PAYOUT-ONE-USE
+ * (dev job `8a417a38`, 2026-08-22). Deterministic and replayable given the same feeds+payouts,
+ * matching this file's own standing rule for a money decision: iterates feeds in a STABLE order
+ * (transaction date, then id — never insertion order) and claims each matched payout so a single
+ * real payout can never "confirm" two different deposits. Without this, a genuine client wire of
+ * the same round amount landing in the same few-day window as a real TD payout would ALSO match,
+ * and get wrongly pulled out of Finance (bug-hunter finding, review of this fix, 2026-08-22).
+ *
+ * Reuses `matchPayoutForDeposit` rather than reimplementing the comparison — see the rejected
+ * roster-name-matching note above for why this codebase does not tolerate a second copy of a
+ * matching rule.
+ */
+export function resolveConfirmedPayoutFeedIds(
+  feeds: ProjectableFeed[],
+  payouts: StripePayoutRow[],
+): Set<string> {
+  const confirmed = new Set<string>()
+  if (payouts.length === 0) return confirmed
+  const claimed = new Set<string>()
+
+  const ordered = [...feeds].sort((a, b) => {
+    const byDate = String(a.transaction_date).localeCompare(String(b.transaction_date))
+    return byDate !== 0 ? byDate : String(a.id).localeCompare(String(b.id))
+  })
+
+  for (const feed of ordered) {
+    if (feed.status === "outgoing") continue // money leaving is never a payout deposit
+
+    // ⛔ SIGNATURE REQUIRED (bug-hunter finding, 2026-08-22): amount + date + currency alone
+    // is a coincidence a genuine client wire could actually produce (round amounts, weekly
+    // payout cycles). Only a deposit that already carries Stripe's own wording is even
+    // ELIGIBLE to be confirmed against the payout list — see `looksLikeStripePayoutDeposit`.
+    if (!looksLikeStripePayoutDeposit(feed)) continue
+
+    const amount = Math.abs(typeof feed.amount === "string" ? Number(feed.amount) : feed.amount)
+    if (!Number.isFinite(amount)) continue
+    const date = String(feed.transaction_date ?? "")
+    if (!date) continue
+
+    const available = payouts.filter((p) => !claimed.has(p.id))
+    const match = matchPayoutForDeposit(amount, date, feed.currency || "USD", available)
+    if (match) {
+      confirmed.add(feed.id)
+      claimed.add(match.id)
+    }
+  }
+  return confirmed
 }
 
 /**
@@ -823,6 +905,25 @@ export function expectedPartsFromPlans(
 }
 
 /**
+ * Every real Stripe payout TD has actually received, LIVE mode only — ground truth for the
+ * confirmed-payout veto in `isClientInvoicePayment`. Synced separately (Step 4a of the
+ * check-wire-payments cron, `syncStripePayouts`) — this only READS the already-synced table,
+ * kept as a clean read/sync separation matching the rest of this loader family. Loaded fresh
+ * per sweep, same as roster/taught: a payout that lands this morning must be confirmable this
+ * afternoon. Fail-open to an empty list — a read error must not stop the sweep, and an empty
+ * list is exactly the pre-fix behaviour.
+ */
+async function fetchLivePayouts(): Promise<StripePayoutRow[]> {
+  const { data, error } = await supabaseAdmin
+    .from("stripe_payouts")
+    .select("id, amount, currency, arrival_date, status, livemode")
+    .eq("livemode", true)
+    .limit(5000)
+  if (error || !data) return []
+  return data as StripePayoutRow[]
+}
+
+/**
  * The scheduled sweep: anything that is not positively a client invoice payment is copied to
  * My Finances and taken out of the Bank Feed. Runs each cycle before the invoice matcher.
  *
@@ -835,6 +936,7 @@ export async function sweepFeedsToOwnerLedger(): Promise<ProjectionResult> {
   const roster = await fetchClientRoster()
   const taught = await fetchTaughtPayerIndex()
   const expected = await fetchExpectedPlanPayments()
+  const payouts = await fetchLivePayouts()
 
   const { data, error } = await supabaseAdmin
     .from("td_bank_feeds")
@@ -852,6 +954,7 @@ export async function sweepFeedsToOwnerLedger(): Promise<ProjectionResult> {
     roster,
     taught,
     expected,
+    payouts,
   })
 }
 
@@ -879,9 +982,16 @@ export async function projectFeedsToOwnerLedger(
     roster?: ClientRosterEntry[]
     expected?: ExpectedPayment[]
     taught?: TaughtPayerIndex
+    payouts?: StripePayoutRow[]
   } = {},
 ): Promise<ProjectionResult> {
-  const evidence: ClientEvidenceContext = { roster: opts.roster, expected: opts.expected, taught: opts.taught }
+  const confirmedTdPayoutFeedIds = resolveConfirmedPayoutFeedIds(feeds, opts.payouts ?? [])
+  const evidence: ClientEvidenceContext = {
+    roster: opts.roster,
+    expected: opts.expected,
+    taught: opts.taught,
+    confirmedTdPayoutFeedIds,
+  }
   const rows: OwnerLedgerRow[] = []
   const markable: string[] = []
   /** Rows filed as the owner's money that still look client-shaped — each gets told. */

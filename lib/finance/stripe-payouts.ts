@@ -62,29 +62,67 @@ export function mapPayoutToRow(p: RawStripePayout): StripePayoutRow {
   }
 }
 
+/** The minimal deposit shape `looksLikeStripePayoutDeposit` needs. */
+export interface PayoutSignatureSource {
+  sender_name?: string | null
+  memo?: string | null
+  sender_reference?: string | null
+}
+
+/**
+ * Does this deposit already carry Stripe's OWN wording — the precondition
+ * `matchPayoutForDeposit` was always meant to require (see the module header: "a client
+ * wire of a coincidental amount does not carry the signature and is not tested here"), but
+ * which no caller actually enforced until now.
+ *
+ * WHY THIS EXISTS (bug-hunter finding, 2026-08-22): without it, `matchPayoutForDeposit`
+ * confirms a deposit purely by amount + date + currency — and a genuine client wire that
+ * happens to land on the same amount, within a few days of a real TD payout, in the same
+ * currency, would pass with ZERO other evidence. That is a coincidence a real client invoice
+ * could actually produce (round amounts, weekly payout cycles). Requiring Stripe's own
+ * wording closes that gap: verified against all 4 real production rows this exists for
+ * (2026-08-22) — every one reads "STRIPE - TRANSFER" — and matches Antonio's own words:
+ * "Stripe Payouts are Stripe Payouts. There is no way to guess anything."
+ */
+export function looksLikeStripePayoutDeposit(feed: PayoutSignatureSource): boolean {
+  const text = `${feed.sender_name ?? ""} ${feed.memo ?? ""} ${feed.sender_reference ?? ""}`
+  return /stripe/i.test(text)
+}
+
 /**
  * Pure: does a bank deposit match a real Stripe payout? Given the deposit's ABSOLUTE
- * amount + its date, find a payout of the same amount whose arrival date is within
- * `windowDays` (bank post-date can lag Stripe's arrival_date by a day or two). Returns the
- * closest-dated match, or null. Amounts compared to the cent to avoid float drift.
+ * amount + its date + its currency, find a payout of the same amount AND currency whose
+ * arrival date is within `windowDays` (bank post-date can lag Stripe's arrival_date by a day
+ * or two). Returns the closest-dated match, or null. Amounts compared to the cent to avoid
+ * float drift; currency compared case-insensitively (Stripe returns lowercase codes, e.g.
+ * "usd" — this file's callers elsewhere in the codebase compare uppercase).
  *
- * This is intentionally amount+date over a SIGNATURE-flagged deposit: the deposit already
- * says "Stripe transfer", and requiring a real payout to exist is what makes it certain — a
- * client wire of a coincidental amount does not carry the signature and is not tested here.
+ * Currency is filtered INSIDE the loop, before the amount/date comparison decides the
+ * closest match — not as a post-filter on the winner. A post-filter would let a wrong-currency
+ * payout with a closer date shadow the correct same-currency one (e.g. a EUR payout dated
+ * closer than the real USD payout for the same numeric amount) — found in review, 2026-08-22.
+ *
+ * This is intentionally amount+date+currency over a SIGNATURE-flagged deposit: the deposit
+ * already says "Stripe transfer", and requiring a real payout to exist is what makes it
+ * certain — a client wire of a coincidental amount does not carry the signature and is not
+ * tested here.
  */
 export function matchPayoutForDeposit(
   depositAmountAbs: number,
   depositDate: string,
+  depositCurrency: string,
   payouts: StripePayoutRow[],
   windowDays = 3,
 ): StripePayoutRow | null {
   const cents = Math.round(depositAmountAbs * 100)
   const depDay = Date.parse(depositDate)
   if (Number.isNaN(depDay)) return null
+  const wantCurrency = (depositCurrency || "usd").trim().toLowerCase()
 
   let best: StripePayoutRow | null = null
   let bestGap = Infinity
   for (const p of payouts) {
+    if ((p.currency || "usd").trim().toLowerCase() !== wantCurrency) continue
     if (Math.round(Math.abs(p.amount) * 100) !== cents) continue
     const gap = Math.abs(Date.parse(p.arrival_date) - depDay) / 86_400_000
     if (gap <= windowDays && gap < bestGap) {
@@ -141,12 +179,13 @@ export async function syncStripePayouts(): Promise<PayoutSyncResult> {
 }
 
 /**
- * DB lookup: is there a real stored payout matching this deposit (absolute amount + date
- * within a few days)? Returns the payout id, or null. Reads only LIVE payouts.
+ * DB lookup: is there a real stored payout matching this deposit (absolute amount +
+ * currency + date within a few days)? Returns the payout id, or null. Reads only LIVE payouts.
  */
 export async function findPayoutIdForDeposit(
   depositAmountAbs: number,
   depositDate: string,
+  depositCurrency: string,
   windowDays = 3,
 ): Promise<string | null> {
   const from = new Date(Date.parse(depositDate) - windowDays * 86_400_000).toISOString().slice(0, 10)
@@ -158,6 +197,6 @@ export async function findPayoutIdForDeposit(
     .gte("arrival_date", from)
     .lte("arrival_date", to)
   if (error || !data) return null
-  const match = matchPayoutForDeposit(depositAmountAbs, depositDate, data as StripePayoutRow[], windowDays)
+  const match = matchPayoutForDeposit(depositAmountAbs, depositDate, depositCurrency, data as StripePayoutRow[], windowDays)
   return match ? match.id : null
 }

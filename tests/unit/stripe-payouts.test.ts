@@ -32,24 +32,24 @@ describe("matchPayoutForDeposit", () => {
   ]
 
   it("matches an exact amount on the same day", () => {
-    expect(matchPayoutForDeposit(1019.25, "2026-07-24", payouts)?.id).toBe("po_a")
+    expect(matchPayoutForDeposit(1019.25, "2026-07-24", "usd", payouts)?.id).toBe("po_a")
   })
 
   it("matches within the date window (bank post-date lags Stripe arrival)", () => {
-    expect(matchPayoutForDeposit(2692.65, "2026-07-18", payouts)?.id).toBe("po_b")
+    expect(matchPayoutForDeposit(2692.65, "2026-07-18", "usd", payouts)?.id).toBe("po_b")
   })
 
   it("does NOT match outside the date window", () => {
-    expect(matchPayoutForDeposit(970.7, "2026-06-20", payouts)).toBeNull()
+    expect(matchPayoutForDeposit(970.7, "2026-06-20", "usd", payouts)).toBeNull()
   })
 
   it("does NOT match a different amount", () => {
-    expect(matchPayoutForDeposit(999.99, "2026-07-24", payouts)).toBeNull()
+    expect(matchPayoutForDeposit(999.99, "2026-07-24", "usd", payouts)).toBeNull()
   })
 
   it("matches a payout stored with a negative sign on absolute value", () => {
     const negs: StripePayoutRow[] = [{ id: "po_n", amount: -60.87, currency: "usd", arrival_date: "2026-04-22", status: "paid", livemode: true }]
-    expect(matchPayoutForDeposit(60.87, "2026-04-22", negs)?.id).toBe("po_n")
+    expect(matchPayoutForDeposit(60.87, "2026-04-22", "usd", negs)?.id).toBe("po_n")
   })
 
   it("when two same-amount payouts are near, picks the closest date", () => {
@@ -57,11 +57,29 @@ describe("matchPayoutForDeposit", () => {
       { id: "po_far", amount: 500, currency: "usd", arrival_date: "2026-05-01", status: "paid", livemode: true },
       { id: "po_near", amount: 500, currency: "usd", arrival_date: "2026-05-03", status: "paid", livemode: true },
     ]
-    expect(matchPayoutForDeposit(500, "2026-05-03", two)?.id).toBe("po_near")
+    expect(matchPayoutForDeposit(500, "2026-05-03", "usd", two)?.id).toBe("po_near")
   })
 
   it("handles cents without float drift (0.1 + 0.2 class)", () => {
     const p: StripePayoutRow[] = [{ id: "po_x", amount: 0.3, currency: "usd", arrival_date: "2026-01-01", status: "paid", livemode: true }]
-    expect(matchPayoutForDeposit(0.3, "2026-01-01", p)?.id).toBe("po_x")
+    expect(matchPayoutForDeposit(0.3, "2026-01-01", "usd", p)?.id).toBe("po_x")
+  })
+
+  it("does NOT match a same-amount payout in a different currency", () => {
+    const p: StripePayoutRow[] = [{ id: "po_eur", amount: 1000, currency: "eur", arrival_date: "2026-05-03", status: "paid", livemode: true }]
+    expect(matchPayoutForDeposit(1000, "2026-05-03", "usd", p)).toBeNull()
+  })
+
+  it("currency comparison is case-insensitive (Stripe returns lowercase, caller may pass uppercase)", () => {
+    const p: StripePayoutRow[] = [{ id: "po_case", amount: 1000, currency: "usd", arrival_date: "2026-05-03", status: "paid", livemode: true }]
+    expect(matchPayoutForDeposit(1000, "2026-05-03", "USD", p)?.id).toBe("po_case")
+  })
+
+  it("filters currency BEFORE picking the closest date — a wrong-currency payout must not shadow a farther same-currency one", () => {
+    const mixed: StripePayoutRow[] = [
+      { id: "po_eur_close", amount: 1000, currency: "eur", arrival_date: "2026-05-03", status: "paid", livemode: true },
+      { id: "po_usd_far", amount: 1000, currency: "usd", arrival_date: "2026-05-01", status: "paid", livemode: true },
+    ]
+    expect(matchPayoutForDeposit(1000, "2026-05-03", "usd", mixed)?.id).toBe("po_usd_far")
   })
 })

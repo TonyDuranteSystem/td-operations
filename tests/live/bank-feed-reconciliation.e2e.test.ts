@@ -121,15 +121,18 @@ async function makeFeed(opts: {
   status?: string
   matchedPaymentId?: string | null
   label: string
+  source?: string
+  currency?: string
+  transactionDate?: string
 }): Promise<string> {
   const { data, error } = await supabaseAdmin
     .from("td_bank_feeds")
     .insert({
-      source: "mercury_api",
+      source: opts.source ?? "mercury_api",
       external_id: `zz-e2e-${RUN}-${opts.label}`,
-      transaction_date: today(-1),
+      transaction_date: opts.transactionDate ?? today(-1),
       amount: opts.amount,
-      currency: "USD",
+      currency: opts.currency ?? "USD",
       sender_name: opts.senderName,
       memo: opts.memo ?? opts.senderName,
       sender_reference: opts.memo ?? opts.senderName,
@@ -143,6 +146,23 @@ async function makeFeed(opts: {
   const id = (data as { id: string }).id
   createdFeeds.push(id)
   return id
+}
+
+const createdPayouts: string[] = []
+
+/** A real (or reproduced) Stripe payout row — the ground truth `matchAndReconcile`'s new
+ *  confirmed-payout guard reads from `stripe_payouts`. */
+async function makeStripePayout(opts: { id: string; amount: number; arrivalDate: string; currency?: string }) {
+  const { error } = await supabaseAdmin.from("stripe_payouts").upsert({
+    id: opts.id,
+    amount: opts.amount,
+    currency: opts.currency ?? "usd",
+    arrival_date: opts.arrivalDate,
+    status: "paid",
+    livemode: true,
+  })
+  if (error) throw new Error(`fixture payout failed: ${error.message}`)
+  createdPayouts.push(opts.id)
 }
 
 async function readPayment(id: string) {
@@ -202,6 +222,7 @@ afterAll(async () => {
   }
   for (const p of createdPayments) await supabaseAdmin.from("payments").delete().eq("id", p)
   for (const a of createdAccounts) await supabaseAdmin.from("accounts").delete().eq("id", a)
+  for (const id of createdPayouts) await supabaseAdmin.from("stripe_payouts").delete().eq("id", id)
 })
 
 // ══════════════════════════════════════════════════════════════════════════════════════
@@ -923,5 +944,68 @@ describe("13c — the audit panel's suggestion list uses the same name rule", ()
     )
     expect(hits).toHaveLength(1)
     expect(hits[0].match_evidence).toContain("partial name")
+  })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════════════
+describe("14 — REPLAY: the four real production Stripe payouts must never get a candidate pinned (dev job 8a417a38)", () => {
+  // Real production values — amount, date, currency, wording — for TD's own four Stripe
+  // payouts this fix exists for (verified against production 2026-08-22). The client-side of
+  // the coincidence is FAKE (ZZ fixture invoices, priced to land inside the matcher's amount
+  // tolerance) — reproducing the actual mechanism: a bare "STRIPE - TRANSFER" deposit landing
+  // near an unrelated invoice's amount, with zero name/identity/invoice-reference evidence.
+  const REAL_PAYOUTS = [
+    { po: "po_1TyLQAIHsqD3wMA90brP6WcY", amount: 50.68, date: "2026-07-29" },
+    { po: "po_1TyhT9IHsqD3wMA9NV7rWeez", amount: 51.16, date: "2026-07-30" },
+    { po: "po_1U2gfRIHsqD3wMA9SW0LaKai", amount: 1019.25, date: "2026-08-10" },
+    { po: "po_1U33KKIHsqD3wMA9oop8I3nJ", amount: 1324.82, date: "2026-08-11" },
+  ]
+
+  it("none of the four real payout deposits get a matched_payment_id pinned against a coincidentally-priced fake invoice", async () => {
+    for (const [i, real] of REAL_PAYOUTS.entries()) {
+      await makeStripePayout({ id: real.po, amount: real.amount, arrivalDate: real.date })
+      // A fake invoice priced within the matcher's 5%-or-$1 tolerance of the real payout —
+      // exactly the shape that pinned all four real rows before this fix.
+      await makeInvoice({ account: ACCT_A, total: Math.round(real.amount), invoiceNumber: `ZZ-${RUN}-PAYOUT${i}` })
+      const feed = await makeFeed({
+        amount: real.amount,
+        senderName: "STRIPE - TRANSFER",
+        memo: "STRIPE - TRANSFER",
+        source: "relay",
+        currency: "USD",
+        transactionDate: real.date,
+        label: `payout${i}`,
+      })
+
+      await matchAndReconcile(feed)
+
+      const row = await readFeed(feed)
+      expect(row.status).toBe("unmatched")
+      expect(row.matched_payment_id).toBeNull()
+    }
+  })
+
+  it("the SAME kind of amount-only coincidence, with NO Stripe wording, still gets pinned as a weak candidate (the guard is signature-gated, not amount-gated)", async () => {
+    // This large shared fixture file only tears down in afterAll, so an amount could
+    // coincidentally tie with some OTHER still-open invoice planted by an earlier scenario —
+    // which invoice wins a tie is not what this test is checking. What matters is the
+    // invariant: with no Stripe signature, the OLD weak-candidate-pinning behaviour still
+    // fires normally (my invoice specifically created it, so at least one candidate exists).
+    const CONTROL_AMOUNT = 733.19
+    await makeInvoice({ account: ACCT_A, total: Math.round(CONTROL_AMOUNT), invoiceNumber: `ZZ-${RUN}-CTRL` })
+    const feed = await makeFeed({
+      amount: CONTROL_AMOUNT,
+      senderName: "Some Anonymous Wire",
+      memo: null,
+      source: "relay",
+      currency: "USD",
+      label: "control-no-signature",
+    })
+
+    await matchAndReconcile(feed)
+
+    const row = await readFeed(feed)
+    expect(row.status).toBe("needs_review")
+    expect(row.matched_payment_id).not.toBeNull()
   })
 })
