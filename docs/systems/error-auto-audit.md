@@ -1,6 +1,8 @@
 # Error Auto-Audit
 
-Last verified against code: 2026-07-11 — Claude (**the 15-minute AI DIAGNOSIS loop is DISABLED** — unscheduled from vercel.json + `lib/cron-coverage.ts`, so it no longer runs, and the route file has now been DELETED. It ran an AI pass over captured errors every 15 minutes and wrote to a `/system-health` view no one opened — recurring token cost for nothing (Antonio, 2026-07-11). Error **capture** (`lib/system-errors.ts::reportSystemError`) and the `/system-health` view are UNCHANGED — errors are still recorded and visible; they just aren't auto-diagnosed anymore (the `diagnosis`/`suggested_fix` fields stay empty until someone diagnoses on demand). Monitoring moved to a point-of-work model instead: real client problems surface on the Portal Chats client (⚠️ + Issues tab, see `dev-tracker.md`/portal), and silent failures (a dead payment sync, orphaned records) fire ONE Team Chat alarm via `/api/cron/payment-integrity-alarm`. The daily audit / cron-coverage / weekly-report crons were also deleted. Original build note below.)
+Last verified against code: 2026-08-22 — Claude (**New client-side caller: the portal service worker's push handler now self-reports a broken app-icon badge** — dev job `61f62c08`. `public/portal-sw.js`'s `push` event used to attempt `navigator.setAppBadge()` and swallow any outcome with an empty `.catch()` — a badge broken on every real client's phone was indistinguishable from one working correctly, from our side. It now posts to the same `/api/system-errors/report` client endpoint, but ONLY on a non-success outcome (unsupported in this context, or the call itself rejected) — silent on success, so this doesn't turn every working push into a fake "error" row; a real recurring failure shows up as one deduped row with occurrence_count counting exactly how many times it happened, and it going quiet is itself the signal that badging started working. Same known limitation as every other client-side caller below applies here too: if the push arrives after the browser session has expired, the report itself can silently 401 — accepted, not solved, matching the existing design.)
+
+Prior: 2026-07-11 — Claude (**the 15-minute AI DIAGNOSIS loop is DISABLED** — unscheduled from vercel.json + `lib/cron-coverage.ts`, so it no longer runs, and the route file has now been DELETED. It ran an AI pass over captured errors every 15 minutes and wrote to a `/system-health` view no one opened — recurring token cost for nothing (Antonio, 2026-07-11). Error **capture** (`lib/system-errors.ts::reportSystemError`) and the `/system-health` view are UNCHANGED — errors are still recorded and visible; they just aren't auto-diagnosed anymore (the `diagnosis`/`suggested_fix` fields stay empty until someone diagnoses on demand). Monitoring moved to a point-of-work model instead: real client problems surface on the Portal Chats client (⚠️ + Issues tab, see `dev-tracker.md`/portal), and silent failures (a dead payment sync, orphaned records) fire ONE Team Chat alarm via `/api/cron/payment-integrity-alarm`. The daily audit / cron-coverage / weekly-report crons were also deleted. Original build note below.)
 
 Original: 2026-07-07 (initial build)
 
@@ -30,7 +32,9 @@ zero trace anywhere.
    - **Client-side**: UI fetch failures POST to `/api/system-errors/report`
      (requires a logged-in user; dead-session errors can't self-report — by
      design, the middleware's 401 SESSION_EXPIRED body already explains those
-     to the user directly). Wired today: create-offer dialog.
+     to the user directly). Wired today: create-offer dialog; the portal
+     service worker's push handler (`public/portal-sw.js`, 2026-08-22 —
+     reports a failed/unsupported app-icon badge only, silent on success).
 2. **Diagnosis → cron** `/api/cron/error-audit` — **DELETED 2026-07-11**
    (unscheduled from vercel.json + `lib/cron-coverage.ts`, route removed).
    It used to run
