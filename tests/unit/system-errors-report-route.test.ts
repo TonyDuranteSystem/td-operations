@@ -1,5 +1,5 @@
 /**
- * POST /api/system-errors/report — auth boundary.
+ * POST /api/system-errors/report — auth boundary + dedup-bypass guard.
  *
  * Built for dev job 61f62c08: the portal service worker's push handler needs
  * to self-report a failed app-icon badge, but a background push event cannot
@@ -7,6 +7,13 @@
  * silently 401ing). The fix opens ONE narrow, allowlisted exception; every
  * other route must stay exactly as auth-gated as before. These tests pin
  * that boundary so it can't quietly widen.
+ *
+ * Second pass (same day, bug-hunter adversarial review): the first version
+ * shipped a false safety claim in its own comments — an unauthenticated
+ * caller could vary the free-text `message` per request to defeat dedup and
+ * flood the row list. canonicalizeUnauthMessage() closes that; the tests
+ * below reproduce the exact attack (message varied per request) and assert
+ * it now collapses to one fixed value instead of flooding.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
@@ -58,13 +65,60 @@ describe("POST /api/system-errors/report — auth boundary", () => {
     expect(reportSystemErrorMock).not.toHaveBeenCalled()
   })
 
-  it("unauthenticated, allowlisted badge-diagnostic route → captured with no email", async () => {
+  it("unauthenticated, allowlisted badge-diagnostic route → captured with no email, message canonicalized", async () => {
     const res = await POST(
-      postFrom("10.0.0.3", { route: "portal-sw:push:setAppBadge", message: "setAppBadge() rejected: x" }),
+      postFrom("10.0.0.3", { route: "portal-sw:push:setAppBadge", message: "setAppBadge() rejected: NotAllowedError" }),
     )
     expect(res.status).toBe(200)
     expect(reportSystemErrorMock).toHaveBeenCalledWith(
-      expect.objectContaining({ route: "portal-sw:push:setAppBadge", user_email: null, source: "client" }),
+      expect.objectContaining({
+        route: "portal-sw:push:setAppBadge",
+        user_email: null,
+        source: "client",
+        message: "setAppBadge() rejected",
+        context: expect.objectContaining({ raw_message: "setAppBadge() rejected: NotAllowedError" }),
+      }),
+    )
+  })
+
+  it("dedup-bypass attack: varying the message per request no longer produces distinct fingerprint-relevant messages", async () => {
+    const attackerMessages = [
+      "setAppBadge() rejected: alpha-payload-1",
+      "setAppBadge() rejected: beta-payload-2",
+      "setAppBadge() rejected: gamma-payload-3",
+    ]
+    const seen: unknown[] = []
+    for (const message of attackerMessages) {
+      reportSystemErrorMock.mockClear()
+      await POST(postFrom("10.0.0.6", { route: "portal-sw:push:setAppBadge", message }))
+      const call = reportSystemErrorMock.mock.calls[0]?.[0] as { message?: string } | undefined
+      seen.push(call?.message)
+    }
+    // All three attacker-varied messages must collapse to the SAME canonical
+    // value — otherwise each one hashes to a distinct fingerprint and dedup
+    // (the entire point of this endpoint's rate/volume story) never engages.
+    expect(new Set(seen).size).toBe(1)
+    expect(seen[0]).toBe("setAppBadge() rejected")
+  })
+
+  it("unrecognized message shape on the allowlisted route still collapses to a fixed fallback, not passed through raw", async () => {
+    const res = await POST(
+      postFrom("10.0.0.7", { route: "portal-sw:push:setAppBadge", message: "totally-unexpected-attacker-text" }),
+    )
+    expect(res.status).toBe(200)
+    expect(reportSystemErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "setAppBadge: unrecognized outcome" }),
+    )
+  })
+
+  it("authenticated caller's message is passed through unchanged, never canonicalized", async () => {
+    authFixture.user = { id: "u1", email: "staff@tonydurante.us" }
+    const res = await POST(
+      postFrom("10.0.0.8", { route: "create-offer-dialog", message: "arbitrary detailed failure text" }),
+    )
+    expect(res.status).toBe(200)
+    expect(reportSystemErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "arbitrary detailed failure text" }),
     )
   })
 
