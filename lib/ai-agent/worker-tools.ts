@@ -1530,6 +1530,29 @@ export function pickPrimaryContactId(
 }
 
 /**
+ * Resolve which single contact an account-scoped portal send actually reaches
+ * on the pinned direct-send surfaces (Portal Chats panel, sidebar, Team Chat —
+ * exact_recipient is off there, so it's always narrowed to one member, never
+ * every member). One shared query + ranking, used by BOTH the actual send
+ * (sendPortalMessageFromWorker below) and the language guard's caller, so the
+ * guard checks the SAME person the message will reach — not a different one
+ * (worker-tools.ts's guard-caller gap, dev job 9c251e65: on these surfaces the
+ * guard used to see >1 linked contact and skip the check entirely, rather than
+ * resolve who the send would actually pick).
+ */
+async function resolvePortalSendContactId(
+  accountId: string,
+): Promise<{ contactId: string | null; ambiguous: boolean }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  const { data: links } = await db
+    .from("account_contacts")
+    .select("contact_id, role, ownership_pct, is_primary")
+    .eq("account_id", accountId)
+  return pickPrimaryContactId((links ?? []) as AccountContactLink[])
+}
+
+/**
  * LANGUAGE GUARD (Adam Marra incident, 2026-07-17) — deterministic floor under
  * the prompt's "client drafts in the client's CRM language" rule, which has now
  * failed twice (Gritti 2026-06-21 → R109; Marra 2026-07-17). Refuses ONLY the
@@ -1672,11 +1695,7 @@ export async function sendPortalMessageFromWorker(input: {
   // message + notification).
   let resolvedContactId = contactId
   if (!resolvedContactId && accountId && input.exact_recipient !== true) {
-    const { data: links } = await db
-      .from("account_contacts")
-      .select("contact_id, role, ownership_pct, is_primary")
-      .eq("account_id", accountId)
-    const picked = pickPrimaryContactId((links ?? []) as AccountContactLink[])
+    const picked = await resolvePortalSendContactId(accountId)
     resolvedContactId = picked.contactId
     if (picked.ambiguous) {
       console.warn(
@@ -2791,11 +2810,29 @@ export async function executeWorkerTool(
     }
 
     // ── PINNED DIRECT-SEND SURFACES (Portal Chats panel, sidebar, Team Chat) ────
-    // Unchanged. These have no card, and the screen fixes the recipient.
-    const portalParams =
+    // These have no card, and the screen fixes the recipient.
+    let portalParams =
       pin && (pin.account_id || pin.contact_id)
         ? { ...params, account_id: pin.account_id ?? undefined, contact_id: pin.contact_id ?? undefined }
         : params
+    // COMPANY-TARGET RESOLUTION — these surfaces never set exact_recipient, so an
+    // account-only send always narrows to ONE resolved member (see
+    // sendPortalMessageFromWorker below). Resolve that SAME member here, before the
+    // guard, so the guard checks the person who will actually receive the message —
+    // not a coin-flip "any member". Without this, an account with 2+ linked contacts
+    // hit the guard's own ambiguity rule (skip rather than judge against the wrong
+    // member) and the language check silently never ran at all on these three
+    // surfaces (dev job 9c251e65, live-confirmed gap, 2026-08-22).
+    {
+      const pAccountId = (portalParams as { account_id?: string }).account_id
+      const pContactId = (portalParams as { contact_id?: string }).contact_id
+      if (pAccountId && !pContactId) {
+        const resolved = await resolvePortalSendContactId(pAccountId)
+        if (resolved.contactId) {
+          portalParams = { ...portalParams, contact_id: resolved.contactId }
+        }
+      }
+    }
     // LANGUAGE GUARD + SEND LATCH — DECOUPLED from the pin (2026-07-29). It used to
     // fire only when a pin existed, so making the recipient staff-directable would
     // have silently switched off the check that stops an English message reaching an
@@ -2812,15 +2849,22 @@ export async function executeWorkerTool(
       if (sendContext.portalSendLatched) {
         return PORTAL_LANGUAGE_REFUSAL
       }
+      const guardMessage =
+        typeof (portalParams as { message?: unknown }).message === "string"
+          ? stripDraftMarkdown(((portalParams as { message?: string }).message ?? "").trim())
+          : ""
       const refuse = await shouldRefusePortalDraftLanguage({
         account_id: (portalParams as { account_id?: string }).account_id ?? null,
         contact_id: (portalParams as { contact_id?: string }).contact_id ?? null,
-        message: typeof (portalParams as { message?: unknown }).message === "string"
-          ? stripDraftMarkdown(((portalParams as { message?: string }).message ?? "").trim())
-          : "",
+        message: guardMessage,
       })
       if (refuse) {
         sendContext.portalSendLatched = true
+        sendContext.portalRefusedDraft = {
+          message: guardMessage,
+          account_id: (portalParams as { account_id?: string }).account_id ?? null,
+          contact_id: (portalParams as { contact_id?: string }).contact_id ?? null,
+        }
         // Refusal audit — lets us tune the detector on real refusals before
         // ever considering a "send anyway" affordance.
         logAction({
@@ -3304,6 +3348,13 @@ export interface WorkerResponse {
    */
   pendingOffThreadRecipient?: string | null
   /**
+   * Set when the language guard refused a portal send this turn — the exact
+   * refused draft + recipient, server-attested, for a surface with no Confirm
+   * card to offer a translate-and-hand-off picker instead of only prose. See
+   * WorkerSendContext.portalRefusedDraft for the full rationale.
+   */
+  portalRefusedDraft?: { message: string; account_id?: string | null; contact_id?: string | null } | null
+  /**
    * Files the worker produced this turn. Rendered by the panel as real download
    * controls — never left to the reply text to mention. See WorkerArtifact.
    */
@@ -3733,6 +3784,18 @@ export interface WorkerSendContext {
    * reviewed. The turn must instead end with a NEW draft for approval.
    */
   portalSendLatched?: boolean
+  /**
+   * The exact draft + recipient the language guard just refused, so a surface
+   * that has NO Confirm card (the Portal Chats Worker tab) can offer a real
+   * "translate and hand to the compose box" picker instead of only prose
+   * (dev job 9c251e65). In-memory only, mirrors the `capturedOffThreadAttempts`
+   * pattern below — no DB row, forgotten when the request ends. Deliberately
+   * NOT a send-bypass: the picker only ever fills the ALREADY-UNGUARDED manual
+   * compose box (app/api/portal/chat), never calls the AI's own guarded send
+   * tool again. See the council scoping notes on this job for why that
+   * distinction is load-bearing.
+   */
+  portalRefusedDraft?: { message: string; account_id?: string | null; contact_id?: string | null } | null
   /**
    * PORTAL FREEZE CONTEXT — set only by a surface that has a Confirm card able to
    * render a portal message (today: the Inbox worker panel).
@@ -5055,6 +5118,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     reply: result.reply,
     toolsUsed: result.toolsUsed,
     pendingOffThreadRecipient: capturedOffThreadAttempts[0] ?? null,
+    portalRefusedDraft: sendContext?.portalRefusedDraft ?? null,
     ...(result.artifacts?.length ? { artifacts: result.artifacts } : {}),
   }
 }

@@ -732,7 +732,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { reply, artifacts } = await callWorkerWithAttachments(userBody, {
+    const { reply, artifacts, portalRefusedDraft } = await callWorkerWithAttachments(userBody, {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
       // Capability statement GENERATED from the rails actually assigned above, so what
@@ -1023,6 +1023,10 @@ export async function POST(req: NextRequest) {
       preparedSend,
       messageId: rowId,
       artifacts: artifacts ?? [],
+      // Portal-Chats-only (dev job 9c251e65): the Inbox surface has its own
+      // Confirm-card language check already; this is the translate-and-hand-off
+      // picker for the surface that has no card at all.
+      portalRefusedDraft: surface === "portal-chats" ? (portalRefusedDraft ?? null) : null,
     })
   } catch (error) {
     if (rowId) {

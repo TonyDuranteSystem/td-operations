@@ -232,6 +232,25 @@ export async function updateContactField(
   })
 }
 
+/**
+ * Read one contact's language + updated_at, for a surface that wants to offer
+ * an inline language fix without the full account/contact detail page loaded
+ * (Portal Chats — dev job 9c251e65: a wrong-on-file language is what the AI
+ * worker's send guard checks, so fixing it fast, right where staff notice it,
+ * beats leaving them stuck).
+ */
+export async function getContactLanguage(
+  contactId: string,
+): Promise<{ language: string | null; updated_at: string } | null> {
+  const { data } = await supabaseAdmin
+    .from('contacts')
+    .select('language, updated_at')
+    .eq('id', contactId)
+    .maybeSingle()
+  if (!data) return null
+  return { language: data.language ?? null, updated_at: data.updated_at }
+}
+
 const ACCOUNT_CONTACT_ROLES = ['', 'owner', 'authorized_representative', 'manager', 'accountant']
 
 export async function updateAccountContactRole(

@@ -263,6 +263,42 @@ describe("send latch + guard wiring in executeWorkerTool", () => {
     )
   })
 
+  it("REGRESSION (dev job 9c251e65): a refusal pins the exact draft + recipient on sendContext.portalRefusedDraft, for the translate-and-hand-off picker", async () => {
+    const sendContext: WorkerSendContext = {
+      actor: "crm-portal:test@tonydurante.us",
+      pinnedPortalRecipient: { contact_id: "c-1" },
+    }
+    await executeWorkerTool(
+      "send_portal_message",
+      { message: INCIDENT_ENGLISH_DRAFT },
+      OFFERED_PORTAL_SEND,
+      null,
+      null,
+      sendContext,
+    )
+    expect(sendContext.portalRefusedDraft).toEqual({
+      message: INCIDENT_ENGLISH_DRAFT,
+      account_id: null,
+      contact_id: "c-1",
+    })
+  })
+
+  it("a send that goes through (no refusal) leaves portalRefusedDraft unset", async () => {
+    const sendContext: WorkerSendContext = {
+      actor: "crm-portal:test@tonydurante.us",
+      pinnedPortalRecipient: { contact_id: "c-1" },
+    }
+    await executeWorkerTool(
+      "send_portal_message",
+      { message: INCIDENT_ITALIAN_DRAFT },
+      OFFERED_PORTAL_SEND,
+      null,
+      null,
+      sendContext,
+    )
+    expect(sendContext.portalRefusedDraft).toBeUndefined()
+  })
+
   it("once latched, EVERY further send this turn is refused (even a correct Italian one)", async () => {
     const sendContext: WorkerSendContext = {
       actor: "crm-portal:test@tonydurante.us",
@@ -326,6 +362,66 @@ describe("send latch + guard wiring in executeWorkerTool", () => {
       null,
       null,
       undefined,
+    )
+    expect(result).toContain("✅")
+  })
+
+  it("REGRESSION (dev job 9c251e65, live-confirmed 2026-08-22): an account-only target on a multi-contact company now resolves the real recipient instead of skipping the check", async () => {
+    // Before this fix, an account-only send (no contact_id, no pin) with 2+ linked
+    // members hit shouldRefusePortalDraftLanguage's own ambiguity-skip and went
+    // through unchecked — see "fail-open: multi-contact account" above, which is
+    // still the guard's correct standalone contract when nobody resolves the
+    // recipient for it first. The dispatch handler now resolves the SAME primary
+    // member sendPortalMessageFromWorker itself would pick (pickPrimaryContactId)
+    // before calling the guard, so the check actually runs against a real person.
+    mockState.accountContactLinks = [{ contact_id: "c-1" }, { contact_id: "c-2" }]
+    const sendContext: { actor: string; portalSendLatched?: boolean } = {
+      actor: "crm-portal:luca@tonydurante.us",
+    }
+    const result = await executeWorkerTool(
+      "send_portal_message",
+      { account_id: "a-1", message: INCIDENT_ENGLISH_DRAFT },
+      OFFERED_PORTAL_SEND,
+      null,
+      null,
+      sendContext,
+    )
+    expect(result).toBe(PORTAL_LANGUAGE_REFUSAL)
+    expect(sendContext.portalSendLatched).toBe(true)
+  })
+
+  it("account-only target on a multi-contact company still sends when the resolved member is English", async () => {
+    mockState.accountContactLinks = [{ contact_id: "c-1" }, { contact_id: "c-2" }]
+    mockState.contactLanguage = "English"
+    const sendContext: WorkerSendContext = {
+      actor: "crm-portal:luca@tonydurante.us",
+      pinnedPortalRecipient: { account_id: "a-1" },
+    }
+    const result = await executeWorkerTool(
+      "send_portal_message",
+      { account_id: "a-1", message: INCIDENT_ENGLISH_DRAFT },
+      OFFERED_PORTAL_SEND,
+      null,
+      null,
+      sendContext,
+    )
+    expect(result).toContain("✅")
+    expect(sendContext.portalSendLatched).toBeUndefined()
+  })
+
+  it("account-only target with zero linked contacts is unaffected (nothing to resolve)", async () => {
+    mockState.accountContactLinks = []
+    const sendContext: WorkerSendContext = {
+      actor: "crm-portal:luca@tonydurante.us",
+      pinnedPortalRecipient: { account_id: "a-1" },
+    }
+    const result = await executeWorkerTool(
+      "send_portal_message",
+      { account_id: "a-1", message: INCIDENT_ENGLISH_DRAFT },
+      OFFERED_PORTAL_SEND,
+      null,
+      null,
+      sendContext,
     )
     expect(result).toContain("✅")
   })
