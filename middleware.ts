@@ -20,6 +20,15 @@ const PUBLIC_PREFIXES = [
   // Self-serve password reset request — by definition called by a logged-OUT
   // client. Without this prefix the route 401s before its handler ever runs.
   '/api/portal/password-reset',
+  // Client error-capture beacon — self-auths internally (route.ts checks the
+  // session itself and only skips it for one allowlisted diagnostic route,
+  // rate-limited). Without this prefix the middleware's own session gate
+  // 401s the request before the route's own allowlist check ever runs — the
+  // exact same shape as the password-reset gap above, found live 2026-08-22
+  // when the allowlisted route kept 401ing after the route-level fix shipped.
+  // Deliberately NOT '/api/system-errors/' — must not also expose
+  // /api/system-errors/update, which stays staff-only.
+  '/api/system-errors/report',
   // API: external webhooks, cron, sync, dashboard badges
   '/api/dashboard/badges',
   '/api/qb',
