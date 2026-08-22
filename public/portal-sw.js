@@ -115,11 +115,45 @@ self.addEventListener('push', function (event) {
     vibrate: [200, 100, 200],
   }
 
+  // Reports to the existing client-error pipeline (POST /api/system-errors/report,
+  // deduped by route+message — a repeat just bumps occurrence_count, never floods
+  // the table) ONLY when badging did NOT work. Silent on success: this is the one
+  // visibility we have into whether setAppBadge actually works for real clients —
+  // previously swallowed entirely (`.catch(function () {})` with nothing else), so
+  // a badge broken on every device was indistinguishable from a working one from
+  // our side. Fire-and-forget; must never affect whether the notification itself
+  // shows, and must never throw back into the caller.
+  function reportBadgeIssue(message, context) {
+    try {
+      fetch('/api/system-errors/report', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          route: 'portal-sw:push:setAppBadge',
+          message: message,
+          context: context,
+        }),
+      }).catch(function () {})
+    } catch {
+      // Never let diagnostic reporting break notification delivery.
+    }
+  }
+
   var showAndBadge = self.registration.showNotification(data.title || 'TD Portal', options)
     .then(function () {
-      if (self.navigator && 'setAppBadge' in self.navigator) {
-        return self.navigator.setAppBadge(data.badge || 1).catch(function () {})
+      if (!(self.navigator && 'setAppBadge' in self.navigator)) {
+        reportBadgeIssue('setAppBadge is not available in this ServiceWorker context', {
+          tag: data.tag || null,
+        })
+        return
       }
+      return self.navigator.setAppBadge(data.badge || 1).catch(function (err) {
+        reportBadgeIssue(
+          'setAppBadge() rejected: ' + (err && err.message ? err.message : String(err)),
+          { tag: data.tag || null },
+        )
+      })
     })
 
   event.waitUntil(showAndBadge)
