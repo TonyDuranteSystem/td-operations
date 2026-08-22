@@ -245,10 +245,23 @@ async function createFork(input: { actor: string; taxYear: number; sourceAccount
   }
 
   // Copy the client's transactions for the year into the workspace (private copy).
+  //
+  // account_ref/loc_code/loc_source/loc_confidence added (2026-08-22, round-4
+  // bug-hunter blocker): this SELECT omitted them, so every forked row got
+  // them NULL for the workspace's whole lifetime — nothing here or in
+  // recategorizeWorkspace ever re-derives account_ref, and a later Replace
+  // save (lib/tax/workspace-save.ts) writes those nulls straight back over
+  // the client's real, previously-populated values. accountKeyOf() falls
+  // back to bank name + account type when account_ref is empty, so two
+  // distinct same-bank accounts (e.g. two Chase accounts) silently collapse
+  // into one identity — corrupting the per-bank balance reconciliation, the
+  // transfer-pair matcher (which calls account_ref "authoritative"), and
+  // coverageQuestions() itself, which uses the same key and can then mask a
+  // real missing-months gap on one of the merged accounts.
   const txRows = await fetchAllBankTransactionsByYear<Record<string, unknown>>(
     input.sourceAccountId,
     input.taxYear,
-    'transaction_date, description, category, subcategory, counterparty, amount, currency, balance_after, bank_name, account_type, transaction_ref, source_file_id, is_related_party, notes, ai_lean, ai_bucket',
+    'transaction_date, description, category, subcategory, counterparty, amount, currency, balance_after, bank_name, account_type, account_ref, transaction_ref, source_file_id, is_related_party, notes, ai_lean, ai_bucket, loc_code, loc_source, loc_confidence',
   )
   let copied = 0
   const BATCH = 500

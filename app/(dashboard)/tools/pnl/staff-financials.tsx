@@ -317,7 +317,7 @@ function OpenWorkspace({ ws, onBack }: { ws: { id: string; name: string; taxYear
           <Save className="h-3.5 w-3.5" /> Save to client
         </button>
       </div>
-      {saving && <SaveToClient workspaceId={ws.id} defaultAccountId={ws.linkedAccountId} onClose={() => setSaving(false)} />}
+      {saving && <SaveToClient workspaceId={ws.id} taxYear={ws.taxYear} defaultAccountId={ws.linkedAccountId} onClose={() => setSaving(false)} />}
       <TaxFinancialsReview accountId="" taxYear={ws.taxYear} locale="en" mode="staff" apiBase={`/api/tools/pnl/${ws.id}`} />
     </div>
   )
@@ -339,12 +339,41 @@ function OpenRecall({ target, onBack }: { target: { accountId: string; accountNa
   )
 }
 
-function SaveToClient({ workspaceId, defaultAccountId, onClose }: { workspaceId: string; defaultAccountId: string | null; onClose: () => void }) {
+function SaveToClient({ workspaceId, taxYear, defaultAccountId, onClose }: { workspaceId: string; taxYear: number; defaultAccountId: string | null; onClose: () => void }) {
   const [accountId, setAccountId] = useState<string | undefined>(defaultAccountId ?? undefined)
   const [accountName, setAccountName] = useState<string | undefined>()
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [needMode, setNeedMode] = useState(false)
+  // Identity confirmation (2026-08-22, round-4 bug-hunter blocker): this was
+  // a free-text account picker with ZERO cross-check before writing into a
+  // real client's real books — the one write action in the whole tool, and
+  // the only staff pick-a-client flow WITHOUT the confirm step "Recall a
+  // client" already has (RecallForm above) for the exact same "similarly-
+  // named client" mis-click risk, just for a read-only view instead of a
+  // write. Same pattern, reused: look the account up, show it back, require
+  // an explicit yes before the first write attempt. Once confirmed for this
+  // account, a retry (including the Merge/Replace follow-up on the SAME
+  // account) does not need to ask again.
+  const [checking, setChecking] = useState(false)
+  const [checkError, setCheckError] = useState<string | null>(null)
+  const [confirmTarget, setConfirmTarget] = useState<{ accountName: string; einNumber: string | null; members: string[] } | null>(null)
+  const [identityConfirmed, setIdentityConfirmed] = useState(false)
+
+  async function checkIdentity() {
+    if (!accountId) return
+    setChecking(true); setCheckError(null)
+    try {
+      const res = await fetch(`/api/portal/tax-financials/identity?account_id=${accountId}`)
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Could not look up this client.')
+      setConfirmTarget({ accountName: d.company_name || accountName || 'Client', einNumber: d.ein_number ?? null, members: d.members ?? [] })
+    } catch (e) {
+      setCheckError(e instanceof Error ? e.message : 'Could not look up this client.')
+    } finally {
+      setChecking(false)
+    }
+  }
 
   async function save(mode?: 'merge' | 'replace') {
     if (!accountId) return
@@ -358,7 +387,7 @@ function SaveToClient({ workspaceId, defaultAccountId, onClose }: { workspaceId:
       if (res.status === 409) { setNeedMode(true); setMsg({ ok: false, text: d.error || 'This client already has data for this year — choose Merge or Replace.' }); return }
       if (!res.ok) throw new Error(d.error || 'Save failed.')
       setNeedMode(false)
-      setMsg({ ok: true, text: `Saved to client — ${d.inserted} row(s) added${d.deleted ? `, ${d.deleted} replaced` : ''}${d.backupPath ? ' (backup taken)' : ''}.` })
+      setMsg({ ok: true, text: `Saved to client — ${d.inserted} row(s) added${d.deleted ? `, ${d.deleted} replaced` : ''}${d.skippedExisting ? `, ${d.skippedExisting} already existed and were left unchanged (use Replace to overwrite them)` : ''}${d.backupPath ? ' (backup taken)' : ''}.` })
     } catch (e) {
       setMsg({ ok: false, text: e instanceof Error ? e.message : 'Save failed.' })
     } finally {
@@ -373,17 +402,39 @@ function SaveToClient({ workspaceId, defaultAccountId, onClose }: { workspaceId:
         <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-700"><X className="h-4 w-4" /></button>
       </div>
       <p className="text-xs text-zinc-500">Writes this workspace&apos;s transactions into the client&apos;s real books. This is the only action that changes real client data.</p>
-      <AccountCombobox value={accountId} displayValue={accountName} onChange={(id, name) => { setAccountId(id); setAccountName(name); setNeedMode(false); setMsg(null) }} />
-      {msg && <p className={`text-xs ${msg.ok ? 'text-green-700' : 'text-red-700'}`}>{msg.text}</p>}
-      {needMode ? (
-        <div className="flex gap-2">
-          <button type="button" disabled={busy} onClick={() => void save('merge')} className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">Merge (add only)</button>
-          <button type="button" disabled={busy} onClick={() => void save('replace')} className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50">Replace (overwrite)</button>
+      <AccountCombobox value={accountId} displayValue={accountName} onChange={(id, name) => { setAccountId(id); setAccountName(name); setNeedMode(false); setMsg(null); setConfirmTarget(null); setIdentityConfirmed(false); setCheckError(null) }} />
+      {checkError && <p className="text-xs text-red-700">{checkError}</p>}
+      {confirmTarget ? (
+        <div className="rounded-lg border-2 border-amber-300 bg-amber-50/60 p-3 space-y-2">
+          <p className="text-xs font-medium text-amber-900">Double-check this is the right client — this write cannot be undone by closing the tab.</p>
+          <div className="rounded-lg border border-amber-200 bg-white p-3 text-sm space-y-1">
+            <div><span className="text-zinc-500">Company:</span> <span className="font-medium text-zinc-900">{confirmTarget.accountName}</span></div>
+            <div><span className="text-zinc-500">EIN:</span> <span className="font-medium text-zinc-900">{confirmTarget.einNumber || 'Not on file'}</span></div>
+            <div><span className="text-zinc-500">Members:</span> <span className="font-medium text-zinc-900">{confirmTarget.members.length > 0 ? confirmTarget.members.join(', ') : 'None on file'}</span></div>
+            <div><span className="text-zinc-500">Tax year:</span> <span className="font-medium text-zinc-900">{taxYear}</span></div>
+          </div>
+          <div className="flex gap-2">
+            <button type="button" disabled={busy} onClick={() => { setIdentityConfirmed(true); setConfirmTarget(null); void save() }}
+              className="inline-flex items-center gap-2 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50">
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Yes, save to this client
+            </button>
+            <button type="button" onClick={() => setConfirmTarget(null)} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:border-zinc-400">Cancel</button>
+          </div>
         </div>
       ) : (
-        <button type="button" disabled={busy || !accountId} onClick={() => void save()} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save to client
-        </button>
+        <>
+          {msg && <p className={`text-xs ${msg.ok ? 'text-green-700' : 'text-red-700'}`}>{msg.text}</p>}
+          {needMode ? (
+            <div className="flex gap-2">
+              <button type="button" disabled={busy} onClick={() => void save('merge')} className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">Merge (add only)</button>
+              <button type="button" disabled={busy} onClick={() => void save('replace')} className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50">Replace (overwrite)</button>
+            </div>
+          ) : (
+            <button type="button" disabled={busy || checking || !accountId} onClick={() => void (identityConfirmed ? save() : checkIdentity())} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
+              {busy || checking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save to client
+            </button>
+          )}
+        </>
       )}
     </div>
   )
