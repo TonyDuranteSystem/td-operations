@@ -59,12 +59,24 @@ export async function POST(request: NextRequest) {
     // regardless of whether this succeeds. Safe to check unconditionally here —
     // unlike the workspace twin below, a real account has no upload/review mode
     // toggle for this route to gate; the review screen is always reachable.
-    const { getAccountStructuralProblem } = await import('@/lib/tax/financials-orchestration')
+    const { getAccountStructuralProblem, getAccountOwnershipProblem } = await import('@/lib/tax/financials-orchestration')
     if (await getAccountStructuralProblem(accountId, taxYear)) {
       return NextResponse.json(
         { error: 'This year has an unresolved data problem (an unreadable statement, or a missing-months question) — fix that first, then re-run.' },
         { status: 409 },
       )
+    }
+
+    // 2026-08-22 (Antonio): check ownership before running anything, not just
+    // before download — re-running categorization on a broken split is the
+    // same "don't compute on known-wrong input" principle, and this is the
+    // literal "before the tool runs any profit and loss" entry point for a
+    // real account. Only fires on an ENTERED-but-wrong split (see
+    // ownershipIsBroken) — an account that simply hasn't finished entering
+    // ownership yet is untouched, same as every other in-progress state here.
+    const ownershipProblem = await getAccountOwnershipProblem(accountId, taxYear)
+    if (ownershipProblem) {
+      return NextResponse.json({ error: ownershipProblem }, { status: 409 })
     }
 
     const { recategorizeAccountYear } = await import('@/lib/tax/categorization-engine')

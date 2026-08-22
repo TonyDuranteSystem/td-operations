@@ -75,12 +75,25 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
     // permanent-lockout shape already checked and ruled out elsewhere in this
     // feature. Once already generated, a re-run is pure waste on data the
     // display/download routes already correctly withhold regardless.
-    const { getWorkspaceStructuralProblem } = await import('@/lib/tax/workspace-orchestration')
+    const { getWorkspaceStructuralProblem, getWorkspaceOwnershipProblem } = await import('@/lib/tax/workspace-orchestration')
     if (ws.generated_at && await getWorkspaceStructuralProblem(workspaceId)) {
       return NextResponse.json(
         { error: 'This workspace has an unresolved data problem (an unreadable statement, or a missing-months question) — fix that first, then generate again.' },
         { status: 409 },
       )
+    }
+
+    // 2026-08-22 (Antonio): check ownership before running anything, including
+    // the very first Generate — unlike the structural-problem check above,
+    // this is safe unconditionally: a workspace's member roster is entered at
+    // CREATION time (New blank workspace requires at least one member before
+    // it can even be created), so "not started yet" isn't a reachable state
+    // here the way an empty upload list is. Only an ENTERED-but-wrong split
+    // blocks (ownershipIsBroken) — a workspace still missing a percentage for
+    // someone is untouched, same as everywhere else in this feature.
+    const ownershipProblem = await getWorkspaceOwnershipProblem(workspaceId)
+    if (ownershipProblem) {
+      return NextResponse.json({ error: ownershipProblem }, { status: 409 })
     }
 
     // Re-run the DETERMINISTIC pass with the workspace's CURRENT metadata

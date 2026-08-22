@@ -141,6 +141,35 @@ export async function getWorkspaceFinancialsView(workspaceId: string): Promise<W
 }
 
 /**
+ * Does THIS workspace's member roster have a BROKEN ownership split right
+ * now — members with stated percentages that don't add to 100 (never "not
+ * yet entered"; see ownership-resolution.ts::ownershipIsBroken)? Cheap and
+ * targeted like getWorkspaceStructuralProblem below — reads only
+ * pnl_workspace_members, no transactions/full draft — for the routes that
+ * must refuse BEFORE computing anything (2026-08-22, Antonio: "before the
+ * tool runs any profit and loss, check ownership first"): download,
+ * generate/regenerate, and forking a real account (source-side, checked via
+ * getAccountOwnershipProblem in financials-orchestration.ts, not here).
+ * Returns the client-facing message (member names + %s) when broken, null
+ * when fine — the SAME wording gate 5 uses, via describeBrokenOwnership().
+ */
+export async function getWorkspaceOwnershipProblem(workspaceId: string): Promise<string | null> {
+  const { data: memberRows } = await db
+    .from("pnl_workspace_members")
+    .select("display_name, ownership_pct")
+    .eq("workspace_id", workspaceId)
+  const wizardMembers: OwnershipSource[] = ((memberRows ?? []) as Array<{ display_name: string | null; ownership_pct: number | string | null }>)
+    .map(m => ({
+      name: (m.display_name ?? "").trim(),
+      pct: m.ownership_pct === null || m.ownership_pct === undefined || m.ownership_pct === "" ? null : Number(m.ownership_pct),
+    }))
+    .filter(m => m.name.length > 0)
+
+  const { describeBrokenOwnership } = await import("./ownership-resolution")
+  return describeBrokenOwnership(resolveOwnership({ priorK1s: [], wizardMembers, accountContacts: [] }))
+}
+
+/**
  * Does THIS workspace, right now, have a structural data problem (an
  * unreadable statement file, or an unresolved/incomplete missing-months
  * question)? Same predicate the GET route surfaces to the UI
