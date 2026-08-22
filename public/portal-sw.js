@@ -123,37 +123,48 @@ self.addEventListener('push', function (event) {
   // a badge broken on every device was indistinguishable from a working one from
   // our side. Fire-and-forget; must never affect whether the notification itself
   // shows, and must never throw back into the caller.
+  // MUST return its promise all the way up to event.waitUntil, or the OS is
+  // free to suspend this worker the instant the .then()/.catch() handler that
+  // called this returns — which happens immediately after the fetch is
+  // *started*, not after it completes. A fire-and-forget call here looked
+  // correct in review but the request itself was verified live to never
+  // leave the device (confirmed via the Simulator's own network log — zero
+  // outbound requests during push handling, across three separate installs).
   function reportBadgeIssue(message, context) {
-    try {
-      fetch('/api/system-errors/report', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          route: 'portal-sw:push:setAppBadge',
-          message: message,
-          context: context,
-        }),
-      }).catch(function () {})
-    } catch {
-      // Never let diagnostic reporting break notification delivery.
-    }
+    return fetch('/api/system-errors/report', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        route: 'portal-sw:push:setAppBadge',
+        message: message,
+        context: context,
+      }),
+    }).catch(function () {})
   }
 
   var showAndBadge = self.registration.showNotification(data.title || 'TD Portal', options)
     .then(function () {
-      if (!(self.navigator && 'setAppBadge' in self.navigator)) {
-        reportBadgeIssue('setAppBadge is not available in this ServiceWorker context', {
-          tag: data.tag || null,
+      try {
+        if (!(self.navigator && 'setAppBadge' in self.navigator)) {
+          return reportBadgeIssue('setAppBadge is not available in this ServiceWorker context', {
+            tag: data.tag || null,
+          })
+        }
+        return self.navigator.setAppBadge(data.badge || 1).catch(function (err) {
+          return reportBadgeIssue(
+            'setAppBadge() rejected: ' + (err && err.message ? err.message : String(err)),
+            { tag: data.tag || null },
+          )
         })
-        return
-      }
-      return self.navigator.setAppBadge(data.badge || 1).catch(function (err) {
-        reportBadgeIssue(
-          'setAppBadge() rejected: ' + (err && err.message ? err.message : String(err)),
+      } catch (err) {
+        // setAppBadge() can throw synchronously rather than reject — cover
+        // both failure shapes the same way.
+        return reportBadgeIssue(
+          'setAppBadge() threw synchronously: ' + (err && err.message ? err.message : String(err)),
           { tag: data.tag || null },
         )
-      })
+      }
     })
 
   event.waitUntil(showAndBadge)
