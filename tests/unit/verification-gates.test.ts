@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { buildFinancialDraft, type DraftTransaction } from "@/lib/tax/financials-engine"
-import { evaluateGates } from "@/lib/tax/verification-gates"
+import { evaluateGates, canConfirm } from "@/lib/tax/verification-gates"
 import { resolveOwnership } from "@/lib/tax/ownership-resolution"
 import { buildCarriedForwardRecord, buildStaffCorrectionRecord, type CarryPayload } from "@/lib/tax/prior-return-case"
 
@@ -111,5 +111,51 @@ describe("gate 2 — honest wording for carried_forward / staff_corrected (round
     const gates = evaluateGates({ draft, ownership: TWO_MEMBERS, priorReturn: prior })
     const g2 = gates.find(g => g.id === 2)!
     expect(g2.detail).toContain("entered by staff")
+  })
+})
+
+describe("gate 5 — K-1 allocation, blocking (2026-08-22, round-5 — the K-1 gate could detect a broken split but nothing ever refused on it)", () => {
+  it("BLOCKS when ownership was entered but doesn't add to 100% — the exact real shape a real client already attested with", () => {
+    const broken = resolveOwnership({
+      priorK1s: [],
+      wizardMembers: [{ name: "Alice Member", pct: 60 }, { name: "Bob Member", pct: 60 }],
+      accountContacts: [],
+    })
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: [tx({ amount: 1000, category: "income" })], members: broken.members, priorReturn: null, defaultUncategorizedBySign: true })
+    const gates = evaluateGates({ draft, ownership: broken, priorReturn: null })
+    const g5 = gates.find(g => g.id === 5)!
+    expect(g5.status).toBe("fail")
+    expect(g5.blocking).toBe(true)
+    expect(g5.detail).toContain("Alice Member (60%)")
+    expect(g5.detail).toContain("Bob Member (60%)")
+    expect(canConfirm(gates)).toBe(false) // this is what actually stops Confirm/attest
+  })
+
+  it("does NOT block when ownership simply hasn't been entered yet — a brand-new or single-member entity must stay confirmable", () => {
+    const notStarted = resolveOwnership({ priorK1s: [], wizardMembers: [], accountContacts: [] })
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: [], members: notStarted.members, priorReturn: null, defaultUncategorizedBySign: true })
+    const gates = evaluateGates({ draft, ownership: notStarted, priorReturn: null })
+    const g5 = gates.find(g => g.id === 5)!
+    expect(g5.blocking).toBe(false)
+  })
+
+  it("does NOT block on a single owner with no stated percentage (SMLLC-shaped legacy submission) — missing, not wrong", () => {
+    const solo = resolveOwnership({ priorK1s: [], wizardMembers: [{ name: "Solo Owner", pct: null }], accountContacts: [] })
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: [tx({ amount: 500, category: "income" })], members: solo.members, priorReturn: null, defaultUncategorizedBySign: true })
+    const gates = evaluateGates({ draft, ownership: solo, priorReturn: null })
+    const g5 = gates.find(g => g.id === 5)!
+    expect(g5.status).toBe("fail") // still surfaced, just not blocking
+    expect(g5.blocking).toBe(false)
+    expect(canConfirm(gates)).toBe(true)
+  })
+
+  it("a correct, resolved 50/50 split passes and never blocks", () => {
+    const gates = evaluateGates({
+      draft: buildFinancialDraft({ taxYear: 2025, transactions: [tx({ amount: 1000, category: "income" })], members: TWO_MEMBERS.members, priorReturn: null, defaultUncategorizedBySign: true }),
+      ownership: TWO_MEMBERS, priorReturn: null,
+    })
+    const g5 = gates.find(g => g.id === 5)!
+    expect(g5.status).toBe("pass")
+    expect(g5.blocking).toBe(false)
   })
 })

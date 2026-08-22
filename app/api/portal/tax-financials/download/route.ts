@@ -39,9 +39,19 @@ export async function GET(request: NextRequest) {
     // review hides when the underlying data has a structural problem — a
     // direct hit on this route otherwise bypasses the screen entirely. No
     // override for this specific case.
-    const { buildFinancialsWorkbookForAccount, getAccountStructuralProblem } = await import('@/lib/tax/financials-orchestration')
+    const { buildFinancialsWorkbookForAccount, getAccountStructuralProblem, getAccountOwnershipProblem } = await import('@/lib/tax/financials-orchestration')
     if (await getAccountStructuralProblem(accountId, taxYear)) {
       return NextResponse.json({ error: 'This year has an unresolved data problem (an unreadable statement, or a missing-months question) — the numbers are not final and cannot be downloaded yet. Fix that first.' }, { status: 422 })
+    }
+
+    // 2026-08-22 (Antonio, round-5 bug-hunter finding): check ownership BEFORE
+    // building anything — a K-1 split computed from percentages that don't
+    // add to 100% is a real, wrong number, not a display glitch, and this
+    // route builds the same numbers whether or not the screen would show
+    // them. No override, same as the structural-problem check above.
+    const ownershipProblem = await getAccountOwnershipProblem(accountId, taxYear)
+    if (ownershipProblem) {
+      return NextResponse.json({ error: ownershipProblem }, { status: 422 })
     }
 
     // The SAME workbook the accountant hand-off archives — one engine, one

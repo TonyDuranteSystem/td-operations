@@ -119,6 +119,67 @@ export function extractWizardOwner(submittedData: Record<string, unknown>): Owne
   return name ? { name, pct: null } : null
 }
 
+/**
+ * Assemble + resolve ownership for an account-year from its three sources
+ * (prior K-1s, wizard, account_contacts) — the ONE place this happens, so
+ * `getFinancialsView` and the lightweight ownership-only check below can
+ * never independently drift (this file's own long-standing warning about a
+ * completeness check re-derived in multiple places applies here too — see
+ * coverage.ts). Also returns `priorReturn` since callers need it beyond
+ * ownership (the draft's beginning-balance carry).
+ */
+async function resolveAccountOwnership(accountId: string, taxYear: number): Promise<{ ownership: OwnershipResolution; priorReturn: PriorReturnCaseRecord | null }> {
+  const sub = await resolveClientSubmission<{ submitted_data: Record<string, unknown> | null; prior_return_extracted: PriorReturnCaseRecord | null }>(
+    supabaseAdmin, accountId, taxYear, "submitted_data, prior_return_extracted",
+  )
+  const submittedData = sub?.submitted_data ?? {}
+  const priorReturn = sub?.prior_return_extracted ?? null
+
+  const { data: links } = await supabaseAdmin
+    .from("account_contacts")
+    .select("contact_id, ownership_pct, contacts(first_name, last_name)")
+    .eq("account_id", accountId)
+  const accountContacts = ((links ?? []) as unknown as Array<{ contact_id: string; ownership_pct: number | null; contacts: { first_name: string | null; last_name: string | null } | null }>)
+    .filter(l => l.contacts)
+    .map(l => ({
+      name: `${l.contacts!.first_name ?? ""} ${l.contacts!.last_name ?? ""}`.trim(),
+      pct: l.ownership_pct,
+      contact_id: l.contact_id,
+    }))
+    .filter(c => c.name.length > 0)
+
+  const priorExtraction = validatedExtraction(priorReturn)
+  const priorK1s: OwnershipSource[] = priorExtraction
+    ? priorExtraction.k1s.map(k => ({ name: k.partner_name, pct: k.ownership_pct }))
+    : []
+
+  const wizardMembers = extractWizardMembers(submittedData)
+  if (wizardMembers.length === 0) {
+    const owner = extractWizardOwner(submittedData)
+    if (owner) wizardMembers.unshift(owner)
+  }
+
+  return { ownership: resolveOwnership({ priorK1s, wizardMembers, accountContacts }), priorReturn }
+}
+
+/**
+ * Does this account+year have a BROKEN ownership split right now — members
+ * with stated percentages that don't add to 100 (never "not yet entered",
+ * which stays non-blocking; see ownership-resolution.ts::ownershipIsBroken)?
+ * Cheap and targeted like getAccountStructuralProblem below — assembles just
+ * the three ownership sources, no bank_transactions/full draft — for the
+ * routes that must refuse BEFORE computing anything (2026-08-22, Antonio:
+ * "before the tool runs any profit and loss, check ownership first"):
+ * download, re-run/generate, and forking this account as a fork source.
+ * Returns the client-facing message (member names + %s) when broken, null
+ * when fine — same wording gate 5 uses, via the same describeBrokenOwnership().
+ */
+export async function getAccountOwnershipProblem(accountId: string, taxYear: number): Promise<string | null> {
+  const { describeBrokenOwnership } = await import("./ownership-resolution")
+  const { ownership } = await resolveAccountOwnership(accountId, taxYear)
+  return describeBrokenOwnership(ownership)
+}
+
 export async function getFinancialsView(
   accountId: string,
   taxYear: number,
@@ -131,30 +192,30 @@ export async function getFinancialsView(
     skipOwnershipSync?: boolean
   } = {},
 ): Promise<FinancialsView> {
-  // Latest submission holding real client data carries the wizard answers +
-  // the prior-return record. Round-6 bug-hunter blocker: this used to be a
-  // raw `.eq("status", "completed")` query — the exact "Rule A" anti-pattern
-  // resolve-submission.ts documents as the cause of a real 2026-08-03
-  // production incident on this same table, and which every OTHER reader in
-  // this feature (the main view route, attest, the three new prior-return
-  // routes) was already fixed to avoid. This function — the one they all
-  // route through for the view itself — was the one call site the original
-  // fix missed. `status` flips completed→reviewed the moment staff run the
-  // ordinary "apply changes" step (a routine, common action, not an edge
-  // case — historically the MAJORITY state), at which point this query found
-  // NOTHING and silently returned an empty view: no wizard members, no
-  // validated prior return, beginning balances quietly falling back to
-  // statements instead of the client's real filed figures — on every
-  // reviewed account, undermining gate 7 / the carry-check / the correction
-  // form / the actual filed Excel (buildFinancialsWorkbookForAccount below
-  // calls this same function) at exactly the accounts most likely to need
-  // them.
-  const sub = await resolveClientSubmission<{ submitted_data: Record<string, unknown> | null; prior_return_extracted: PriorReturnCaseRecord | null }>(
-    supabaseAdmin, accountId, taxYear, "submitted_data, prior_return_extracted",
-  )
-
-  const submittedData = sub?.submitted_data ?? {}
-  const priorReturn = sub?.prior_return_extracted ?? null
+  // Ownership assembly + resolution (three sources: prior K-1s, wizard,
+  // account_contacts) lives in resolveAccountOwnership — the one place it
+  // happens, shared with getAccountOwnershipProblem below, so the two can
+  // never independently drift. This also carries priorReturn, needed further
+  // down for the draft's beginning-balance carry.
+  //
+  // Round-6 bug-hunter blocker, still relevant to the submission read inside
+  // resolveAccountOwnership: it used to be a raw `.eq("status", "completed")`
+  // query — the exact "Rule A" anti-pattern resolve-submission.ts documents
+  // as the cause of a real 2026-08-03 production incident on this same
+  // table, and which every OTHER reader in this feature (the main view
+  // route, attest, the three new prior-return routes) was already fixed to
+  // avoid. This function — the one they all route through for the view
+  // itself — was the one call site the original fix missed. `status` flips
+  // completed→reviewed the moment staff run the ordinary "apply changes"
+  // step (a routine, common action, not an edge case — historically the
+  // MAJORITY state), at which point this query found NOTHING and silently
+  // returned an empty view: no wizard members, no validated prior return,
+  // beginning balances quietly falling back to statements instead of the
+  // client's real filed figures — on every reviewed account, undermining
+  // gate 7 / the carry-check / the correction form / the actual filed Excel
+  // (buildFinancialsWorkbookForAccount below calls this same function) at
+  // exactly the accounts most likely to need them.
+  const { ownership, priorReturn } = await resolveAccountOwnership(accountId, taxYear)
 
   // Paginated read — buildFinancialDraft re-sorts internally, so `id` order is
   // fine here; the point is to get EVERY row past the 1000-row cap (a >1000-tx
@@ -184,39 +245,6 @@ export async function getFinancialsView(
       fxRates[r.currency.toUpperCase()] = Number(r.rate_to_usd)
     }
   }
-
-  const { data: links } = await supabaseAdmin
-    .from("account_contacts")
-    .select("contact_id, ownership_pct, contacts(first_name, last_name)")
-    .eq("account_id", accountId)
-  const accountContacts = ((links ?? []) as unknown as Array<{ contact_id: string; ownership_pct: number | null; contacts: { first_name: string | null; last_name: string | null } | null }>)
-    .filter(l => l.contacts)
-    .map(l => ({
-      name: `${l.contacts!.first_name ?? ""} ${l.contacts!.last_name ?? ""}`.trim(),
-      pct: l.ownership_pct,
-      contact_id: l.contact_id,
-    }))
-    .filter(c => c.name.length > 0)
-
-  // Prior-year K-1 ownership %s — from a client upload OR our own filed return.
-  const priorExtraction = validatedExtraction(priorReturn)
-  const priorK1s: OwnershipSource[] = priorExtraction
-    ? priorExtraction.k1s.map(k => ({ name: k.partner_name, pct: k.ownership_pct }))
-    : []
-
-  const wizardMembers = extractWizardMembers(submittedData)
-  // The owner_* keys only seed the roster when there is NO member list at all
-  // (legacy pre-redesign submissions). The redesigned wizard has no owner step
-  // — the filler is one of the members — but a draft reset reuses the same
-  // submission row, so stale owner_* keys can survive next to the fresh
-  // member list. Unshifting the stale owner injected a phantom member on top
-  // of the client's declared 50/50 (2026-06-12, Antonio's catch — % hit 200).
-  if (wizardMembers.length === 0) {
-    const owner = extractWizardOwner(submittedData)
-    if (owner) wizardMembers.unshift(owner)
-  }
-
-  const ownership = resolveOwnership({ priorK1s, wizardMembers, accountContacts })
 
   // W6 sync-back — only a complete, conflict-free resolution is auto-written.
   if (ownership.complete && ownership.conflicts.length === 0 && !opts.skipOwnershipSync) {

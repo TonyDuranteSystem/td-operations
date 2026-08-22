@@ -160,3 +160,30 @@ export function resolveOwnership(input: ResolveOwnershipInput): OwnershipResolut
 
   return { members, conflicts, missing, totalPct, complete }
 }
+
+/**
+ * True only when ownership was actually ENTERED but doesn't add up to 100%
+ * — never when it simply hasn't been entered yet. A brand-new entity (zero
+ * members) or one still missing a percentage for someone is "still being set
+ * up", not broken; only a stated total that's provably wrong is (2026-08-22,
+ * Antonio, round-5 bug-hunter finding — a real client attested a return with
+ * two members entered at 60%/60%). Getting this distinction wrong is exactly
+ * what would have hard-locked a brand-new or single-member entity out of the
+ * tool entirely, with no way back in — see this session's council review.
+ */
+export function ownershipIsBroken(o: OwnershipResolution): boolean {
+  return o.members.length > 0 && o.missing.length === 0 && Math.abs(o.totalPct - 100) > CONFLICT_TOLERANCE
+}
+
+/**
+ * Antonio's required message shape (2026-08-22): name the problem, every
+ * member and their %, and say what to do — never a generic "something's
+ * wrong". Returns null when ownership isn't broken. This is the ONE place
+ * that wording is written, so gate 5 and every route that blocks on it can
+ * never show a different message than the one that actually blocked them.
+ */
+export function describeBrokenOwnership(o: OwnershipResolution): string | null {
+  if (!ownershipIsBroken(o)) return null
+  const parts = o.members.map(m => `${m.name} (${m.pct}%)`).join(", ")
+  return `Ownership percentages don't add up to 100% — they total ${o.totalPct}%: ${parts}. Fix the ownership before this can continue.`
+}
