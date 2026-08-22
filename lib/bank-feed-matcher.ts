@@ -28,6 +28,7 @@ import {
   evaluateNameEvidence,
 } from "@/lib/finance/feed-signals"
 import { isChargeRefundedNow } from "@/lib/stripe-sync"
+import { findPayoutIdForDeposit, looksLikeStripePayoutDeposit } from "@/lib/finance/stripe-payouts"
 import { updateFeed } from "@/lib/finance/feed-write"
 import {
   auditLinkMetadata,
@@ -141,6 +142,38 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
     const feedAmount = Number(feed.amount)
     const feedCurrency = feed.currency || "USD"
+
+    // ⛔ CONFIRMED TD STRIPE PAYOUT (dev job `8a417a38`, 2026-08-22, Antonio: "Stripe Payouts
+    // are Stripe Payouts. There is no way to guess anything"). Computed ONCE, used ONLY at the
+    // single weakest tier below (the bare amount-coincidence bucket, zero name/identity/invoice-
+    // reference evidence) — NEVER at function entry. A real Relay/Stripe payout deposit reaches
+    // this function almost immediately (the Relay webhook calls straight into this matcher the
+    // instant a deposit lands, and four more entry points — an admin button and three separate
+    // crons — do the same), hours before the 6-hourly owner-ledger sweep (lib/finance/owner-
+    // ledger-projection.ts) ever gets a chance to recognise it. Left unguarded, this matcher pins
+    // a low-confidence "maybe this matches invoice X" candidate on it — confirmed as the actual
+    // mechanism behind all 4 real incident rows (2026-08-22 audit). Requires Stripe's own wording
+    // AND a real confirmed payout (never wording alone) — a stronger tier above this point (Tier
+    // 0 payment-intent, invoice-reference-in-text, identity/name match) still wins untouched if
+    // one somehow exists, so this can never discard real evidence for a genuine client payment
+    // (senior-engineer finding: an earlier draft that checked this at function entry could have).
+    //
+    // Fails OPEN to today's existing behaviour if the payout lookup itself errors or the payout
+    // hasn't synced yet (`stripe_payouts` refreshes only every 6h, inside the same cron as the
+    // sweep) — that single miss self-heals on the next sweep cycle, which already treats a
+    // confirmed payout as stronger than a pending candidate pin.
+    let confirmedTdPayout = false
+    if (looksLikeStripePayoutDeposit(feed)) {
+      try {
+        confirmedTdPayout = (await findPayoutIdForDeposit(Math.abs(feedAmount), feed.transaction_date, feedCurrency)) !== null
+      } catch (err) {
+        console.error(
+          "[bank-feed-matcher] confirmed-payout lookup failed — falling back to normal scoring for this feed:",
+          err instanceof Error ? err.message : String(err),
+        )
+      }
+    }
+
     const senderLower = (feed.sender_name || "").toLowerCase()
     const memoLower = (feed.memo || "").toLowerCase()
     // The invoice reference may live on the column OR inside the Stripe payload
@@ -563,6 +596,14 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
         // and not 'high' (under the `exact_or_high` threshold setting, 'high' would settle).
         confidence = "medium"
         score = 55
+      } else if (confirmedTdPayout) {
+        // ⛔ NO REAL EVIDENCE TIES THIS TO ANY CLIENT, AND STRIPE ITSELF CONFIRMS THIS IS TD'S
+        // OWN MONEY. Every real incident this guard exists for reached exactly this branch — a
+        // bare amount coincidence, nothing else. Skip it as a candidate for THIS invoice
+        // entirely; the owner-ledger sweep (already fixed) will file it correctly. A stronger
+        // tier above this one still wins if it somehow applies — this only silences the
+        // weakest, zero-evidence bucket.
+        continue
       } else {
         // Amount-only match (no identity, no name, no invoice ref) → manual review only
         confidence = "medium"

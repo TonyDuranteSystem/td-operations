@@ -37,6 +37,7 @@ import { processBankFeedMatches } from "@/lib/operations/process-bank-feed-match
 import { sweepFeedsToOwnerLedger } from "@/lib/finance/owner-ledger-projection"
 import { syncStripePayouts } from "@/lib/finance/stripe-payouts"
 import { runContractMonitor } from "@/lib/db-contract-monitor"
+import { reportSystemError } from "@/lib/system-errors"
 
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
@@ -133,11 +134,28 @@ export async function GET(req: NextRequest) {
     let payoutSync: Awaited<ReturnType<typeof syncStripePayouts>> | { error: string } | null = null
     try {
       payoutSync = await syncStripePayouts()
-      if (!payoutSync.ok) console.error("[check-wire] Stripe payout sync failed:", payoutSync.error)
+      if (!payoutSync.ok) {
+        console.error("[check-wire] Stripe payout sync failed:", payoutSync.error)
+        // LOUD ON PURPOSE (dev job `8a417a38`, 2026-08-22): a swallowed failure here left the
+        // sweep below running against a stale/empty payout list, silently reproducing the exact
+        // misfile this list exists to prevent, with nothing more than a log line nobody reads.
+        await reportSystemError({
+          source: "server",
+          route: "cron/check-wire-payments",
+          message: `Stripe payout sync failed: ${payoutSync.error}`,
+          context: { step: "4a-payout-sync" },
+        })
+      }
     } catch (payoutErr) {
       const msg = payoutErr instanceof Error ? payoutErr.message : String(payoutErr)
       console.error("[check-wire] Stripe payout sync threw:", msg)
       payoutSync = { error: msg }
+      await reportSystemError({
+        source: "server",
+        route: "cron/check-wire-payments",
+        message: `Stripe payout sync threw: ${msg}`,
+        context: { step: "4a-payout-sync" },
+      })
     }
 
     // ─── Step 4b: Route TD's OWN money to My Finances ───────────────
