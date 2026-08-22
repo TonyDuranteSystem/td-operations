@@ -6,6 +6,7 @@ import { Bell, X, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useLocale } from '@/lib/portal/use-locale'
 import { urlBase64ToUint8Array } from '@/lib/push/dashboard-push'
+import { withTimeout } from '@/lib/push/with-timeout'
 import { PORTAL_SW_PATH, PORTAL_SW_SCOPE } from '@/lib/portal/sw-scope'
 import {
   shouldShowEnablePushCard,
@@ -20,6 +21,7 @@ const COPY = {
     enabled: 'Notifications enabled — you’re all set',
     denied: 'Notification permission denied',
     failed: 'Could not enable notifications',
+    timeout: 'This is taking too long — check your connection and try again',
     close: 'Dismiss',
   },
   it: {
@@ -29,9 +31,14 @@ const COPY = {
     enabled: 'Notifiche attivate — tutto pronto',
     denied: 'Permesso per le notifiche negato',
     failed: 'Impossibile attivare le notifiche',
+    timeout: 'Ci sta mettendo troppo tempo — controlla la connessione e riprova',
     close: 'Chiudi',
   },
 } as const
+
+/** How long we wait for register→ready→subscribe→save before giving up and
+ * telling the user, instead of leaving the button spinning forever. */
+const ENABLE_TIMEOUT_MS = 15000
 
 function isStandalone(): boolean {
   if (typeof window === 'undefined') return false
@@ -111,6 +118,9 @@ export function EnablePushCard({ accountId }: { accountId: string }) {
       // tap's transient activation, which network awaits can outlive — and the
       // installed iOS app is the only place this card renders (council review,
       // senior-engineer major #2). Nothing before this needs the permission.
+      // Deliberately NOT under either timeout below: it's a system dialog the
+      // user is actively looking at, and racing a clock against how long they
+      // take to decide would be actively wrong.
       const perm = await Notification.requestPermission()
       if (perm !== 'granted') {
         toast.error(c.denied)
@@ -118,33 +128,67 @@ export function EnablePushCard({ accountId }: { accountId: string }) {
         return
       }
 
-      // Same flow (and, critically, same SW scope) as PushToggle — see the
-      // scope-'/' double-registration incident noted in push-toggle.tsx.
-      const registration = await navigator.serviceWorker.register(
-        PORTAL_SW_PATH,
-        { scope: PORTAL_SW_SCOPE },
+      // register/ready/subscribe are native WebKit/Push APIs with no built-in
+      // timeout — any of them can hang forever with no reject path (the
+      // reported bug: permission granted, then silence). Race the whole
+      // register→ready→subscribe leg as ONE unit so the value withTimeout
+      // resolves with, late or on time, IS the subscription — no separate
+      // tracking variable needed to know what to clean up.
+      const subscription = await withTimeout(
+        (async () => {
+          // Same flow (and, critically, same SW scope) as PushToggle — see the
+          // scope-'/' double-registration incident noted in push-toggle.tsx.
+          const registration = await navigator.serviceWorker.register(
+            PORTAL_SW_PATH,
+            { scope: PORTAL_SW_SCOPE },
+          )
+          await navigator.serviceWorker.ready
+
+          const keyRes = await fetch('/api/portal/push')
+          if (!keyRes.ok) throw new Error('Push not configured on server')
+          const { publicKey } = await keyRes.json()
+
+          return registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
+          })
+        })(),
+        ENABLE_TIMEOUT_MS,
+        (result) => {
+          // Arrived after we'd already given up and told the user. Drop it —
+          // otherwise the visibility check would find it via
+          // getSubscription() and hide the card forever while the server
+          // never got a row, and the device would silently keep getting
+          // emails instead (same hazard the save-failure branch below
+          // already guards against, just reached via a hang, not an error).
+          if (result.status === 'fulfilled') result.value.unsubscribe().catch(() => {})
+        },
       )
-      await navigator.serviceWorker.ready
-
-      const keyRes = await fetch('/api/portal/push')
-      if (!keyRes.ok) throw new Error('Push not configured on server')
-      const { publicKey } = await keyRes.json()
-
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
-      })
 
       let res: Response
       try {
-        res = await fetch('/api/portal/push', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            subscription: subscription.toJSON(),
-            account_id: accountId,
+        // Same reasoning, same guard, for the save call itself — an
+        // unbounded fetch() can hang exactly like the native APIs above.
+        res = await withTimeout(
+          fetch('/api/portal/push', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subscription: subscription.toJSON(),
+              account_id: accountId,
+            }),
           }),
-        })
+          ENABLE_TIMEOUT_MS,
+          () => {
+            // Late fulfilled OR rejected: we've already told the user it
+            // failed, so don't trust a save we can no longer see the result
+            // of. Worst case this discards a save that actually landed —
+            // self-heals (the send path prunes a stale/invalid endpoint) —
+            // which is far better than the card silently vanishing while the
+            // server has no matching row.
+            subscription.unsubscribe().catch(() => {})
+          },
+        )
       } catch (err) {
         // Save failed: drop the browser-side subscription, or the visibility
         // check would see it and hide the card forever while the server has no
@@ -162,7 +206,10 @@ export function EnablePushCard({ accountId }: { accountId: string }) {
       toast.success(c.enabled)
       setShow(false)
     } catch (err) {
-      toast.error(err instanceof Error && err.message ? err.message : c.failed)
+      const timedOut = err instanceof Error && err.message === 'timeout'
+      toast.error(
+        timedOut ? c.timeout : err instanceof Error && err.message ? err.message : c.failed,
+      )
     } finally {
       setLoading(false)
     }
