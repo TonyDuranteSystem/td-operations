@@ -107,6 +107,13 @@ export interface SaveToClientResult {
   reason?: string
   inserted: number
   deleted: number
+  /** Merge only: rows that already existed for this account+year and were
+   * therefore left untouched (dedup match on account_id/transaction_ref/
+   * transaction_date/amount) — includes a staff correction to an existing
+   * row's category, since Merge is "add only", never "overwrite". Distinct
+   * from `failed`; surfaced so "Saved — N added" can't be misread as "your
+   * edit landed" when it didn't (2026-08-22, round-4 bug-hunter major). */
+  skippedExisting: number
   /** Rows that FAILED to insert (constraint/DB errors — never dedup skips).
    * Non-zero is loud: logged, error-audited, and surfaced to the caller. */
   failed: number
@@ -183,7 +190,7 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
 
   const wsRows = (await fetchWorkspaceRowsForSave(workspaceId)).filter(r => Number(r.tax_year) === taxYear)
   if (wsRows.length === 0) {
-    return { ok: false, action: "refuse", reason: "This workspace has no transactions to save.", inserted: 0, deleted: 0, failed: 0 }
+    return { ok: false, action: "refuse", reason: "This workspace has no transactions to save.", inserted: 0, deleted: 0, skippedExisting: 0, failed: 0 }
   }
 
   // Existing rows in the client's real books for this account+year.
@@ -198,7 +205,7 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
   const structuralProblem = await getWorkspaceStructuralProblem(workspaceId)
   const decision = decideSaveToClient({ existingCount: existingCount ?? 0, inFlightJobs, mode, hasStructuralProblem: structuralProblem })
   if (decision.action === "refuse") {
-    return { ok: false, action: "refuse", reason: decision.reason, inserted: 0, deleted: 0, failed: 0 }
+    return { ok: false, action: "refuse", reason: decision.reason, inserted: 0, deleted: 0, skippedExisting: 0, failed: 0 }
   }
 
   // Replace → snapshot then delete the client's rows for this year.
@@ -260,6 +267,7 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
         : "This workspace's data problem was resolved a moment ago but has reappeared since — please refresh and try again.",
       inserted: 0,
       deleted,
+      skippedExisting: 0,
       failed: 0,
       backupPath,
     }
@@ -273,10 +281,21 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
   // hand-reconciled). Every failed row is now recorded and the save reports
   // itself to the error-audit feed. A dedup skip (merge idempotency) is NOT a
   // failure — upsert with ignoreDuplicates returns no error for those.
+  //
+  // .select("id") added (2026-08-22, round-4 bug-hunter major finding): with
+  // no .select() chained, `error` was null for BOTH a genuine insert AND a
+  // row skipped by ON CONFLICT DO NOTHING — `inserted` was actually counting
+  // every non-errored row, silently overclaiming a Merge as "N added" for
+  // rows that were really left untouched (e.g. a staff correction to an
+  // existing row's category, which Merge is specifically supposed to leave
+  // alone rather than silently reporting as saved). Postgres only RETURNs a
+  // row from ON CONFLICT DO NOTHING when the insert actually happened, so
+  // `.select("id")` lets each iteration tell the two cases apart for real.
   let inserted = 0
+  let skippedExisting = 0
   const failedRows: Array<{ ref: string; date: string; amount: string; error: string }> = []
   for (const tx of wsRows) {
-    const { error } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from("bank_transactions")
       .upsert({
         account_id: targetAccountId,
@@ -302,8 +321,10 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
         loc_source: tx.loc_source,
         loc_confidence: tx.loc_confidence,
       } as never, { onConflict: "account_id,transaction_ref,transaction_date,amount", ignoreDuplicates: true })
-    if (!error) inserted++
-    else failedRows.push({ ref: tx.transaction_ref, date: tx.transaction_date, amount: String(tx.amount), error: error.message })
+      .select("id")
+    if (error) { failedRows.push({ ref: tx.transaction_ref, date: tx.transaction_date, amount: String(tx.amount), error: error.message }); continue }
+    if (data && data.length > 0) inserted++
+    else skippedExisting++
   }
   if (failedRows.length > 0) {
     console.error(`[workspace-save] ${failedRows.length} row(s) FAILED to insert:`, failedRows.slice(0, 5))
@@ -514,8 +535,8 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
       table_name: "bank_transactions",
       record_id: workspaceId,
       account_id: targetAccountId,
-      summary: `Saved P&L workspace to client (${decision.action}): +${inserted} row(s)${deleted ? `, -${deleted} replaced` : ""}${promotedRules ? `, ${promotedRules} learned rule(s) promoted` : ""}${promotedPolicies ? `, ${promotedPolicies} country polic${promotedPolicies === 1 ? "y" : "ies"} promoted` : ""} for tax year ${taxYear}`,
-      details: { workspace_id: workspaceId, tax_year: taxYear, mode: decision.action, inserted, deleted, failed: failedRows.length, backup_path: backupPath ?? null, promoted_rules: promotedRules, promoted_policies: promotedPolicies },
+      summary: `Saved P&L workspace to client (${decision.action}): +${inserted} row(s)${deleted ? `, -${deleted} replaced` : ""}${skippedExisting ? `, ${skippedExisting} already existed and were left unchanged` : ""}${promotedRules ? `, ${promotedRules} learned rule(s) promoted` : ""}${promotedPolicies ? `, ${promotedPolicies} country polic${promotedPolicies === 1 ? "y" : "ies"} promoted` : ""} for tax year ${taxYear}`,
+      details: { workspace_id: workspaceId, tax_year: taxYear, mode: decision.action, inserted, deleted, skipped_existing: skippedExisting, failed: failedRows.length, backup_path: backupPath ?? null, promoted_rules: promotedRules, promoted_policies: promotedPolicies },
     } as never)
   } catch (e) {
     console.error("[workspace-save] audit log insert failed (save already applied):", e)
@@ -538,5 +559,5 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
     }
   }
 
-  return { ok: true, action: decision.action, inserted, deleted, failed: failedRows.length, backupPath }
+  return { ok: true, action: decision.action, inserted, deleted, skippedExisting, failed: failedRows.length, backupPath }
 }
