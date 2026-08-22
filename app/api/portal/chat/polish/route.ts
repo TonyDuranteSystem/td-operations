@@ -4,6 +4,7 @@ import { isDashboardUser } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { callAI } from '@/lib/portal/ai-provider'
 import { fetchKBContext, buildKBQuery } from '@/lib/portal/kb-context'
+import { decidePolishLanguage, pickLastClientMessage } from '@/lib/portal/polish-language'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -28,13 +29,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'AI not configured' }, { status: 503 })
   }
 
-  const { message, account_id, contact_id } = await request.json()
+  const { message, account_id, contact_id, preserve_language, target_language } = await request.json()
   if (!message?.trim()) return NextResponse.json({ error: 'message required' }, { status: 400 })
 
   try {
-    // 1. Account + client info
+    // 1. Account + client info (company name/entity/state ONLY — never a stored
+    // language field. dev job 9c251e65, Antonio, verbatim: "the worker shouldn't
+    // guess or read the primary contact — should just see the language that the
+    // client is writing." The account-based "primary contact" lookup this used to
+    // do here was found unreliable: 230/230 sole-contact active accounts have no
+    // primary contact flagged at all, so it silently found nothing almost every
+    // time. Replaced entirely by reading the conversation itself, below.)
     let companyName = ''
-    let clientLanguage = ''
     let entityType = ''
     let stateOfFormation = ''
 
@@ -47,30 +53,14 @@ export async function POST(request: NextRequest) {
       companyName = account?.company_name || ''
       entityType = account?.entity_type || ''
       stateOfFormation = account?.state_of_formation || ''
-
-      // Language from primary contact
-      const { data: primaryAc } = await supabaseAdmin
-        .from('account_contacts')
-        .select('contacts(language)')
-        .eq('account_id', account_id)
-        .eq('is_primary', true)
-        .limit(1)
-        .maybeSingle()
-      const lang = (primaryAc?.contacts as { language?: string | null } | null)?.language
-      clientLanguage = lang || ''
     } else if (contact_id) {
       const { data: contact } = await supabaseAdmin
         .from('contacts')
-        .select('language, full_name')
+        .select('full_name')
         .eq('id', contact_id)
         .single()
-      clientLanguage = contact?.language || ''
       companyName = contact?.full_name || ''
     }
-
-    const isItalian = clientLanguage === 'it' || clientLanguage === 'Italian'
-    const isEnglish = clientLanguage === 'en' || clientLanguage === 'English'
-    const targetLanguage = isItalian ? 'Italian' : isEnglish ? 'English' : clientLanguage || null
 
     // 2. Active services
     let services: { service_name: string; status: string }[] = []
@@ -119,7 +109,26 @@ export async function POST(request: NextRequest) {
     }
     conversationQuery = conversationQuery.not('message', 'ilike', '%<!-- chat-event:%')
     const { data: conversation } = await conversationQuery
+    // `conversation` is newest-first (the query's own order); read the client's
+    // MOST RECENT message directly off it, before reversing to ascending for the
+    // prompt's own chronological display below. pickLastClientMessage matches
+    // sender_type='client' only — never 'system' (automated notices) or 'admin'.
+    const lastClientMessage = pickLastClientMessage(conversation ?? [])
     const conversationHistory = (conversation ?? []).reverse()
+
+    // What language to write in — read the client's own words, never a stored
+    // field (see the note on the account/contact lookup above). If there's
+    // nothing reliable to read from (no client message yet, or it's too short to
+    // tell), don't guess: tell the caller to ask a human which language to use.
+    const decision = decidePolishLanguage({
+      explicitTargetLanguage: typeof target_language === 'string' ? target_language : null,
+      preserveLanguage: preserve_language === true,
+      lastClientMessage,
+    })
+    if (decision.kind === 'ask') {
+      return NextResponse.json({ needs_language_choice: true })
+    }
+    const targetLanguage = decision.language
 
     // 5. Style examples from admin's past messages (other threads)
     const { data: styleMessages } = await supabaseAdmin
@@ -148,7 +157,9 @@ export async function POST(request: NextRequest) {
     ].filter(Boolean).join('\n')
 
     const conversationText = conversationHistory.length
-      ? conversationHistory.map(m => `${m.sender_type === 'admin' ? 'Antonio' : 'Client'}: ${m.message}`).join('\n')
+      ? conversationHistory
+          .map(m => `${m.sender_type === 'admin' ? 'Antonio' : m.sender_type === 'system' ? 'System' : 'Client'}: ${m.message}`)
+          .join('\n')
       : ''
 
     const systemPrompt = `You are a writing assistant for Antonio, who runs Tony Durante LLC (US business formation & tax consulting).
@@ -175,7 +186,9 @@ ${styleExamples.length > 0 ? `\nANTONIO'S WRITING STYLE (examples):\n${styleExam
       temperature: 0.5,
     })
 
-    return NextResponse.json({ polished: result.text, provider: result.provider })
+    // Report what the rule actually did — the caller can no longer be surprised by a
+    // silent translation, and can show it plainly instead of guessing.
+    return NextResponse.json({ polished: result.text, provider: result.provider, applied_language: targetLanguage })
   } catch (err: unknown) {
     console.error('[polish] Error:', err)
     return NextResponse.json({ error: 'Failed to polish message' }, { status: 500 })
