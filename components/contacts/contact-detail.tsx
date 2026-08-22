@@ -10,7 +10,7 @@ import {
   Loader2, ChevronRight, Eye, EyeOff, X, FolderOpen, CreditCard,
   Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles, ScanText, Trash2,
   ChevronDown as ChevronDownIcon, ExternalLink, Folder, ShieldCheck, RefreshCw,
-  Activity, Plus, GitBranch, Ban,
+  Activity, Plus, GitBranch, Ban, Languages,
 } from 'lucide-react'
 import { InvoiceDialog, type InvoiceDialogDefaults } from '@/components/payments/invoice-dialog'
 import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
@@ -1659,6 +1659,9 @@ function ChatTab({
   const [error, setError] = useState<string | null>(null)
   const [notifOpen, setNotifOpen] = useState(false)
   const [polishing, setPolishing] = useState(false)
+  // AI Polish defaults to matching the client's language on file (unchanged
+  // behavior) — lets staff opt out for one message. Dev job 9c251e65.
+  const [preserveLanguage, setPreserveLanguage] = useState(false)
   const [suggesting, setSuggesting] = useState(false)
   // Cross-border advisory notes (dev job 09cc3aec) — INTERNAL ONLY, never
   // auto-inserted into draft. Same contract as the Portal Chats page.
@@ -1766,13 +1769,19 @@ function ChatTab({
       const res = await fetch('/api/portal/chat/polish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: draft }),
+        // Was sending { text: draft } with no contact_id — the route expects
+        // `message` and needs the client's id to know their language on file, so
+        // this call always 400'd and never actually translated (dev job 9c251e65).
+        body: JSON.stringify({ message: draft, contact_id: contactId, preserve_language: preserveLanguage }),
       })
-      if (!res.ok) throw new Error('Polish failed')
-      const data = await res.json()
-      if (data.polished) setDraft(data.polished)
-    } catch {
-      toast.error('AI polish failed')
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Polish failed')
+      if (data.polished) {
+        setDraft(data.polished)
+        toast.success(data.applied_language ? `Polished — translated to ${data.applied_language}` : 'Polished — language kept as written')
+      }
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'AI polish failed')
     } finally {
       setPolishing(false)
     }
@@ -2035,13 +2044,29 @@ function ChatTab({
               placeholder="Type a message... (Enter to send)"
               className="flex-1 min-w-0 px-3 py-2.5 text-sm bg-transparent border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none overflow-y-auto max-h-[120px] placeholder:text-zinc-400"
             />
+            {/* Language toggle for AI Polish — off (default) matches the client's
+                language on file, on keeps the draft exactly as written. */}
+            {draft.trim() && (
+              <button
+                onClick={() => setPreserveLanguage(v => !v)}
+                className={cn(
+                  'p-2 rounded-full transition-colors shrink-0',
+                  preserveLanguage
+                    ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                    : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100'
+                )}
+                title={preserveLanguage ? 'Polish will keep the language as written — click to match the client\'s language instead' : 'Polish will match the client\'s language — click to keep it as written instead'}
+              >
+                <Languages className="h-5 w-5" />
+              </button>
+            )}
             {/* AI Polish — appears when text typed */}
             {draft.trim() && (
               <button
                 onClick={handlePolish}
                 disabled={polishing}
                 className="p-2 rounded-full bg-violet-100 text-violet-600 hover:bg-violet-200 disabled:opacity-50 transition-colors shrink-0"
-                title="AI Polish — clean up grammar"
+                title={preserveLanguage ? 'AI Polish — clean up grammar, keep language as written' : 'AI Polish — clean up grammar and match the client\'s language'}
               >
                 {polishing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
               </button>

@@ -4,6 +4,7 @@ import { isDashboardUser } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { callAI } from '@/lib/portal/ai-provider'
 import { fetchKBContext, buildKBQuery } from '@/lib/portal/kb-context'
+import { resolvePolishTargetLanguage } from '@/lib/portal/polish-language'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -28,7 +29,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'AI not configured' }, { status: 503 })
   }
 
-  const { message, account_id, contact_id } = await request.json()
+  const { message, account_id, contact_id, preserve_language } = await request.json()
   if (!message?.trim()) return NextResponse.json({ error: 'message required' }, { status: 400 })
 
   try {
@@ -68,9 +69,11 @@ export async function POST(request: NextRequest) {
       companyName = contact?.full_name || ''
     }
 
-    const isItalian = clientLanguage === 'it' || clientLanguage === 'Italian'
-    const isEnglish = clientLanguage === 'en' || clientLanguage === 'English'
-    const targetLanguage = isItalian ? 'Italian' : isEnglish ? 'English' : clientLanguage || null
+    // Staff can explicitly ask to keep the draft's own language instead of matching
+    // the client's language on file — dev job 9c251e65 (Luca: Polish silently
+    // translated when he wanted the draft kept as written). Explicit opt-in, not a
+    // default change: unset behaves exactly as before.
+    const targetLanguage = resolvePolishTargetLanguage(clientLanguage, preserve_language === true)
 
     // 2. Active services
     let services: { service_name: string; status: string }[] = []
@@ -175,7 +178,9 @@ ${styleExamples.length > 0 ? `\nANTONIO'S WRITING STYLE (examples):\n${styleExam
       temperature: 0.5,
     })
 
-    return NextResponse.json({ polished: result.text, provider: result.provider })
+    // Report what the rule actually did — the caller can no longer be surprised by a
+    // silent translation, and can show it plainly instead of guessing.
+    return NextResponse.json({ polished: result.text, provider: result.provider, applied_language: targetLanguage })
   } catch (err: unknown) {
     console.error('[polish] Error:', err)
     return NextResponse.json({ error: 'Failed to polish message' }, { status: 500 })

@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, AlertTriangle, StickyNote, Link2 } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, AlertTriangle, StickyNote, Link2, Languages } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -238,6 +238,10 @@ export default function PortalChatsPage() {
   // response), never separately, per Antonio's "wait for both" decision.
   const [crossBorderNotes, setCrossBorderNotes] = useState<{ lens: string; label: string; status: string; text: string }[]>([])
   const [polishing, setPolishing] = useState(false)
+  // AI Polish defaults to matching the client's language on file (unchanged
+  // behavior) — this lets staff opt out for one message when they specifically
+  // want the draft kept as written. Dev job 9c251e65.
+  const [preserveLanguage, setPreserveLanguage] = useState(false)
   const [chatSearch, setChatSearch] = useState('')
   const [replyToMsg, setReplyToMsg] = useState<{ id: string; message: string; sender_type: string } | null>(null)
   const [newChatOpen, setNewChatOpen] = useState(false)
@@ -1676,11 +1680,17 @@ export default function PortalChatsPage() {
       const res = await fetch('/api/portal/chat/polish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: replyText, ...polishIds }),
+        body: JSON.stringify({ message: replyText, preserve_language: preserveLanguage, ...polishIds }),
       })
-      const data = await res.json()
-      if (data.polished) setReplyText(data.polished)
-    } catch { /* silent */ }
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Failed to polish message')
+      if (data.polished) {
+        setReplyText(data.polished)
+        toast.success(data.applied_language ? `Polished — translated to ${data.applied_language}` : 'Polished — language kept as written')
+      }
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'AI polish failed — please try again.')
+    }
     finally { setPolishing(false) }
   }
 
@@ -3853,13 +3863,30 @@ export default function PortalChatsPage() {
                     placeholder={isRecording ? 'Recording...' : 'Type a message...'}
                     className="flex-1 min-w-0 px-1 py-2.5 text-base bg-transparent border-none focus:outline-none focus:ring-0 resize-none overflow-y-auto max-h-[300px] placeholder:text-zinc-400"
                   />
+                  {/* Language toggle for AI Polish — off (default) matches the client's
+                      language on file, on keeps the draft exactly as written. Visible
+                      only alongside Polish so it never reads as a general setting. */}
+                  {replyText.trim() && (
+                    <button
+                      onClick={() => setPreserveLanguage(v => !v)}
+                      className={cn(
+                        'p-2 rounded-full transition-colors shrink-0',
+                        preserveLanguage
+                          ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                          : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100'
+                      )}
+                      title={preserveLanguage ? 'Polish will keep the language as written — click to match the client\'s language instead' : 'Polish will match the client\'s language — click to keep it as written instead'}
+                    >
+                      <Languages className="h-5 w-5" />
+                    </button>
+                  )}
                   {/* Polish button — inside pill, shows when text */}
                   {replyText.trim() && (
                     <button
                       onClick={handlePolish}
                       disabled={polishing}
                       className="p-2 rounded-full bg-violet-100 text-violet-600 hover:bg-violet-200 disabled:opacity-50 transition-colors shrink-0"
-                      title="AI Polish — clean up grammar and make it professional"
+                      title={preserveLanguage ? 'AI Polish — clean up grammar, keep language as written' : 'AI Polish — clean up grammar and match the client\'s language'}
                     >
                       {polishing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
                     </button>
