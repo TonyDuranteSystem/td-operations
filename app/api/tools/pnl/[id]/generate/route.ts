@@ -35,7 +35,7 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
   try {
     const { data: ws } = await db
       .from('pnl_workspaces')
-      .select('id, company_name, linked_account_id')
+      .select('id, company_name, linked_account_id, generated_at')
       .eq('id', workspaceId)
       .maybeSingle()
     if (!ws) return NextResponse.json({ error: 'Workspace not found.' }, { status: 404 })
@@ -61,6 +61,24 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
     if (stillPending > 0) {
       return NextResponse.json(
         { error: `${stillPending} statement(s) are still processing — wait for them to finish, then generate.`, pending: stillPending },
+        { status: 409 },
+      )
+    }
+
+    // Hard-stop parity (2026-08-21, round-3 follow-up) — REGENERATE only, never
+    // the FIRST generate. A workspace opens in upload mode (`generated_at` is
+    // null) and this exact route is what stamps it into review mode — that
+    // transition is what makes the blocking banner and the "remove this file"
+    // control reachable at all. Refusing the first press here would trap a
+    // broken workspace at the upload screen forever, unable to ever reach the
+    // one screen that explains what's wrong and lets it be fixed — the same
+    // permanent-lockout shape already checked and ruled out elsewhere in this
+    // feature. Once already generated, a re-run is pure waste on data the
+    // display/download routes already correctly withhold regardless.
+    const { getWorkspaceStructuralProblem } = await import('@/lib/tax/workspace-orchestration')
+    if (ws.generated_at && await getWorkspaceStructuralProblem(workspaceId)) {
+      return NextResponse.json(
+        { error: 'This workspace has an unresolved data problem (an unreadable statement, or a missing-months question) — fix that first, then generate again.' },
         { status: 409 },
       )
     }

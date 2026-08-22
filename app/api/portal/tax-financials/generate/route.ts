@@ -52,6 +52,21 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Hard-stop parity (2026-08-21, round-3 follow-up): re-running categorization
+    // on data with an unreadable statement or an unresolved missing-months
+    // question wastes real compute (the deterministic pass + a queued AI-assist
+    // job) on numbers the display/download routes already correctly withhold
+    // regardless of whether this succeeds. Safe to check unconditionally here —
+    // unlike the workspace twin below, a real account has no upload/review mode
+    // toggle for this route to gate; the review screen is always reachable.
+    const { getAccountStructuralProblem } = await import('@/lib/tax/financials-orchestration')
+    if (await getAccountStructuralProblem(accountId, taxYear)) {
+      return NextResponse.json(
+        { error: 'This year has an unresolved data problem (an unreadable statement, or a missing-months question) — fix that first, then re-run.' },
+        { status: 409 },
+      )
+    }
+
     const { recategorizeAccountYear } = await import('@/lib/tax/categorization-engine')
     const recat = await recategorizeAccountYear(accountId, taxYear)
     if (recat.handsOffSkipped) {
