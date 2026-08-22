@@ -21,12 +21,17 @@ let mockState: {
 
 function makeBuilder(table: string) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let inIds: string[] = []
   const builder: any = {
     select: () => builder,
     eq: () => builder,
     gte: () => builder,
     limit: () => builder,
     insert: () => builder,
+    in: (_col: string, ids: string[]) => {
+      inIds = ids
+      return builder
+    },
     maybeSingle: async () => {
       if (mockState.failQueries) throw new Error("db down")
       if (table === "contacts") return { data: { language: mockState.contactLanguage } }
@@ -35,8 +40,14 @@ function makeBuilder(table: string) {
     single: async () => ({ data: { id: "msg-1", created_at: "2026-07-17T00:00:00Z" }, error: null }),
     then: (resolve: (v: unknown) => void, reject: (e: unknown) => void) => {
       if (mockState.failQueries) return Promise.reject(new Error("db down")).then(resolve, reject)
-      const data = table === "account_contacts" ? mockState.accountContactLinks : []
-      return Promise.resolve({ data }).then(resolve, reject)
+      if (table === "account_contacts") return Promise.resolve({ data: mockState.accountContactLinks }).then(resolve, reject)
+      // checkAllAccountMembers: contacts.select("language").in("id", contactIds) —
+      // same shared mockState.contactLanguage for every linked member, which is
+      // enough to pin "any Italian" vs "none Italian" without a per-contact map.
+      if (table === "contacts") {
+        return Promise.resolve({ data: inIds.map(() => ({ language: mockState.contactLanguage })) }).then(resolve, reject)
+      }
+      return Promise.resolve({ data: [] }).then(resolve, reject)
     },
   }
   return builder
@@ -168,6 +179,66 @@ describe("shouldRefusePortalDraftLanguage", () => {
     await expect(
       shouldRefusePortalDraftLanguage({ contact_id: "c-1", message: INCIDENT_ENGLISH_DRAFT })
     ).resolves.toBe(false)
+  })
+
+  describe("checkAllAccountMembers (dev job 6a927407 — company-wide sends)", () => {
+    // A company-only pick (exact_recipient) reaches EVERY member, not one resolved
+    // "owner" — the default ambiguity-skip above exists for the opposite case
+    // (narrows to a single unknown member) and must NOT apply here, or a
+    // multi-member all-Italian company sails an English send through unchecked.
+    it("refuses when ANY linked member is Italian, even with multiple members", async () => {
+      mockState.accountContactLinks = [{ contact_id: "c-1" }, { contact_id: "c-2" }]
+      await expect(
+        shouldRefusePortalDraftLanguage({
+          account_id: "a-1",
+          message: INCIDENT_ENGLISH_DRAFT,
+          checkAllAccountMembers: true,
+        })
+      ).resolves.toBe(true)
+    })
+    it("does NOT skip on ambiguity the way the default (contact_id-narrowing) path does", async () => {
+      // Same fixture as the "fail-open: multi-contact account" test above, which
+      // resolves to false without this flag — proves the flag changes behavior.
+      mockState.accountContactLinks = [{ contact_id: "c-1" }, { contact_id: "c-2" }]
+      const withoutFlag = await shouldRefusePortalDraftLanguage({ account_id: "a-1", message: INCIDENT_ENGLISH_DRAFT })
+      const withFlag = await shouldRefusePortalDraftLanguage({
+        account_id: "a-1",
+        message: INCIDENT_ENGLISH_DRAFT,
+        checkAllAccountMembers: true,
+      })
+      expect(withoutFlag).toBe(false)
+      expect(withFlag).toBe(true)
+    })
+    it("allows when every linked member is non-Italian", async () => {
+      mockState.accountContactLinks = [{ contact_id: "c-1" }, { contact_id: "c-2" }]
+      mockState.contactLanguage = "English"
+      await expect(
+        shouldRefusePortalDraftLanguage({
+          account_id: "a-1",
+          message: INCIDENT_ENGLISH_DRAFT,
+          checkAllAccountMembers: true,
+        })
+      ).resolves.toBe(false)
+    })
+    it("fail-open: an account with no linked members never refuses", async () => {
+      mockState.accountContactLinks = []
+      await expect(
+        shouldRefusePortalDraftLanguage({
+          account_id: "a-1",
+          message: INCIDENT_ENGLISH_DRAFT,
+          checkAllAccountMembers: true,
+        })
+      ).resolves.toBe(false)
+    })
+    it("a contact_id target ignores the flag — it's not an account-wide send", async () => {
+      await expect(
+        shouldRefusePortalDraftLanguage({
+          contact_id: "c-1",
+          message: INCIDENT_ENGLISH_DRAFT,
+          checkAllAccountMembers: true,
+        })
+      ).resolves.toBe(true) // same as the plain single-contact case — flag is a no-op here
+    })
   })
 })
 

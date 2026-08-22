@@ -168,6 +168,41 @@ export async function confirmPortalSend(input: {
     recipientName = contact.full_name ?? "this person"
   }
 
+  // LANGUAGE GUARD — deliberately BEFORE the claim, so a refusal writes nothing and
+  // the row stays pending/retryable with no rollback to get right (2026-08-22, dev
+  // job 6a927407: this Confirm button reached a real client send with NO language
+  // check at all — the tool-dispatch send_portal_message path has one
+  // (shouldRefusePortalDraftLanguage), this one never called it).
+  //
+  // Checked against input.accountId/input.contactId — the human's VALIDATED pick
+  // from just above, never claimed.proposed_account_id/proposed_contact_id (the
+  // worker's original suggestion, which the staff member is free to override on
+  // this exact card).
+  {
+    const { data: draftRow } = await db
+      .from("worker_prepared_sends")
+      .select("body")
+      .eq("id", input.preparedId)
+      .maybeSingle()
+    const { shouldRefusePortalDraftLanguage } = await import("@/lib/ai-agent/worker-tools")
+    const refuse = await shouldRefusePortalDraftLanguage({
+      account_id: input.accountId,
+      contact_id: input.contactId,
+      message: draftRow?.body ?? "",
+      // This path always sends with exact_recipient: true below — an account-only
+      // pick reaches every member of the company, not one resolved "owner".
+      checkAllAccountMembers: Boolean(input.accountId),
+    })
+    if (refuse) {
+      return {
+        ok: false,
+        reason:
+          "Not sent — this client's language on file is Italian, but the message is in English. " +
+          "Ask the assistant to Reformulate it in Italian, or update the client's language on file first if it's wrong.",
+      }
+    }
+  }
+
   // Claim the row: pending → sent in one guarded update. This, not the content-hash
   // dedup downstream, is the double-send guard — the cross-run idempotency claim is a
   // no-op here because a confirm click carries no originating message id.

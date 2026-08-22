@@ -20,6 +20,11 @@ const state = vi.hoisted(() => ({
   // an invented return value proves nothing about the code it guards.
   sendResult: "✅ Portal message sent to Acme LLC. id=msg-1 at 2026-08-01T00:00:00Z",
   sendArgs: null as Record<string, unknown> | null,
+  // Language guard (dev job 6a927407): this Confirm path had NO check at all until
+  // now. Controllable per test; defaults to "never refuses" so the existing tests
+  // above stay green without opting in.
+  refuseLanguage: false,
+  guardArgs: null as Record<string, unknown> | null,
 }))
 
 vi.mock("@/lib/supabase-admin", () => {
@@ -57,6 +62,10 @@ vi.mock("@/lib/ai-agent/worker-tools", () => ({
     state.sendArgs = args
     return state.sendResult
   },
+  shouldRefusePortalDraftLanguage: async (args: Record<string, unknown>) => {
+    state.guardArgs = args
+    return state.refuseLanguage
+  },
 }))
 
 import { confirmPortalSend } from "@/lib/inbox/worker-portal-freeze"
@@ -80,6 +89,8 @@ beforeEach(() => {
   state.updates = []
   state.sendResult = "✅ Portal message sent to LUMA Beauty Global LLC. id=msg-1 at 2026-08-01T00:00:00Z"
   state.sendArgs = null
+  state.refuseLanguage = false
+  state.guardArgs = null
 })
 
 describe("confirmPortalSend — who may confirm", () => {
@@ -141,6 +152,55 @@ describe("confirmPortalSend — which client", () => {
     await confirmPortalSend({ ...base, accountId: "acct-1" })
     const claim = state.updates.find(u => u.status === "sent")
     expect(claim).toMatchObject({ portal_account_id: "acct-1", portal_contact_id: null })
+  })
+})
+
+describe("confirmPortalSend — language guard (dev job 6a927407)", () => {
+  // Until this fix, this Confirm button was the ONE way a portal message could
+  // reach a client with NO language check at all — the send_portal_message
+  // tool-dispatch path has shouldRefusePortalDraftLanguage, this path never
+  // called it. 7 real client sends had already gone through here unchecked.
+
+  it("REFUSES and sends nothing when the guard says refuse — the row is never claimed", async () => {
+    state.refuseLanguage = true
+    const r = await confirmPortalSend({ ...base, accountId: "acct-1" })
+    expect(r.ok).toBe(false)
+    if (r.ok === false) expect(r.reason).toContain("language on file")
+    expect(state.sendArgs).toBeNull()
+    // Pre-claim by design: a refusal must write NOTHING, so the row stays
+    // pending/retryable with no rollback to get right.
+    expect(state.updates.some(u => u.status === "sent")).toBe(false)
+  })
+
+  it("checks the recipient the STAFF MEMBER validated on the card, not the worker's original proposal", async () => {
+    // state.row's proposed_* fields (the worker's suggestion) are never part of
+    // `base` — the guard must be called with input.accountId/contactId, the
+    // re-validated pick from just above the claim, exactly as the real bug this
+    // closes was: staff can override the recipient at Confirm time.
+    await confirmPortalSend({ ...base, accountId: "acct-1" })
+    expect(state.guardArgs).toMatchObject({ account_id: "acct-1", contact_id: null })
+  })
+
+  it("passes checkAllAccountMembers when the target is a company — exact_recipient reaches every member, not one", async () => {
+    await confirmPortalSend({ ...base, accountId: "acct-1" })
+    expect(state.guardArgs).toMatchObject({ checkAllAccountMembers: true })
+  })
+
+  it("does not request checkAllAccountMembers for a person-target send", async () => {
+    await confirmPortalSend({ ...base, contactId: "contact-1" })
+    expect(state.guardArgs).toMatchObject({ checkAllAccountMembers: false })
+  })
+
+  it("checks the frozen draft text, not an empty string", async () => {
+    await confirmPortalSend({ ...base, accountId: "acct-1" })
+    expect(state.guardArgs).toMatchObject({ message: FRESH.body })
+  })
+
+  it("a matched-language draft still sends normally", async () => {
+    state.refuseLanguage = false
+    const r = await confirmPortalSend({ ...base, accountId: "acct-1" })
+    expect(r.ok).toBe(true)
+    expect(state.sendArgs).not.toBeNull()
   })
 })
 

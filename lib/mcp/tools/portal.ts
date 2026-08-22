@@ -1988,6 +1988,27 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
           }
         }
 
+        // LANGUAGE GUARD — this tool is a third, independent way a portal message
+        // reaches a client (Claude Code / Claude.ai sessions, not the AI worker
+        // surfaces), and it had NO language check at all (2026-08-22, dev job
+        // 6a927407): the AI-worker paths use shouldRefusePortalDraftLanguage, this
+        // tool never called it, sending immediately with zero check. Same guard,
+        // same "client language on file is Italian, draft is English" rule.
+        const { shouldRefusePortalDraftLanguage } = await import("@/lib/ai-agent/worker-tools")
+        const refuseLanguage = await shouldRefusePortalDraftLanguage({
+          account_id: account_id ?? null,
+          contact_id: contact_id ?? null,
+          message: msgText,
+        })
+        if (refuseLanguage) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: "Not sent — this client's language on file is Italian, but the message is in English. Draft the message in Italian and try again. (TD rule: a client-facing send must match the client's language on file — do not translate and resend without showing the new draft first.)",
+            }],
+          }
+        }
+
         // Resolve contact_id: if only account_id was provided, tag the member
         // actually being answered — deterministically (reply-author → last
         // client sender → primary/first), via the same shared helper the chat

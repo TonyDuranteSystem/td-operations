@@ -1542,6 +1542,15 @@ export async function shouldRefusePortalDraftLanguage(input: {
   account_id?: string | null
   contact_id?: string | null
   message: string
+  /**
+   * The send genuinely reaches EVERY member of the account, not one resolved
+   * "owner" — set by callers using exact_recipient (a company-wide send is a
+   * real audience, not an ambiguous one). Refuses if ANY linked member is
+   * Italian, instead of the default "skip on ambiguity" rule below, which
+   * exists for the opposite case: a send that narrows to a single unknown
+   * member and must not be judged against the wrong one.
+   */
+  checkAllAccountMembers?: boolean
 }): Promise<boolean> {
   try {
     const { isItalian } = await import("@/lib/locale")
@@ -1552,6 +1561,18 @@ export async function shouldRefusePortalDraftLanguage(input: {
     const db = supabaseAdmin as any
     let contactId = input.contact_id ?? null
     if (!contactId && input.account_id) {
+      if (input.checkAllAccountMembers) {
+        const { data: links } = await db
+          .from("account_contacts")
+          .select("contact_id")
+          .eq("account_id", input.account_id)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const contactIds = ((links ?? []) as any[]).map((l) => l?.contact_id).filter(Boolean)
+        if (!contactIds.length) return false
+        const { data: contacts } = await db.from("contacts").select("language").in("id", contactIds)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return ((contacts ?? []) as any[]).some((c) => isItalian(c?.language))
+      }
       // Ambiguity rule: on a multi-contact account the "owner" resolution is
       // arbitrary — skip the guard rather than judge against the wrong member.
       const { data: links } = await db
