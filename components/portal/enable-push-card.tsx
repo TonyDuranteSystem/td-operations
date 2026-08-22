@@ -194,11 +194,20 @@ export function EnablePushCard({ accountId }: { accountId: string }) {
         // check would see it and hide the card forever while the server has no
         // row — the device would silently keep getting emails (council review,
         // senior-engineer major #1).
-        await subscription.unsubscribe().catch(() => {})
+        //
+        // Deliberately NOT awaited (bug-hunter finding, same session): this is
+        // the same native unsubscribe() the withTimeout wrapping above exists
+        // to guard against — an awaited hang here would block this catch from
+        // ever reaching `throw err`, so `finally { setLoading(false) }` never
+        // runs and the button spins forever again, reproducing the exact bug
+        // this fix shipped to close, just relocated to the cleanup step.
+        // Fire-and-forget: tell the user what already failed immediately:
+        // don't make them wait on best-effort cleanup to hear about it.
+        subscription.unsubscribe().catch(() => {})
         throw err
       }
       if (!res.ok) {
-        await subscription.unsubscribe().catch(() => {})
+        subscription.unsubscribe().catch(() => {})
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || c.failed)
       }
