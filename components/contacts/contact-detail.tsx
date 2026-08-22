@@ -1762,7 +1762,11 @@ function ChatTab({
     }
   }
 
-  const handlePolish = async () => {
+  // Polish couldn't tell what language to use (nothing from the client to read
+  // yet, or it's too short/ambiguous) — Antonio, 2026-08-22: ask, don't guess.
+  const [polishAskLanguage, setPolishAskLanguage] = useState(false)
+
+  const handlePolish = async (explicitLanguage?: string) => {
     if (!draft.trim() || polishing) return
     setPolishing(true)
     try {
@@ -1772,10 +1776,20 @@ function ChatTab({
         // Was sending { text: draft } with no contact_id — the route expects
         // `message` and needs the client's id to know their language on file, so
         // this call always 400'd and never actually translated (dev job 9c251e65).
-        body: JSON.stringify({ message: draft, contact_id: contactId, preserve_language: preserveLanguage }),
+        body: JSON.stringify({
+          message: draft,
+          contact_id: contactId,
+          preserve_language: preserveLanguage,
+          ...(explicitLanguage ? { target_language: explicitLanguage } : {}),
+        }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Polish failed')
+      if (data.needs_language_choice) {
+        setPolishAskLanguage(true)
+        return
+      }
+      setPolishAskLanguage(false)
       if (data.polished) {
         setDraft(data.polished)
         toast.success(data.applied_language ? `Polished — translated to ${data.applied_language}` : 'Polished — language kept as written')
@@ -2044,32 +2058,63 @@ function ChatTab({
               placeholder="Type a message... (Enter to send)"
               className="flex-1 min-w-0 px-3 py-2.5 text-sm bg-transparent border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none overflow-y-auto max-h-[120px] placeholder:text-zinc-400"
             />
-            {/* Language toggle for AI Polish — off (default) matches the client's
-                language on file, on keeps the draft exactly as written. */}
-            {draft.trim() && (
-              <button
-                onClick={() => setPreserveLanguage(v => !v)}
-                className={cn(
-                  'p-2 rounded-full transition-colors shrink-0',
-                  preserveLanguage
-                    ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                    : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100'
+            {/* Polish couldn't tell what language to use — ask, don't guess.
+                Replaces the toggle+wand until staff pick one. */}
+            {draft.trim() && polishAskLanguage ? (
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  onClick={() => handlePolish('English')}
+                  disabled={polishing}
+                  className="px-2 py-1.5 rounded-full text-xs font-medium bg-violet-100 text-violet-700 hover:bg-violet-200 disabled:opacity-50 transition-colors"
+                >
+                  English
+                </button>
+                <button
+                  onClick={() => handlePolish('Italian')}
+                  disabled={polishing}
+                  className="px-2 py-1.5 rounded-full text-xs font-medium bg-violet-100 text-violet-700 hover:bg-violet-200 disabled:opacity-50 transition-colors"
+                >
+                  Italian
+                </button>
+                <button
+                  onClick={() => setPolishAskLanguage(false)}
+                  className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
+                  title="Cancel"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Language toggle for AI Polish — off (default) matches whatever
+                    language the client is actually writing in this conversation,
+                    on keeps the draft exactly as written. */}
+                {draft.trim() && (
+                  <button
+                    onClick={() => setPreserveLanguage(v => !v)}
+                    className={cn(
+                      'p-2 rounded-full transition-colors shrink-0',
+                      preserveLanguage
+                        ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                        : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100'
+                    )}
+                    title={preserveLanguage ? 'Polish will keep the language as written — click to match the client instead' : 'Polish will match the language the client is writing — click to keep it as written instead'}
+                  >
+                    <Languages className="h-5 w-5" />
+                  </button>
                 )}
-                title={preserveLanguage ? 'Polish will keep the language as written — click to match the client\'s language instead' : 'Polish will match the client\'s language — click to keep it as written instead'}
-              >
-                <Languages className="h-5 w-5" />
-              </button>
-            )}
-            {/* AI Polish — appears when text typed */}
-            {draft.trim() && (
-              <button
-                onClick={handlePolish}
-                disabled={polishing}
-                className="p-2 rounded-full bg-violet-100 text-violet-600 hover:bg-violet-200 disabled:opacity-50 transition-colors shrink-0"
-                title={preserveLanguage ? 'AI Polish — clean up grammar, keep language as written' : 'AI Polish — clean up grammar and match the client\'s language'}
-              >
-                {polishing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
-              </button>
+                {/* AI Polish — appears when text typed */}
+                {draft.trim() && (
+                  <button
+                    onClick={() => handlePolish()}
+                    disabled={polishing}
+                    className="p-2 rounded-full bg-violet-100 text-violet-600 hover:bg-violet-200 disabled:opacity-50 transition-colors shrink-0"
+                    title={preserveLanguage ? 'AI Polish — clean up grammar, keep language as written' : 'AI Polish — clean up grammar and match the client\'s language'}
+                  >
+                    {polishing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
+                  </button>
+                )}
+              </>
             )}
             {/* AI Suggest — appears when no text */}
             {!draft.trim() && messages.length > 0 && (
