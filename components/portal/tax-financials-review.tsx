@@ -1543,10 +1543,17 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     setBusy(`prior-return-${choice}`)
     setError(null)
     try {
+      // account_id/tax_year added (2026-08-22, round-4 bug-hunter major finding,
+      // second half): every other account-mode POST in this file sends these —
+      // this one didn't, so even with the server route now accepting JSON, the
+      // account-mode request would still 400 with "account_id and tax_year
+      // required". Harmless extra fields for the workspace-mode route, which
+      // only ever reads `choice` from the body and resolves its own tax_year
+      // from the URL's workspace id.
       const res = await fetch(`${API}/prior-return`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ choice }),
+        body: JSON.stringify({ choice, account_id: accountId, tax_year: taxYear }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
