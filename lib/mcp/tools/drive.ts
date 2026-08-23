@@ -638,7 +638,7 @@ export function registerDriveTools(server: McpServer) {
 
 // ─── Utility ────────────────────────────────────────────────
 
-function guessMimeType(filename: string): string {
+export function guessMimeType(filename: string): string {
   const ext = filename.split(".").pop()?.toLowerCase()
   const map: Record<string, string> = {
     pdf: "application/pdf",
