@@ -468,6 +468,15 @@ export function registerBankStatementTools(server: McpServer) {
           // guessing, but silence would mean they simply vanish from this
           // summary with no trace. Name them instead.
           ...engineView.ownership.missing.map(name => `  ⚠ ${name}: ownership % missing — not included above`),
+          // resolveOwnership() already computes this (someone linked to the
+          // company — a prior K-1 or a CRM contact — who isn't on this year's
+          // declared list, e.g. a mid-year exit) but until now nothing in this
+          // tool's output ever showed it: their share of any owner money in/out
+          // still gets silently spread across the CURRENT members by CURRENT
+          // ownership %, with no trace anywhere a human actually reads. Surface
+          // the engine's own message verbatim — one line per person — so
+          // whoever generates this return sees it before filing, every time.
+          ...engineView.ownership.conflicts.map(c => `  ⚠ ${c.message}`),
           "",
           `Distributions: $${totalDistributions.toFixed(2)}`,
           // Per-member breakdown below is grouped by raw bank counterparty text

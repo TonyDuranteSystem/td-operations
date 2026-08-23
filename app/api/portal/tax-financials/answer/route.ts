@@ -222,8 +222,17 @@ export async function POST(request: NextRequest) {
        *
        * Refusing is the honest outcome: we say plainly that the member list has
        * to be fixed first, instead of writing an answer we cannot honour.
+       *
+       * BOTH directions, not just withdrawals (2026-08-23 bug-hunter finding):
+       * this guard originally checked 'distribution' only, so confirming a
+       * CONTRIBUTION ("this money came in from X") to a non-current member sailed
+       * through untouched — the UI showed the client's answer as accepted, then
+       * financials-engine.ts silently discarded it at draft-build time the exact
+       * same way, spreading a real capital contribution across the CURRENT
+       * members by CURRENT ownership % instead of the person who actually put it
+       * in. Same failure, same fix, the other direction.
        */
-      if (suspectedMember && mapped.category === 'distribution') {
+      if (suspectedMember && (mapped.category === 'distribution' || mapped.category === 'contribution')) {
         const { resolveOwnership, sameName } = await import('@/lib/tax/ownership-resolution')
         // THE CANONICAL WIZARD READER, not a hand-rolled one. The wizard writes
         // FLAT keys (member_0_member_first_name, …, member_count) — the first
@@ -249,8 +258,11 @@ export async function POST(request: NextRequest) {
           const creditable = resolveOwnership({ priorK1s: [], wizardMembers, accountContacts: [] })
             .members.filter(m => m.pct !== null)
           if (creditable.length > 0 && !creditable.some(m => sameName(m.name, suspectedMember))) {
+            const asPayment = mapped.category === 'distribution'
+              ? `a payment to ${suspectedMember}`
+              : `money from ${suspectedMember}`
             return NextResponse.json({
-              error: `We can't record this as a payment to ${suspectedMember} yet — they are not on this year's member list. Send us a message and we'll fix the member list first.`,
+              error: `We can't record this as ${asPayment} yet — they are not on this year's member list. Send us a message and we'll fix the member list first.`,
             }, { status: 409 })
           }
         }
