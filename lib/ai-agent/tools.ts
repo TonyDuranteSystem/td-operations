@@ -1057,7 +1057,10 @@ async function searchConversations(p: any) {
 
   if (p.account_id) q = q.eq('account_id', p.account_id)
   if (p.contact_id) q = q.eq('contact_id', p.contact_id)
-  if (p.query) q = q.or(`topic.ilike.%${p.query}%,client_message.ilike.%${p.query}%`)
+  if (p.query) {
+    const safeQuery = String(p.query).replace(/[%,()]/g, ' ')
+    q = q.or(`topic.ilike.%${safeQuery}%,client_message.ilike.%${safeQuery}%`)
+  }
   if (p.date_from) q = q.gte('date', `${p.date_from}T00:00:00`)
   if (p.date_to) q = q.lte('date', `${p.date_to}T23:59:59`)
 
