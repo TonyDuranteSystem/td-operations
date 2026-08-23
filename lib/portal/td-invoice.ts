@@ -673,38 +673,31 @@ export function toExpenseStatus(newStatus: string): string {
   return statusMap[newStatus] || newStatus
 }
 
+/**
+ * NOTIFICATION ONLY (dev job 0dcb0a18). This function used to ALSO write the
+ * `client_expenses` mirror directly — that write is now done automatically by
+ * a database trigger on `payments` (migration 20260823-1200) the instant any
+ * caller's own `payments` update lands, for every writer, present or future.
+ * A second trigger now actively REFUSES a direct write like this function's
+ * old one, so keeping it would throw here. What's left is the one thing the
+ * database trigger deliberately does NOT do: tell staff a payment came in.
+ *
+ * `_paidDate`/`_amountPaid` stay in the signature so every existing call
+ * site compiles unchanged, but neither is written anywhere anymore — only
+ * `newStatus` is used, to decide whether this is a transition to a genuine
+ * Paid status worth announcing. Still gated the same way it always was:
+ * this is never called from a credit-settlement path
+ * (lib/operations/credit-netting.ts calls `syncTDInvoiceMirror` — now a
+ * diagnostic-only read — directly instead, exactly so a credit application
+ * never fires a false "client paid" note).
+ */
 export async function syncTDInvoiceStatus(
   paymentId: string,
   newStatus: string,
-  paidDate?: string,
-  amountPaid?: number
+  _paidDate?: string,
+  _amountPaid?: number,
 ): Promise<void> {
-  // Map payment status → expense status. client_expenses.status has a CHECK allowing ONLY
-  // Pending / Paid / Overdue / Cancelled — an unmapped value falling through `|| newStatus`
-  // is rejected by the database, and rejected writes here have historically been silent.
-  // 'Sent' and 'Draft' were exactly that hole (found 2026-07-28 when un-marking an Overdue
-  // invoice whose due date was renegotiated): open-but-not-yet-due is 'Pending' to a client.
   const expenseStatus = toExpenseStatus(newStatus)
-
-  const updates: Record<string, unknown> = {
-    status: expenseStatus,
-    updated_at: new Date().toISOString(),
-  }
-  if (paidDate) updates.paid_date = paidDate
-  if (amountPaid !== undefined) {
-    // For partial payments, keep as Pending (client still owes)
-    if (amountPaid > 0 && expenseStatus !== 'Paid') {
-      updates.status = 'Pending'
-    }
-  }
-
-  await dbWriteSafe(
-    supabaseAdmin
-      .from('client_expenses')
-      .update(updates)
-      .eq('td_payment_id', paymentId),
-    'client_expenses.update'
-  )
 
   // When a payment transitions to Paid (via any rail: Stripe / Whop /
   // bank-feed-matcher manual+auto / reconcile), surface a Billing-topic

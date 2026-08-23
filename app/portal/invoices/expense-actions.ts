@@ -128,7 +128,19 @@ export async function updateExpense(
  */
 export async function markExpensePaid(expenseId: string, paidDate?: string): Promise<ActionResult> {
   return safeAction(async () => {
-    await supabaseAdmin
+    // Verify it's not a TD invoice (those settle only through the real
+    // invoice being paid — never a direct client-side edit of the mirror;
+    // matches the same guard on updateExpense/deleteExpense above, and is
+    // now also enforced at the database layer, dev job 0dcb0a18).
+    const { data: exp } = await supabaseAdmin
+      .from('client_expenses')
+      .select('source')
+      .eq('id', expenseId)
+      .single()
+    if (!exp) throw new Error('Expense not found')
+    if (exp.source === 'td_invoice') throw new Error('Cannot mark a TD invoice paid directly')
+
+    const { error } = await supabaseAdmin
       .from('client_expenses')
       .update({
         status: 'Paid',
@@ -136,6 +148,7 @@ export async function markExpensePaid(expenseId: string, paidDate?: string): Pro
         updated_at: new Date().toISOString(),
       })
       .eq('id', expenseId)
+    if (error) throw new Error(error.message)
 
     revalidatePath('/portal/invoices')
   }, {
