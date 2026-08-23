@@ -11,7 +11,6 @@
  * import (td-invoice ↔ credit-netting).
  */
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { dbWriteSafe } from '@/lib/db'
 
 /**
  * Map a `payments` state (invoice_status, else legacy status) → the portal
@@ -61,12 +60,19 @@ export function mirrorDiffers(
 export type MirrorSnapshot = Record<string, string | number | null>
 
 /**
- * ALWAYS runs as service-role (`supabaseAdmin`). `client_expenses` has RLS
- * enabled with NO policies, so a staff/user-scoped client (e.g. the one
- * `regenerateInvoice` passes) is silently denied every write — 0 rows, no error.
- * That was the ACTUAL cause of the drift: credit-apply updated `payments` with
- * the staff client (allowed) but its mirror write hit RLS and never landed.
- * This function must never depend on the caller's client for the mirror.
+ * DIAGNOSTIC ONLY (dev job 0dcb0a18). The database itself now keeps
+ * `client_expenses` in sync with `payments` automatically — a trigger on
+ * `payments` (migration 20260823-1200) recomputes the matching mirror row
+ * inside the same transaction as any write to a TD invoice's money/status/
+ * date fields, for every writer, present or future. A second trigger on
+ * `client_expenses` refuses any OTHER attempt to write those fields on a
+ * `source='td_invoice'` row — including this function's own former write,
+ * which is why it no longer performs one.
+ *
+ * This function now only REPORTS whether the mirror currently matches
+ * `payments` (it should always be true, since the DB trigger already did
+ * the work) — used by the CRM "Sync Mirror" admin button and the CLI
+ * reconciliation sweep as a read-only health check, not a repair tool.
  */
 export async function syncTDInvoiceMirror(
   paymentId: string,
@@ -89,7 +95,7 @@ export async function syncTDInvoiceMirror(
   // Derive the balance from the projected status, don't blind-copy payments'
   // amount_due: some Paid payment rows carry a stale non-zero amount_due, and
   // copying it would show "$2,000" next to a Paid badge. A settled (Paid /
-  // Cancelled) invoice owes 0 — matching createTDInvoice's own mirror logic.
+  // Cancelled) invoice owes 0 — matching the DB trigger's own mirror logic.
   const status = mapPaymentStatusToExpense((p.invoice_status as string | null) ?? (p.status as string | null))
   const settled = status === 'Paid' || status === 'Cancelled'
   const after = {
@@ -100,14 +106,9 @@ export async function syncTDInvoiceMirror(
     paid_date: (p.paid_date as string | null) ?? null,
   }
 
-  await dbWriteSafe(
-    db
-      .from('client_expenses')
-      // eslint-disable-next-line no-restricted-syntax -- authoritative mirror projection from payments (source of truth); this IS the sanctioned sync path
-      .update({ ...after, updated_at: new Date().toISOString() })
-      .eq('td_payment_id', paymentId),
-    'client_expenses.update',
-  )
-
+  // No write here — the payments-side trigger already applied it. Reporting
+  // `changed: true` now means the trigger has NOT run for this row (e.g. the
+  // migration predates this payment, or the trigger itself needs attention),
+  // which is exactly the signal the admin button and CLI sweep want to see.
   return { changed: mirrorDiffers(before as never, after), before: before as MirrorSnapshot, after }
 }
