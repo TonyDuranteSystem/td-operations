@@ -340,11 +340,12 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - gmail_labels: List Gmail labels with unread counts.
 - RULE: For client emails, ALWAYS use gmail_send (Gmail). This ensures threading, Gmail Sent folder visibility, and unified inbox.
 
-### Portal Chat (5 tools: portal_chat_* + portal_team_send)
+### Portal Chat (6 tools: portal_chat_* + portal_team_send)
 - portal_chat_inbox: **START HERE** for reading messages. Shows all portal chat threads with unread counts, last message preview, client names. Supports filtering by account_id, contact_id, or unread_only.
 - portal_chat_read: Read full message history for a specific thread (by account_id or contact_id). Shows messages chronologically with sender info, timestamps, attachments.
 - portal_chat_mark_read: Mark client messages as read. Call ONLY after Antonio has reviewed the messages. Does NOT auto-trigger.
 - portal_chat_send: Send a message to a client via portal chat. ALWAYS show draft to Antonio before sending.
+- portal_chat_attach_file: Copy a file already in Drive/Gmail/a URL/Supabase Storage into the portal chat's own attachment storage, returning a link ready for portal_chat_send's attachments array. Use this instead of a raw Drive link, which is not confirmed shared with the client.
 - portal_team_send: Internal team message (staff only, NOT visible to clients).
 - RULE: "Read the message" → portal_chat_inbox FIRST. NEVER msg_inbox.
 
