@@ -9,13 +9,16 @@ import { createSD } from "@/lib/operations/service-delivery"
 import { syncTier } from "@/lib/operations/sync-tier"
 import { collectFilesRecursive, processFile } from "@/lib/mcp/tools/doc"
 import { buildTransitionWelcomeEmail } from "@/lib/mcp/tools/offers"
-import { gmailPost } from "@/lib/gmail"
+import { gmailPost, getGmailAttachment } from "@/lib/gmail"
 import { safeSend } from "@/lib/mcp/safe-send"
 import type { MailingAddressRow } from "@/lib/addresses"
 import { LLC_MANAGEMENT_BUNDLE_TYPES } from "@/lib/services"
 import { formatMcpChatSenderLabel } from "@/lib/portal/chat-sender-name"
 import { contactThreadOrFilter, multiMemberAccountIds } from "@/lib/portal/thread-scope"
 import { isContactLinkedToAccount, resolveAdminReplyContact } from "@/lib/portal/admin-send-scope"
+import { downloadFileBinaryForSend } from "@/lib/google-drive"
+import { buildChatAttachmentPath } from "@/lib/portal/chat-attachment-path"
+import { guessMimeType } from "@/lib/mcp/tools/drive"
 
 // Document types allowed to be visible in the client portal Documents tab
 // Document types visible to clients in the portal (by type name)
@@ -2083,6 +2086,148 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
           content: [{
             type: "text" as const,
             text: `Message sent to ${recipientName} via portal chat.\nMessage ID: ${msg.id}\nTimestamp: ${msg.created_at}`,
+          }],
+        }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ─── portal_chat_attach_file ────────────────────────────────────────────
+
+  server.tool(
+    "portal_chat_attach_file",
+    `Move a file that already exists in Drive, Gmail, a URL, or Supabase Storage into the SAME public storage the portal chat's own attachments use, and return a link ready to pass into portal_chat_send's "attachments" array. This does NOT send anything — call portal_chat_send afterward with the returned url/name/mime_type/size.
+
+Use this to hand a client a file we generated or already hold (a P&L export, a signed agreement, a document from Drive) directly in a chat message, without depending on that file's Drive sharing permissions — the destination bucket is public by design, exactly like the files clients themselves upload in chat.
+
+Workflow for a Drive file: source='drive' + file_id. Google-native files (Docs/Sheets/Slides) are exported automatically (Sheets→xlsx, Docs/Slides→pdf).
+Workflow for a Gmail attachment: source='gmail' + message_id + attachment_id.
+Workflow for a URL: source='url' + url.
+Workflow for Supabase Storage: source='supabase_storage' + storage_path (+ storage_bucket if not 'assets').
+
+Requires account_id or contact_id — whichever thread the file is headed to — since that determines the storage folder. Max ~4MB (same ceiling as drive_upload_file; the file is held fully in memory for the copy).`,
+    {
+      source: z.enum(["drive", "gmail", "url", "supabase_storage"]).describe("Where to get the file: 'drive' = Google Drive file, 'gmail' = Gmail attachment, 'url' = download from URL, 'supabase_storage' = Supabase Storage bucket"),
+      account_id: z.string().uuid().optional().describe("Account UUID for the LLC thread the file is headed to. At least one of account_id or contact_id required."),
+      contact_id: z.string().uuid().optional().describe("Contact UUID for the person-level thread the file is headed to. At least one of account_id or contact_id required."),
+      filename: z.string().optional().describe("Override filename (auto-detected from source if omitted)"),
+      file_id: z.string().optional().describe("Google Drive file ID (required when source='drive')"),
+      message_id: z.string().optional().describe("Gmail message ID (required when source='gmail')"),
+      attachment_id: z.string().optional().describe("Gmail attachment ID from message parts (required when source='gmail')"),
+      url: z.string().optional().describe("Direct download URL (required when source='url')"),
+      storage_path: z.string().optional().describe("File path inside the Supabase Storage bucket (required when source='supabase_storage')"),
+      storage_bucket: z.string().optional().describe("Supabase Storage bucket name (default: 'assets' — only needed if the file lives in a different bucket)"),
+    },
+    async ({ source, account_id, contact_id, filename, file_id, message_id, attachment_id, url, storage_path, storage_bucket }) => {
+      try {
+        if (!account_id && !contact_id) {
+          return { content: [{ type: "text" as const, text: "Error: account_id or contact_id is required — it determines which client's chat storage folder the file lands in." }] }
+        }
+
+        let buffer: Buffer
+        let finalFilename: string
+        let mimeType: string
+
+        if (source === "drive") {
+          if (!file_id) {
+            return { content: [{ type: "text" as const, text: "Error: file_id is required when source='drive'." }] }
+          }
+          const result = await downloadFileBinaryForSend(file_id)
+          buffer = result.buffer
+          mimeType = result.mimeType
+          finalFilename = filename || result.fileName
+        } else if (source === "gmail") {
+          if (!message_id || !attachment_id) {
+            return { content: [{ type: "text" as const, text: "Error: message_id and attachment_id are required when source='gmail'. Use gmail_read first to get these values." }] }
+          }
+          const { data } = await getGmailAttachment(message_id, attachment_id)
+          buffer = data
+          if (filename) {
+            finalFilename = filename
+            mimeType = guessMimeType(filename)
+          } else {
+            const { gmailGet } = await import("@/lib/gmail")
+            const msg = (await gmailGet(`/messages/${message_id}`, { format: "full" })) as {
+              payload: { parts?: Array<{ filename?: string; mimeType: string; body?: { attachmentId?: string } }> }
+            }
+            const part = msg.payload.parts?.find((p) => p.body?.attachmentId === attachment_id)
+            finalFilename = part?.filename || `attachment-${Date.now()}`
+            mimeType = part?.mimeType || "application/octet-stream"
+          }
+        } else if (source === "url") {
+          if (!url) {
+            return { content: [{ type: "text" as const, text: "Error: url is required when source='url'." }] }
+          }
+          const res = await fetch(url)
+          if (!res.ok) {
+            return { content: [{ type: "text" as const, text: `Error: failed to download from URL: ${res.status} ${res.statusText}` }] }
+          }
+          buffer = Buffer.from(await res.arrayBuffer())
+          const disposition = res.headers.get("content-disposition")
+          if (filename) {
+            finalFilename = filename
+          } else if (disposition) {
+            const match = disposition.match(/filename[*]?=(?:UTF-8''|"?)([^";]+)/i)
+            finalFilename = match ? decodeURIComponent(match[1]) : `download-${Date.now()}`
+          } else {
+            finalFilename = new URL(url).pathname.split("/").pop() || `download-${Date.now()}`
+          }
+          mimeType = res.headers.get("content-type") || "application/octet-stream"
+        } else {
+          if (!storage_path) {
+            return { content: [{ type: "text" as const, text: "Error: storage_path is required when source='supabase_storage'." }] }
+          }
+          const bucket = storage_bucket || "assets"
+          const cleanPath = storage_path.replace(/^\/+/, "")
+          const { data: blob, error: dlErr } = await supabaseAdmin.storage.from(bucket).download(cleanPath)
+          if (dlErr || !blob) {
+            return { content: [{ type: "text" as const, text: `Error: failed to download from Supabase Storage (${bucket}/${cleanPath}): ${dlErr?.message || "no data returned"}` }] }
+          }
+          buffer = Buffer.from(await blob.arrayBuffer())
+          finalFilename = filename || cleanPath.split("/").pop() || `storage-file-${Date.now()}`
+          mimeType = blob.type || "application/octet-stream"
+        }
+
+        const MAX_SIZE = 4 * 1024 * 1024
+        if (buffer.length > MAX_SIZE) {
+          return { content: [{ type: "text" as const, text: `Error: file too large (${(buffer.length / 1024 / 1024).toFixed(1)}MB). Max supported: ~4MB.` }] }
+        }
+
+        const destPath = buildChatAttachmentPath(finalFilename, account_id ?? null, contact_id ?? null)
+        const { error: uploadError } = await supabaseAdmin.storage
+          .from("assets")
+          .upload(destPath, buffer, { contentType: mimeType, upsert: false })
+        if (uploadError) {
+          return { content: [{ type: "text" as const, text: `Error: upload failed: ${uploadError.message}` }] }
+        }
+
+        const { data: urlData } = supabaseAdmin.storage.from("assets").getPublicUrl(destPath)
+
+        await logAction({
+          action_type: "create",
+          table_name: "portal_chat_attachment",
+          record_id: destPath,
+          account_id: account_id || undefined,
+          contact_id: contact_id || undefined,
+          summary: `Staged chat attachment from ${source}: ${finalFilename} (${(buffer.length / 1024).toFixed(1)}KB)`,
+        })
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              `✅ Ready to attach`,
+              ``,
+              `Name: ${finalFilename}`,
+              `Type: ${mimeType}`,
+              `Size: ${(buffer.length / 1024).toFixed(1)}KB`,
+              `URL: ${urlData.publicUrl}`,
+              ``,
+              `Pass this to portal_chat_send as one entry in "attachments":`,
+              `{ "url": "${urlData.publicUrl}", "name": "${finalFilename}", "mime_type": "${mimeType}", "size": ${buffer.length} }`,
+            ].join("\n"),
           }],
         }
       } catch (error) {
