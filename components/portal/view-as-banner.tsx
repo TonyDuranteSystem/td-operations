@@ -38,15 +38,15 @@ export function ViewAsBanner({ clientName }: { clientName: string }) {
   return (
     <div
       ref={ref}
-      className="sticky top-0 z-[100] flex items-center justify-center gap-3 bg-red-600 px-4 py-2 text-center text-sm font-medium text-white shadow-md"
+      className="sticky top-0 z-[100] flex items-center justify-center gap-2 bg-red-600 px-3 py-1 text-center text-xs font-medium text-white shadow-md"
     >
-      <Eye className="h-4 w-4 shrink-0" />
+      <Eye className="h-3 w-3 shrink-0" />
       <span>
         Viewing as <strong>{clientName}</strong> — <strong>READ ONLY</strong>. Actions are disabled.
       </span>
       <a
         href="/portal/view-as/exit"
-        className="ml-2 shrink-0 rounded-md bg-white/20 px-3 py-1 font-semibold underline-offset-2 hover:bg-white/30"
+        className="ml-1 shrink-0 rounded bg-white/20 px-2 py-0.5 font-semibold underline-offset-2 hover:bg-white/30"
       >
         Exit
       </a>
