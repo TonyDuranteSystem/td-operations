@@ -80,6 +80,20 @@ export interface AttachmentReadResult {
   textBlocks: string[]
   imageBlocks: WorkerImageBlock[]
   documentBlocks: WorkerDocumentBlock[]
+  /**
+   * For each file that came back as windowed TEXT and had a `shortRefs` entry
+   * (dev job 5e87b099) — the {ref, resultText} pair the caller threads through
+   * to seed read-completion.ts's pending-read ledger BEFORE the tool loop
+   * starts. Without this, a file pasted into chat gets no live "you're not
+   * done reading" signal — only the 4 tool-based readers (read_uploaded_file
+   * etc.) did, because only their results ever reached that ledger.
+   *
+   * Built HERE, from data already in scope in the loop below (this file's own
+   * ref and its own freshly-produced text) — never by re-scanning the
+   * COMBINED turn text for marker lines after the fact, which a hostile
+   * file's own content could forge to misattribute another file's state.
+   */
+  pendingReadSeeds: Array<{ ref: string; resultText: string }>
 }
 
 // ── Image sniffing ───────────────────────────────────────────────────────────
@@ -231,8 +245,17 @@ export async function readAttachmentBuffer(
 export async function readAttachments(
   refs: AttachmentRef[],
   fetchBytes: (ref: AttachmentRef) => Promise<Buffer>,
+  /**
+   * The model-facing short ref for each entry in `refs`, SAME order/length
+   * (e.g. PinnedUpload's "up1", "up2", ...) — the handle a later
+   * read_uploaded_file call would use to continue THIS SAME file. Optional:
+   * a caller that never offers re-reading (no pinnedUploads for this turn)
+   * simply omits it, and no seeds are produced. Structural correspondence by
+   * INDEX into `refs`, not by name — see AttachmentReadResult.pendingReadSeeds.
+   */
+  shortRefs?: Array<string | undefined>,
 ): Promise<AttachmentReadResult> {
-  const result: AttachmentReadResult = { textBlocks: [], imageBlocks: [], documentBlocks: [] }
+  const result: AttachmentReadResult = { textBlocks: [], imageBlocks: [], documentBlocks: [], pendingReadSeeds: [] }
   if (!refs.length) return result
 
   const capped = refs.slice(0, MAX_ATTACHMENTS_PER_TURN)
@@ -240,7 +263,8 @@ export async function readAttachments(
     result.textBlocks.push(`[${refs.length} files were attached; only the first ${capped.length} were read.]`)
   }
 
-  for (const ref of capped) {
+  for (let idx = 0; idx < capped.length; idx++) {
+    const ref = capped[idx]
     const label = ref.name ?? "unnamed file"
 
     // Trust a declared size when we have one — skip the download entirely.
@@ -283,6 +307,9 @@ export async function readAttachments(
         break
       case "text":
         result.textBlocks.push(read.text)
+        if (shortRefs?.[idx]) {
+          result.pendingReadSeeds.push({ ref: shortRefs[idx] as string, resultText: read.text })
+        }
         break
       case "scanned":
       case "error":

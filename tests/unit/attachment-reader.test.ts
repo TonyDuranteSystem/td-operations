@@ -184,7 +184,7 @@ describe("readAttachments", () => {
   it("returns empty for no refs without calling the fetcher", async () => {
     const fetcher = fetchOk(png())
     const out = await readAttachments([], fetcher)
-    expect(out).toEqual({ textBlocks: [], imageBlocks: [], documentBlocks: [] })
+    expect(out).toEqual({ textBlocks: [], imageBlocks: [], documentBlocks: [], pendingReadSeeds: [] })
     expect(fetcher).not.toHaveBeenCalled()
   })
 

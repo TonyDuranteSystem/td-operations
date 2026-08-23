@@ -175,6 +175,41 @@ export function updatePendingReads(
   // window); a file mid-sequence stays PENDING — see the header for why.
 }
 
+/** One door-attached file's continue-reading key + the text it was windowed to. */
+export interface DoorAttachmentSeed {
+  ref: string
+  resultText: string
+}
+
+/**
+ * Seed the ledger from files that arrived ALREADY ATTACHED to the turn (dev job
+ * 5e87b099) — pasted into chat, not chosen by the model. attachment-reader.ts
+ * windows these with the SAME windowText() the 4 tool-based readers use, and
+ * they carry the SAME marker lines, but nothing called updatePendingReads() for
+ * them: the model got no live signal it was reading a partial file, only the
+ * after-the-fact stamp (stampPartialReads) once the turn had already shipped.
+ *
+ * Each seed is keyed as if it were a read_uploaded_file call with offset 0, so
+ * a REAL continuation (the model later calling read_uploaded_file with the
+ * SAME ref) lands in the SAME ledger entry and advances or clears it exactly
+ * as today — this reuses updatePendingReads()'s own forgery defenses verbatim,
+ * no new marker-parsing logic.
+ *
+ * Seeds are built by the CALLER (attachment-reader.ts's readAttachments, one
+ * per file, from data it already has in hand for that exact file) — never by
+ * re-scanning the COMBINED turn text for marker lines after the fact, which a
+ * hostile file's own content could forge to misattribute another file's
+ * truncation state onto the wrong ref.
+ */
+export function seedPendingReadsFromDoorAttachments(
+  ledger: Map<string, PendingRead>,
+  seeds: DoorAttachmentSeed[] | null | undefined,
+): void {
+  for (const seed of seeds ?? []) {
+    updatePendingReads(ledger, "read_uploaded_file", { ref: seed.ref, offset: 0 }, seed.resultText)
+  }
+}
+
 /**
  * Progress signature for the nudge gate. The latch re-fires only while the model
  * is actually advancing (offsets moved or entries closed since the last nudge) —
