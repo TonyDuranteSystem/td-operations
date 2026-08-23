@@ -362,6 +362,7 @@ export default function PortalChatsPage() {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [editSaving, setEditSaving] = useState(false)
+  const editTextareaRef = useRef<HTMLTextAreaElement>(null)
   const prevTotalUnreadRef = useRef(-1)
   const queryClient = useQueryClient()
   // Topic-as-thread state for admin
@@ -1564,6 +1565,13 @@ export default function PortalChatsPage() {
     el.style.height = '0px'
     el.style.height = Math.max(44, Math.min(el.scrollHeight, 300)) + 'px'
   }, [internalReplyText])
+
+  useEffect(() => {
+    const el = editTextareaRef.current
+    if (!el) return
+    el.style.height = '0px'
+    el.style.height = Math.max(80, Math.min(el.scrollHeight, 300)) + 'px'
+  }, [editDraft, editingMessageId])
 
   const MAX_ADMIN_ATTACHMENTS = 5
   const handleAdminFileSelect = (file: File) => {
@@ -3379,7 +3387,8 @@ export default function PortalChatsPage() {
                       {isAdmin && actionButton}
                       <div
                         className={cn(
-                          'max-w-[75%] rounded-xl px-4 py-2.5 overflow-hidden transition-shadow',
+                          'rounded-xl px-4 py-2.5 overflow-hidden transition-shadow',
+                          editingMessageId === msg.id ? 'max-w-[90%] sm:max-w-[520px]' : 'max-w-[75%]',
                           isAdmin
                             ? 'bg-blue-600 text-white'
                             : 'bg-zinc-100 text-zinc-900',
@@ -3480,13 +3489,14 @@ export default function PortalChatsPage() {
                         {editingMessageId === msg.id ? (
                           <div className="mt-1 space-y-1.5">
                             <textarea
+                              ref={editTextareaRef}
                               value={editDraft}
                               onChange={e => setEditDraft(e.target.value)}
                               onKeyDown={e => {
                                 if (e.key === 'Escape') { setEditingMessageId(null); setEditDraft('') }
                               }}
-                              rows={3}
-                              className="w-full px-2 py-1.5 text-sm text-zinc-900 bg-white border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
+                              rows={1}
+                              className="w-full px-2.5 py-2 text-sm text-zinc-900 bg-white border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none overflow-y-auto max-h-[300px]"
                               autoFocus
                             />
                             <div className="flex items-center gap-2 justify-end">
