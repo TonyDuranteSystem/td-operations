@@ -50,7 +50,7 @@ import {
 import { getEntryByServiceType, isPerPersonServiceType } from "@/lib/services"
 import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import { updateTasksBulk } from "@/lib/operations/task"
-import { updateAccount } from "@/lib/operations/account"
+import { setAccountRenewalDate, anniversaryForYear } from "@/lib/operations/renewal-dates"
 import { logAction } from "@/lib/mcp/action-log"
 
 // Re-export so existing import paths keep working.
@@ -1019,7 +1019,11 @@ export async function deactivateSD(
   }
 
   // Renewal types on an account: optionally clear the account date so the
-  // nightly cron won't re-create the SD.
+  // nightly cron won't re-create the SD. Goes through setAccountRenewalDate
+  // so the deadlines-table mirror the client portal reads gets closed out
+  // too — a direct account-column clear left that mirror stale, showing
+  // clients a renewal that looked live after staff had deactivated it
+  // (dev job 8bd0e51a).
   let renewalDateCleared = false
   if (params.clear_renewal_date && sd.account_id && isRenewalServiceType(sd.service_type)) {
     const column = RENEWAL_DATE_COLUMN[sd.service_type]
@@ -1030,13 +1034,7 @@ export async function deactivateSD(
       .maybeSingle()
     const previousValue = (acct as Record<string, unknown> | null)?.[column] ?? null
     if (previousValue !== null) {
-      const patch =
-        column === "ra_renewal_date"
-          ? { ra_renewal_date: null }
-          : { annual_report_due_date: null }
-      const acctResult = await updateAccount({
-        id: sd.account_id,
-        patch,
+      const acctResult = await setAccountRenewalDate(sd.account_id, column, null, {
         actor,
         summary: `Cleared ${column} — ${sd.service_type} deactivated`,
         details: { cleared_column: column, previous_value: previousValue, reason: params.reason ?? null },
@@ -1481,19 +1479,15 @@ export async function revertServiceDelivery(
       .maybeSingle()
     const currentValue = (acct as Record<string, unknown> | null)?.[column] as string | null | undefined
     if (currentValue) {
-      const { anniversaryForYear } = await import("@/lib/operations/renewal-dates")
       const curYear = parseInt(String(currentValue).slice(0, 4), 10)
       const target = sd.due_date
         ? String(sd.due_date)
         : anniversaryForYear(String(currentValue), curYear - 1)
       if (target < String(currentValue)) {
-        const acctPatch =
-          column === "ra_renewal_date"
-            ? { ra_renewal_date: target }
-            : { annual_report_due_date: target }
-        const acctResult = await updateAccount({
-          id: sd.account_id,
-          patch: acctPatch,
+        // setAccountRenewalDate (not a direct updateAccount patch) so the
+        // deadlines-table mirror un-rolls too, not just the account column
+        // (dev job 8bd0e51a).
+        const acctResult = await setAccountRenewalDate(sd.account_id, column, target, {
           actor,
           summary: `Un-rolled ${column} ${currentValue} → ${target} — ${sd.service_type} completion reverted (cycle reopened)`,
           details: { column, from: currentValue, to: target, sd_id: sd.id, sd_due_date: sd.due_date ?? null },

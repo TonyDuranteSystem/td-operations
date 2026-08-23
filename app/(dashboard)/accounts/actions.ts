@@ -11,7 +11,10 @@ import { syncTier, syncContactTiersForAccount } from '@/lib/operations/sync-tier
 import { syncPortalLoginEmail } from '@/lib/operations/portal-login-email'
 import { createSD } from '@/lib/operations/service-delivery'
 import { createAccount as createAccountOp, createAndLinkContact as createAndLinkContactOp } from '@/lib/operations/account'
+import { setAccountRenewalDate, type RenewalDateColumn } from '@/lib/operations/renewal-dates'
 import type { Json } from '@/lib/database.types'
+
+const RENEWAL_DATE_FIELDS = new Set<string>(['ra_renewal_date', 'annual_report_due_date'])
 
 // Matches safeAction's own actor derivation (lib/server-action.ts) — needed
 // here because the operations-layer functions take actor as a param instead
@@ -27,11 +30,11 @@ export async function updateAccountField(
   field: string,
   value: string,
   updatedAt: string
-): Promise<ActionResult> {
+): Promise<ActionResult & { warning?: string }> {
   const allowedFields = [
     'company_name', 'entity_type', 'member_structure', 'member_count', 'account_type', 'status', 'ein_number', 'filing_id',
     'state_of_formation', 'formation_date', 'physical_address',
-    'registered_agent_provider', 'ra_renewal_date', 'ra_switch_date', 'client_since', 'notes',
+    'registered_agent_provider', 'ra_renewal_date', 'annual_report_due_date', 'ra_switch_date', 'client_since', 'notes',
     'installment_1_amount', 'installment_1_currency',
     'installment_2_amount', 'installment_2_currency',
     'communication_email',
@@ -87,6 +90,33 @@ export async function updateAccountField(
     coercedValue = normalized
   } else {
     coercedValue = value || null
+  }
+
+  // ra_renewal_date / annual_report_due_date go through setAccountRenewalDate
+  // instead of the generic updateWithLock branch below — that generic branch
+  // writes `{ [field]: coercedValue }` with a dynamic key, which a lint rule
+  // guarding this column can't see through, so the routing has to happen
+  // here in code rather than rely on the rule alone (dev job 8bd0e51a).
+  // setAccountRenewalDate also keeps the deadlines-table mirror the client
+  // portal reads in sync, and on a stale optimistic-lock miss it reports the
+  // conflict instead of silently force-overwriting (unlike updateWithLock's
+  // admin-client retry, which drops the lock filter entirely).
+  if (RENEWAL_DATE_FIELDS.has(field)) {
+    const column = field as RenewalDateColumn
+    const result = await setAccountRenewalDate(accountId, column, coercedValue as string | null, {
+      expectedUpdatedAt: updatedAt,
+      actor: await getDashboardActor(),
+      summary: `${field} updated`,
+      details: { [field]: coercedValue },
+    })
+    if (!result.success) {
+      const error = result.outcome === 'stale'
+        ? 'This account was updated since the page loaded — refresh and try again.'
+        : (result.error ?? 'Failed to save')
+      return { success: false, error }
+    }
+    revalidatePath(`/accounts/${accountId}`)
+    return { success: true, warning: result.mirrorWarning }
   }
 
   const result = await safeAction(async () => {

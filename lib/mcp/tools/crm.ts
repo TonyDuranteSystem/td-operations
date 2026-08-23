@@ -7,6 +7,11 @@ import { syncSupabaseToAirtable } from "@/lib/sync-airtable"
 import { logAction } from "@/lib/mcp/action-log"
 import { syncPortalLoginEmail } from "@/lib/operations/portal-login-email"
 import {
+  setAccountRenewalDate,
+  checkDeadlineDirectWrite,
+  type RenewalDateColumn,
+} from "@/lib/operations/renewal-dates"
+import {
   ACCOUNT_STATUS, PAYMENT_STATUS, TASK_STATUS,
   LEAD_STATUS, DEAL_STAGE, TAX_RETURN_STATUS,
 } from "@/lib/constants"
@@ -880,6 +885,49 @@ export function registerCrmTools(server: McpServer) {
           return { content: [{ type: "text" as const, text: `❌ ${validationError}` }] }
         }
 
+        // ── deadlines: block a direct edit that would desync this row from
+        // the account's own renewal date + the renewal-creation cron (dev
+        // job 8bd0e51a) ──
+        if (table === "deadlines") {
+          const { data: existingDeadline } = await supabaseAdmin
+            .from("deadlines")
+            .select("deadline_type")
+            .eq("id", id)
+            .maybeSingle()
+          const check = checkDeadlineDirectWrite(existingDeadline?.deadline_type ?? null, updates)
+          if (!check.allowed) {
+            return { content: [{ type: "text" as const, text: `❌ ${check.reason}` }] }
+          }
+        }
+
+        // ── accounts: ra_renewal_date / annual_report_due_date must go
+        // through setAccountRenewalDate so the deadlines-table mirror the
+        // client portal reads stays in sync (dev job 8bd0e51a) — strip them
+        // from the generic bulk update below and apply them first, so the
+        // final readback reflects the true value. Key-presence check (not
+        // truthiness): a caller passing `ra_renewal_date: null` to clear the
+        // date must not be silently swallowed. ──
+        let renewalMirrorWarning = ""
+        if (table === "accounts") {
+          const renewalColumns: RenewalDateColumn[] = ["ra_renewal_date", "annual_report_due_date"]
+          for (const column of renewalColumns) {
+            if (!Object.prototype.hasOwnProperty.call(updates, column)) continue
+            const value = updates[column]
+            if (value !== null && typeof value !== "string") {
+              return { content: [{ type: "text" as const, text: `❌ ${column} must be a date string (YYYY-MM-DD) or null` }] }
+            }
+            delete updates[column]
+            const result = await setAccountRenewalDate(id, column, value, {
+              summary: `${column} updated via crm_update_record`,
+              details: { [column]: value },
+            })
+            if (!result.success) {
+              return { content: [{ type: "text" as const, text: `❌ Failed to update ${column}: ${result.error}` }] }
+            }
+            if (result.mirrorWarning) renewalMirrorWarning += `\n\n⚠️ ${result.mirrorWarning}`
+          }
+        }
+
         const { data, error } = await supabaseAdmin
           .from(table)
           .update({ ...updates, updated_at: new Date().toISOString() })
@@ -976,7 +1024,7 @@ export function registerCrmTools(server: McpServer) {
         return {
           content: [{
             type: "text" as const,
-            text: `✅ ${table} record updated: ${id}\n${JSON.stringify(data, null, 2)}${loginSyncMsg}${autoAdvanceMsg}${installmentMsg}`,
+            text: `✅ ${table} record updated: ${id}\n${JSON.stringify(data, null, 2)}${loginSyncMsg}${autoAdvanceMsg}${installmentMsg}${renewalMirrorWarning}`,
           }],
         }
       } catch (err: any) {

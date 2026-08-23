@@ -6,6 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { checkDeadlineDirectWrite } from "@/lib/operations/renewal-dates"
 
 export function registerDeadlineTools(server: McpServer) {
 
@@ -205,6 +206,20 @@ export function registerDeadlineTools(server: McpServer) {
     },
     async ({ id, updates }) => {
       try {
+        // RA Renewal / Annual Report rows are mirrored FROM the account's
+        // own renewal-date column — a direct due_date edit or a direct
+        // Filed/Completed status flip here would desync them from that
+        // column and from the renewal-creation cron (dev job 8bd0e51a).
+        const { data: existingDeadline } = await supabaseAdmin
+          .from("deadlines")
+          .select("deadline_type")
+          .eq("id", id)
+          .maybeSingle()
+        const check = checkDeadlineDirectWrite(existingDeadline?.deadline_type ?? null, updates)
+        if (!check.allowed) {
+          return { content: [{ type: "text" as const, text: `❌ ${check.reason}` }] }
+        }
+
         const { data, error } = await supabaseAdmin
           .from("deadlines")
           .update({ ...updates, updated_at: new Date().toISOString() })
