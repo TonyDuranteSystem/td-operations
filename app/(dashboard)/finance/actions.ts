@@ -947,16 +947,12 @@ export async function updateInvoice(
       }
     }
 
-    // Also update client_expenses mirror. Deliberately NOT `notes`: invoice
-    // notes are INTERNAL staff remarks (the edit dialog promises "not visible
-    // to client") — client_expenses belongs to the client's own bookkeeping,
-    // so internal notes must never be copied there (decided 2026-07-03).
-    const expUpdates: Record<string, unknown> = { updated_at: now }
-    if (updates.due_date !== undefined) expUpdates.due_date = updates.due_date || null
-    if (updates.total !== undefined) { expUpdates.total = updates.total; expUpdates.subtotal = updates.total }
-    if (updates.description !== undefined) expUpdates.description = updates.description
-    const { error: updateExpErr } = await supabaseAdmin.from('client_expenses').update(expUpdates).eq('td_payment_id', paymentId)
-    if (updateExpErr) throw new Error(`Failed to sync to client_expenses mirror: ${updateExpErr.message}`)
+    // client_expenses mirror (dev job 0dcb0a18): a database trigger on `payments`
+    // now applies this same due_date/total/subtotal/description change to the
+    // client-facing copy automatically, the instant the `payments` update above
+    // lands — nothing to do here anymore. (Deliberately still never touches
+    // `notes`: those are internal staff remarks, and the trigger doesn't sync
+    // that column either — decided 2026-07-03.)
 
     revalidatePath('/finance')
     revalidatePath('/payments')
