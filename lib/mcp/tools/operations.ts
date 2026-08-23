@@ -694,7 +694,10 @@ export function registerOperationsTools(server: McpServer) {
           .select("*")
           .order("title")
 
-        if (query) q = q.or(`title.ilike.%${query}%,content.ilike.%${query}%`)
+        if (query) {
+          const safeQuery = query.replace(/[%,()]/g, ' ')
+          q = q.or(`title.ilike.%${safeQuery}%,content.ilike.%${safeQuery}%`)
+        }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if (service_type) q = q.eq("service_type", service_type as any)
 
