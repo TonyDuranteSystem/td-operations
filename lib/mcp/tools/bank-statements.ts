@@ -19,6 +19,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { downloadFileBinary, listFolder, uploadBinaryToDriveUpsert, findTaxFolder } from "@/lib/google-drive"
 import { parseBankStatement, categorizeTransaction, type CategorizedTransaction } from "@/lib/bank-statement-parser"
 import { logAction } from "@/lib/mcp/action-log"
+import { autoSaveDocument } from "@/lib/portal/auto-save-document"
+import { notifyClientsOfNewDocument } from "@/lib/portal/document-alerts"
 
 // ─── Helpers ────────────────────────────────────────────────
 
@@ -401,6 +403,7 @@ export function registerBankStatementTools(server: McpServer) {
 
         // Upload to Drive
         let driveLink = ""
+        let documentVisibleToClient = false
         if (upload_to_drive && ctx.driveFolderId) {
           const taxFolderId = await findTaxFolder(ctx.driveFolderId)
           const targetFolder = taxFolderId || ctx.driveFolderId
@@ -421,6 +424,31 @@ export function registerBankStatementTools(server: McpServer) {
             summary: `Generated P&L for ${ctx.companyName} (${tax_year}), uploaded to Drive`,
             details: { drive_file_id: uploaded.id, net_income: netIncome },
           })
+
+          // Register it as a portal-visible document — without this, the
+          // generated P&L only ever exists as a raw Drive link this tool
+          // hands back to the caller, with no safe way to actually get it to
+          // the client (a raw Drive link from our own service account isn't
+          // confirmed shared with them). autoSaveDocument dedupes on
+          // drive_file_id, so re-running this tool for the same account/year
+          // (the upload above is itself an upsert to the same file) never
+          // creates a duplicate document row or re-fires the notification.
+          const saved = await autoSaveDocument({
+            accountId: account_id,
+            fileName,
+            documentType: "Profit & Loss Statement",
+            category: 3, // Tax
+            driveFileId: uploaded.id,
+            portalVisible: true,
+          })
+          if (saved.id) {
+            documentVisibleToClient = true
+            await notifyClientsOfNewDocument(saved.id).catch((e) =>
+              console.warn("[bank_statement_pnl] client notification failed:", e instanceof Error ? e.message : String(e))
+            )
+          } else if (saved.error) {
+            console.warn("[bank_statement_pnl] document registration failed:", saved.error)
+          }
         }
 
         // Summary — ALL figures below (totalIncome/totalCogs/grossProfit/
@@ -479,6 +507,7 @@ export function registerBankStatementTools(server: McpServer) {
           `Year-end cash: ${Object.entries(accountBalances).map(([k, v]) => `${k}: ${v.toFixed(2)}`).join(", ") || "N/A"}`,
           uncategorized.length > 0 ? `\n⚠️ ${uncategorized.length} uncategorized transactions — review before sending to India` : "",
           driveLink ? `\n📎 Excel: ${driveLink}` : "",
+          documentVisibleToClient ? "✅ Now visible in the client's portal Documents tab (client notified)." : "",
           "",
           "5 sheets: P&L Statement, Balance Sheet, Income Detail, Expense Detail, Distributions",
         ].filter(Boolean).join("\n")

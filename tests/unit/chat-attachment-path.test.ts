@@ -16,20 +16,36 @@ describe("chatAttachmentDir", () => {
 })
 
 describe("safeChatAttachmentExt", () => {
+  // Deliberately NOT an allow-list (see the function's own doc comment) —
+  // dangerous file TYPES are rejected separately by validateChatAttachment()
+  // before this ever runs. This function only sanitizes the storage KEY.
+
   it("lowercases a normal extension", () => {
     expect(safeChatAttachmentExt("Report.XLSX")).toBe("xlsx")
   })
 
-  it("falls back to 'bin' for an extension outside the allow-list", () => {
-    expect(safeChatAttachmentExt("script.exe")).toBe("bin")
+  it("preserves a real extension outside any narrow allow-list — e.g. a phone photo's .heic must survive so the chat UI still renders it inline", () => {
+    expect(safeChatAttachmentExt("passport-photo.HEIC")).toBe("heic")
   })
 
-  it("falls back to 'bin' for a filename with no extension", () => {
-    expect(safeChatAttachmentExt("noext")).toBe("bin")
+  it("a filename with no dot at all becomes its own (sanitized) pseudo-extension — matches the uploader route's exact behavior, not a regression introduced here", () => {
+    expect(safeChatAttachmentExt("noext")).toBe("noext")
   })
 
-  it("strips anything that isn't alphanumeric before checking the allow-list — never trust a caller-supplied extension verbatim into a storage path", () => {
-    expect(safeChatAttachmentExt("evil.pdf/../../secrets")).toBe("bin")
+  it("falls back to 'bin' when there IS a dot but nothing usable survives after it", () => {
+    expect(safeChatAttachmentExt("file.")).toBe("bin")
+    expect(safeChatAttachmentExt("file.***")).toBe("bin")
+  })
+
+  it("strips anything that isn't alphanumeric — a path-traversal payload can never survive into the storage key, even though nothing here is a path allow-list", () => {
+    const result = safeChatAttachmentExt("evil.pdf/../../secrets")
+    expect(result).not.toContain("/")
+    expect(result).not.toContain("..")
+    expect(result).toMatch(/^[a-z0-9]*$/)
+  })
+
+  it("caps length at 8 characters — matches the uploader route's own cap, so an unusually long trailing segment can't bloat the storage key", () => {
+    expect(safeChatAttachmentExt("file.reallylongextension")).toBe("reallylo")
   })
 })
 

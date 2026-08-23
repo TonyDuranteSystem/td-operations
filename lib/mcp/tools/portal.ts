@@ -16,9 +16,10 @@ import { LLC_MANAGEMENT_BUNDLE_TYPES } from "@/lib/services"
 import { formatMcpChatSenderLabel } from "@/lib/portal/chat-sender-name"
 import { contactThreadOrFilter, multiMemberAccountIds } from "@/lib/portal/thread-scope"
 import { isContactLinkedToAccount, resolveAdminReplyContact } from "@/lib/portal/admin-send-scope"
-import { downloadFileBinaryForSend } from "@/lib/google-drive"
+import { downloadFileBinaryForSend, getFileMetadata } from "@/lib/google-drive"
 import { buildChatAttachmentPath } from "@/lib/portal/chat-attachment-path"
 import { guessMimeType } from "@/lib/mcp/tools/drive"
+import { validateChatAttachment } from "@/lib/portal/chat-attachment"
 
 // Document types allowed to be visible in the client portal Documents tab
 // Document types visible to clients in the portal (by type name)
@@ -44,6 +45,40 @@ const TD_ADDRESS_PATTERNS = [
   "indian shores",
   "park blvd",
 ]
+
+/**
+ * Does this Drive file actually live inside the given account's own Drive
+ * folder tree? Walks up to 3 parent-folder levels — the same depth
+ * doc_map_folders uses to match orphan documents back to accounts — before
+ * giving up. Used by portal_chat_attach_file's 'drive' source so a wrong or
+ * copy-pasted file_id can't silently land one client's file in another
+ * client's chat thread; account_contacts/contact-only threads have no Drive
+ * folder of their own, so this check only applies when account_id is given.
+ */
+async function driveFileBelongsToAccount(fileId: string, accountId: string): Promise<boolean> {
+  const { data: account } = await supabaseAdmin.from("accounts").select("drive_folder_id").eq("id", accountId).maybeSingle()
+  const targetFolderId = account?.drive_folder_id as string | null | undefined
+  if (!targetFolderId) return false
+
+  let currentFolderId: string | null
+  try {
+    const meta = (await getFileMetadata(fileId)) as { parents?: string[] }
+    currentFolderId = meta.parents?.[0] ?? null
+  } catch {
+    return false
+  }
+
+  for (let level = 0; level < 4 && currentFolderId; level++) {
+    if (currentFolderId === targetFolderId) return true
+    try {
+      const meta = (await getFileMetadata(currentFolderId)) as { parents?: string[] }
+      currentFolderId = meta.parents?.[0] ?? null
+    } catch {
+      return false
+    }
+  }
+  return false
+}
 
 function isTDAddress(address: string | null, mailingRow?: Pick<MailingAddressRow, 'is_td_provided'> | null): boolean {
   if (mailingRow != null) return mailingRow.is_td_provided === true
@@ -2105,11 +2140,11 @@ Use this to hand a client a file we generated or already hold (a P&L export, a s
 Workflow for a Drive file: source='drive' + file_id. Google-native files (Docs/Sheets/Slides) are exported automatically (Sheets→xlsx, Docs/Slides→pdf).
 Workflow for a Gmail attachment: source='gmail' + message_id + attachment_id.
 Workflow for a URL: source='url' + url.
-Workflow for Supabase Storage: source='supabase_storage' + storage_path (+ storage_bucket if not 'assets').
+Workflow for Supabase Storage: source='supabase_storage' + storage_path — reads from the SAME public "assets" bucket this tool writes to (e.g. a raw chat-attachment path a client already uploaded to). Cannot read any other bucket — TD's onboarding/banking/ITIN upload buckets hold sensitive intake documents and were deliberately locked down; this tool never reaches them.
 
-Requires account_id or contact_id — whichever thread the file is headed to — since that determines the storage folder. Max ~4MB (same ceiling as drive_upload_file; the file is held fully in memory for the copy).`,
+Requires account_id or contact_id — whichever thread the file is headed to — since that determines the storage folder. Max 20MB — this tool holds the whole file in memory for the copy (unlike the client's own 100MB browser-to-storage upload, which never touches server memory), but 20MB comfortably covers any real document (scans, PDFs, spreadsheets) with margin to spare.`,
     {
-      source: z.enum(["drive", "gmail", "url", "supabase_storage"]).describe("Where to get the file: 'drive' = Google Drive file, 'gmail' = Gmail attachment, 'url' = download from URL, 'supabase_storage' = Supabase Storage bucket"),
+      source: z.enum(["drive", "gmail", "url", "supabase_storage"]).describe("Where to get the file: 'drive' = Google Drive file, 'gmail' = Gmail attachment, 'url' = download from URL, 'supabase_storage' = a path already inside the public 'assets' bucket"),
       account_id: z.string().uuid().optional().describe("Account UUID for the LLC thread the file is headed to. At least one of account_id or contact_id required."),
       contact_id: z.string().uuid().optional().describe("Contact UUID for the person-level thread the file is headed to. At least one of account_id or contact_id required."),
       filename: z.string().optional().describe("Override filename (auto-detected from source if omitted)"),
@@ -2117,10 +2152,9 @@ Requires account_id or contact_id — whichever thread the file is headed to —
       message_id: z.string().optional().describe("Gmail message ID (required when source='gmail')"),
       attachment_id: z.string().optional().describe("Gmail attachment ID from message parts (required when source='gmail')"),
       url: z.string().optional().describe("Direct download URL (required when source='url')"),
-      storage_path: z.string().optional().describe("File path inside the Supabase Storage bucket (required when source='supabase_storage')"),
-      storage_bucket: z.string().optional().describe("Supabase Storage bucket name (default: 'assets' — only needed if the file lives in a different bucket)"),
+      storage_path: z.string().optional().describe("Path inside the public 'assets' bucket (required when source='supabase_storage')"),
     },
-    async ({ source, account_id, contact_id, filename, file_id, message_id, attachment_id, url, storage_path, storage_bucket }) => {
+    async ({ source, account_id, contact_id, filename, file_id, message_id, attachment_id, url, storage_path }) => {
       try {
         if (!account_id && !contact_id) {
           return { content: [{ type: "text" as const, text: "Error: account_id or contact_id is required — it determines which client's chat storage folder the file lands in." }] }
@@ -2133,6 +2167,15 @@ Requires account_id or contact_id — whichever thread the file is headed to —
         if (source === "drive") {
           if (!file_id) {
             return { content: [{ type: "text" as const, text: "Error: file_id is required when source='drive'." }] }
+          }
+          // Fail fast, before spending a download, if this file isn't even
+          // inside the target account's own Drive folder — a wrong or
+          // copy-pasted file_id must never silently land one client's file in
+          // another client's chat thread. No equivalent check for a
+          // contact-only thread (no Drive folder of its own) — mandatory
+          // human review before portal_chat_send is the only guard there.
+          if (account_id && !(await driveFileBelongsToAccount(file_id, account_id))) {
+            return { content: [{ type: "text" as const, text: "Error: this file doesn't appear to be inside that account's own Drive folder. Double-check the file_id and account_id — if this is intentional (e.g. a document from outside the client's own folder), flag it to Antonio rather than attaching it directly." }] }
           }
           const result = await downloadFileBinaryForSend(file_id)
           buffer = result.buffer
@@ -2149,12 +2192,23 @@ Requires account_id or contact_id — whichever thread the file is headed to —
             mimeType = guessMimeType(filename)
           } else {
             const { gmailGet } = await import("@/lib/gmail")
-            const msg = (await gmailGet(`/messages/${message_id}`, { format: "full" })) as {
-              payload: { parts?: Array<{ filename?: string; mimeType: string; body?: { attachmentId?: string } }> }
+            type GmailPart = { filename?: string; mimeType: string; body?: { attachmentId?: string }; parts?: GmailPart[] }
+            const msg = (await gmailGet(`/messages/${message_id}`, { format: "full" })) as { payload: GmailPart }
+            // Recurse into nested parts (e.g. a forwarded message wrapper) —
+            // a top-level-only search silently fabricates a filename/mimetype
+            // for a real, correctly-fetched attachment that just isn't at the
+            // top level, and that mislabeled result reaches a real client.
+            const findPart = (parts: GmailPart[] | undefined): GmailPart | undefined => {
+              for (const p of parts ?? []) {
+                if (p.body?.attachmentId === attachment_id) return p
+                const nested = findPart(p.parts)
+                if (nested) return nested
+              }
+              return undefined
             }
-            const part = msg.payload.parts?.find((p) => p.body?.attachmentId === attachment_id)
+            const part = findPart(msg.payload.parts)
             finalFilename = part?.filename || `attachment-${Date.now()}`
-            mimeType = part?.mimeType || "application/octet-stream"
+            mimeType = part?.mimeType || guessMimeType(finalFilename)
           }
         } else if (source === "url") {
           if (!url) {
@@ -2174,25 +2228,45 @@ Requires account_id or contact_id — whichever thread the file is headed to —
           } else {
             finalFilename = new URL(url).pathname.split("/").pop() || `download-${Date.now()}`
           }
-          mimeType = res.headers.get("content-type") || "application/octet-stream"
+          mimeType = res.headers.get("content-type") || guessMimeType(finalFilename)
         } else {
           if (!storage_path) {
             return { content: [{ type: "text" as const, text: "Error: storage_path is required when source='supabase_storage'." }] }
           }
-          const bucket = storage_bucket || "assets"
+          // Hard-pinned to "assets" — the only bucket this tool ever reads OR
+          // writes. No caller-supplied bucket name: the sensitive intake
+          // buckets (onboarding/banking/ITIN uploads) were deliberately
+          // locked down from public access after a real exposure, and a
+          // configurable source bucket here would let a service-role read
+          // republish any of them straight back onto the public bucket.
           const cleanPath = storage_path.replace(/^\/+/, "")
-          const { data: blob, error: dlErr } = await supabaseAdmin.storage.from(bucket).download(cleanPath)
+          const { data: blob, error: dlErr } = await supabaseAdmin.storage.from("assets").download(cleanPath)
           if (dlErr || !blob) {
-            return { content: [{ type: "text" as const, text: `Error: failed to download from Supabase Storage (${bucket}/${cleanPath}): ${dlErr?.message || "no data returned"}` }] }
+            return { content: [{ type: "text" as const, text: `Error: failed to download from Supabase Storage (assets/${cleanPath}): ${dlErr?.message || "no data returned"}` }] }
           }
           buffer = Buffer.from(await blob.arrayBuffer())
           finalFilename = filename || cleanPath.split("/").pop() || `storage-file-${Date.now()}`
-          mimeType = blob.type || "application/octet-stream"
+          mimeType = blob.type || guessMimeType(finalFilename)
         }
 
-        const MAX_SIZE = 4 * 1024 * 1024
+        // 20MB, not drive_upload_file's 4MB or the client-upload path's
+        // 100MB: this tool holds the whole file in memory for the copy
+        // (unlike a browser's direct-to-storage PUT), so the real constraint
+        // is memory/time for one buffer, not a platform upload ceiling — 20MB
+        // is comfortably past any real document while staying well short of
+        // anything that would actually strain a single function call.
+        const MAX_SIZE = 20 * 1024 * 1024
         if (buffer.length > MAX_SIZE) {
-          return { content: [{ type: "text" as const, text: `Error: file too large (${(buffer.length / 1024 / 1024).toFixed(1)}MB). Max supported: ~4MB.` }] }
+          return { content: [{ type: "text" as const, text: `Error: file too large (${(buffer.length / 1024 / 1024).toFixed(1)}MB). Max supported: ~20MB.` }] }
+        }
+
+        // Same active-content block-list every other writer into this PUBLIC
+        // bucket already goes through (client upload, staff chat senders) —
+        // a URL/Gmail/Drive source's declared type is untrusted, and this
+        // bucket serves whatever lands in it directly to a browser.
+        const attachmentError = validateChatAttachment(finalFilename, buffer.length, mimeType)
+        if (attachmentError) {
+          return { content: [{ type: "text" as const, text: `Error: ${attachmentError}` }] }
         }
 
         const destPath = buildChatAttachmentPath(finalFilename, account_id ?? null, contact_id ?? null)
@@ -2203,7 +2277,13 @@ Requires account_id or contact_id — whichever thread the file is headed to —
           return { content: [{ type: "text" as const, text: `Error: upload failed: ${uploadError.message}` }] }
         }
 
-        const { data: urlData } = supabaseAdmin.storage.from("assets").getPublicUrl(destPath)
+        // The access-controlled proxy, not the bucket's own getPublicUrl —
+        // this bucket is still technically public (see
+        // docs/SECURITY-chat-attachments-cutover.md), but new code has no
+        // reason to hand out a permanent, unauthenticated link when the
+        // already-built, already-safe proxy works today regardless of the
+        // bucket's public/private state and needs zero new backend code.
+        const proxyUrl = `${PORTAL_BASE_URL}/api/portal/chat/attachment?path=${encodeURIComponent(destPath)}`
 
         await logAction({
           action_type: "create",
@@ -2223,10 +2303,10 @@ Requires account_id or contact_id — whichever thread the file is headed to —
               `Name: ${finalFilename}`,
               `Type: ${mimeType}`,
               `Size: ${(buffer.length / 1024).toFixed(1)}KB`,
-              `URL: ${urlData.publicUrl}`,
+              `URL: ${proxyUrl}`,
               ``,
               `Pass this to portal_chat_send as one entry in "attachments":`,
-              `{ "url": "${urlData.publicUrl}", "name": "${finalFilename}", "mime_type": "${mimeType}", "size": ${buffer.length} }`,
+              `{ "url": "${proxyUrl}", "name": "${finalFilename}", "mime_type": "${mimeType}", "size": ${buffer.length} }`,
             ].join("\n"),
           }],
         }

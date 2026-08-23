@@ -10,17 +10,24 @@
 
 import { randomUUID } from "crypto"
 
-const SAFE_EXTENSIONS = ["pdf", "jpg", "jpeg", "png", "webp", "gif", "doc", "docx", "xls", "xlsx", "txt", "csv"]
-
 /** The path's directory segment — account-scoped thread, else the contact's own thread, else the same "unknown" fallback the uploader route uses. */
 export function chatAttachmentDir(accountId: string | null, contactId: string | null): string {
   return accountId || contactId || "unknown"
 }
 
-/** Lowercased, alphanumeric-only extension from a filename, restricted to the same allow-list the client-upload route enforces. Falls back to "bin" for anything else (never trust a caller-supplied extension into a storage path). */
+/**
+ * Lowercased, alphanumeric-only, length-capped extension from a filename —
+ * sanitizes the STORAGE KEY (no traversal/weird characters), it does not
+ * decide which file TYPES are safe to attach. Deliberately NOT an allow-list:
+ * an allow-list here silently degraded real, common attachment types (e.g. a
+ * phone-photographed passport, .heic) to a generic "bin" extension, breaking
+ * inline rendering even though the real content-type was preserved — while
+ * doing nothing an allow-list is actually for, since dangerous file types are
+ * now rejected up front by validateChatAttachment() before this ever runs.
+ * Matches app/api/portal/chat/upload-url/route.ts's exact sanitize shape.
+ */
 export function safeChatAttachmentExt(filename: string): string {
-  const rawExt = (filename.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "")
-  return SAFE_EXTENSIONS.includes(rawExt) ? rawExt : "bin"
+  return (filename.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8) || "bin"
 }
 
 /** Full storage path for a new chat attachment. */
