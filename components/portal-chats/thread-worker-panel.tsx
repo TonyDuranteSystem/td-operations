@@ -61,9 +61,25 @@ interface ThreadWorkerPanelProps {
   accountId: string | null
   contactId: string | null
   clientName: string
+  /**
+   * Hand a translated draft to the ORDINARY (already-unguarded) reply
+   * composer on the Messages tab and switch to it — the safe alternative to
+   * a "send anyway" button on the AI's own guarded send tool (dev job
+   * 9c251e65, council-scoped 2026-08-22). Nothing sends automatically; a
+   * human still has to look at it and press the real Send button.
+   */
+  onHandoffToComposer?: (text: string) => void
 }
 
-export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWorkerPanelProps) {
+/** The exact draft + recipient the language guard just refused — surfaced by
+ *  the route as `portalRefusedDraft`, never parsed from the reply text. */
+interface RefusedDraft {
+  message: string
+  account_id?: string | null
+  contact_id?: string | null
+}
+
+export function ThreadWorkerPanel({ accountId, contactId, clientName, onHandoffToComposer }: ThreadWorkerPanelProps) {
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
   const [pending, setPending] = useState(false)
@@ -73,6 +89,8 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
   const attachments = useWorkerAttachments()
   const [preparedSend, setPreparedSend] = useState<PreparedSend | null>(null)
   const [confirming, setConfirming] = useState(false)
+  const [refusedDraft, setRefusedDraft] = useState<RefusedDraft | null>(null)
+  const [translating, setTranslating] = useState<'English' | 'Italian' | null>(null)
   // WHICH OF OUR ADDRESSES IT GOES OUT FROM — the staff member chooses on the card
   // (Antonio, 2026-07-29). The server re-checks that they may send as it.
   const [sendAs, setSendAs] = useState<'support' | 'antonio'>('support')
@@ -86,6 +104,39 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
   clearAttachmentsRef.current = attachments.clear
   // 🧠 per-reply save state, keyed by the reply's row id.
   const [remembered, setRemembered] = useState<Record<string, 'saving' | 'saved'>>({})
+
+  /**
+   * Translate the refused draft into the picked language and hand it to the
+   * ORDINARY reply composer (Messages tab) — never sends anything itself.
+   * Reuses the exact same translation route AI Polish already ships with
+   * (dev job 9c251e65): an explicit `target_language` always wins there, so
+   * this never falls into Polish's own "ask which language" branch.
+   */
+  const translateAndHandoff = async (language: 'English' | 'Italian') => {
+    if (!refusedDraft || translating) return
+    setTranslating(language)
+    try {
+      const res = await fetch('/api/portal/chat/polish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: refusedDraft.message,
+          account_id: refusedDraft.account_id ?? undefined,
+          contact_id: refusedDraft.contact_id ?? undefined,
+          target_language: language,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.polished) throw new Error(data.error || 'Could not translate — please try again.')
+      onHandoffToComposer?.(data.polished)
+      setRefusedDraft(null)
+      toast.success(`Moved to the message box, translated to ${language} — review and send from there.`)
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not translate — please try again.')
+    } finally {
+      setTranslating(null)
+    }
+  }
 
   /** Confirm or cancel a frozen email. Same endpoint the Inbox panel uses. */
   const resolvePreparedSend = async (action: 'confirm' | 'cancel') => {
@@ -176,6 +227,7 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
     // one — the worst kind of wrong-recipient mistake, and invisible.
     setPreparedSend(null)
     setConfirming(false)
+    setRefusedDraft(null)
     clearAttachmentsRef.current()
     if (!clientKey) return
     let alive = true
@@ -202,6 +254,10 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
       : text
     setMessages(prev => [...prev, { role: 'user', text: shown }])
     setPending(true)
+    // A fresh ask supersedes any earlier refusal picker — the same discipline
+    // preparedSend already follows below, so a stale "translate & send" choice
+    // can't fire against a conversation that moved on.
+    setRefusedDraft(null)
     try {
       const res = await fetch('/api/inbox/worker-chat', {
         method: 'POST',
@@ -219,7 +275,7 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
         }),
       })
       const raw = await res.text()
-      let data: { reply?: string; error?: string; messageId?: string; preparedSend?: PreparedSend | null; artifacts?: unknown } = {}
+      let data: { reply?: string; error?: string; messageId?: string; preparedSend?: PreparedSend | null; artifacts?: unknown; portalRefusedDraft?: RefusedDraft | null } = {}
       try { data = JSON.parse(raw) } catch { /* non-JSON = gateway error */ }
       if (!res.ok) {
         throw new Error(
@@ -242,6 +298,10 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
       // stale frozen email stays on screen under a new conversation and one click
       // sends it.
       setPreparedSend(data.preparedSend ?? null)
+      // Same "?? null clears the old one" discipline for the language-refusal
+      // picker — already set to null above the fetch, this just confirms the
+      // fresh answer (a turn that DIDN'T refuse must not leave a stale picker up).
+      setRefusedDraft(data.portalRefusedDraft ?? null)
       // Fresh card → fresh choice; a sticky pick must not leak onto the next email.
       // Same for the signature: a "no signature" pick must not silently carry over.
       if (data.preparedSend) {
@@ -344,6 +404,44 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
           </div>
         )}
       </div>
+
+      {/* Language guard refused the draft — offer a real translate-and-hand-off
+          picker instead of only prose. Nothing here sends anything: picking a
+          language fills the ORDINARY Messages-tab compose box, same as it
+          always worked, and a human still presses that box's own Send. */}
+      {refusedDraft && (
+        <div className="border-t border-indigo-200 bg-indigo-50 px-4 py-3 shrink-0">
+          <p className="text-[11px] font-semibold text-indigo-800 uppercase tracking-wide mb-1">
+            Which language should this go in?
+          </p>
+          <p className="text-xs text-zinc-500 mb-2">
+            Moves the draft to the message box, translated — you still review and send it from there.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => translateAndHandoff('English')}
+              disabled={translating !== null}
+              className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 min-h-[36px]"
+            >
+              {translating === 'English' ? 'Translating…' : 'English'}
+            </button>
+            <button
+              onClick={() => translateAndHandoff('Italian')}
+              disabled={translating !== null}
+              className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 min-h-[36px]"
+            >
+              {translating === 'Italian' ? 'Translating…' : 'Italian'}
+            </button>
+            <button
+              onClick={() => setRefusedDraft(null)}
+              disabled={translating !== null}
+              className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100 disabled:opacity-50 min-h-[36px]"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Frozen email awaiting a human. The worker never sends an attachment on
           its own — the staff member sees the exact recipient, subject, body and

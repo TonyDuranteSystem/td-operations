@@ -19,6 +19,7 @@ import { ThreadIssuesPanel } from '@/components/portal-chats/thread-issues-panel
 import { ThreadWhatsNewPanel } from '@/components/portal-chats/thread-whats-new-panel'
 import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ThreadWorkerPanel } from '@/components/portal-chats/thread-worker-panel'
+import { ContactLanguageField } from '@/components/portal-chats/contact-language-field'
 import { sortPortalThreads } from '@/lib/portal-chats/sort-threads'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { subscribeToDashboardPush } from '@/lib/push/dashboard-push'
@@ -2605,6 +2606,11 @@ export default function PortalChatsPage() {
                           </button>
                         )}
                       </div>
+                      {(selectedContactId || selectedThreadContactId) && (
+                        <div className="mt-0.5">
+                          <ContactLanguageField contactId={(selectedContactId || selectedThreadContactId)!} />
+                        </div>
+                      )}
                       {companies.length > 0 && (
                         <div className="flex flex-wrap items-center gap-1 mt-0.5">
                           {companies.map(c => (
@@ -3003,6 +3009,10 @@ export default function PortalChatsPage() {
                 accountId={selectedAccountId || panelCompanyId}
                 contactId={selectedContactId}
                 clientName={selectedName?.company || selectedName?.contact || 'this client'}
+                onHandoffToComposer={text => {
+                  setReplyText(text)
+                  setChatViewMode('messages')
+                }}
               />
             ) : (
             <>
