@@ -16,6 +16,9 @@ import { getPortalAccounts } from "@/lib/portal/queries"
 import { APP_BASE_URL } from "@/lib/config"
 import { PortalSS4Client } from "./portal-ss4-client"
 import { cookies } from "next/headers"
+import { t, getLocale } from "@/lib/portal/i18n"
+import { loadTranslationsForLocale } from "@/lib/portal/translations-store"
+import { interpolateString } from "@/lib/template-interpolation"
 
 export default async function PortalSignSS4Page() {
   const supabase = createClient()
@@ -26,16 +29,19 @@ export default async function PortalSignSS4Page() {
   if (!user) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
-        <p className="text-zinc-500">Please log in to view your documents.</p>
+        <p className="text-zinc-500">{t("signDocs.notLoggedIn")}</p>
       </div>
     )
   }
+
+  const locale = getLocale(user)
+  const translations = await loadTranslationsForLocale(locale)
 
   const contactId = getClientContactId(user)
   if (!contactId) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
-        <p className="text-zinc-500">No contact associated with your account.</p>
+        <p className="text-zinc-500">{t("signDocs.noContact", locale, translations)}</p>
       </div>
     )
   }
@@ -50,8 +56,8 @@ export default async function PortalSignSS4Page() {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center space-y-2">
-          <p className="text-zinc-500 text-lg">No company found.</p>
-          <p className="text-zinc-400 text-sm">Your SS-4 will appear here once your company is set up.</p>
+          <p className="text-zinc-500 text-lg">{t("signDocs.noCompany", locale, translations)}</p>
+          <p className="text-zinc-400 text-sm">{t("signSubpages.ss4.noCompanyDesc", locale, translations)}</p>
         </div>
       </div>
     )
@@ -60,7 +66,7 @@ export default async function PortalSignSS4Page() {
   // Find the SS-4 for this account (most recent)
   const { data: ss4 } = await supabaseAdmin
     .from("ss4_applications")
-    .select("token, access_code, status, company_name, language, contact_id, responsible_party_name")
+    .select("token, access_code, status, company_name, contact_id, responsible_party_name")
     .eq("account_id", selectedAccountId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -70,8 +76,8 @@ export default async function PortalSignSS4Page() {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center space-y-2">
-          <p className="text-zinc-500 text-lg">No SS-4 application found.</p>
-          <p className="text-zinc-400 text-sm">Your EIN application will appear here once it has been generated.</p>
+          <p className="text-zinc-500 text-lg">{t("signSubpages.ss4.notFoundTitle", locale, translations)}</p>
+          <p className="text-zinc-400 text-sm">{t("signSubpages.ss4.notFoundDesc", locale, translations)}</p>
         </div>
       </div>
     )
@@ -83,8 +89,8 @@ export default async function PortalSignSS4Page() {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center space-y-2">
-          <p className="text-zinc-500 text-lg">This document is signed by {ss4.responsible_party_name}.</p>
-          <p className="text-zinc-400 text-sm">Only the designated responsible party can sign the SS-4 (EIN Application).</p>
+          <p className="text-zinc-500 text-lg">{interpolateString(t("signSubpages.ss4.wrongSignerTitle", locale, translations), { name: ss4.responsible_party_name })}</p>
+          <p className="text-zinc-400 text-sm">{t("signSubpages.ss4.wrongSignerDesc", locale, translations)}</p>
         </div>
       </div>
     )
@@ -93,5 +99,5 @@ export default async function PortalSignSS4Page() {
   // Construct URL with portal=true
   const ss4Url = `${APP_BASE_URL}/ss4/${ss4.token}/${ss4.access_code}?portal=true`
 
-  return <PortalSS4Client ss4Url={ss4Url} status={ss4.status} companyName={ss4.company_name} language={ss4.language} />
+  return <PortalSS4Client ss4Url={ss4Url} status={ss4.status} companyName={ss4.company_name} />
 }

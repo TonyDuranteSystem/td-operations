@@ -167,7 +167,7 @@ function SearchBar({ value, onChange, placeholder }: {
 // ─── Main Page ────────────────────────────────────────────────
 
 export default function PortalGuidePage() {
-  const { locale } = useLocale()
+  const { locale, t: translate } = useLocale()
   const content: Content = locale === 'it' ? IT : EN
   const [query, setQuery] = useState('')
 
@@ -243,7 +243,7 @@ export default function PortalGuidePage() {
           {/* Guides section */}
           <div className="space-y-2">
             <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider px-1">
-              {locale === 'it' ? 'Guide Pratiche' : 'Step-by-Step Guides'}
+              {translate('guide.stepByStepGuides')}
             </h2>
             {[
               {
@@ -251,20 +251,16 @@ export default function PortalGuidePage() {
                 icon: Globe,
                 color: 'bg-blue-50',
                 iconColor: 'text-blue-600',
-                title: locale === 'it' ? 'Come Inviare un Bonifico Internazionale' : 'How to Send an International Wire',
-                desc: locale === 'it'
-                  ? 'Guida passo passo per inviare un bonifico SWIFT tramite il tuo conto Relay.'
-                  : 'Step-by-step guide for sending a SWIFT transfer via your Relay account.',
+                title: translate('guide.relayWireTitle'),
+                desc: translate('guide.relayWireDesc'),
               },
               {
                 href: '/portal/guide/relay-docs',
                 icon: FileText,
                 color: 'bg-blue-50',
                 iconColor: 'text-blue-600',
-                title: locale === 'it' ? 'Relay — Sblocco Bonifici Internazionali' : 'Relay — Unlock International Payments',
-                desc: locale === 'it'
-                  ? 'Cosa caricare per sbloccare i bonifici internazionali sul tuo conto Relay.'
-                  : 'What documents to upload to unlock international wire transfers on Relay.',
+                title: translate('guide.relayDocsTitle'),
+                desc: translate('guide.relayDocsDesc'),
               },
             ].map(g => (
               <Link

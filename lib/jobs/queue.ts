@@ -296,9 +296,19 @@ export async function failJob(
  * relying on the cron to loop many multi-minute jobs in a single 300s run.
  */
 export async function triggerWorker(): Promise<void> {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL
+  // VERCEL_URL is this exact running deployment's own address — prefer it so a
+  // self-call always reaches the code that's actually enqueuing the job. Falling
+  // back to NEXT_PUBLIC_APP_URL (a shared, stable alias) meant a self-trigger could
+  // land on WHICHEVER deployment currently owns that alias — on the sandbox
+  // project, other worktree sessions deploy to the same project and briefly steal
+  // the alias, so a job chained by this deployment could get picked up by a
+  // different, older build that doesn't even know the job type. Confirmed live:
+  // translate_language chunks failing "Unknown job type" from a self-trigger while
+  // `vercel inspect` showed the alias pointing at the very deployment that enqueued
+  // them a moment earlier. (2026-08-23)
+  const baseUrl = process.env.VERCEL_URL
     ? `https://${process.env.VERCEL_URL}`
-    : "http://localhost:3000")
+    : process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
 
   const workerUrl = `${baseUrl}/api/jobs/process`
   const secret = process.env.JOB_WORKER_SECRET || process.env.TD_MCP_API_KEY

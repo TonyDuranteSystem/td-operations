@@ -9,6 +9,7 @@ import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { computeHasWizardPending } from '@/lib/portal/wizard-visibility'
 import { getLocale } from '@/lib/portal/i18n'
+import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
 import { OfficeClock } from '@/components/portal/office-clock'
 import { countryToTimeZone } from '@/lib/portal/client-timezone'
@@ -86,9 +87,9 @@ export default async function PortalLayout({
     const tmSelectedAccountId = tmAccount?.id ?? ''
     const tmTier = tmAccount?.portal_tier ?? 'active'
     const tmSuspended = tmAccount?.status === 'Suspended'
-    const [tmActiveServices, tmNavVisibility] = tmSelectedAccountId
-      ? await Promise.all([getPortalActiveServices(tmSelectedAccountId), getPortalNavVisibility(tmSelectedAccountId, undefined)])
-      : [[] as string[], await getContactOnlyNavVisibility(undefined)]
+    const [tmActiveServices, tmNavVisibility, tmTranslations] = tmSelectedAccountId
+      ? await Promise.all([getPortalActiveServices(tmSelectedAccountId), getPortalNavVisibility(tmSelectedAccountId, undefined), loadTranslationsForLocale(tmLocale)])
+      : [[] as string[], await getContactOnlyNavVisibility(undefined), await loadTranslationsForLocale(tmLocale)]
 
     return (
       <Providers>
@@ -98,7 +99,7 @@ export default async function PortalLayout({
             catch up on wake too. Mounting only in the branch below would have
             silently excluded them (caught in review). */}
         <PortalWakeRefresh />
-        <LocaleProvider locale={tmLocale}>
+        <LocaleProvider locale={tmLocale} translations={tmTranslations}>
           <div className="flex h-screen bg-gradient-to-br from-slate-50 to-blue-50/30">
             <PortalSidebar
               user={user}
@@ -205,6 +206,7 @@ export default async function PortalLayout({
   const showOnboarding = false // Disabled until tier-specific tour is built
   const userName = user.user_metadata?.full_name || ''
   const locale = getLocale(user)
+  const translations = await loadTranslationsForLocale(locale)
 
   // Account-level data: only if an account is selected
   // Phase C (ITIN Chain Fix 2026-05-11): pass contactId so the ITIN-at-Client-
@@ -252,7 +254,7 @@ export default async function PortalLayout({
       {viewAsMarker && <ViewAsBanner clientName={viewAsName} />}
       <PortalSwRegister locale={locale} />
       <PortalWakeRefresh />
-      <LocaleProvider locale={locale}>
+      <LocaleProvider locale={locale} translations={translations}>
         <PasswordGate mustChangePassword={mustChangePassword} />
         {showOnboarding && <OnboardingWrapper showOnboarding={true} userName={userName} />}
         <div className="flex h-screen bg-gradient-to-br from-slate-50 to-blue-50/30">

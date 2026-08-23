@@ -6,7 +6,8 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
-import { getLocale } from '@/lib/portal/i18n'
+import { t, getLocale } from '@/lib/portal/i18n'
+import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import { TaxFinancialsReview } from '@/components/portal/tax-financials-review'
 import { pickOpenYear } from '@/lib/portal/open-year'
 
@@ -50,13 +51,13 @@ export default async function TaxFinancialsPage({ searchParams }: { searchParams
   if (!taxYear) redirect('/portal')
 
   const locale = getLocale(user)
-  const it = locale === 'it'
+  const translations = await loadTranslationsForLocale(locale)
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto">
       {openYears.length > 1 && (
-        <nav className="mb-4 flex items-center gap-2" aria-label={it ? 'Anno fiscale' : 'Tax year'}>
-          <span className="text-xs text-zinc-500">{it ? 'Anno fiscale:' : 'Tax year:'}</span>
+        <nav className="mb-4 flex items-center gap-2" aria-label={t('taxFinancials.taxYear', locale, translations)}>
+          <span className="text-xs text-zinc-500">{t('taxFinancials.taxYearLabel', locale, translations)}</span>
           {openYears.map(y => (
             <a
               key={y}

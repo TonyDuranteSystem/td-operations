@@ -4,6 +4,8 @@ import { CheckCircle, Clock, AlertCircle, ArrowRight, Building2, MapPin, Calenda
 import Link from 'next/link'
 import { FormationProgressTracker } from '@/components/portal/formation-progress-tracker'
 import type { FormationTrackerStep } from '@/lib/portal/formation-progress'
+import { useLocale } from '@/lib/portal/use-locale'
+import { interpolateString } from '@/lib/template-interpolation'
 
 interface FormationAccount {
   id: string
@@ -70,7 +72,54 @@ export function FormationDashboard({
   sdStage,
   filedAt,
 }: FormationDashboardProps) {
-  const tr = locale === 'it' ? IT : EN
+  const { t: translate } = useLocale()
+  const tr = {
+    welcome: translate('formationDash.welcome'),
+    subtitle: translate('formationDash.subtitle'),
+    progressTitle: translate('formationDash.progressTitle'),
+    m1Label: translate('formationDash.m1Label'),
+    m1Desc: translate('formationDash.m1Desc'),
+    m2Label: translate('formationDash.m2Label'),
+    m2Desc: translate('formationDash.m2Desc'),
+    m3Label: translate('formationDash.m3Label'),
+    m3Desc: translate('formationDash.m3Desc'),
+    m4Label: translate('formationDash.m4Label'),
+    m4Desc: translate('formationDash.m4Desc'),
+    m5Label: translate('formationDash.m5Label'),
+    m5Desc: translate('formationDash.m5Desc'),
+    m6Label: translate('formationDash.m6Label'),
+    m6Desc: translate('formationDash.m6Desc'),
+    m7Label: translate('formationDash.m7Label'),
+    m7Desc: translate('formationDash.m7Desc'),
+    m8Label: translate('formationDash.m8Label'),
+    m8Desc: translate('formationDash.m8Desc'),
+    ctaWizardTitle: translate('formationDash.ctaWizardTitle'),
+    ctaWizardDesc: translate('formationDash.ctaWizardDesc'),
+    ctaSS4Title: translate('formationDash.ctaSS4Title'),
+    ctaSS4Desc: translate('formationDash.ctaSS4Desc'),
+    ctaOATitle: translate('formationDash.ctaOATitle'),
+    ctaOADesc: translate('formationDash.ctaOADesc'),
+    ctaLeaseTitle: translate('formationDash.ctaLeaseTitle'),
+    ctaLeaseDesc: translate('formationDash.ctaLeaseDesc'),
+    ctaClosureTitle: translate('formationDash.ctaClosureTitle'),
+    ctaClosureDesc: translate('formationDash.ctaClosureDesc'),
+    waitingStateTitle: translate('formationDash.waitingStateTitle'),
+    waitingStateTitleDated: translate('formationDash.waitingStateTitleDated'),
+    waitingStateBody: translate('formationDash.waitingStateBody'),
+    waitingEINTitle: translate('formationDash.waitingEINTitle'),
+    waitingEINBody: translate('formationDash.waitingEINBody'),
+    allDoneTitle: translate('formationDash.allDoneTitle'),
+    allDoneBody: translate('formationDash.allDoneBody'),
+    companyInfo: translate('formationDash.companyInfo'),
+    companyName: translate('formationDash.companyName'),
+    entityType: translate('formationDash.entityType'),
+    state: translate('formationDash.state'),
+    formationDate: translate('formationDash.formationDate'),
+    ein: translate('formationDash.ein'),
+    filingId: translate('formationDash.filingId'),
+    chatTitle: translate('formationDash.chatTitle'),
+    chatDesc: translate('formationDash.chatDesc'),
+  }
   // New-company formations are lead-anchored: the wizard page only enters the
   // formation scope via ?lead=. Carry it so returning clients (who already own
   // an account) aren't routed to that account's wizard. Falls back to the bare
@@ -236,7 +285,7 @@ export function FormationDashboard({
           <Clock className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
           <div>
             <p className="font-semibold text-blue-900">
-              {filedAt ? tr.waitingStateTitleDated.replace('{date}', formatDate(filedAt)) : tr.waitingStateTitle}
+              {filedAt ? interpolateString(tr.waitingStateTitleDated, { date: formatDate(filedAt) }) : tr.waitingStateTitle}
             </p>
             <p className="text-sm text-blue-700 mt-1">{tr.waitingStateBody}</p>
           </div>
@@ -424,100 +473,3 @@ function InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label:
   )
 }
 
-// ─── Translations ───
-
-const EN = {
-  welcome: 'Welcome',
-  subtitle: 'We\'re forming your LLC. Here\'s where things stand.',
-  progressTitle: 'Formation Progress',
-  m1Label: 'Payment Confirmed',
-  m1Desc: 'Your formation order is active',
-  m2Label: 'Formation Data Submitted',
-  m2Desc: 'Your details submitted to our team',
-  m3Label: 'State Filing Submitted',
-  m3Desc: 'Articles of Organization filed with the Secretary of State',
-  m4Label: 'LLC Officially Formed',
-  m4Desc: 'State has approved and confirmed your LLC',
-  m5Label: 'SS-4 Signed',
-  m5Desc: 'IRS EIN application form signed by you',
-  m6Label: 'SS-4 Faxed to IRS',
-  m6Desc: 'Application submitted to the IRS',
-  m7Label: 'EIN Received',
-  m7Desc: 'Your federal Employer Identification Number is assigned',
-  m8Label: 'Post-Formation Setup',
-  m8Desc: 'Operating Agreement, Lease Agreement, and banking setup',
-  ctaWizardTitle: 'Complete Your Formation Details',
-  ctaWizardDesc: 'We need your information to file your LLC with the state',
-  ctaSS4Title: 'Sign Your SS-4 Form',
-  ctaSS4Desc: 'Your EIN application is ready — sign to proceed',
-  ctaOATitle: 'Sign Your Operating Agreement',
-  ctaOADesc: 'Your LLC\'s governing document is ready for your signature',
-  ctaLeaseTitle: 'Sign Your Lease Agreement',
-  ctaLeaseDesc: 'Your registered address lease is ready for your signature',
-  ctaClosureTitle: 'Complete Your Company Closure Details',
-  ctaClosureDesc: 'We need details about the company you\'re closing — name, EIN, and Articles of Organization',
-  waitingStateTitle: 'Your LLC has been filed with the Secretary of State',
-  waitingStateTitleDated: 'Your LLC has been filed with the Secretary of State on {date}',
-  waitingStateBody: 'Processing time varies by state — typically 1–4 weeks. We\'ll update you as soon as the state confirms.',
-  waitingEINTitle: 'EIN Application Submitted to the IRS',
-  waitingEINBody: 'Your SS-4 form has been faxed to the IRS. EIN numbers typically arrive within 4–6 weeks. We\'ll notify you as soon as it\'s received.',
-  allDoneTitle: 'Your formation is complete!',
-  allDoneBody: 'Your LLC is formed, your EIN is assigned, and all documents are signed. Welcome to Tony Durante LLC services.',
-  companyInfo: 'Company Information',
-  companyName: 'Company',
-  entityType: 'Entity Type',
-  state: 'State',
-  formationDate: 'Formation Date',
-  ein: 'EIN',
-  filingId: 'Filing ID',
-  chatTitle: 'Have Questions?',
-  chatDesc: 'Chat with our team anytime',
-}
-
-const IT = {
-  welcome: 'Benvenuto',
-  subtitle: 'Stiamo costituendo la tua LLC. Ecco a che punto siamo.',
-  progressTitle: 'Avanzamento Costituzione',
-  m1Label: 'Pagamento Confermato',
-  m1Desc: 'Il tuo ordine di costituzione è attivo',
-  m2Label: 'Dati di Costituzione Inviati',
-  m2Desc: 'I tuoi dati sono stati inviati al nostro team',
-  m3Label: 'Deposito Statale Inviato',
-  m3Desc: 'Articles of Organization depositati presso il Segretario di Stato',
-  m4Label: 'LLC Ufficialmente Costituita',
-  m4Desc: 'Lo Stato ha approvato e confermato la tua LLC',
-  m5Label: 'SS-4 Firmato',
-  m5Desc: 'Modulo di richiesta EIN firmato da te',
-  m6Label: 'SS-4 Inviato all\'IRS',
-  m6Desc: 'Domanda presentata all\'IRS',
-  m7Label: 'EIN Ricevuto',
-  m7Desc: 'Il tuo Employer Identification Number federale è assegnato',
-  m8Label: 'Setup Post-Costituzione',
-  m8Desc: 'Operating Agreement, Contratto di Locazione e apertura conto corrente',
-  ctaWizardTitle: 'Completa i Dati di Costituzione',
-  ctaWizardDesc: 'Abbiamo bisogno delle tue informazioni per registrare la LLC presso lo Stato',
-  ctaSS4Title: 'Firma il Tuo Modulo SS-4',
-  ctaSS4Desc: 'La tua richiesta di EIN è pronta — firma per procedere',
-  ctaOATitle: 'Firma il Tuo Operating Agreement',
-  ctaOADesc: 'Il documento costitutivo della tua LLC è pronto per la firma',
-  ctaLeaseTitle: 'Firma il Tuo Contratto di Locazione',
-  ctaLeaseDesc: 'Il contratto per il tuo indirizzo registrato è pronto per la firma',
-  ctaClosureTitle: 'Completa i Dati per la Chiusura della Società',
-  ctaClosureDesc: 'Ci servono i dettagli della società che stai chiudendo — nome, EIN e Atto Costitutivo',
-  waitingStateTitle: 'La tua LLC è stata depositata presso il Segretario di Stato',
-  waitingStateTitleDated: 'La tua LLC è stata depositata presso il Segretario di Stato il {date}',
-  waitingStateBody: 'I tempi di elaborazione variano per Stato — di solito 1–4 settimane. Ti aggiorneremo non appena lo Stato confermerà.',
-  waitingEINTitle: 'Richiesta EIN Inviata all\'IRS',
-  waitingEINBody: 'Il tuo modulo SS-4 è stato inviato via fax all\'IRS. I numeri EIN arrivano tipicamente entro 4–6 settimane. Ti notificheremo non appena lo riceveremo.',
-  allDoneTitle: 'La tua costituzione è completata!',
-  allDoneBody: 'La tua LLC è costituita, il tuo EIN è assegnato e tutti i documenti sono firmati. Benvenuto nei servizi di Tony Durante LLC.',
-  companyInfo: 'Informazioni Aziendali',
-  companyName: 'Azienda',
-  entityType: 'Tipo di Entità',
-  state: 'Stato',
-  formationDate: 'Data di Costituzione',
-  ein: 'EIN',
-  filingId: 'ID Registrazione',
-  chatTitle: 'Hai Domande?',
-  chatDesc: 'Chatta con il nostro team in qualsiasi momento',
-}

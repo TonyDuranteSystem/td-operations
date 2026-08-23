@@ -13,29 +13,6 @@ import {
   PUSH_CARD_DISMISS_KEY,
 } from '@/lib/portal/push-card-visibility'
 
-const COPY = {
-  en: {
-    title: 'Turn on notifications',
-    body: 'Get instant alerts on this device when our team writes to you — instead of emails.',
-    enable: 'Enable notifications',
-    enabled: 'Notifications enabled — you’re all set',
-    denied: 'Notification permission denied',
-    failed: 'Could not enable notifications',
-    timeout: 'This is taking too long — check your connection and try again',
-    close: 'Dismiss',
-  },
-  it: {
-    title: 'Attiva le notifiche',
-    body: 'Ricevi avvisi istantanei su questo dispositivo quando il nostro team ti scrive — al posto delle email.',
-    enable: 'Attiva le notifiche',
-    enabled: 'Notifiche attivate — tutto pronto',
-    denied: 'Permesso per le notifiche negato',
-    failed: 'Impossibile attivare le notifiche',
-    timeout: 'Ci sta mettendo troppo tempo — controlla la connessione e riprova',
-    close: 'Chiudi',
-  },
-} as const
-
 /** How long we wait for register→ready→subscribe→save before giving up and
  * telling the user, instead of leaving the button spinning forever. */
 const ENABLE_TIMEOUT_MS = 15000
@@ -60,8 +37,7 @@ function isStandalone(): boolean {
  */
 export function EnablePushCard({ accountId }: { accountId: string }) {
   const pathname = usePathname()
-  const { locale } = useLocale()
-  const c = COPY[locale === 'it' ? 'it' : 'en']
+  const { t } = useLocale()
   const [show, setShow] = useState(false)
   const [loading, setLoading] = useState(false)
 
@@ -123,7 +99,7 @@ export function EnablePushCard({ accountId }: { accountId: string }) {
       // take to decide would be actively wrong.
       const perm = await Notification.requestPermission()
       if (perm !== 'granted') {
-        toast.error(c.denied)
+        toast.error(t('pushCard.denied'))
         setShow(false)
         return
       }
@@ -209,20 +185,20 @@ export function EnablePushCard({ accountId }: { accountId: string }) {
       if (!res.ok) {
         subscription.unsubscribe().catch(() => {})
         const d = await res.json().catch(() => ({}))
-        throw new Error(d.error || c.failed)
+        throw new Error(d.error || t('pushCard.failed'))
       }
 
-      toast.success(c.enabled)
+      toast.success(t('pushCard.enabled'))
       setShow(false)
     } catch (err) {
       const timedOut = err instanceof Error && err.message === 'timeout'
       toast.error(
-        timedOut ? c.timeout : err instanceof Error && err.message ? err.message : c.failed,
+        timedOut ? t('pushCard.timeout') : err instanceof Error && err.message ? err.message : t('pushCard.failed'),
       )
     } finally {
       setLoading(false)
     }
-  }, [accountId, c])
+  }, [accountId, t])
 
   const handleDismiss = useCallback(() => {
     try {
@@ -242,8 +218,8 @@ export function EnablePushCard({ accountId }: { accountId: string }) {
           <Bell className="h-5 w-5 text-white" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-zinc-900">{c.title}</p>
-          <p className="text-xs text-zinc-500 mt-0.5">{c.body}</p>
+          <p className="text-sm font-semibold text-zinc-900">{t('pushCard.title')}</p>
+          <p className="text-xs text-zinc-500 mt-0.5">{t('pushCard.body')}</p>
           <button
             onClick={handleEnable}
             disabled={loading}
@@ -254,13 +230,13 @@ export function EnablePushCard({ accountId }: { accountId: string }) {
             ) : (
               <Bell className="h-3.5 w-3.5" />
             )}
-            {c.enable}
+            {t('pushCard.enable')}
           </button>
         </div>
         <button
           onClick={handleDismiss}
           className="p-1 text-zinc-400 hover:text-zinc-600 shrink-0"
-          aria-label={c.close}
+          aria-label={t('pushCard.close')}
         >
           <X className="h-4 w-4" />
         </button>

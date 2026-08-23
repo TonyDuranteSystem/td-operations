@@ -7,7 +7,8 @@ import { getPortalAccounts } from '@/lib/portal/queries'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { formatAddressString, type MailingAddressRow } from '@/lib/addresses'
-import { getLocale } from '@/lib/portal/i18n'
+import { t, getLocale } from '@/lib/portal/i18n'
+import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,6 +35,7 @@ export default async function PortalAddressesPage() {
   if (!user) redirect('/portal/login')
 
   const locale = getLocale(user)
+  const translations = await loadTranslationsForLocale(locale)
   const contactId = getClientContactId(user)
 
   let selectedAccountId: string | undefined
@@ -80,7 +82,6 @@ export default async function PortalAddressesPage() {
     companyName = (acct?.company_name as string | null) ?? null
   }
 
-  const it = locale === 'it'
   const tdLine = formatAddressString(tdAddr as MailingAddressRow | null)
   const cmraLine = formatAddressString(cmra as MailingAddressRow | null)
 
@@ -88,12 +89,10 @@ export default async function PortalAddressesPage() {
     <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto space-y-6">
       <div>
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">
-          {it ? 'Indirizzi' : 'Addresses'}
+          {t('addresses.title', locale, translations)}
         </h1>
         <p className="text-zinc-500 text-xs sm:text-sm mt-1">
-          {it
-            ? 'Gli indirizzi importanti per la tua azienda.'
-            : 'The key addresses for your company.'}
+          {t('addresses.subtitle', locale, translations)}
         </p>
       </div>
 
@@ -101,42 +100,36 @@ export default async function PortalAddressesPage() {
       <AddressCard
         icon={Building2}
         accent="blue"
-        title={it ? 'Indirizzo postale di Tony Durante' : 'Tony Durante Mailing Address'}
-        subtitle={it
-          ? 'Usa questo indirizzo per inviarci documenti o posta fisica.'
-          : 'Use this address to send us documents or physical mail.'}
+        title={t('addresses.tdTitle', locale, translations)}
+        subtitle={t('addresses.tdSubtitle', locale, translations)}
         name={(tdAddr?.name as string | null) ?? 'Tony Durante LLC'}
         line={tdLine}
         country={(tdAddr?.country as string | null) ?? null}
-        empty={it ? 'Non disponibile.' : 'Not available.'}
+        empty={t('addresses.tdEmpty', locale, translations)}
       />
 
       {/* Registered Agent address */}
       <AddressCard
         icon={ShieldCheck}
         accent="emerald"
-        title={it ? 'Agente Registrato' : 'Registered Agent'}
-        subtitle={raProvider
-          ? (it ? `Provider: ${raProvider}` : `Provider: ${raProvider}`)
-          : (it ? "L'indirizzo del tuo agente registrato." : 'Your registered agent address.')}
+        title={t('addresses.raTitle', locale, translations)}
+        subtitle={raProvider ? `Provider: ${raProvider}` : t('addresses.raSubtitleDefault', locale, translations)}
         name={companyName}
         line={raAddress}
         country={null}
-        empty={it ? 'Nessun agente registrato in archivio.' : 'No registered agent on file.'}
+        empty={t('addresses.raEmpty', locale, translations)}
       />
 
       {/* Mailing / CMRA address */}
       <AddressCard
         icon={Mail}
         accent="violet"
-        title={it ? 'Indirizzo postale (CMRA)' : 'Mailing Address (CMRA)'}
-        subtitle={it
-          ? "L'indirizzo postale della tua azienda."
-          : "Your company's mailing address."}
+        title={t('addresses.cmraTitle', locale, translations)}
+        subtitle={t('addresses.cmraSubtitle', locale, translations)}
         name={(cmra?.name as string | null) ?? companyName}
         line={cmraLine}
         country={(cmra?.country as string | null) ?? null}
-        empty={it ? 'Nessun indirizzo postale in archivio.' : 'No mailing address on file.'}
+        empty={t('addresses.cmraEmpty', locale, translations)}
       />
     </div>
   )

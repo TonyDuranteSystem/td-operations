@@ -14,6 +14,7 @@ import { VendorList } from '@/components/portal/vendor-list'
 import { ExpensesHeader } from '@/components/portal/expenses-header'
 import { Receipt, Plus, ArrowDownLeft, ArrowUpRight, Building2 } from 'lucide-react'
 import { t, getLocale } from '@/lib/portal/i18n'
+import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import Link from 'next/link'
 import { listTemplates } from './actions'
 import { listVendors } from './vendor-actions'
@@ -89,6 +90,7 @@ export default async function PortalInvoicesPage({
   // Pre-filter to paid when arriving from a receipt email link
   const defaultExpenseFilter: 'all' | 'paid' = params.view === 'paid' ? 'paid' : 'all'
   const locale = getLocale(user)
+  const translations = await loadTranslationsForLocale(locale)
 
   // Fetch data for all tabs in parallel. When no account, only personal
   // expenses are queried; sales/templates/vendors are empty.
@@ -113,7 +115,7 @@ export default async function PortalInvoicesPage({
   // Merge company-scoped + personal expenses into one mixed list. Each row
   // gets a scope_label so the ExpenseList can render a small badge ("Personal"
   // or company name). Per Antonio's design decision 2026-05-05.
-  const personalLabel = locale === 'it' ? 'Personale' : 'Personal'
+  const personalLabel = t('dashboard.personal', locale, translations)
   const expenses = [
     ...accountExpenses.map(e => ({ ...e, scope_label: companyName ?? personalLabel })),
     ...personalExpenses.map(e => ({ ...e, scope_label: personalLabel })),
@@ -147,11 +149,11 @@ export default async function PortalInvoicesPage({
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('invoices.title', locale)}</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('invoices.title', locale, translations)}</h1>
           <p className="text-zinc-500 text-xs sm:text-sm mt-1">
             {!selectedAccountId
-              ? (locale === 'it' ? 'Le tue spese personali' : 'Your personal expenses')
-              : activeTab === 'sales' ? t('invoices.salesSubtitle', locale) : t('invoices.expensesSubtitle', locale)}
+              ? t('invoices.yourPersonalExpenses', locale, translations)
+              : activeTab === 'sales' ? t('invoices.salesSubtitle', locale, translations) : t('invoices.expensesSubtitle', locale, translations)}
           </p>
         </div>
         {activeTab === 'sales' && selectedAccountId && (
@@ -160,11 +162,11 @@ export default async function PortalInvoicesPage({
             className="flex items-center justify-center gap-2 px-4 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors w-full sm:w-auto"
           >
             <Plus className="h-4 w-4" />
-            {t('invoices.new', locale)}
+            {t('invoices.new', locale, translations)}
           </Link>
         )}
         {activeTab === 'expenses' && selectedAccountId && (
-          <ExpensesHeader accountId={selectedAccountId} vendors={vendors} locale={locale} />
+          <ExpensesHeader accountId={selectedAccountId} vendors={vendors} />
         )}
       </div>
 
@@ -183,7 +185,7 @@ export default async function PortalInvoicesPage({
           }`}
         >
           <ArrowUpRight className="h-4 w-4" />
-          {t('invoices.tabSales', locale)}
+          {t('invoices.tabSales', locale, translations)}
           {salesStats.total > 0 && (
             <span className="text-xs bg-zinc-200 text-zinc-600 px-1.5 py-0.5 rounded-full">{salesStats.total}</span>
           )}
@@ -197,7 +199,7 @@ export default async function PortalInvoicesPage({
           }`}
         >
           <ArrowDownLeft className="h-4 w-4" />
-          {t('invoices.tabExpenses', locale)}
+          {t('invoices.tabExpenses', locale, translations)}
           {expenseStats.total > 0 && (
             <span className="text-xs bg-zinc-200 text-zinc-600 px-1.5 py-0.5 rounded-full">{expenseStats.total}</span>
           )}
@@ -211,7 +213,7 @@ export default async function PortalInvoicesPage({
           }`}
         >
           <Building2 className="h-4 w-4" />
-          {locale === 'it' ? 'Fornitori' : 'Vendors'}
+          {t('invoices.vendors', locale, translations)}
           {vendors.length > 0 && (
             <span className="text-xs bg-zinc-200 text-zinc-600 px-1.5 py-0.5 rounded-full">{vendors.length}</span>
           )}
@@ -225,15 +227,15 @@ export default async function PortalInvoicesPage({
           {/* Stats */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="bg-white rounded-xl border shadow-sm p-4">
-              <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('invoices.totalInvoiced', locale)}</p>
+              <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('invoices.totalInvoiced', locale, translations)}</p>
               <p className="text-lg sm:text-xl font-semibold text-zinc-900 mt-1">${salesStats.totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
             </div>
             <div className="bg-white rounded-xl border shadow-sm p-4">
-              <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('invoices.paid', locale)}</p>
+              <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('invoices.paid', locale, translations)}</p>
               <p className="text-lg sm:text-xl font-semibold text-emerald-600 mt-1">${salesStats.paid.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
             </div>
             <div className="bg-white rounded-xl border shadow-sm p-4">
-              <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('invoices.outstanding', locale)}</p>
+              <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('invoices.outstanding', locale, translations)}</p>
               <p className="text-lg sm:text-xl font-semibold text-amber-600 mt-1">${salesStats.outstanding.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
             </div>
           </div>
@@ -241,14 +243,14 @@ export default async function PortalInvoicesPage({
           {mapped.length === 0 ? (
             <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
               <Receipt className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
-              <h3 className="text-lg font-medium text-zinc-900 mb-1">{t('invoices.noInvoices', locale)}</h3>
-              <p className="text-sm text-zinc-500 mb-4">{t('invoices.createFirst', locale)}</p>
+              <h3 className="text-lg font-medium text-zinc-900 mb-1">{t('invoices.noInvoices', locale, translations)}</h3>
+              <p className="text-sm text-zinc-500 mb-4">{t('invoices.createFirst', locale, translations)}</p>
               <Link
                 href="/portal/invoices/new"
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
               >
                 <Plus className="h-4 w-4" />
-                {t('invoices.new', locale)}
+                {t('invoices.new', locale, translations)}
               </Link>
             </div>
           ) : (
@@ -265,15 +267,15 @@ export default async function PortalInvoicesPage({
           {/* Stats */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="bg-white rounded-xl border shadow-sm p-4">
-              <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('expenses.totalExpenses', locale)}</p>
+              <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('expenses.totalExpenses', locale, translations)}</p>
               <p className="text-lg sm:text-xl font-semibold text-zinc-900 mt-1">${expenseStats.totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
             </div>
             <div className="bg-white rounded-xl border shadow-sm p-4">
-              <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('expenses.totalPaid', locale)}</p>
+              <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('expenses.totalPaid', locale, translations)}</p>
               <p className="text-lg sm:text-xl font-semibold text-emerald-600 mt-1">${expenseStats.paid.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
             </div>
             <div className="bg-white rounded-xl border shadow-sm p-4">
-              <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('expenses.totalPending', locale)}</p>
+              <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('expenses.totalPending', locale, translations)}</p>
               <p className="text-lg sm:text-xl font-semibold text-amber-600 mt-1">${expenseStats.pending.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
             </div>
           </div>
@@ -281,13 +283,12 @@ export default async function PortalInvoicesPage({
           {expenses.length === 0 ? (
             <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
               <ArrowDownLeft className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
-              <h3 className="text-lg font-medium text-zinc-900 mb-1">{t('expenses.noExpenses', locale)}</h3>
-              <p className="text-sm text-zinc-500">{t('expenses.noExpensesDesc', locale)}</p>
+              <h3 className="text-lg font-medium text-zinc-900 mb-1">{t('expenses.noExpenses', locale, translations)}</h3>
+              <p className="text-sm text-zinc-500">{t('expenses.noExpensesDesc', locale, translations)}</p>
             </div>
           ) : (
             <ExpenseList
               expenses={expenses}
-              locale={locale}
               initialFilter={defaultExpenseFilter === 'paid' ? 'Paid' : 'All'}
             />
           )}
@@ -296,7 +297,7 @@ export default async function PortalInvoicesPage({
 
       {/* ── Vendors Tab ── */}
       {activeTab === 'vendors' && (
-        <VendorList vendors={vendors} accountId={selectedAccountId!} locale={locale} />
+        <VendorList vendors={vendors} accountId={selectedAccountId!} />
       )}
     </div>
   )

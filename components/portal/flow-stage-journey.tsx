@@ -41,7 +41,6 @@ export interface ShippingCard {
     serviceDeliveryId: string
     initialCourier: string | null
     initialTracking: string | null
-    locale: 'en' | 'it'
   } | null
 }
 
@@ -52,7 +51,8 @@ export function FlowStageJourney({
 }: {
   title: string
   steps: JourneyStep[]
-  /** All copy is pre-resolved server-side, so this component is locale-agnostic. */
+  /** Card copy is pre-resolved server-side. The embedded ItinShippingForm is
+   *  the one exception — it reads the client's language live via context. */
   shipping?: ShippingCard | null
 }) {
   // Auto-expand the current stage; let the client toggle any stage open/closed.
@@ -199,7 +199,6 @@ export function FlowStageJourney({
                           serviceDeliveryId={shipping.shippingForm.serviceDeliveryId}
                           initialCourier={shipping.shippingForm.initialCourier}
                           initialTracking={shipping.shippingForm.initialTracking}
-                          locale={shipping.shippingForm.locale}
                         />
                       )}
                     </div>

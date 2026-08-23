@@ -3,39 +3,35 @@
 import { useEffect, useState, useCallback } from 'react'
 import { FileText, CheckCircle, Clock, PenLine, Send } from 'lucide-react'
 import { useRouter } from 'next/navigation'
+import { useLocale } from '@/lib/portal/use-locale'
+import { interpolateString } from '@/lib/template-interpolation'
 
 interface PortalOAClientProps {
   oaUrl: string
   status: string
   companyName: string
-  language?: string
   /** Shown only for a multi-member agreement that is not yet fully signed. */
   accountId?: string
   canResend?: boolean
 }
 
-const STATUS_INFO: Record<string, { en: string; it: string; icon: typeof FileText; color: string; bg: string }> = {
-  draft: { en: 'Operating Agreement Ready', it: 'Operating Agreement Pronto', icon: PenLine, color: 'text-blue-600', bg: 'bg-blue-50' },
-  sent: { en: 'Operating Agreement Ready', it: 'Operating Agreement Pronto', icon: PenLine, color: 'text-blue-600', bg: 'bg-blue-50' },
-  viewed: { en: 'Awaiting Your Signature', it: 'In Attesa della Tua Firma', icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
-  signed: { en: 'Signed', it: 'Firmato', icon: CheckCircle, color: 'text-green-600', bg: 'bg-green-50' },
+const STATUS_ICON: Record<string, { key: string; icon: typeof FileText; color: string; bg: string }> = {
+  draft: { key: 'signSubpages.oa.ready', icon: PenLine, color: 'text-blue-600', bg: 'bg-blue-50' },
+  sent: { key: 'signSubpages.oa.ready', icon: PenLine, color: 'text-blue-600', bg: 'bg-blue-50' },
+  viewed: { key: 'signSubpages.awaitingSignature', icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
+  signed: { key: 'signDocs.status.signed', icon: CheckCircle, color: 'text-green-600', bg: 'bg-green-50' },
 }
 
-const SUBTITLES: Record<string, { en: string; it: string }> = {
-  signed: { en: 'Your Operating Agreement has been signed and saved.', it: 'Il tuo Operating Agreement \u00e8 stato firmato e salvato.' },
-  default: { en: 'Review and sign your Operating Agreement below.', it: 'Rivedi e firma il tuo Operating Agreement qui sotto.' },
-}
-
-export function PortalOAClient({ oaUrl, status, companyName, language, accountId, canResend }: PortalOAClientProps) {
+export function PortalOAClient({ oaUrl, status, companyName, accountId, canResend }: PortalOAClientProps) {
   const router = useRouter()
+  const { t } = useLocale()
   const [currentStatus, setCurrentStatus] = useState(status)
   const [resending, setResending] = useState(false)
   const [resendMsg, setResendMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
-  const info = STATUS_INFO[currentStatus] || STATUS_INFO.sent
+  const info = STATUS_ICON[currentStatus] || STATUS_ICON.sent
   const Icon = info.icon
-  const lang = (language === 'it' ? 'it' : 'en') as 'en' | 'it'
-  const subtitle = SUBTITLES[currentStatus] || SUBTITLES.default
+  const subtitle = currentStatus === 'signed' ? t('signSubpages.oa.subtitleSigned') : t('signSubpages.oa.subtitleDefault')
 
   const handleResend = useCallback(async () => {
     if (!accountId || resending) return
@@ -49,22 +45,20 @@ export function PortalOAClient({ oaUrl, status, companyName, language, accountId
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setResendMsg({ ok: false, text: data.error || (lang === 'it' ? 'Impossibile inviare i link. Riprova.' : 'Could not send the links. Please try again.') })
+        setResendMsg({ ok: false, text: data.error || t('signSubpages.oa.resendSendError') })
       } else {
         const n = data.reissued ?? 0
         setResendMsg({
           ok: true,
-          text: lang === 'it'
-            ? `Nuovi link di firma inviati a ${n} ${n === 1 ? 'socio' : 'soci'} via email.`
-            : `Fresh signing links emailed to ${n} member${n === 1 ? '' : 's'}.`,
+          text: interpolateString(n === 1 ? t('signSubpages.oa.resendSuccessSingular') : t('signSubpages.oa.resendSuccessPlural'), { count: n }),
         })
       }
     } catch {
-      setResendMsg({ ok: false, text: lang === 'it' ? 'Errore di connessione. Riprova.' : 'Connection error. Please try again.' })
+      setResendMsg({ ok: false, text: t('signSubpages.oa.resendConnError') })
     } finally {
       setResending(false)
     }
-  }, [accountId, resending, lang])
+  }, [accountId, resending, t])
 
   // Listen for postMessage from embedded OA page when signing completes.
   const handleMessage = useCallback((event: MessageEvent) => {
@@ -104,8 +98,8 @@ export function PortalOAClient({ oaUrl, status, companyName, language, accountId
       <div className={`${info.bg} border-b px-6 py-3 flex items-center gap-3`}>
         <Icon className={`h-5 w-5 ${info.color}`} />
         <div className="flex-1">
-          <p className={`text-sm font-semibold ${info.color}`}>{info[lang]}</p>
-          <p className="text-xs text-zinc-500">{subtitle[lang]}</p>
+          <p className={`text-sm font-semibold ${info.color}`}>{t(info.key)}</p>
+          <p className="text-xs text-zinc-500">{subtitle}</p>
         </div>
         {/* Re-send signing links — only for a multi-member agreement still awaiting
             signatures. Rotates + re-emails the pending members' personal links (a
@@ -117,9 +111,7 @@ export function PortalOAClient({ oaUrl, status, companyName, language, accountId
             className="shrink-0 inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
           >
             <Send className="h-3.5 w-3.5" />
-            {resending
-              ? (lang === 'it' ? 'Invio…' : 'Sending…')
-              : (lang === 'it' ? 'Reinvia i link di firma' : 'Re-send signing links')}
+            {resending ? t('signSubpages.oa.resendSending') : t('signSubpages.oa.resendButton')}
           </button>
         )}
       </div>

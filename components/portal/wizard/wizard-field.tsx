@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Loader2, CheckCircle, AlertCircle, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useLocale } from '@/lib/portal/use-locale'
 
 export interface FieldConfig {
   name: string
@@ -95,6 +96,17 @@ const COUNTRIES = [
 ].sort()
 
 export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, locale, error }: WizardFieldProps) {
+  // Any language beyond en/it (dev job 12cab351) — loaded translations are
+  // keyed by the field's own English text (lib/portal/wizard-translatable-
+  // text.ts), so this MUST be layered under the existing it/en choice, not
+  // replace it: `translations` is only ever non-empty for a locale outside
+  // SUPPORTED_LOCALES, and falls through to the exact same it/en behavior
+  // as before whenever it has nothing for a given phrase.
+  const { translations } = useLocale()
+  const pick = (en: string | undefined, it: string | undefined): string | undefined => {
+    if (!en) return en
+    return translations[en] ?? (locale === 'it' && it ? it : en)
+  }
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadStatus, setUploadStatus] = useState<{ name: string; index: number; total: number; pct: number } | null>(null)
@@ -115,9 +127,9 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
       setAiBusy(false)
     }
   }
-  const label = locale === 'it' && field.labelIt ? field.labelIt : field.label
-  const placeholder = locale === 'it' && field.placeholderIt ? field.placeholderIt : field.placeholder
-  const hint = locale === 'it' && field.hintIt ? field.hintIt : field.hint
+  const label = pick(field.label, field.labelIt)
+  const placeholder = pick(field.placeholder, field.placeholderIt)
+  const hint = pick(field.hint, field.hintIt)
 
   // repeater fields are rendered by wizard-client, not here
   if (field.type === 'repeater') return null
@@ -145,7 +157,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
         <div className="rounded-lg border-2 border-red-300 bg-red-50 p-3 flex gap-2.5">
           <div className="shrink-0 flex h-7 w-7 items-center justify-center rounded-full bg-red-600 text-white text-lg font-black leading-none">!</div>
           <p className="text-xs text-red-900 leading-relaxed">
-            {locale === 'it' && field.danger.textIt ? field.danger.textIt : field.danger.text}
+            {pick(field.danger.text, field.danger.textIt)}
           </p>
         </div>
       )}
@@ -268,7 +280,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
                       }}
                       className="h-4 w-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500"
                     />
-                    <span className="truncate">{locale === 'it' && opt.labelIt ? opt.labelIt : opt.label}</span>
+                    <span className="truncate">{pick(opt.label, opt.labelIt)}</span>
                   </label>
                 )
               })}
@@ -284,7 +296,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
           <option value="">{locale === 'it' ? 'Seleziona...' : 'Select...'}</option>
           {field.options?.map(opt => (
             <option key={opt.value} value={opt.value}>
-              {locale === 'it' && opt.labelIt ? opt.labelIt : opt.label}
+              {pick(opt.label, opt.labelIt)}
             </option>
           ))}
         </select>

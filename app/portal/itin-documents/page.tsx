@@ -22,6 +22,8 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getItinAtClientSigning } from '@/lib/portal/queries'
 import { Download, FileText, MapPin, AlertCircle } from 'lucide-react'
 import { ConfirmMailedButton } from './confirm-mailed-button'
+import { t } from '@/lib/portal/i18n'
+import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 
 export const dynamic = 'force-dynamic'
 
@@ -62,48 +64,34 @@ export default async function PortalItinDocumentsPage() {
     .eq('id', contactId)
     .maybeSingle()
   const lang: 'en' | 'it' = isItalian(contact?.language) ? 'it' : 'en'
-
-  const copy = lang === 'it'
-    ? {
-        title: 'Documenti ITIN — Spedizione',
-        subtitle: 'I tuoi moduli sono pronti. Segui questi passaggi per completare la richiesta.',
-        documentsHeading: 'Documenti da scaricare e firmare',
-        downloadCta: 'Scarica',
-        noDocsHeading: 'Documenti in preparazione',
-        noDocsBody: 'I tuoi moduli W-7 e 1040-NR sono ancora in preparazione. Riprova tra qualche minuto, oppure contatta lo staff se l\'attesa si prolunga.',
-        instructionsHeading: 'Cosa fare adesso',
-        steps: [
-          'Stampa i moduli W-7 e 1040-NR in DOPPIA COPIA.',
-          'Firma TUTTE le copie con penna nera o blu.',
-          'Includi DUE copie delle pagine identificative del tuo passaporto (foto + dati personali). NON spedire il passaporto originale — Antonio è un CAA (Certified Acceptance Agent) autorizzato a certificare la copia.',
-          'Spedisci tutto insieme tramite raccomandata o corriere all\'indirizzo qui sotto.',
-        ],
-        addressHeading: 'Indirizzo di spedizione',
-        warningTitle: 'Importante: NON spedire il passaporto originale',
-        warningBody: 'Antonio è un Certified Acceptance Agent autorizzato dall\'IRS. Spediscigli solo le COPIE delle pagine del passaporto — non l\'originale.',
-        confirmHeading: 'Dopo aver spedito',
-        confirmBody: 'Quando hai consegnato i documenti alla posta o al corriere, premi il pulsante qui sotto. Aggiornerà lo stato del tuo servizio ITIN.',
-      }
-    : {
-        title: 'ITIN Documents — Mailing',
-        subtitle: 'Your forms are ready. Follow the steps below to complete your application.',
-        documentsHeading: 'Documents to download and sign',
-        downloadCta: 'Download',
-        noDocsHeading: 'Documents being prepared',
-        noDocsBody: 'Your W-7 and 1040-NR forms are still being prepared. Try again in a few minutes, or contact our team if the wait is unusually long.',
-        instructionsHeading: 'What to do next',
-        steps: [
-          'Print the W-7 and 1040-NR forms in DOUBLE COPY.',
-          'Sign ALL copies in black or blue ink.',
-          'Include TWO copies of your passport identification pages (photo + personal details). Do NOT mail your original passport — Antonio is a Certified Acceptance Agent (CAA) authorized to certify the copy.',
-          'Mail everything together via certified mail or a courier to the address below.',
-        ],
-        addressHeading: 'Mailing address',
-        warningTitle: 'Important: do NOT mail your original passport',
-        warningBody: 'Antonio is an IRS-authorized Certified Acceptance Agent. Mail him COPIES of your passport pages only — never the original document.',
-        confirmHeading: 'After mailing',
-        confirmBody: 'Once you have handed off your documents to the post office or courier, press the button below. It will update the status of your ITIN service.',
-      }
+  // This page derives its language from contacts.language (free text, not the
+  // portal_language preference) — see the comment above. Layering the shared
+  // any-language dictionary under it (dev job 12cab351) removes the local
+  // hardcoded copy object without changing that existing behavior: `lang`
+  // stays 'en'|'it' exactly as before, `translations` is only ever non-empty
+  // for a locale outside SUPPORTED_LOCALES, so this resolves identically to
+  // the old ternary for every client today.
+  const translations = await loadTranslationsForLocale(lang)
+  const copy = {
+    title: t('itinDocs.title', lang, translations),
+    subtitle: t('itinDocs.subtitle', lang, translations),
+    documentsHeading: t('itinDocs.documentsHeading', lang, translations),
+    downloadCta: t('itinDocs.downloadCta', lang, translations),
+    noDocsHeading: t('itinDocs.noDocsHeading', lang, translations),
+    noDocsBody: t('itinDocs.noDocsBody', lang, translations),
+    instructionsHeading: t('itinDocs.instructionsHeading', lang, translations),
+    steps: [
+      t('itinDocs.step1', lang, translations),
+      t('itinDocs.step2', lang, translations),
+      t('itinDocs.step3', lang, translations),
+      t('itinDocs.step4', lang, translations),
+    ],
+    addressHeading: t('itinDocs.addressHeading', lang, translations),
+    warningTitle: t('itinDocs.warningTitle', lang, translations),
+    warningBody: t('itinDocs.warningBody', lang, translations),
+    confirmHeading: t('itinDocs.confirmHeading', lang, translations),
+    confirmBody: t('itinDocs.confirmBody', lang, translations),
+  }
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto space-y-6">

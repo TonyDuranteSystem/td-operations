@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { WizardShell, type WizardStep } from '@/components/portal/wizard/wizard-shell'
 import { WizardField, type FieldConfig } from '@/components/portal/wizard/wizard-field'
 import { getWizardConfig, wizardCollectsOwnerMembers, wizardRequiresSs4Signer, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
+import { useLocale } from '@/lib/portal/use-locale'
 import { createClient } from '@/lib/supabase/client'
 import { resolveInstitution } from '@/lib/tax/bank-identity'
 import { AlertCircle, CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
@@ -275,6 +276,17 @@ export function WizardClient({
   institutions = [],
   configOverride,
 }: WizardClientProps) {
+  // Any language beyond en/it (dev job 12cab351) — see the identical
+  // comment in wizard-field.tsx. Layered UNDER the existing it/en choice,
+  // never replacing it: `translations` is only non-empty for a locale
+  // outside SUPPORTED_LOCALES, and a field the exclusion registry kept out
+  // of generation (lib/portal/translation-exclusions.ts) simply has
+  // nothing here, so it safely falls through to it/en exactly as before.
+  const { translations: fieldTranslations } = useLocale()
+  const pickText = useCallback((en: string | undefined, it: string | undefined): string | undefined => {
+    if (!en) return en
+    return fieldTranslations[en] ?? (locale === 'it' && it ? it : en)
+  }, [fieldTranslations, locale])
   // The client's answer to the one-owner/multi-owner question, when the server
   // could not resolve it. Seeded from saved data so a reload — or the autosave
   // round-trip — does not re-ask a question already answered.
@@ -614,7 +626,7 @@ export function WizardClient({
     if (key === '__members_ownership') return locale === 'it' ? 'Quote dei soci' : 'Member ownership'
     const stepId = steps[currentStep].id
     const stepFields = fields[stepId] || []
-    const pick = (f: FieldConfig) => (locale === 'it' && f.labelIt ? f.labelIt : f.label) || f.name
+    const pick = (f: FieldConfig) => pickText(f.label, f.labelIt) || f.name
     // member_{idx}_{name}
     const m = key.match(/^member_\d+_(.+)$/)
     if (m) {
@@ -634,7 +646,7 @@ export function WizardClient({
     const top = stepFields.find(f => f.name === key)
     if (top) return pick(top)
     return key
-  }, [currentStep, steps, fields, locale])
+  }, [currentStep, steps, fields, locale, pickText])
 
   // Compute the step's errors and PUBLISH them (highlight + summary). Returns
   // true when the step is BLOCKED (has errors). Used by forward navigation and
@@ -1316,17 +1328,17 @@ export function WizardClient({
               // ── Inline repeater ─────────────────────────────────────
               if (field.type === 'repeater') {
                 const count = repeaterCounts[field.name] ?? 0
-                const addLabel = locale === 'it' && field.repeaterAddLabelIt ? field.repeaterAddLabelIt : (field.repeaterAddLabel ?? 'Add')
+                const addLabel = pickText(field.repeaterAddLabel ?? 'Add', field.repeaterAddLabelIt)
                 return (
                   <div key={field.name} className="md:col-span-2 space-y-3">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-zinc-700">{locale === 'it' && field.labelIt ? field.labelIt : field.label}</span>
+                      <span className="text-sm font-medium text-zinc-700">{pickText(field.label, field.labelIt)}</span>
                       {(field.required || field.repeaterRequired)
                         ? <span className="text-xs font-semibold text-red-500">{locale === 'it' ? '(obbligatorio)' : '(required)'}</span>
                         : <span className="text-xs text-zinc-400">{locale === 'it' ? '(opzionale)' : '(optional)'}</span>}
                     </div>
-                    {(locale === 'it' && field.hintIt ? field.hintIt : field.hint) && (
-                      <p className="text-xs text-zinc-500 leading-relaxed whitespace-pre-line">{locale === 'it' && field.hintIt ? field.hintIt : field.hint}</p>
+                    {pickText(field.hint, field.hintIt) && (
+                      <p className="text-xs text-zinc-500 leading-relaxed whitespace-pre-line">{pickText(field.hint, field.hintIt)}</p>
                     )}
                     {count === 0 && (
                       <p className={`text-xs italic ${(field.required || field.repeaterRequired) ? 'text-red-500' : 'text-zinc-400'}`}>
@@ -1490,7 +1502,7 @@ export function WizardClient({
                   {field.warningOnValue && String(formData[field.name] ?? '') === field.warningOnValue.value && (
                     <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-2 text-xs text-amber-800 leading-relaxed">
                       <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-                      <span>{locale === 'it' && field.warningOnValue.textIt ? field.warningOnValue.textIt : field.warningOnValue.text}</span>
+                      <span>{pickText(field.warningOnValue.text, field.warningOnValue.textIt)}</span>
                     </div>
                   )}
                 </div>
