@@ -5,17 +5,17 @@ import { X, Upload, Loader2, FileText } from 'lucide-react'
 import { createExpense } from '@/app/portal/invoices/expense-actions'
 import { toast } from 'sonner'
 import type { Vendor } from '@/app/portal/invoices/vendor-actions'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface UploadExpenseDialogProps {
   open: boolean
   onClose: () => void
   accountId: string
   vendors: Vendor[]
-  locale: string
 }
 
-export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale }: UploadExpenseDialogProps) {
-  const isIt = locale === 'it'
+export function UploadExpenseDialog({ open, onClose, accountId, vendors }: UploadExpenseDialogProps) {
+  const { t } = useLocale()
   const fileRef = useRef<HTMLInputElement>(null)
   const [saving, setSaving] = useState(false)
   const [file, setFile] = useState<File | null>(null)
@@ -83,11 +83,11 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
 
   const handleSubmit = async () => {
     if (!form.vendor_name && !form.vendor_id) {
-      toast.error(isIt ? 'Seleziona un fornitore' : 'Select a vendor')
+      toast.error(t('uploadExpense.selectVendorError'))
       return
     }
     if (!form.total || Number(form.total) <= 0) {
-      toast.error(isIt ? 'Importo obbligatorio' : 'Amount is required')
+      toast.error(t('uploadExpense.amountRequiredError'))
       return
     }
 
@@ -116,10 +116,10 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
       })
 
       if (!res.success) throw new Error(res.error)
-      toast.success(isIt ? 'Spesa registrata' : 'Expense recorded')
+      toast.success(t('uploadExpense.expenseRecorded'))
       onClose()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Error')
+      toast.error(e instanceof Error ? e.message : t('common.error'))
     } finally {
       setSaving(false)
     }
@@ -130,7 +130,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-5 border-b">
           <h2 className="text-lg font-semibold text-zinc-900">
-            {isIt ? 'Registra Spesa' : 'Record Expense'}
+            {t('uploadExpense.title')}
           </h2>
           <button onClick={onClose} className="p-1 hover:bg-zinc-100 rounded">
             <X className="h-5 w-5 text-zinc-400" />
@@ -140,14 +140,14 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
         <div className="p-5 space-y-4">
           {/* Vendor */}
           <div>
-            <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'Fornitore *' : 'Vendor *'}</label>
+            <label className="block text-xs font-medium text-zinc-600 mb-1">{t('uploadExpense.vendorLabel')}</label>
             {vendors.length > 0 ? (
               <select
                 value={form.vendor_id}
                 onChange={e => handleVendorChange(e.target.value)}
                 className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
               >
-                <option value="">{isIt ? '— Seleziona fornitore —' : '— Select vendor —'}</option>
+                <option value="">{t('uploadExpense.selectVendorPlaceholder')}</option>
                 {vendors.map(v => (
                   <option key={v.id} value={v.id}>{v.name}</option>
                 ))}
@@ -157,7 +157,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
                 value={form.vendor_name}
                 onChange={e => setForm(f => ({ ...f, vendor_name: e.target.value }))}
                 className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder={isIt ? 'Nome fornitore' : 'Vendor name'}
+                placeholder={t('uploadExpense.vendorNamePlaceholder')}
               />
             )}
           </div>
@@ -165,7 +165,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
           {/* Invoice number + Currency */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'N. Fattura' : 'Invoice #'}</label>
+              <label className="block text-xs font-medium text-zinc-600 mb-1">{t('uploadExpense.invoiceNumberLabel')}</label>
               <input
                 value={form.invoice_number}
                 onChange={e => setForm(f => ({ ...f, invoice_number: e.target.value }))}
@@ -173,14 +173,14 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'Valuta' : 'Currency'}</label>
+              <label className="block text-xs font-medium text-zinc-600 mb-1">{t('uploadExpense.currencyLabel')}</label>
               <select
                 value={form.currency}
                 onChange={e => setForm(f => ({ ...f, currency: e.target.value as 'USD' | 'EUR' }))}
                 className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
               >
                 <option value="USD">USD ($)</option>
-                <option value="EUR">EUR (\u20AC)</option>
+                <option value="EUR">EUR (€)</option>
               </select>
             </div>
           </div>
@@ -188,7 +188,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
           {/* Amount + Category */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'Importo *' : 'Amount *'}</label>
+              <label className="block text-xs font-medium text-zinc-600 mb-1">{t('uploadExpense.amountLabel')}</label>
               <input
                 type="number"
                 step="0.01"
@@ -200,7 +200,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'Categoria' : 'Category'}</label>
+              <label className="block text-xs font-medium text-zinc-600 mb-1">{t('uploadExpense.categoryLabel')}</label>
               <select
                 value={form.category}
                 onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
@@ -221,7 +221,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
           {/* Dates */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'Data Emissione' : 'Issue Date'}</label>
+              <label className="block text-xs font-medium text-zinc-600 mb-1">{t('uploadExpense.issueDateLabel')}</label>
               <input
                 type="date"
                 value={form.issue_date}
@@ -230,7 +230,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'Scadenza' : 'Due Date'}</label>
+              <label className="block text-xs font-medium text-zinc-600 mb-1">{t('uploadExpense.dueDateLabel')}</label>
               <input
                 type="date"
                 value={form.due_date}
@@ -242,7 +242,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
 
           {/* Description */}
           <div>
-            <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'Descrizione' : 'Description'}</label>
+            <label className="block text-xs font-medium text-zinc-600 mb-1">{t('uploadExpense.descriptionLabel')}</label>
             <input
               value={form.description}
               onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
@@ -252,7 +252,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
 
           {/* File Upload */}
           <div>
-            <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'Allegato (PDF/Immagine)' : 'Attachment (PDF/Image)'}</label>
+            <label className="block text-xs font-medium text-zinc-600 mb-1">{t('uploadExpense.attachmentLabel')}</label>
             <input
               ref={fileRef}
               type="file"
@@ -274,7 +274,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
                 className="w-full flex items-center justify-center gap-2 px-3 py-3 border-2 border-dashed rounded-lg text-sm text-zinc-500 hover:border-blue-300 hover:text-blue-600 transition-colors"
               >
                 <Upload className="h-4 w-4" />
-                {isIt ? 'Carica fattura' : 'Upload invoice'}
+                {t('uploadExpense.uploadInvoice')}
               </button>
             )}
           </div>
@@ -283,7 +283,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
         {/* Footer */}
         <div className="flex justify-end gap-2 p-5 border-t">
           <button onClick={onClose} className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50">
-            {isIt ? 'Annulla' : 'Cancel'}
+            {t('common.cancel')}
           </button>
           <button
             onClick={handleSubmit}
@@ -291,7 +291,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors, locale 
             className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
           >
             {(saving || uploading) && <Loader2 className="h-4 w-4 animate-spin" />}
-            {uploading ? (isIt ? 'Caricamento...' : 'Uploading...') : (isIt ? 'Registra' : 'Save')}
+            {uploading ? (t('uploadExpense.uploading')) : (t('uploadExpense.save'))}
           </button>
         </div>
       </div>

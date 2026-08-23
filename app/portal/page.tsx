@@ -15,6 +15,7 @@ import Link from 'next/link'
 import { PaymentHistory } from '@/components/portal/payment-history'
 import { cn } from '@/lib/utils'
 import { t, getLocale } from '@/lib/portal/i18n'
+import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { WelcomeDashboard } from './welcome-dashboard'
@@ -73,6 +74,7 @@ export default async function PortalDashboardPage() {
 
   const contactId = getClientContactId(user)
   const locale = getLocale(user)
+  const translations = await loadTranslationsForLocale(locale)
 
   // ITIN is contact-scoped (account_id NULL), so a formation-tier client who
   // also has an ITIN would never see it: the formation branches below return
@@ -153,7 +155,7 @@ export default async function PortalDashboardPage() {
         <div className="space-y-4">
           {itinFlows.length > 0 && (
             <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
-              <PortalFlowStatusSection flows={itinFlows} locale={locale} />
+              <PortalFlowStatusSection flows={itinFlows} locale={locale} translations={translations} />
             </div>
           )}
           <FormationDashboard
@@ -314,7 +316,7 @@ export default async function PortalDashboardPage() {
           <div className="space-y-4">
             {itinFlows.length > 0 && (
               <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
-                <PortalFlowStatusSection flows={itinFlows} locale={locale} />
+                <PortalFlowStatusSection flows={itinFlows} locale={locale} translations={translations} />
               </div>
             )}
             <FormationDashboard
@@ -346,7 +348,7 @@ export default async function PortalDashboardPage() {
         <div className="space-y-4">
           {itinFlows.length > 0 && (
             <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
-              <PortalFlowStatusSection flows={itinFlows} locale={locale} />
+              <PortalFlowStatusSection flows={itinFlows} locale={locale} translations={translations} />
             </div>
           )}
           <FormationDashboard
@@ -403,14 +405,14 @@ export default async function PortalDashboardPage() {
       <>
         {noAccountActionItems.items.length > 0 && (
           <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
-            <ActionItems data={noAccountActionItems} locale={locale} />
+            <ActionItems data={noAccountActionItems} />
           </div>
         )}
         {noAccountFlows.length > 0 && (
           <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0 space-y-3">
             <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide flex items-center gap-2 px-1">
               <ListChecks className="h-4 w-4 text-zinc-400" />
-              {locale === 'it' ? 'Stato dei Servizi' : 'Service Status'}
+              {t('dashboard.serviceStatus', locale, translations)}
             </h2>
             {noAccountFlows.map(f =>
               f.steps ? (
@@ -423,7 +425,7 @@ export default async function PortalDashboardPage() {
                 >
                   <span className="text-sm font-medium text-zinc-900">{f.title}</span>
                   <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600">
-                    {locale === 'it' ? 'Attivo' : 'Active'}
+                    {t('dashboard.active', locale, translations)}
                   </span>
                 </Link>
               )
@@ -434,7 +436,6 @@ export default async function PortalDashboardPage() {
           tier={authTier}
           firstName={firstName}
           offerData={offerData}
-          locale={locale}
           wizardSubmitted={wizardSubmitted}
         />
       </>
@@ -486,7 +487,7 @@ export default async function PortalDashboardPage() {
       <div className="space-y-4">
         {itinFlows.length > 0 && (
           <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
-            <PortalFlowStatusSection flows={itinFlows} locale={locale} />
+            <PortalFlowStatusSection flows={itinFlows} locale={locale} translations={translations} />
           </div>
         )}
         <FormationDashboard
@@ -597,14 +598,13 @@ export default async function PortalDashboardPage() {
       <>
         {actionItems.items.length > 0 && (
           <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
-            <ActionItems data={actionItems} locale={locale} />
+            <ActionItems data={actionItems} />
           </div>
         )}
         <WelcomeDashboard
           tier={portalTier}
           firstName={firstName}
           offerData={offerData}
-          locale={locale}
           wizardSubmitted={wizardSubmitted}
         />
       </>
@@ -709,7 +709,7 @@ export default async function PortalDashboardPage() {
   if (!account) {
     return (
       <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto text-center py-20">
-        <p className="text-zinc-500">{t('dashboard.accountNotFound', locale)}</p>
+        <p className="text-zinc-500">{t('dashboard.accountNotFound', locale, translations)}</p>
       </div>
     )
   }
@@ -721,8 +721,8 @@ export default async function PortalDashboardPage() {
   // list with a per-row scope label, mirroring the Expenses tab on
   // /portal/invoices. Per Antonio's "he sees both" rule applied to the
   // home-page PaymentHistory widget for active-tier clients.
-  const personalPaymentLabel = locale === 'it' ? 'Personale' : 'Personal'
-  const companyPaymentLabel = account.company_name ?? (locale === 'it' ? 'Azienda' : 'Company')
+  const personalPaymentLabel = t('dashboard.personal', locale, translations)
+  const companyPaymentLabel = account.company_name ?? t('dashboard.company', locale, translations)
   const payments = [
     ...accountPayments.map(p => ({ ...p, scope_label: companyPaymentLabel })),
     ...contactPayments.map(p => ({ ...p, scope_label: personalPaymentLabel })),
@@ -744,7 +744,7 @@ export default async function PortalDashboardPage() {
       </div>
 
       {/* What's New - one-time (per device) feature announcement, dismissed via localStorage */}
-      <WhatsNewBanner locale={locale} />
+      <WhatsNewBanner />
 
       {/* Offer banner — persistent until the offer is completed or expired */}
       {pendingOffer && (
@@ -838,7 +838,6 @@ export default async function PortalDashboardPage() {
               firstName={firstName}
               confirmationId={tr.extension_submission_id ?? null}
               deadlineDisplay={deadlineDisplay}
-              locale={locale}
             />
           )
         }
@@ -847,7 +846,6 @@ export default async function PortalDashboardPage() {
             key={tr.id}
             taxYear={tr.tax_year}
             returnType={tr.return_type}
-            locale={locale}
             reviewStatus={(tr.review_status as import('@/lib/tax/review-status').ReviewStatus | null) ?? undefined}
             submissionId={tr.submission_id ?? null}
             confirmationAccepted={tr.confirmation_accepted ?? false}
@@ -864,7 +862,7 @@ export default async function PortalDashboardPage() {
           steps and labels come from pipeline_stages (client_label /
           client_label_it), so relabels need no deploy. */}
       {trackerSteps && trackerTr && (
-        <TaxProgressTracker steps={trackerSteps} taxYear={trackerTr.tax_year} locale={locale} />
+        <TaxProgressTracker steps={trackerSteps} taxYear={trackerTr.tax_year} />
       )}
 
       {/* Service Status — a visual progress stepper per active recurring flow
@@ -878,7 +876,7 @@ export default async function PortalDashboardPage() {
         <div className="space-y-3">
           <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide flex items-center gap-2 px-1">
             <ListChecks className="h-4 w-4 text-zinc-400" />
-            {locale === 'it' ? 'Stato dei Servizi' : 'Service Status'}
+            {t('flows.serviceStatus', locale, translations)}
           </h2>
           {flowsForStatus.map(f =>
             f.steps ? (
@@ -891,7 +889,7 @@ export default async function PortalDashboardPage() {
               >
                 <span className="text-sm font-medium text-zinc-900">{f.title}</span>
                 <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600">
-                  {locale === 'it' ? 'Attivo' : 'Active'}
+                  {t('flows.active', locale, translations)}
                 </span>
               </Link>
             )
@@ -900,20 +898,20 @@ export default async function PortalDashboardPage() {
       )}
 
       {/* Action Items Widget */}
-      <ActionItems data={actionItems} locale={locale} />
+      <ActionItems data={actionItems} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Company Info Card */}
         <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.companyInfo', locale)}</h2>
+          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.companyInfo', locale, translations)}</h2>
           <div className="space-y-2.5 text-sm">
-            <InfoRow icon={Building2} label={t('dashboard.entityType', locale)} value={account.entity_type ?? '\u2014'} />
-            <InfoRow icon={MapPin} label={t('dashboard.state', locale)} value={account.state_of_formation ?? '\u2014'} />
-            <InfoRow icon={Calendar} label={t('dashboard.formation', locale)} value={formatDate(account.formation_date)} />
-            <InfoRow icon={Shield} label={t('dashboard.ein', locale)} value={formatEin(account.ein_number)} />
-            {account.filing_id && <InfoRow icon={FileText} label={t('profile.filingId', locale)} value={account.filing_id} />}
-            {account.registered_agent_address && <InfoRow icon={MapPin} label={t('dashboard.raAddress', locale)} value={account.registered_agent_address} />}
-            {account.physical_address && <InfoRow icon={MapPin} label={t('dashboard.address', locale)} value={account.physical_address} />}
+            <InfoRow icon={Building2} label={t('dashboard.entityType', locale, translations)} value={account.entity_type ?? '\u2014'} />
+            <InfoRow icon={MapPin} label={t('dashboard.state', locale, translations)} value={account.state_of_formation ?? '\u2014'} />
+            <InfoRow icon={Calendar} label={t('dashboard.formation', locale, translations)} value={formatDate(account.formation_date)} />
+            <InfoRow icon={Shield} label={t('dashboard.ein', locale, translations)} value={formatEin(account.ein_number)} />
+            {account.filing_id && <InfoRow icon={FileText} label={t('profile.filingId', locale, translations)} value={account.filing_id} />}
+            {account.registered_agent_address && <InfoRow icon={MapPin} label={t('dashboard.raAddress', locale, translations)} value={account.registered_agent_address} />}
+            {account.physical_address && <InfoRow icon={MapPin} label={t('dashboard.address', locale, translations)} value={account.physical_address} />}
           </div>
         </div>
 
@@ -921,7 +919,7 @@ export default async function PortalDashboardPage() {
         {isMultiMember && members.length > 0 && (
           <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
             <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">
-              {t('dashboard.members', locale)} ({members.length})
+              {t('dashboard.members', locale, translations)} ({members.length})
             </h2>
             <div className="space-y-3">
               {members.map((m, i) => {
@@ -984,12 +982,12 @@ export default async function PortalDashboardPage() {
         {/* Services Card */}
         <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
           <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">
-            {t('dashboard.activeServices', locale)} ({allServices.length})
+            {t('dashboard.activeServices', locale, translations)} ({allServices.length})
           </h2>
           {allServices.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-zinc-400">
               <CheckCircle2 className="h-8 w-8 mb-2" />
-              <p className="text-sm">{t('dashboard.noServices', locale)}</p>
+              <p className="text-sm">{t('dashboard.noServices', locale, translations)}</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -1005,7 +1003,7 @@ export default async function PortalDashboardPage() {
                   {s.current_step != null && s.total_steps != null && (
                     <div className="mt-2">
                       <div className="flex items-center justify-between text-xs text-zinc-500 mb-1">
-                        <span>{t('dashboard.progress', locale)}</span>
+                        <span>{t('dashboard.progress', locale, translations)}</span>
                         <span>{s.current_step}/{s.total_steps}</span>
                       </div>
                       <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
@@ -1017,7 +1015,7 @@ export default async function PortalDashboardPage() {
                     </div>
                   )}
                   {s.current_stage && (
-                    <p className="text-xs text-zinc-400 mt-1">{t('dashboard.stage', locale)}: {s.current_stage}</p>
+                    <p className="text-xs text-zinc-400 mt-1">{t('dashboard.stage', locale, translations)}: {s.current_stage}</p>
                   )}
                 </div>
               ))}
@@ -1035,11 +1033,11 @@ export default async function PortalDashboardPage() {
 
         {/* Upcoming Deadlines */}
         <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.upcomingDeadlines', locale)}</h2>
+          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.upcomingDeadlines', locale, translations)}</h2>
           {deadlines.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-zinc-400">
               <Calendar className="h-8 w-8 mb-2" />
-              <p className="text-sm">{t('dashboard.noDeadlines', locale)}</p>
+              <p className="text-sm">{t('dashboard.noDeadlines', locale, translations)}</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -1067,12 +1065,12 @@ export default async function PortalDashboardPage() {
         </div>
 
         {/* Payment History */}
-        <PaymentHistory payments={payments} title={t('dashboard.paymentHistory', locale)} />
+        <PaymentHistory payments={payments} title={t('dashboard.paymentHistory', locale, translations)} />
 
         {/* Tax Returns */}
         {taxReturns.length > 0 && (
           <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3 lg:col-span-2">
-            <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.taxReturns', locale)}</h2>
+            <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.taxReturns', locale, translations)}</h2>
             <div className="space-y-2">
               {taxReturns.map(tr => (
                 <div key={tr.id} className="flex flex-col sm:flex-row sm:items-center justify-between py-2 border-b last:border-b-0 text-sm gap-1 sm:gap-3">
@@ -1081,7 +1079,7 @@ export default async function PortalDashboardPage() {
                     <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">{tr.return_type}</span>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-                    <span className="text-xs text-zinc-500">{t('dashboard.deadline', locale)}: {formatDate(tr.deadline)}</span>
+                    <span className="text-xs text-zinc-500">{t('dashboard.deadline', locale, translations)}: {formatDate(tr.deadline)}</span>
                     {tr.extension_filed && (() => {
                       const resolvedIso = resolveExtensionDeadline(
                         tr.extension_deadline,
@@ -1091,7 +1089,7 @@ export default async function PortalDashboardPage() {
                       const displayed = resolvedIso ? formatDeadlineForDisplay(resolvedIso, locale) : '\u2014'
                       return (
                         <span className="text-xs text-zinc-500">
-                          {t('dashboard.ext', locale)}: {displayed}
+                          {t('dashboard.ext', locale, translations)}: {displayed}
                         </span>
                       )
                     })()}

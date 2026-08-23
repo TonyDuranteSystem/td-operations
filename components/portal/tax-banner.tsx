@@ -5,11 +5,12 @@ import { useRouter } from 'next/navigation'
 import { AlertTriangle, ArrowRight, CheckCircle, Clock, Pencil, Loader2 } from 'lucide-react'
 import type { ReviewStatus } from '@/lib/tax/review-status'
 import { flowStageBannerState } from '@/lib/tax/flow-banner'
+import { useLocale } from '@/lib/portal/use-locale'
+import { interpolateString } from '@/lib/template-interpolation'
 
 interface TaxBannerProps {
   taxYear: number
   returnType: string | null
-  locale: 'en' | 'it'
   /** New: fine-grained review sub-state from tax_return_submissions.review_status */
   reviewStatus?: ReviewStatus | null
   /** New: submission id for the Confirm action */
@@ -45,13 +46,12 @@ function EditButton({ cta }: { cta: string }) {
 
 function ConfirmButton({
   submissionId,
-  locale,
   onConfirmed,
 }: {
   submissionId: string
-  locale: 'en' | 'it'
   onConfirmed: () => void
 }) {
+  const { t } = useLocale()
   const [state, setState] = useState<'idle' | 'loading' | 'error'>('idle')
   const [errMsg, setErrMsg] = useState<string | null>(null)
 
@@ -66,16 +66,14 @@ function ConfirmButton({
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
-        throw new Error((d as { error?: string }).error || (locale === 'it' ? 'Errore — riprova.' : 'Error — please try again.'))
+        throw new Error((d as { error?: string }).error || t('taxBanner.errorRetry'))
       }
       onConfirmed()
     } catch (err) {
-      setErrMsg(err instanceof Error && err.message ? err.message : (locale === 'it' ? 'Errore — riprova.' : 'Error — please try again.'))
+      setErrMsg(err instanceof Error && err.message ? err.message : t('taxBanner.errorRetry'))
       setState('idle')
     }
   }
-
-  const label = locale === 'it' ? 'Conferma' : 'Confirm'
 
   return (
     <div className="flex flex-col items-end gap-1">
@@ -89,7 +87,7 @@ function ConfirmButton({
         ) : (
           <CheckCircle className="h-3.5 w-3.5" />
         )}
-        {label}
+        {t('taxBanner.confirm')}
       </button>
       {errMsg && <p className="text-xs text-red-600">{errMsg}</p>}
     </div>
@@ -99,7 +97,6 @@ function ConfirmButton({
 export function TaxBanner({
   taxYear,
   returnType,
-  locale,
   reviewStatus,
   submissionId,
   confirmationAccepted = false,
@@ -109,14 +106,16 @@ export function TaxBanner({
   sdStage = null,
 }: TaxBannerProps) {
   const router = useRouter()
+  const { t } = useLocale()
   const returnLabel = returnType || 'Tax Return'
-  const isIt = locale === 'it'
+  const y = String(taxYear)
+  const tok = { year: y, returnLabel }
 
   // MMLLC/Corp: after submission the generated P&L + Balance Sheet live on
   // their own review screen (Slice 9) — surface the path from the banner.
   const financialsLink = showFinancialsLink ? (
     <a href="/portal/tax-financials" className="mt-2 inline-block text-xs font-semibold text-blue-700 underline hover:text-blue-900">
-      {locale === 'it' ? 'Controlla e conferma il tuo Conto Economico e Stato Patrimoniale →' : 'Check and confirm your Profit & Loss and Balance Sheet →'}
+      {t('taxBanner.checkFinancials')}
     </a>
   ) : null
 
@@ -139,14 +138,10 @@ export function TaxBanner({
         // entity-agnostic wording below.
         if (showFinancialsLink) {
           if (!confirmationAccepted) {
-            const title = locale === 'it'
-              ? `Azione richiesta — la tua dichiarazione ${taxYear} non è completa`
-              : `Action needed — your ${taxYear} tax return isn't finished`
-            const desc = locale === 'it'
-              ? `Devi ancora completare la categorizzazione delle transazioni e confermare il Conto Economico e lo Stato Patrimoniale prima che possiamo preparare la tua dichiarazione.`
-              : `You still need to finish categorizing your transactions and confirm your Profit & Loss and Balance Sheet before we can prepare your return.`
-            const cta = locale === 'it' ? 'Completa ora' : 'Finish now'
-            const editCta = locale === 'it' ? 'Modifica le tue risposte' : 'Edit your answers'
+            const title = interpolateString(t('taxBanner.actionNeededTitle'), tok)
+            const desc = t('taxBanner.actionNeededDesc')
+            const cta = t('taxBanner.finishNow')
+            const editCta = t('taxBanner.editYourAnswers')
             return (
               <div className="block w-full rounded-xl border-2 border-amber-400 bg-amber-50 px-5 py-4 mb-6">
                 <div className="flex items-start gap-4">
@@ -171,12 +166,8 @@ export function TaxBanner({
               </div>
             )
           }
-          const doneTitle = locale === 'it'
-            ? `Fatto — abbiamo tutto il necessario (${taxYear})`
-            : `You're done — we have what we need (${taxYear})`
-          const doneDesc = locale === 'it'
-            ? `Hai confermato il Conto Economico e lo Stato Patrimoniale per la ${returnLabel} ${taxYear}. Non è richiesta alcuna azione da parte tua.`
-            : `You've confirmed your ${returnLabel} ${taxYear} Profit & Loss and Balance Sheet. No further action needed from you.`
+          const doneTitle = interpolateString(t('taxBanner.doneTitle'), tok)
+          const doneDesc = interpolateString(t('taxBanner.doneDesc'), tok)
           return (
             <div className="block w-full rounded-xl border-2 border-blue-300 bg-blue-50 px-5 py-4 mb-6">
               <div className="flex items-start gap-4">
@@ -197,13 +188,9 @@ export function TaxBanner({
         // submission yet) — original wording, unchanged from before this
         // whole fix, since there's no hidden categorize-and-confirm step to
         // clarify for this population.
-        const title = locale === 'it'
-          ? `Dati fiscali inviati — in revisione (${taxYear})`
-          : `Tax data submitted — under review (${taxYear})`
-        const desc = locale === 'it'
-          ? `I tuoi dati per la ${returnLabel} ${taxYear} sono stati inviati. Puoi ancora modificarli prima che iniziamo la revisione.`
-          : `Your data for ${returnLabel} ${taxYear} has been submitted. You can still edit before we begin review.`
-        const cta = locale === 'it' ? 'Modifica' : 'Edit'
+        const title = interpolateString(t('taxBanner.submittedTitle'), tok)
+        const desc = interpolateString(t('taxBanner.submittedDesc'), tok)
+        const cta = t('taxBanner.edit')
         return (
           <div className="block w-full rounded-xl border-2 border-blue-300 bg-blue-50 px-5 py-4 mb-6">
             <div className="flex items-start gap-4">
@@ -221,12 +208,8 @@ export function TaxBanner({
       }
 
       case 'under_review': {
-        const title = locale === 'it'
-          ? `In revisione (${taxYear})`
-          : `Under review (${taxYear})`
-        const desc = locale === 'it'
-          ? `Il nostro team sta esaminando i tuoi dati per la ${returnLabel} ${taxYear}. Ti avviseremo quando sarà pronto.`
-          : `Our team is reviewing your ${returnLabel} ${taxYear} data. We'll notify you when we're done.`
+        const title = interpolateString(t('taxBanner.underReviewTitle'), tok)
+        const desc = interpolateString(t('taxBanner.reviewStatusUnderReviewDesc'), tok)
         return (
           <div className="block w-full rounded-xl border-2 border-blue-300 bg-blue-50 px-5 py-4 mb-6">
             <div className="flex items-start gap-4">
@@ -243,13 +226,9 @@ export function TaxBanner({
       }
 
       case 'revision_requested': {
-        const title = locale === 'it'
-          ? `Modifiche richieste — ${returnLabel} ${taxYear}`
-          : `Changes requested — ${returnLabel} ${taxYear}`
-        const desc = locale === 'it'
-          ? `Il nostro team ha richiesto alcune modifiche. Controlla la chat del portale per i dettagli, poi aggiorna e reinvia i tuoi dati.`
-          : `Our team has requested changes. Check the portal chat for details, then update and resubmit your data.`
-        const cta = locale === 'it' ? 'Modifica e reinvia' : 'Edit & resubmit'
+        const title = interpolateString(t('taxBanner.revisionRequestedTitle'), tok)
+        const desc = t('taxBanner.revisionRequestedDesc')
+        const cta = t('taxBanner.editAndResubmit')
         return (
           <div className="block w-full rounded-xl border-2 border-amber-400 bg-amber-50 px-5 py-4 mb-6">
             <div className="flex items-start gap-4">
@@ -274,13 +253,9 @@ export function TaxBanner({
       }
 
       case 'approved': {
-        const title = locale === 'it'
-          ? `Revisionato ✓ — ${returnLabel} ${taxYear}`
-          : `Reviewed ✓ — ${returnLabel} ${taxYear}`
-        const desc = locale === 'it'
-          ? `I tuoi dati sono stati revisionati dal nostro team. Clicca Conferma per finalizzare la tua dichiarazione.`
-          : `Your data has been reviewed by our team. Click Confirm to finalize your return.`
-        const editCta = locale === 'it' ? 'Modifica' : 'Edit'
+        const title = interpolateString(t('taxBanner.approvedTitle'), tok)
+        const desc = t('taxBanner.approvedDesc')
+        const editCta = t('taxBanner.edit')
         return (
           <div className="block w-full rounded-xl border-2 border-emerald-300 bg-emerald-50 px-5 py-4 mb-6">
             <div className="flex items-start gap-4">
@@ -296,7 +271,6 @@ export function TaxBanner({
                 {submissionId && (
                   <ConfirmButton
                     submissionId={submissionId}
-                    locale={locale}
                     onConfirmed={() => router.refresh()}
                   />
                 )}
@@ -308,12 +282,8 @@ export function TaxBanner({
       }
 
       case 'confirmed': {
-        const title = locale === 'it'
-          ? `Confermato — in elaborazione (${taxYear})`
-          : `Confirmed — being processed (${taxYear})`
-        const desc = locale === 'it'
-          ? `Hai confermato i tuoi dati per la ${returnLabel} ${taxYear}. Il nostro team inizierà l'elaborazione a breve.`
-          : `You've confirmed your ${returnLabel} ${taxYear} data. Our team will begin processing shortly.`
+        const title = interpolateString(t('taxBanner.confirmedTitle'), tok)
+        const desc = interpolateString(t('taxBanner.confirmedDesc'), tok)
         return (
           <div className="block w-full rounded-xl border-2 border-blue-300 bg-blue-50 px-5 py-4 mb-6">
             <div className="flex items-start gap-4">
@@ -331,13 +301,9 @@ export function TaxBanner({
       }
 
       case 'reopened': {
-        const title = locale === 'it'
-          ? `Riaperto — rivedi e reinvia (${taxYear})`
-          : `Reopened — please review and resubmit (${taxYear})`
-        const desc = locale === 'it'
-          ? `Il tuo invio è stato riaperto dal nostro team. Rivedi i tuoi dati e reinviali quando sei pronto.`
-          : `Your submission has been reopened by our team. Review your data and resubmit when ready.`
-        const cta = locale === 'it' ? 'Rivedi e reinvia' : 'Review & resubmit'
+        const title = interpolateString(t('taxBanner.reopenedTitle'), tok)
+        const desc = t('taxBanner.reopenedDesc')
+        const cta = t('taxBanner.reviewAndResubmit')
         return (
           <div className="block w-full rounded-xl border-2 border-amber-400 bg-amber-50 px-5 py-4 mb-6">
             <div className="flex items-start gap-4">
@@ -370,7 +336,6 @@ export function TaxBanner({
   // were wrongly showing the legacy "Edit submission" banner.
   const flowState = sdStage ? flowStageBannerState(sdStage) : null
   if (flowState) {
-    const y = taxYear
     type Tone = 'amber' | 'blue' | 'emerald'
     const cfg: {
       tone: Tone
@@ -383,53 +348,53 @@ export function TaxBanner({
         case 'complete_form':
           return {
             tone: 'amber', Icon: AlertTriangle,
-            title: isIt ? `Completa il modulo fiscale (${y})` : `Complete your tax form (${y})`,
-            desc: isIt ? `La procedura guidata per la tua ${returnLabel} ${y} è pronta. Compila il modulo per continuare.` : `Your tax wizard for ${returnLabel} ${y} is ready. Complete the form to continue.`,
-            action: { href: editHref, cta: isIt ? 'Compila il modulo' : 'Complete tax form' },
+            title: interpolateString(t('taxBanner.flowCompleteFormTitle'), tok),
+            desc: interpolateString(t('taxBanner.flowCompleteFormDesc'), tok),
+            action: { href: editHref, cta: t('taxBanner.completeTaxFormCta') },
           }
         case 'under_review':
           return {
             tone: 'blue', Icon: Clock,
-            title: isIt ? `In revisione (${y})` : `Under review (${y})`,
-            desc: isIt ? `Il nostro team sta esaminando i tuoi dati per la ${returnLabel} ${y}. Ti avviseremo quando avremo finito.` : `Our team is reviewing your ${returnLabel} ${y} data. We'll notify you when we're done.`,
+            title: interpolateString(t('taxBanner.underReviewTitle'), tok),
+            desc: interpolateString(t('taxBanner.flowUnderReviewDesc'), tok),
           }
         case 'preparing':
           return {
             tone: 'blue', Icon: Clock,
-            title: isIt ? `In preparazione (${y})` : `Being prepared (${y})`,
-            desc: isIt ? `I tuoi dati sono stati approvati. Stiamo preparando la tua ${returnLabel} ${y}.` : `Your data has been approved. We're preparing your ${returnLabel} ${y}.`,
+            title: interpolateString(t('taxBanner.preparingTitle'), tok),
+            desc: interpolateString(t('taxBanner.preparingDesc'), tok),
           }
         case 'revision_requested':
           return {
             tone: 'amber', Icon: AlertTriangle,
-            title: isIt ? `Modifiche richieste — ${returnLabel} ${y}` : `Changes requested — ${returnLabel} ${y}`,
-            desc: isIt ? `Il nostro team ha richiesto alcune modifiche. Controlla la chat del portale, poi modifica il tuo invio.` : `Our team has requested changes. Check the portal chat, then edit your submission.`,
-            action: { href: editHref, cta: isIt ? 'Modifica il tuo invio' : 'Edit your submission' },
+            title: interpolateString(t('taxBanner.revisionRequestedTitle'), tok),
+            desc: t('taxBanner.flowRevisionRequestedDesc'),
+            action: { href: editHref, cta: t('taxBanner.editYourSubmission') },
           }
         case 'sign':
           return {
             tone: 'emerald', Icon: Pencil,
-            title: isIt ? `Firma la tua dichiarazione (${y})` : `Sign your tax return (${y})`,
-            desc: isIt ? `La tua ${returnLabel} ${y} è pronta per la firma. Accedi al portale e firmala.` : `Your ${returnLabel} ${y} is ready for your signature. Sign it in the portal.`,
-            action: { href: signHref, cta: isIt ? 'Firma la dichiarazione' : 'Sign your tax return' },
+            title: interpolateString(t('taxBanner.signTitle'), tok),
+            desc: interpolateString(t('taxBanner.signDesc'), tok),
+            action: { href: signHref, cta: t('taxBanner.signYourTaxReturn') },
           }
         case 'signed':
           return {
             tone: 'emerald', Icon: CheckCircle,
-            title: isIt ? `Firmata ✓ (${y})` : `Signed ✓ (${y})`,
-            desc: isIt ? `La tua ${returnLabel} ${y} è firmata. La presenteremo all'IRS.` : `Your ${returnLabel} ${y} is signed. We'll file it with the IRS.`,
+            title: interpolateString(t('taxBanner.signedTitle'), tok),
+            desc: interpolateString(t('taxBanner.signedDesc'), tok),
           }
         case 'filed':
           return {
             tone: 'emerald', Icon: CheckCircle,
-            title: isIt ? `Presentata all'IRS (${y})` : `Filed with the IRS (${y})`,
-            desc: isIt ? `La tua ${returnLabel} ${y} è stata presentata all'IRS.` : `Your ${returnLabel} ${y} has been filed with the IRS.`,
+            title: interpolateString(t('taxBanner.filedTitle'), tok),
+            desc: interpolateString(t('taxBanner.filedDesc'), tok),
           }
         case 'completed':
           return {
             tone: 'emerald', Icon: CheckCircle,
-            title: isIt ? `Completata ✓ (${y})` : `Completed ✓ (${y})`,
-            desc: isIt ? `La tua ${returnLabel} ${y} è completata.` : `Your ${returnLabel} ${y} is complete.`,
+            title: interpolateString(t('taxBanner.completedTitle'), tok),
+            desc: interpolateString(t('taxBanner.completedDesc'), tok),
           }
       }
     })()
@@ -439,16 +404,16 @@ export function TaxBanner({
       blue: { card: 'border-blue-300 bg-blue-50', iconWrap: 'bg-blue-100 border-blue-300', icon: 'text-blue-600', title: 'text-blue-900', desc: 'text-blue-700', btn: 'bg-blue-600 hover:bg-blue-700' },
       emerald: { card: 'border-emerald-300 bg-emerald-50', iconWrap: 'bg-emerald-100 border-emerald-300', icon: 'text-emerald-600', title: 'text-emerald-900', desc: 'text-emerald-700', btn: 'bg-emerald-600 hover:bg-emerald-700' },
     }
-    const t = tones[cfg.tone]
+    const tn = tones[cfg.tone]
     const Icon = cfg.Icon
     const inner = (
       <div className="flex items-start gap-4">
-        <div className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border ${t.iconWrap}`}>
-          <Icon className={`h-5 w-5 ${t.icon}`} />
+        <div className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border ${tn.iconWrap}`}>
+          <Icon className={`h-5 w-5 ${tn.icon}`} />
         </div>
         <div className="flex-1 min-w-0">
-          <p className={`font-semibold text-sm sm:text-base ${t.title}`}>{cfg.title}</p>
-          <p className={`text-xs sm:text-sm mt-1 ${t.desc}`}>{cfg.desc}</p>
+          <p className={`font-semibold text-sm sm:text-base ${tn.title}`}>{cfg.title}</p>
+          <p className={`text-xs sm:text-sm mt-1 ${tn.desc}`}>{cfg.desc}</p>
           {/* Post-submit: surface the P&L / Balance Sheet review link. The flow-
               workspace path is SD-stage-driven (no review_status), so without
               this the client lands on a link-less "Under review" banner and can
@@ -457,7 +422,7 @@ export function TaxBanner({
           {(flowState === 'under_review' || flowState === 'preparing') && financialsLink}
         </div>
         {cfg.action && (
-          <div className={`shrink-0 flex items-center gap-1.5 self-center rounded-lg px-3 py-1.5 text-xs font-semibold text-white ${t.btn}`}>
+          <div className={`shrink-0 flex items-center gap-1.5 self-center rounded-lg px-3 py-1.5 text-xs font-semibold text-white ${tn.btn}`}>
             <Pencil className="h-3.5 w-3.5" />
             {cfg.action.cta}
           </div>
@@ -465,11 +430,11 @@ export function TaxBanner({
       </div>
     )
     return cfg.action ? (
-      <a href={cfg.action.href} className={`block w-full rounded-xl border-2 px-5 py-4 mb-6 transition-all hover:shadow-md ${t.card}`}>
+      <a href={cfg.action.href} className={`block w-full rounded-xl border-2 px-5 py-4 mb-6 transition-all hover:shadow-md ${tn.card}`}>
         {inner}
       </a>
     ) : (
-      <div className={`block w-full rounded-xl border-2 px-5 py-4 mb-6 ${t.card}`}>
+      <div className={`block w-full rounded-xl border-2 px-5 py-4 mb-6 ${tn.card}`}>
         {inner}
       </div>
     )
@@ -478,12 +443,8 @@ export function TaxBanner({
   // ─── Legacy fallback (pre-Slice-2 submissions: no review_status) ───
 
   if (sentToAccountant) {
-    const title = locale === 'it'
-      ? `In elaborazione: ${returnLabel} ${taxYear}`
-      : `In progress: ${returnLabel} ${taxYear}`
-    const description = locale === 'it'
-      ? `I tuoi dati per la ${returnLabel} ${taxYear} sono in fase di elaborazione. Ti contatteremo se avremo bisogno di ulteriori informazioni.`
-      : `Your data for ${returnLabel} ${taxYear} is being processed. We'll reach out if we need any additional information.`
+    const title = interpolateString(t('taxBanner.inProgressTitle'), tok)
+    const description = interpolateString(t('taxBanner.inProgressDesc'), tok)
     return (
       <div className="block w-full rounded-xl border-2 border-blue-300 bg-blue-50 px-5 py-4 mb-6">
         <div className="flex items-start gap-4">
@@ -500,13 +461,9 @@ export function TaxBanner({
   }
 
   if (dataReceived) {
-    const title = locale === 'it'
-      ? `Informazioni fiscali inviate — in revisione (${taxYear})`
-      : `Tax information submitted — under review (${taxYear})`
-    const description = locale === 'it'
-      ? `I tuoi dati per la ${returnLabel} ${taxYear} sono stati inviati e sono in fase di revisione. Puoi ancora modificare le risposte fino all'inizio dell'elaborazione.`
-      : `Your data for ${returnLabel} ${taxYear} has been submitted and is under review. You can still edit your answers until processing begins.`
-    const cta = locale === 'it' ? 'Modifica invio' : 'Edit submission'
+    const title = interpolateString(t('taxBanner.dataReceivedTitle'), tok)
+    const description = interpolateString(t('taxBanner.dataReceivedDesc'), tok)
+    const cta = t('taxBanner.editSubmission')
     return (
       <a
         href={editHref}
@@ -530,13 +487,9 @@ export function TaxBanner({
   }
 
   // State 1: action required — client needs to complete the form
-  const title = locale === 'it'
-    ? `Azione richiesta: Completa le informazioni fiscali per il ${taxYear}`
-    : `Action required: Complete your tax information for ${taxYear}`
-  const description = locale === 'it'
-    ? `La tua dichiarazione ${returnLabel} per il ${taxYear} richiede i tuoi dati finanziari. Compila il modulo ora per evitare ritardi nella presentazione.`
-    : `Your ${returnLabel} for ${taxYear} requires your financial data. Complete the form now to avoid filing delays.`
-  const cta = locale === 'it' ? 'Compila il modulo fiscale' : 'Complete tax form'
+  const title = interpolateString(t('taxBanner.actionRequiredTitle'), tok)
+  const description = interpolateString(t('taxBanner.actionRequiredDesc'), tok)
+  const cta = t('taxBanner.completeTaxForm')
   return (
     <a
       href={editHref}

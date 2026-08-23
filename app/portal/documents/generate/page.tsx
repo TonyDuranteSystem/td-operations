@@ -4,7 +4,6 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalAccountDetail, getPortalMembers } from '@/lib/portal/queries'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
-import { getLocale } from '@/lib/portal/i18n'
 import { GenerateDocumentsClient } from './generate-documents-client'
 import { formatMemberAddress } from '@/lib/members/member-address'
 import { pickDefaultSs4SignerLink } from '@/lib/operations/ss4-signer'
@@ -25,8 +24,6 @@ export default async function GenerateDocumentsPage() {
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
 
   if (!selectedAccountId) redirect('/portal')
-
-  const locale = getLocale(user)
 
   // Load account details, members, and history in parallel.
   // Also fetch the contact as fallback for accounts without members table rows
@@ -142,7 +139,6 @@ export default async function GenerateDocumentsPage() {
       }}
       members={mappedMembers}
       history={historyResult.data || []}
-      locale={locale}
     />
   )
 }

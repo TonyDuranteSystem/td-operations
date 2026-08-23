@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react"
 import { FileSignature, CheckCircle, Clock, PenLine } from "lucide-react"
 import { useRouter } from "next/navigation"
+import { useLocale } from "@/lib/portal/use-locale"
 
 interface PortalDocumentClientProps {
   docUrl: string
@@ -10,17 +11,18 @@ interface PortalDocumentClientProps {
   documentName: string
 }
 
-const STATUS_INFO: Record<string, { en: string; it: string; icon: typeof FileSignature; color: string; bg: string }> = {
-  draft: { en: "Ready for Signature", it: "Pronto per la Firma", icon: PenLine, color: "text-blue-600", bg: "bg-blue-50" },
-  awaiting_signature: { en: "Awaiting Your Signature", it: "In Attesa della Tua Firma", icon: Clock, color: "text-amber-600", bg: "bg-amber-50" },
-  signed: { en: "Signed", it: "Firmato", icon: CheckCircle, color: "text-green-600", bg: "bg-green-50" },
+const STATUS_ICON: Record<string, { key: string; icon: typeof FileSignature; color: string; bg: string }> = {
+  draft: { key: "signSubpages.document.ready", icon: PenLine, color: "text-blue-600", bg: "bg-blue-50" },
+  awaiting_signature: { key: "signSubpages.awaitingSignature", icon: Clock, color: "text-amber-600", bg: "bg-amber-50" },
+  signed: { key: "signDocs.status.signed", icon: CheckCircle, color: "text-green-600", bg: "bg-green-50" },
 }
 
 export function PortalDocumentClient({ docUrl, status, documentName }: PortalDocumentClientProps) {
   const router = useRouter()
+  const { t } = useLocale()
   const [currentStatus, setCurrentStatus] = useState(status)
 
-  const info = STATUS_INFO[currentStatus] || STATUS_INFO.draft
+  const info = STATUS_ICON[currentStatus] || STATUS_ICON.draft
   const Icon = info.icon
 
   const handleMessage = useCallback(
@@ -44,7 +46,7 @@ export function PortalDocumentClient({ docUrl, status, documentName }: PortalDoc
         <Icon className={`h-5 w-5 ${info.color}`} />
         <div>
           <p className={`text-sm font-semibold ${info.color}`}>{documentName}</p>
-          <p className="text-xs text-zinc-500">{info.en}</p>
+          <p className="text-xs text-zinc-500">{t(info.key)}</p>
         </div>
       </div>
 

@@ -1,16 +1,16 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CreditCard, Building2, Copy, Check, X, Loader2, ExternalLink, ChevronDown } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface TdPayModalProps {
   paymentId: string
   invoiceNumber: string
   amount: number
   currency: string
-  locale: string
   onClose: () => void
 }
 
@@ -53,8 +53,12 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   )
 }
 
-export function TdPayModal({ paymentId, invoiceNumber, amount, currency, locale, onClose }: TdPayModalProps) {
-  const isIt = locale === 'it'
+export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose }: TdPayModalProps) {
+  const { t } = useLocale()
+  // Read inside the mount-only effect below without retriggering it \u2014 t() is
+  // a fresh closure every render, and this fetch must only run once.
+  const tRef = useRef(t)
+  tRef.current = t
   const csym = currency === 'EUR' ? '\u20AC' : '$'
   const cardTotal = Math.ceil(amount * 1.05)
 
@@ -80,7 +84,7 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, locale,
       })
       .catch(err => {
         if (cancelled) return
-        setBankError(err instanceof Error ? err.message : 'Failed to load bank details')
+        setBankError(err instanceof Error ? err.message : tRef.current('tdPayModal.bankDetailsFailed'))
         setBankLoading(false)
       })
     return () => { cancelled = true }
@@ -97,11 +101,11 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, locale,
       })
       const data = await res.json()
       if (!res.ok || !data.checkoutUrl) {
-        throw new Error(data.error || 'Failed to create checkout session')
+        throw new Error(data.error || t('tdPayModal.checkoutFailed'))
       }
       window.open(data.checkoutUrl, '_blank', 'noopener,noreferrer')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to start card payment')
+      toast.error(err instanceof Error ? err.message : t('tdPayModal.cardPaymentFailed'))
     } finally {
       setStripeLoading(false)
     }
@@ -120,7 +124,7 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, locale,
         <div className="px-5 py-4 bg-gradient-to-r from-blue-600 to-blue-700 flex items-center justify-between">
           <div>
             <h3 className="text-white font-semibold text-base">
-              {isIt ? 'Paga Fattura' : 'Pay Invoice'}
+              {t('tdPayModal.title')}
             </h3>
             <p className="text-blue-100 text-sm mt-0.5">
               {invoiceNumber} — {csym}{amount.toFixed(2)} {currency}
@@ -130,7 +134,7 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, locale,
             type="button"
             onClick={onClose}
             className="text-white/70 hover:text-white p-1"
-            title={isIt ? 'Chiudi' : 'Close'}
+            title={t('tdPayModal.close')}
           >
             <X className="h-5 w-5" />
           </button>
@@ -151,11 +155,11 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, locale,
                 </div>
                 <div className="text-left">
                   <p className="text-sm font-medium text-zinc-900 group-hover:text-blue-600 transition-colors">
-                    {isIt ? 'Carta di Credito / Debito' : 'Credit / Debit Card'}
+                    {t('tdPayModal.creditCard')}
                   </p>
                   <p className="text-xs text-zinc-500">
                     {csym}{cardTotal.toFixed(2)} {currency}
-                    <span className="text-zinc-400"> ({isIt ? '+5% commissione' : '+5% fee'})</span>
+                    <span className="text-zinc-400"> ({t('tdPayModal.fee')})</span>
                   </p>
                 </div>
               </div>
@@ -163,7 +167,7 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, locale,
                 {stripeLoading
                   ? <Loader2 className="h-4 w-4 animate-spin" />
                   : <>
-                      {isIt ? 'Paga Ora' : 'Pay Now'}
+                      {t('tdPayModal.payNow')}
                       <ExternalLink className="h-4 w-4" />
                     </>
                 }
@@ -184,7 +188,7 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, locale,
                 </div>
                 <div className="text-left">
                   <p className="text-sm font-medium text-zinc-900">
-                    {isIt ? 'Bonifico / ACH' : 'Bank Transfer / ACH'}
+                    {t('tdPayModal.bankTransfer')}
                   </p>
                   <p className="text-xs text-zinc-500">{csym}{amount.toFixed(2)} {currency}</p>
                 </div>
@@ -196,12 +200,12 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, locale,
                 {bankLoading && (
                   <div className="py-2 text-xs text-zinc-500 flex items-center gap-2">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    {isIt ? 'Caricamento dettagli...' : 'Loading details...'}
+                    {t('tdPayModal.loadingDetails')}
                   </div>
                 )}
                 {bankError && (
                   <div className="py-2 text-xs text-red-600">
-                    {isIt ? 'Errore: ' : 'Error: '}{bankError}
+                    {t('tdPayModal.errorPrefix')}{bankError}
                   </div>
                 )}
                 {bankDetails && (
@@ -209,33 +213,31 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, locale,
                     {invoiceNumber && (
                       <div className="mb-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
                         <p className="text-[11px] font-semibold text-amber-900">
-                          {isIt ? '⚠️ Obbligatorio — Causale del bonifico' : '⚠️ Required — Payment reference'}
+                          {t('tdPayModal.referenceRequired')}
                         </p>
                         <div className="mt-1 flex items-center justify-between gap-2">
                           <span className="text-base font-mono font-bold text-amber-900">{invoiceNumber}</span>
                           <CopyButton text={invoiceNumber} />
                         </div>
                         <p className="mt-1 text-[11px] leading-snug text-amber-800">
-                          {isIt
-                            ? 'Inserisci questo numero nella causale del bonifico. Senza questo riferimento non possiamo identificare il pagamento.'
-                            : 'You must include this number in your transfer reference. Without it we cannot identify your payment.'}
+                          {t('tdPayModal.referenceNote')}
                         </p>
                       </div>
                     )}
                     {bankDetails.beneficiary && (
-                      <DetailRow label={isIt ? 'Beneficiario' : 'Beneficiary'} value={bankDetails.beneficiary} />
+                      <DetailRow label={t('tdPayModal.beneficiary')} value={bankDetails.beneficiary} />
                     )}
                     {bankDetails.bank && (
-                      <DetailRow label={isIt ? 'Banca' : 'Bank'} value={bankDetails.bank} />
+                      <DetailRow label={t('tdPayModal.bank')} value={bankDetails.bank} />
                     )}
                     {bankDetails.account && (
-                      <DetailRow label={isIt ? 'N. Conto' : 'Account #'} value={bankDetails.account} />
+                      <DetailRow label={t('tdPayModal.accountNumber')} value={bankDetails.account} />
                     )}
                     {bankDetails.routing && (
-                      <DetailRow label={isIt ? 'Routing' : 'Routing #'} value={bankDetails.routing} />
+                      <DetailRow label={t('tdPayModal.routing')} value={bankDetails.routing} />
                     )}
                     {bankDetails.type && (
-                      <DetailRow label={isIt ? 'Tipo' : 'Type'} value={bankDetails.type} />
+                      <DetailRow label={t('tdPayModal.type')} value={bankDetails.type} />
                     )}
                   </>
                 )}

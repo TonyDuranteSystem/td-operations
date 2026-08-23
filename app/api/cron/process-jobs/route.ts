@@ -90,6 +90,16 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     console.error('[process-jobs] chain watchdog failed (job processing continues):', e)
   }
+  // Same self-healing shape, separate module (portal translation chains have
+  // a different scope shape — language+source, not workspace/account+year —
+  // and no confirmed-submission guard to apply; see translation-watchdog.ts).
+  let translationWatchdog: import('@/lib/jobs/translation-watchdog').TranslationWatchdogResult | null = null
+  try {
+    const { runTranslationWatchdog } = await import('@/lib/jobs/translation-watchdog')
+    translationWatchdog = await runTranslationWatchdog(startTime)
+  } catch (e) {
+    console.error('[process-jobs] translation watchdog failed (job processing continues):', e)
+  }
   const results: Array<{ job_id: string; job_type: string; status: string; summary?: string; error?: string }> = []
 
   for (let i = 0; i < MAX_JOBS_PER_RUN; i++) {
@@ -155,13 +165,14 @@ export async function GET(req: NextRequest) {
     endpoint: '/api/cron/process-jobs',
     status: processed === 0 ? 'success' : results.some(r => r.status === 'failed') ? 'error' : 'success',
     duration_ms: duration,
-    details: { processed, results, reaped, watchdog },
+    details: { processed, results, reaped, watchdog, translationWatchdog },
   })
 
   return NextResponse.json({
     processed,
     reaped,
     watchdog,
+    translationWatchdog,
     duration_ms: duration,
     results,
   })

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { DecisionCard } from '@/components/portal/decision-card'
 import type { DecisionRequest } from '@/lib/decisions'
+import { useLocale } from '@/lib/portal/use-locale'
 
 /**
  * Portal-wide pending decision requests. Fetches the signed-in client's pending
@@ -14,6 +15,7 @@ import type { DecisionRequest } from '@/lib/decisions'
  */
 export function PendingDecisions({ locale }: { locale: 'en' | 'it' }) {
   const [requests, setRequests] = useState<DecisionRequest[]>([])
+  const { t } = useLocale()
 
   useEffect(() => {
     let cancelled = false
@@ -35,7 +37,7 @@ export function PendingDecisions({ locale }: { locale: 'en' | 'it' }) {
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0 space-y-3">
       <h2 className="px-1 text-sm font-semibold uppercase tracking-wide text-amber-700">
-        {locale === 'it' ? 'Azione richiesta' : 'Action required'}
+        {t('decisions.actionRequired')}
       </h2>
       {requests.map((req) => (
         <DecisionCard key={req.id} request={req} locale={locale} actionable />

@@ -2,10 +2,11 @@
 
 import { FileText, CreditCard, PenLine, CheckCircle2 } from 'lucide-react'
 import type { ActionItem, ActionItemsResult } from '@/lib/portal/queries'
+import { useLocale } from '@/lib/portal/use-locale'
+import { interpolateString } from '@/lib/template-interpolation'
 
 interface ActionItemsProps {
   data: ActionItemsResult
-  locale: 'en' | 'it'
 }
 
 const PRIORITY_STYLES = {
@@ -36,21 +37,22 @@ const TYPE_ICONS = {
   wizard: FileText,
 }
 
-function timeAgo(dateStr: string, locale: 'en' | 'it'): string {
+function timeAgo(dateStr: string, t: (key: string) => string): string {
   const days = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000)
-  if (days === 0) return locale === 'it' ? 'Oggi' : 'Today'
-  if (days === 1) return locale === 'it' ? 'Ieri' : 'Yesterday'
-  if (days < 7) return locale === 'it' ? `${days} giorni fa` : `${days} days ago`
+  if (days === 0) return t('actionItems.today')
+  if (days === 1) return t('actionItems.yesterday')
+  if (days < 7) return interpolateString(t('actionItems.daysAgo'), { days: String(days) })
   if (days < 30) {
     const weeks = Math.floor(days / 7)
-    return locale === 'it' ? `${weeks} settimana/e fa` : `${weeks}w ago`
+    return interpolateString(t('actionItems.weeksAgo'), { weeks: String(weeks) })
   }
   const months = Math.floor(days / 30)
-  return locale === 'it' ? `${months} mese/i fa` : `${months}mo ago`
+  return interpolateString(t('actionItems.monthsAgo'), { months: String(months) })
 }
 
-export function ActionItems({ data, locale }: ActionItemsProps) {
+export function ActionItems({ data }: ActionItemsProps) {
   const { items, counts } = data
+  const { t } = useLocale()
 
   // Empty state
   if (items.length === 0) {
@@ -62,10 +64,10 @@ export function ActionItems({ data, locale }: ActionItemsProps) {
           </div>
           <div>
             <p className="font-medium text-green-800">
-              {locale === 'it' ? 'Tutto in ordine!' : 'All caught up!'}
+              {t('actionItems.allCaughtUp')}
             </p>
             <p className="text-sm text-green-600">
-              {locale === 'it' ? 'Nessuna azione in sospeso.' : 'No pending actions.'}
+              {t('actionItems.noPendingActions')}
             </p>
           </div>
         </div>
@@ -78,7 +80,7 @@ export function ActionItems({ data, locale }: ActionItemsProps) {
       {/* Header with counts */}
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-lg font-semibold text-zinc-800">
-          {locale === 'it' ? 'Azioni da completare' : 'Action Items'}
+          {t('actionItems.title')}
         </h2>
         <div className="flex items-center gap-2">
           {counts.red > 0 && (
@@ -105,16 +107,22 @@ export function ActionItems({ data, locale }: ActionItemsProps) {
       {/* Action items list */}
       <div className="space-y-2">
         {items.map((item, idx) => (
-          <ActionItemCard key={idx} item={item} locale={locale} />
+          <ActionItemCard key={idx} item={item} />
         ))}
       </div>
     </div>
   )
 }
 
-function ActionItemCard({ item, locale }: { item: ActionItem; locale: 'en' | 'it' }) {
+function ActionItemCard({ item }: { item: ActionItem }) {
+  const { locale, t } = useLocale()
   const styles = PRIORITY_STYLES[item.priority]
   const Icon = TYPE_ICONS[item.type]
+  // item.title/titleIt (and description) are generated per-instance on the
+  // server (e.g. "Sign your Operating Agreement") — hand-written en/it
+  // pairs, not app-text, so they're outside the shared any-language
+  // dictionary the same way pipeline_stages client_label/client_label_it
+  // are. Falls back to English for any locale beyond en/it, same as before.
   const title = locale === 'it' ? item.titleIt : item.title
   const description = locale === 'it' ? item.descriptionIt : item.description
 
@@ -131,7 +139,7 @@ function ActionItemCard({ item, locale }: { item: ActionItem; locale: 'en' | 'it
           <div className="flex items-center justify-between gap-2">
             <p className="font-medium text-sm text-zinc-800 truncate">{title}</p>
             <span className="shrink-0 text-xs text-zinc-400">
-              {timeAgo(item.createdAt, locale)}
+              {timeAgo(item.createdAt, t)}
             </span>
           </div>
           <p className="text-xs text-zinc-500 mt-0.5">{description}</p>

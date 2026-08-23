@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { ListChecks } from 'lucide-react'
 import { FlowProgressTracker } from '@/components/portal/flow-progress-tracker'
 import type { PortalFlow } from '@/lib/portal/queries'
+import { t, type Locale } from '@/lib/portal/i18n'
 
 /**
  * "Service Status" section — a visual progress stepper per active flow. Extracted
@@ -14,9 +15,11 @@ import type { PortalFlow } from '@/lib/portal/queries'
 export function PortalFlowStatusSection({
   flows,
   locale,
+  translations = {},
 }: {
   flows: PortalFlow[]
-  locale: 'en' | 'it'
+  locale: Locale
+  translations?: Record<string, string>
 }) {
   if (flows.length === 0) return null
 
@@ -24,7 +27,7 @@ export function PortalFlowStatusSection({
     <div className="space-y-3">
       <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide flex items-center gap-2 px-1">
         <ListChecks className="h-4 w-4 text-zinc-400" />
-        {locale === 'it' ? 'Stato dei Servizi' : 'Service Status'}
+        {t('flows.serviceStatus', locale, translations)}
       </h2>
       {flows.map(f =>
         f.steps ? (
@@ -37,7 +40,7 @@ export function PortalFlowStatusSection({
           >
             <span className="text-sm font-medium text-zinc-900">{f.title}</span>
             <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600">
-              {locale === 'it' ? 'Attivo' : 'Active'}
+              {t('flows.active', locale, translations)}
             </span>
           </Link>
         )

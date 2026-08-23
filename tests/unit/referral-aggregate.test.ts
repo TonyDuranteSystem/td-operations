@@ -122,22 +122,22 @@ describe('formatEarnedSummary', () => {
 })
 
 describe('leadStatusBadge', () => {
-  it('maps known funnel statuses (EN + IT)', () => {
-    expect(leadStatusBadge('Offer Sent').label_en).toBe('Offer Sent')
-    expect(leadStatusBadge('Offer Sent').label_it).toBe('Offerta inviata')
-    expect(leadStatusBadge('Call Done').label_en).toBe('Call Done')
+  it('maps known funnel statuses to a translation key, not pre-resolved text', () => {
+    expect(leadStatusBadge('Offer Sent').labelKey).toBe('leadStatus.offerSent')
+    expect(leadStatusBadge('Call Done').labelKey).toBe('leadStatus.callDone')
     expect(leadStatusBadge('Paid').color).toContain('emerald')
   })
 
   it('keeps Lost as Lost (per Antonio)', () => {
-    expect(leadStatusBadge('Lost').label_en).toBe('Lost')
-    expect(leadStatusBadge('Lost').label_it).toBe('Perso')
+    expect(leadStatusBadge('Lost').labelKey).toBe('leadStatus.lost')
     expect(leadStatusBadge('Lost').color).toContain('red')
   })
 
-  it('falls back to the raw value for unknown/empty status', () => {
-    expect(leadStatusBadge('Weird').label_en).toBe('Weird')
-    expect(leadStatusBadge('').label_en).toBe('Pending')
-    expect(leadStatusBadge(null).label_en).toBe('Pending')
+  it('falls back to the raw value for unknown/empty status — no labelKey, so the caller shows rawLabel as-is rather than mistranslating it', () => {
+    expect(leadStatusBadge('Weird').labelKey).toBeNull()
+    expect(leadStatusBadge('Weird').rawLabel).toBe('Weird')
+    expect(leadStatusBadge('').labelKey).toBeNull()
+    expect(leadStatusBadge('').rawLabel).toBe('Pending')
+    expect(leadStatusBadge(null).rawLabel).toBe('Pending')
   })
 })

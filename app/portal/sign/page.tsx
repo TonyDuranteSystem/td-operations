@@ -16,6 +16,8 @@ import { getPortalAccounts } from '@/lib/portal/queries'
 import { cookies } from 'next/headers'
 import { getSignableDocuments } from '@/lib/portal/signable-documents'
 import { SignDocumentsClient } from './sign-documents-client'
+import { t, getLocale } from '@/lib/portal/i18n'
+import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 
 // Re-exported so ./sign-documents-client keeps importing the type from here.
 export type { SignableDocument } from '@/lib/portal/signable-documents'
@@ -25,18 +27,23 @@ export default async function PortalSignPage({ searchParams }: { searchParams?: 
   const { data: { user } } = await supabase.auth.getUser()
 
   if (!user) {
+    // No session yet, so there is no known language preference — 'en' is the
+    // correct default here, not a translation gap.
     return (
       <div className="flex items-center justify-center h-[60vh]">
-        <p className="text-zinc-500">Please log in to view your documents.</p>
+        <p className="text-zinc-500">{t('signDocs.notLoggedIn')}</p>
       </div>
     )
   }
+
+  const locale = getLocale(user)
+  const translations = await loadTranslationsForLocale(locale)
 
   const contactId = getClientContactId(user)
   if (!contactId) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
-        <p className="text-zinc-500">No contact associated with your account.</p>
+        <p className="text-zinc-500">{t('signDocs.noContact', locale, translations)}</p>
       </div>
     )
   }
@@ -62,8 +69,8 @@ export default async function PortalSignPage({ searchParams }: { searchParams?: 
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center space-y-2">
-          <p className="text-zinc-500 text-lg">No company found.</p>
-          <p className="text-zinc-400 text-sm">Your documents will appear here once your company is set up.</p>
+          <p className="text-zinc-500 text-lg">{t('signDocs.noCompany', locale, translations)}</p>
+          <p className="text-zinc-400 text-sm">{t('signDocs.noCompanyDesc', locale, translations)}</p>
         </div>
       </div>
     )

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Truck, ExternalLink, Loader2, Pencil } from 'lucide-react'
 import { COURIERS, courierTrackingUrl } from '@/lib/flows/courier'
 import { confirmItinMailed } from '@/app/portal/itin-documents/actions'
+import { useLocale } from '@/lib/portal/use-locale'
 
 /**
  * Client-facing ITIN shipping form, embedded in the "Client Signing" card on
@@ -33,44 +34,27 @@ export function ItinShippingForm({
   serviceDeliveryId,
   initialCourier,
   initialTracking,
-  locale,
 }: {
   serviceDeliveryId: string
   initialCourier: string | null
   initialTracking: string | null
-  locale: 'en' | 'it'
 }) {
-  const t = locale === 'it'
-    ? {
-        heading: 'Hai spedito i documenti? Registra la spedizione',
-        courier: 'Corriere',
-        choose: 'Seleziona…',
-        tracking: 'Numero di tracking',
-        save: 'Ho spedito i documenti',
-        saving: 'Registrazione…',
-        edit: 'Modifica',
-        savedHeading: 'Spedizione registrata — grazie!',
-        savedNote: 'Ti avviseremo appena il pacco arriva nel nostro ufficio.',
-        via: 'Corriere',
-        track: 'Traccia il pacco',
-        errFallback: 'Impossibile salvare. Riprova.',
-        confirm: 'Confermi di aver firmato e spedito i moduli W-7 e 1040-NR (doppia copia) insieme alle copie del passaporto?',
-      }
-    : {
-        heading: 'Shipped your documents? Record your shipment',
-        courier: 'Courier',
-        choose: 'Select…',
-        tracking: 'Tracking number',
-        save: 'I have mailed the documents',
-        saving: 'Recording…',
-        edit: 'Edit',
-        savedHeading: 'Shipment recorded — thank you!',
-        savedNote: 'We’ll let you know as soon as your package reaches our office.',
-        via: 'Courier',
-        track: 'Track package',
-        errFallback: 'Could not save. Please try again.',
-        confirm: 'Confirm you have signed and mailed the W-7 and 1040-NR (double copy) along with copies of your passport pages?',
-      }
+  const { t: translate } = useLocale()
+  const t = {
+    heading: translate('itinShippingForm.heading'),
+    courier: translate('itinShippingForm.courier'),
+    choose: translate('itinShippingForm.choose'),
+    tracking: translate('itinShippingForm.tracking'),
+    save: translate('itinShippingForm.save'),
+    saving: translate('itinShippingForm.saving'),
+    edit: translate('itinShippingForm.edit'),
+    savedHeading: translate('itinShippingForm.savedHeading'),
+    savedNote: translate('itinShippingForm.savedNote'),
+    via: translate('itinShippingForm.via'),
+    track: translate('itinShippingForm.track'),
+    errFallback: translate('itinShippingForm.errFallback'),
+    confirm: translate('itinShippingForm.confirm'),
+  }
 
   const [courier, setCourier] = useState(initialCourier ?? '')
   const [tracking, setTracking] = useState(initialTracking ?? '')

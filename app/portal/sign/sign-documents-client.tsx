@@ -3,45 +3,16 @@
 import Link from 'next/link'
 import { useLocale } from '@/lib/portal/use-locale'
 import { FileText, PenLine, CheckCircle2, Clock, ChevronRight, PartyPopper, FileSignature } from 'lucide-react'
+import { interpolateString } from '@/lib/template-interpolation'
 import type { SignableDocument } from './page'
 
-const DOC_INFO: Record<string, { en: { title: string; desc: string }; it: { title: string; desc: string }; icon: typeof FileText }> = {
-  oa: {
-    en: { title: 'Operating Agreement', desc: 'The governing document for your LLC — defines ownership, management, and operating rules.' },
-    it: { title: 'Operating Agreement', desc: 'Il documento costitutivo della tua LLC — definisce proprietà, gestione e regole operative.' },
-    icon: FileText,
-  },
-  lease: {
-    en: { title: 'Office Lease Agreement', desc: 'Your virtual office lease for the registered business address.' },
-    it: { title: 'Contratto di Locazione Ufficio', desc: 'Il contratto di locazione del tuo ufficio virtuale per l\'indirizzo commerciale registrato.' },
-    icon: FileText,
-  },
-  ss4: {
-    en: { title: 'SS-4 (EIN Application)', desc: 'Application for your Employer Identification Number from the IRS.' },
-    it: { title: 'SS-4 (Richiesta EIN)', desc: 'Domanda per il tuo Employer Identification Number dall\'IRS.' },
-    icon: FileText,
-  },
-  msa: {
-    en: { title: 'Annual Service Agreement', desc: 'Your annual management services contract — confirms the service period and payment schedule.' },
-    it: { title: 'Contratto di Servizio Annuale', desc: 'Il contratto annuale di gestione — conferma il periodo di servizio e il piano di pagamento.' },
-    icon: FileText,
-  },
-  '8832': {
-    en: { title: 'Form 8832 (C-Corp Election)', desc: 'Entity Classification Election — elects your LLC to be taxed as a Corporation.' },
-    it: { title: 'Form 8832 (Elezione C-Corp)', desc: 'Elezione di Classificazione dell\'Entità — elegge la tua LLC a essere tassata come Corporation.' },
-    icon: FileText,
-  },
-  document: {
-    en: { title: 'Document', desc: 'A document requiring your signature.' },
-    it: { title: 'Documento', desc: 'Un documento che richiede la tua firma.' },
-    icon: FileSignature,
-  },
-}
-
-const STATUS_LABELS: Record<string, { en: string; it: string }> = {
-  awaiting: { en: 'Awaiting Signature', it: 'In Attesa di Firma' },
-  signed: { en: 'Signed', it: 'Firmato' },
-  pending: { en: 'Pending', it: 'In Attesa' },
+const DOC_INFO: Record<string, { key: string; icon: typeof FileText }> = {
+  oa: { key: 'oa', icon: FileText },
+  lease: { key: 'lease', icon: FileText },
+  ss4: { key: 'ss4', icon: FileText },
+  msa: { key: 'msa', icon: FileText },
+  '8832': { key: 'form8832', icon: FileText },
+  document: { key: 'document', icon: FileSignature },
 }
 
 interface Props {
@@ -49,8 +20,8 @@ interface Props {
   companyName: string
 }
 
-function DocCard({ doc, locale }: { doc: SignableDocument; locale: 'en' | 'it' }) {
-  const info = DOC_INFO[doc.type]
+function DocCard({ doc, locale, t }: { doc: SignableDocument; locale: 'en' | 'it'; t: (key: string) => string }) {
+  const info = DOC_INFO[doc.type] ?? DOC_INFO.document
   const isSigned = doc.status === 'signed'
   // Legacy docs from documents table: show as signed but non-interactive
   // (clients view the actual file in the Documents tab, not here)
@@ -78,16 +49,16 @@ function DocCard({ doc, locale }: { doc: SignableDocument; locale: 'en' | 'it' }
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <h3 className={`font-semibold ${isSigned ? 'text-green-800' : 'text-zinc-900'}`}>
-            {doc.type === 'document' && doc.documentName ? doc.documentName : (info[locale]?.title || info.en.title)}
+            {doc.type === 'document' && doc.documentName ? doc.documentName : t(`signDocs.docType.${info.key}.title`)}
           </h3>
           {doc.suiteNumber && (
             <span className="text-xs bg-zinc-100 text-zinc-500 px-2 py-0.5 rounded-full">
-              Suite {doc.suiteNumber}
+              {t('signDocs.suite')} {doc.suiteNumber}
             </span>
           )}
         </div>
         <p className={`text-sm mt-0.5 ${isSigned ? 'text-green-600' : 'text-zinc-500'}`}>
-          {info[locale]?.desc || info.en.desc}
+          {t(`signDocs.docType.${info.key}.desc`)}
         </p>
 
         {/* Status */}
@@ -96,7 +67,7 @@ function DocCard({ doc, locale }: { doc: SignableDocument; locale: 'en' | 'it' }
             <>
               <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
               <span className="text-xs font-medium text-green-600">
-                {STATUS_LABELS.signed[locale] || STATUS_LABELS.signed.en}
+                {t('signDocs.status.signed')}
                 {doc.signedAt && ` — ${new Date(doc.signedAt).toLocaleDateString(locale === 'it' ? 'it-IT' : 'en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`}
               </span>
             </>
@@ -104,7 +75,7 @@ function DocCard({ doc, locale }: { doc: SignableDocument; locale: 'en' | 'it' }
             <>
               <Clock className="h-3.5 w-3.5 text-amber-500" />
               <span className="text-xs font-medium text-amber-600">
-                {STATUS_LABELS[doc.status]?.[locale] || STATUS_LABELS[doc.status]?.en || doc.status}
+                {doc.status === 'awaiting' || doc.status === 'pending' ? t(`signDocs.status.${doc.status}`) : doc.status}
               </span>
             </>
           )}
@@ -126,7 +97,7 @@ function DocCard({ doc, locale }: { doc: SignableDocument; locale: 'en' | 'it' }
 }
 
 export function SignDocumentsClient({ documents, companyName }: Props) {
-  const { locale } = useLocale()
+  const { locale, t } = useLocale()
 
   // Show ONLY what the client must act on. The page builds the full list (OA /
   // Lease / SS-4 / MSA / 8832 / generic signature requests incl. the flow Tax
@@ -141,13 +112,10 @@ export function SignDocumentsClient({ documents, companyName }: Props) {
       {/* Header */}
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-zinc-900">
-          {locale === 'it' ? 'Firma Documenti' : 'Sign Documents'}
+          {t('signDocs.title')}
         </h1>
         <p className="text-zinc-500 mt-1">
-          {locale === 'it'
-            ? `Documenti che richiedono la tua firma per ${companyName}`
-            : `Documents requiring your signature for ${companyName}`
-          }
+          {interpolateString(t('signDocs.subtitleFor'), { company: companyName })}
         </p>
       </div>
 
@@ -156,13 +124,10 @@ export function SignDocumentsClient({ documents, companyName }: Props) {
         <div className="rounded-xl border border-green-200 bg-green-50 p-8 text-center mb-8">
           <PartyPopper className="h-12 w-12 text-green-600 mx-auto mb-4" />
           <h2 className="text-xl font-semibold text-green-800">
-            {locale === 'it' ? 'Tutti i documenti sono firmati!' : 'All documents signed!'}
+            {t('signDocs.allSignedTitle')}
           </h2>
           <p className="text-green-600 mt-2">
-            {locale === 'it'
-              ? 'Hai completato la firma di tutti i documenti richiesti.'
-              : 'You have completed signing all required documents.'
-            }
+            {t('signDocs.allSignedDesc')}
           </p>
         </div>
       )}
@@ -171,10 +136,10 @@ export function SignDocumentsClient({ documents, companyName }: Props) {
       {pending.length > 0 && (
         <div className="mb-8">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-700 mb-3">
-            {locale === 'it' ? `Da firmare (${pending.length})` : `To sign (${pending.length})`}
+            {interpolateString(t('signDocs.toSign'), { count: pending.length })}
           </h2>
           <div className="space-y-4">
-            {pending.map((doc) => <DocCard key={doc.href} doc={doc} locale={locale} />)}
+            {pending.map((doc) => <DocCard key={doc.href} doc={doc} locale={locale} t={t} />)}
           </div>
         </div>
       )}
@@ -184,13 +149,10 @@ export function SignDocumentsClient({ documents, companyName }: Props) {
         <div className="rounded-xl border border-zinc-200 bg-white p-12 text-center">
           <FileSignature className="h-12 w-12 text-zinc-300 mx-auto mb-4" />
           <p className="text-zinc-500 text-lg">
-            {locale === 'it' ? 'Nessun documento da firmare' : 'No documents to sign'}
+            {t('signDocs.noDocuments')}
           </p>
           <p className="text-zinc-400 text-sm mt-1">
-            {locale === 'it'
-              ? 'I documenti appariranno qui quando saranno pronti.'
-              : 'Documents will appear here when they are ready.'
-            }
+            {t('signDocs.noDocumentsDesc')}
           </p>
         </div>
       )}

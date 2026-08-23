@@ -3,35 +3,30 @@
 import { useEffect, useState, useCallback } from 'react'
 import { FileText, CheckCircle, Clock, PenLine } from 'lucide-react'
 import { useRouter } from 'next/navigation'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface PortalLeaseClientProps {
   leaseUrl: string
   status: string
   companyName: string
   suiteNumber: string | null
-  language?: string
 }
 
-const STATUS_INFO: Record<string, { en: string; it: string; icon: typeof FileText; color: string; bg: string }> = {
-  draft: { en: 'Lease Agreement Ready', it: 'Contratto di Locazione Pronto', icon: PenLine, color: 'text-blue-600', bg: 'bg-blue-50' },
-  sent: { en: 'Lease Agreement Ready', it: 'Contratto di Locazione Pronto', icon: PenLine, color: 'text-blue-600', bg: 'bg-blue-50' },
-  viewed: { en: 'Awaiting Your Signature', it: 'In Attesa della Tua Firma', icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
-  signed: { en: 'Signed', it: 'Firmato', icon: CheckCircle, color: 'text-green-600', bg: 'bg-green-50' },
+const STATUS_ICON: Record<string, { key: string; icon: typeof FileText; color: string; bg: string }> = {
+  draft: { key: 'signSubpages.lease.ready', icon: PenLine, color: 'text-blue-600', bg: 'bg-blue-50' },
+  sent: { key: 'signSubpages.lease.ready', icon: PenLine, color: 'text-blue-600', bg: 'bg-blue-50' },
+  viewed: { key: 'signSubpages.awaitingSignature', icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
+  signed: { key: 'signDocs.status.signed', icon: CheckCircle, color: 'text-green-600', bg: 'bg-green-50' },
 }
 
-const SUBTITLES: Record<string, { en: string; it: string }> = {
-  signed: { en: 'Your Lease Agreement has been signed and saved.', it: 'Il tuo Contratto di Locazione \u00e8 stato firmato e salvato.' },
-  default: { en: 'Review and sign your Lease Agreement below.', it: 'Rivedi e firma il tuo Contratto di Locazione qui sotto.' },
-}
-
-export function PortalLeaseClient({ leaseUrl, status, companyName, suiteNumber, language }: PortalLeaseClientProps) {
+export function PortalLeaseClient({ leaseUrl, status, companyName, suiteNumber }: PortalLeaseClientProps) {
   const router = useRouter()
+  const { t } = useLocale()
   const [currentStatus, setCurrentStatus] = useState(status)
 
-  const info = STATUS_INFO[currentStatus] || STATUS_INFO.sent
+  const info = STATUS_ICON[currentStatus] || STATUS_ICON.sent
   const Icon = info.icon
-  const lang = (language === 'it' ? 'it' : 'en') as 'en' | 'it'
-  const subtitle = SUBTITLES[currentStatus] || SUBTITLES.default
+  const subtitle = currentStatus === 'signed' ? t('signSubpages.lease.subtitleSigned') : t('signSubpages.lease.subtitleDefault')
 
   // Listen for postMessage from embedded Lease page when signing completes
   const handleMessage = useCallback((event: MessageEvent) => {
@@ -52,11 +47,11 @@ export function PortalLeaseClient({ leaseUrl, status, companyName, suiteNumber, 
       <div className={`${info.bg} border-b px-6 py-3 flex items-center gap-3`}>
         <Icon className={`h-5 w-5 ${info.color}`} />
         <div>
-          <p className={`text-sm font-semibold ${info.color}`}>{info[lang]}</p>
+          <p className={`text-sm font-semibold ${info.color}`}>{t(info.key)}</p>
           <p className="text-xs text-zinc-500">
-            {subtitle[lang]}
+            {subtitle}
             {suiteNumber && currentStatus !== 'signed' && (
-              <span className="ml-2 text-zinc-400">Suite {suiteNumber}</span>
+              <span className="ml-2 text-zinc-400">{t('signDocs.suite')} {suiteNumber}</span>
             )}
           </p>
         </div>
