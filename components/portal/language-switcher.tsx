@@ -7,6 +7,7 @@ import { useLocale } from '@/lib/portal/use-locale'
 import { useRouter } from 'next/navigation'
 import { t as translate, type Locale } from '@/lib/portal/i18n'
 import { LANGUAGE_NAMES } from '@/lib/portal/language-codes'
+import { flagEmojiForLanguage } from '@/lib/portal/language-flags'
 
 /**
  * Any-language picker (dev job 12cab351) — replaces the old English/Italian
@@ -26,6 +27,7 @@ export function LanguageSwitcher({ compact = false }: { compact?: boolean }) {
   const searchRef = useRef<HTMLInputElement>(null)
 
   const currentCode = (locale as string).toLowerCase()
+  const currentFlag = flagEmojiForLanguage(currentCode)
 
   const entries = Object.entries(LANGUAGE_NAMES) as Array<[string, string]>
   const q = query.trim().toLowerCase()
@@ -97,7 +99,13 @@ export function LanguageSwitcher({ compact = false }: { compact?: boolean }) {
           <Loader2 className={compact ? 'h-3.5 w-3.5 animate-spin' : 'h-4 w-4 animate-spin'} />
         ) : (
           <>
-            <Globe className={compact ? 'h-3.5 w-3.5 shrink-0' : 'h-4 w-4 shrink-0'} />
+            {currentFlag ? (
+              <span className={compact ? 'text-sm leading-none shrink-0' : 'text-base leading-none shrink-0'} aria-hidden="true">
+                {currentFlag}
+              </span>
+            ) : (
+              <Globe className={compact ? 'h-3.5 w-3.5 shrink-0' : 'h-4 w-4 shrink-0'} />
+            )}
             <span className="truncate max-w-[8rem]">{t('languageSwitcher.changeLanguage')}</span>
             <ChevronDown className={compact ? 'h-3 w-3 shrink-0' : 'h-3.5 w-3.5 shrink-0'} />
           </>
