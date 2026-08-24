@@ -9,7 +9,7 @@ import { cookies } from 'next/headers'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import { TaxFinancialsReview } from '@/components/portal/tax-financials-review'
-import { pickOpenYear } from '@/lib/portal/open-year'
+import { pickOpenYear, mergeReachableYears } from '@/lib/portal/open-year'
 
 /**
  * /portal/tax-financials — the review/confirm screen (Slice 8, master plan
@@ -46,8 +46,23 @@ export default async function TaxFinancialsPage({ searchParams }: { searchParams
     .eq('data_received', false)
     .order('tax_year', { ascending: false })
   const openYears = Array.from(new Set(((trs ?? []) as Array<{ tax_year: number }>).map(t => t.tax_year)))
+
+  // A year whose intake already closed (data_received=true) can still have a
+  // generated P&L sitting on real uncategorized transactions — the client
+  // must be able to reach that review too, not just years still awaiting
+  // their first submission (2026-08-24, Adact Studio International). Narrower
+  // "suspected owner" flags (lib/tax/question-groups.ts) aren't checked here —
+  // no known account is stuck on that case alone; revisit if one appears.
+  const { data: pendingRows } = await supabaseAdmin
+    .from('bank_transactions')
+    .select('tax_year')
+    .eq('account_id', selectedAccountId)
+    .eq('category', 'uncategorized')
+  const pendingReviewYears = Array.from(new Set(((pendingRows ?? []) as Array<{ tax_year: number }>).map(r => r.tax_year)))
+  const reachableYears = mergeReachableYears(openYears, pendingReviewYears)
+
   const params = searchParams ? await searchParams : undefined
-  const taxYear = pickOpenYear(openYears, params?.year)
+  const taxYear = pickOpenYear(reachableYears, params?.year)
   if (!taxYear) redirect('/portal')
 
   const locale = getLocale(user)
@@ -55,10 +70,10 @@ export default async function TaxFinancialsPage({ searchParams }: { searchParams
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto">
-      {openYears.length > 1 && (
+      {reachableYears.length > 1 && (
         <nav className="mb-4 flex items-center gap-2" aria-label={t('taxFinancials.taxYear', locale, translations)}>
           <span className="text-xs text-zinc-500">{t('taxFinancials.taxYearLabel', locale, translations)}</span>
-          {openYears.map(y => (
+          {reachableYears.map(y => (
             <a
               key={y}
               href={`/portal/tax-financials?year=${y}`}

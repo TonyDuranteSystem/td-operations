@@ -1,6 +1,6 @@
 /** Portal open-year picker — the Dynamiq-2024 amendment case. */
 import { describe, it, expect } from 'vitest'
-import { pickOpenYear } from '@/lib/portal/open-year'
+import { pickOpenYear, mergeReachableYears } from '@/lib/portal/open-year'
 
 describe('pickOpenYear', () => {
   it('no open years → null (page redirects, unchanged behavior)', () => {
@@ -19,5 +19,26 @@ describe('pickOpenYear', () => {
   it('a requested year that is NOT open falls back to newest — no probing closed years', () => {
     expect(pickOpenYear([2025, 2024], '2023')).toBe(2025)
     expect(pickOpenYear([2025, 2024], 'abc')).toBe(2025)
+  })
+})
+
+describe('mergeReachableYears', () => {
+  it('neither list has anything → empty (page still redirects, unchanged)', () => {
+    expect(mergeReachableYears([], [])).toEqual([])
+  })
+  it('only open years, no pending review → passes through unaffected', () => {
+    expect(mergeReachableYears([2025], [])).toEqual([2025])
+  })
+  it('only a pending-review year, intake already closed (the Adact case) → reachable on its own', () => {
+    expect(mergeReachableYears([], [2025])).toEqual([2025])
+  })
+  it('one of each, different years → both reachable, newest first', () => {
+    expect(mergeReachableYears([2026], [2025])).toEqual([2026, 2025])
+  })
+  it('the same year in both lists → counted once', () => {
+    expect(mergeReachableYears([2025], [2025])).toEqual([2025])
+  })
+  it('sorts newest-first regardless of input order', () => {
+    expect(mergeReachableYears([2023], [2025, 2024])).toEqual([2025, 2024, 2023])
   })
 })
