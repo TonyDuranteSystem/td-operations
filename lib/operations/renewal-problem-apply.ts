@@ -17,7 +17,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { loadRenewalStatuses } from "@/lib/operations/renewal-status-loader"
 import { proposeRenewalFixes, type RenewalAutoFix, type ProposalAction } from "@/lib/operations/renewal-problem-proposals"
-import { mirrorDeadlineDate } from "@/lib/operations/renewal-dates"
+import { syncDeadlineRowForRenewalDate } from "@/lib/operations/renewal-dates"
 import type { ObligationKind, CompanyRenewalStatus } from "@/lib/operations/renewal-status"
 
 export interface ApplyAutoFixRequest {
@@ -31,7 +31,7 @@ export interface ApplyAutoFixRequest {
 }
 
 export type ApplyAutoFixResult =
-  | { ok: true; applied: string; status: CompanyRenewalStatus }
+  | { ok: true; applied: string; status: CompanyRenewalStatus; warning?: string }
   | { ok: false; error: string }
 
 const AUTO_FIXABLE: ProposalAction[] = ["roll_forward_date", "derive_missing_date"]
@@ -78,15 +78,21 @@ export async function applyRenewalAutoFix(req: ApplyAutoFixRequest): Promise<App
     return { ok: false, error: "The record changed while applying — nothing was written. Refresh and re-check." }
   }
 
-  // 3. Deadlines mirror (best-effort) + audit row.
+  // 3. Deadlines mirror (best-effort) + audit row. Year-agnostic sync (the
+  // same core logic setAccountRenewalDate uses) — no matchYear hint needed,
+  // it finds the one open row for this obligation regardless of which year
+  // it's stamped, and correctly excludes a Cancelled row from being silently
+  // repurposed (round-4 council fix — this call previously used the OLDER,
+  // year-scoped mirrorDeadlineDate, which had drifted out of sync).
   const deadlineType = req.obligation === "ra_renewal" ? "RA Renewal" : "Annual Report"
+  let mirrorWarning: string | undefined
   try {
-    await mirrorDeadlineDate(req.accountId, deadlineType, fresh.to, {
-      state: loaded.account.state_of_formation,
-      note: `Calendar one-click fix (${req.action}) by ${req.actor}`,
-      // A rolled record's open deadline row still carries the OLD cycle's year.
-      matchYear: fresh.from ? parseInt(fresh.from.slice(0, 4), 10) : undefined,
-    })
+    mirrorWarning = await syncDeadlineRowForRenewalDate(
+      req.accountId,
+      deadlineType,
+      fresh.to,
+      loaded.account.state_of_formation,
+    )
   } catch {
     // mirror is best-effort; the account date above is the source of truth
   }
@@ -115,5 +121,5 @@ export async function applyRenewalAutoFix(req: ApplyAutoFixRequest): Promise<App
   // 4. The flag clears only if a clean recompute says so.
   const after = await loadRenewalStatuses(supabaseAdmin, { accountIds: [req.accountId] })
   const status = after[0]?.status ?? loaded.status
-  return { ok: true, applied: `${fresh.column} → ${fresh.to}`, status }
+  return { ok: true, applied: `${fresh.column} → ${fresh.to}`, status, warning: mirrorWarning }
 }

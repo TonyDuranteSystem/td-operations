@@ -44,6 +44,10 @@
       {
         "selector": "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(insert|update|upsert)$/][callee.object.type='CallExpression'][callee.object.callee.property.name='from'][callee.object.arguments.0.value='contacts'] Property[key.name='portal_tier']",
         "message": "Phase D1: direct writes to `contacts.portal_tier` must go through `reconcileTier()` in lib/operations/portal.ts so contacts + linked accounts + auth.users.app_metadata all land on the same tier atomically. This rule exists because tier drift across the three layers was the root of the Luca Gallacci 2026-04-18 incident. Exempted inside lib/operations/**."
+      },
+      {
+        "selector": "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(insert|update|upsert)$/][callee.object.type='CallExpression'][callee.object.callee.property.name='from'][callee.object.arguments.0.value='accounts'] Property[key.name=/^(ra_renewal_date|annual_report_due_date)$/]",
+        "message": "Dev job 8bd0e51a: direct writes to accounts.ra_renewal_date / accounts.annual_report_due_date must go through setAccountRenewalDate() in lib/operations/renewal-dates.ts, which also keeps the deadlines-table mirror the client portal reads in sync. Four call sites writing the account column directly (never updating that mirror) is what showed clients stale/wrong renewal dates in the first place. Exempted inside lib/operations/** — and note this rule cannot see a write via a computed/dynamic key (e.g. `{ [field]: value }`); those sites need their own explicit guard in code, not just this rule."
       }
     ]
   },
