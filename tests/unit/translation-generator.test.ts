@@ -182,6 +182,40 @@ describe("generateTranslationsForLanguage", () => {
     expect(requestBody.system).toMatch(/never use literal quotation mark characters/i)
   })
 
+  it("REGRESSION GUARD for the bug found live on a real German guide batch: max_tokens must have real headroom above a full 150-key prose batch's worst measured need (German 8513, Finnish 8962 output tokens) — 8192 truncated the response mid-generation (stop_reason: \"max_tokens\") before the tool_use block completed, failing the whole batch", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: [
+          {
+            type: "tool_use",
+            name: "submit_translations",
+            input: { translations: { "nav.chat": "Chat", "nav.profile": "Profil" } },
+          },
+        ],
+      }),
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const chains = [
+      makeChain([{ data: [] }]), // recoverStuckRows
+      makeChain([{ data: [] }]), // existing rows — nothing exists yet
+      makeChain([{ data: null }]), // upsert brand-new pending rows
+      makeChain([{ data: [{ key: "nav.chat" }] }]),
+      makeChain([{ data: [{ key: "nav.profile" }] }]),
+      makeChain([{ data: null }]),
+      makeChain([{ data: null }]),
+    ]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    await generateTranslationsForLanguage("de", "German", TEST_DICT)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(requestBody.max_tokens).toBeGreaterThanOrEqual(16000)
+  })
+
   it("REGRESSION GUARD for the bug found live on a 150-key Hungarian batch: the model can return `translations` as a JSON-encoded STRING instead of a native object — the code must parse it, not silently fail every key in the batch", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

@@ -176,7 +176,19 @@ async function translateBatch(
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: 8192,
+        // BUG #6 FOUND running this for real (German, 2026-08-24): a full
+        // BATCH_SIZE (150) batch of guide/wizard prose content (full
+        // sentences, not short dictionary labels) translated into a
+        // verbose target language needs more than 8192 output tokens —
+        // German needed 8513, Finnish (tested as a worse-case language)
+        // needed 8962. The response gets cut off mid-generation
+        // (stop_reason: "max_tokens") before the tool_use block completes,
+        // so the whole batch fails cleanly (no partial/corrupted "done"
+        // rows — see the !translations check below). 16000 gives real
+        // headroom above both measured worst cases while staying well
+        // under the AI_TIMEOUT_MS wall-clock budget (the Finnish test
+        // took ~167s of the 240s allowed).
+        max_tokens: 16000,
         system:
           "You translate short user-interface phrases (buttons, menu labels, headings, short instructions) for a legal/financial services web app, from English into the target language. " +
           "Keep the same tone (plain, professional, concise) and the same length feel — these are UI labels, not prose. " +
