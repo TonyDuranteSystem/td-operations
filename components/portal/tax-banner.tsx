@@ -463,7 +463,12 @@ export function TaxBanner({
   if (dataReceived) {
     const title = interpolateString(t('taxBanner.dataReceivedTitle'), tok)
     const description = interpolateString(t('taxBanner.dataReceivedDesc'), tok)
-    const cta = t('taxBanner.editSubmission')
+    const editCta = t('taxBanner.editSubmission')
+    // The P&L/categorize step is the action that actually matters once data
+    // is received (Antonio, 2026-08-24: "it must be in evidence, it's
+    // something that the client must see first") — it leads as the primary
+    // button; re-editing the original submission is the rare case now, so it
+    // demotes to a plain text link instead of matching it in weight.
     return (
       <div className="block w-full rounded-xl border-2 border-blue-300 bg-blue-50 px-5 py-4 mb-6">
         <div className="flex items-start gap-4">
@@ -473,15 +478,21 @@ export function TaxBanner({
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-blue-900 text-sm sm:text-base">{title}</p>
             <p className="text-blue-700 text-xs sm:text-sm mt-1">{description}</p>
-            {financialsLink}
           </div>
-          <a
-            href={editHref}
-            className="shrink-0 flex items-center gap-1.5 self-center rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-            {cta}
-          </a>
+          <div className="shrink-0 flex flex-col items-end gap-1.5">
+            {showFinancialsLink && (
+              <a
+                href="/portal/tax-financials"
+                className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
+              >
+                {t('taxBanner.checkFinancials')}
+                <ArrowRight className="h-3.5 w-3.5" />
+              </a>
+            )}
+            <a href={editHref} className="text-xs font-medium text-blue-700 underline hover:text-blue-900">
+              {editCta}
+            </a>
+          </div>
         </div>
       </div>
     )
