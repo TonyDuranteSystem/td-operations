@@ -22,6 +22,9 @@ vi.mock("@/lib/portal/i18n", () => ({
 vi.mock("@/lib/portal/wizard-translatable-text", () => ({
   getWizardTranslatableText: () => ({ "First Name": "First Name" }),
 }))
+vi.mock("@/lib/portal/guide-translatable-text", () => ({
+  getGuideTranslatableText: () => ({ "Portal Guide": "Portal Guide" }),
+}))
 const triggerWorkerMock = vi.fn(async () => {})
 vi.mock("@/lib/jobs/queue", () => ({
   triggerWorker: () => triggerWorkerMock(),
@@ -154,10 +157,30 @@ describe("handleTranslateLanguage", () => {
     expect(supabaseState.insertedRows).toHaveLength(0)
   })
 
-  it("finishes cleanly with no continuation when the wizard source is done (end of the whole chain)", async () => {
+  it("translates the wizard source and chains into the guide source once done (three-source chain, not two)", async () => {
+    const r = await handleTranslateLanguage(job({ language_code: "cy", language_name: "Welsh", source: "wizard" }))
+    expect(r.ok).not.toBe(false)
+    expect(supabaseState.insertedRows).toHaveLength(1)
+    expect(supabaseState.insertedRows[0]).toMatchObject({
+      job_type: "translate_language",
+      payload: { language_code: "cy", source: "guide", chunk_index: 0, auto_retry: 0 },
+    })
+    expect(triggerWorkerMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("finishes cleanly with no continuation when the guide source is done (end of the whole chain)", async () => {
+    const r = await handleTranslateLanguage(job({ language_code: "cy", language_name: "Welsh", source: "guide" }))
+    expect(r.ok).not.toBe(false)
+    expect(supabaseState.insertedRows).toHaveLength(0)
+  })
+
+  it("does not enqueue a duplicate guide-source job when one is already live", async () => {
+    supabaseState = makeSupabaseChain([{ id: "already-live-guide" }])
     const r = await handleTranslateLanguage(job({ language_code: "cy", language_name: "Welsh", source: "wizard" }))
     expect(r.ok).not.toBe(false)
     expect(supabaseState.insertedRows).toHaveLength(0)
+    expect(r.steps.some(s => s.name === "chain_next_source" && s.status === "skipped")).toBe(true)
+    expect(triggerWorkerMock).not.toHaveBeenCalled()
   })
 
   it("finishes with nothing to do when the source has no missing keys at all", async () => {
@@ -165,7 +188,7 @@ describe("handleTranslateLanguage", () => {
       languageCode: "cy", requested: 100, alreadyDone: 100, generated: 0, failed: 0, failedKeys: [],
       noCandidates: true, stoppedOnDeadline: false, batchesSent: 0, batchesFailed: 0,
     })
-    const r = await handleTranslateLanguage(job({ language_code: "cy", language_name: "Welsh", source: "wizard" }))
+    const r = await handleTranslateLanguage(job({ language_code: "cy", language_name: "Welsh", source: "guide" }))
     expect(r.ok).not.toBe(false)
     expect(supabaseState.insertedRows).toHaveLength(0)
   })

@@ -21,6 +21,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { decideChainState, AI_CHAIN_JOB_PRIORITY, AI_CHAIN_BACKOFF_MS } from "./chain-state"
 import { getEnglishDictionary } from "@/lib/portal/i18n"
 import { getWizardTranslatableText } from "@/lib/portal/wizard-translatable-text"
+import { getGuideTranslatableText } from "@/lib/portal/guide-translatable-text"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -29,7 +30,7 @@ const SCOPE_LOOKBACK_MS = 7 * 24 * 3600_000
 const SCOPE_CAP = 50
 const STAFF_ALERT_EMAIL = "support@tonydurante.us"
 
-type Source = "dictionary" | "wizard"
+type Source = "dictionary" | "wizard" | "guide"
 
 interface ScopeKey {
   languageCode: string
@@ -49,7 +50,9 @@ function scopeId(s: ScopeKey): string {
 }
 
 function sourceDictionaryFor(source: Source): Record<string, string> {
-  return source === "wizard" ? getWizardTranslatableText() : getEnglishDictionary()
+  if (source === "wizard") return getWizardTranslatableText()
+  if (source === "guide") return getGuideTranslatableText()
+  return getEnglishDictionary()
 }
 
 /**
@@ -102,7 +105,7 @@ export async function runTranslationWatchdog(now = Date.now()): Promise<Translat
   for (const j of (jobRows ?? []) as JobRow[]) {
     const languageCode = j.payload?.language_code
     const languageName = j.payload?.language_name
-    const source: Source = j.payload?.source === "wizard" ? "wizard" : "dictionary"
+    const source: Source = j.payload?.source === "wizard" ? "wizard" : j.payload?.source === "guide" ? "guide" : "dictionary"
     if (!languageCode || !languageName) continue
     const key: ScopeKey = { languageCode, languageName, source }
     const id = scopeId(key)

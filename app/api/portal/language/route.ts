@@ -6,8 +6,19 @@ import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { SUPPORTED_LOCALES, getEnglishDictionary } from '@/lib/portal/i18n'
 import { seedPendingTranslations } from '@/lib/portal/translation-generator'
 import { getWizardTranslatableText } from '@/lib/portal/wizard-translatable-text'
+import { getGuideTranslatableText } from '@/lib/portal/guide-translatable-text'
 import { isBrandNewLanguage, distinctLanguagesTranslatedToday, MAX_NEW_LANGUAGES_PER_DAY } from '@/lib/portal/language-cap'
 import { enqueueJob } from '@/lib/jobs/queue'
+
+type TranslationSource = 'dictionary' | 'wizard' | 'guide'
+
+// Same order the job handler's own chain hops through (translate-language.ts's
+// NEXT_SOURCE) — dictionary, then wizard, then the guide/help-article library.
+const SOURCES_IN_ORDER: Array<{ source: TranslationSource; dictionary: () => Record<string, string> }> = [
+  { source: 'dictionary', dictionary: getEnglishDictionary },
+  { source: 'wizard', dictionary: getWizardTranslatableText },
+  { source: 'guide', dictionary: getGuideTranslatableText },
+]
 
 /**
  * The job handler's own chain-continuation dedup only guards chunk-to-chunk
@@ -18,7 +29,7 @@ import { enqueueJob } from '@/lib/jobs/queue'
  * prevents double-translating any single entry, but this avoids the wasted
  * duplicate job outright.
  */
-async function hasLiveTranslateJob(languageCode: string, source: 'dictionary' | 'wizard'): Promise<boolean> {
+async function hasLiveTranslateJob(languageCode: string, source: TranslationSource): Promise<boolean> {
   const { data } = await supabaseAdmin
     .from('job_queue')
     .select('id')
@@ -78,27 +89,22 @@ export async function POST(request: NextRequest) {
         // rolls over or an existing language's own top-up work triggers it.
         console.warn(`[portal/language] daily new-language cap (${MAX_NEW_LANGUAGES_PER_DAY}) reached — skipping translation kickoff for "${lang}"`)
       } else {
-        const seeded = await seedPendingTranslations(lang, getEnglishDictionary())
-        if (seeded.missing > 0) {
-          if (!(await hasLiveTranslateJob(lang, 'dictionary'))) {
-            await enqueueJob({
-              job_type: 'translate_language',
-              payload: { language_code: lang, language_name: languageName(lang) ?? lang, source: 'dictionary', chunk_index: 0, auto_retry: 0 },
-              created_by: 'portal-language-picker',
-            })
-          }
-        } else {
-          // Dictionary already fully translated for this language (e.g. a
-          // client switching back to one they used before) — still worth
-          // checking the wizard content source, which lags behind on a
-          // separate track.
-          const seededWizard = await seedPendingTranslations(lang, getWizardTranslatableText())
-          if (seededWizard.missing > 0 && !(await hasLiveTranslateJob(lang, 'wizard'))) {
-            await enqueueJob({
-              job_type: 'translate_language',
-              payload: { language_code: lang, language_name: languageName(lang) ?? lang, source: 'wizard', chunk_index: 0, auto_retry: 0 },
-              created_by: 'portal-language-picker',
-            })
+        // Seed+enqueue the FIRST source (in chain order) that still has
+        // missing work. A returning language whose dictionary (and maybe
+        // wizard) content is already fully translated only needs whichever
+        // source is genuinely behind — e.g. the help-article library, which
+        // lags behind on its own separate track.
+        for (const { source, dictionary } of SOURCES_IN_ORDER) {
+          const seeded = await seedPendingTranslations(lang, dictionary())
+          if (seeded.missing > 0) {
+            if (!(await hasLiveTranslateJob(lang, source))) {
+              await enqueueJob({
+                job_type: 'translate_language',
+                payload: { language_code: lang, language_name: languageName(lang) ?? lang, source, chunk_index: 0, auto_retry: 0 },
+                created_by: 'portal-language-picker',
+              })
+            }
+            break
           }
         }
       }

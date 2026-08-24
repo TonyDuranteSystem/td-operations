@@ -36,6 +36,9 @@ vi.mock("@/lib/portal/translation-generator", () => ({
 vi.mock("@/lib/portal/wizard-translatable-text", () => ({
   getWizardTranslatableText: () => ({ "First Name": "First Name" }),
 }))
+vi.mock("@/lib/portal/guide-translatable-text", () => ({
+  getGuideTranslatableText: () => ({ "Portal Guide": "Portal Guide" }),
+}))
 
 const enqueueJobMock = vi.fn(async () => ({ id: "job-new" }))
 vi.mock("@/lib/jobs/queue", () => ({
@@ -99,5 +102,20 @@ describe("POST /api/portal/language — dictionary enqueue dedup", () => {
     const res = await POST(req("fr"))
     expect(res.status).toBe(200)
     expect(enqueueJobMock).not.toHaveBeenCalled()
+  })
+
+  it("falls through to the guide source when both dictionary and wizard are already fully seeded (a returning language whose help-article content still lags)", async () => {
+    seedPendingTranslationsMock
+      .mockResolvedValueOnce({ requested: 100, alreadyDone: 100, missing: 0 }) // dictionary: done
+      .mockResolvedValueOnce({ requested: 50, alreadyDone: 50, missing: 0 })   // wizard: done
+      .mockResolvedValueOnce({ requested: 200, alreadyDone: 0, missing: 200 }) // guide: still missing
+    const res = await POST(req("fr"))
+    expect(res.status).toBe(200)
+    expect(seedPendingTranslationsMock).toHaveBeenCalledTimes(3)
+    expect(enqueueJobMock).toHaveBeenCalledTimes(1)
+    expect(enqueueJobMock.mock.calls[0][0]).toMatchObject({
+      job_type: "translate_language",
+      payload: { language_code: "fr", source: "guide", chunk_index: 0, auto_retry: 0 },
+    })
   })
 })
