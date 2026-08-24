@@ -627,7 +627,10 @@ export function registerOperationsTools(server: McpServer) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if (channel) q = q.eq("channel", channel as any)
         if (category) q = q.eq("category", category)
-        if (query) q = q.or(`topic.ilike.%${query}%,client_message.ilike.%${query}%`)
+        if (query) {
+          const safeQuery = query.replace(/[%,()]/g, ' ')
+          q = q.or(`topic.ilike.%${safeQuery}%,client_message.ilike.%${safeQuery}%`)
+        }
         if (date_from) q = q.gte("date", `${date_from}T00:00:00`)
         if (date_to) q = q.lte("date", `${date_to}T23:59:59`)
 
@@ -691,7 +694,10 @@ export function registerOperationsTools(server: McpServer) {
           .select("*")
           .order("title")
 
-        if (query) q = q.or(`title.ilike.%${query}%,content.ilike.%${query}%`)
+        if (query) {
+          const safeQuery = query.replace(/[%,()]/g, ' ')
+          q = q.or(`title.ilike.%${safeQuery}%,content.ilike.%${safeQuery}%`)
+        }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if (service_type) q = q.eq("service_type", service_type as any)
 
