@@ -15,7 +15,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }))
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { setAccountRenewalDate, checkDeadlineDirectWrite } from "@/lib/operations/renewal-dates"
+import { setAccountRenewalDate, checkDeadlineDirectWrite, mirrorDeadlineDate, syncDeadlineRowForRenewalDate } from "@/lib/operations/renewal-dates"
 import { deactivateSD } from "@/lib/operations/service-delivery"
 
 const ACCT = "55555555-0000-4000-8000-000000000002" // ZZ Renewal-Sync Test LLC
@@ -248,11 +248,74 @@ describe("setAccountRenewalDate — the single writer", () => {
   })
 })
 
+describe("mirrorDeadlineDate — the OLD (year-scoped) mirror, used by intake fills, the yearly roll-forward, and the Compliance Calendar's one-click repair", () => {
+  it("round-4 REGRESSION GUARD: a Cancelled row is NEVER revived here either — a new cycle gets a fresh row instead", async () => {
+    const cancelledId = await makeDeadline({ type: "RA Renewal", due: "2026-06-21", status: "Cancelled" })
+    await mirrorDeadlineDate(ACCT, "RA Renewal", "2027-08-01", {})
+
+    const rows = await readDeadlines("RA Renewal")
+    expect(rows.length).toBe(2) // the old Cancelled row + a fresh Pending one — NOT 1 (revived)
+    const cancelled = rows.find((r) => r.id === cancelledId)
+    const fresh = rows.find((r) => r.id !== cancelledId)
+    expect(cancelled?.status).toBe("Cancelled")
+    expect(cancelled?.due_date).toBe("2026-06-21") // untouched, not silently rewritten
+    expect(fresh?.status).toBe("Pending")
+    expect(fresh?.due_date).toBe("2027-08-01")
+  })
+
+  it("a NULL-status row is treated as OPEN (matched and corrected), not silently skipped into a duplicate insert (round-4, NULL-safety)", async () => {
+    const { data, error } = await supabaseAdmin
+      .from("deadlines")
+      .insert({ account_id: ACCT, deadline_type: "RA Renewal", due_date: "2027-03-15", status: null, year: 2027, assigned_to: "Luca" })
+      .select("id")
+      .single()
+    if (error) throw new Error(`fixture failed: ${error.message}`)
+    createdDeadlines.push(data!.id)
+
+    await mirrorDeadlineDate(ACCT, "RA Renewal", "2027-04-01", {})
+
+    const rows = await readDeadlines("RA Renewal")
+    expect(rows.length).toBe(1) // NOT 2 — the NULL-status row was matched, not skipped
+    expect(rows[0].id).toBe(data!.id)
+    expect(rows[0].due_date).toBe("2027-04-01")
+  })
+
+  it("still excludes Completed/Filed exactly as before (no regression on the existing contract)", async () => {
+    const filedId = await makeDeadline({ type: "RA Renewal", due: "2026-01-01", status: "Filed" })
+    await mirrorDeadlineDate(ACCT, "RA Renewal", "2027-01-01", {})
+
+    const rows = await readDeadlines("RA Renewal")
+    expect(rows.length).toBe(2)
+    const filed = rows.find((r) => r.id === filedId)
+    expect(filed?.due_date).toBe("2026-01-01") // untouched history
+  })
+})
+
+describe("syncDeadlineRowForRenewalDate (the primitive setAccountRenewalDate AND renewal-problem-apply.ts's one-click fix both now share) — NULL-status handling", () => {
+  it("a NULL-status row is treated as open by the duplicate-count check too (round-4, NULL-safety)", async () => {
+    const { data, error } = await supabaseAdmin
+      .from("deadlines")
+      .insert({ account_id: ACCT, deadline_type: "RA Renewal", due_date: "2027-03-15", status: null, year: 2027, assigned_to: "Luca" })
+      .select("id")
+      .single()
+    if (error) throw new Error(`fixture failed: ${error.message}`)
+    createdDeadlines.push(data!.id)
+
+    const warning = await syncDeadlineRowForRenewalDate(ACCT, "RA Renewal", "2027-04-01", null)
+    expect(warning).toBeUndefined()
+
+    const rows = await readDeadlines("RA Renewal")
+    expect(rows.length).toBe(1)
+    expect(rows[0].due_date).toBe("2027-04-01")
+  })
+})
+
 describe("checkDeadlineDirectWrite — the reverse-direction guard", () => {
-  it("blocks a direct due_date edit on an RA Renewal row", () => {
+  it("blocks a direct due_date edit on an RA Renewal row, pointing at a route that actually exists (round-4 fix — the old wording pointed at a nonexistent CRM field)", () => {
     const check = checkDeadlineDirectWrite("RA Renewal", { due_date: "2027-01-01" })
     expect(check.allowed).toBe(false)
-    expect(check.reason).toContain("account's own renewal-date field")
+    expect(check.reason).toContain("ra_renewal_date")
+    expect(check.reason).toContain("crm_update_record")
   })
 
   it("blocks a direct due_date edit on an Annual Report row", () => {

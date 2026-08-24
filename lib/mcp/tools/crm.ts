@@ -878,6 +878,9 @@ export function registerCrmTools(server: McpServer) {
       updates: z.record(z.string(), z.any()).describe("Fields to update as key-value pairs (e.g. {status: 'Active', phone: '+1234567890'})"),
     },
     async ({ table, id, updates }) => {
+      // Hoisted above the try so the catch block can disclose a partial
+      // commit if the generic bulk update fails AFTER these already landed.
+      const renewalWritesApplied: RenewalDateColumn[] = []
       try {
         // ── Status field validation (ENUM-backed tables only) ──
         const validationError = validateStatusField(table, updates)
@@ -907,23 +910,37 @@ export function registerCrmTools(server: McpServer) {
         // final readback reflects the true value. Key-presence check (not
         // truthiness): a caller passing `ra_renewal_date: null` to clear the
         // date must not be silently swallowed. ──
+        //
+        // Both columns are VALIDATED FIRST, before either is written — a
+        // caller passing e.g. a valid ra_renewal_date alongside a malformed
+        // annual_report_due_date must not commit the first and then report
+        // total failure on the second, leaving the account silently
+        // half-changed (round-4 council, bug-hunter major).
         let renewalMirrorWarning = ""
         if (table === "accounts") {
           const renewalColumns: RenewalDateColumn[] = ["ra_renewal_date", "annual_report_due_date"]
+          const toApply: Array<{ column: RenewalDateColumn; value: string | null }> = []
           for (const column of renewalColumns) {
             if (!Object.prototype.hasOwnProperty.call(updates, column)) continue
             const value = updates[column]
-            if (value !== null && typeof value !== "string") {
+            if (value !== null && (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value))) {
               return { content: [{ type: "text" as const, text: `❌ ${column} must be a date string (YYYY-MM-DD) or null` }] }
             }
+            toApply.push({ column, value })
+          }
+          for (const { column, value } of toApply) {
             delete updates[column]
             const result = await setAccountRenewalDate(id, column, value, {
               summary: `${column} updated via crm_update_record`,
               details: { [column]: value },
             })
             if (!result.success) {
-              return { content: [{ type: "text" as const, text: `❌ Failed to update ${column}: ${result.error}` }] }
+              const partialNote = renewalWritesApplied.length
+                ? ` (${renewalWritesApplied.join(", ")} WAS already updated and committed before this failure)`
+                : ""
+              return { content: [{ type: "text" as const, text: `❌ Failed to update ${column}: ${result.error}${partialNote}` }] }
             }
+            renewalWritesApplied.push(column)
             if (result.mirrorWarning) renewalMirrorWarning += `\n\n⚠️ ${result.mirrorWarning}`
           }
         }
@@ -1028,7 +1045,10 @@ export function registerCrmTools(server: McpServer) {
           }],
         }
       } catch (err: any) {
-        return { content: [{ type: "text" as const, text: `❌ crm_update_record error: ${err.message}` }] }
+        const partialNote = renewalWritesApplied.length
+          ? ` (${renewalWritesApplied.join(", ")} WAS already updated and committed before this failure — not rolled back)`
+          : ""
+        return { content: [{ type: "text" as const, text: `❌ crm_update_record error: ${err.message}${partialNote}` }] }
       }
     }
   )

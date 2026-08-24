@@ -1474,7 +1474,7 @@ export async function revertServiceDelivery(
     const column = RENEWAL_DATE_COLUMN[sd.service_type]
     const { data: acct } = await supabaseAdmin
       .from("accounts")
-      .select(column)
+      .select(`${column}, state_of_formation`)
       .eq("id", sd.account_id)
       .maybeSingle()
     const currentValue = (acct as Record<string, unknown> | null)?.[column] as string | null | undefined
@@ -1486,11 +1486,14 @@ export async function revertServiceDelivery(
       if (target < String(currentValue)) {
         // setAccountRenewalDate (not a direct updateAccount patch) so the
         // deadlines-table mirror un-rolls too, not just the account column
-        // (dev job 8bd0e51a).
+        // (dev job 8bd0e51a). `state` passed through so a fresh insert (if
+        // the deadlines row happens to be absent at this exact moment) isn't
+        // missing its state label (round-4 council, bug-hunter minor).
         const acctResult = await setAccountRenewalDate(sd.account_id, column, target, {
           actor,
           summary: `Un-rolled ${column} ${currentValue} → ${target} — ${sd.service_type} completion reverted (cycle reopened)`,
           details: { column, from: currentValue, to: target, sd_id: sd.id, sd_due_date: sd.due_date ?? null },
+          state: (acct as Record<string, unknown> | null)?.state_of_formation as string | null | undefined,
         })
         if (acctResult.success) {
           renewalDateReverted = { column, from: String(currentValue), to: target }

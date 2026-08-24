@@ -94,11 +94,16 @@ export function registerDeadlineTools(server: McpServer) {
         const futureDate = new Date(today.getTime() + (days_ahead || 30) * 24 * 60 * 60 * 1000)
         const futureStr = futureDate.toISOString().slice(0, 10)
 
-        // Get unfiled deadlines up to the future date (and all overdue)
+        // Get unfiled, un-cancelled deadlines up to the future date (and all
+        // overdue) — a Cancelled record (e.g. a paused renewal service) is
+        // resolved, not upcoming work (round-4 council finding). Verified
+        // live in production (2026-08-23): zero deadlines rows currently
+        // have a NULL status, so `.not(...,"in",...)`'s three-valued-logic
+        // NULL gap doesn't affect this tool today.
         let q = supabaseAdmin
           .from("deadlines")
           .select("*, accounts(company_name)")
-          .neq("status", "Filed")
+          .not("status", "in", '("Filed","Cancelled")')
           .lte("due_date", futureStr)
           .order("due_date", { ascending: true })
           .limit(200)

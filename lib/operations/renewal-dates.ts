@@ -230,23 +230,36 @@ export async function mirrorDeadlineDate(
   // includeNullYear=false: only exact-year rows match — used by the roll
   // forward's "ensure a NEW cycle row exists" so it can never steal the OLD
   // cycle's year-NULL legacy row out from under file-renewal's completion.
-  const yearFilter = (opts?.includeNullYear ?? true)
-    ? `year.eq.${lookupYear},year.is.null`
-    : `year.eq.${lookupYear}`
-  const { data: existingRows } = await supabaseAdmin
+  // Filtered in JS, not in the query, deliberately: PostgREST's `.not("status",
+  // "in", ...)` treats a NULL status as neither in-nor-out (three-valued
+  // logic), silently dropping a NULL-status row from the match instead of
+  // treating it as open — and this table is heavily legacy-imported, so a
+  // NULL status is real (round-4 council, 3 reviewers independently; the
+  // exact same trap already scarred this codebase once before). Chaining a
+  // second `.or()` for the status guard on top of the existing year `.or()`
+  // is possible in principle, but not worth the ambiguity risk over a
+  // per-account row set this small.
+  const TERMINAL_STATUSES = new Set(["Completed", "Filed", "Cancelled"])
+  const { data: rowsForType } = await supabaseAdmin
     .from("deadlines")
-    .select("id, due_date")
+    .select("id, due_date, status, year")
     .eq("account_id", accountId)
     .eq("deadline_type", deadlineType)
-    // Completed AND Filed rows are history — repurposing a Filed row to a
-    // new cycle kept its Filed status + old receipt on the client portal
-    // (senior-engineer major, council 2026-08-06). A new cycle gets a
-    // fresh Pending row instead.
-    .not("status", "in", '("Completed","Filed")')
-    .or(yearFilter)
-    .order("due_date", { ascending: false })
-    .limit(1)
-  const existing = existingRows?.[0] ?? null
+  const yearMatches = (row: { year: number | null }) =>
+    row.year === lookupYear || ((opts?.includeNullYear ?? true) && row.year == null)
+  // Completed, Filed AND Cancelled rows are history — repurposing a Filed
+  // row to a new cycle kept its Filed status + old receipt on the client
+  // portal (senior-engineer major, council 2026-08-06); repurposing a
+  // Cancelled row silently rewrote its date while it stayed hidden from the
+  // client portal, which excludes Cancelled rows entirely (round-4 council,
+  // 4 reviewers independently — this exclusion list had drifted out of sync
+  // with syncDeadlineRowForRenewalDate's below). A new cycle always gets a
+  // fresh Pending row instead. A NULL status is treated as open (not
+  // terminal), matching the NULL-safety note above.
+  const openMatches = (rowsForType ?? [])
+    .filter((r) => (r.status == null || !TERMINAL_STATUSES.has(r.status)) && yearMatches(r))
+    .sort((a, b) => (b.due_date ?? "").localeCompare(a.due_date ?? ""))
+  const existing = openMatches[0] ?? null
   if (existing) {
     if (existing.due_date !== due) {
       await supabaseAdmin
@@ -305,14 +318,19 @@ export interface SetAccountRenewalDateResult {
 }
 
 /**
- * The single sanctioned writer for accounts.ra_renewal_date /
- * accounts.annual_report_due_date. Writes the account column (through
+ * The sanctioned writer for a CORRECTION or CLEAR of accounts.ra_renewal_date
+ * / accounts.annual_report_due_date. Writes the account column (through
  * updateAccount — optimistic lock + action_log summary/details preserved
  * exactly as before) then keeps the ONE open `deadlines` row in sync, so the
  * client portal and the renewal-creation cron never disagree with what
- * staff just set. Every caller of these two columns (account-page edit,
- * crm_update_record, deactivateSD, revertServiceDelivery) must route
- * through here — enforced by a lint rule outside lib/operations/**.
+ * staff just set. Every non-cycle caller of these two columns (account-page
+ * edit, crm_update_record, deactivateSD, revertServiceDelivery) routes
+ * through here — enforced outside lib/operations/** by a lint rule that
+ * cannot see a write built with a computed/variable field name (round-4
+ * council correction — this is NOT the only writer of these columns: the
+ * SD-completion roll-forward in the separate lib/service-delivery.ts file
+ * deliberately keeps its own year-SCOPED write + mirrorDeadlineDate call,
+ * since it always knows which cycle it's filing FOR — see that module).
  *
  * Deadlines-side matching excludes Cancelled (alongside Completed/Filed):
  * a Cancelled row is never "revived" by a fresh date write — reviving
@@ -372,23 +390,38 @@ export async function setAccountRenewalDate(
   return { success: true, outcome: "updated", mirrorWarning }
 }
 
-/** Year-agnostic single-writer mirror for setAccountRenewalDate. Returns a
- *  human-readable warning string when more than one open row was found
- *  (never guesses which one to touch), else undefined. */
-async function syncDeadlineRowForRenewalDate(
+/**
+ * Year-agnostic deadlines-mirror sync — the core logic behind
+ * setAccountRenewalDate, also called directly by the Compliance Calendar's
+ * one-click record repair (lib/operations/renewal-problem-apply.ts), which
+ * keeps its OWN checked write for the account column (a precise
+ * value-level check on the specific field, stronger than a row-level
+ * optimistic lock) but must not use a SEPARATE, older mirror-sync path for
+ * the deadlines side — that drift (this function's Cancelled-exclusion
+ * fix never reaching the calendar's repair tool) was a round-4 council
+ * finding (3 reviewers): the one tool staff actually use to fix an affected
+ * account wasn't getting the fix.
+ *
+ * Returns a human-readable warning string when more than one open row was
+ * found (never guesses which one to touch), else undefined.
+ */
+export async function syncDeadlineRowForRenewalDate(
   accountId: string,
   deadlineType: "RA Renewal" | "Annual Report",
   value: string | null,
   state?: string | null,
 ): Promise<string | undefined> {
-  const { data: openRows } = await supabaseAdmin
+  // Filtered in JS, not via `.not("status","in",...)` — that operator treats
+  // a NULL status as neither in-nor-out and silently drops the row from the
+  // match (round-4 council, 3 reviewers; this table is heavily legacy-
+  // imported, so a NULL status is real, not theoretical).
+  const TERMINAL_STATUSES = new Set(["Completed", "Filed", "Cancelled"])
+  const { data: rowsForType } = await supabaseAdmin
     .from("deadlines")
     .select("id, due_date, status")
     .eq("account_id", accountId)
     .eq("deadline_type", deadlineType)
-    .not("status", "in", '("Completed","Filed","Cancelled")')
-
-  const rows = openRows ?? []
+  const rows = (rowsForType ?? []).filter((r) => r.status == null || !TERMINAL_STATUSES.has(r.status))
 
   if (rows.length > 1) {
     const warning = `${deadlineType}: found ${rows.length} open records for this account — could not auto-correct the client-facing date. Needs manual review (dedupe the deadlines rows).`
@@ -483,7 +516,11 @@ export function checkDeadlineDirectWrite(
   if (Object.prototype.hasOwnProperty.call(updates, "due_date")) {
     return {
       allowed: false,
-      reason: `Direct due_date edits on a ${deadlineType} record are blocked — correct the account's own renewal-date field instead, which keeps this record and the renewal-tracking automation in sync.`,
+      // Round-4 council (business-analyst): the earlier wording pointed at
+      // "the account's own renewal-date field" — there is no such field
+      // anywhere in the CRM UI today (grep-confirmed). Point at the two
+      // routes that actually exist instead.
+      reason: `Direct due_date edits on a ${deadlineType} record are blocked — update accounts.${deadlineType === "RA Renewal" ? "ra_renewal_date" : "annual_report_due_date"} instead (via crm_update_record, or the Compliance Calendar's record-repair action), which keeps this record and the renewal-tracking automation in sync.`,
     }
   }
   if (
