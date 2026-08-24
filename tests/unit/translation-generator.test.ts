@@ -148,6 +148,40 @@ describe("generateTranslationsForLanguage", () => {
     expect(upsertCalls.length).toBe(0)
   })
 
+  it("REGRESSION GUARD for the bug found live on a real German batch: the AI call must instruct the model never to use literal quote marks in a translated value, so a source phrase with an embedded quoted phrase (e.g. `... as \"Pay Now\" buttons ...`) can never corrupt the whole batch's JSON — reproduced 4/4 times live before this instruction, 0/3 failures after", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: [
+          {
+            type: "tool_use",
+            name: "submit_translations",
+            input: { translations: { "nav.chat": "Chat", "nav.profile": "Profil" } },
+          },
+        ],
+      }),
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const chains = [
+      makeChain([{ data: [] }]), // recoverStuckRows
+      makeChain([{ data: [] }]), // existing rows — nothing exists yet
+      makeChain([{ data: null }]), // upsert brand-new pending rows
+      makeChain([{ data: [{ key: "nav.chat" }] }]),
+      makeChain([{ data: [{ key: "nav.profile" }] }]),
+      makeChain([{ data: null }]),
+      makeChain([{ data: null }]),
+    ]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    await generateTranslationsForLanguage("fr", "French", TEST_DICT)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(requestBody.system).toMatch(/never use literal quotation mark characters/i)
+  })
+
   it("REGRESSION GUARD for the bug found live on a 150-key Hungarian batch: the model can return `translations` as a JSON-encoded STRING instead of a native object — the code must parse it, not silently fail every key in the batch", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

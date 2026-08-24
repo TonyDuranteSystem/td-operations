@@ -48,4 +48,18 @@ describe("getWizardTranslatableText", () => {
       expect(value).toBe(key)
     }
   })
+
+  it("includes the hand-listed static UI copy from wizard-client.tsx and wizard-field.tsx (2026-08-24 migration pass), not just FieldConfig-derived content", () => {
+    expect(result["Required field"]).toBe("Required field")
+    expect(result["Draft saved"]).toBe("Draft saved")
+    expect(result["Data submitted successfully!"]).toBe("Data submitted successfully!")
+    expect(result["Suggested draft"]).toBe("Suggested draft")
+    expect(result["Select country..."]).toBe("Select country...")
+  })
+
+  it("keeps the interpolation tokens intact for templated UI strings — the AI translation must NOT be asked to translate a literal count or name", () => {
+    expect(result["Member {n}"]).toBe("Member {n}")
+    expect(result["Ownership shares must total 100% (currently {pctSum}%)"]).toBe("Ownership shares must total 100% (currently {pctSum}%)")
+    expect(result["Upload failed: {files}"]).toBe("Upload failed: {files}")
+  })
 })
