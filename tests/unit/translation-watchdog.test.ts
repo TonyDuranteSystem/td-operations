@@ -6,6 +6,9 @@ vi.mock("@/lib/portal/i18n", () => ({
 vi.mock("@/lib/portal/wizard-translatable-text", () => ({
   getWizardTranslatableText: () => ({ "First Name": "First Name" }),
 }))
+vi.mock("@/lib/portal/guide-translatable-text", () => ({
+  getGuideTranslatableText: () => ({ "Portal Guide": "Portal Guide" }),
+}))
 
 const gmailPostMock = vi.fn(async () => ({}))
 vi.mock("@/lib/gmail", () => ({ gmailPost: (...a: unknown[]) => gmailPostMock(...a) }))
@@ -209,18 +212,19 @@ describe("runTranslationWatchdog", () => {
     expect(gmailPostMock).not.toHaveBeenCalled()
   })
 
-  it("keeps dictionary and wizard as separate scopes for the same language", async () => {
+  it("keeps dictionary, wizard, and guide as three separate scopes for the same language", async () => {
     const now = Date.now()
     state = makeState({
       jobQueueRows: [
         { id: "j1", status: "failed", completed_at: new Date(now - 20 * 60_000).toISOString(), payload: { language_code: "fr", language_name: "French", source: "dictionary", auto_retry: 0 } },
         { id: "j2", status: "failed", completed_at: new Date(now - 20 * 60_000).toISOString(), payload: { language_code: "fr", language_name: "French", source: "wizard", auto_retry: 0 } },
+        { id: "j3", status: "failed", completed_at: new Date(now - 20 * 60_000).toISOString(), payload: { language_code: "fr", language_name: "French", source: "guide", auto_retry: 0 } },
       ],
-      translationRows: [PENDING_ROW, { key: "First Name", status: "pending" }],
+      translationRows: [PENDING_ROW, { key: "First Name", status: "pending" }, { key: "Portal Guide", status: "pending" }],
       postInsertLiveCount: 1,
     })
     const r = await runTranslationWatchdog(now)
-    expect(r.scopes).toBe(2)
-    expect(r.reEnqueued.sort()).toEqual(["translate:fr:dictionary", "translate:fr:wizard"])
+    expect(r.scopes).toBe(3)
+    expect(r.reEnqueued.sort()).toEqual(["translate:fr:dictionary", "translate:fr:guide", "translate:fr:wizard"])
   })
 })

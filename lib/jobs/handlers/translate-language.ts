@@ -2,10 +2,10 @@
  * Job Handler: translate_language (dev job 12cab351).
  *
  * One invocation = one chunk of AI translation batches for ONE content source
- * (the central dictionary, then the wizard field labels) of ONE language,
- * bounded by the runner's deadline. Same chained-chunk shape as
- * recategorize_ai — reuses decideChunkFollowup rather than reinventing
- * continue/done/halt logic.
+ * (the central dictionary, then the wizard field labels, then the
+ * help-article library) of ONE language, bounded by the runner's deadline.
+ * Same chained-chunk shape as recategorize_ai — reuses decideChunkFollowup
+ * rather than reinventing continue/done/halt logic.
  *
  * Enqueued by the language-picker API route (app/api/portal/language/route.ts)
  * right after it seeds 'pending' rows for a language that isn't fully
@@ -19,8 +19,19 @@ import { AI_CHAIN_CHUNK_CAP, AI_CHAIN_JOB_PRIORITY, decideChunkFollowup } from "
 import { generateTranslationsForLanguage } from "@/lib/portal/translation-generator"
 import { getEnglishDictionary } from "@/lib/portal/i18n"
 import { getWizardTranslatableText } from "@/lib/portal/wizard-translatable-text"
+import { getGuideTranslatableText } from "@/lib/portal/guide-translatable-text"
 
-type Source = "dictionary" | "wizard"
+type Source = "dictionary" | "wizard" | "guide"
+
+// Chain order: dictionary finishing hops into wizard, wizard finishing hops
+// into guide, guide finishing ends the chain for this language. Kept as one
+// map (rather than three copy-pasted "if source === X" blocks) so adding a
+// fourth source later is a one-line change, not another duplicated branch.
+const NEXT_SOURCE: Record<Source, Source | null> = {
+  dictionary: "wizard",
+  wizard: "guide",
+  guide: null,
+}
 
 interface TranslateLanguagePayload {
   language_code: string
@@ -34,13 +45,15 @@ function step(name: string, status: "ok" | "error" | "skipped", detail?: string)
 }
 
 function sourceDictionaryFor(source: Source): Record<string, string> {
-  return source === "wizard" ? getWizardTranslatableText() : getEnglishDictionary()
+  if (source === "wizard") return getWizardTranslatableText()
+  if (source === "guide") return getGuideTranslatableText()
+  return getEnglishDictionary()
 }
 
 export async function handleTranslateLanguage(job: Job, ctx?: JobRunContext): Promise<JobResult> {
   const p = job.payload as unknown as TranslateLanguagePayload
   const result: JobResult = { steps: [] }
-  const source: Source = p.source === "wizard" ? "wizard" : "dictionary"
+  const source: Source = p.source === "wizard" ? "wizard" : p.source === "guide" ? "guide" : "dictionary"
   const chunkIndex = p.chunk_index ?? 0
 
   if (!p.language_code || !p.language_name) {
@@ -123,37 +136,38 @@ export async function handleTranslateLanguage(job: Job, ctx?: JobRunContext): Pr
     return result
   }
 
-  // Dictionary source finished (done/halted) → chain into the wizard source,
-  // the second content feed this system knows about. Wizard finishing (or a
-  // halt) ends the whole chain for this language — nothing to chain into.
-  if (source === "dictionary" && (followup === "done" || followup === "halt_cap")) {
+  // This source finished (done/halted) → chain into the next content source
+  // this system knows about (see NEXT_SOURCE above). The last source in the
+  // chain finishing (or halting) ends the whole chain for this language —
+  // nothing to chain into.
+  const nextSource = NEXT_SOURCE[source]
+  if (nextSource && (followup === "done" || followup === "halt_cap")) {
     try {
       // Same dedup guard as the "continue" branch above (found missing in
-      // review, 2026-08-23): two independently-finishing dictionary chains
-      // for the same language — e.g. a route-triggered pick racing a
-      // watchdog retry — could otherwise each insert their own wizard
-      // chunk-0 job.
+      // review, 2026-08-23): two independently-finishing chains for the same
+      // language — e.g. a route-triggered pick racing a watchdog retry —
+      // could otherwise each insert their own chunk-0 job for the next source.
       const { data: live } = await db
         .from("job_queue")
         .select("id")
         .eq("job_type", "translate_language")
         .eq("payload->>language_code", p.language_code)
-        .eq("payload->>source", "wizard")
+        .eq("payload->>source", nextSource)
         .in("status", ["pending", "processing"])
         .neq("id", job.id)
         .limit(1)
       if (!live || live.length === 0) {
         const { error } = await db.from("job_queue").insert({
           job_type: "translate_language",
-          payload: { language_code: p.language_code, language_name: p.language_name, source: "wizard", chunk_index: 0, auto_retry: 0 },
+          payload: { language_code: p.language_code, language_name: p.language_name, source: nextSource, chunk_index: 0, auto_retry: 0 },
           priority: AI_CHAIN_JOB_PRIORITY,
           created_by: "chain",
         })
         if (error) throw new Error(error.message)
-        result.steps.push(step("chain_next_source", "ok", "wizard source enqueued"))
+        result.steps.push(step("chain_next_source", "ok", `${nextSource} source enqueued`))
         triggerWorker().catch(() => {})
       } else {
-        result.steps.push(step("chain_next_source", "skipped", "wizard chain job already live"))
+        result.steps.push(step("chain_next_source", "skipped", `${nextSource} chain job already live`))
       }
     } catch (e) {
       console.error("[translate-language] next-source insert failed:", e)
