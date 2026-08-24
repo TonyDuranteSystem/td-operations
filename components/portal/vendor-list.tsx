@@ -4,11 +4,11 @@ import { useState } from 'react'
 import { Search, Plus, Building2, Pencil, Trash2, X, Loader2, Mail, Phone, MapPin, User } from 'lucide-react'
 import { createVendor, updateVendor, deleteVendor, type Vendor } from '@/app/portal/invoices/vendor-actions'
 import { toast } from 'sonner'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface VendorListProps {
   vendors: Vendor[]
   accountId: string
-  locale: string
 }
 
 const EMPTY_FORM = {
@@ -21,15 +21,14 @@ const EMPTY_FORM = {
   notes: '',
 }
 
-export function VendorList({ vendors: initialVendors, accountId, locale }: VendorListProps) {
+export function VendorList({ vendors: initialVendors, accountId }: VendorListProps) {
+  const { t } = useLocale()
   const [search, setSearch] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
-
-  const isIt = locale === 'it'
 
   const filtered = initialVendors.filter(v => {
     if (!search) return true
@@ -61,7 +60,7 @@ export function VendorList({ vendors: initialVendors, accountId, locale }: Vendo
 
   const handleSave = async () => {
     if (!form.name.trim()) {
-      toast.error(isIt ? 'Il nome è obbligatorio' : 'Name is required')
+      toast.error(t('vendorList.nameRequired'))
       return
     }
     setSaving(true)
@@ -69,31 +68,31 @@ export function VendorList({ vendors: initialVendors, accountId, locale }: Vendo
       if (editingId) {
         const res = await updateVendor(editingId, form)
         if (!res.success) throw new Error(res.error)
-        toast.success(isIt ? 'Fornitore aggiornato' : 'Vendor updated')
+        toast.success(t('vendorList.vendorUpdated'))
       } else {
         const res = await createVendor({ account_id: accountId, ...form })
         if (!res.success) throw new Error(res.error)
-        toast.success(isIt ? 'Fornitore creato' : 'Vendor created')
+        toast.success(t('vendorList.vendorCreated'))
       }
       setShowForm(false)
       setEditingId(null)
       setForm(EMPTY_FORM)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Error')
+      toast.error(e instanceof Error ? e.message : t('common.error'))
     } finally {
       setSaving(false)
     }
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm(isIt ? 'Eliminare questo fornitore?' : 'Delete this vendor?')) return
+    if (!confirm(t('vendorList.deleteConfirm'))) return
     setDeletingId(id)
     try {
       const res = await deleteVendor(id)
       if (!res.success) throw new Error(res.error)
-      toast.success(isIt ? 'Fornitore eliminato' : 'Vendor deleted')
+      toast.success(t('vendorList.vendorDeleted'))
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Error')
+      toast.error(e instanceof Error ? e.message : t('common.error'))
     } finally {
       setDeletingId(null)
     }
@@ -109,7 +108,7 @@ export function VendorList({ vendors: initialVendors, accountId, locale }: Vendo
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder={isIt ? 'Cerca fornitore...' : 'Search vendors...'}
+            placeholder={t('vendorList.searchPlaceholder')}
             className="w-full pl-9 pr-3 py-2.5 text-sm border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
@@ -118,7 +117,7 @@ export function VendorList({ vendors: initialVendors, accountId, locale }: Vendo
           className="flex items-center justify-center gap-2 px-4 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
         >
           <Plus className="h-4 w-4" />
-          {isIt ? 'Nuovo Fornitore' : 'New Vendor'}
+          {t('vendorList.newVendor')}
         </button>
       </div>
 
@@ -127,7 +126,7 @@ export function VendorList({ vendors: initialVendors, accountId, locale }: Vendo
         <div className="bg-white rounded-xl border shadow-sm p-5 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-zinc-700">
-              {editingId ? (isIt ? 'Modifica Fornitore' : 'Edit Vendor') : (isIt ? 'Nuovo Fornitore' : 'New Vendor')}
+              {editingId ? t('vendorList.editVendor') : t('vendorList.newVendor')}
             </h3>
             <button onClick={() => { setShowForm(false); setEditingId(null) }} className="p-1 hover:bg-zinc-100 rounded">
               <X className="h-4 w-4 text-zinc-400" />
@@ -136,7 +135,7 @@ export function VendorList({ vendors: initialVendors, accountId, locale }: Vendo
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'Ragione Sociale *' : 'Company Name *'}</label>
+              <label className="block text-xs font-medium text-zinc-600 mb-1">{t('vendorList.companyName')}</label>
               <input
                 value={form.name}
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
@@ -145,7 +144,7 @@ export function VendorList({ vendors: initialVendors, accountId, locale }: Vendo
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'Referente' : 'Contact Person'}</label>
+              <label className="block text-xs font-medium text-zinc-600 mb-1">{t('vendorList.contactPerson')}</label>
               <input
                 value={form.contact_person}
                 onChange={e => setForm(f => ({ ...f, contact_person: e.target.value }))}
@@ -164,7 +163,7 @@ export function VendorList({ vendors: initialVendors, accountId, locale }: Vendo
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'Telefono' : 'Phone'}</label>
+              <label className="block text-xs font-medium text-zinc-600 mb-1">{t('vendorList.phone')}</label>
               <input
                 value={form.phone}
                 onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
@@ -173,7 +172,7 @@ export function VendorList({ vendors: initialVendors, accountId, locale }: Vendo
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'P.IVA / Tax ID' : 'VAT / Tax ID'}</label>
+              <label className="block text-xs font-medium text-zinc-600 mb-1">{t('vendorList.vatTaxId')}</label>
               <input
                 value={form.vat_number}
                 onChange={e => setForm(f => ({ ...f, vat_number: e.target.value }))}
@@ -182,7 +181,7 @@ export function VendorList({ vendors: initialVendors, accountId, locale }: Vendo
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'Indirizzo' : 'Address'}</label>
+              <label className="block text-xs font-medium text-zinc-600 mb-1">{t('vendorList.address')}</label>
               <input
                 value={form.address}
                 onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
@@ -192,7 +191,7 @@ export function VendorList({ vendors: initialVendors, accountId, locale }: Vendo
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-zinc-600 mb-1">{isIt ? 'Note' : 'Notes'}</label>
+            <label className="block text-xs font-medium text-zinc-600 mb-1">{t('vendorList.notes')}</label>
             <textarea
               value={form.notes}
               onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
@@ -203,11 +202,11 @@ export function VendorList({ vendors: initialVendors, accountId, locale }: Vendo
 
           <div className="flex justify-end gap-2">
             <button onClick={() => { setShowForm(false); setEditingId(null) }} className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50">
-              {isIt ? 'Annulla' : 'Cancel'}
+              {t('vendorList.cancel')}
             </button>
             <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
               {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-              {editingId ? (isIt ? 'Salva' : 'Save') : (isIt ? 'Crea' : 'Create')}
+              {editingId ? t('vendorList.save') : t('vendorList.create')}
             </button>
           </div>
         </div>
@@ -217,8 +216,8 @@ export function VendorList({ vendors: initialVendors, accountId, locale }: Vendo
       {filtered.length === 0 ? (
         <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
           <Building2 className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
-          <h3 className="text-lg font-medium text-zinc-900 mb-1">{isIt ? 'Nessun fornitore' : 'No vendors yet'}</h3>
-          <p className="text-sm text-zinc-500">{isIt ? 'Aggiungi i tuoi fornitori per tracciare le spese' : 'Add your vendors to track expenses'}</p>
+          <h3 className="text-lg font-medium text-zinc-900 mb-1">{t('vendorList.noVendors')}</h3>
+          <p className="text-sm text-zinc-500">{t('vendorList.noVendorsDesc')}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

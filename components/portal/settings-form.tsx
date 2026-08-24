@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { PushToggle } from '@/components/portal/push-toggle'
 import { useLocale } from '@/lib/portal/use-locale'
+import { t as translateStatic } from '@/lib/portal/i18n'
 import { useRouter } from 'next/navigation'
 
 interface SettingsFormProps {
@@ -24,11 +25,11 @@ export function SettingsForm({ accountId }: SettingsFormProps) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (newPassword !== confirmPassword) {
-      toast.error('Passwords do not match')
+      toast.error(t('settings.passwordMismatch'))
       return
     }
     if (newPassword.length < 8) {
-      toast.error('Password must be at least 8 characters')
+      toast.error(t('settings.passwordTooShort'))
       return
     }
 
@@ -54,12 +55,12 @@ export function SettingsForm({ accountId }: SettingsFormProps) {
         await supabase.auth.signInWithPassword({ email: data.email, password: newPassword })
       }
       setLoading(false)
-      toast.success('Password updated')
+      toast.success(t('settings.passwordUpdated'))
       setNewPassword('')
       setConfirmPassword('')
     } else {
       setLoading(false)
-      toast.error(data.error || 'Could not update your password — please try again.')
+      toast.error(data.error || t('settings.passwordUpdateFailed'))
     }
   }
 
@@ -73,10 +74,12 @@ export function SettingsForm({ accountId }: SettingsFormProps) {
         body: JSON.stringify({ language: lang }),
       })
       if (!res.ok) throw new Error()
-      toast.success(lang === 'it' ? 'Lingua aggiornata' : 'Language updated')
+      // Confirm in the language just chosen, not the one being left —
+      // both en/it are in the static dictionary, so this is synchronous.
+      toast.success(translateStatic('settings.languageUpdated', lang))
       router.refresh()
     } catch {
-      toast.error('Failed to update language')
+      toast.error(t('settings.languageUpdateFailed'))
     } finally {
       setChangingLang(false)
     }

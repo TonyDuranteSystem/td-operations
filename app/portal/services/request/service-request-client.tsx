@@ -9,74 +9,52 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { labelForServiceStatic } from '@/lib/services'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface ServiceRequestClientProps {
   contactId: string
   accountId: string
   userName: string
-  locale: string
 }
 
-// Slug → UI metadata (icon, color, bilingual marketing description). Display
-// labels are resolved from the services catalog via labelForServiceStatic so
-// wording stays canonical across the app and admin tooling.
+// Slug → UI metadata (icon, color). Display labels and marketing descriptions
+// are resolved via labelForServiceStatic / the shared translation dictionary
+// so wording stays canonical across the app and admin tooling.
 const SERVICE_UI: ReadonlyArray<{
   slug: string
   icon: typeof Building2
   color: string
-  desc: { en: string; it: string }
 }> = [
-  { slug: 'llc_formation', icon: Building2, color: 'text-blue-600 bg-blue-50', desc: { en: 'Form a new US LLC (Wyoming, Delaware, New Mexico, Florida)', it: 'Costituisci una nuova LLC americana (Wyoming, Delaware, New Mexico, Florida)' } },
-  { slug: 'tax_return', icon: Receipt, color: 'text-green-600 bg-green-50', desc: { en: 'Annual tax return (Form 1120, 1065, 5472)', it: 'Dichiarazione annuale (Form 1120, 1065, 5472)' } },
-  { slug: 'itin', icon: Fingerprint, color: 'text-purple-600 bg-purple-50', desc: { en: 'W-7 preparation and filing as IRS Certified Acceptance Agent', it: 'Preparazione W-7 e invio come Agente Certificato IRS' } },
-  { slug: 'banking', icon: CreditCard, color: 'text-amber-600 bg-amber-50', desc: { en: 'USD (Relay) or EUR (Payset IBAN) business account', it: 'Conto aziendale USD (Relay) o EUR IBAN (Payset)' } },
-  { slug: 'ein', icon: FileText, color: 'text-indigo-600 bg-indigo-50', desc: { en: 'Employer Identification Number from the IRS', it: 'Employer Identification Number dall\'IRS' } },
-  { slug: 'shipping', icon: Package, color: 'text-orange-600 bg-orange-50', desc: { en: 'International shipping, mail forwarding, package handling', it: 'Spedizioni internazionali, inoltro posta, gestione pacchi' } },
-  { slug: 'notary', icon: FileText, color: 'text-rose-600 bg-rose-50', desc: { en: 'Notarization, apostille, certified copies', it: 'Notarizzazione, apostille, copie certificate' } },
-  { slug: 'closure', icon: XCircle, color: 'text-red-600 bg-red-50', desc: { en: 'LLC dissolution, state filing, IRS closure letter', it: 'Scioglimento LLC, filing statale, lettera chiusura IRS' } },
-  { slug: 'consulting', icon: Phone, color: 'text-teal-600 bg-teal-50', desc: { en: 'One-on-one consultation about your business needs', it: 'Consulenza personalizzata sulle tue esigenze aziendali' } },
+  { slug: 'llc_formation', icon: Building2, color: 'text-blue-600 bg-blue-50' },
+  { slug: 'tax_return', icon: Receipt, color: 'text-green-600 bg-green-50' },
+  { slug: 'itin', icon: Fingerprint, color: 'text-purple-600 bg-purple-50' },
+  { slug: 'banking', icon: CreditCard, color: 'text-amber-600 bg-amber-50' },
+  { slug: 'ein', icon: FileText, color: 'text-indigo-600 bg-indigo-50' },
+  { slug: 'shipping', icon: Package, color: 'text-orange-600 bg-orange-50' },
+  { slug: 'notary', icon: FileText, color: 'text-rose-600 bg-rose-50' },
+  { slug: 'closure', icon: XCircle, color: 'text-red-600 bg-red-50' },
+  { slug: 'consulting', icon: Phone, color: 'text-teal-600 bg-teal-50' },
 ]
 
-const T = {
-  en: {
-    title: 'Request a Service',
-    subtitle: 'Select a service and tell us what you need. We\'ll get back to you with a quote.',
-    selectService: 'Select a service',
-    details: 'Tell us more about what you need',
-    detailsPlaceholder: 'Describe your request in detail...',
-    urgency: 'Urgency',
-    normal: 'Normal',
-    urgent: 'Urgent',
-    submit: 'Submit Request',
-    submitting: 'Submitting...',
-    success: 'Request Submitted!',
-    successMsg: 'We\'ll review your request and get back to you shortly via chat or email.',
-    back: 'Back to Services',
-    backToPortal: 'Back to Dashboard',
-    chatBtn: 'Go to Chat',
-  },
-  it: {
-    title: 'Richiedi un Servizio',
-    subtitle: 'Seleziona un servizio e dicci di cosa hai bisogno. Ti risponderemo con un preventivo.',
-    selectService: 'Seleziona un servizio',
-    details: 'Raccontaci di più su cosa ti serve',
-    detailsPlaceholder: 'Descrivi la tua richiesta in dettaglio...',
-    urgency: 'Urgenza',
-    normal: 'Normale',
-    urgent: 'Urgente',
-    submit: 'Invia Richiesta',
-    submitting: 'Invio in corso...',
-    success: 'Richiesta Inviata!',
-    successMsg: 'Esamineremo la tua richiesta e ti risponderemo a breve via chat o email.',
-    back: 'Torna ai Servizi',
-    backToPortal: 'Torna alla Dashboard',
-    chatBtn: 'Vai alla Chat',
-  },
-}
-
-export function ServiceRequestClient({ contactId, accountId, userName, locale }: ServiceRequestClientProps) {
+export function ServiceRequestClient({ contactId, accountId, userName }: ServiceRequestClientProps) {
   const router = useRouter()
-  const t = locale === 'it' ? T.it : T.en
+  const { locale, t: translate } = useLocale()
+  const t = {
+    title: translate('serviceRequest.title'),
+    subtitle: translate('serviceRequest.subtitle'),
+    details: translate('serviceRequest.details'),
+    detailsPlaceholder: translate('serviceRequest.detailsPlaceholder'),
+    urgency: translate('serviceRequest.urgency'),
+    normal: translate('serviceRequest.normal'),
+    urgent: translate('serviceRequest.urgent'),
+    submit: translate('serviceRequest.submit'),
+    submitting: translate('serviceRequest.submitting'),
+    success: translate('serviceRequest.success'),
+    successMsg: translate('serviceRequest.successMsg'),
+    back: translate('serviceRequest.back'),
+    backToPortal: translate('serviceRequest.backToPortal'),
+    chatBtn: translate('serviceRequest.chatBtn'),
+  }
   const [selected, setSelected] = useState<string | null>(null)
   const [details, setDetails] = useState('')
   const [urgency, setUrgency] = useState<'normal' | 'urgent'>('normal')
@@ -165,7 +143,7 @@ export function ServiceRequestClient({ contactId, accountId, userName, locale }:
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {SERVICE_UI.map(svc => {
             const Icon = svc.icon
-            const desc = locale === 'it' ? svc.desc.it : svc.desc.en
+            const desc = translate(`serviceRequest.desc.${svc.slug}`)
             return (
               <button
                 key={svc.slug}
@@ -198,7 +176,7 @@ export function ServiceRequestClient({ contactId, accountId, userName, locale }:
           {(() => {
             const svc = SERVICE_UI.find(s => s.slug === selected)!
             const Icon = svc.icon
-            const desc = locale === 'it' ? svc.desc.it : svc.desc.en
+            const desc = translate(`serviceRequest.desc.${svc.slug}`)
             return (
               <div className="flex items-center gap-3 p-4 bg-white border rounded-xl mb-6">
                 <div className={cn('p-2.5 rounded-lg', svc.color)}>

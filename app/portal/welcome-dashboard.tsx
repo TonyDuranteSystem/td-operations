@@ -2,6 +2,7 @@
 
 import { FileText, CreditCard, CheckCircle, Clock, PenSquare, ArrowRight, Package, MessageCircle } from 'lucide-react'
 import Link from 'next/link'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface OfferService {
   name: string
@@ -32,14 +33,13 @@ interface WelcomeDashboardProps {
     bank_details: { beneficiary?: string; account_number?: string; routing_number?: string; iban?: string; bic?: string; bank_name?: string } | null
     payment_type: string | null
   } | null
-  locale: 'en' | 'it'
   /** True when an onboarding wizard_progress row exists with status='submitted'.
    *  Flips step 4 ("Complete Setup") from an active link into a passive
    *  "Data submitted — under review" state (Tier Model B, SOP v7.2). */
   wizardSubmitted?: boolean
 }
 
-export function WelcomeDashboard({ tier, firstName, offerData, locale, wizardSubmitted = false }: WelcomeDashboardProps) {
+export function WelcomeDashboard({ tier, firstName, offerData, wizardSubmitted = false }: WelcomeDashboardProps) {
   const isLead = tier === 'lead'
   const isFormation = tier === 'formation'
   const isOnboarding = tier === 'onboarding' || isFormation
@@ -50,7 +50,45 @@ export function WelcomeDashboard({ tier, firstName, offerData, locale, wizardSub
   // Parse services from offer
   const services: OfferService[] = Array.isArray(offerData?.services) ? offerData.services : []
 
-  const t = locale === 'it' ? IT : EN
+  const { t: translate } = useLocale()
+  const t = {
+    welcome: translate('welcomeDash.welcome'),
+    leadSubtitle: translate('welcomeDash.leadSubtitle'),
+    onboardingSubtitle: translate('welcomeDash.onboardingSubtitle'),
+    yourProgress: translate('welcomeDash.yourProgress'),
+    step1: translate('welcomeDash.step1'),
+    step1Desc: translate('welcomeDash.step1Desc'),
+    step2: translate('welcomeDash.step2'),
+    step2Desc: translate('welcomeDash.step2Desc'),
+    step3: translate('welcomeDash.step3'),
+    step3Desc: translate('welcomeDash.step3Desc'),
+    step4: translate('welcomeDash.step4'),
+    step4Desc: translate('welcomeDash.step4Desc'),
+    step4Review: translate('welcomeDash.step4Review'),
+    step4ReviewDesc: translate('welcomeDash.step4ReviewDesc'),
+    underReviewTitle: translate('welcomeDash.underReviewTitle'),
+    underReviewBody: translate('welcomeDash.underReviewBody'),
+    servicesPurchased: translate('welcomeDash.servicesPurchased'),
+    viewProposal: translate('welcomeDash.viewProposal'),
+    viewProposalDesc: translate('welcomeDash.viewProposalDesc'),
+    completeSetup: translate('welcomeDash.completeSetup'),
+    completeSetupDesc: translate('welcomeDash.completeSetupDesc'),
+    chatWithUs: translate('welcomeDash.chatWithUs'),
+    chatWithUsDesc: translate('welcomeDash.chatWithUsDesc'),
+    requestService: translate('welcomeDash.requestService'),
+    requestServiceDesc: translate('welcomeDash.requestServiceDesc'),
+    paymentRequired: translate('welcomeDash.paymentRequired'),
+    paymentDesc: translate('welcomeDash.paymentDesc'),
+    payByCard: translate('welcomeDash.payByCard'),
+    payByCardDesc: translate('welcomeDash.payByCardDesc'),
+    cardFee: translate('welcomeDash.cardFee'),
+    bankTransfer: translate('welcomeDash.bankTransfer'),
+    noFee: translate('welcomeDash.noFee'),
+    beneficiary: translate('welcomeDash.beneficiary'),
+    accountNumber: translate('welcomeDash.accountNumber'),
+    routingNumber: translate('welcomeDash.routingNumber'),
+    bankName: translate('welcomeDash.bankName'),
+  }
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto space-y-6">
@@ -311,82 +349,3 @@ function ProgressStep({
   return <div className={className}>{content}</div>
 }
 
-// ─── Translations ───
-
-const EN = {
-  welcome: 'Welcome',
-  leadSubtitle: 'Your personalized proposal is ready. Review it, sign the contract, and make your payment to get started.',
-  onboardingSubtitle: 'Thank you for your payment! Complete your setup so we can start working on your services.',
-  yourProgress: 'Your Progress',
-  step1: 'Review Proposal',
-  step1Desc: 'Review the services and pricing we discussed',
-  step2: 'Sign Contract',
-  step2Desc: 'Accept the terms and sign the service agreement',
-  step3: 'Make Payment',
-  step3Desc: 'Complete your payment to activate services',
-  step4: 'Complete Setup',
-  step4Desc: 'Provide your information so we can get started',
-  step4Review: 'Data Submitted — Under Review',
-  step4ReviewDesc: 'Our team is reviewing your information (1–2 business days)',
-  underReviewTitle: "We've received your onboarding data",
-  underReviewBody: "Our team is reviewing your submission and the documents you uploaded. We'll activate your services shortly — typically within 1–2 business days. You'll see them appear right here when we're done.",
-  servicesPurchased: 'Services Included',
-  viewProposal: 'View Your Proposal',
-  viewProposalDesc: 'Review services, pricing, and sign the contract',
-  completeSetup: 'Complete Your Setup',
-  completeSetupDesc: 'Fill in your details to start the process',
-  chatWithUs: 'Chat With Us',
-  chatWithUsDesc: 'Ask questions or get help anytime',
-  requestService: 'Request a Service',
-  requestServiceDesc: 'Notary, shipping, ITIN, banking, and more',
-  paymentRequired: 'Payment Required',
-  paymentDesc: 'Your contract is signed. Complete your payment to start the process.',
-  payByCard: 'Pay by Card',
-  payByCardDesc: 'Secure payment via credit card',
-  cardFee: 'card fee',
-  bankTransfer: 'Pay by Bank Transfer',
-  noFee: 'No fee',
-  beneficiary: 'Beneficiary',
-  accountNumber: 'Account #',
-  routingNumber: 'Routing #',
-  bankName: 'Bank',
-}
-
-const IT = {
-  welcome: 'Benvenuto',
-  leadSubtitle: 'La tua proposta personalizzata è pronta. Rivedi, firma il contratto e procedi con il pagamento.',
-  onboardingSubtitle: 'Grazie per il pagamento! Completa la registrazione per iniziare a lavorare sui tuoi servizi.',
-  yourProgress: 'Il Tuo Progresso',
-  step1: 'Rivedi la Proposta',
-  step1Desc: 'Rivedi i servizi e i prezzi che abbiamo discusso',
-  step2: 'Firma il Contratto',
-  step2Desc: 'Accetta i termini e firma il contratto di servizio',
-  step3: 'Effettua il Pagamento',
-  step3Desc: 'Completa il pagamento per attivare i servizi',
-  step4: 'Completa la Registrazione',
-  step4Desc: 'Fornisci le tue informazioni per iniziare',
-  step4Review: 'Dati Inviati — In Revisione',
-  step4ReviewDesc: 'Il nostro team sta esaminando le tue informazioni (1–2 giorni lavorativi)',
-  underReviewTitle: 'Abbiamo ricevuto i tuoi dati di onboarding',
-  underReviewBody: 'Il nostro team sta esaminando la tua compilazione e i documenti caricati. Attiveremo i tuoi servizi a breve — di solito entro 1–2 giorni lavorativi. Li vedrai apparire proprio qui quando avremo finito.',
-  servicesPurchased: 'Servizi Inclusi',
-  viewProposal: 'Visualizza la Proposta',
-  viewProposalDesc: 'Rivedi servizi, prezzi e firma il contratto',
-  completeSetup: 'Completa la Registrazione',
-  completeSetupDesc: 'Inserisci i tuoi dati per avviare il processo',
-  chatWithUs: 'Chatta Con Noi',
-  chatWithUsDesc: 'Fai domande o chiedi aiuto in qualsiasi momento',
-  requestService: 'Richiedi un Servizio',
-  requestServiceDesc: 'Notaio, spedizioni, ITIN, banking e altro',
-  paymentRequired: 'Pagamento Richiesto',
-  paymentDesc: 'Il contratto è firmato. Completa il pagamento per avviare il processo.',
-  payByCard: 'Paga con Carta',
-  payByCardDesc: 'Pagamento sicuro con carta di credito',
-  cardFee: 'commissione carta',
-  bankTransfer: 'Paga con Bonifico',
-  noFee: 'Senza commissioni',
-  beneficiary: 'Beneficiario',
-  accountNumber: 'N° Conto',
-  routingNumber: 'Routing #',
-  bankName: 'Banca',
-}

@@ -21,7 +21,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { getLocale } from '@/lib/portal/i18n'
+import { t, getLocale } from '@/lib/portal/i18n'
+import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import { getClientContactId } from '@/lib/portal-auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientActiveEnrollment } from '@/lib/td-communication/brand-audit'
@@ -48,6 +49,7 @@ export default async function TdCommunicationPage() {
   if (!user) redirect('/portal/login')
 
   const locale = getLocale(user)
+  const translations = await loadTranslationsForLocale(locale)
   const isIt = locale === 'it'
 
   // Published landing content + (only when live) the active packages grid.
@@ -106,7 +108,7 @@ export default async function TdCommunicationPage() {
   // enrollment via its own endpoint and self-hides when there's no kit, the kill-
   // switch is off, or nothing is delivered. (The page's `enrollment` above comes
   // from the active lookup, which excludes delivered rows, so it can't gate this.)
-  const socialKitCard: React.ReactNode = <SocialKitCard locale={isIt ? 'it' : 'en'} />
+  const socialKitCard: React.ReactNode = <SocialKitCard />
   // Phase 16 — self-hiding "your landing page is live" card (kill-switch +
   // delivered + published gated in its own endpoint).
   const landingLiveCard: React.ReactNode = <LandingLiveCard locale={isIt ? 'it' : 'en'} />
@@ -118,7 +120,6 @@ export default async function TdCommunicationPage() {
         <ShowcaseConsentCard
           initialConsented={!!activeConsent}
           consentText={resolveShowcaseConsentText(locale)}
-          locale={isIt ? 'it' : 'en'}
         />
       )
     } catch (err) {
@@ -127,18 +128,12 @@ export default async function TdCommunicationPage() {
   }
 
   // Footer copy (unchanged from the Phase 5/6 teaser).
-  const ctaTitle = isIt ? 'Il tuo brand audit è pronto' : 'Your brand audit is ready'
-  const ctaSub = isIt
-    ? 'Raccontaci il tuo brand: bastano pochi minuti per iniziare.'
-    : 'Tell us about your brand — it only takes a few minutes to get started.'
-  const ctaButton = isIt ? 'Inizia il tuo brand audit' : 'Start your brand audit'
-  const submittedTitle = isIt ? 'Brand audit ricevuto' : 'Brand audit received'
-  const submittedSub = isIt
-    ? 'Grazie! Il nostro team sta lavorando al tuo brand.'
-    : 'Thank you! Our team is working on your brand.'
-  const notify = isIt
-    ? 'Ti avviseremo non appena sarà pronto.'
-    : "We'll notify you when it's ready."
+  const ctaTitle = t('tdComm.ctaTitle', locale, translations)
+  const ctaSub = t('tdComm.ctaSub', locale, translations)
+  const ctaButton = t('tdComm.ctaButton', locale, translations)
+  const submittedTitle = t('tdComm.submittedTitle', locale, translations)
+  const submittedSub = t('tdComm.submittedSub', locale, translations)
+  const notify = t('tdComm.notify', locale, translations)
 
   const startCta = (
     <div className="mt-8 flex flex-col items-center gap-4 rounded-2xl border border-blue-200 bg-blue-50/60 px-6 py-7 text-center">

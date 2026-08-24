@@ -11,6 +11,7 @@ import type { ChatAttachment, PortalMessage } from '@/lib/types'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { MessageReactions } from '@/components/chat/message-reactions'
 import { useLocale } from '@/lib/portal/use-locale'
+import { interpolateString } from '@/lib/template-interpolation'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { toast } from 'sonner'
 import { format, parseISO, isToday, isYesterday } from 'date-fns'
@@ -131,14 +132,15 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   const [newTopicInput, setNewTopicInput] = useState('')
   // Map a real account_id → company name for the per-message company badge.
   const accountNameById = new Map(entities.filter(e => e.accountId).map(e => [e.accountId as string, e.label]))
-  const personalLabel = locale === 'it' ? 'Personale' : 'Personal'
+  const { t } = useLocale()
+  const personalLabel = t('dashboard.personal')
 
   // Localized display label + icon per entity (company / formation / personal).
   const entityLabel = useCallback((e: PortalChatEntity): string => {
-    if (e.kind === 'formation') return `${e.label} ${locale === 'it' ? '(in formazione)' : '(in formation)'}`
-    if (e.kind === 'personal') return locale === 'it' ? 'Personale / Generale' : 'Personal / General'
+    if (e.kind === 'formation') return `${e.label} ${t('portalChat.inFormationSuffix')}`
+    if (e.kind === 'personal') return t('portalChat.personalGeneral')
     return e.label
-  }, [locale])
+  }, [t])
 
   // Switch the active entity (view-follows-choice). Reuses the same cookies the
   // sidebar CompanySwitcher writes, so chat stays in lock-step with the rest of
@@ -208,7 +210,6 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     setPinHighlightId(id)
     window.setTimeout(() => setPinHighlightId(null), 2800)
   }
-  const { t } = useLocale()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -384,7 +385,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
         await sendMessage(msg, undefined, replyId, senderContext, tagAccountId, activeTopic)
       }
     } catch (err) {
-      const errMsg = err instanceof Error && err.message ? err.message : 'Failed to send message'
+      const errMsg = err instanceof Error && err.message ? err.message : t('portalChat.sendFailed')
       toast.error(errMsg)
       setInput(msg)
     }
@@ -427,7 +428,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     }
     setPendingFiles(prev => {
       if (prev.length >= MAX_ATTACHMENTS) {
-        toast.error(`Maximum ${MAX_ATTACHMENTS} files per message.`)
+        toast.error(interpolateString(t('portalChat.maxAttachments'), { count: MAX_ATTACHMENTS }))
         return prev
       }
       if (file.type.startsWith('image/')) {
@@ -463,11 +464,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     } else {
       if (!micConsented) {
         // Show consent notice
-        const ok = window.confirm(
-          locale === 'it'
-            ? 'Per usare l\'input vocale, il tuo audio verrà registrato e inviato per la trascrizione. La registrazione viene eliminata subito dopo. Vuoi continuare?'
-            : 'To use voice input, your audio will be recorded and sent for transcription. The recording is deleted immediately after. Continue?'
-        )
+        const ok = window.confirm(t('portalChat.micConsent'))
         if (!ok) return
         localStorage.setItem('mic_consent', 'yes')
         setMicConsented(true)
@@ -513,7 +510,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
         onClick={handleRefresh}
         disabled={isRefreshing || loading}
         className="absolute top-2 right-2 z-10 p-1.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-40 transition-colors"
-        title={locale === 'it' ? 'Aggiorna messaggi' : 'Refresh messages'}
+        title={t('portalChat.refreshMessages')}
       >
         <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
       </button>
@@ -521,7 +518,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
       {isDragging && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center border-2 border-dashed border-blue-400 bg-blue-50/90 rounded-xl pointer-events-none">
           <Paperclip className="h-10 w-10 text-blue-400 mb-2" />
-          <p className="text-sm font-medium text-blue-600">Drop file to attach</p>
+          <p className="text-sm font-medium text-blue-600">{t('portalChat.dropToAttach')}</p>
         </div>
       )}
       {/* Prominent "Chatting about" banner — multi-entity clients only. Big and
@@ -544,7 +541,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
               </span>
               <div className="min-w-0">
                 <div className={cn('text-[10px] font-semibold uppercase tracking-wider', accent.label)}>
-                  {locale === 'it' ? 'Stai scrivendo a' : 'Chatting about'}
+                  {t('portalChat.chattingAbout')}
                 </div>
                 <div className={cn('text-base sm:text-lg font-bold leading-tight truncate', accent.name)} title={entityLabel(currentEntity)}>
                   {entityLabel(currentEntity)}
@@ -556,7 +553,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
               onClick={() => setPopupOpen(true)}
               className={cn('shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white border text-xs font-semibold transition-colors', accent.btn)}
             >
-              {locale === 'it' ? 'Cambia' : 'Switch'}
+              {t('portalChat.switch')}
               <ChevronDown className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -573,7 +570,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
               : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
           )}
         >
-          {locale === 'it' ? 'Argomento' : 'Topic'}
+          {t('portalChat.topic')}
           {(unreadByTopic[''] ?? 0) > 0 && (
             <span className={cn(
               'inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold',
@@ -628,7 +625,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
               setNewTopicInput('')
               setCreatingTopic(false)
             }}
-            placeholder={locale === 'it' ? 'Nome argomento…' : 'Topic name…'}
+            placeholder={t('portalChat.topicNamePlaceholder')}
             className="shrink-0 px-2.5 py-1 text-[11px] rounded-full border border-blue-300 outline-none bg-white text-zinc-800 placeholder:text-zinc-400 w-32"
           />
         ) : (
@@ -637,7 +634,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
             className="shrink-0 flex items-center gap-1 px-2.5 py-1 text-[11px] rounded-full border border-dashed border-zinc-300 text-zinc-500 hover:text-zinc-700 hover:border-zinc-400 transition-colors"
           >
             <Plus className="h-3 w-3" />
-            {locale === 'it' ? 'Crea nuovo argomento' : 'Create a new topic'}
+            {t('portalChat.createNewTopic')}
           </button>
         )}
       </div>
@@ -653,7 +650,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
           <div className="flex flex-col items-center justify-center h-full text-zinc-400">
             <MessageCircle className="h-12 w-12 mb-3" />
             <p className="text-sm font-medium">{t('chat.noMessages')}</p>
-            <p className="text-xs mt-1">Send a message to start the conversation</p>
+            <p className="text-xs mt-1">{t('chat.noMessagesDesc')}</p>
           </div>
         ) : (
           <>
@@ -670,7 +667,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                 ) : (
                   <ChevronUp className="h-3 w-3" />
                 )}
-                {locale === 'it' ? 'Carica messaggi precedenti' : 'Load older messages'}
+                {t('portalChat.loadOlderMessages')}
               </button>
             </div>
           )}
@@ -682,7 +679,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                 <div className="flex items-center gap-1 mb-1">
                   <Pin className="h-3 w-3 text-amber-600" />
                   <span className="text-[11px] font-medium text-amber-700">
-                    {locale === 'it' ? 'Fissati' : 'Pinned'} ({pinned.length})
+                    {t('portalChat.pinned')} ({pinned.length})
                   </span>
                 </div>
                 <div className="space-y-0.5 max-h-28 overflow-y-auto">
@@ -693,12 +690,12 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                         className="flex items-start gap-1.5 text-xs text-zinc-700 flex-1 min-w-0 text-left"
                       >
                         <Pin className="h-3 w-3 text-amber-500 mt-0.5 shrink-0" />
-                        <span className="truncate flex-1">{pm.message || (locale === 'it' ? '[Allegato]' : '[Attachment]')}</span>
+                        <span className="truncate flex-1">{pm.message || t('portalChat.attachmentPlaceholder')}</span>
                       </button>
                       <button
                         onClick={() => togglePin(pm.id, false)}
                         className="shrink-0 text-zinc-400 hover:text-red-600"
-                        title={locale === 'it' ? 'Rimuovi' : 'Unpin'}
+                        title={t('portalChat.unpin')}
                       >
                         <X className="h-3 w-3" />
                       </button>
@@ -735,14 +732,14 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                       <button
                         onClick={() => togglePin(msg.id, !msg.pinned_at)}
                         className={cn('p-1 rounded-full hover:bg-zinc-100 transition-colors shrink-0', msg.pinned_at ? 'text-amber-500' : 'text-zinc-300 hover:text-zinc-600')}
-                        title={msg.pinned_at ? (locale === 'it' ? 'Rimuovi' : 'Unpin') : (locale === 'it' ? 'Fissa' : 'Pin')}
+                        title={msg.pinned_at ? t('portalChat.unpin') : t('portalChat.pin')}
                       >
                         <Pin className={cn('h-3.5 w-3.5', msg.pinned_at && 'fill-amber-400')} />
                       </button>
                       <button
                         onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
                         className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
-                        title="Reply"
+                        title={t('portalChat.reply')}
                       >
                         <Reply className="h-3.5 w-3.5" />
                       </button>
@@ -769,7 +766,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                       )}>
                         {msg.sender_context === 'person'
                           ? personalLabel
-                          : (msg.account_id && accountNameById.get(msg.account_id)) || (locale === 'it' ? 'Azienda' : 'Company')}
+                          : (msg.account_id && accountNameById.get(msg.account_id)) || t('dashboard.company')}
                       </span>
                     )}
                     {!isOwn && (
@@ -883,14 +880,14 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                       <button
                         onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
                         className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
-                        title="Reply"
+                        title={t('portalChat.reply')}
                       >
                         <Reply className="h-3.5 w-3.5" />
                       </button>
                       <button
                         onClick={() => togglePin(msg.id, !msg.pinned_at)}
                         className={cn('p-1 rounded-full hover:bg-zinc-100 transition-colors shrink-0', msg.pinned_at ? 'text-amber-500' : 'text-zinc-300 hover:text-zinc-600')}
-                        title={msg.pinned_at ? (locale === 'it' ? 'Rimuovi' : 'Unpin') : (locale === 'it' ? 'Fissa' : 'Pin')}
+                        title={msg.pinned_at ? t('portalChat.unpin') : t('portalChat.pin')}
                       >
                         <Pin className={cn('h-3.5 w-3.5', msg.pinned_at && 'fill-amber-400')} />
                       </button>
@@ -898,7 +895,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                         <button
                           onClick={() => toggleKeepUnread(msg.id, !msg.client_kept_unread)}
                           className={cn('p-1 rounded-full hover:bg-zinc-100 transition-colors shrink-0', msg.client_kept_unread ? 'text-blue-500' : 'text-zinc-300 hover:text-zinc-600')}
-                          title={msg.client_kept_unread ? (locale === 'it' ? 'Segna come letto' : 'Mark read') : (locale === 'it' ? 'Segna come non letto' : 'Mark unread')}
+                          title={msg.client_kept_unread ? t('portalChat.markRead') : t('portalChat.markUnread')}
                         >
                           <MailOpen className="h-3.5 w-3.5" />
                         </button>
@@ -935,10 +932,10 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
         <button
           onClick={jumpToLatest}
           className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-zinc-800 rounded-full shadow-lg hover:bg-zinc-700 transition-colors"
-          title={locale === 'it' ? 'Vai al più recente' : 'Jump to latest'}
+          title={t('portalChat.jumpToLatest')}
         >
           <ChevronDown className="h-3 w-3" />
-          {locale === 'it' ? 'Più recenti' : 'Latest'}
+          {t('portalChat.latest')}
           {unreadBelowCount > 0 && (
             <span className="ml-0.5 min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-semibold leading-none">
               {unreadBelowCount}
@@ -1047,12 +1044,10 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
           >
             <div className="px-4 py-3 border-b">
               <h3 className="text-sm font-semibold text-zinc-900">
-                {locale === 'it' ? 'Di quale azienda si tratta?' : 'Which company is this message about?'}
+                {t('portalChat.whichCompanyTitle')}
               </h3>
               <p className="text-[11px] text-zinc-500 mt-0.5">
-                {locale === 'it'
-                  ? 'Scegli a quale azienda appartiene questa conversazione.'
-                  : 'Pick which company this conversation belongs to.'}
+                {t('portalChat.whichCompanyDesc')}
               </p>
             </div>
             <div className="max-h-72 overflow-y-auto py-1">
@@ -1079,9 +1074,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                     </span>
                     {e.isShared && (
                       <span className="block text-[10px] text-amber-700 mt-0.5">
-                        {locale === 'it'
-                          ? 'Gli altri membri di questa azienda vedranno questo messaggio.'
-                          : 'Other members of this company will see this message.'}
+                        {t('portalChat.sharedEntityNote')}
                       </span>
                     )}
                   </span>
@@ -1105,7 +1098,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
               <button
                 onClick={() => setShowEmojiPicker(v => !v)}
                 className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
-                title="Emoji"
+                title={t('portalChat.emoji')}
               >
                 <Smile className="h-5 w-5" />
               </button>

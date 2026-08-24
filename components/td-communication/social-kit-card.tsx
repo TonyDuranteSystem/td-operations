@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { Download, Share2, Loader2 } from 'lucide-react'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface KitState {
   available: boolean
@@ -15,10 +16,10 @@ interface KitState {
  * fetches the (kill-switch + delivered + IDOR gated) client endpoint on mount and
  * renders NOTHING when a kit isn't available — so the page can mount it
  * unconditionally in the delivered branch. The signed download URL is minted
- * fresh by the server (never stale). Bilingual EN/IT.
+ * fresh by the server (never stale). Any language (dev job 12cab351).
  */
-export function SocialKitCard({ locale }: { locale: 'en' | 'it' }) {
-  const isIt = locale === 'it'
+export function SocialKitCard() {
+  const { t } = useLocale()
   const [state, setState] = useState<KitState | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -43,11 +44,9 @@ export function SocialKitCard({ locale }: { locale: 'en' | 'it' }) {
   // Render nothing until we know a kit is available (no empty placeholder).
   if (loading || !state?.available || !state.download_url) return null
 
-  const title = isIt ? 'Il tuo kit per i social' : 'Your social sharing kit'
-  const body = isIt
-    ? 'Asset pronti da pubblicare — foto profilo, copertine e post brandizzati nei tuoi colori.'
-    : 'Ready-to-post brand assets — profile pictures, covers, and branded posts in your colours.'
-  const button = isIt ? 'Scarica il kit' : 'Download kit'
+  const title = t('socialKit.title')
+  const body = t('socialKit.body')
+  const button = t('socialKit.button')
 
   return (
     <div className="mt-8 flex flex-col items-center gap-4 rounded-2xl border border-blue-200 bg-blue-50/60 px-6 py-7 text-center">

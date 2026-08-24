@@ -14,6 +14,8 @@ import { getPortalAccounts } from "@/lib/portal/queries"
 import { APP_BASE_URL } from "@/lib/config"
 import { PortalDocumentClient } from "./portal-document-client"
 import { cookies } from "next/headers"
+import { t, getLocale } from "@/lib/portal/i18n"
+import { loadTranslationsForLocale } from "@/lib/portal/translations-store"
 
 export default async function PortalSignDocumentPage({
   searchParams,
@@ -26,16 +28,19 @@ export default async function PortalSignDocumentPage({
   if (!user) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
-        <p className="text-zinc-500">Please log in to view your documents.</p>
+        <p className="text-zinc-500">{t("signDocs.notLoggedIn")}</p>
       </div>
     )
   }
+
+  const locale = getLocale(user)
+  const translations = await loadTranslationsForLocale(locale)
 
   const contactId = getClientContactId(user)
   if (!contactId) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
-        <p className="text-zinc-500">No contact associated with your account.</p>
+        <p className="text-zinc-500">{t("signDocs.noContact", locale, translations)}</p>
       </div>
     )
   }
@@ -46,7 +51,7 @@ export default async function PortalSignDocumentPage({
   if (!token) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
-        <p className="text-zinc-500">No document specified.</p>
+        <p className="text-zinc-500">{t("signSubpages.document.noDocSpecified", locale, translations)}</p>
       </div>
     )
   }
@@ -68,8 +73,8 @@ export default async function PortalSignDocumentPage({
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center space-y-2">
-          <p className="text-zinc-500 text-lg">Document not found.</p>
-          <p className="text-zinc-400 text-sm">The document may have been removed or is not associated with your account.</p>
+          <p className="text-zinc-500 text-lg">{t("signSubpages.document.notFoundTitle", locale, translations)}</p>
+          <p className="text-zinc-400 text-sm">{t("signSubpages.document.notFoundDesc", locale, translations)}</p>
         </div>
       </div>
     )

@@ -20,6 +20,7 @@ import { handleCountryPolicySweep } from "./handlers/country-policy-sweep"
 import { handleEsignSendEmail } from "./handlers/esign-send-email"
 import { handleArchiveTaxSubmission } from "./handlers/archive-tax-submission"
 import { handleArchiveSubmission } from "./handlers/archive-submission"
+import { handleTranslateLanguage } from "./handlers/translate-language"
 
 /** Runner-supplied execution context (Phase 3R): the hard wall-clock deadline
  *  anchored to the RUNNER's invocation start — a chunked handler must stop
@@ -73,6 +74,10 @@ const handlers: Record<string, JobHandler> = {
   // lib/forms/archive-registry.ts. Payload carries { form_type, table,
   // submission_id }. Tax keeps its own handler (left untouched).
   archive_submission: handleArchiveSubmission,
+  // Added 2026-08-23 (dev job 12cab351) — chained AI translation of the
+  // portal's UI text into a client-picked language. One chunk per invocation,
+  // same shape as recategorize_ai; chains dictionary source -> wizard source.
+  translate_language: handleTranslateLanguage,
 }
 
 export function getJobHandler(jobType: string): JobHandler | null {

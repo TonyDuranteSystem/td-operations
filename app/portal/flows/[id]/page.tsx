@@ -5,7 +5,8 @@ import { ArrowLeft, ArrowRight, MessageSquare, Layers, PenSquare } from 'lucide-
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { getLocale } from '@/lib/portal/i18n'
+import { t, getLocale } from '@/lib/portal/i18n'
+import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import { FlowProgressTracker } from '@/components/portal/flow-progress-tracker'
 import { FlowStageJourney, type ShippingCard } from '@/components/portal/flow-stage-journey'
 import { DecisionCard } from '@/components/portal/decision-card'
@@ -30,46 +31,28 @@ const CATEGORY_LABELS: Record<number, string> = {
  */
 function buildItinShippingCard(
   locale: 'en' | 'it',
+  translations: Record<string, string>,
   documents: { id: string; file_name: string }[],
   shippingForm: ShippingCard['shippingForm'],
 ): ShippingCard {
   const addressLines = [...MAILING_DESTINATION_LINES]
-  if (locale === 'it') {
-    return {
-      stageName: 'Client Signing',
-      title: 'Stampa, firma e spedisci i documenti',
-      intro: 'Stampa i documenti, firmali a inchiostro e spediscili a:',
-      addressLines,
-      checklist: [
-        '2 copie firmate del Form W-7',
-        '2 copie firmate del Form 1040-NR (con Schedule OI)',
-        '2 copie a colori del passaporto (pagina dati + pagina firma)',
-      ],
-      tracking: 'Usa un corriere tracciabile (FedEx, DHL, UPS) e registra qui sotto la spedizione.',
-      // The CAA warning existed ONLY on /portal/itin-documents. A client who
-      // followed the emailed link landed here and never saw it — and mailing an
-      // original passport is not a recoverable mistake.
-      passportWarning: 'NON spedire il passaporto originale — servono solo le fotocopie a colori.',
-      documentsHeading: 'I tuoi documenti da stampare:',
-      downloadLabel: 'Scarica',
-      documents,
-      shippingForm,
-    }
-  }
   return {
     stageName: 'Client Signing',
-    title: 'Print, sign & mail your documents',
-    intro: 'Print these documents, sign them with wet ink, and mail to:',
+    title: t('itinShipping.title', locale, translations),
+    intro: t('itinShipping.intro', locale, translations),
     addressLines,
     checklist: [
-      '2× signed Form W-7',
-      '2× signed Form 1040-NR (with Schedule OI)',
-      '2× color copies of your passport (data page + signature page)',
+      t('itinShipping.checklistW7', locale, translations),
+      t('itinShipping.checklist1040nr', locale, translations),
+      t('itinShipping.checklistPassport', locale, translations),
     ],
-    tracking: 'Use a trackable shipping method (FedEx, DHL, UPS) and record your shipment below.',
-    passportWarning: 'Do NOT mail your original passport — colour photocopies only.',
-    documentsHeading: 'Your documents to print:',
-    downloadLabel: 'Download',
+    tracking: t('itinShipping.tracking', locale, translations),
+    // The CAA warning existed ONLY on /portal/itin-documents. A client who
+    // followed the emailed link landed here and never saw it — and mailing an
+    // original passport is not a recoverable mistake.
+    passportWarning: t('itinShipping.passportWarning', locale, translations),
+    documentsHeading: t('itinShipping.documentsHeading', locale, translations),
+    downloadLabel: t('itinShipping.downloadLabel', locale, translations),
     documents,
     shippingForm,
   }
@@ -92,6 +75,7 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
   if (!user) redirect('/portal/login')
 
   const locale = getLocale(user)
+  const translations = await loadTranslationsForLocale(locale)
 
   // Load the SD.
   const { data: sd } = await supabaseAdmin
@@ -180,7 +164,6 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
       serviceDeliveryId: sd.id,
       initialCourier: (shipRow?.shipping_courier as string | null) ?? null,
       initialTracking: (shipRow?.shipping_tracking_number as string | null) ?? null,
-      locale,
     }
   }
   // Only at Client Signing. Previously this card was built for EVERY ITIN
@@ -190,7 +173,7 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
   // to the one they actually need. Antonio, 2026-07-22.
   const shipping: ShippingCard | null =
     sd.service_type === 'ITIN' && sd.stage === 'Client Signing'
-      ? buildItinShippingCard(locale, docs.map(d => ({ id: d.id, file_name: d.file_name })), shippingForm)
+      ? buildItinShippingCard(locale, translations, docs.map(d => ({ id: d.id, file_name: d.file_name })), shippingForm)
       : null
 
   // ── "Do this now" call-to-action ──
@@ -212,12 +195,9 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
   const itinCta =
     sd.service_type === 'ITIN' && atFirstStep
       ? {
-          title: locale === 'it' ? 'Compila la tua richiesta ITIN' : 'Complete your ITIN application',
-          body:
-            locale === 'it'
-              ? 'Per iniziare ci servono i tuoi dati personali e il passaporto. Bastano circa 10 minuti.'
-              : 'To get started we need your personal details and passport. It takes about 10 minutes.',
-          cta: locale === 'it' ? 'Inizia ora' : 'Start now',
+          title: t('flowDetail.itinTitle', locale, translations),
+          body: t('flowDetail.itinBody', locale, translations),
+          cta: t('flowDetail.itinCta', locale, translations),
           href: '/portal/wizard?type=itin',
         }
       : null
@@ -252,8 +232,8 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
   const actionableDecisions = decisions.filter((d) => d.id === newestPendingId)
   const historicalDecisions = decisions.filter((d) => d.id !== newestPendingId)
 
-  const teamLabel = locale === 'it' ? 'Team Tony Durante' : 'Tony Durante Team'
-  const youLabel = locale === 'it' ? 'Tu' : 'You'
+  const teamLabel = t('flowDetail.teamLabel', locale, translations)
+  const youLabel = t('flowDetail.youLabel', locale, translations)
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto space-y-6">
@@ -262,14 +242,14 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
         className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-800"
       >
         <ArrowLeft className="h-4 w-4" />
-        {locale === 'it' ? 'Torna alla dashboard' : 'Back to dashboard'}
+        {t('flowDetail.backToDashboard', locale, translations)}
       </Link>
 
       <div>
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{title}</h1>
         {sd.status === 'completed' && (
           <span className="inline-block mt-1 text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
-            {locale === 'it' ? 'Completato' : 'Completed'}
+            {t('flowDetail.completed', locale, translations)}
           </span>
         )}
       </div>
@@ -300,15 +280,15 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
           stepper for account flows, or a neutral state when neither applies. */}
       {journey && journey.length > 0 ? (
         <FlowStageJourney
-          title={locale === 'it' ? 'Avanzamento' : 'Progress'}
+          title={t('flowDetail.progress', locale, translations)}
           steps={journey}
           shipping={shipping}
         />
       ) : steps ? (
-        <FlowProgressTracker title={locale === 'it' ? 'Avanzamento' : 'Progress'} steps={steps} />
+        <FlowProgressTracker title={t('flowDetail.progress', locale, translations)} steps={steps} />
       ) : (
         <div className="bg-white rounded-xl border shadow-sm p-5">
-          <span className="text-sm text-zinc-600">{locale === 'it' ? 'Servizio attivo' : 'Service active'}</span>
+          <span className="text-sm text-zinc-600">{t('flowDetail.serviceActive', locale, translations)}</span>
         </div>
       )}
 
@@ -323,7 +303,7 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
       {historicalDecisions.length > 0 && (
         <details className="group">
           <summary className="cursor-pointer select-none text-xs font-medium text-zinc-500 hover:text-zinc-800">
-            {locale === 'it' ? 'Richieste precedenti' : 'Previous requests'} ({historicalDecisions.length})
+            {t('flowDetail.previousRequests', locale, translations)} ({historicalDecisions.length})
           </summary>
           <div className="mt-2 space-y-2">
             {historicalDecisions.map((d) => (
@@ -339,10 +319,10 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
           <div className="flex items-center gap-2 mb-3">
             <Layers className="h-4 w-4 text-zinc-500" />
             <h2 className="text-sm font-semibold text-zinc-700">
-              {locale === 'it' ? 'Documenti' : 'Documents'}
+              {t('flowDetail.documents', locale, translations)}
             </h2>
           </div>
-          <DocumentList documents={docs} categoryLabels={CATEGORY_LABELS} locale={locale} />
+          <DocumentList documents={docs} categoryLabels={CATEGORY_LABELS} />
         </div>
       )}
 
@@ -352,16 +332,16 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
           <div className="flex items-center gap-2">
             <MessageSquare className="h-4 w-4 text-zinc-500" />
             <h2 className="text-sm font-semibold text-zinc-700">
-              {locale === 'it' ? 'Messaggi' : 'Messages'}
+              {t('flowDetail.messages', locale, translations)}
             </h2>
           </div>
           <Link href="/portal/chat" className="text-xs text-blue-600 hover:text-blue-700 hover:underline">
-            {locale === 'it' ? 'Apri chat →' : 'Open chat →'}
+            {t('flowDetail.openChat', locale, translations)}
           </Link>
         </div>
         {messages.length === 0 ? (
           <div className="bg-white rounded-xl border shadow-sm p-5 text-sm text-zinc-500">
-            {locale === 'it' ? 'Nessun messaggio per questo servizio.' : 'No messages for this service yet.'}
+            {t('flowDetail.noMessages', locale, translations)}
           </div>
         ) : (
           <div className="bg-white rounded-xl border shadow-sm divide-y">

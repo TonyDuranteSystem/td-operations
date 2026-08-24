@@ -18,6 +18,7 @@ import {
   formatDocumentAmount,
 } from '@/lib/portal/document-templates'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
+import { interpolateString } from '@/lib/template-interpolation'
 
 interface HistoryItem {
   id: string
@@ -56,83 +57,28 @@ interface Props {
   }
   members: ExtendedMemberInfo[]
   history: HistoryItem[]
-  locale: string
 }
 
 type Stage = 'selection' | 'form' | 'preview' | 'signing' | 'done'
 
-const LABELS: Record<string, Record<string, string>> = {
-  pageTitle: { en: 'Generate Documents', it: 'Genera Documenti' },
-  pageDesc: {
-    en: 'Generate formal documents for your company distributions.',
-    it: 'Genera documenti formali per le distribuzioni della tua azienda.',
-  },
-  distributionResolution: { en: 'Distribution Resolution', it: 'Verbale di Distribuzione' },
-  distributionResolutionDesc: {
-    en: 'A formal resolution authorizing the distribution of profits from the company to its members.',
-    it: 'Un verbale formale che autorizza la distribuzione degli utili dalla società ai suoi membri.',
-  },
-  taxStatement: { en: 'Tax Statement', it: 'Certificato Fiscale' },
-  taxStatementDesc: {
-    en: 'A certificate documenting the distribution and confirming the US tax status for foreign tax authorities.',
-    it: 'Un certificato che documenta la distribuzione e conferma lo status fiscale USA per le autorità fiscali estere.',
-  },
-  operatingAgreement: { en: 'Operating Agreement', it: 'Atto Costitutivo' },
-  operatingAgreementDesc: {
-    en: 'The founding document of your LLC establishing ownership, management, and operating rules.',
-    it: 'Il documento costitutivo della tua LLC che stabilisce proprietà, gestione e regole operative.',
-  },
-  effectiveDate: { en: 'Effective Date', it: 'Data di Efficacia' },
-  memberAddresses: { en: 'Member Addresses', it: 'Indirizzi dei Soci' },
-  // ONE text for every company shape. The previous copy said "Enter each member's
-  // full address", on a screen whose typed values the server discarded for every
-  // account that had member records — the field looked editable and was not.
-  addressFromRecord: {
-    en: 'These addresses come from your records with us and appear in the Operating Agreement exactly as shown. If anything is wrong, send us a message and we\'ll put the form in your portal so you can update them.',
-    it: 'Questi indirizzi provengono dai tuoi dati registrati presso di noi e compaiono nell\'Atto Costitutivo esattamente come mostrati. Se qualcosa non è corretto, scrivici e ti mettiamo il modulo nel portale per aggiornarli.',
-  },
-  addressMissing: {
-    en: 'Not on file — send us a message and we\'ll add it.',
-    it: 'Non disponibile — scrivici e lo aggiungiamo.',
-  },
-  address: { en: 'Address', it: 'Indirizzo' },
-  amount: { en: 'Distribution Amount', it: 'Importo Distribuzione' },
-  fiscalYear: { en: 'Fiscal Year', it: 'Anno Fiscale' },
-  distributionDate: { en: 'Distribution Date', it: 'Data Distribuzione' },
-  currency: { en: 'Currency', it: 'Valuta' },
-  companyName: { en: 'Company', it: 'Azienda' },
-  ein: { en: 'EIN', it: 'EIN' },
-  state: { en: 'State', it: 'Stato' },
-  entityType: { en: 'Entity Type', it: 'Tipo Entità' },
-  preview: { en: 'Preview', it: 'Anteprima' },
-  back: { en: 'Back', it: 'Indietro' },
-  downloadPdf: { en: 'Download PDF', it: 'Scarica PDF' },
-  signAndDownload: { en: 'Sign & Download', it: 'Firma e Scarica' },
-  generating: { en: 'Generating PDF...', it: 'Generazione PDF...' },
-  success: { en: 'Document generated successfully!', it: 'Documento generato con successo!' },
-  generateAnother: { en: 'Generate Another', it: 'Genera Un Altro' },
-  history: { en: 'Document History', it: 'Storico Documenti' },
-  noHistory: { en: 'No documents generated yet.', it: 'Nessun documento generato.' },
-  clearSignature: { en: 'Clear Signature', it: 'Cancella Firma' },
-  signBelow: { en: 'Sign below to complete the document', it: 'Firma qui sotto per completare il documento' },
-  confirmSign: { en: 'Confirm & Download', it: 'Conferma e Scarica' },
-  selectDocType: { en: 'Select a document to generate', it: 'Seleziona un documento da generare' },
+// Canonical English document-type names — used ONLY for the value sent to the
+// server (a stored field, never displayed), never for on-screen text. Display
+// labels come from the shared translation dictionary via docTypeLabel() below.
+const DOCUMENT_TYPE_EN: Record<string, string> = {
+  distribution_resolution: 'Distribution Resolution',
+  tax_statement: 'Tax Statement',
+  operating_agreement: 'Operating Agreement',
 }
 
-function l(key: string, locale: string): string {
-  return LABELS[key]?.[locale] || LABELS[key]?.['en'] || key
-}
-
-function docTypeLabel(type: string, lang: string): string {
-  if (type === 'distribution_resolution') return l('distributionResolution', lang)
-  if (type === 'tax_statement') return l('taxStatement', lang)
-  if (type === 'operating_agreement') return l('operatingAgreement', lang)
+function docTypeLabel(type: string, t: (key: string) => string): string {
+  if (type === 'distribution_resolution') return t('documentGenerate.distributionResolution')
+  if (type === 'tax_statement') return t('documentGenerate.taxStatement')
+  if (type === 'operating_agreement') return t('documentGenerate.operatingAgreement')
   return type
 }
 
-export function GenerateDocumentsClient({ account, members, history: initialHistory, locale }: Props) {
-  const { locale: ctxLocale } = useLocale()
-  const lang = ctxLocale || locale || 'en'
+export function GenerateDocumentsClient({ account, members, history: initialHistory }: Props) {
+  const { t } = useLocale()
   const router = useRouter()
 
   const [stage, setStage] = useState<Stage>('selection')
@@ -295,13 +241,13 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
     const fd = new FormData()
     fd.append('file', blob, filename)
     fd.append('account_id', account.id)
-    fd.append('document_type', selectedType ? docTypeLabel(selectedType, 'en') : 'Generated Document')
+    fd.append('document_type', selectedType ? (DOCUMENT_TYPE_EN[selectedType] ?? 'Generated Document') : 'Generated Document')
     fd.append('document_type_key', selectedType ?? '')
     fd.append('file_name', filename)
     const res = await fetch('/api/portal/generated-documents/save-signed', { method: 'POST', body: fd })
     if (!res.ok) {
       const d = await res.json().catch(() => ({}))
-      throw new Error(d.error || 'Portal save failed')
+      throw new Error(d.error || t('documentGenerate.portalSaveFailed'))
     }
   }
 
@@ -410,7 +356,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
         }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error || 'Failed to create Operating Agreement')
+      if (!res.ok) throw new Error(data.error || t('documentGenerate.oaCreateFailed'))
       // The route tells us whether anyone was actually reached, and whether the
       // signer identified by THIS login can sign. Ignoring either produced a
       // confident green screen that was sometimes untrue.
@@ -422,7 +368,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
       succeeded = true
     } catch (err) {
       setOaCreateStatus('error')
-      setOaCreateError(err instanceof Error ? err.message : 'Something went wrong')
+      setOaCreateError(err instanceof Error ? err.message : t('documentGenerate.somethingWrong'))
     }
 
     // COMPLETION IS THE REFRESH SIGNAL (Antonio, 2026-07-22). The portal shell
@@ -450,12 +396,12 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
         body: JSON.stringify({ account_id: account.id }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error || 'Could not open the member information form.')
+      if (!res.ok) throw new Error(data.error || t('documentGenerate.memberFormFailed'))
       setMemberInfoRequestStatus('idle')
       window.location.href = data.form_url
     } catch (err) {
       setMemberInfoRequestStatus('error')
-      setMemberInfoRequestError(err instanceof Error && err.message ? err.message : 'Could not open the form — please try again or contact support@tonydurante.us.')
+      setMemberInfoRequestError(err instanceof Error && err.message ? err.message : t('documentGenerate.memberFormFailedRetry'))
     }
   }
 
@@ -478,14 +424,14 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
     <div className="max-w-4xl mx-auto px-4 py-6 space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-zinc-900">{l('pageTitle', lang)}</h1>
-        <p className="text-zinc-500 mt-1">{l('pageDesc', lang)}</p>
+        <h1 className="text-2xl font-bold text-zinc-900">{t('documentGenerate.pageTitle')}</h1>
+        <p className="text-zinc-500 mt-1">{t('documentGenerate.pageDesc')}</p>
       </div>
 
       {/* === SELECTION STAGE === */}
       {stage === 'selection' && (
         <>
-          <p className="text-sm text-zinc-500">{l('selectDocType', lang)}</p>
+          <p className="text-sm text-zinc-500">{t('documentGenerate.selectDocType')}</p>
           <div className="grid md:grid-cols-2 gap-4">
             {/* Distribution Resolution Card */}
             <button
@@ -498,10 +444,10 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 </div>
                 <div>
                   <h3 className="font-semibold text-zinc-900 group-hover:text-blue-600 transition">
-                    {l('distributionResolution', lang)}
+                    {t('documentGenerate.distributionResolution')}
                   </h3>
                   <p className="text-sm text-zinc-500 mt-1">
-                    {l('distributionResolutionDesc', lang)}
+                    {t('documentGenerate.distributionResolutionDesc')}
                   </p>
                 </div>
               </div>
@@ -518,10 +464,10 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 </div>
                 <div>
                   <h3 className="font-semibold text-zinc-900 group-hover:text-emerald-600 transition">
-                    {l('taxStatement', lang)}
+                    {t('documentGenerate.taxStatement')}
                   </h3>
                   <p className="text-sm text-zinc-500 mt-1">
-                    {l('taxStatementDesc', lang)}
+                    {t('documentGenerate.taxStatementDesc')}
                   </p>
                 </div>
               </div>
@@ -538,10 +484,10 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 </div>
                 <div>
                   <h3 className="font-semibold text-zinc-900 group-hover:text-violet-600 transition">
-                    {l('operatingAgreement', lang)}
+                    {t('documentGenerate.operatingAgreement')}
                   </h3>
                   <p className="text-sm text-zinc-500 mt-1">
-                    {l('operatingAgreementDesc', lang)}
+                    {t('documentGenerate.operatingAgreementDesc')}
                   </p>
                 </div>
               </div>
@@ -553,23 +499,23 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
             <div className="mt-8">
               <h2 className="text-lg font-semibold text-zinc-900 flex items-center gap-2 mb-4">
                 <History size={18} />
-                {l('history', lang)}
+                {t('documentGenerate.history')}
               </h2>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-zinc-200 text-zinc-500">
-                      <th className="text-left py-2 px-3">Document</th>
-                      <th className="text-left py-2 px-3">{l('fiscalYear', lang)}</th>
-                      <th className="text-right py-2 px-3">{l('amount', lang)}</th>
-                      <th className="text-center py-2 px-3">Status</th>
-                      <th className="text-left py-2 px-3">Date</th>
+                      <th className="text-left py-2 px-3">{t('documentGenerate.tableDocument')}</th>
+                      <th className="text-left py-2 px-3">{t('documentGenerate.fiscalYear')}</th>
+                      <th className="text-right py-2 px-3">{t('documentGenerate.amount')}</th>
+                      <th className="text-center py-2 px-3">{t('documentGenerate.tableStatus')}</th>
+                      <th className="text-left py-2 px-3">{t('documentGenerate.tableDate')}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {history.map(h => (
                       <tr key={h.id} className="border-b border-zinc-200 text-zinc-700">
-                        <td className="py-2 px-3">{docTypeLabel(h.document_type, lang)}</td>
+                        <td className="py-2 px-3">{docTypeLabel(h.document_type, t)}</td>
                         <td className="py-2 px-3">{h.fiscal_year}</td>
                         <td className="py-2 px-3 text-right">
                           {h.amount ? formatDocumentAmount(h.amount, h.currency || 'USD') : '-'}
@@ -600,35 +546,35 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
       {stage === 'form' && (
         <div className="space-y-6">
           <button onClick={handleReset} className="flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-900 transition">
-            <ArrowLeft size={16} /> {l('back', lang)}
+            <ArrowLeft size={16} /> {t('documentGenerate.back')}
           </button>
 
           <h2 className="text-xl font-semibold text-zinc-900">
-            {docTypeLabel(selectedType || '', lang)}
+            {docTypeLabel(selectedType || '', t)}
           </h2>
 
           {/* Read-only company fields */}
           <div className="grid md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs text-zinc-500 mb-1">{l('companyName', lang)}</label>
+              <label className="block text-xs text-zinc-500 mb-1">{t('documentGenerate.companyName')}</label>
               <div className="px-3 py-2 bg-zinc-50 rounded border border-zinc-200 text-zinc-700 text-sm">
                 {account.companyName}
               </div>
             </div>
             <div>
-              <label className="block text-xs text-zinc-500 mb-1">{l('ein', lang)}</label>
+              <label className="block text-xs text-zinc-500 mb-1">{t('documentGenerate.ein')}</label>
               <div className="px-3 py-2 bg-zinc-50 rounded border border-zinc-200 text-zinc-700 text-sm">
                 {account.ein || 'N/A'}
               </div>
             </div>
             <div>
-              <label className="block text-xs text-zinc-500 mb-1">{l('state', lang)}</label>
+              <label className="block text-xs text-zinc-500 mb-1">{t('documentGenerate.state')}</label>
               <div className="px-3 py-2 bg-zinc-50 rounded border border-zinc-200 text-zinc-700 text-sm">
                 {account.stateOfFormation || 'N/A'}
               </div>
             </div>
             <div>
-              <label className="block text-xs text-zinc-500 mb-1">{l('entityType', lang)}</label>
+              <label className="block text-xs text-zinc-500 mb-1">{t('documentGenerate.entityType')}</label>
               <div className="px-3 py-2 bg-zinc-50 rounded border border-zinc-200 text-zinc-700 text-sm">
                 {account.entityType || 'N/A'}
               </div>
@@ -641,7 +587,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
               {/* Pre-flight validation panel — MMLLC only */}
               {isMMLC && oaPreflight && (
                 <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 space-y-2">
-                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Pre-flight Check</p>
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">{t('documentGenerate.preflightCheck')}</p>
                   {/* Member count */}
                   {account.memberCount != null ? (
                     <div className="flex items-center gap-2 text-sm">
@@ -649,14 +595,17 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                         ? <Check className="h-4 w-4 text-emerald-600 shrink-0" />
                         : <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />}
                       <span className={oaPreflight.memberCountOk ? 'text-zinc-700' : 'text-amber-600'}>
-                        {members.length} member{members.length !== 1 ? 's' : ''} in system
-                        {!oaPreflight.memberCountOk && ` (SS-4 says ${account.memberCount})`}
+                        {interpolateString(
+                          t(members.length === 1 ? 'documentGenerate.memberCountSingular' : 'documentGenerate.memberCountPlural'),
+                          { count: members.length },
+                        )}
+                        {!oaPreflight.memberCountOk && ` ${interpolateString(t('documentGenerate.memberCountMismatch'), { count: account.memberCount })}`}
                       </span>
                     </div>
                   ) : (
                     <div className="flex items-center gap-2 text-sm">
                       <AlertTriangle className="h-4 w-4 text-zinc-500 shrink-0" />
-                      <span className="text-zinc-500">Member count not confirmed — contact your advisor if unsure</span>
+                      <span className="text-zinc-500">{t('documentGenerate.memberCountUnconfirmed')}</span>
                     </div>
                   )}
                   {/* Portal access */}
@@ -666,8 +615,11 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                       : <X className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />}
                     <span className={oaPreflight.allHavePortal ? 'text-zinc-700' : 'text-red-600'}>
                       {oaPreflight.allHavePortal
-                        ? 'All members have portal accounts'
-                        : `Cannot send — ${oaPreflight.missingPortal.join(', ')} ${oaPreflight.missingPortal.length === 1 ? 'has' : 'have'} no portal account. Contact support.`}
+                        ? t('documentGenerate.allHavePortal')
+                        : interpolateString(
+                          t(oaPreflight.missingPortal.length === 1 ? 'documentGenerate.missingPortalSingular' : 'documentGenerate.missingPortalPlural'),
+                          { names: oaPreflight.missingPortal.join(', ') },
+                        )}
                     </span>
                   </div>
                   {/* Ownership */}
@@ -676,8 +628,11 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                       ? <Check className="h-4 w-4 text-emerald-600 shrink-0" />
                       : <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />}
                     <span className={oaPreflight.ownershipOk ? 'text-zinc-700' : 'text-amber-600'}>
-                      Ownership: {members.map(m => `${m.ownershipPct ?? '?'}%`).join(' + ')} = {oaPreflight.ownershipTotal.toFixed(0)}%
-                      {!oaPreflight.ownershipOk && ' (should be 100%)'}
+                      {interpolateString(t('documentGenerate.ownershipLine'), {
+                        breakdown: members.map(m => `${m.ownershipPct ?? '?'}%`).join(' + '),
+                        total: oaPreflight.ownershipTotal.toFixed(0),
+                      })}
+                      {!oaPreflight.ownershipOk && ` ${t('documentGenerate.ownershipWarning')}`}
                     </span>
                   </div>
                   {/* Manager — who the agreement will name, resolved from the
@@ -693,7 +648,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                     return resolvedManager ? (
                       <div className="pt-2 mt-1 border-t border-zinc-200 flex items-start justify-between gap-3 flex-wrap">
                         <span className="text-sm text-zinc-700">
-                          Manager on this agreement: <strong>{resolvedManager.fullName}</strong>
+                          {t('documentGenerate.managerLabel')} <strong>{resolvedManager.fullName}</strong>
                         </span>
                         <button
                           type="button"
@@ -701,7 +656,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                           disabled={memberInfoRequestStatus === 'opening'}
                           className="text-xs text-violet-600 hover:text-violet-500 disabled:opacity-50 underline underline-offset-2"
                         >
-                          {memberInfoRequestStatus === 'opening' ? 'Opening…' : "Not right? Update your member information"}
+                          {memberInfoRequestStatus === 'opening' ? t('documentGenerate.opening') : t('documentGenerate.notRightUpdateInfo')}
                         </button>
                       </div>
                     ) : null
@@ -712,7 +667,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 </div>
               )}
               <div>
-                <label className="block text-xs text-zinc-500 mb-1">{l('effectiveDate', lang)} *</label>
+                <label className="block text-xs text-zinc-500 mb-1">{t('documentGenerate.effectiveDate')} *</label>
                 <input
                   type="date"
                   value={oaEffectiveDate}
@@ -722,8 +677,8 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
               </div>
 
               <div>
-                <label className="block text-xs text-zinc-500 mb-1">{l('memberAddresses', lang)}</label>
-                <p className="text-xs text-zinc-500 mb-3">{l('addressFromRecord', lang)}</p>
+                <label className="block text-xs text-zinc-500 mb-1">{t('documentGenerate.memberAddresses')}</label>
+                <p className="text-xs text-zinc-500 mb-3">{t('documentGenerate.addressFromRecord')}</p>
                 {/* READ-ONLY, for every company shape. These addresses go into a
                     legal document verbatim, so the screen shows the record and
                     offers no way to type over it; the route refuses a posted
@@ -737,7 +692,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                       ) : (
                         /* Never blank and never a placeholder that could read as an
                            address — an absent record says so in words. */
-                        <p className="text-sm text-amber-700">{l('addressMissing', lang)}</p>
+                        <p className="text-sm text-amber-700">{t('documentGenerate.addressMissing')}</p>
                       )}
                     </div>
                   ))}
@@ -748,7 +703,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
             /* Distribution/Tax fields */
             <div className="grid md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs text-zinc-500 mb-1">{l('amount', lang)} *</label>
+                <label className="block text-xs text-zinc-500 mb-1">{t('documentGenerate.amount')} *</label>
                 <div className="flex">
                   <select
                     value={formData.currency}
@@ -770,7 +725,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 </div>
               </div>
               <div>
-                <label className="block text-xs text-zinc-500 mb-1">{l('fiscalYear', lang)} *</label>
+                <label className="block text-xs text-zinc-500 mb-1">{t('documentGenerate.fiscalYear')} *</label>
                 <select
                   value={formData.fiscalYear}
                   onChange={e => setFormData(p => ({ ...p, fiscalYear: parseInt(e.target.value) }))}
@@ -782,7 +737,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-zinc-500 mb-1">{l('distributionDate', lang)} *</label>
+                <label className="block text-xs text-zinc-500 mb-1">{t('documentGenerate.distributionDate')} *</label>
                 <input
                   type="date"
                   value={formData.distributionDate}
@@ -799,9 +754,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
             <div className="flex items-start gap-2 rounded-lg border border-red-800 bg-red-950/40 p-3 text-sm text-red-600">
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
               <span>
-                {lang === 'it'
-                  ? 'Impossibile generare il documento — nessun membro/titolare risulta collegato alla società. Contatta il supporto per completare i dati societari.'
-                  : 'Cannot generate this document — no member/owner is on file for this company. Please contact support to complete your company records.'}
+                {t('documentGenerate.noMembersError')}
               </span>
             </div>
           )}
@@ -812,9 +765,9 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
               onClick={handlePreview}
               disabled={(!isOA && (formData.amount <= 0 || members.length === 0)) || (isOA && !oaCanProceed)}
               className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-300 disabled:text-zinc-500 text-white rounded-lg font-medium text-sm transition"
-              title={isOA && !oaCanProceed ? 'All members must have portal accounts to proceed' : undefined}
+              title={isOA && !oaCanProceed ? t('documentGenerate.portalOnlyTooltip') : undefined}
             >
-              {l('preview', lang)}
+              {t('documentGenerate.preview')}
             </button>
           </div>
         </div>
@@ -828,7 +781,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
               onClick={() => { setStage('form'); setSignatureImage(null) }}
               className="flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-900 transition"
             >
-              <ArrowLeft size={16} /> {l('back', lang)}
+              <ArrowLeft size={16} /> {t('documentGenerate.back')}
             </button>
           </div>
 
@@ -874,7 +827,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
           {/* Signature Pad (signing stage) */}
           {stage === 'signing' && !signatureImage && (
             <div className="space-y-3">
-              <p className="text-sm text-zinc-500">{l('signBelow', lang)}</p>
+              <p className="text-sm text-zinc-500">{t('documentGenerate.signBelow')}</p>
               <div className="border border-zinc-600 rounded-lg overflow-hidden bg-white">
                 <canvas
                   ref={initSignaturePad}
@@ -886,7 +839,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                   onClick={clearSignature}
                   className="px-4 py-2 text-sm text-zinc-500 hover:text-zinc-900 border border-zinc-200 rounded-lg transition"
                 >
-                  {l('clearSignature', lang)}
+                  {t('documentGenerate.clearSignature')}
                 </button>
                 <button
                   onClick={handleConfirmSign}
@@ -894,7 +847,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                   className="px-6 py-2 bg-green-600 hover:bg-green-500 disabled:bg-zinc-300 text-white rounded-lg font-medium text-sm transition flex items-center gap-2"
                 >
                   {isGenerating ? <Loader2 size={16} className="animate-spin" /> : <PenLine size={16} />}
-                  {isGenerating ? l('generating', lang) : l('confirmSign', lang)}
+                  {isGenerating ? t('documentGenerate.generating') : t('documentGenerate.confirmSign')}
                 </button>
               </div>
             </div>
@@ -909,7 +862,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 className="px-6 py-2.5 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-white rounded-lg font-medium text-sm transition flex items-center gap-2"
               >
                 {isGenerating ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-                {isGenerating ? l('generating', lang) : l('downloadPdf', lang)}
+                {isGenerating ? t('documentGenerate.generating') : t('documentGenerate.downloadPdf')}
               </button>
               {isOA ? (
                 <div className="space-y-1">
@@ -919,7 +872,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                     className="px-6 py-2.5 bg-violet-600 hover:bg-violet-500 disabled:bg-zinc-300 text-white rounded-lg font-medium text-sm transition flex items-center gap-2"
                   >
                     {oaCreateStatus === 'sending' ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-                    {oaCreateStatus === 'sending' ? 'Sending...' : (lang === 'it' ? 'Crea e Invia per Firma' : 'Create & Send for Signing')}
+                    {oaCreateStatus === 'sending' ? t('documentGenerate.sending') : t('documentGenerate.createAndSend')}
                   </button>
                   {/* Sized to be readable, not decorative. This now carries the
                       blocking reason when an owner cannot be sent a signature
@@ -937,7 +890,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                   className="px-6 py-2.5 bg-green-600 hover:bg-green-500 text-white rounded-lg font-medium text-sm transition flex items-center gap-2"
                 >
                   <PenLine size={16} />
-                  {l('signAndDownload', lang)}
+                  {t('documentGenerate.signAndDownload')}
                 </button>
               )}
             </div>
@@ -951,8 +904,8 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
           <CheckCircle2 size={48} className="text-green-600" />
           <h2 className="text-xl font-semibold text-zinc-900">
             {oaCreateStatus === 'sent'
-              ? (lang === 'it' ? 'Firma avviata!' : 'Signing process started!')
-              : l('success', lang)}
+              ? t('documentGenerate.signingStarted')
+              : t('documentGenerate.success')}
           </h2>
           {oaCreateStatus === 'sent' && (
             <p className="text-sm text-zinc-500 max-w-sm">
@@ -961,26 +914,16 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                   a button that does not render is its own dead end. */}
               {!oaNotified
                 ? oaCanSignNow
-                  ? (lang === 'it'
-                    ? 'L\'Atto Costitutivo è stato creato, ma non siamo riusciti a inviare la notifica. Usa il pulsante qui sotto per firmare, e contatta l\'assistenza se hai bisogno di aiuto.'
-                    : 'Your Operating Agreement was created, but we could not send the notification. Use the button below to sign, and contact support if you need help.')
-                  : (lang === 'it'
-                    ? 'L\'Atto Costitutivo è stato creato, ma non siamo riusciti a inviare la notifica ai soci. Contatta l\'assistenza a support@tonydurante.us così possiamo avvisarli.'
-                    : 'Your Operating Agreement was created, but we could not notify the members. Please contact support@tonydurante.us so we can reach them.')
+                  ? t('documentGenerate.oaCreatedNoNotifyCanSign')
+                  : t('documentGenerate.oaCreatedNoNotifyCantSign')
                 : isMMLC
-                ? (lang === 'it'
-                  ? 'Ogni socio ha ricevuto il proprio link personale per firmare l\'Atto Costitutivo.'
-                  : 'Each member has received their own personal signing link.')
-                : (lang === 'it'
-                  ? 'Il tuo Atto Costitutivo è pronto. Firmalo adesso per completare il processo.'
-                  : 'Your Operating Agreement is ready. Sign it now to complete the process.')}
+                ? t('documentGenerate.oaReadyMMLC')
+                : t('documentGenerate.oaReadySingle')}
             </p>
           )}
           {portalSaveWarning && (
             <p className="text-sm text-amber-700 bg-amber-50 rounded-lg px-4 py-2 max-w-sm">
-              {lang === 'it'
-                ? 'Documento scaricato. Non siamo riusciti a salvarlo anche nella tua cartella Documenti — l’assistenza è stata avvisata.'
-                : 'Downloaded. We couldn’t also save it to your Documents folder — support has been notified.'}
+              {t('documentGenerate.portalSaveWarning')}
             </p>
           )}
           {/* THE fix for the incident this flow caused: a client who had just
@@ -1000,14 +943,14 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
               href={`/portal/sign/oa?account=${account.id}`}
               className="mt-4 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold text-sm transition"
             >
-              {lang === 'it' ? 'Firma adesso' : 'Sign now'}
+              {t('documentGenerate.signNow')}
             </a>
           )}
           <button
             onClick={handleReset}
             className={`${oaCreateStatus === 'sent' ? 'mt-2' : 'mt-4'} px-6 py-2.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg font-medium text-sm transition`}
           >
-            {l('generateAnother', lang)}
+            {t('documentGenerate.generateAnother')}
           </button>
         </div>
       )}

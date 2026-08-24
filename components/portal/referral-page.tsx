@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { Copy, Check, Share2, Gift } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { t, type Locale } from '@/lib/portal/i18n'
+import { useLocale } from '@/lib/portal/use-locale'
 import { formatMoney, leadStatusBadge } from '@/lib/portal/referral-aggregate'
 
 interface ReferralRow {
@@ -33,18 +33,18 @@ interface PayoutRow {
 interface Props {
   referrals: ReferralRow[]
   payouts: PayoutRow[]
-  locale: Locale
 }
 
-const statusConfig: Record<string, { label_en: string; label_it: string; color: string }> = {
-  pending: { label_en: 'Pending', label_it: 'In attesa', color: 'bg-yellow-100 text-yellow-800' },
-  converted: { label_en: 'Converted', label_it: 'Convertito', color: 'bg-blue-100 text-blue-800' },
-  credited: { label_en: 'Credited', label_it: 'Accreditato', color: 'bg-green-100 text-green-800' },
-  paid: { label_en: 'Paid', label_it: 'Pagato', color: 'bg-emerald-100 text-emerald-800' },
-  cancelled: { label_en: 'Cancelled', label_it: 'Annullato', color: 'bg-red-100 text-red-800' },
+const statusConfig: Record<string, { labelKey: string; color: string }> = {
+  pending: { labelKey: 'referral.pending', color: 'bg-yellow-100 text-yellow-800' },
+  converted: { labelKey: 'referral.converted', color: 'bg-blue-100 text-blue-800' },
+  credited: { labelKey: 'referral.credited', color: 'bg-green-100 text-green-800' },
+  paid: { labelKey: 'referral.paid', color: 'bg-emerald-100 text-emerald-800' },
+  cancelled: { labelKey: 'referral.cancelled', color: 'bg-red-100 text-red-800' },
 }
 
-export function ReferralPage({ referrals, payouts, locale }: Props) {
+export function ReferralPage({ referrals, payouts }: Props) {
+  const { t } = useLocale()
   const [copied, setCopied] = useState(false)
   const [referralLink, setReferralLink] = useState<string | null>(null)
   const [linkLoading, setLinkLoading] = useState(true)
@@ -90,9 +90,9 @@ export function ReferralPage({ referrals, payouts, locale }: Props) {
               <Share2 className="h-5 w-5 text-violet-600" />
             </div>
             <div className="flex-1 min-w-0">
-              <h3 className="font-semibold text-zinc-900">{t('referrals.yourLink', locale)}</h3>
+              <h3 className="font-semibold text-zinc-900">{t('referrals.yourLink')}</h3>
               <p className="text-xs text-zinc-500 mt-0.5">
-                {t('referrals.shareLinkDesc', locale)}
+                {t('referrals.shareLinkDesc')}
               </p>
               <div className="mt-3 flex items-center gap-2">
                 <div className="flex-1 bg-white rounded-lg border px-3 py-2 text-sm text-zinc-700 truncate font-mono">
@@ -108,9 +108,9 @@ export function ReferralPage({ referrals, payouts, locale }: Props) {
                   )}
                 >
                   {copied ? (
-                    <span className="flex items-center gap-1.5"><Check className="h-4 w-4" />{t('referrals.copied', locale)}</span>
+                    <span className="flex items-center gap-1.5"><Check className="h-4 w-4" />{t('referrals.copied')}</span>
                   ) : (
-                    <span className="flex items-center gap-1.5"><Copy className="h-4 w-4" />{t('referrals.copyLink', locale)}</span>
+                    <span className="flex items-center gap-1.5"><Copy className="h-4 w-4" />{t('referrals.copyLink')}</span>
                   )}
                 </button>
               </div>
@@ -120,7 +120,7 @@ export function ReferralPage({ referrals, payouts, locale }: Props) {
       ) : (
         <div className="bg-zinc-50 rounded-xl border p-5 text-center">
           <Gift className="h-8 w-8 text-zinc-300 mx-auto mb-2" />
-          <p className="text-sm text-zinc-500">{t('referrals.noLinkYet', locale)}</p>
+          <p className="text-sm text-zinc-500">{t('referrals.noLinkYet')}</p>
         </div>
       )}
 
@@ -128,8 +128,8 @@ export function ReferralPage({ referrals, payouts, locale }: Props) {
       {referrals.length === 0 ? (
         <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
           <Share2 className="h-8 w-8 text-zinc-300 mx-auto mb-3" />
-          <p className="text-sm font-medium text-zinc-600">{t('referrals.noReferrals', locale)}</p>
-          <p className="text-xs text-zinc-400 mt-1">{t('referrals.noReferralsDesc', locale)}</p>
+          <p className="text-sm font-medium text-zinc-600">{t('referrals.noReferrals')}</p>
+          <p className="text-xs text-zinc-400 mt-1">{t('referrals.noReferralsDesc')}</p>
         </div>
       ) : (
         <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
@@ -141,8 +141,10 @@ export function ReferralPage({ referrals, payouts, locale }: Props) {
               const useLead = !!r.lead_status && r.status !== 'cancelled'
               const s = useLead
                 ? leadStatusBadge(r.lead_status)
-                : (statusConfig[r.status] || { label_en: r.status, label_it: r.status, color: 'bg-zinc-100 text-zinc-700' })
-              const label = locale === 'it' ? s.label_it : s.label_en
+                : (statusConfig[r.status]
+                    ? { ...statusConfig[r.status], rawLabel: r.status }
+                    : { labelKey: null, rawLabel: r.status, color: 'bg-zinc-100 text-zinc-700' })
+              const label = s.labelKey ? t(s.labelKey) : s.rawLabel
               const displayName = r.company_name || r.referred_name
               const totalPaid = (Number(r.credited_amount) || 0) + (Number(r.paid_amount) || 0)
 
@@ -170,15 +172,15 @@ export function ReferralPage({ referrals, payouts, locale }: Props) {
       {/* Payouts */}
       <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
         <div className="px-5 py-3.5 border-b bg-zinc-50">
-          <h3 className="text-sm font-semibold text-zinc-700">{t('referrals.payouts', locale)}</h3>
+          <h3 className="text-sm font-semibold text-zinc-700">{t('referrals.payouts')}</h3>
         </div>
         {payouts.length === 0 ? (
-          <p className="text-sm text-zinc-400 px-5 py-6 text-center">{t('referrals.noPayouts', locale)}</p>
+          <p className="text-sm text-zinc-400 px-5 py-6 text-center">{t('referrals.noPayouts')}</p>
         ) : (
           <div className="divide-y">
             {payouts.map((p) => {
               const typeKey = `referrals.payoutType.${p.payout_type}` as Parameters<typeof t>[0]
-              const typeLabel = t(typeKey, locale) || p.payout_type
+              const typeLabel = t(typeKey) || p.payout_type
               return (
                 <div key={p.id} className="flex items-center justify-between px-5 py-3.5">
                   <div className="min-w-0 flex-1">

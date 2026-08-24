@@ -3,28 +3,29 @@
 import { useEffect, useState, useCallback } from 'react'
 import { FileText, CheckCircle, PenLine } from 'lucide-react'
 import { useRouter } from 'next/navigation'
+import { useLocale } from '@/lib/portal/use-locale'
+import { interpolateString } from '@/lib/template-interpolation'
 
 interface PortalMSAClientProps {
   msaUrl: string
   status: string
   companyName: string
-  language?: string
   contractYear: number
 }
 
-const STATUS_INFO: Record<string, { en: string; it: string; icon: typeof FileText; color: string; bg: string }> = {
-  draft: { en: 'Annual Service Agreement Ready', it: 'Contratto di Servizio Annuale Pronto', icon: PenLine, color: 'text-blue-600', bg: 'bg-blue-50' },
-  sent: { en: 'Annual Service Agreement Ready', it: 'Contratto di Servizio Annuale Pronto', icon: PenLine, color: 'text-blue-600', bg: 'bg-blue-50' },
-  signed: { en: 'Signed', it: 'Firmato', icon: CheckCircle, color: 'text-green-600', bg: 'bg-green-50' },
+const STATUS_ICON: Record<string, { key: string; icon: typeof FileText; color: string; bg: string }> = {
+  draft: { key: 'signSubpages.msa.ready', icon: PenLine, color: 'text-blue-600', bg: 'bg-blue-50' },
+  sent: { key: 'signSubpages.msa.ready', icon: PenLine, color: 'text-blue-600', bg: 'bg-blue-50' },
+  signed: { key: 'signDocs.status.signed', icon: CheckCircle, color: 'text-green-600', bg: 'bg-green-50' },
 }
 
-export function PortalMSAClient({ msaUrl, status, companyName, language, contractYear }: PortalMSAClientProps) {
+export function PortalMSAClient({ msaUrl, status, companyName, contractYear }: PortalMSAClientProps) {
   const router = useRouter()
+  const { t } = useLocale()
   const [currentStatus, setCurrentStatus] = useState(status)
 
-  const info = STATUS_INFO[currentStatus] || STATUS_INFO.draft
+  const info = STATUS_ICON[currentStatus] || STATUS_ICON.draft
   const Icon = info.icon
-  const lang = (language === 'it' ? 'it' : 'en') as 'en' | 'it'
 
   // Listen for postMessage from embedded contract page when signing completes
   const handleMessage = useCallback((event: MessageEvent) => {
@@ -39,9 +40,10 @@ export function PortalMSAClient({ msaUrl, status, companyName, language, contrac
     return () => window.removeEventListener('message', handleMessage)
   }, [handleMessage])
 
-  const subtitle = currentStatus === 'signed'
-    ? { en: `Your ${contractYear} Annual Service Agreement has been signed and saved.`, it: `Il tuo Contratto di Servizio Annuale ${contractYear} è stato firmato e salvato.` }
-    : { en: `Review and sign your ${contractYear} Annual Service Agreement below.`, it: `Rivedi e firma il tuo Contratto di Servizio Annuale ${contractYear} qui sotto.` }
+  const subtitle = interpolateString(
+    currentStatus === 'signed' ? t('signSubpages.msa.subtitleSigned') : t('signSubpages.msa.subtitleDefault'),
+    { year: contractYear },
+  )
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)]">
@@ -49,8 +51,8 @@ export function PortalMSAClient({ msaUrl, status, companyName, language, contrac
       <div className={`${info.bg} border-b px-6 py-3 flex items-center gap-3`}>
         <Icon className={`h-5 w-5 ${info.color}`} />
         <div>
-          <p className={`text-sm font-semibold ${info.color}`}>{info[lang]} — {contractYear}</p>
-          <p className="text-xs text-zinc-500">{subtitle[lang]}</p>
+          <p className={`text-sm font-semibold ${info.color}`}>{t(info.key)} — {contractYear}</p>
+          <p className="text-xs text-zinc-500">{subtitle}</p>
         </div>
       </div>
 

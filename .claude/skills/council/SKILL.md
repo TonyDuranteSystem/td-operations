@@ -59,7 +59,8 @@ Match on meaning, not exact keywords — the phrases are cues, not a whitelist. 
 | money math, invoices, payments, payouts, financial statements, reconciliation | Finance-Auditor |
 | LLC setup, formation (esp. Wyoming), onboarding, compliance, renewals, annual reports, registered agent/CMRA, EIN/ITIN (CAA), BOI/FinCEN, contract renewals, dissolution | Compliance-Deadlines-Auditor, CPA-IRS, Legal-Reviewer |
 | CRM, client portal, dashboard, business process, requirements, ROI, workflow, staff/ops tooling | Business-Analyst |
-| ecommerce, website, public client site, landing page, SEO, general UI/UX | Web-Auditor |
+| ecommerce, website, public client site, landing page, SEO, trust signals | Web-Auditor |
+| interface copy/wording, button or control labels, icon choice, affordance/clarity, portal or CRM UX, "will a real user understand this" | Erika-Hall-UX-Designer |
 | bank-account approval, payment-processor onboarding, client-site credibility for underwriters | Ecommerce-Bank-Auditor |
 | banking, payments, credentials, auth, PII, data exposure, uploads, webhooks | Security |
 | contracts, offers, leases, operating agreements, ICA, consent, liability, terms | Legal-Reviewer |
