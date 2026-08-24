@@ -465,10 +465,7 @@ export function TaxBanner({
     const description = interpolateString(t('taxBanner.dataReceivedDesc'), tok)
     const cta = t('taxBanner.editSubmission')
     return (
-      <a
-        href={editHref}
-        className="block w-full rounded-xl border-2 border-blue-300 bg-blue-50 px-5 py-4 transition-all hover:bg-blue-100 hover:shadow-md mb-6"
-      >
+      <div className="block w-full rounded-xl border-2 border-blue-300 bg-blue-50 px-5 py-4 mb-6">
         <div className="flex items-start gap-4">
           <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 border border-blue-300">
             <CheckCircle className="h-5 w-5 text-blue-600" />
@@ -476,13 +473,17 @@ export function TaxBanner({
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-blue-900 text-sm sm:text-base">{title}</p>
             <p className="text-blue-700 text-xs sm:text-sm mt-1">{description}</p>
+            {financialsLink}
           </div>
-          <div className="shrink-0 flex items-center gap-1.5 self-center rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700">
+          <a
+            href={editHref}
+            className="shrink-0 flex items-center gap-1.5 self-center rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
+          >
             <Pencil className="h-3.5 w-3.5" />
             {cta}
-          </div>
+          </a>
         </div>
-      </a>
+      </div>
     )
   }
 
