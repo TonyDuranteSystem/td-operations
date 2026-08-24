@@ -231,6 +231,9 @@ async function runSidebarWorker(args: {
   // become native document blocks, everything else is extracted to text and appended to
   // the body — the same treatment the Inbox and Team Chat give a dropped file.
   const media: { images: WorkerImageBlock[]; documents: WorkerDocumentBlock[] } = { images: [], documents: [] }
+  // Read-to-the-end seeds for panel uploads that came back windowed (dev job
+  // 5e87b099) — threaded into the worker call as doorAttachmentSeeds.
+  let doorAttachmentSeeds: Array<{ ref: string; resultText: string }> = []
 
   // LEGACY single-file field (base64 in the request body). Kept so an older tab
   // that hasn't reloaded still works; the panel now sends `attachments` instead.
@@ -279,9 +282,10 @@ async function runSidebarWorker(args: {
         '@/lib/ai-agent/attachment-reader'
       )
       const refs = attachments.map((a) => ({ id: a.path, name: a.name, mimetype: a.mime_type, size: a.size }))
-      const read = await readAttachments(refs, fetchWorkerUploadBytes)
+      const read = await readAttachments(refs, fetchWorkerUploadBytes, sidebarSendable.map((u) => u.ref))
       media.images.push(...read.imageBlocks)
       media.documents.push(...read.documentBlocks)
+      doorAttachmentSeeds = read.pendingReadSeeds
       if (read.textBlocks.length) {
         // ONE budget across all the files' TEXT, mirroring the media budget. Five
         // uploads each inside the per-file window still add up past what the model
@@ -475,6 +479,8 @@ async function runSidebarWorker(args: {
       // and it can only resolve a ref that appears here.
       // READ pin = the SAME refs the attach list offers, by construction.
       ...(sidebarSendable.length ? { pinnedUploads: sidebarSendable } : {}),
+      // Read-to-the-end seeds for uploads that came back windowed (dev job 5e87b099).
+      ...(doorAttachmentSeeds.length ? { doorAttachmentSeeds } : {}),
       // Client-facing sends, aimed by the server (see buildSidebarSendRails).
       ...rails.portal,
       ...rails.email,

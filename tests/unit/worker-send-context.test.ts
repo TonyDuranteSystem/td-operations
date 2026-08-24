@@ -80,6 +80,22 @@ describe("buildWorkerSendContext — the controls survive the handoff", () => {
     expect(ctx!.pinnedUploads?.[0]?.ref).toBe("up1")
   })
 
+  it("REGRESSION: forwards doorAttachmentSeeds — without it a pasted-in file gets no live read-to-the-end signal (dev job 5e87b099)", () => {
+    // MANDATED by buildWorkerSendContext's own docblock. Drop this field from the
+    // builder and it still typechecks — runWorkerLoop's ledger simply never gets
+    // seeded, and a door-attached file is back to only the after-the-fact stamp.
+    const ctx = buildWorkerSendContext({
+      pinnedUploads: [
+        { ref: "up1", source: "worker_upload", locator: "worker-chat/abc.csv", name: "Tracking.csv" },
+      ],
+      doorAttachmentSeeds: [{ ref: "up1", resultText: "…[truncated — file is 99999 chars; continue with offset: 20000]" }],
+    })
+    expect(ctx).toBeDefined()
+    expect(ctx!.doorAttachmentSeeds).toEqual([
+      { ref: "up1", resultText: "…[truncated — file is 99999 chars; continue with offset: 20000]" },
+    ])
+  })
+
   it("forwards forceMailbox — the antonio@-impersonation control", () => {
     // MANDATED by buildWorkerSendContext's own docblock: every new control field must
     // be asserted here. Without this, dropping forceMailbox from the builder would

@@ -191,6 +191,9 @@ export async function POST(req: NextRequest) {
   // Media handed straight to the model on this turn, and the documents it may open.
   const imageBlocks: WorkerImageBlock[] = []
   const documentBlocks: WorkerDocumentBlock[] = []
+  // Read-to-the-end seeds for panel uploads that came back windowed (dev job
+  // 5e87b099) — threaded into callWorkerWithAttachments as doorAttachmentSeeds.
+  let doorAttachmentSeeds: Array<{ ref: string; resultText: string }> = []
   let pinnedEmailAttachments: PinnedEmailAttachment[] = []
   // undefined = surface has no recipient pin (Portal Chats sends no email).
   // An array — including an empty one — means send_email is restricted to it.
@@ -448,9 +451,10 @@ export async function POST(req: NextRequest) {
   }))
   if (uploadRefs.length) {
     try {
-      const read = await readAttachments(uploadRefs, fetchWorkerUploadBytes)
+      const read = await readAttachments(uploadRefs, fetchWorkerUploadBytes, sendableUploads.map((u) => u.ref))
       imageBlocks.push(...read.imageBlocks)
       documentBlocks.push(...read.documentBlocks)
+      doorAttachmentSeeds = read.pendingReadSeeds
       if (read.textBlocks.length) {
         // ONE budget across all the files' TEXT — same rule as the CRM sidebar.
         const { capTurnTextBudget, SLACK_TEXT_CAP_FOR_SURFACE } = await import("@/lib/ai-agent/attachment-reader")
@@ -778,6 +782,11 @@ export async function POST(req: NextRequest) {
       // id, not a location — cannot be read by it. Documents stay attachable;
       // they are simply not offered to the file reader, which would fail on them.
       ...(readableUploads.length ? { pinnedUploads: readableUploads } : {}),
+      // Read-to-the-end seeds for panel uploads that came back windowed (dev job
+      // 5e87b099) — see readAttachments' pendingReadSeeds for why chat-posted
+      // files (the other half of readableUploads) need none: they are only
+      // LISTED at door-time, never windowed, so there is nothing to seed yet.
+      ...(doorAttachmentSeeds.length ? { doorAttachmentSeeds } : {}),
       // FULL SLACK-PARITY READ RAILS (Antonio 2026-07-08: "it must be able
       // to work how it works in Slack"). Same switches the Team Workspace
       // grants staff. The code-task rail stays OFF (Antonio-only, R111);
