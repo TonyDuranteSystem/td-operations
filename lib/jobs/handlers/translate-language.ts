@@ -16,7 +16,7 @@
 import { triggerWorker, type Job, type JobResult } from "../queue"
 import type { JobRunContext } from "../registry"
 import { AI_CHAIN_CHUNK_CAP, AI_CHAIN_JOB_PRIORITY, decideChunkFollowup } from "../chain-state"
-import { generateTranslationsForLanguage } from "@/lib/portal/translation-generator"
+import { generateTranslationsForLanguage, seedPendingTranslations } from "@/lib/portal/translation-generator"
 import { getEnglishDictionary } from "@/lib/portal/i18n"
 import { getWizardTranslatableText } from "@/lib/portal/wizard-translatable-text"
 import { getGuideTranslatableText } from "@/lib/portal/guide-translatable-text"
@@ -136,38 +136,81 @@ export async function handleTranslateLanguage(job: Job, ctx?: JobRunContext): Pr
     return result
   }
 
-  // This source finished (done/halted) → chain into the next content source
-  // this system knows about (see NEXT_SOURCE above). The last source in the
-  // chain finishing (or halting) ends the whole chain for this language —
-  // nothing to chain into.
+  // This source finished, halted on the chunk cap, or got stuck making no
+  // progress → chain into the next content source this system knows about
+  // (see NEXT_SOURCE above). halt_no_progress is included deliberately
+  // (2026-08-24, found live: German's dictionary source halted repeatedly for
+  // ~2.5h and blocked wizard/guide from even starting the whole time) — a
+  // source stuck failing no longer blocks its siblings; it keeps being
+  // retried independently by translation-watchdog.ts on its own backoff
+  // ladder regardless of what happens here. The last source in the chain
+  // finishing (or halting) ends the whole chain for this language — nothing
+  // to chain into.
   const nextSource = NEXT_SOURCE[source]
-  if (nextSource && (followup === "done" || followup === "halt_cap")) {
+  if (nextSource && (followup === "done" || followup === "halt_cap" || followup === "halt_no_progress")) {
     try {
-      // Same dedup guard as the "continue" branch above (found missing in
-      // review, 2026-08-23): two independently-finishing chains for the same
-      // language — e.g. a route-triggered pick racing a watchdog retry —
-      // could otherwise each insert their own chunk-0 job for the next source.
-      const { data: live } = await db
-        .from("job_queue")
-        .select("id")
-        .eq("job_type", "translate_language")
-        .eq("payload->>language_code", p.language_code)
-        .eq("payload->>source", nextSource)
-        .in("status", ["pending", "processing"])
-        .neq("id", job.id)
-        .limit(1)
-      if (!live || live.length === 0) {
-        const { error } = await db.from("job_queue").insert({
-          job_type: "translate_language",
-          payload: { language_code: p.language_code, language_name: p.language_name, source: nextSource, chunk_index: 0, auto_retry: 0 },
-          priority: AI_CHAIN_JOB_PRIORITY,
-          created_by: "chain",
-        })
-        if (error) throw new Error(error.message)
-        result.steps.push(step("chain_next_source", "ok", `${nextSource} source enqueued`))
-        triggerWorker().catch(() => {})
+      // Skip if nextSource has no missing work at all — cheap, AI-free check
+      // (seedPendingTranslations only reads + upserts brand-new rows). Without
+      // this, a source stuck retrying on the watchdog ladder would re-hit this
+      // branch on every retry and re-enqueue an already-finished sibling each
+      // time — harmless (it would just no-op as noCandidates→"done") but noisy
+      // job_queue churn for no reason (ai-architect review finding, 2026-08-24).
+      const seed = await seedPendingTranslations(p.language_code, sourceDictionaryFor(nextSource))
+      if (seed.missing === 0) {
+        result.steps.push(step("chain_next_source", "skipped", `${nextSource} already fully translated`))
       } else {
-        result.steps.push(step("chain_next_source", "skipped", `${nextSource} chain job already live`))
+        // Same dedup guard as the "continue" branch above (found missing in
+        // review, 2026-08-23): two independently-finishing chains for the same
+        // language — e.g. a route-triggered pick racing a watchdog retry —
+        // could otherwise each insert their own chunk-0 job for the next source.
+        const { data: live } = await db
+          .from("job_queue")
+          .select("id")
+          .eq("job_type", "translate_language")
+          .eq("payload->>language_code", p.language_code)
+          .eq("payload->>source", nextSource)
+          .in("status", ["pending", "processing"])
+          .neq("id", job.id)
+          .limit(1)
+        if (!live || live.length === 0) {
+          const { data: inserted, error } = await db
+            .from("job_queue")
+            .insert({
+              job_type: "translate_language",
+              payload: { language_code: p.language_code, language_name: p.language_name, source: nextSource, chunk_index: 0, auto_retry: 0 },
+              priority: AI_CHAIN_JOB_PRIORITY,
+              created_by: "chain",
+            })
+            .select("id")
+            .single()
+          if (error) throw new Error(error.message)
+          // Post-insert verify (same non-atomic SELECT-then-INSERT guard
+          // translation-watchdog.ts already uses for its own re-enqueue): if a
+          // concurrent runner ALSO inserted a live job for this exact
+          // (language, nextSource) scope in the gap between our SELECT and our
+          // INSERT, delete OUR row and let theirs run. This matters more now
+          // than before this change — widening the trigger to halt_no_progress
+          // means this whole branch fires on every watchdog retry of a stuck
+          // source, not just once, so the race window gets exercised
+          // repeatedly instead of a single time (senior-engineer review
+          // finding, 2026-08-24).
+          const { data: liveAfter } = await db
+            .from("job_queue")
+            .select("id")
+            .in("status", ["pending", "processing"])
+            .eq("job_type", "translate_language")
+            .eq("payload->>language_code", p.language_code)
+            .eq("payload->>source", nextSource)
+          if ((liveAfter ?? []).length > 1) {
+            await db.from("job_queue").delete().eq("id", inserted.id).eq("status", "pending")
+            result.steps.push(step("chain_next_source", "skipped", `${nextSource} chain job already live (post-insert race)`))
+          } else {
+            result.steps.push(step("chain_next_source", "ok", `${nextSource} source enqueued`))
+            triggerWorker().catch(() => {})
+          }
+        } else {
+          result.steps.push(step("chain_next_source", "skipped", `${nextSource} chain job already live`))
+        }
       }
     } catch (e) {
       console.error("[translate-language] next-source insert failed:", e)
@@ -177,7 +220,7 @@ export async function handleTranslateLanguage(job: Job, ctx?: JobRunContext): Pr
 
   if (followup === "halt_no_progress") {
     result.ok = false
-    result.summary = `translate_language made no progress (${r.batchesSent} batches, ${r.batchesFailed} failed) — halted (${p.language_code}, ${source})`
+    result.summary = `translate_language made no progress (${r.batchesSent} batches, ${r.batchesFailed} failed) — halted (${p.language_code}, ${source})${r.lastBatchError ? `: ${r.lastBatchError}` : ""}`
     return result
   }
   if (followup === "halt_cap") {

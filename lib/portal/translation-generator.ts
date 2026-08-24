@@ -58,6 +58,11 @@ export interface GenerateResult {
   /** Batches actually attempted this call (each one real AI spend). */
   batchesSent: number
   batchesFailed: number
+  /** The raw error from the LAST failed batch this call, if any — kept so a
+   *  stuck language (repeated halt_no_progress) is diagnosable from the job's
+   *  own result/error text instead of requiring a manual server-log dig, as
+   *  this session had to do to root-cause the German incident (2026-08-24). */
+  lastBatchError?: string
 }
 
 interface ExistingStatusRow {
@@ -439,13 +444,14 @@ export async function generateTranslationsForLanguage(
           result.generated++
         }
       }
-    } catch {
+    } catch (e) {
       // Whole batch failed (API error, timeout, malformed response) — leave
       // these rows at 'generating'; recoverStuckRows() resets them to
       // 'pending' for the next call once STUCK_GENERATING_MS has passed.
       result.batchesFailed++
       result.failed += wonKeys.length
       result.failedKeys.push(...wonKeys)
+      result.lastBatchError = e instanceof Error ? e.message : String(e)
     }
   }
 
