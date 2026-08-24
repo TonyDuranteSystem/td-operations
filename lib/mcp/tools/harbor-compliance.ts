@@ -18,6 +18,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { harborCompliance } from "@/lib/harbor-compliance"
 import { logAction } from "@/lib/mcp/action-log"
 import { uploadBinaryToDriveUpsert } from "@/lib/google-drive"
+import { setAccountRenewalDate } from "@/lib/operations/renewal-dates"
 
 export function registerHarborComplianceTools(server: McpServer) {
 
@@ -615,29 +616,43 @@ Use this periodically to keep deadlines table in sync with HC registration data.
             continue
           }
 
-          // Actually create/update
+          // Actually create/update — routed through setAccountRenewalDate
+          // (not a raw deadlines insert/update) so the ACCOUNT's own
+          // ra_renewal_date also reflects HC's data, and so this write gets
+          // the same protections every other renewal-date writer now has:
+          // a Cancelled record is never silently repurposed, and more than
+          // one open record is never guessed at (round-4 council finding —
+          // this tool was a live, un-gated 6th writer to the exact table
+          // this project protects everywhere else; confirmed via production
+          // action_log that it has never actually run in write mode).
           if (existing) {
             if (existing.due_date !== dueDate) {
-              await supabaseAdmin
-                .from("deadlines")
-                .update({ due_date: dueDate, state, updated_at: new Date().toISOString() })
-                .eq("id", existing.id)
-              updated.push(`${account.company_name}: ${existing.due_date} -> ${dueDate}`)
+              const result = await setAccountRenewalDate(account.id, "ra_renewal_date", dueDate, {
+                actor: "hc_sync_license_deadlines",
+                summary: `RA Renewal date synced from Harbor Compliance license #${lic.license_number}`,
+                details: { license_number: lic.license_number, previous_due_date: existing.due_date },
+                state,
+              })
+              if (result.success) {
+                updated.push(`${account.company_name}: ${existing.due_date} -> ${dueDate}${result.mirrorWarning ? " ⚠️ " + result.mirrorWarning : ""}`)
+              } else {
+                skipped.push(`${account.company_name}: sync failed — ${result.error}`)
+              }
             } else {
               skipped.push(`${account.company_name}: already up to date`)
             }
           } else {
-            await supabaseAdmin.from("deadlines").insert({
-              account_id: account.id,
-              deadline_type: "RA Renewal",
-              due_date: dueDate,
-              status: "Pending",
+            const result = await setAccountRenewalDate(account.id, "ra_renewal_date", dueDate, {
+              actor: "hc_sync_license_deadlines",
+              summary: `RA Renewal date synced from Harbor Compliance license #${lic.license_number}`,
+              details: { license_number: lic.license_number },
               state,
-              year,
-              assigned_to: "Luca",
-              notes: `Synced from Harbor Compliance license #${lic.license_number}`,
             })
-            created.push(`${account.company_name}: RA Renewal due ${dueDate} (${state})`)
+            if (result.success) {
+              created.push(`${account.company_name}: RA Renewal due ${dueDate} (${state})${result.mirrorWarning ? " ⚠️ " + result.mirrorWarning : ""}`)
+            } else {
+              skipped.push(`${account.company_name}: sync failed — ${result.error}`)
+            }
           }
         }
 

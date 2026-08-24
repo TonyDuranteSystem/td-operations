@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
     if (result.ok === false) {
       return NextResponse.json({ error: result.error }, { status: 409 })
     }
-    return NextResponse.json({ ok: true, applied: result.applied, status: result.status })
+    return NextResponse.json({ ok: true, applied: result.applied, status: result.status, warning: result.warning })
   } catch (err) {
     console.error("fix-renewal-problem failed:", err)
     const message = err instanceof Error && err.message ? err.message : "Unexpected error — please try again."

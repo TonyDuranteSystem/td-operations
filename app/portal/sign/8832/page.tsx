@@ -16,6 +16,8 @@ import { getPortalAccounts } from "@/lib/portal/queries"
 import { APP_BASE_URL } from "@/lib/config"
 import { Portal8832Client } from "./portal-8832-client"
 import { cookies } from "next/headers"
+import { t, getLocale } from "@/lib/portal/i18n"
+import { loadTranslationsForLocale } from "@/lib/portal/translations-store"
 
 export default async function PortalSign8832Page() {
   const supabase = createClient()
@@ -26,16 +28,19 @@ export default async function PortalSign8832Page() {
   if (!user) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
-        <p className="text-zinc-500">Please log in to view your documents.</p>
+        <p className="text-zinc-500">{t("signDocs.notLoggedIn")}</p>
       </div>
     )
   }
+
+  const locale = getLocale(user)
+  const translations = await loadTranslationsForLocale(locale)
 
   const contactId = getClientContactId(user)
   if (!contactId) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
-        <p className="text-zinc-500">No contact associated with your account.</p>
+        <p className="text-zinc-500">{t("signDocs.noContact", locale, translations)}</p>
       </div>
     )
   }
@@ -49,8 +54,8 @@ export default async function PortalSign8832Page() {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center space-y-2">
-          <p className="text-zinc-500 text-lg">No company found.</p>
-          <p className="text-zinc-400 text-sm">Your Form 8832 will appear here once your company is set up.</p>
+          <p className="text-zinc-500 text-lg">{t("signDocs.noCompany", locale, translations)}</p>
+          <p className="text-zinc-400 text-sm">{t("signSubpages.form8832.noCompanyDesc", locale, translations)}</p>
         </div>
       </div>
     )
@@ -59,7 +64,7 @@ export default async function PortalSign8832Page() {
   // Find the Form 8832 for this account
   const { data: form } = await supabaseAdmin
     .from("form_8832_applications")
-    .select("token, access_code, status, company_name, language")
+    .select("token, access_code, status, company_name")
     .eq("account_id", selectedAccountId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -69,8 +74,8 @@ export default async function PortalSign8832Page() {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center space-y-2">
-          <p className="text-zinc-500 text-lg">No Form 8832 found.</p>
-          <p className="text-zinc-400 text-sm">Your C-Corp election form will appear here once it has been generated.</p>
+          <p className="text-zinc-500 text-lg">{t("signSubpages.form8832.notFoundTitle", locale, translations)}</p>
+          <p className="text-zinc-400 text-sm">{t("signSubpages.form8832.notFoundDesc", locale, translations)}</p>
         </div>
       </div>
     )
@@ -78,5 +83,5 @@ export default async function PortalSign8832Page() {
 
   const formUrl = `${APP_BASE_URL}/8832/${form.token}/${form.access_code}?portal=true`
 
-  return <Portal8832Client formUrl={formUrl} status={form.status} companyName={form.company_name} language={form.language} />
+  return <Portal8832Client formUrl={formUrl} status={form.status} companyName={form.company_name} />
 }

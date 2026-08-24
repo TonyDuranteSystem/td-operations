@@ -6,29 +6,6 @@ import { useLocale } from '@/lib/portal/use-locale'
 import { getOfficeStatus, OFFICE_TZ } from '@/lib/portal/office-hours'
 import { cn } from '@/lib/utils'
 
-const COPY = {
-  en: {
-    open: 'We are open',
-    closed: 'We are closed',
-    openSub: 'Our team is online now — Monday to Friday, 9 AM – 3 PM Eastern Time (US).',
-    closedSub:
-      "Our office is open Monday to Friday, 9 AM – 3 PM Eastern Time (US). We'll reply on the next business day.",
-    our: 'Our time',
-    your: 'Your time',
-    et: 'Eastern Time · US',
-  },
-  it: {
-    open: 'Siamo aperti',
-    closed: 'Siamo chiusi',
-    openSub: 'Il nostro team è online adesso — dal lunedì al venerdì, 9:00 – 15:00 (ora della costa est USA).',
-    closedSub:
-      'Il nostro ufficio è aperto dal lunedì al venerdì, 9:00 – 15:00 (ora della costa est USA). Ti risponderemo il prossimo giorno lavorativo.',
-    our: 'La nostra ora',
-    your: 'La tua ora',
-    et: 'Ora orientale · USA',
-  },
-} as const
-
 function timeFmt(locale: string, timeZone?: string) {
   return new Intl.DateTimeFormat(locale === 'it' ? 'it-IT' : 'en-US', {
     weekday: 'short',
@@ -48,7 +25,7 @@ export function OfficeClock({
   clientTimeZone?: string
   clientTimeZoneLabel?: string
 } = {}) {
-  const { locale } = useLocale()
+  const { locale, t } = useLocale()
   const [now, setNow] = useState<Date | null>(null)
 
   // Render only after mount — the server has no single "now" the client agrees
@@ -64,7 +41,6 @@ export function OfficeClock({
     return <div className="h-[104px] sm:h-20" aria-hidden />
   }
 
-  const copy = COPY[locale === 'it' ? 'it' : 'en']
   const status = getOfficeStatus(now)
   const open = status.open
 
@@ -109,11 +85,11 @@ export function OfficeClock({
               aria-hidden
             />
             <span className={cn('text-lg font-bold sm:text-xl', open ? 'text-emerald-800' : 'text-red-800')}>
-              {open ? copy.open : copy.closed}
+              {open ? t('officeClock.open') : t('officeClock.closed')}
             </span>
           </p>
           <p className={cn('mt-0.5 text-xs sm:text-sm', open ? 'text-emerald-700/90' : 'text-red-700/90')}>
-            {open ? copy.openSub : copy.closedSub}
+            {open ? t('officeClock.openSub') : t('officeClock.closedSub')}
           </p>
         </div>
       </div>
@@ -121,12 +97,12 @@ export function OfficeClock({
       {/* Two clocks: our timezone + the client's timezone */}
       <div className="flex flex-none items-stretch gap-3">
         <div className="flex-1 rounded-xl bg-white/80 px-4 py-2 text-center shadow-sm sm:flex-none">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{copy.our}</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{t('officeClock.our')}</p>
           <p className="text-base font-bold tabular-nums text-zinc-900">{ourTime}</p>
-          <p className="text-[10px] text-zinc-400">{copy.et}</p>
+          <p className="text-[10px] text-zinc-400">{t('officeClock.et')}</p>
         </div>
         <div className="flex-1 rounded-xl bg-white/80 px-4 py-2 text-center shadow-sm sm:flex-none">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{copy.your}</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{t('officeClock.your')}</p>
           <p className="text-base font-bold tabular-nums text-zinc-900">{yourTime}</p>
           <p className="text-[10px] text-zinc-400">{yourTz || ' '}</p>
         </div>

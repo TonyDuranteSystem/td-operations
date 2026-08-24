@@ -2,8 +2,61 @@
 
 import { ArrowLeft, FileText, CheckCircle, ChevronRight, Info, MessageCircle, FolderOpen } from 'lucide-react'
 import Link from 'next/link'
+import { useLocale } from '@/lib/portal/use-locale'
+
+// Builds the step list from the shared dictionary — kept as a function (not a
+// module-level constant) since it must re-resolve whenever the caller's t()
+// (locale + loaded translations) changes.
+const buildSteps = (t: (key: string) => string) => [
+  {
+    title: t('guideRelayDocs.steps.0.title'),
+    desc: t('guideRelayDocs.steps.0.desc'),
+  },
+  {
+    title: t('guideRelayDocs.steps.1.title'),
+    desc: t('guideRelayDocs.steps.1.desc'),
+  },
+  {
+    title: t('guideRelayDocs.steps.2.title'),
+    desc: t('guideRelayDocs.steps.2.desc'),
+  },
+  {
+    title: t('guideRelayDocs.steps.3.title'),
+    desc: t('guideRelayDocs.steps.3.desc'),
+    items: [t('guideRelayDocs.steps.3.items.0'), t('guideRelayDocs.steps.3.items.1'), t('guideRelayDocs.steps.3.items.2'), t('guideRelayDocs.steps.3.items.3'), t('guideRelayDocs.steps.3.items.4')],
+  },
+  {
+    title: t('guideRelayDocs.steps.4.title'),
+    desc: t('guideRelayDocs.steps.4.desc'),
+    portalNote: t('guideRelayDocs.steps.4.portalNote'),
+  },
+  {
+    title: t('guideRelayDocs.steps.5.title'),
+    desc: t('guideRelayDocs.steps.5.desc'),
+    portalNote: t('guideRelayDocs.steps.5.portalNote'),
+  },
+  {
+    title: t('guideRelayDocs.steps.6.title'),
+    desc: t('guideRelayDocs.steps.6.desc'),
+  },
+]
 
 export default function RelayDocsGuidePage() {
+  const { t } = useLocale()
+
+  const back = t('guideRelayDocs.back')
+  const title = t('guideRelayDocs.title')
+  const subtitle = t('guideRelayDocs.subtitle')
+  const needTitle = t('guideRelayDocs.needTitle')
+  const needItems = [0, 1, 2, 3, 4, 5, 6].map(i => t(`guideRelayDocs.needItems.${i}`))
+  const stepsHeading = t('guideRelayDocs.stepsHeading')
+  const steps = buildSteps(t)
+  const tipsTitle = t('guideRelayDocs.tipsTitle')
+  const tips = [0, 1, 2, 3].map(i => t(`guideRelayDocs.tips.${i}`))
+  const helpTitle = t('guideRelayDocs.helpTitle')
+  const helpDesc = t('guideRelayDocs.helpDesc')
+  const chatBtn = t('guideRelayDocs.chatBtn')
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto space-y-8">
 
@@ -13,7 +66,7 @@ export default function RelayDocsGuidePage() {
         className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-900 transition-colors"
       >
         <ArrowLeft className="h-4 w-4" />
-        Back to Guide
+        {back}
       </Link>
 
       {/* Header */}
@@ -23,27 +76,19 @@ export default function RelayDocsGuidePage() {
         </div>
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">
-            Relay — International Payments Onboarding: Document Upload Guide
+            {title}
           </h1>
           <p className="text-zinc-500 text-sm mt-0.5">
-            What to upload to unlock international wire transfers on your Relay account.
+            {subtitle}
           </p>
         </div>
       </div>
 
       {/* What you need */}
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-5">
-        <p className="text-sm font-semibold text-amber-800 mb-3">What you need before you start</p>
+        <p className="text-sm font-semibold text-amber-800 mb-3">{needTitle}</p>
         <ul className="space-y-2">
-          {[
-            'Access to your Relay business account',
-            'Your signed lease agreement with Tony Durante LLC',
-            'Recent invoices issued by your LLC (last 60 days)',
-            'Personal bank statements (last 60 days)',
-            'Your Articles of Organization — available in your portal',
-            'Your EIN Confirmation Letter from the IRS — available in your portal',
-            'A personal proof of address dated within the last 60–90 days',
-          ].map((item, i) => (
+          {needItems.map((item, i) => (
             <li key={i} className="flex items-center gap-2.5 text-sm text-amber-700">
               <CheckCircle className="h-4 w-4 shrink-0" />
               {item}
@@ -54,8 +99,8 @@ export default function RelayDocsGuidePage() {
 
       {/* Steps */}
       <div className="space-y-4">
-        <h2 className="text-base font-semibold">Documents to upload</h2>
-        {STEPS.map((step, i) => (
+        <h2 className="text-base font-semibold">{stepsHeading}</h2>
+        {steps.map((step, i) => (
           <div key={i} className="bg-white rounded-xl border p-5">
             <div className="flex gap-4">
               <div className="w-8 h-8 rounded-full bg-blue-600 text-white text-sm font-bold flex items-center justify-center shrink-0 mt-0.5">
@@ -91,14 +136,9 @@ export default function RelayDocsGuidePage() {
         <div className="flex items-start gap-3">
           <Info className="h-4 w-4 text-blue-600 mt-0.5 shrink-0" />
           <div>
-            <p className="text-sm font-semibold text-blue-800 mb-2">Good to know</p>
+            <p className="text-sm font-semibold text-blue-800 mb-2">{tipsTitle}</p>
             <ul className="space-y-1.5">
-              {[
-                'For Proof of Operations, the more documents you submit the better — Relay explicitly recommends combining multiple files into one PDF.',
-                'Paid invoices are ideal but unpaid invoices are also accepted for the Invoice requirement.',
-                'Documents available in your portal (Articles of Organization, EIN Letter) are already in the correct format.',
-                'Once submitted, Relay\'s review typically takes a few business days.',
-              ].map((tip, i) => (
+              {tips.map((tip, i) => (
                 <li key={i} className="text-sm text-blue-700 leading-relaxed">{tip}</li>
               ))}
             </ul>
@@ -109,57 +149,17 @@ export default function RelayDocsGuidePage() {
       {/* Help */}
       <div className="bg-gradient-to-r from-blue-600 to-blue-700 rounded-xl p-6 text-white text-center">
         <MessageCircle className="h-8 w-8 mx-auto mb-2 opacity-80" />
-        <p className="text-sm font-semibold mb-1">Need Help?</p>
-        <p className="text-xs opacity-80 mb-4">If you have questions about which documents to upload, our team is here to help.</p>
+        <p className="text-sm font-semibold mb-1">{helpTitle}</p>
+        <p className="text-xs opacity-80 mb-4">{helpDesc}</p>
         <Link
           href="/portal/chat"
           className="inline-flex items-center gap-2 px-4 py-2 bg-white text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-50 transition-colors"
         >
           <MessageCircle className="h-4 w-4" />
-          Chat With Us
+          {chatBtn}
         </Link>
       </div>
 
     </div>
   )
 }
-
-const STEPS = [
-  {
-    title: 'Proof of Address (Business)',
-    desc: 'Upload the signed lease agreement with Tony Durante LLC for your Florida address. This is your official US business address on file with Relay.',
-  },
-  {
-    title: 'Invoice',
-    desc: 'Upload an invoice issued by your LLC in the last 60 days. The invoice must be addressed to a US-based recipient — this is how Relay confirms your LLC is actively doing business in the United States. The recipient can be a US individual, a US company, or another US LLC. A paid invoice is preferred, but Relay also accepts unpaid ones.',
-  },
-  {
-    title: 'Source of Wealth',
-    desc: 'Upload your personal bank statements from the last 60 days.',
-  },
-  {
-    title: 'Proof of Operations',
-    desc: 'Upload multiple documents combined into a single PDF when possible. The more you submit, the stronger your application. Accepted documents:',
-    items: [
-      'Business invoices',
-      'Lease agreement',
-      'Client contracts or sales agreements',
-      'Business plan',
-      'Marketing materials',
-    ],
-  },
-  {
-    title: 'Certificate of Incorporation',
-    desc: 'Upload your Articles of Organization — the document used to form your LLC.',
-    portalNote: 'Available in your portal under Company Documents.',
-  },
-  {
-    title: 'Employer Identification Number (EIN)',
-    desc: 'Upload your EIN Confirmation Letter issued by the IRS.',
-    portalNote: 'Available in your portal under Company Documents.',
-  },
-  {
-    title: 'Proof of Address (Owner)',
-    desc: 'Upload a personal document confirming your home address: a utility bill, bank statement, or any official document showing your name and address, dated within the last 60–90 days.',
-  },
-]

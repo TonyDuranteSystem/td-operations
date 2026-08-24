@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Loader2, CheckCircle2, XCircle, HelpCircle } from 'lucide-react'
 import type { DecisionRequest } from '@/lib/decisions'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface DecisionCardProps {
   request: DecisionRequest
@@ -13,45 +14,30 @@ interface DecisionCardProps {
 
 interface Choice { key: string; label: string; description?: string }
 
-const T = {
-  en: {
-    actionRequired: 'Action required',
-    yes: 'Yes, I approve',
-    no: "No, I don't approve",
-    submit: 'Submit',
-    notePlaceholder: 'Add a comment (optional)',
-    suggestNameLabel: 'Suggest a name instead (optional):',
-    suggestNamePlaceholder: 'e.g. Sunshine LLC',
-    youResponded: 'Your response',
-    pending: 'A response is pending.',
-    expired: 'This request has expired.',
-    cancelled: 'This request was cancelled.',
-    approved: 'Approved',
-    rejected: 'Rejected',
-    thanks: 'Thank you — your response has been recorded.',
-    error: 'Could not submit your response. Please try again.',
-  },
-  it: {
-    actionRequired: 'Azione richiesta',
-    yes: 'Sì, approvo',
-    no: 'No, non approvo',
-    submit: 'Invia',
-    notePlaceholder: 'Aggiungi un commento (facoltativo)',
-    suggestNameLabel: 'Suggerisci un nome (facoltativo):',
-    suggestNamePlaceholder: 'es. Sunshine LLC',
-    youResponded: 'La tua risposta',
-    pending: 'In attesa di una risposta.',
-    expired: 'Questa richiesta è scaduta.',
-    cancelled: 'Questa richiesta è stata annullata.',
-    approved: 'Approvato',
-    rejected: 'Rifiutato',
-    thanks: 'Grazie — la tua risposta è stata registrata.',
-    error: 'Impossibile inviare la risposta. Riprova.',
-  },
-}
-
 export function DecisionCard({ request, locale, actionable }: DecisionCardProps) {
-  const t = T[locale]
+  // Routed through the shared translation system (dev job 12cab351) instead
+  // of a private en/it-only dictionary — a local `Record<'en'|'it',...>[locale]`
+  // returned undefined for any other locale and crashed on the next property
+  // access (2026-08-22 incident, found by the senior-engineer council pass).
+  // useLocale()'s t() always resolves to English rather than undefined.
+  const { t: translate } = useLocale()
+  const t = {
+    actionRequired: translate('decisionCard.actionRequired'),
+    yes: translate('decisionCard.yes'),
+    no: translate('decisionCard.no'),
+    submit: translate('decisionCard.submit'),
+    notePlaceholder: translate('decisionCard.notePlaceholder'),
+    suggestNameLabel: translate('decisionCard.suggestNameLabel'),
+    suggestNamePlaceholder: translate('decisionCard.suggestNamePlaceholder'),
+    youResponded: translate('decisionCard.youResponded'),
+    pending: translate('decisionCard.pending'),
+    expired: translate('decisionCard.expired'),
+    cancelled: translate('decisionCard.cancelled'),
+    approved: translate('decisionCard.approved'),
+    rejected: translate('decisionCard.rejected'),
+    thanks: translate('decisionCard.thanks'),
+    error: translate('decisionCard.error'),
+  }
   const opts = (request.options ?? {}) as Record<string, unknown>
   const message = locale === 'it' && request.message_it ? request.message_it : request.message
   // Per-request button labels (with optional IT variants), falling back to the

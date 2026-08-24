@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { CheckCircle, ArrowRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { FormationTrackerStep } from '@/lib/portal/formation-progress'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface FormationProgressTrackerProps {
   steps: FormationTrackerStep[]
@@ -13,21 +14,6 @@ interface FormationProgressTrackerProps {
   /** Where the "sign your SS-4" action links. */
   signHref: string
   title: string
-}
-
-const ACTION_LABEL: Record<'en' | 'it', string> = {
-  en: 'Action required',
-  it: 'Azione richiesta',
-}
-
-const FILED_LABEL: Record<'en' | 'it', string> = {
-  en: 'Filed',
-  it: 'Depositata',
-}
-
-const FAXED_LABEL: Record<'en' | 'it', string> = {
-  en: 'Faxed',
-  it: 'Inviato',
 }
 
 /** Compact, locale-aware filing date, e.g. "Jun 18, 2026" / "18 giu 2026". */
@@ -48,6 +34,7 @@ function formatFiledDate(iso: string, locale: 'en' | 'it'): string | null {
  * wizard (Payment Confirmed) or the signing page (SS-4 Prepared). EN/IT.
  */
 export function FormationProgressTracker({ steps, locale, wizardHref, signHref, title }: FormationProgressTrackerProps) {
+  const { t } = useLocale()
   return (
     <div className="bg-white rounded-xl border shadow-sm p-6">
       <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wider mb-5">{title}</h2>
@@ -91,14 +78,14 @@ export function FormationProgressTracker({ steps, locale, wizardHref, signHref, 
                 >
                   {step.label}
                   {filedDate && (
-                    <span className="text-zinc-500 font-normal"> · {FILED_LABEL[locale]} {filedDate}</span>
+                    <span className="text-zinc-500 font-normal"> · {t('formationTracker.filed')} {filedDate}</span>
                   )}
                   {faxedDate && (
-                    <span className="text-zinc-500 font-normal"> · {FAXED_LABEL[locale]} {faxedDate}</span>
+                    <span className="text-zinc-500 font-normal"> · {t('formationTracker.faxed')} {faxedDate}</span>
                   )}
                 </p>
                 {step.isActionRequired && (
-                  <p className="text-xs font-medium text-amber-700">{ACTION_LABEL[locale]}</p>
+                  <p className="text-xs font-medium text-amber-700">{t('decisions.actionRequired')}</p>
                 )}
               </div>
 

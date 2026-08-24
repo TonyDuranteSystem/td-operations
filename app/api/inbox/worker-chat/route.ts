@@ -191,6 +191,9 @@ export async function POST(req: NextRequest) {
   // Media handed straight to the model on this turn, and the documents it may open.
   const imageBlocks: WorkerImageBlock[] = []
   const documentBlocks: WorkerDocumentBlock[] = []
+  // Read-to-the-end seeds for panel uploads that came back windowed (dev job
+  // 5e87b099) — threaded into callWorkerWithAttachments as doorAttachmentSeeds.
+  let doorAttachmentSeeds: Array<{ ref: string; resultText: string }> = []
   let pinnedEmailAttachments: PinnedEmailAttachment[] = []
   // undefined = surface has no recipient pin (Portal Chats sends no email).
   // An array — including an empty one — means send_email is restricted to it.
@@ -435,6 +438,10 @@ export async function POST(req: NextRequest) {
   const uploadRefs = (body.attachments ?? [])
     .filter((a): a is { path: string; name?: string; mime_type?: string; size?: number } => typeof a.path === "string")
     .map((a) => ({ id: a.path, name: a.name, mimetype: a.mime_type, size: a.size }))
+  // Persisted onto this turn's own row below, so a LATER turn can still offer
+  // these (dev job eefac886) — see harvestRecentWorkerUploads.
+  const { buildPersistedTurnAttachments } = await import("@/lib/inbox/worker-upload-harvest")
+  const persistedTurnAttachments = buildPersistedTurnAttachments(uploadRefs)
   // Each attachable file gets a stable ref the model names; the location and the
   // bytes are resolved server-side, never by the model.
   const sendableUploads = uploadRefs.map((r, i) => ({
@@ -448,9 +455,10 @@ export async function POST(req: NextRequest) {
   }))
   if (uploadRefs.length) {
     try {
-      const read = await readAttachments(uploadRefs, fetchWorkerUploadBytes)
+      const read = await readAttachments(uploadRefs, fetchWorkerUploadBytes, sendableUploads.map((u) => u.ref))
       imageBlocks.push(...read.imageBlocks)
       documentBlocks.push(...read.documentBlocks)
+      doorAttachmentSeeds = read.pendingReadSeeds
       if (read.textBlocks.length) {
         // ONE budget across all the files' TEXT — same rule as the CRM sidebar.
         const { capTurnTextBudget, SLACK_TEXT_CAP_FOR_SURFACE } = await import("@/lib/ai-agent/attachment-reader")
@@ -476,10 +484,21 @@ export async function POST(req: NextRequest) {
   // BOTH surfaces get it — the client-chat panel has the same email capability
   // as the Inbox (Antonio, 2026-07-29, dev job f55ea3bb — "the worker in the
   // Portal chat must have the same capabilities it has everywhere").
-  const { sendableFromChatRefs, attachableFilesPrompt } = await import("@/lib/inbox/sendable-attachment")
+  const { sendableFromChatRefs, sendableFromRecentUploads, attachableFilesPrompt } = await import("@/lib/inbox/sendable-attachment")
+  // Files shared in an EARLIER turn of this SAME conversation, still offered
+  // now (dev job eefac886) — this is what closes the "not available this
+  // turn" gap: a file's ref used to die the moment the request that carried
+  // it ended. Excludes anything already staged THIS turn (sendableUploads),
+  // so a freshly re-shared file is only listed once, as the fresher copy.
+  const { harvestRecentWorkerUploads } = await import("@/lib/inbox/worker-upload-harvest")
+  const recentUploads = await harvestRecentWorkerUploads(
+    deterministicThreadUuid(scope),
+    new Set(uploadRefs.map((r) => r.id)),
+  )
   const sendableFiles = [
     ...sendableUploads,
-    ...sendableFromChatRefs(harvestedChatFiles, "posted in this client's chat", sendableUploads.length + 1),
+    ...sendableFromRecentUploads(recentUploads, sendableUploads.length + 1),
+    ...sendableFromChatRefs(harvestedChatFiles, "posted in this client's chat", sendableUploads.length + recentUploads.length + 1),
   ]
   if (sendableFiles.length) {
     userBody += `\n\n${attachableFilesPrompt(sendableFiles)}`
@@ -564,6 +583,11 @@ export async function POST(req: NextRequest) {
           ...(gmailThreadId ? { gmail_thread_id: gmailThreadId, mailbox: body.mailbox ?? "support" } : {}),
           ...(clientKey ? { client_key: clientKey } : {}),
           user_email: user.email ?? null,
+          // Files staged THIS turn, persisted so a LATER turn can still offer
+          // them (dev job eefac886) — see harvestRecentWorkerUploads, which
+          // reads this back and re-mints fresh refs; nothing here round-trips
+          // through the model.
+          ...(persistedTurnAttachments.length ? { attachments: persistedTurnAttachments } : {}),
         },
       })
       .select("id")
@@ -778,6 +802,11 @@ export async function POST(req: NextRequest) {
       // id, not a location — cannot be read by it. Documents stay attachable;
       // they are simply not offered to the file reader, which would fail on them.
       ...(readableUploads.length ? { pinnedUploads: readableUploads } : {}),
+      // Read-to-the-end seeds for panel uploads that came back windowed (dev job
+      // 5e87b099) — see readAttachments' pendingReadSeeds for why chat-posted
+      // files (the other half of readableUploads) need none: they are only
+      // LISTED at door-time, never windowed, so there is nothing to seed yet.
+      ...(doorAttachmentSeeds.length ? { doorAttachmentSeeds } : {}),
       // FULL SLACK-PARITY READ RAILS (Antonio 2026-07-08: "it must be able
       // to work how it works in Slack"). Same switches the Team Workspace
       // grants staff. The code-task rail stays OFF (Antonio-only, R111);

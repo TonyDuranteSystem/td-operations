@@ -33,6 +33,7 @@ import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
 import { CompanySwitcher } from './company-switcher'
+import { LanguageSwitcher } from './language-switcher'
 import { GlobalSearch } from '@/components/shared/global-search'
 import type { PortalAccount } from '@/lib/types'
 import type { PortalNavVisibility, InProgressFormation } from '@/lib/portal/queries'
@@ -319,7 +320,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   const companiesLabel = (totalEntities > 1
     ? SECTION_LABELS['nav.section.companies']
     : SECTION_LABELS['nav.section.company'])?.[locale] ?? 'Companies'
-  const loggedInAsLabel = locale === 'it' ? 'Accesso come' : 'Logged in as'
+  const loggedInAsLabel = t('sidebar.loggedInAs')
 
   const isPartner = isPartnerPortal(portalRole)
 
@@ -451,10 +452,10 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
       // The wizard is the formation/onboarding data-collection step. Banking is
       // no longer a wizard — it's the dedicated /portal/banks "Bank Applications"
       // item below — so this label is always "Complete Setup".
-      navLabel = locale === 'it' ? 'Completa Registrazione' : 'Complete Setup'
+      navLabel = t('sidebar.completeSetup')
     }
     if (item.key === 'nav.bankApplications') {
-      navLabel = locale === 'it' ? 'Apertura Conto Bancario' : 'Bank Applications'
+      navLabel = t('sidebar.bankApplications')
     }
 
     return (
@@ -527,6 +528,9 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
         ) : (
           <span className="font-semibold text-sm">{t('nav.portal')}</span>
         )}
+        <div className="ml-auto shrink-0">
+          <LanguageSwitcher compact />
+        </div>
       </div>
 
       {/* Mobile overlay */}

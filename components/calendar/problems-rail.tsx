@@ -74,6 +74,9 @@ function ProblemCard({ proposal }: { proposal: RenewalFixProposal }) {
       if (!res.ok) {
         throw new Error(data.error || 'Fix could not be applied — refresh and try again.')
       }
+      // Surface a "couldn't safely auto-correct the client-facing copy"
+      // warning instead of leaving it invisible in a log (round-4 council).
+      if (data.warning) toast.warning(data.warning)
       toast.success(`${proposal.companyName}: ${data.applied}`)
       router.refresh()
     } catch (err) {

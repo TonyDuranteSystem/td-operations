@@ -2,6 +2,7 @@
 
 import { ChevronLeft, ChevronRight, Check, Loader2, Save } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useLocale } from '@/lib/portal/use-locale'
 
 export interface WizardStep {
   id: string
@@ -46,9 +47,22 @@ export function WizardShell({
   const isFirstStep = currentStep === 0
   const progress = ((currentStep + 1) / steps.length) * 100
 
-  const t = locale === 'it'
-    ? { back: 'Indietro', next: 'Avanti', submit: 'Invia', saving: 'Salvando...', save: 'Salva bozza', step: 'Passo', of: 'di', submitting: 'Invio in corso...' }
-    : { back: 'Back', next: 'Next', submit: 'Submit', saving: 'Saving...', save: 'Save draft', step: 'Step', of: 'of', submitting: 'Submitting...' }
+  // Any language beyond en/it (dev job 12cab351): the loaded map is keyed by
+  // the step's own English text (lib/portal/wizard-translatable-text.ts), so
+  // it must layer UNDER the existing it/en choice, not replace it — same
+  // convention as components/portal/wizard/wizard-field.tsx.
+  const { t: translate, translations } = useLocale()
+  const pick = (en: string, it: string | undefined): string => translations[en] ?? (locale === 'it' && it ? it : en)
+  const t = {
+    back: translate('wizardShell.back'),
+    next: translate('wizardShell.next'),
+    submit: translate('wizardShell.submit'),
+    saving: translate('wizardShell.saving'),
+    save: translate('wizardShell.save'),
+    step: translate('wizardShell.step'),
+    of: translate('wizardShell.of'),
+    submitting: translate('wizardShell.submitting'),
+  }
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -89,7 +103,7 @@ export function WizardShell({
                 {i + 1}
               </span>
             )}
-            {locale === 'it' && step.titleIt ? step.titleIt : step.title}
+            {pick(step.title, step.titleIt)}
           </button>
         ))}
       </div>
@@ -97,15 +111,11 @@ export function WizardShell({
       {/* Step content */}
       <div className="bg-white rounded-xl border shadow-sm p-6 mb-6">
         <h2 className="text-lg font-semibold mb-1">
-          {locale === 'it' && steps[currentStep].titleIt
-            ? steps[currentStep].titleIt
-            : steps[currentStep].title}
+          {pick(steps[currentStep].title, steps[currentStep].titleIt)}
         </h2>
         {steps[currentStep].description && (
           <p className="text-sm text-zinc-500 mb-6">
-            {locale === 'it' && steps[currentStep].descriptionIt
-              ? steps[currentStep].descriptionIt
-              : steps[currentStep].description}
+            {pick(steps[currentStep].description as string, steps[currentStep].descriptionIt)}
           </p>
         )}
         {children}

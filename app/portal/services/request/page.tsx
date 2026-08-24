@@ -8,7 +8,6 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getLocale } from '@/lib/portal/i18n'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { ServiceRequestClient } from './service-request-client'
 
@@ -18,7 +17,6 @@ export default async function ServiceRequestPage() {
   if (!user) redirect('/portal/login')
 
   const contactId = getClientContactId(user)
-  const locale = getLocale(user)
   const userName = user.user_metadata?.full_name || user.email?.split('@')[0] || ''
 
   // Resolve the current account so the submitted chat message lands on the
@@ -46,7 +44,6 @@ export default async function ServiceRequestPage() {
         contactId={contactId || ''}
         accountId={accountId}
         userName={userName}
-        locale={locale}
       />
     </div>
   )

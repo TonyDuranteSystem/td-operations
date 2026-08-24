@@ -262,7 +262,7 @@ export default async function PortalDocumentsPage() {
             <Layers className="h-4 w-4 text-zinc-500" />
             <h2 className="text-sm font-semibold text-zinc-700">{group.title}</h2>
           </div>
-          <DocumentList documents={group.docs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} locale={locale} />
+          <DocumentList documents={group.docs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} />
         </div>
       ))}
 
@@ -281,7 +281,7 @@ export default async function PortalDocumentsPage() {
                 <Building2 className="h-4 w-4 text-zinc-500" />
                 <h2 className="text-sm font-semibold text-zinc-700">Company Documents</h2>
               </div>
-              <DocumentList documents={companyDocs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} locale={locale} />
+              <DocumentList documents={companyDocs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} />
             </div>
           )}
 
@@ -291,7 +291,7 @@ export default async function PortalDocumentsPage() {
                 <User className="h-4 w-4 text-zinc-500" />
                 <h2 className="text-sm font-semibold text-zinc-700">My Documents</h2>
               </div>
-              <DocumentList documents={myDocs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} locale={locale} />
+              <DocumentList documents={myDocs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} />
             </div>
           )}
         </>

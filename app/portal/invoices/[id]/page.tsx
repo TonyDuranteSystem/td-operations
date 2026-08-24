@@ -130,9 +130,7 @@ export default function InvoiceDetailPage() {
 
   const handleSend = async () => {
     if (!invoice?.customer?.email) {
-      toast.error(locale === 'it'
-        ? 'Aggiungi un indirizzo email al cliente per inviare la fattura.'
-        : 'Please add an email to this customer to send the invoice.')
+      toast.error(t('invoices.addEmailToSend'))
       return
     }
     setSending(true)

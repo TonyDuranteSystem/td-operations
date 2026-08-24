@@ -5,6 +5,7 @@ import { FileText, Download, Search, Filter, Eye, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface Document {
   id: string
@@ -21,7 +22,6 @@ interface DocumentListProps {
   categoryLabels: Record<number, string>
   /** Ids of documents that are "new" (unopened) for the current contact. */
   newDocIds?: string[]
-  locale?: 'en' | 'it'
 }
 
 const CATEGORY_COLORS: Record<number, string> = {
@@ -32,7 +32,8 @@ const CATEGORY_COLORS: Record<number, string> = {
   5: 'bg-zinc-100 text-zinc-700',
 }
 
-export function DocumentList({ documents, categoryLabels, newDocIds = [], locale = 'en' }: DocumentListProps) {
+export function DocumentList({ documents, categoryLabels, newDocIds = [] }: DocumentListProps) {
+  const { t } = useLocale()
   const [search, setSearch] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null)
   const [downloading, setDownloading] = useState<string | null>(null)
@@ -44,7 +45,7 @@ export function DocumentList({ documents, categoryLabels, newDocIds = [], locale
   const [seenIds, setSeenIds] = useState<Set<string>>(new Set())
   const newSet = new Set(newDocIds)
   const isNew = (id: string) => newSet.has(id) && !seenIds.has(id)
-  const newLabel = locale === 'it' ? 'Novità' : 'New'
+  const newLabel = t('documents.new')
   const markViewed = (docId: string) => {
     if (!newSet.has(docId) || seenIds.has(docId)) return
     setSeenIds(prev => new Set(prev).add(docId))

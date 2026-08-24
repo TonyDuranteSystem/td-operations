@@ -9,31 +9,6 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
 }
 
-const COPY = {
-  en: {
-    title: 'Install the Portal app',
-    androidSub: 'Quick access from your home screen',
-    install: 'Install',
-    iosIntro: 'For one-tap access, like an app:',
-    iosStep1Before: 'Tap the',
-    iosStep1Bold: 'Share',
-    iosStep1After: 'button in the Safari bar below',
-    iosStep2Before: 'Choose',
-    iosStep2Bold: '"Add to Home Screen"',
-  },
-  it: {
-    title: "Installa l'app del Portale",
-    androidSub: 'Accesso rapido dalla schermata Home',
-    install: 'Installa',
-    iosIntro: "Per accedere in un tocco, come un'app:",
-    iosStep1Before: 'Tocca il pulsante',
-    iosStep1Bold: 'Condividi',
-    iosStep1After: 'qui sotto nella barra di Safari',
-    iosStep2Before: 'Scegli',
-    iosStep2Bold: '"Aggiungi alla schermata Home"',
-  },
-} as const
-
 const DISMISS_KEY = 'pwa-install-dismissed'
 const DISMISS_DAYS = 30
 
@@ -64,8 +39,7 @@ function isMobile(): boolean {
 }
 
 export function PwaInstallPrompt() {
-  const { locale } = useLocale()
-  const c = COPY[locale === 'it' ? 'it' : 'en']
+  const { t } = useLocale()
   const [show, setShow] = useState(false)
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [showIOS, setShowIOS] = useState(false)
@@ -116,15 +90,15 @@ export function PwaInstallPrompt() {
             <span className="text-white font-bold text-lg">TD</span>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-zinc-900">{c.title}</p>
-            <p className="text-xs text-zinc-500">{c.androidSub}</p>
+            <p className="text-sm font-semibold text-zinc-900">{t('pwaPrompt.title')}</p>
+            <p className="text-xs text-zinc-500">{t('pwaPrompt.androidSub')}</p>
           </div>
           <button
             onClick={handleInstall}
             className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors shrink-0"
           >
             <Download className="h-4 w-4 inline mr-1" />
-            {c.install}
+            {t('pwaPrompt.install')}
           </button>
           <button
             onClick={handleDismiss}
@@ -147,20 +121,20 @@ export function PwaInstallPrompt() {
               <span className="text-white font-bold text-lg">TD</span>
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-zinc-900">{c.title}</p>
-              <p className="text-xs text-zinc-500 mt-1">{c.iosIntro}</p>
+              <p className="text-sm font-semibold text-zinc-900">{t('pwaPrompt.title')}</p>
+              <p className="text-xs text-zinc-500 mt-1">{t('pwaPrompt.iosIntro')}</p>
               <ol className="text-xs text-zinc-600 mt-2 space-y-1.5">
                 <li className="flex items-start gap-1.5">
                   <span className="font-semibold text-zinc-900 shrink-0">1.</span>
                   <span>
-                    {c.iosStep1Before} <strong>{c.iosStep1Bold}</strong>{' '}
-                    <Share className="h-3.5 w-3.5 inline text-blue-500 -mt-0.5" /> {c.iosStep1After}
+                    {t('pwaPrompt.iosStep1Before')} <strong>{t('pwaPrompt.iosStep1Bold')}</strong>{' '}
+                    <Share className="h-3.5 w-3.5 inline text-blue-500 -mt-0.5" /> {t('pwaPrompt.iosStep1After')}
                   </span>
                 </li>
                 <li className="flex items-start gap-1.5">
                   <span className="font-semibold text-zinc-900 shrink-0">2.</span>
                   <span>
-                    {c.iosStep2Before} <strong>{c.iosStep2Bold}</strong>
+                    {t('pwaPrompt.iosStep2Before')} <strong>{t('pwaPrompt.iosStep2Bold')}</strong>
                   </span>
                 </li>
               </ol>

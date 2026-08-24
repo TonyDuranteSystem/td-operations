@@ -6,6 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { checkDeadlineDirectWrite } from "@/lib/operations/renewal-dates"
 
 export function registerDeadlineTools(server: McpServer) {
 
@@ -93,11 +94,16 @@ export function registerDeadlineTools(server: McpServer) {
         const futureDate = new Date(today.getTime() + (days_ahead || 30) * 24 * 60 * 60 * 1000)
         const futureStr = futureDate.toISOString().slice(0, 10)
 
-        // Get unfiled deadlines up to the future date (and all overdue)
+        // Get unfiled, un-cancelled deadlines up to the future date (and all
+        // overdue) — a Cancelled record (e.g. a paused renewal service) is
+        // resolved, not upcoming work (round-4 council finding). Verified
+        // live in production (2026-08-23): zero deadlines rows currently
+        // have a NULL status, so `.not(...,"in",...)`'s three-valued-logic
+        // NULL gap doesn't affect this tool today.
         let q = supabaseAdmin
           .from("deadlines")
           .select("*, accounts(company_name)")
-          .neq("status", "Filed")
+          .not("status", "in", '("Filed","Cancelled")')
           .lte("due_date", futureStr)
           .order("due_date", { ascending: true })
           .limit(200)
@@ -205,6 +211,20 @@ export function registerDeadlineTools(server: McpServer) {
     },
     async ({ id, updates }) => {
       try {
+        // RA Renewal / Annual Report rows are mirrored FROM the account's
+        // own renewal-date column — a direct due_date edit or a direct
+        // Filed/Completed status flip here would desync them from that
+        // column and from the renewal-creation cron (dev job 8bd0e51a).
+        const { data: existingDeadline } = await supabaseAdmin
+          .from("deadlines")
+          .select("deadline_type")
+          .eq("id", id)
+          .maybeSingle()
+        const check = checkDeadlineDirectWrite(existingDeadline?.deadline_type ?? null, updates)
+        if (!check.allowed) {
+          return { content: [{ type: "text" as const, text: `❌ ${check.reason}` }] }
+        }
+
         const { data, error } = await supabaseAdmin
           .from("deadlines")
           .update({ ...updates, updated_at: new Date().toISOString() })

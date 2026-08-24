@@ -366,6 +366,27 @@ export function sendableFromChatRefs(
   }))
 }
 
+/**
+ * Files uploaded to THIS worker conversation in an earlier turn (dev job
+ * eefac886) — same private worker-attachments bucket as a this-turn upload,
+ * so `source: "worker_upload"` (never "chat_asset") is required: that field
+ * is what tells the reader to fetch with the service key, not a public URL.
+ */
+export function sendableFromRecentUploads(
+  refs: Array<{ id: string; name?: string; mimetype?: string; size?: number }>,
+  startAt = 1,
+): SendableFile[] {
+  return refs.map((r, i) => ({
+    ref: `up${startAt + i}`,
+    source: "worker_upload" as const,
+    locator: r.id,
+    name: r.name || "file",
+    contentType: r.mimetype,
+    size: r.size,
+    origin: "shared earlier in this conversation",
+  }))
+}
+
 /** One row of `documents`, as the offer-builder below needs it. */
 export interface DocumentRowForOffer {
   id: string

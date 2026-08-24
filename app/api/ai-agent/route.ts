@@ -231,6 +231,9 @@ async function runSidebarWorker(args: {
   // become native document blocks, everything else is extracted to text and appended to
   // the body — the same treatment the Inbox and Team Chat give a dropped file.
   const media: { images: WorkerImageBlock[]; documents: WorkerDocumentBlock[] } = { images: [], documents: [] }
+  // Read-to-the-end seeds for panel uploads that came back windowed (dev job
+  // 5e87b099) — threaded into the worker call as doorAttachmentSeeds.
+  let doorAttachmentSeeds: Array<{ ref: string; resultText: string }> = []
 
   // LEGACY single-file field (base64 in the request body). Kept so an older tab
   // that hasn't reloaded still works; the panel now sends `attachments` instead.
@@ -273,15 +276,39 @@ async function runSidebarWorker(args: {
     size: a.size,
     origin: 'you uploaded this just now',
   }))
+  // Persisted onto this turn's own row below, so a LATER turn can still offer
+  // these (dev job eefac886) — see harvestRecentWorkerUploads.
+  const { buildPersistedTurnAttachments, harvestRecentWorkerUploads } = await import(
+    '@/lib/inbox/worker-upload-harvest'
+  )
+  const persistedTurnAttachments = buildPersistedTurnAttachments(
+    (attachments ?? []).map((a) => ({ id: a.path, name: a.name, mimetype: a.mime_type, size: a.size })),
+  )
+  // Files shared in an EARLIER turn of this SAME conversation, still offered
+  // now (dev job eefac886) — the fix for "not available this turn" when the
+  // ask to attach comes later than the upload. Excludes anything already
+  // staged THIS turn so a re-shared file is only listed once, as the fresher
+  // copy. NOT used for the read-into-context block below — that's about
+  // content windowed THIS turn only, unaffected by this fix.
+  const recentUploads = await harvestRecentWorkerUploads(
+    threadId,
+    new Set((attachments ?? []).map((a) => a.path)),
+  )
+  const { sendableFromRecentUploads } = await import('@/lib/inbox/sendable-attachment')
+  const sidebarAttachable: import('@/lib/inbox/sendable-attachment').SendableFile[] = [
+    ...sidebarSendable,
+    ...sendableFromRecentUploads(recentUploads, sidebarSendable.length + 1),
+  ]
   if (attachments?.length) {
     try {
       const { readAttachments, fetchWorkerUploadBytes, fenceUntrustedContent } = await import(
         '@/lib/ai-agent/attachment-reader'
       )
       const refs = attachments.map((a) => ({ id: a.path, name: a.name, mimetype: a.mime_type, size: a.size }))
-      const read = await readAttachments(refs, fetchWorkerUploadBytes)
+      const read = await readAttachments(refs, fetchWorkerUploadBytes, sidebarSendable.map((u) => u.ref))
       media.images.push(...read.imageBlocks)
       media.documents.push(...read.documentBlocks)
+      doorAttachmentSeeds = read.pendingReadSeeds
       if (read.textBlocks.length) {
         // ONE budget across all the files' TEXT, mirroring the media budget. Five
         // uploads each inside the per-file window still add up past what the model
@@ -320,6 +347,10 @@ async function runSidebarWorker(args: {
       userBody = `${userBody}\n\n[The attached file(s) "${names}" could not be read. Say so plainly rather than guessing at their contents.]`
     }
   }
+  // A turn with NO panel upload but files shared earlier in this thread still
+  // needs the attachable-list prompt — the block above only fires when
+  // `attachments?.length`, which is exactly the case this fix closes.
+  if (recentUploads.length) attachablePromptPending = true
 
   // ONE budget across BOTH sources: the caps multiply out past the request limit,
   // and the whole payload is re-sent on every iteration of the tool loop. Capping
@@ -379,6 +410,9 @@ async function runSidebarWorker(args: {
           user_message: rawUserMessage,
           ...(clientKey ? { client_key: clientKey } : {}),
           user_email: userEmail,
+          // Files staged THIS turn, persisted so a LATER turn can still offer
+          // them (dev job eefac886) — see harvestRecentWorkerUploads.
+          ...(persistedTurnAttachments.length ? { attachments: persistedTurnAttachments } : {}),
         },
       })
       .select('id')
@@ -415,7 +449,7 @@ async function runSidebarWorker(args: {
   // this line has to close on the prompt side.
   if (attachablePromptPending && rails.email.enableEmailSend) {
     const { attachableFilesPrompt } = await import('@/lib/inbox/sendable-attachment')
-    userBody += `\n\n${attachableFilesPrompt(sidebarSendable)}`
+    userBody += `\n\n${attachableFilesPrompt(sidebarAttachable)}`
   }
 
   // WHO the client on this page actually is — name, language, services, addresses.
@@ -474,7 +508,15 @@ async function runSidebarWorker(args: {
       // The pin is the gate: read_uploaded_file exists only because this is set,
       // and it can only resolve a ref that appears here.
       // READ pin = the SAME refs the attach list offers, by construction.
-      ...(sidebarSendable.length ? { pinnedUploads: sidebarSendable } : {}),
+      // READABLE is a SUBSET of attachable — matches the same filter the Inbox
+      // route applies to its own merged list. Nothing here ever actually has
+      // source "document" (only worker_upload), but the type is shared with a
+      // surface that does carry that source, so the filter keeps the two honest.
+      ...(sidebarAttachable.length
+        ? { pinnedUploads: sidebarAttachable.filter((f): f is typeof f & { source: "worker_upload" | "chat_asset" } => f.source !== "document") }
+        : {}),
+      // Read-to-the-end seeds for uploads that came back windowed (dev job 5e87b099).
+      ...(doorAttachmentSeeds.length ? { doorAttachmentSeeds } : {}),
       // Client-facing sends, aimed by the server (see buildSidebarSendRails).
       ...rails.portal,
       ...rails.email,
@@ -508,7 +550,7 @@ async function runSidebarWorker(args: {
               gmailThreadId: null,
               mailbox: TD_MAILBOXES[0],
               defaultReplyToMessageId: null,
-              sendable: sidebarSendable,
+              sendable: sidebarAttachable,
             },
           }
         : {}),

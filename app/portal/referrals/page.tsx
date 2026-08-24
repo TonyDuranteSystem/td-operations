@@ -5,6 +5,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { t, getLocale } from '@/lib/portal/i18n'
+import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import { ReferralPage } from '@/components/portal/referral-page'
 import { computePrimaryAccountIds, sumEarnedByCurrency, formatEarnedSummary } from '@/lib/portal/referral-aggregate'
 
@@ -17,6 +18,7 @@ export default async function PortalReferralsPage() {
   if (!contactId) redirect('/portal')
 
   const locale = getLocale(user)
+  const translations = await loadTranslationsForLocale(locale)
 
   // The referral link is fetched client-side from /api/portal/referral-code,
   // which generates the code on demand in a reliable request context (a write
@@ -119,25 +121,25 @@ export default async function PortalReferralsPage() {
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
       <div>
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">
-          {t('referrals.title', locale)}
+          {t('referrals.title', locale, translations)}
         </h1>
         <p className="text-zinc-500 text-xs sm:text-sm mt-1">
-          {t('referrals.subtitle', locale)}
+          {t('referrals.subtitle', locale, translations)}
         </p>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="bg-white rounded-xl border shadow-sm p-4">
-          <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('referrals.totalReferrals', locale)}</p>
+          <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('referrals.totalReferrals', locale, translations)}</p>
           <p className="text-lg sm:text-xl font-semibold text-zinc-900 mt-1">{totalReferrals}</p>
         </div>
         <div className="bg-white rounded-xl border shadow-sm p-4">
-          <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('referrals.converted', locale)}</p>
+          <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('referrals.converted', locale, translations)}</p>
           <p className="text-lg sm:text-xl font-semibold text-blue-600 mt-1">{convertedCount}</p>
         </div>
         <div className="bg-white rounded-xl border shadow-sm p-4">
-          <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('referrals.earned', locale)}</p>
+          <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('referrals.earned', locale, translations)}</p>
           <p className="text-lg sm:text-xl font-semibold text-emerald-600 mt-1">
             {earnedSummary}
           </p>
@@ -147,7 +149,6 @@ export default async function PortalReferralsPage() {
       <ReferralPage
         referrals={referralRows}
         payouts={payoutRows}
-        locale={locale}
       />
     </div>
   )

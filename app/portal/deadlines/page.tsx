@@ -25,11 +25,24 @@ export default async function PortalDeadlinesPage() {
 
   const locale = getLocale(user)
 
-  // Fetch ALL deadlines for this account (not just upcoming)
+  // Fetch ALL deadlines for this account (not just upcoming) — but never a
+  // Cancelled row: those are internal history (e.g. a service that was
+  // deactivated and later re-set up under a fresh record), not something a
+  // client should ever see as a live obligation. Without this filter, a
+  // Cancelled row's old (now-past) due date renders here as a fake overdue
+  // renewal on something staff already resolved (dev job 8bd0e51a).
+  //
+  // `.or('status.is.null,status.neq.Cancelled')`, not a bare `.neq()` — a
+  // plain `status <> 'Cancelled'` is NULL (excluded) for a NULL-status row,
+  // and this table is heavily legacy-imported, so that's real, not
+  // theoretical (round-4 council, 2 reviewers; verified live in production
+  // 2026-08-23 that zero rows currently have a NULL status here, so this is
+  // a defensive fix, not a correction of a live-today client-visible bug).
   const { data: deadlines } = await supabaseAdmin
     .from('deadlines')
     .select('id, deadline_type, due_date, status, notes, state, year, filed_date')
     .eq('account_id', selectedAccountId)
+    .or('status.is.null,status.neq.Cancelled')
     .order('due_date', { ascending: true })
     .limit(100)
 

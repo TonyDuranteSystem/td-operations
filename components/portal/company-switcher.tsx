@@ -44,8 +44,8 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const router = useRouter()
-  const { locale } = useLocale()
-  const changeCompanyLabel = locale === 'it' ? 'Cambia azienda' : 'Change company'
+  const { t } = useLocale()
+  const changeCompanyLabel = t('company.changeCompany')
 
   const totalEntities = accounts.length + inProgress.length
   const selectedAccount = accounts.find(a => a.id === selectedAccountId)

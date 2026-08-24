@@ -5,8 +5,10 @@ import { toast } from 'sonner'
 import { WizardShell, type WizardStep } from '@/components/portal/wizard/wizard-shell'
 import { WizardField, type FieldConfig } from '@/components/portal/wizard/wizard-field'
 import { getWizardConfig, wizardCollectsOwnerMembers, wizardRequiresSs4Signer, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
+import { useLocale } from '@/lib/portal/use-locale'
 import { createClient } from '@/lib/supabase/client'
 import { resolveInstitution } from '@/lib/tax/bank-identity'
+import { interpolateString } from '@/lib/template-interpolation'
 import { AlertCircle, CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
 
 const UPLOAD_BUCKET = 'onboarding-uploads'
@@ -128,6 +130,11 @@ function PrepareCsvStep({ locale, bankGuides, acknowledged, onAcknowledge }: { l
   const [fetched, setFetched] = useState<FetchedGuide | null>(null)
   const [loading, setLoading] = useState(false)
   const it = locale === 'it'
+  // Any language beyond en/it (dev job 12cab351) — same pattern as
+  // WizardClient's own pickText, defined locally here since this is a
+  // separate component with no access to the parent's callback.
+  const { translations } = useLocale()
+  const pick = (en: string, itText: string): string => translations[en] ?? (it ? itText : en)
   const q = bank.toLowerCase().trim()
   const localGuide = q.length >= 3 ? bankGuides.find(g => g.matchTerms.some(t => q.includes(t))) : null
   // A locally-matched (curated) guide always wins. Otherwise show whatever the
@@ -167,42 +174,46 @@ function PrepareCsvStep({ locale, bankGuides, acknowledged, onAcknowledge }: { l
     <div className="space-y-5">
       <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm">
         <p className="text-lg font-bold text-amber-900">
-          {it ? '⚠️ Leggi attentamente prima di iniziare' : '⚠️ Read this carefully before you start'}
+          {pick('⚠️ Read this carefully before you start', '⚠️ Leggi attentamente prima di iniziare')}
         </p>
         <div className="mt-3 space-y-2.5 text-sm leading-relaxed text-amber-950">
           <p>
-            {it
-              ? 'Come parte della tua dichiarazione, prepariamo NOI per te il Conto Economico (P&L) e lo Stato Patrimoniale (Balance Sheet) della tua azienda.'
-              : 'As part of your tax return, WE prepare your Profit & Loss (P&L) and Balance Sheet for you — the complete financial picture of your company.'}
+            {pick(
+              'As part of your tax return, WE prepare your Profit & Loss (P&L) and Balance Sheet for you — the complete financial picture of your company.',
+              'Come parte della tua dichiarazione, prepariamo NOI per te il Conto Economico (P&L) e lo Stato Patrimoniale (Balance Sheet) della tua azienda.',
+            )}
           </p>
           <p>
-            {it
-              ? 'Questi documenti vengono costruiti direttamente dai tuoi estratti conto bancari, quindi devono essere il più accurati e completi possibile. Se mancano dei movimenti, il tuo P&L, lo Stato Patrimoniale e la tua dichiarazione saranno errati.'
-              : 'These are built directly from your bank statements, so they must be as accurate and complete as possible. If any transactions are missing, your P&L, Balance Sheet and tax return will be wrong.'}
+            {pick(
+              'These are built directly from your bank statements, so they must be as accurate and complete as possible. If any transactions are missing, your P&L, Balance Sheet and tax return will be wrong.',
+              'Questi documenti vengono costruiti direttamente dai tuoi estratti conto bancari, quindi devono essere il più accurati e completi possibile. Se mancano dei movimenti, il tuo P&L, lo Stato Patrimoniale e la tua dichiarazione saranno errati.',
+            )}
           </p>
           <p className="font-semibold">
-            {it
-              ? '👉 Prima di iniziare il questionario, scarica TUTTI i tuoi estratti conto dell’intero anno — per ogni banca e ogni valuta — e salvali sul tuo dispositivo. Li caricherai durante questa procedura.'
-              : '👉 Before you start the questionnaire, download ALL of your bank statements for the full year — for every bank and every currency — and save them on your device. You will upload them during this process.'}
+            {pick(
+              '👉 Before you start the questionnaire, download ALL of your bank statements for the full year — for every bank and every currency — and save them on your device. You will upload them during this process.',
+              '👉 Prima di iniziare il questionario, scarica TUTTI i tuoi estratti conto dell’intero anno — per ogni banca e ogni valuta — e salvali sul tuo dispositivo. Li caricherai durante questa procedura.',
+            )}
           </p>
           <p className="text-xs text-amber-800">
-            {it
-              ? 'Suggerimento: il formato CSV è il più affidabile. Usa la ricerca qui sotto per sapere come scaricarlo dalla tua banca.'
-              : 'Tip: CSV is the most reliable format. Use the lookup below to see exactly how to download it from your bank.'}
+            {pick(
+              'Tip: CSV is the most reliable format. Use the lookup below to see exactly how to download it from your bank.',
+              'Suggerimento: il formato CSV è il più affidabile. Usa la ricerca qui sotto per sapere come scaricarlo dalla tua banca.',
+            )}
           </p>
         </div>
       </div>
 
       <div>
         <label className="block text-sm font-medium text-gray-700">
-          {it ? 'Qual è la tua banca? (es. Mercury, Wise, Chase, Revolut, Airwallex, Relay)' : 'Which bank do you use? (e.g. Mercury, Wise, Chase, Revolut, Airwallex, Relay)'}
+          {pick('Which bank do you use? (e.g. Mercury, Wise, Chase, Revolut, Airwallex, Relay)', 'Qual è la tua banca? (es. Mercury, Wise, Chase, Revolut, Airwallex, Relay)')}
         </label>
         <input
           type="text"
           value={bank}
           onChange={e => { setBank(e.target.value); setFetched(null) }}
           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); lookup() } }}
-          placeholder={it ? 'Scrivi il nome della banca…' : 'Type your bank name…'}
+          placeholder={pick('Type your bank name…', 'Scrivi il nome della banca…')}
           className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
         {q.length >= 2 && !guide && (
@@ -214,15 +225,15 @@ function PrepareCsvStep({ locale, bankGuides, acknowledged, onAcknowledge }: { l
               className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-60"
             >
               {loading
-                ? (it ? 'Cerco le istruzioni…' : 'Finding instructions…')
-                : (it ? 'Mostra come scaricare il CSV' : 'Show me how to download the CSV')}
+                ? pick('Finding instructions…', 'Cerco le istruzioni…')
+                : pick('Show me how to download the CSV', 'Mostra come scaricare il CSV')}
             </button>
           </div>
         )}
         {guide && (
           <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2.5">
             <p className="text-xs font-semibold text-emerald-900">
-              {it ? `Come scaricare il CSV da ${guide.name}:` : `How to download the CSV from ${guide.name}:`}
+              {interpolateString(pick('How to download the CSV from {name}:', 'Come scaricare il CSV da {name}:'), { name: guide.name })}
             </p>
             <ol className="mt-1 list-decimal pl-4 space-y-0.5 text-xs leading-relaxed text-emerald-900/90">
               {gSteps.map((s, i) => <li key={i}>{s}</li>)}
@@ -233,9 +244,10 @@ function PrepareCsvStep({ locale, bankGuides, acknowledged, onAcknowledge }: { l
       </div>
 
       <p className="text-xs text-gray-500">
-        {it
-          ? 'Hai solo un PDF? Scarica comunque il CSV dalla tua banca: è il modo più affidabile e veloce. Caricherai i file nello step finale.'
-          : 'Only have a PDF? Please still download the CSV from your bank — it’s the most reliable and fastest option. You’ll upload the files in the final step.'}
+        {pick(
+          'Only have a PDF? Please still download the CSV from your bank — it’s the most reliable and fastest option. You’ll upload the files in the final step.',
+          'Hai solo un PDF? Scarica comunque il CSV dalla tua banca: è il modo più affidabile e veloce. Caricherai i file nello step finale.',
+        )}
       </p>
 
       {/* Required acknowledgement — gates the Next button (validateStep). */}
@@ -247,9 +259,10 @@ function PrepareCsvStep({ locale, bankGuides, acknowledged, onAcknowledge }: { l
           className="mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded border-gray-400 text-amber-600 focus:ring-amber-500"
         />
         <span className="text-sm font-semibold text-amber-950">
-          {it
-            ? 'Ho letto quanto sopra e ho scaricato tutti i miei estratti conto bancari dell’intero anno.'
-            : 'I have read the above and I have downloaded all my bank statements for the full year.'}
+          {pick(
+            'I have read the above and I have downloaded all my bank statements for the full year.',
+            'Ho letto quanto sopra e ho scaricato tutti i miei estratti conto bancari dell’intero anno.',
+          )}
         </span>
       </label>
     </div>
@@ -275,6 +288,17 @@ export function WizardClient({
   institutions = [],
   configOverride,
 }: WizardClientProps) {
+  // Any language beyond en/it (dev job 12cab351) — see the identical
+  // comment in wizard-field.tsx. Layered UNDER the existing it/en choice,
+  // never replacing it: `translations` is only non-empty for a locale
+  // outside SUPPORTED_LOCALES, and a field the exclusion registry kept out
+  // of generation (lib/portal/translation-exclusions.ts) simply has
+  // nothing here, so it safely falls through to it/en exactly as before.
+  const { translations: fieldTranslations } = useLocale()
+  const pickText = useCallback((en: string | undefined, it: string | undefined): string | undefined => {
+    if (!en) return en
+    return fieldTranslations[en] ?? (locale === 'it' && it ? it : en)
+  }, [fieldTranslations, locale])
   // The client's answer to the one-owner/multi-owner question, when the server
   // could not resolve it. Seeded from saved data so a reload — or the autosave
   // round-trip — does not re-ask a question already answered.
@@ -491,16 +515,16 @@ export function WizardClient({
         })
         if (!res.ok) {
           const d = await res.json().catch(() => ({}))
-          throw new Error(d.error || (locale === 'it' ? 'Generazione non riuscita.' : 'Could not generate a draft.'))
+          throw new Error(d.error || pickText('Could not generate a draft.', 'Generazione non riuscita.'))
         }
         const data = await res.json()
         return typeof data.text === 'string' ? data.text : null
       } catch (err) {
-        toast.error(err instanceof Error && err.message ? err.message : (locale === 'it' ? 'Generazione non riuscita.' : 'Could not generate a draft.'))
+        toast.error(err instanceof Error && err.message ? err.message : pickText('Could not generate a draft.', 'Generazione non riuscita.')!)
         return null
       }
     },
-    [formData, locale],
+    [formData, locale, pickText],
   )
 
   // A file field is empty when its array of paths is empty. Other field types
@@ -521,8 +545,8 @@ export function WizardClient({
   // required questions the old form never had and would otherwise stare at a
   // dead grey button). validateStep is derived from this (empty errors = valid),
   // so there is ONE source of truth for step completeness.
-  const reqMsg = locale === 'it' ? 'Campo obbligatorio' : 'Required field'
-  const minMsg = locale === 'it' ? 'Il valore non è valido' : 'Value is not valid'
+  const reqMsg = pickText('Required field', 'Campo obbligatorio')!
+  const minMsg = pickText('Value is not valid', 'Il valore non è valido')!
 
   const getStepErrors = useCallback((): Record<string, string> => {
     const errs: Record<string, string> = {}
@@ -531,9 +555,10 @@ export function WizardClient({
 
     if (stepId === 'prepare') {
       if (formData['prepare_acknowledged'] !== true) {
-        errs['prepare_acknowledged'] = locale === 'it'
-          ? 'Conferma di aver letto e scaricato gli estratti conto per continuare'
-          : 'Confirm you have read the above and downloaded your statements to continue'
+        errs['prepare_acknowledged'] = pickText(
+          'Confirm you have read the above and downloaded your statements to continue',
+          'Conferma di aver letto e scaricato gli estratti conto per continuare',
+        )!
       }
       return errs
     }
@@ -561,9 +586,10 @@ export function WizardClient({
           if (!Number.isNaN(v)) pctSum += v
         }
         if (Math.abs(pctSum - 100) > 0.5) {
-          errs['__members_ownership'] = locale === 'it'
-            ? `Le quote dei soci devono sommare al 100% (ora: ${pctSum}%)`
-            : `Ownership shares must total 100% (currently ${pctSum}%)`
+          errs['__members_ownership'] = interpolateString(
+            pickText('Ownership shares must total 100% (currently {pctSum}%)', 'Le quote dei soci devono sommare al 100% (ora: {pctSum}%)')!,
+            { pctSum },
+          )
         }
       }
       return errs
@@ -574,7 +600,7 @@ export function WizardClient({
       if (field.type === 'repeater') {
         const count = repeaterCounts[field.name] ?? (Number(formData[`${field.name}_count`]) || 0)
         if ((field.required || field.repeaterRequired) && count < 1) {
-          errs[field.name] = locale === 'it' ? 'Aggiungi almeno una voce' : 'Add at least one entry'
+          errs[field.name] = pickText('Add at least one entry', 'Aggiungi almeno una voce')!
         }
         for (let idx = 0; idx < count; idx++) {
           for (const rf of field.repeaterFields ?? []) {
@@ -604,17 +630,17 @@ export function WizardClient({
       else if (belowFieldMin(field, formData[field.name])) errs[field.name] = minMsg
     }
     return errs
-  }, [currentStep, steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, locale, reqMsg, minMsg, institutions])
+  }, [currentStep, steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, reqMsg, minMsg, institutions, pickText])
 
   const validateStep = useCallback(() => Object.keys(getStepErrors()).length === 0, [getStepErrors])
 
   // Resolve a flattened formData key to a human, localized field label so the
   // error list + the highlighted field read plainly (not `member_0_member_zip`).
   const labelForKey = useCallback((key: string): string => {
-    if (key === '__members_ownership') return locale === 'it' ? 'Quote dei soci' : 'Member ownership'
+    if (key === '__members_ownership') return pickText('Member ownership', 'Quote dei soci')!
     const stepId = steps[currentStep].id
     const stepFields = fields[stepId] || []
-    const pick = (f: FieldConfig) => (locale === 'it' && f.labelIt ? f.labelIt : f.label) || f.name
+    const pick = (f: FieldConfig) => pickText(f.label, f.labelIt) || f.name
     // member_{idx}_{name}
     const m = key.match(/^member_\d+_(.+)$/)
     if (m) {
@@ -634,7 +660,7 @@ export function WizardClient({
     const top = stepFields.find(f => f.name === key)
     if (top) return pick(top)
     return key
-  }, [currentStep, steps, fields, locale])
+  }, [currentStep, steps, fields, pickText])
 
   // Compute the step's errors and PUBLISH them (highlight + summary). Returns
   // true when the step is BLOCKED (has errors). Used by forward navigation and
@@ -682,18 +708,18 @@ export function WizardClient({
       if (res.ok) {
         const result = await res.json()
         if (result.id) setCurrentProgressId(result.id)
-        if (!silent) toast.success(locale === 'it' ? 'Bozza salvata' : 'Draft saved')
+        if (!silent) toast.success(pickText('Draft saved', 'Bozza salvata')!)
         return true
       }
-      if (!silent) toast.error(locale === 'it' ? 'Errore nel salvataggio' : 'Save failed')
+      if (!silent) toast.error(pickText('Save failed', 'Errore nel salvataggio')!)
       return false
     } catch {
-      if (!silent) toast.error(locale === 'it' ? 'Errore nel salvataggio' : 'Save failed')
+      if (!silent) toast.error(pickText('Save failed', 'Errore nel salvataggio')!)
       return false
     } finally {
       if (!silent) setIsSaving(false)
     }
-  }, [wizardType, currentStep, formData, accountId, contactId, leadId, currentProgressId, locale])
+  }, [wizardType, currentStep, formData, accountId, contactId, leadId, currentProgressId, pickText])
 
   const handleSave = useCallback(async () => {
     dirtyRef.current = false
@@ -724,7 +750,7 @@ export function WizardClient({
     // Clarify fix: highlight the exact missing fields on the final step + explain,
     // instead of a generic "fill all required fields" toast over a grey button.
     if (raiseStepErrors()) {
-      toast.error(locale === 'it' ? 'Completa i campi evidenziati per inviare' : 'Complete the highlighted fields to submit')
+      toast.error(pickText('Complete the highlighted fields to submit', 'Completa i campi evidenziati per inviare')!)
       return
     }
 
@@ -737,9 +763,13 @@ export function WizardClient({
       }
       if (chosen !== itinCount) {
         toast.error(
-          locale === 'it'
-            ? `Seleziona esattamente ${itinCount} persona/e che richiedono l'ITIN (selezionate: ${chosen}).`
-            : `Select exactly ${itinCount} person(s) to apply for the ITIN (you selected ${chosen}).`,
+          interpolateString(
+            pickText(
+              'Select exactly {itinCount} person(s) to apply for the ITIN (you selected {chosen}).',
+              "Seleziona esattamente {itinCount} persona/e che richiedono l'ITIN (selezionate: {chosen}).",
+            )!,
+            { itinCount, chosen },
+          ),
         )
         return
       }
@@ -762,9 +792,10 @@ export function WizardClient({
         }
         if (signerCount !== 1) {
           toast.error(
-            locale === 'it'
-              ? 'Seleziona esattamente una persona come Responsible Party del modulo SS-4.'
-              : 'Select exactly one person as the SS-4 Responsible Party.',
+            pickText(
+              'Select exactly one person as the SS-4 Responsible Party.',
+              'Seleziona esattamente una persona come Responsible Party del modulo SS-4.',
+            )!,
           )
           return
         }
@@ -782,9 +813,13 @@ export function WizardClient({
         // absorbs thirds (33.33×3 = 99.99).
         if (Math.abs(pctSum - 100) > 0.5) {
           toast.error(
-            locale === 'it'
-              ? `Le quote di tutti i soci devono fare 100% (attuale: ${pctSum}%). Ricordati di includere anche te stesso tra i soci.`
-              : `All members' ownership must total 100% (currently ${pctSum}%). Remember to include yourself as a member.`,
+            interpolateString(
+              pickText(
+                "All members' ownership must total 100% (currently {pctSum}%). Remember to include yourself as a member.",
+                'Le quote di tutti i soci devono fare 100% (attuale: {pctSum}%). Ricordati di includere anche te stesso tra i soci.',
+              )!,
+              { pctSum },
+            ),
           )
           return
         }
@@ -792,9 +827,13 @@ export function WizardClient({
         // Formation MMLLC: separate owner step; additional members < 100%, the
         // owner takes the remaining share at materialization.
         toast.error(
-          locale === 'it'
-            ? `La somma delle quote dei membri aggiuntivi deve essere maggiore di 0% e minore di 100% (attuale: ${pctSum}%). Il titolare riceve la quota rimanente.`
-            : `Additional members' ownership must total more than 0% and less than 100% (currently ${pctSum}%). The owner takes the remaining share.`,
+          interpolateString(
+            pickText(
+              "Additional members' ownership must total more than 0% and less than 100% (currently {pctSum}%). The owner takes the remaining share.",
+              'La somma delle quote dei membri aggiuntivi deve essere maggiore di 0% e minore di 100% (attuale: {pctSum}%). Il titolare riceve la quota rimanente.',
+            )!,
+            { pctSum },
+          ),
         )
         return
       }
@@ -842,7 +881,7 @@ export function WizardClient({
         if (res.ok) {
           setIsSubmitting(false)
           setIsSubmitted(true)
-          toast.success(locale === 'it' ? 'Dati inviati con successo!' : 'Data submitted successfully!')
+          toast.success(pickText('Data submitted successfully!', 'Dati inviati con successo!')!)
           return
         }
 
@@ -869,11 +908,12 @@ export function WizardClient({
     setIsSubmitting(false)
     toast.error(
       lastError ||
-      (locale === 'it'
-        ? "Invio non riuscito dopo alcuni tentativi. Aggiorna la pagina: se risulta già inviato, è andato a buon fine."
-        : "Submit didn't go through after a few tries. Refresh the page — if it shows as already submitted, it worked."),
+      pickText(
+        "Submit didn't go through after a few tries. Refresh the page — if it shows as already submitted, it worked.",
+        "Invio non riuscito dopo alcuni tentativi. Aggiorna la pagina: se risulta già inviato, è andato a buon fine.",
+      )!,
     )
-  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, currentProgressId, raiseStepErrors, locale, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer])
+  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, currentProgressId, raiseStepErrors, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer, pickText])
 
   // Auto-save on step change
   const handleStepChange = useCallback((step: number) => {
@@ -934,12 +974,13 @@ export function WizardClient({
     return (
       <div className="max-w-lg mx-auto py-12">
         <h2 className="text-2xl font-bold mb-2 text-zinc-900">
-          {locale === 'it' ? 'Una domanda prima di iniziare' : 'One question before we start'}
+          {pickText('One question before we start', 'Una domanda prima di iniziare')}
         </h2>
         <p className="text-sm text-zinc-600 mb-6">
-          {locale === 'it'
-            ? 'Chi saranno i proprietari della nuova società? Puoi cambiare questa risposta parlando con noi in qualsiasi momento.'
-            : 'Who will own the new company? You can change this by talking to us at any time.'}
+          {pickText(
+            'Who will own the new company? You can change this by talking to us at any time.',
+            'Chi saranno i proprietari della nuova società? Puoi cambiare questa risposta parlando con noi in qualsiasi momento.',
+          )}
         </p>
         <div className="space-y-3">
           <button
@@ -948,10 +989,10 @@ export function WizardClient({
             className="w-full text-left rounded-xl border border-zinc-200 bg-white p-4 hover:border-blue-500 hover:bg-blue-50 transition-colors"
           >
             <span className="block font-medium text-zinc-900">
-              {locale === 'it' ? 'Solo io' : 'Just me'}
+              {pickText('Just me', 'Solo io')}
             </span>
             <span className="block text-xs text-zinc-500 mt-1">
-              {locale === 'it' ? 'Un solo proprietario' : 'A single owner'}
+              {pickText('A single owner', 'Un solo proprietario')}
             </span>
           </button>
           <button
@@ -960,12 +1001,10 @@ export function WizardClient({
             className="w-full text-left rounded-xl border border-zinc-200 bg-white p-4 hover:border-blue-500 hover:bg-blue-50 transition-colors"
           >
             <span className="block font-medium text-zinc-900">
-              {locale === 'it' ? 'Io e altri soci' : 'Me and other owners'}
+              {pickText('Me and other owners', 'Io e altri soci')}
             </span>
             <span className="block text-xs text-zinc-500 mt-1">
-              {locale === 'it'
-                ? 'Potrai aggiungere gli altri soci nel modulo'
-                : 'You will add the other owners in the form'}
+              {pickText('You will add the other owners in the form', 'Potrai aggiungere gli altri soci nel modulo')}
             </span>
           </button>
         </div>
@@ -986,21 +1025,21 @@ export function WizardClient({
     const lockedCopy =
       wizardType === 'formation'
         ? {
-            title: locale === 'it' ? 'Dati già inviati' : 'Your details are with us',
-            body:
-              locale === 'it'
-                ? 'Abbiamo iniziato a lavorare sulla tua società, quindi questo modulo non è più modificabile. Se qualcosa deve essere corretto, scrivicelo in chat e ce ne occupiamo noi.'
-                : 'We have started work on your company, so this form can no longer be edited. If something needs correcting, send us a message in chat and we will take care of it.',
-            cta: locale === 'it' ? 'Vai alla chat' : 'Message us in chat',
+            title: pickText('Your details are with us', 'Dati già inviati'),
+            body: pickText(
+              'We have started work on your company, so this form can no longer be edited. If something needs correcting, send us a message in chat and we will take care of it.',
+              'Abbiamo iniziato a lavorare sulla tua società, quindi questo modulo non è più modificabile. Se qualcosa deve essere corretto, scrivicelo in chat e ce ne occupiamo noi.',
+            ),
+            cta: pickText('Message us in chat', 'Vai alla chat'),
             href: '/portal/chat',
           }
         : {
-            title: locale === 'it' ? 'Informazioni fiscali in elaborazione' : 'Tax information reviewed',
-            body:
-              locale === 'it'
-                ? 'Le tue informazioni fiscali sono state esaminate e sono in fase di elaborazione. Non sono necessarie ulteriori azioni da parte tua.'
-                : 'Your tax information has been reviewed and is being processed. No further action is required from you.',
-            cta: locale === 'it' ? 'Torna alla Dashboard' : 'Back to Dashboard',
+            title: pickText('Tax information reviewed', 'Informazioni fiscali in elaborazione'),
+            body: pickText(
+              'Your tax information has been reviewed and is being processed. No further action is required from you.',
+              'Le tue informazioni fiscali sono state esaminate e sono in fase di elaborazione. Non sono necessarie ulteriori azioni da parte tua.',
+            ),
+            cta: pickText('Back to Dashboard', 'Torna alla Dashboard'),
             href: '/portal',
           }
 
@@ -1037,17 +1076,19 @@ export function WizardClient({
         </div>
         <h2 className="text-2xl font-bold mb-2">
           {isBanking
-            ? (locale === 'it' ? `${bankLabel} — Richiesta inviata!` : `${bankLabel} — Application submitted!`)
-            : (locale === 'it' ? 'Dati inviati con successo!' : 'Data submitted successfully!')}
+            ? interpolateString(pickText('{bankLabel} — Application submitted!', '{bankLabel} — Richiesta inviata!')!, { bankLabel })
+            : pickText('Data submitted successfully!', 'Dati inviati con successo!')}
         </h2>
         <p className="text-zinc-500 mb-6">
           {isTaxFinancials
-            ? (locale === 'it'
-              ? 'Stiamo preparando il tuo Conto Economico e Stato Patrimoniale dai file che hai caricato — controllali, rispondi alle eventuali domande e conferma i numeri.'
-              : 'We are preparing your Profit & Loss and Balance Sheet from the files you uploaded — check them, answer any remaining questions, and confirm the numbers.')
-            : (locale === 'it'
-              ? 'Il nostro team esaminerà le informazioni e ti contatterà a breve.'
-              : 'Our team will review your information and contact you shortly.')}
+            ? pickText(
+                'We are preparing your Profit & Loss and Balance Sheet from the files you uploaded — check them, answer any remaining questions, and confirm the numbers.',
+                'Stiamo preparando il tuo Conto Economico e Stato Patrimoniale dai file che hai caricato — controllali, rispondi alle eventuali domande e conferma i numeri.',
+              )
+            : pickText(
+                'Our team will review your information and contact you shortly.',
+                'Il nostro team esaminerà le informazioni e ti contatterà a breve.',
+              )}
         </p>
         {isTaxFinancials ? (
           <div className="space-y-3">
@@ -1055,14 +1096,14 @@ export function WizardClient({
               href="/portal/tax-financials"
               className="inline-flex items-center px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
             >
-              {locale === 'it' ? 'Vedi il tuo Conto Economico e Stato Patrimoniale →' : 'See your Profit & Loss and Balance Sheet →'}
+              {pickText('See your Profit & Loss and Balance Sheet →', 'Vedi il tuo Conto Economico e Stato Patrimoniale →')}
             </a>
             <div>
               <a
                 href="/portal"
                 className="inline-flex items-center px-4 py-1.5 text-sm text-zinc-500 hover:text-zinc-700 transition-colors"
               >
-                {locale === 'it' ? 'Torna alla Dashboard' : 'Back to Dashboard'}
+                {pickText('Back to Dashboard', 'Torna alla Dashboard')}
               </a>
             </div>
           </div>
@@ -1072,14 +1113,14 @@ export function WizardClient({
               href="/portal/wizard?type=banking"
               className="inline-flex items-center px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
             >
-              {locale === 'it' ? 'Continua con le altre banche →' : 'Continue with other banks →'}
+              {pickText('Continue with other banks →', 'Continua con le altre banche →')}
             </a>
             <div>
               <a
                 href="/portal"
                 className="inline-flex items-center px-4 py-1.5 text-sm text-zinc-500 hover:text-zinc-700 transition-colors"
               >
-                {locale === 'it' ? 'Torna alla Dashboard' : 'Back to Dashboard'}
+                {pickText('Back to Dashboard', 'Torna alla Dashboard')}
               </a>
             </div>
           </div>
@@ -1088,7 +1129,7 @@ export function WizardClient({
             href="/portal"
             className="inline-flex items-center px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
           >
-            {locale === 'it' ? 'Torna alla Dashboard' : 'Back to Dashboard'}
+            {pickText('Back to Dashboard', 'Torna alla Dashboard')}
           </a>
         )}
       </div>
@@ -1112,9 +1153,9 @@ export function WizardClient({
       isSubmitting={isSubmitting}
       isSaving={isSaving}
       locale={locale}
-      submitLabel={isResubmitMode ? (locale === 'it' ? 'Aggiorna invio' : 'Re-submit') : undefined}
+      submitLabel={isResubmitMode ? pickText('Re-submit', 'Aggiorna invio') : undefined}
       autosaveStatus={autosavedAt
-        ? `${locale === 'it' ? 'Salvato' : 'Saved'} ${autosavedAt.toLocaleTimeString(locale === 'it' ? 'it-IT' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`
+        ? `${pickText('Saved', 'Salvato')} ${autosavedAt.toLocaleTimeString(locale === 'it' ? 'it-IT' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`
         : null}
     >
       {/* Re-submit mode banner */}
@@ -1123,12 +1164,13 @@ export function WizardClient({
           <Pencil className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
           <div className="text-sm">
             <p className="font-semibold text-amber-900">
-              {locale === 'it' ? 'Dati già inviati — puoi modificare' : 'Already submitted — you can edit'}
+              {pickText('Already submitted — you can edit', 'Dati già inviati — puoi modificare')}
             </p>
             <p className="text-amber-700 mt-0.5">
-              {locale === 'it'
-                ? 'I tuoi dati sono stati inviati ma non ancora esaminati. Puoi aggiornare le risposte fino all\'inizio della revisione.'
-                : "Your data has been submitted but not yet reviewed. You can update your answers until we begin the review."}
+              {pickText(
+                "Your data has been submitted but not yet reviewed. You can update your answers until we begin the review.",
+                "I tuoi dati sono stati inviati ma non ancora esaminati. Puoi aggiornare le risposte fino all'inizio della revisione.",
+              )}
             </p>
           </div>
         </div>
@@ -1143,7 +1185,7 @@ export function WizardClient({
           <AlertCircle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
           <div className="text-sm w-full">
             <p className="font-semibold text-red-900 mb-1">
-              {locale === 'it' ? 'Per continuare, completa questi campi:' : 'To continue, complete these fields:'}
+              {pickText('To continue, complete these fields:', 'Per continuare, completa questi campi:')}
             </p>
             <ul className="list-disc list-inside text-red-700 space-y-0.5">
               {fieldErrors.map((fe, i) => (
@@ -1170,7 +1212,7 @@ export function WizardClient({
             <div key={idx} className="border rounded-lg p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-zinc-700">
-                  {locale === 'it' ? `Membro ${idx + 1}` : `Member ${idx + 1}`}
+                  {interpolateString(pickText('Member {n}', 'Membro {n}')!, { n: idx + 1 })}
                 </h3>
                 {memberCount > 1 && (
                   <button
@@ -1204,7 +1246,7 @@ export function WizardClient({
                     }}
                     className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1"
                   >
-                    <Trash2 className="h-3 w-3" /> {locale === 'it' ? 'Rimuovi' : 'Remove'}
+                    <Trash2 className="h-3 w-3" /> {pickText('Remove', 'Rimuovi')}
                   </button>
                 )}
               </div>
@@ -1242,9 +1284,7 @@ export function WizardClient({
                 <SignerRadio
                   checked={signerIndex === idx}
                   onSelect={() => setSigner(idx)}
-                  label={locale === 'it'
-                    ? `${idx === 0 ? `Membro ${idx + 1}` : `Membro ${idx + 1}`} è il Responsible Party del modulo SS-4.`
-                    : `Member ${idx + 1} is the SS-4 Responsible Party.`}
+                  label={interpolateString(pickText('Member {n} is the SS-4 Responsible Party.', 'Membro {n} è il Responsible Party del modulo SS-4.')!, { n: idx + 1 })}
                 />
               )}
             </div>
@@ -1260,7 +1300,7 @@ export function WizardClient({
             className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
           >
             <Plus className="h-4 w-4" />
-            {locale === 'it' ? 'Aggiungi membro' : 'Add member'}
+            {pickText('Add member', 'Aggiungi membro')}
           </button>
 
           {/* Live ownership total — tax MMLLC requires every member (including
@@ -1275,10 +1315,14 @@ export function WizardClient({
             return (
               <div className={`rounded-lg border px-3 py-2.5 text-sm font-medium ${ok ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-amber-300 bg-amber-50 text-amber-900'}`}>
                 {ok
-                  ? (locale === 'it' ? `✓ Quote totali: ${pctSum}%` : `✓ Total ownership: ${pctSum}%`)
-                  : (locale === 'it'
-                      ? `Quote totali: ${pctSum}% — devono fare 100%. Includi tutti i soci, te compreso.`
-                      : `Total ownership: ${pctSum}% — must equal 100%. Include every member, including yourself.`)}
+                  ? interpolateString(pickText('✓ Total ownership: {pctSum}%', '✓ Quote totali: {pctSum}%')!, { pctSum })
+                  : interpolateString(
+                      pickText(
+                        'Total ownership: {pctSum}% — must equal 100%. Include every member, including yourself.',
+                        'Quote totali: {pctSum}% — devono fare 100%. Includi tutti i soci, te compreso.',
+                      )!,
+                      { pctSum },
+                    )}
               </div>
             )
           })()}
@@ -1289,15 +1333,16 @@ export function WizardClient({
         {requiresSs4Signer && stepId === 'owner' && (
           <div className="mb-4">
             <p className="text-sm font-semibold text-zinc-700 mb-1.5">
-              {locale === 'it' ? 'Responsible Party (SS-4)' : 'SS-4 Responsible Party'}
+              {pickText('SS-4 Responsible Party', 'Responsible Party (SS-4)')}
             </p>
             <SignerRadio
               checked={signerIndex === -1}
               onSelect={() => setSigner(-1)}
-              label={locale === 'it' ? 'Sarò io il Responsible Party del modulo SS-4.' : 'I will be the SS-4 Responsible Party.'}
-              hint={locale === 'it'
-                ? 'Una sola persona tra titolare e membri può essere selezionata.'
-                : 'Exactly one person across the owner and members must be selected.'}
+              label={pickText('I will be the SS-4 Responsible Party.', 'Sarò io il Responsible Party del modulo SS-4.')!}
+              hint={pickText(
+                'Exactly one person across the owner and members must be selected.',
+                'Una sola persona tra titolare e membri può essere selezionata.',
+              )}
             />
           </div>
         )}
@@ -1316,23 +1361,23 @@ export function WizardClient({
               // ── Inline repeater ─────────────────────────────────────
               if (field.type === 'repeater') {
                 const count = repeaterCounts[field.name] ?? 0
-                const addLabel = locale === 'it' && field.repeaterAddLabelIt ? field.repeaterAddLabelIt : (field.repeaterAddLabel ?? 'Add')
+                const addLabel = pickText(field.repeaterAddLabel ?? 'Add', field.repeaterAddLabelIt)
                 return (
                   <div key={field.name} className="md:col-span-2 space-y-3">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-zinc-700">{locale === 'it' && field.labelIt ? field.labelIt : field.label}</span>
+                      <span className="text-sm font-medium text-zinc-700">{pickText(field.label, field.labelIt)}</span>
                       {(field.required || field.repeaterRequired)
-                        ? <span className="text-xs font-semibold text-red-500">{locale === 'it' ? '(obbligatorio)' : '(required)'}</span>
-                        : <span className="text-xs text-zinc-400">{locale === 'it' ? '(opzionale)' : '(optional)'}</span>}
+                        ? <span className="text-xs font-semibold text-red-500">{pickText('(required)', '(obbligatorio)')}</span>
+                        : <span className="text-xs text-zinc-400">{pickText('(optional)', '(opzionale)')}</span>}
                     </div>
-                    {(locale === 'it' && field.hintIt ? field.hintIt : field.hint) && (
-                      <p className="text-xs text-zinc-500 leading-relaxed whitespace-pre-line">{locale === 'it' && field.hintIt ? field.hintIt : field.hint}</p>
+                    {pickText(field.hint, field.hintIt) && (
+                      <p className="text-xs text-zinc-500 leading-relaxed whitespace-pre-line">{pickText(field.hint, field.hintIt)}</p>
                     )}
                     {count === 0 && (
                       <p className={`text-xs italic ${(field.required || field.repeaterRequired) ? 'text-red-500' : 'text-zinc-400'}`}>
                         {(field.required || field.repeaterRequired)
-                          ? (locale === 'it' ? 'Aggiungi almeno una voce per continuare.' : 'Add at least one entry to continue.')
-                          : (locale === 'it' ? 'Nessuna voce aggiunta.' : 'No entries added yet.')}
+                          ? pickText('Add at least one entry to continue.', 'Aggiungi almeno una voce per continuare.')
+                          : pickText('No entries added yet.', 'Nessuna voce aggiunta.')}
                       </p>
                     )}
                     {Array.from({ length: count }).map((_, idx) => (
@@ -1374,7 +1419,7 @@ export function WizardClient({
                             }}
                             className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1"
                           >
-                            <Trash2 className="h-3 w-3" /> {locale === 'it' ? 'Rimuovi' : 'Remove'}
+                            <Trash2 className="h-3 w-3" /> {pickText('Remove', 'Rimuovi')}
                           </button>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1415,9 +1460,10 @@ export function WizardClient({
                             <div className="space-y-1.5">
                               {!waived && (
                                 <div className="rounded-md border border-red-300 bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-700">
-                                  {locale === 'it'
-                                    ? '⚠️ Ricontrolla il numero di conto dopo averlo scritto — se è sbagliato, il tuo P&L sarà sbagliato.'
-                                    : '⚠️ Double-check the account number after you type it — if it\'s wrong, your P&L will be wrong.'}
+                                  {pickText(
+                                    "⚠️ Double-check the account number after you type it — if it's wrong, your P&L will be wrong.",
+                                    '⚠️ Ricontrolla il numero di conto dopo averlo scritto — se è sbagliato, il tuo P&L sarà sbagliato.',
+                                  )}
                                 </div>
                               )}
                               <label className="flex items-center gap-1.5 text-xs text-zinc-500">
@@ -1426,9 +1472,10 @@ export function WizardClient({
                                   checked={waived}
                                   onChange={e => handleFieldChange(noNumKey, e.target.checked ? '1' : '')}
                                 />
-                                {locale === 'it'
-                                  ? 'È un servizio multivaluta o crypto (senza numero di conto unico)'
-                                  : 'This is a multi-currency service or crypto (no single account number)'}
+                                {pickText(
+                                  'This is a multi-currency service or crypto (no single account number)',
+                                  'È un servizio multivaluta o crypto (senza numero di conto unico)',
+                                )}
                               </label>
                             </div>
                           )
@@ -1446,7 +1493,7 @@ export function WizardClient({
                           return (
                             <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2.5">
                               <p className="text-xs font-semibold text-emerald-900">
-                                {locale === 'it' ? `Come scaricare il CSV da ${guide.name}:` : `How to download the CSV from ${guide.name}:`}
+                                {interpolateString(pickText('How to download the CSV from {name}:', 'Come scaricare il CSV da {name}:')!, { name: guide.name })}
                               </p>
                               <ol className="mt-1 list-decimal pl-4 space-y-0.5 text-xs leading-relaxed text-emerald-900/90">
                                 {steps.map((s, i) => <li key={i}>{s}</li>)}
@@ -1490,7 +1537,7 @@ export function WizardClient({
                   {field.warningOnValue && String(formData[field.name] ?? '') === field.warningOnValue.value && (
                     <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-2 text-xs text-amber-800 leading-relaxed">
                       <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-                      <span>{locale === 'it' && field.warningOnValue.textIt ? field.warningOnValue.textIt : field.warningOnValue.text}</span>
+                      <span>{pickText(field.warningOnValue.text, field.warningOnValue.textIt)}</span>
                     </div>
                   )}
                 </div>

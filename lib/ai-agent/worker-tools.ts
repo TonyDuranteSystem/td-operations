@@ -67,7 +67,9 @@ import {
 } from "./answer-guards"
 import {
   type PendingRead,
+  type DoorAttachmentSeed,
   updatePendingReads,
+  seedPendingReadsFromDoorAttachments,
   pendingReadsSignature,
   buildIncompleteReadNudge,
   stampPartialReads,
@@ -3657,6 +3659,15 @@ export interface CallWorkerOptions {
    */
   pinnedUploads?: PinnedUpload[] | null
   /**
+   * Read-to-the-end seeds for files that arrived ALREADY ATTACHED to this turn
+   * (dev job 5e87b099), one per file in `pinnedUploads` that came back windowed.
+   * Built by attachment-reader.ts's readAttachments (its `shortRefs` param) from
+   * the SAME array position as the matching PinnedUpload, never guessed after
+   * the fact. Companion to `pinnedUploads`, not independent — a caller with no
+   * uploads pinned has nothing to seed either.
+   */
+  doorAttachmentSeeds?: DoorAttachmentSeed[] | null
+  /**
    * Addresses that need NO confirm step (thread participants / the client's own
    * addresses / our mailboxes). Any other address is still reachable, but its draft
    * is FROZEN for the staff member to confirm once — see
@@ -3842,6 +3853,8 @@ export interface WorkerSendContext {
    * window of an uploaded file. See WorkerSendContext.pinnedUploads.
    */
   pinnedUploads?: PinnedUpload[] | null
+  /** Read-to-the-end seeds for door-attached files. See CallWorkerOptions.doorAttachmentSeeds. */
+  doorAttachmentSeeds?: DoorAttachmentSeed[] | null
 
   /**
    * SERVER-CAPTURED sink (mutable): every off-thread address the model actually
@@ -3895,6 +3908,7 @@ export function buildWorkerSendContext(
     pinnedPortalRecipient?: { account_id?: string | null; contact_id?: string | null } | null
     pinnedEmailAttachments?: PinnedEmailAttachment[] | null
     pinnedUploads?: PinnedUpload[] | null
+    doorAttachmentSeeds?: DoorAttachmentSeed[] | null
     emailConfirmExempt?: string[]
     forceMailbox?: "support" | "antonio"
     emailSendPrep?: WorkerSendContext["emailSendPrep"]
@@ -3929,6 +3943,7 @@ export function buildWorkerSendContext(
     pinnedPortalRecipient: opts.pinnedPortalRecipient ?? null,
     pinnedEmailAttachments: opts.pinnedEmailAttachments ?? null,
     pinnedUploads: opts.pinnedUploads ?? null,
+    doorAttachmentSeeds: opts.doorAttachmentSeeds ?? null,
     capturedOffThreadAttempts,
     memoryClientKey: opts.clientKey ?? null,
     clientScope: opts.clientScope ?? null,
@@ -4212,6 +4227,10 @@ export async function runWorkerLoop(
   // hard cap. No progress twice in a row ⇒ stop nudging, ship WITH the server
   // stamp instead: a stamped answer beats a burned loop budget.
   const pendingReads = new Map<string, PendingRead>()
+  // Files that arrived ALREADY ATTACHED to this turn (dev job 5e87b099) get the
+  // SAME live tracking a deliberately-opened file already gets, seeded before
+  // the model's first turn — see seedPendingReadsFromDoorAttachments's own doc.
+  seedPendingReadsFromDoorAttachments(pendingReads, sendContext?.doorAttachmentSeeds)
   let readNudges = 0
   let lastReadNudgeSignature: string | null = null
   // Lookups that actually RETURNED something (not an error). This — not the

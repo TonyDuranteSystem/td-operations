@@ -3,6 +3,8 @@
 import { useEffect, useRef } from 'react'
 import { Check } from 'lucide-react'
 import type { TrackerStep } from '@/lib/tax/progress-tracker'
+import { useLocale } from '@/lib/portal/use-locale'
+import { interpolateString } from '@/lib/template-interpolation'
 
 /**
  * Tax Return progress tracker (Slice 5, REV 4.1 spec §5).
@@ -16,22 +18,18 @@ import type { TrackerStep } from '@/lib/tax/progress-tracker'
 export function TaxProgressTracker({
   steps,
   taxYear,
-  locale,
 }: {
   steps: TrackerStep[]
   taxYear: number
-  locale: 'en' | 'it'
 }) {
   const currentRef = useRef<HTMLLIElement | null>(null)
+  const { t } = useLocale()
 
   useEffect(() => {
     // Scroll only the tracker's own overflow container — never the page.
     currentRef.current?.scrollIntoView({ block: 'nearest', inline: 'center' })
   }, [])
-  const title =
-    locale === 'it'
-      ? `Dichiarazione dei redditi annuale ${taxYear} — Avanzamento`
-      : `${taxYear} Tax Return — Progress`
+  const title = interpolateString(t('taxTracker.progressTitle'), { year: taxYear })
 
   return (
     <div className="bg-white rounded-xl border shadow-sm p-5">

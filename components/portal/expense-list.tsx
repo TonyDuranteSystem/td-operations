@@ -6,6 +6,7 @@ import { format, parseISO } from 'date-fns'
 import { Search, FileText, Building2, Upload, PenLine, Download, Loader2, CreditCard } from 'lucide-react'
 import { toast } from 'sonner'
 import { TdPayModal } from './td-pay-modal'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface Expense {
   id: string
@@ -47,6 +48,13 @@ const SOURCE_CONFIG: Record<string, { icon: typeof Building2; label: string; cla
 
 const STATUS_TABS = ['All', 'Pending', 'Paid', 'Overdue']
 
+const STATUS_TAB_LABEL_KEYS: Record<string, string> = {
+  All: 'expenseList.all',
+  Pending: 'expenseList.pending',
+  Paid: 'expenseList.paid',
+  Overdue: 'expenseList.overdue',
+}
+
 function fmtDate(d: string | null): string {
   if (!d) return '—'
   try { return format(parseISO(d), 'MMM d, yy') } catch { return d }
@@ -54,13 +62,12 @@ function fmtDate(d: string | null): string {
 
 export function ExpenseList({
   expenses,
-  locale,
   initialFilter = 'All',
 }: {
   expenses: Expense[]
-  locale: string
   initialFilter?: 'All' | 'Pending' | 'Paid' | 'Overdue'
 }) {
+  const { t } = useLocale()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>(initialFilter)
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
@@ -79,15 +86,13 @@ export function ExpenseList({
       a.download = `${exp.invoice_number ?? 'invoice'}.pdf`
       a.click()
       URL.revokeObjectURL(url)
-      toast.success('PDF downloaded')
+      toast.success(t('expenseList.pdfDownloaded'))
     } catch {
-      toast.error('Failed to download PDF')
+      toast.error(t('expenseList.pdfDownloadFailed'))
     } finally {
       setDownloadingId(null)
     }
   }
-
-  const isIt = locale === 'it'
 
   const filtered = expenses.filter(exp => {
     if (statusFilter !== 'All' && exp.status !== statusFilter) return false
@@ -110,7 +115,7 @@ export function ExpenseList({
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder={isIt ? 'Cerca per fornitore o numero...' : 'Search by vendor or number...'}
+            placeholder={t('expenseList.searchPlaceholder')}
             className="w-full pl-9 pr-3 py-2.5 text-sm border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
@@ -124,11 +129,7 @@ export function ExpenseList({
                 statusFilter === tab ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white text-zinc-600 hover:bg-zinc-50'
               )}
             >
-              {tab === 'All' ? (isIt ? 'Tutte' : 'All')
-                : tab === 'Pending' ? (isIt ? 'Da Pagare' : 'Pending')
-                : tab === 'Paid' ? (isIt ? 'Pagate' : 'Paid')
-                : tab === 'Overdue' ? (isIt ? 'Scadute' : 'Overdue')
-                : tab}
+              {STATUS_TAB_LABEL_KEYS[tab] ? t(STATUS_TAB_LABEL_KEYS[tab]) : tab}
             </button>
           ))}
         </div>
@@ -137,19 +138,19 @@ export function ExpenseList({
       {/* Table */}
       <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
         <div className="hidden md:grid md:grid-cols-[1fr,120px,100px,90px,80px,80px,80px] gap-3 px-4 py-3 border-b bg-zinc-50 text-xs font-medium text-zinc-500 uppercase">
-          <span>{isIt ? 'Fornitore' : 'Vendor'}</span>
-          <span>{isIt ? 'N. Fattura' : 'Invoice #'}</span>
-          <span className="text-right">{isIt ? 'Importo' : 'Amount'}</span>
-          <span>{isIt ? 'Data' : 'Date'}</span>
-          <span>{isIt ? 'Stato' : 'Status'}</span>
-          <span>{isIt ? 'Fonte' : 'Source'}</span>
+          <span>{t('expenseList.vendor')}</span>
+          <span>{t('expenseList.invoiceNumberShort')}</span>
+          <span className="text-right">{t('expenseList.amount')}</span>
+          <span>{t('expenseList.date')}</span>
+          <span>{t('expenseList.status')}</span>
+          <span>{t('expenseList.source')}</span>
           <span></span>
         </div>
         {filtered.length === 0 ? (
           <div className="p-8 text-center">
             <FileText className="h-10 w-10 text-zinc-300 mx-auto mb-2" />
             <p className="text-sm text-zinc-500">
-              {isIt ? 'Nessuna spesa trovata' : 'No expenses found'}
+              {t('expenseList.noExpensesFound')}
             </p>
           </div>
         ) : (
@@ -200,7 +201,7 @@ export function ExpenseList({
                 <span>
                   {Number(exp.total) < 0 ? (
                     <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
-                      {isIt ? 'Credito' : 'Credit'}
+                      {t('expenseList.credit')}
                     </span>
                   ) : (
                     <span className={cn('text-xs px-2 py-0.5 rounded-full', STATUS_COLORS[exp.status] ?? 'bg-zinc-100')}>
@@ -219,7 +220,7 @@ export function ExpenseList({
                     <button
                       onClick={() => setPayingExpense(exp)}
                       className="p-1 rounded hover:bg-blue-50 text-blue-600 hover:text-blue-700"
-                      title={isIt ? 'Paga' : 'Pay'}
+                      title={t('expenseList.pay')}
                     >
                       <CreditCard className="h-4 w-4" />
                     </button>
@@ -229,7 +230,7 @@ export function ExpenseList({
                       onClick={() => handleDownloadPdf(exp)}
                       disabled={downloadingId === exp.id}
                       className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-blue-600 disabled:opacity-50"
-                      title={isIt ? 'Scarica PDF' : 'Download PDF'}
+                      title={t('expenseList.downloadPdf')}
                     >
                       {downloadingId === exp.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                     </button>
@@ -252,7 +253,6 @@ export function ExpenseList({
           invoiceNumber={payingExpense.invoice_number || payingExpense.internal_ref || 'Invoice'}
           amount={Number(payingExpense.amount_due ?? payingExpense.total)}
           currency={payingExpense.currency}
-          locale={locale}
           onClose={() => setPayingExpense(null)}
         />
       )}

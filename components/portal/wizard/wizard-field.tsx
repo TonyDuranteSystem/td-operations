@@ -3,6 +3,8 @@
 import { useState } from 'react'
 import { Loader2, CheckCircle, AlertCircle, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useLocale } from '@/lib/portal/use-locale'
+import { interpolateString } from '@/lib/template-interpolation'
 
 export interface FieldConfig {
   name: string
@@ -95,6 +97,17 @@ const COUNTRIES = [
 ].sort()
 
 export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, locale, error }: WizardFieldProps) {
+  // Any language beyond en/it (dev job 12cab351) — loaded translations are
+  // keyed by the field's own English text (lib/portal/wizard-translatable-
+  // text.ts), so this MUST be layered under the existing it/en choice, not
+  // replace it: `translations` is only ever non-empty for a locale outside
+  // SUPPORTED_LOCALES, and falls through to the exact same it/en behavior
+  // as before whenever it has nothing for a given phrase.
+  const { translations } = useLocale()
+  const pick = (en: string | undefined, it: string | undefined): string | undefined => {
+    if (!en) return en
+    return translations[en] ?? (locale === 'it' && it ? it : en)
+  }
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadStatus, setUploadStatus] = useState<{ name: string; index: number; total: number; pct: number } | null>(null)
@@ -115,9 +128,9 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
       setAiBusy(false)
     }
   }
-  const label = locale === 'it' && field.labelIt ? field.labelIt : field.label
-  const placeholder = locale === 'it' && field.placeholderIt ? field.placeholderIt : field.placeholder
-  const hint = locale === 'it' && field.hintIt ? field.hintIt : field.hint
+  const label = pick(field.label, field.labelIt)
+  const placeholder = pick(field.placeholder, field.placeholderIt)
+  const hint = pick(field.hint, field.hintIt)
 
   // repeater fields are rendered by wizard-client, not here
   if (field.type === 'repeater') return null
@@ -136,7 +149,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
           {field.required && <span className="text-red-500">*</span>}
           {field.prefilled && value && (
             <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full font-normal">
-              {locale === 'it' ? 'Pre-compilato' : 'Pre-filled'}
+              {pick('Pre-filled', 'Pre-compilato')}
             </span>
           )}
         </label>
@@ -145,7 +158,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
         <div className="rounded-lg border-2 border-red-300 bg-red-50 p-3 flex gap-2.5">
           <div className="shrink-0 flex h-7 w-7 items-center justify-center rounded-full bg-red-600 text-white text-lg font-black leading-none">!</div>
           <p className="text-xs text-red-900 leading-relaxed">
-            {locale === 'it' && field.danger.textIt ? field.danger.textIt : field.danger.text}
+            {pick(field.danger.text, field.danger.textIt)}
           </p>
         </div>
       )}
@@ -172,20 +185,20 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
                   type="button"
                   onClick={runAiAssist}
                   disabled={aiBusy}
-                  title={locale === 'it' ? 'Genera una bozza con l’AI' : 'Draft an answer with AI'}
+                  title={pick('Draft an answer with AI', 'Genera una bozza con l’AI')}
                   className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-60 disabled:cursor-wait"
                 >
                   {aiBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <span>✨</span>}
-                  {aiBusy ? (locale === 'it' ? 'Genero…' : 'Drafting…') : (locale === 'it' ? 'Genera' : 'Generate')}
+                  {aiBusy ? pick('Drafting…', 'Genero…') : pick('Generate', 'Genera')}
                 </button>
               ) : (
                 <button
                   type="button"
                   disabled
-                  title={locale === 'it' ? 'Generazione AI — in arrivo' : 'AI generation — coming soon'}
+                  title={pick('AI generation — coming soon', 'Generazione AI — in arrivo')}
                   className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] font-medium text-zinc-400 cursor-not-allowed"
                 >
-                  ✨ {locale === 'it' ? 'Genera' : 'Generate'}
+                  ✨ {pick('Generate', 'Genera')}
                 </button>
               )
             )}
@@ -196,7 +209,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
           {aiSuggestion !== null && (
             <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 space-y-2">
               <p className="text-[11px] font-medium uppercase tracking-wide text-blue-600">
-                ✨ {locale === 'it' ? 'Bozza suggerita' : 'Suggested draft'}
+                ✨ {pick('Suggested draft', 'Bozza suggerita')}
               </p>
               <p className="text-sm text-zinc-800 whitespace-pre-wrap">{aiSuggestion}</p>
               <div className="flex flex-wrap items-center gap-2 pt-0.5">
@@ -205,7 +218,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
                   onClick={() => { onChange(field.name, aiSuggestion); setAiSuggestion(null) }}
                   className="inline-flex items-center rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700"
                 >
-                  {locale === 'it' ? 'Usa questa' : 'Use this'}
+                  {pick('Use this', 'Usa questa')}
                 </button>
                 <button
                   type="button"
@@ -216,7 +229,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
                   }}
                   className="inline-flex items-center rounded-md border border-blue-300 bg-white px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50"
                 >
-                  {locale === 'it' ? 'Aggiungi alla risposta' : 'Add to my answer'}
+                  {pick('Add to my answer', 'Aggiungi alla risposta')}
                 </button>
                 <button
                   type="button"
@@ -225,14 +238,14 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
                   className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-60"
                 >
                   {aiBusy && <Loader2 className="h-3 w-3 animate-spin" />}
-                  {locale === 'it' ? 'Rigenera' : 'Regenerate'}
+                  {pick('Regenerate', 'Rigenera')}
                 </button>
                 <button
                   type="button"
                   onClick={() => setAiSuggestion(null)}
                   className="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium text-zinc-400 hover:text-zinc-600"
                 >
-                  {locale === 'it' ? 'Ignora' : 'Dismiss'}
+                  {pick('Dismiss', 'Ignora')}
                 </button>
               </div>
             </div>
@@ -268,7 +281,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
                       }}
                       className="h-4 w-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500"
                     />
-                    <span className="truncate">{locale === 'it' && opt.labelIt ? opt.labelIt : opt.label}</span>
+                    <span className="truncate">{pick(opt.label, opt.labelIt)}</span>
                   </label>
                 )
               })}
@@ -281,10 +294,10 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
           onChange={e => onChange(field.name, e.target.value)}
           className={inputClass}
         >
-          <option value="">{locale === 'it' ? 'Seleziona...' : 'Select...'}</option>
+          <option value="">{pick('Select...', 'Seleziona...')}</option>
           {field.options?.map(opt => (
             <option key={opt.value} value={opt.value}>
-              {locale === 'it' && opt.labelIt ? opt.labelIt : opt.label}
+              {pick(opt.label, opt.labelIt)}
             </option>
           ))}
         </select>
@@ -294,7 +307,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
           onChange={e => onChange(field.name, e.target.value)}
           className={inputClass}
         >
-          <option value="">{locale === 'it' ? 'Seleziona paese...' : 'Select country...'}</option>
+          <option value="">{pick('Select country...', 'Seleziona paese...')}</option>
           {COUNTRIES.map(c => (
             <option key={c} value={c}>{c}</option>
           ))}
@@ -368,9 +381,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
                   if (failed.length > 0) {
                     setUploadError(
                       serverMessage
-                        ?? (locale === 'it'
-                          ? `Caricamento fallito: ${failed.join(', ')}`
-                          : `Upload failed: ${failed.join(', ')}`),
+                        ?? interpolateString(pick('Upload failed: {files}', 'Caricamento fallito: {files}')!, { files: failed.join(', ') }),
                     )
                   }
                 }}
@@ -384,8 +395,8 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
                     <Loader2 className="h-3 w-3 animate-spin shrink-0" />
                     <span className="truncate">
                       {uploadStatus
-                        ? `${locale === 'it' ? 'Caricamento' : 'Uploading'} ${uploadStatus.name}${uploadStatus.total > 1 ? ` (${uploadStatus.index}/${uploadStatus.total})` : ''} — ${uploadStatus.pct}%`
-                        : (locale === 'it' ? 'Caricamento...' : 'Uploading...')}
+                        ? `${pick('Uploading', 'Caricamento')} ${uploadStatus.name}${uploadStatus.total > 1 ? ` (${uploadStatus.index}/${uploadStatus.total})` : ''} — ${uploadStatus.pct}%`
+                        : pick('Uploading...', 'Caricamento...')}
                     </span>
                   </div>
                   {uploadStatus && (
@@ -410,7 +421,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
                         type="button"
                         onClick={() => onChange(field.name, paths.filter((_, j) => j !== i))}
                         className="text-zinc-400 hover:text-red-500 shrink-0"
-                        aria-label={locale === 'it' ? 'Rimuovi file' : 'Remove file'}
+                        aria-label={pick('Remove file', 'Rimuovi file')}
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -451,8 +462,8 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
         !Number.isNaN(Number(value)) && Number(value) < field.min && (
         <p className="text-xs text-red-500">
           {field.min === 0
-            ? (locale === 'it' ? 'Questo importo non può essere negativo.' : 'This amount cannot be negative.')
-            : (locale === 'it' ? `Deve essere almeno ${field.min}.` : `Must be at least ${field.min}.`)}
+            ? pick('This amount cannot be negative.', 'Questo importo non può essere negativo.')
+            : interpolateString(pick('Must be at least {min}.', 'Deve essere almeno {min}.')!, { min: field.min })}
         </p>
       )}
       {error && <p className="text-xs text-red-500">{error}</p>}
