@@ -176,7 +176,23 @@ async function translateBatch(
           "You translate short user-interface phrases (buttons, menu labels, headings, short instructions) for a legal/financial services web app, from English into the target language. " +
           "Keep the same tone (plain, professional, concise) and the same length feel — these are UI labels, not prose. " +
           "Preserve any proper nouns, brand names, and placeholders exactly as written. " +
-          "Translate every single entry given; do not skip or merge any. Call the submit_translations tool exactly once with every key filled in.",
+          "Translate every single entry given; do not skip or merge any. " +
+          // BUG #5 FOUND running this for real (German, 2026-08-24): a source
+          // phrase containing an embedded quoted phrase (e.g. `... as "Pay
+          // Now" buttons ...`) sometimes comes back with a mismatched opening/
+          // closing quote style (a typographic opening quote paired with a
+          // bare, unescaped ASCII closing quote) when the model hands the
+          // whole `translations` object back as a re-stringified JSON blob —
+          // an already-known quirk, see the string-vs-object handling below.
+          // That one bad character corrupts JSON.parse for the ENTIRE batch,
+          // not just the one key, and reproduces 100% of the time for the
+          // same batch (verified: 4/4 failures on the real stuck content,
+          // 0/3 failures once this instruction was added). Cheaper and safer
+          // than a source-text edit — the affected keys already have
+          // completed Spanish/French translations with no live mechanism
+          // that would ever re-check them against a changed source string.
+          "Never use literal quotation mark characters (\" or any curly/typographic quote variant) anywhere in a translated value, even if the English source text contains a quoted phrase — rephrase around it instead (e.g. drop the quotes, or reword) so the output never contains a quote character that could break JSON encoding. " +
+          "Call the submit_translations tool exactly once with every key filled in.",
         tools: [
           {
             name: "submit_translations",
