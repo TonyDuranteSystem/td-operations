@@ -46,11 +46,11 @@ describe("renderCapabilityBlock — rails on", () => {
     expect(block).toMatch(/portal chat/i)
   })
 
-  it("always requires the draft-then-explicit-go flow", () => {
+  it("requires showing the draft first, and — since a stale 'always wait for a second turn' instruction expired attach-refs out from under a real conversation (dev job eefac886) — makes the wait CONDITIONAL: call it this same turn once the ask is already clear, only wait when it's genuinely unclear", () => {
     const block = renderCapabilityBlock({ canSendEmail: true, clientName: "Acme LLC" })
     expect(block).toMatch(/show the full draft first/i)
-    expect(block).toMatch(/wait for the staff member's explicit go-ahead/i)
-    expect(block).toMatch(/send ONCE/i)
+    expect(block).toMatch(/call the send tool in this SAME turn/i)
+    expect(block).toMatch(/genuinely unclear whether they want it sent yet.*wait for their explicit go-ahead/i)
   })
 
   it("PORTAL: says the client is fixed server-side and cannot be redirected", () => {
