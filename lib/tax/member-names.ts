@@ -382,20 +382,46 @@ export function suspectedMemberFromNotes(notes: string | null | undefined): stri
 export const CONFIRMED_MEMBER_SEP = " | Member: "
 
 /**
- * The owner a client CONFIRMED on this row, or null.
+ * Prefix the DETERMINISTIC exact-name-match rule writes (bank-statement-
+ * parser.ts) when a payment's payee/description exactly matches a declared
+ * member's full name — a high-confidence auto-attribution the client never
+ * explicitly answered, but with the same claim on the row as a client-typed
+ * answer: it is still someone's confirmed capital movement, not a merchant.
+ */
+export const PARSER_MEMBER_NOTE_PREFIX = "Member: "
+
+/**
+ * The owner CONFIRMED on this row — by the client's own answer, or by the
+ * deterministic exact-name-match rule — or null.
  *
  * Read so the card can keep showing the question after it is answered — the
  * mark is gone by then, and without this the client has no way back if they
  * picked the wrong person. Tapping a merchant chip instead re-books the whole
  * group, so "no way back" meant "correcting one attribution corrupts twenty
  * other payments".
+ *
+ * BOTH note shapes, not just the client-answer one (2026-08-23, bug-hunter
+ * finding): the parser's bare "Member: X" (no leading pipe) matched neither
+ * this function nor the suspected-mark reader, so a row it auto-booked as a
+ * distribution/contribution sailed past every exclusion and a single generic
+ * merchant chip could silently flip it to a plain expense — the exact
+ * K-1/capital-account corruption this whole reader exists to prevent. This is
+ * not a corner case: the parser rule exists specifically because clients
+ * whose bank memos literally name a member are common (the Dynamiq-2024
+ * incident its own comment cites).
  */
 export function confirmedMemberFromNote(notes: string | null | undefined): string | null {
   const n = (notes ?? "")
   const at = n.indexOf(CONFIRMED_MEMBER_SEP)
-  if (at === -1) return null
-  const name = n.slice(at + CONFIRMED_MEMBER_SEP.length).split(" | ")[0].trim()
-  return name.length > 0 ? name : null
+  if (at !== -1) {
+    const name = n.slice(at + CONFIRMED_MEMBER_SEP.length).split(" | ")[0].trim()
+    if (name.length > 0) return name
+  }
+  if (n.startsWith(PARSER_MEMBER_NOTE_PREFIX)) {
+    const name = n.slice(PARSER_MEMBER_NOTE_PREFIX.length).trim()
+    if (name.length > 0) return name
+  }
+  return null
 }
 
 /**
