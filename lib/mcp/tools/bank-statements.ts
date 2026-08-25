@@ -367,15 +367,6 @@ export function registerBankStatementTools(server: McpServer) {
         const primaryCurrency = Object.entries(currencyCounts).sort((a, b) => (b[1] as number) - (a[1] as number))[0]?.[0] || "USD"
         const irsRate = rates[primaryCurrency]
 
-        // Year-end balances per currency account
-        const accountBalances: Record<string, number> = {}
-        for (const tx of transactions) {
-          const key = `${tx.bank_name} ${tx.account_type}`
-          if (tx.balance_after !== null) {
-            accountBalances[key] = Number(tx.balance_after)
-          }
-        }
-
         // distByMember — the year's distributions grouped by member. Kept here
         // because the text summary below reports it; the workbook itself is built
         // by the ONE shared engine, not in this file.
@@ -550,7 +541,20 @@ export function registerBankStatementTools(server: McpServer) {
           // separately, not this fix's scope.
           ...Object.entries(distByMember).map(([name, amt]) => `  ${name}: ${primaryCurrency} ${amt.toFixed(2)} (native, unconverted)`),
           "",
-          `Year-end cash: ${Object.entries(accountBalances).map(([k, v]) => `${k}: ${v.toFixed(2)}`).join(", ") || "N/A"}`,
+          // Reads the SAME reconciliation-gated closing balance the portal/
+          // Excel already trust (engineView.draft.bank_balances, built by
+          // mergeBankBalances) instead of a local re-scan of transactions.
+          // The old local scan overwrote its per-bank guess on ANY row with a
+          // non-null balance_after in date order, with no check that the row
+          // was actually the bucket's last one or that the bucket's balance
+          // coverage was complete — so a small "unknown"-bank bucket whose
+          // only balance-bearing row landed mid-year could print that stale
+          // snapshot as if it were the year-end figure (Dynamiq SR LLC,
+          // 2026-08-25: "unknown USD" showed $382,480.30 off one $2.79 fee
+          // row, while the bucket's real transactions totaled a few dollars).
+          `Year-end cash: ${(engineView.draft.bank_balances?.banks ?? []).map(b =>
+            `${b.bank_key}: ${b.closing_usd !== null ? b.closing_usd.toFixed(2) : "N/A (balance history incomplete)"}`
+          ).join(", ") || "N/A"}`,
           uncategorized.length > 0 ? `\n⚠️ ${uncategorized.length} uncategorized transactions — review before sending to India` : "",
           driveLink ? `\n📎 Excel: ${driveLink}` : "",
           documentVisibleToClient ? "✅ Now visible in the client's portal Documents tab (client notified)." : "",
