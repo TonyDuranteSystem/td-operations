@@ -3115,11 +3115,21 @@ export default function PortalChatsPage() {
                   const replyRef = msg.reply_to_id ? combinedMessages.find(m => m.id === msg.reply_to_id) : null
                   const isDeleted = !!msg.deleted_at
 
+                  // Antonio, 2026-08-25: a run of tombstone cards after a bulk
+                  // cleanup was noisier than the duplicate messages it was
+                  // meant to show the removal of — deleted messages now render
+                  // as nothing at all for staff too, the same as they already
+                  // do for the client (app/api/portal/chat/route.ts's
+                  // `isClientUser` branch). No admin audit UI in this view;
+                  // deleted_at/deleted_by still sit on the row for anyone who
+                  // needs to check the database directly.
+                  if (isDeleted) return null
+
                   // System events (auto-emitted on client actions: wizard submitted,
                   // payment received, doc uploaded, SS-4 signed, etc.). Render as a
                   // centered amber pill with a distinct neutral style — not a chat
                   // bubble. Strip the embedded idempotency marker before display.
-                  if (isSystem && !isDeleted) {
+                  if (isSystem) {
                     const displayBody = msg.message.replace(/<!--[\s\S]*?-->/g, '').trim()
                     const isUnread = !msg.read_at
                     return (
@@ -3134,24 +3144,6 @@ export default function PortalChatsPage() {
                           <Bell className="h-3 w-3 shrink-0" />
                           <span className="leading-snug">{displayBody}</span>
                           <span className="text-[10px] opacity-70 shrink-0">{format(parseISO(msg.created_at), 'h:mm a')}</span>
-                        </div>
-                      </div>
-                    )
-                  }
-
-                  if (isDeleted) {
-                    return (
-                      <div key={msg.id} className={cn('flex items-end gap-1', isAdmin ? 'justify-end' : 'justify-start')}>
-                        <div className={cn(
-                          'max-w-[75%] rounded-xl px-3 py-2 border border-dashed',
-                          isAdmin ? 'border-blue-200 bg-blue-50/40 text-zinc-500' : 'border-zinc-200 bg-zinc-50 text-zinc-500'
-                        )}>
-                          <p className="text-xs italic flex items-center gap-1.5">
-                            <Trash2 className="h-3 w-3" /> Message deleted
-                          </p>
-                          <p className="text-[10px] text-zinc-400 mt-0.5">
-                            {msg.deleted_at ? `Deleted ${format(parseISO(msg.deleted_at), 'MMM d, h:mm a')}` : 'Deleted'} · originally sent {format(parseISO(msg.created_at), 'MMM d, h:mm a')}
-                          </p>
                         </div>
                       </div>
                     )
