@@ -443,8 +443,45 @@ export function registerBankStatementTools(server: McpServer) {
           })
           if (saved.id) {
             documentVisibleToClient = true
+            // autoSaveDocument's dedupe-on-drive_file_id is correct for every
+            // OTHER caller (a signed contract/OA/lease truly never changes
+            // once saved) but this tool's whole point is regenerating the
+            // SAME file in place as categorization/ownership work continues —
+            // on a repeat run autoSaveDocument returns the existing row as-is
+            // and touches nothing, so the portal's Documents tab kept showing
+            // the first run's timestamp while the actual Drive file (a real
+            // upsert, confirmed via its own modified-time) had moved on.
+            // Antonio hit this live: a corrected P&L looked like "the old
+            // one" in Documents because nothing here said otherwise
+            // (2026-08-25). Refresh unconditionally — a fresh insert just
+            // re-sets the same instant, a dedup hit gets the update it never
+            // got.
+            await supabaseAdmin.from("documents").update({ updated_at: new Date().toISOString(), processed_at: new Date().toISOString() }).eq("id", saved.id)
             await notifyClientsOfNewDocument(saved.id).catch((e) =>
               console.warn("[bank_statement_pnl] client notification failed:", e instanceof Error ? e.message : String(e))
+            )
+            // A dedicated "your P&L is ready" chat message with a DIRECT link
+            // to the review page (Antonio, 2026-08-25): the generic new-
+            // document alert above links to /portal/documents, which finds
+            // the file but not the page where the client actually reviews
+            // numbers and confirms. Same action-required pattern + dedup
+            // window as notifyQuestionsReady (lib/jobs/questions-ready-
+            // notify.ts) — a repeat run within 10 minutes (e.g. re-generating
+            // while fixing a categorization) never double-sends.
+            const { notifyClientActionRequired } = await import("@/lib/portal/action-required")
+            await notifyClientActionRequired({
+              account_id,
+              title: {
+                en: `Your ${tax_year} Profit & Loss is ready`,
+                it: `Il tuo Conto Economico ${tax_year} è pronto`,
+              },
+              message: {
+                en: `Please go in — your ${tax_year} Profit & Loss and Balance Sheet are ready to review, download, and confirm.`,
+                it: `Accedi al portale — il tuo Conto Economico e Stato Patrimoniale ${tax_year} sono pronti da rivedere, scaricare e confermare.`,
+              },
+              link: `/portal/tax-financials?year=${tax_year}`,
+            }).catch((e) =>
+              console.warn("[bank_statement_pnl] action-required notification failed:", e instanceof Error ? e.message : String(e))
             )
           } else if (saved.error) {
             console.warn("[bank_statement_pnl] document registration failed:", saved.error)
