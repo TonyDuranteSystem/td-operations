@@ -308,7 +308,23 @@ async function extractSinglePass(
   const refs = dedupeRefs(transactions.map(t => t.transaction_ref))
   transactions.forEach((t, i) => { t.transaction_ref = refs[i] })
 
-  if (transactions.length === 0 && errors.length === 0) {
+  // EMPTY-BUT-VALID (mirrors the CSV path's `recognized_empty`, 2026-08-12):
+  // zero transactions is only a genuine read failure when we ALSO have no
+  // corroborating evidence the model actually saw the statement. A stated
+  // opening balance that reconciles against a stated closing balance with
+  // zero transactions is real evidence of a correct read of a real
+  // zero-activity period — the model could not have produced two matching,
+  // specific numbers from a page it couldn't read. Real incident: THW Global
+  // LLC's dormant Mercury sub-accounts (checking + credit, both $0 the whole
+  // month) were branded "could not read this file" and the client was told
+  // to re-upload a statement that was already correct — impossible advice,
+  // since re-exporting an empty period produces the identical file every
+  // time (2026-08-25). Deliberately does NOT cover a statement with no stated
+  // balances at all (a genuinely unreadable/scanned PDF has nothing to
+  // reconcile) — that case is unchanged, still terminal "unreadable".
+  const reconciliation = reconcile(stmt, transactions)
+  const emptyButReconciled = transactions.length === 0 && reconciliation.reconciled === true
+  if (transactions.length === 0 && errors.length === 0 && !emptyButReconciled) {
     errors.push("AI extraction returned no transactions")
   }
 
@@ -320,7 +336,8 @@ async function extractSinglePass(
     period: stmt.period || "",
     errors,
     extraction_method: "ai",
-    reconciliation: reconcile(stmt, transactions),
+    reconciliation,
+    ...(emptyButReconciled ? { recognized_empty: true } : {}),
   }
 }
 
@@ -409,10 +426,16 @@ export async function aiExtractBankStatement(
     reconciliation = { opening_balance: opening, closing_balance: closing, computed_closing: computed, reconciled, note: reconciled ? `Reconciled across ${chunks.length} page-chunks` : `MISMATCH across ${chunks.length} page-chunks: opening ${opening} + Σ ${Math.round(sum * 100) / 100} = ${computed}, statement closing = ${closing}. Needs human review.` }
   }
 
+  // EMPTY-BUT-VALID across the whole merged statement (mirrors the
+  // single-pass case above) — a stated opening (first chunk) reconciling
+  // against a stated closing (last chunk) with zero merged transactions is
+  // real evidence every chunk was actually read, not evidence of failure.
+  const emptyButReconciled = mergedTx.length === 0 && reconciliation.reconciled === true
+
   const errors = Array.from(new Set(results.flatMap(r => r.errors)))
   errors.unshift(`Large PDF split into ${chunks.length} page-chunks (>${CHUNK_THRESHOLD_PAGES} pages) and merged.`)
   if (truncatedChunks > 0) errors.push(`Time budget reached — ${truncatedChunks} chunk(s) not processed; figures may be incomplete (see reconciliation).`)
-  if (mergedTx.length === 0) errors.push("AI extraction returned no transactions across any chunk")
+  if (mergedTx.length === 0 && !emptyButReconciled) errors.push("AI extraction returned no transactions across any chunk")
 
   return {
     transactions: mergedTx,
@@ -423,5 +446,6 @@ export async function aiExtractBankStatement(
     errors,
     extraction_method: "ai",
     reconciliation,
+    ...(emptyButReconciled ? { recognized_empty: true } : {}),
   }
 }
