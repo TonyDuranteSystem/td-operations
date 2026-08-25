@@ -1841,7 +1841,7 @@ Does NOT auto-mark messages as read. Use portal_chat_mark_read explicitly after 
         // Fetch messages
         let query = supabaseAdmin
           .from("portal_messages")
-          .select("id, sender_type, sender_id, message, attachment_url, attachment_name, attachments, read_at, created_at, contact_id, contacts:contact_id(full_name)")
+          .select("id, sender_type, sender_id, message, attachment_url, attachment_name, attachments, read_at, created_at, deleted_at, contact_id, contacts:contact_id(full_name)")
           .order("created_at", { ascending: false })
           .limit(msgLimit)
 
@@ -1881,6 +1881,13 @@ Does NOT auto-mark messages as read. Use portal_chat_mark_read explicitly after 
           // arbitrary linked member), NOT the author. See staffChatSenderLabel.
           const sender = formatMcpChatSenderLabel(m.sender_type, contactData?.full_name)
           const time = new Date(m.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+          // R100 tombstone — this tool is staff-only (never client-reachable),
+          // so a deleted row stays listed but its body is replaced, matching
+          // the dashboard's own admin view (portal-chats/page.tsx).
+          if ((m as any).deleted_at) {
+            const deletedTime = new Date((m as any).deleted_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+            return `[${time}] ${sender}:\n   [Deleted ${deletedTime} · originally sent ${time}]`
+          }
           const readStatus = m.sender_type === "client" && !m.read_at ? " 🔴 UNREAD" : ""
           const atts = (m as any).attachments?.length
             ? (m as any).attachments.map((a: { name: string; url: string }) => `\n   📎 ${a.name} — ${a.url}`).join("")
