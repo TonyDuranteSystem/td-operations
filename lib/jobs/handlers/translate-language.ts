@@ -17,21 +17,7 @@ import { triggerWorker, type Job, type JobResult } from "../queue"
 import type { JobRunContext } from "../registry"
 import { AI_CHAIN_CHUNK_CAP, AI_CHAIN_JOB_PRIORITY, decideChunkFollowup } from "../chain-state"
 import { generateTranslationsForLanguage, seedPendingTranslations } from "@/lib/portal/translation-generator"
-import { getEnglishDictionary } from "@/lib/portal/i18n"
-import { getWizardTranslatableText } from "@/lib/portal/wizard-translatable-text"
-import { getGuideTranslatableText } from "@/lib/portal/guide-translatable-text"
-
-type Source = "dictionary" | "wizard" | "guide"
-
-// Chain order: dictionary finishing hops into wizard, wizard finishing hops
-// into guide, guide finishing ends the chain for this language. Kept as one
-// map (rather than three copy-pasted "if source === X" blocks) so adding a
-// fourth source later is a one-line change, not another duplicated branch.
-const NEXT_SOURCE: Record<Source, Source | null> = {
-  dictionary: "wizard",
-  wizard: "guide",
-  guide: null,
-}
+import { NEXT_SOURCE, sourceDictionaryFor, type TranslationSource as Source } from "@/lib/portal/translation-sources"
 
 interface TranslateLanguagePayload {
   language_code: string
@@ -42,12 +28,6 @@ interface TranslateLanguagePayload {
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {
   return { name, status, detail, timestamp: new Date().toISOString() }
-}
-
-function sourceDictionaryFor(source: Source): Record<string, string> {
-  if (source === "wizard") return getWizardTranslatableText()
-  if (source === "guide") return getGuideTranslatableText()
-  return getEnglishDictionary()
 }
 
 export async function handleTranslateLanguage(job: Job, ctx?: JobRunContext): Promise<JobResult> {

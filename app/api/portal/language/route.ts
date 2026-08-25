@@ -3,43 +3,9 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { NextRequest, NextResponse } from 'next/server'
 import { isValidLanguageCode, languageName } from '@/lib/portal/language-codes'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
-import { SUPPORTED_LOCALES, getEnglishDictionary } from '@/lib/portal/i18n'
-import { seedPendingTranslations } from '@/lib/portal/translation-generator'
-import { getWizardTranslatableText } from '@/lib/portal/wizard-translatable-text'
-import { getGuideTranslatableText } from '@/lib/portal/guide-translatable-text'
+import { SUPPORTED_LOCALES } from '@/lib/portal/i18n'
+import { catchUpLanguage } from '@/lib/portal/language-catchup'
 import { isBrandNewLanguage, distinctLanguagesTranslatedToday, MAX_NEW_LANGUAGES_PER_DAY } from '@/lib/portal/language-cap'
-import { enqueueJob } from '@/lib/jobs/queue'
-
-type TranslationSource = 'dictionary' | 'wizard' | 'guide'
-
-// Same order the job handler's own chain hops through (translate-language.ts's
-// NEXT_SOURCE) — dictionary, then wizard, then the guide/help-article library.
-const SOURCES_IN_ORDER: Array<{ source: TranslationSource; dictionary: () => Record<string, string> }> = [
-  { source: 'dictionary', dictionary: getEnglishDictionary },
-  { source: 'wizard', dictionary: getWizardTranslatableText },
-  { source: 'guide', dictionary: getGuideTranslatableText },
-]
-
-/**
- * The job handler's own chain-continuation dedup only guards chunk-to-chunk
- * within an already-running chain — it never protected this initial enqueue.
- * Two clients (or two devices/tabs for the same client) picking the same
- * never-before-seen language at once could each start their own chunk-0 job
- * for it (found in review, 2026-08-23). Per-key claiming inside the job still
- * prevents double-translating any single entry, but this avoids the wasted
- * duplicate job outright.
- */
-async function hasLiveTranslateJob(languageCode: string, source: TranslationSource): Promise<boolean> {
-  const { data } = await supabaseAdmin
-    .from('job_queue')
-    .select('id')
-    .eq('job_type', 'translate_language')
-    .eq('payload->>language_code', languageCode)
-    .eq('payload->>source', source)
-    .in('status', ['pending', 'processing'])
-    .limit(1)
-  return !!data && data.length > 0
-}
 
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -93,20 +59,10 @@ export async function POST(request: NextRequest) {
         // missing work. A returning language whose dictionary (and maybe
         // wizard) content is already fully translated only needs whichever
         // source is genuinely behind — e.g. the help-article library, which
-        // lags behind on its own separate track.
-        for (const { source, dictionary } of SOURCES_IN_ORDER) {
-          const seeded = await seedPendingTranslations(lang, dictionary())
-          if (seeded.missing > 0) {
-            if (!(await hasLiveTranslateJob(lang, source))) {
-              await enqueueJob({
-                job_type: 'translate_language',
-                payload: { language_code: lang, language_name: languageName(lang) ?? lang, source, chunk_index: 0, auto_retry: 0 },
-                created_by: 'portal-language-picker',
-              })
-            }
-            break
-          }
-        }
+        // lags behind on its own separate track. Same catch-up logic the
+        // periodic sweep uses (lib/portal/language-catchup.ts) — this is
+        // just the on-demand trigger for it.
+        await catchUpLanguage(lang, languageName(lang) ?? lang)
       }
     } catch (e) {
       // Never fail the language switch itself over a translation-kickoff
