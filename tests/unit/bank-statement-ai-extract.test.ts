@@ -193,6 +193,45 @@ describe('aiExtractBankStatement', () => {
     expect(r.transient_failure).toBeUndefined()
   })
 
+  // ── recognized_empty for AI-extracted statements (2026-08-25) ──
+  // Real incident: THW Global LLC's dormant Mercury sub-accounts (checking +
+  // credit card, genuinely $0 the whole month) were branded "could not read
+  // this file" — the client was told to re-upload a statement that was
+  // already correct. A stated opening balance that reconciles against a
+  // stated closing balance with zero transactions is real evidence the model
+  // actually read the page, not evidence it failed.
+  describe('recognized_empty (empty-but-valid AI-read statement)', () => {
+    it('a genuinely $0 month (opening=closing=0, zero rows) is recognized_empty, not an error', async () => {
+      const { fn } = makeSeqFetch([{ input: { bank_name: 'Mercury', currency: 'USD', opening_balance: 0, closing_balance: 0, transactions: [] } }])
+      const r = await aiExtractBankStatement(Buffer.from('x'), 'mercury_dormant.pdf', 'application/pdf', { fetchImpl: fn })
+      expect(r.recognized_empty).toBe(true)
+      expect(r.transactions).toHaveLength(0)
+      expect(r.errors.join(' ')).not.toMatch(/no transactions/i)
+      expect(r.reconciliation?.reconciled).toBe(true)
+    })
+
+    it('a non-zero balance that held steady all period (opening=closing=500) is ALSO recognized_empty', async () => {
+      const { fn } = makeSeqFetch([{ input: { opening_balance: 500, closing_balance: 500, transactions: [] } }])
+      const r = await aiExtractBankStatement(Buffer.from('x'), 'idle_account.pdf', 'application/pdf', { fetchImpl: fn })
+      expect(r.recognized_empty).toBe(true)
+    })
+
+    it('does NOT mark recognized_empty when balances are stated but do not reconcile (opening != closing, zero rows) — that is suspicious, not confirmed-empty', async () => {
+      const { fn } = makeSeqFetch([{ input: { opening_balance: 100, closing_balance: 900, transactions: [] } }])
+      const r = await aiExtractBankStatement(Buffer.from('x'), 'mismatch.pdf', 'application/pdf', { fetchImpl: fn })
+      expect(r.recognized_empty).toBeUndefined()
+      expect(r.reconciliation?.reconciled).toBe(false)
+      expect(r.errors.join(' ')).toMatch(/no transactions/i)
+    })
+
+    it('a genuinely unreadable file (no balances stated either) still stays a plain error — unchanged behavior', async () => {
+      const { fn } = makeSeqFetch([{ input: { transactions: [] } }])
+      const r = await aiExtractBankStatement(Buffer.from('x'), 'scanned.pdf', 'application/pdf', { fetchImpl: fn })
+      expect(r.recognized_empty).toBeUndefined()
+      expect(r.errors.join(' ')).toMatch(/no transactions/i)
+    })
+  })
+
   // ── Large multi-page PDF chunking ──
   it('splits a LARGE (>15pp) PDF into page-chunks, extracts each, and merges', async () => {
     const pdf = await makePdf(20) // 20 pages → 10/chunk → 2 chunks
@@ -224,6 +263,21 @@ describe('aiExtractBankStatement', () => {
     const r = await aiExtractBankStatement(Buffer.from('not a real pdf'), 'weird.pdf', 'application/pdf', { fetchImpl: fn })
     expect(calls.count).toBe(1)
     expect(r.transactions).toHaveLength(1)
+  })
+
+  it('a LARGE dormant statement (every chunk empty, opening=closing across the whole merge) is recognized_empty too', async () => {
+    const pdf = await makePdf(20) // 20 pages → 2 chunks
+    // Each chunk returns zero transactions on every attempt, so each chunk's
+    // own retry loop uses both of its allotted attempts (chunks.length<=4 →
+    // maxAttempts=2) before settling — 2 chunks × 2 attempts = 4 calls.
+    const { fn, calls } = makeSeqFetch([
+      { input: { bank_name: 'Mercury', currency: 'USD', opening_balance: 0, closing_balance: 0, transactions: [] } },
+    ])
+    const r = await aiExtractBankStatement(pdf, 'mercury_big_dormant.pdf', 'application/pdf', { fetchImpl: fn })
+    expect(calls.count).toBe(4)
+    expect(r.transactions).toHaveLength(0)
+    expect(r.recognized_empty).toBe(true)
+    expect(r.errors.join(' ')).not.toMatch(/no transactions/i)
   })
 })
 
