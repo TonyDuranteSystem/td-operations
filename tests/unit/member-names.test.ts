@@ -427,3 +427,38 @@ describe('candidatesFromNote — the answer remembers who was in the running', (
     expect(candidatesFromNote('')).toEqual([])
   })
 })
+
+/**
+ * THE DETERMINISTIC PARSER'S BARE NOTE. bank-statement-parser.ts writes
+ * `Member: ${matched}` (no leading pipe) when a payee/description exactly
+ * matches a declared member's full name — a real, common auto-attribution the
+ * client never explicitly answered. Before 2026-08-23 this shape matched
+ * neither confirmedMemberFromNote nor suspectedMembersFromNotes, so a row it
+ * auto-booked as a distribution/contribution was invisible to both exclusion
+ * sets a generic merchant chip is checked against — one click could silently
+ * flip it to a plain expense with no warning (bug-hunter finding).
+ */
+describe('confirmedMemberFromNote — recognises the deterministic parser note too', () => {
+  it('reads the bare "Member: X" shape the parser writes, no pipe', () => {
+    expect(confirmedMemberFromNote('Member: Gabriele Finelli')).toBe('Gabriele Finelli')
+  })
+
+  it('still reads the client-answer "| Member: X" shape unchanged', () => {
+    expect(confirmedMemberFromNote('manual: client answer (owner_draw) | Member: Gabriele Finelli')).toBe('Gabriele Finelli')
+  })
+
+  it('does not treat an open owner-question mark as confirmed', () => {
+    expect(confirmedMemberFromNote('ask: possible payment to member Gabriele Finelli')).toBeNull()
+  })
+
+  it('does not false-positive on unrelated notes, including ones that merely mention a member mid-string', () => {
+    expect(confirmedMemberFromNote('manual: client answer (business_expense)')).toBeNull()
+    expect(confirmedMemberFromNote('Paid Gabriele Finelli for consulting, not equity')).toBeNull()
+    expect(confirmedMemberFromNote(null)).toBeNull()
+    expect(confirmedMemberFromNote('')).toBeNull()
+  })
+
+  it('is empty, not a blank name, when the bare prefix has nothing after it', () => {
+    expect(confirmedMemberFromNote('Member: ')).toBeNull()
+  })
+})

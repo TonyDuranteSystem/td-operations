@@ -600,30 +600,66 @@ export function registerBankStatementTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "bank_statement_recategorize",
-    "Update the category and/or subcategory of a bank transaction. Use after bank_statement_review to fix uncategorized or miscategorized transactions before generating P&L.",
+    "Update the category and/or subcategory of a bank transaction. Use after bank_statement_review to fix uncategorized or miscategorized transactions before generating P&L. For 'distribution'/'contribution', pass `member` to name WHO the money went to/came from — required to credit the right partner's K-1 instead of spreading it across everyone by ownership %. If the row already names a member and you don't pass one, that name is kept automatically; you'll be told if you're the one clearing it by recategorizing away from distribution/contribution.",
     {
       transaction_id: z.string().uuid().describe("Transaction UUID from bank_statement_review"),
       category: z.enum(["income", "cogs", "expense", "distribution", "contribution", "fee", "conversion", "refund", "uncategorized"]).describe("New category ('contribution' = owner capital in — equity, never P&L revenue)"),
       subcategory: z.string().optional().describe("New subcategory (e.g., 'coaching_revenue', 'subcontractor', 'bank_fee')"),
       is_related_party: z.boolean().optional().describe("Mark as related party transaction"),
+      member: z.string().optional().describe("For category 'distribution' or 'contribution': the member's full name this payment belongs to. Omit to keep whatever member name (if any) the row already carries."),
     },
-    async ({ transaction_id, category, subcategory, is_related_party }) => {
+    async ({ transaction_id, category, subcategory, is_related_party, member }) => {
       try {
+        // NEVER overwrite an existing member attribution blind (2026-08-23,
+        // bug-hunter finding: this tool used to unconditionally replace notes
+        // with no member field at all, permanently erasing who a confirmed
+        // distribution/contribution belonged to — a real, live incident on a
+        // real client tonight). Read the current note first so a plain
+        // category/subcategory fix doesn't silently drop it.
+        const { confirmedMemberFromNote } = await import("@/lib/tax/member-names")
+        const { data: current, error: readErr } = await supabaseAdmin
+          .from("bank_transactions")
+          .select("notes")
+          .eq("id", transaction_id)
+          .single()
+        if (readErr) throw new Error(readErr.message)
+        const notesAtRead = (current as { notes: string | null }).notes
+        const existingMember = confirmedMemberFromNote(notesAtRead)
+        const isMemberCategory = category === "distribution" || category === "contribution"
+        // A blank string is "no member," same as omitting the field — not a
+        // request to clear an existing one silently (bug-hunter finding).
+        const requestedMember = member?.trim() || undefined
+        const effectiveMember = requestedMember ?? (isMemberCategory ? existingMember : null)
+        const droppedMember = !isMemberCategory && existingMember ? existingMember : null
+
         const updates: Record<string, any> = { category }
         if (subcategory !== undefined) updates.subcategory = subcategory
         if (is_related_party !== undefined) updates.is_related_party = is_related_party
         // "manual:" marks a human correction — recategorizeAccountYear (rules +
         // transfer + AI passes) will never overwrite a row carrying this marker.
-        updates.notes = `manual: ${category}${subcategory ? `/${subcategory}` : ""} via recategorize tool`
+        const base = `manual: ${category}${subcategory ? `/${subcategory}` : ""} via recategorize tool`
+        updates.notes = effectiveMember ? `${base} | Member: ${effectiveMember}` : base
 
-        const { data, error } = await supabaseAdmin
-          .from("bank_transactions")
-          .update(updates)
-          .eq("id", transaction_id)
+        // COMPARE-AND-SWAP on notes (bug-hunter finding): the account's own
+        // background re-sort can attribute this exact row to a member between
+        // the read above and this write — a plain, unconditional update would
+        // silently clobber that fresh attribution with our stale one. Matching
+        // on the notes we actually read means a concurrent change makes this
+        // update affect zero rows (surfaced as a clear error below) instead of
+        // silently winning the race.
+        let query = supabaseAdmin.from("bank_transactions").update(updates).eq("id", transaction_id)
+        query = notesAtRead === null ? query.is("notes", null) : query.eq("notes", notesAtRead)
+        const { data, error } = await query
           .select("transaction_date, description, amount, currency, category, subcategory")
           .single()
 
-        if (error) throw new Error(error.message)
+        if (error) {
+          throw new Error(
+            error.code === "PGRST116"
+              ? "This transaction's notes changed since it was read (likely the automatic re-sort touched it) — please retry with bank_statement_review to see its current state before recategorizing again."
+              : error.message,
+          )
+        }
 
         logAction({
           action_type: "bank_statement_recategorize",
@@ -633,7 +669,14 @@ export function registerBankStatementTools(server: McpServer) {
           details: updates,
         })
 
-        return { content: [{ type: "text" as const, text: `✅ Updated: ${data.transaction_date} | ${data.description?.substring(0, 50)} | ${data.amount} ${data.currency} → ${category}/${subcategory || "—"}` }] }
+        const memberNote = effectiveMember
+          ? ` (member: ${effectiveMember}${member ? "" : ", carried over from the existing note"})`
+          : droppedMember
+            ? ` ⚠️ this row was previously attributed to ${droppedMember} — that attribution is now CLEARED since the new category isn't a distribution/contribution`
+            : isMemberCategory
+              ? " ⚠️ no member named — this amount will be spread across all members by ownership % until someone names who it belongs to"
+              : ""
+        return { content: [{ type: "text" as const, text: `✅ Updated: ${data.transaction_date} | ${data.description?.substring(0, 50)} | ${data.amount} ${data.currency} → ${category}/${subcategory || "—"}${memberNote}` }] }
       } catch (err: any) {
         return { content: [{ type: "text" as const, text: `❌ Error: ${err.message}` }] }
       }
