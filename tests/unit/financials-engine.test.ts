@@ -575,6 +575,17 @@ describe("confirmed owner attribution (2026-08-04)", () => {
     const d = build("manual: client answer (owner_draw) | Member: Someone Else")
     expect(d.members.find(m => m.name === "Gabriele Finelli")!.distributions).toBe(20000)
   })
+
+  it("credits the deterministic exact-name-match parser's bare note too, not just the client-answer shape (2026-08-23 bug-hunter fix)", () => {
+    // bank-statement-parser.ts writes a bare "Member: X" (no leading pipe) when
+    // a payee/description exactly matches a member's full name — this used to
+    // fall through to spreading (see the test above) because this file's own
+    // confirmedMemberFromNotes only recognized "| Member: X". It now delegates
+    // to the shared reader, which recognizes both shapes.
+    const d = build("Member: Gabriele Finelli")
+    expect(d.members.find(m => m.name === "Gabriele Finelli")!.distributions).toBe(40000)
+    expect(d.members.find(m => m.name === "Matthew Finelli")!.distributions).toBe(0)
+  })
 })
 
 /**

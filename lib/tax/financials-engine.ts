@@ -23,6 +23,7 @@
 
 import { computePnlTotals } from "@/lib/pnl-generator"
 import { sameName, type ResolvedMember } from "./ownership-resolution"
+import { confirmedMemberFromNote } from "./member-names"
 import { validatedExtraction, type PriorReturnCaseRecord } from "./prior-return-case"
 import { toUsd, type FxRates } from "./fx"
 import { mergeBankBalances, type ProvidedBankBalance, type BankBalancesSummary } from "./bank-balances"
@@ -170,14 +171,14 @@ export interface BuildDraftInput {
  * nothing, while the totals still tie so no gate notices.
  */
 export function confirmedMemberFromNotes(notes: string | null | undefined, members: ResolvedMember[]): ResolvedMember | null {
-  const at = (notes ?? "").indexOf("| Member: ")
-  if (at === -1) return null
-  // Cut at the NEXT " | " — the answer note may carry further trailers after
-  // the member (the "| Of: A; B" candidate breadcrumb that keeps the change
-  // buttons honest). Reading to end-of-string swallowed that trailer into the
-  // name, sameName failed, and the confirmed draw silently fell back to being
-  // spread across every partner — undoing the exact fix this reader exists for.
-  const name = (notes ?? "").slice(at + "| Member: ".length).split(" | ")[0].trim()
+  // Delegates to the ONE canonical note reader (./member-names) instead of a
+  // second, hand-rolled parse of the same concept — this file used to search
+  // for "| Member: " on its own, which missed the deterministic exact-name-
+  // match parser's bare "Member: X" note (no pipe) entirely, silently falling
+  // back to spreading that member's real capital contribution/distribution
+  // across everyone else by ownership % (2026-08-23, bug-hunter finding: this
+  // duplicate was the one place tonight's member-names.ts fix didn't reach).
+  const name = confirmedMemberFromNote(notes)
   if (!name) return null
   return members.find(m => sameName(m.name, name)) ?? null
 }

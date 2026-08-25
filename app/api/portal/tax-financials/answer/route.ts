@@ -269,6 +269,36 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // DEFENSE IN DEPTH — a plain (non-owner-flagged) answer must never touch a
+    // row already confirmed to a specific member, even if a stale client tab
+    // or a future UI regression sends its id here. The client already
+    // excludes these (merchantAnswerIds), but that is a client-side-only
+    // guard; the two sibling flows above (isSuspectedAnswer,
+    // isOwnTransferChange) both re-verify against CURRENT notes server-side
+    // for the exact same reason. Bulk needs no separate check here — its own
+    // update below is already restricted to FROM-category 'uncategorized'
+    // only, which a confirmed distribution/contribution row can never be.
+    // (2026-08-23, AI-architect review finding on the sibling client-side fix.)
+    if (!isBulk && !isSuspectedAnswer && !isOwnTransferChange) {
+      const { confirmedMemberFromNote } = await import('@/lib/tax/member-names')
+      const protectedIds = new Set<string>()
+      for (let i = 0; i < ownerAnswerIds.length; i += 200) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data } = await (supabaseAdmin as any)
+          .from('bank_transactions')
+          .select('id, notes')
+          .eq('account_id', accountId)
+          .eq('tax_year', taxYear)
+          .in('id', ownerAnswerIds.slice(i, i + 200))
+        for (const r of ((data ?? []) as Array<{ id: string; notes: string | null }>)) {
+          if (confirmedMemberFromNote(r.notes)) protectedIds.add(r.id)
+        }
+      }
+      if (protectedIds.size > 0) {
+        ownerAnswerIds = ownerAnswerIds.filter(id => !protectedIds.has(id))
+      }
+    }
+
     const aiPre: Array<{ id: string; category: string; notes: string }> = []
     for (let i = 0; i < transactionIds.length; i += 200) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
