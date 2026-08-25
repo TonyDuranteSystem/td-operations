@@ -224,11 +224,12 @@ describe('aiExtractBankStatement', () => {
       expect(r.errors.join(' ')).toMatch(/no transactions/i)
     })
 
-    it('a genuinely unreadable file (no balances stated either) still stays a plain error — unchanged behavior', async () => {
+    it('a statement with NO stated balances at all is ALSO recognized_empty (Antonio, 2026-08-25: "when there is a bank statement with zero transactions, don\'t consider it — it doesn\'t matter for us, it\'s zero"). Covers Mercury "Choice Sweep" deposit-summary documents, which have no opening-balance line to reconcile in the first place but still honestly report zero transactions.', async () => {
       const { fn } = makeSeqFetch([{ input: { transactions: [] } }])
-      const r = await aiExtractBankStatement(Buffer.from('x'), 'scanned.pdf', 'application/pdf', { fetchImpl: fn })
-      expect(r.recognized_empty).toBeUndefined()
-      expect(r.errors.join(' ')).toMatch(/no transactions/i)
+      const r = await aiExtractBankStatement(Buffer.from('x'), 'choice_sweep.pdf', 'application/pdf', { fetchImpl: fn })
+      expect(r.recognized_empty).toBe(true)
+      expect(r.errors.join(' ')).not.toMatch(/no transactions/i)
+      expect(r.reconciliation?.reconciled).toBeNull()
     })
   })
 

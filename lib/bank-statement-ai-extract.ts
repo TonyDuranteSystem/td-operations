@@ -308,22 +308,22 @@ async function extractSinglePass(
   const refs = dedupeRefs(transactions.map(t => t.transaction_ref))
   transactions.forEach((t, i) => { t.transaction_ref = refs[i] })
 
-  // EMPTY-BUT-VALID (mirrors the CSV path's `recognized_empty`, 2026-08-12):
-  // zero transactions is only a genuine read failure when we ALSO have no
-  // corroborating evidence the model actually saw the statement. A stated
-  // opening balance that reconciles against a stated closing balance with
-  // zero transactions is real evidence of a correct read of a real
-  // zero-activity period — the model could not have produced two matching,
-  // specific numbers from a page it couldn't read. Real incident: THW Global
-  // LLC's dormant Mercury sub-accounts (checking + credit, both $0 the whole
-  // month) were branded "could not read this file" and the client was told
-  // to re-upload a statement that was already correct — impossible advice,
-  // since re-exporting an empty period produces the identical file every
-  // time (2026-08-25). Deliberately does NOT cover a statement with no stated
-  // balances at all (a genuinely unreadable/scanned PDF has nothing to
-  // reconcile) — that case is unchanged, still terminal "unreadable".
+  // EMPTY-BUT-VALID (mirrors the CSV path's `recognized_empty`, 2026-08-12;
+  // widened 2026-08-25 per Antonio's explicit ruling: "when there is a bank
+  // statement with zero transactions, don't consider it — it doesn't matter
+  // for us, it's zero"). A statement the model actually processed and
+  // reported zero transactions for is treated as confirmed-empty — this
+  // covers a stated opening/closing balance that reconciles at zero activity
+  // (a dormant checking/credit account) AND a statement with no stated
+  // balance at all (e.g. Mercury's "Choice Sweep" deposit-summary documents,
+  // which have no opening-balance line to reconcile in the first place, but
+  // still report zero transactions honestly). The ONE case still treated as
+  // a genuine problem: a stated opening balance that does NOT reconcile
+  // against a stated closing balance with zero transactions — that means
+  // real money moved and the model could not account for it, which is
+  // hidden activity, not "zero", and must still surface for review.
   const reconciliation = reconcile(stmt, transactions)
-  const emptyButReconciled = transactions.length === 0 && reconciliation.reconciled === true
+  const emptyButReconciled = transactions.length === 0 && reconciliation.reconciled !== false
   if (transactions.length === 0 && errors.length === 0 && !emptyButReconciled) {
     errors.push("AI extraction returned no transactions")
   }
@@ -427,10 +427,11 @@ export async function aiExtractBankStatement(
   }
 
   // EMPTY-BUT-VALID across the whole merged statement (mirrors the
-  // single-pass case above) — a stated opening (first chunk) reconciling
-  // against a stated closing (last chunk) with zero merged transactions is
-  // real evidence every chunk was actually read, not evidence of failure.
-  const emptyButReconciled = mergedTx.length === 0 && reconciliation.reconciled === true
+  // single-pass case above, widened the same way per Antonio's 2026-08-25
+  // ruling) — zero merged transactions is confirmed-empty unless the
+  // reconciliation actively MISMATCHES (real money moved that the model
+  // could not account for).
+  const emptyButReconciled = mergedTx.length === 0 && reconciliation.reconciled !== false
 
   const errors = Array.from(new Set(results.flatMap(r => r.errors)))
   errors.unshift(`Large PDF split into ${chunks.length} page-chunks (>${CHUNK_THRESHOLD_PAGES} pages) and merged.`)
