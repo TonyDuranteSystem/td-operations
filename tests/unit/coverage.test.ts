@@ -78,11 +78,15 @@ describe("hasStructuralProblem", () => {
     expect(hasStructuralProblem({ ...clean, failedFilesOverridden: true })).toBe(false)
   })
 
-  it("an unanswered coverage question → true, independent of ingest state", () => {
-    expect(hasStructuralProblem({ ...clean, unansweredCoverage: 1 })).toBe(true)
+  // 2026-08-25, Antonio: "if there are no statements, means there are no
+  // activity" — a leading/trailing/internal gap no longer blocks anything,
+  // answered or not. Kept as an input field (still computable/showable) but
+  // deliberately excluded from the blocking calculation.
+  it("an unanswered coverage question → false — no statement means no activity, not a problem", () => {
+    expect(hasStructuralProblem({ ...clean, unansweredCoverage: 1 })).toBe(false)
   })
 
-  it("a coverage question answered 'had activity' (confirmed incomplete) → true", () => {
+  it("a coverage question answered 'had activity' (confirmed incomplete) → true — the client SAID there was activity, the opposite of 'no statement, assume none'", () => {
     expect(hasStructuralProblem({ ...clean, incompleteCoverage: 1 })).toBe(true)
   })
 
@@ -90,8 +94,12 @@ describe("hasStructuralProblem", () => {
     expect(hasStructuralProblem({ ingestFailed: 2, failedFilesOverridden: false, quarantined: 0, unansweredCoverage: 3, incompleteCoverage: 1 })).toBe(true)
   })
 
-  it("override does NOT suppress an unrelated coverage problem — only the failed-file leg", () => {
-    expect(hasStructuralProblem({ ingestFailed: 1, failedFilesOverridden: true, quarantined: 0, unansweredCoverage: 1, incompleteCoverage: 0 })).toBe(true)
+  it("override does NOT suppress an unrelated coverage problem — only the failed-file leg (incompleteCoverage, the still-blocking leg, not unansweredCoverage which never blocks)", () => {
+    expect(hasStructuralProblem({ ingestFailed: 1, failedFilesOverridden: true, quarantined: 0, unansweredCoverage: 1, incompleteCoverage: 1 })).toBe(true)
+  })
+
+  it("an override plus only unanswered (non-blocking) coverage → false — nothing left blocking", () => {
+    expect(hasStructuralProblem({ ingestFailed: 1, failedFilesOverridden: true, quarantined: 0, unansweredCoverage: 5, incompleteCoverage: 0 })).toBe(false)
   })
 
   // 2026-08-21, round-3 bug-hunter blocker: a file awaiting a staff format

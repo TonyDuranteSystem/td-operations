@@ -141,6 +141,19 @@ export function incompleteCoverage(questions: CoverageQuestion[], answers: Cover
  * chosen to proceed past; quarantine's own resolution is the one-tap format
  * confirmation itself, which transitions the file out of "quarantined"
  * entirely (computeIngestFileStates re-resolves per path, succeeded wins).
+ *
+ * `unansweredCoverage` is DELIBERATELY NOT blocking (Antonio, 2026-08-25:
+ * "if there are no statements, means there are no activity" — no client
+ * question, no hold-up). A leading/trailing/internal gap is a month with NO
+ * uploaded statement at all; the default assumption is now zero activity for
+ * that month, exactly like a statement that reads as genuinely empty
+ * (`recognized_empty`, lib/bank-statement-ai-extract.ts, same day's ruling).
+ * `unansweredCoverage` is kept as an input (not removed) so a caller can still
+ * SHOW the assumption to the client for transparency without it ever
+ * blocking. `incompleteCoverage` is UNCHANGED and still blocks: that fires
+ * only when someone has AFFIRMATIVELY answered "yes, there was activity" for
+ * a gap with no file — the opposite of "no statement, assume none" — so it
+ * remains a genuine unresolved problem needing the actual file.
  */
 export function hasStructuralProblem(input: {
   ingestFailed: number
@@ -150,5 +163,5 @@ export function hasStructuralProblem(input: {
   incompleteCoverage: number
 }): boolean {
   const failed = input.ingestFailed > 0 && !input.failedFilesOverridden
-  return failed || input.quarantined > 0 || input.unansweredCoverage > 0 || input.incompleteCoverage > 0
+  return failed || input.quarantined > 0 || input.incompleteCoverage > 0
 }
