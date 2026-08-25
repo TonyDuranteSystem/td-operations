@@ -83,6 +83,11 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   // not filed (a last-signer render/store hiccup); excludes by_hand.
   "/api/cron/oa-finalize-sweep": "*/10 * * * *",
   "/api/cron/action-required-reminders": "0 13 * * *",
+  // Any-language translation catch-up sweep (dev job 12cab351, 2026-08-25) —
+  // re-checks every language a real client currently has selected against
+  // the current content sources, so a language that finished translating
+  // before new content was added doesn't silently stay behind forever.
+  "/api/cron/portal-translation-catchup": "*/30 * * * *",
 }
 
 /**
