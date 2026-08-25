@@ -208,6 +208,40 @@ export async function notifyClientOfStatementIngestFailure(
     if (currentResult[NOTIFIED_FLAG] === true) {
       return { notified: false, reason: "already_notified" }
     }
+
+    // CROSS-JOB idempotency by (account, path) — the per-job check above only
+    // catches a re-fire of THIS SAME job row. It does nothing when a stuck
+    // wizard-setup job is auto-reaped and retried: the retry re-runs the
+    // bank-statement enqueue step, which mints a BRAND NEW job_queue row for
+    // the identical already-known-bad path (statement-ingest-enqueue.ts's own
+    // idempotency deliberately does not block on a prior TERMINAL job, so a
+    // client who fixes a file and re-uploads it isn't stuck). Each new job
+    // row is a "new" job to the per-job check, so it fired its own full
+    // client message every time. Real incident: THW Global LLC's setup job
+    // stalled and was auto-retried twice, and 10 unreadable files each sent
+    // the same "could not read" message 3 times in ~20 minutes (2026-08-25).
+    // Skip if ANY other job for this exact path already told the client —
+    // stamp this job's own flag too, so a further retry short-circuits on
+    // the cheap per-job check above without a second query.
+    if (path) {
+      const { data: siblingJobs } = await supabaseAdmin
+        .from("job_queue")
+        .select("result")
+        .eq("job_type", "ingest_bank_statement")
+        .eq("account_id", accountId)
+        .eq("payload->>path", path)
+        .neq("id", job.id)
+      const alreadyNotifiedElsewhere = (siblingJobs ?? []).some(
+        (r) => (r.result as Record<string, unknown> | null)?.[NOTIFIED_FLAG] === true,
+      )
+      if (alreadyNotifiedElsewhere) {
+        await supabaseAdmin
+          .from("job_queue")
+          .update({ result: { ...currentResult, [NOTIFIED_FLAG]: true } as unknown as Json })
+          .eq("id", job.id)
+        return { notified: false, reason: "already_notified_for_path" }
+      }
+    }
     const steps = (currentResult.steps ?? []) as Array<{ detail?: string }>
     const quarantined = steps.some(
       (s) => typeof s.detail === "string" && s.detail.startsWith("FORMAT_CONFIRMATION_NEEDED:"),

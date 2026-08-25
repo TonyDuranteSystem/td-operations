@@ -14,21 +14,33 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 // ── Mutable fixtures shared with the mocked supabase client ──────────────────
 interface Fixtures {
   jobResult: Record<string, unknown>
+  /** Other job_queue rows for the same (job_type, account_id, path) —
+   *  the cross-job idempotency check's own result set. */
+  siblingJobResults: Array<{ result: Record<string, unknown> | null }>
   contactLanguage: string | null
   accountContacts: Array<{ contact_id: string | null; is_primary: boolean | null }>
   insertError: { message: string } | null
 }
 const fixtures: Fixtures = {
   jobResult: {},
+  siblingJobResults: [],
   contactLanguage: null,
   accountContacts: [{ contact_id: "primary-ctc", is_primary: true }],
   insertError: null,
 }
 const inserts: Array<Record<string, unknown>> = []
+const jobQueueUpdates: Array<Record<string, unknown>> = []
 
-function resolveFor(table: string, op: "select" | "insert" | "update") {
+/** `.single()`/`.maybeSingle()` = the ONE-job-by-id lookup (its own marker).
+ *  Bare `await` (`.then()`) on a job_queue select = the cross-job sibling
+ *  lookup, which returns an ARRAY of sibling rows, never the current job. */
+function resolveFor(table: string, op: "select" | "insert" | "update", awaitedAsList: boolean) {
   if (table === "job_queue") {
-    if (op === "select") return { data: { result: fixtures.jobResult }, error: null }
+    if (op === "select") {
+      return awaitedAsList
+        ? { data: fixtures.siblingJobResults, error: null }
+        : { data: { result: fixtures.jobResult }, error: null }
+    }
     return { data: null, error: null } // marker write
   }
   if (table === "contacts") return { data: { language: fixtures.contactLanguage }, error: null }
@@ -46,8 +58,9 @@ function makeBuilder(table: string) {
   b.limit = chain
   b.order = chain
   b.neq = chain
-  b.update = () => {
+  b.update = (payload: Record<string, unknown>) => {
     state.op = "update"
+    if (table === "job_queue") jobQueueUpdates.push(payload)
     return b
   }
   b.insert = (payload: Record<string, unknown>) => {
@@ -55,10 +68,10 @@ function makeBuilder(table: string) {
     if (table === "portal_messages") inserts.push(payload)
     return b
   }
-  b.maybeSingle = async () => resolveFor(state.table, state.op)
-  b.single = async () => resolveFor(state.table, state.op)
+  b.maybeSingle = async () => resolveFor(state.table, state.op, false)
+  b.single = async () => resolveFor(state.table, state.op, false)
   b.then = (onFulfilled: (v: unknown) => unknown) =>
-    Promise.resolve(resolveFor(state.table, state.op)).then(onFulfilled)
+    Promise.resolve(resolveFor(state.table, state.op, true)).then(onFulfilled)
   return b
 }
 
@@ -82,10 +95,12 @@ import {
 
 beforeEach(() => {
   fixtures.jobResult = {}
+  fixtures.siblingJobResults = []
   fixtures.contactLanguage = null
   fixtures.accountContacts = [{ contact_id: "primary-ctc", is_primary: true }]
   fixtures.insertError = null
   inserts.length = 0
+  jobQueueUpdates.length = 0
 })
 
 describe("WIZARD_FAILURE_JOB_TYPES", () => {
@@ -295,5 +310,45 @@ describe("notifyClientOfStatementIngestFailure", () => {
     const r = await notifyClientOfStatementIngestFailure(ingestJob({ account_id: null, payload: { path: "p" } }))
     expect(r.notified).toBe(false)
     expect(r.reason).toBe("no_target")
+  })
+
+  // ── Cross-job idempotency (2026-08-25): a reaped/retried wizard-setup job
+  // re-enqueues a NEW job_queue row for the identical already-failed path —
+  // real incident, THW Global LLC's 10 files each notified 3x in ~20 minutes.
+  describe("cross-job idempotency by (account, path)", () => {
+    it("skips and stamps its own flag when ANOTHER job for the same path already notified", async () => {
+      fixtures.siblingJobResults = [{ result: { client_failure_notified: true } }]
+      const r = await notifyClientOfStatementIngestFailure(ingestJob())
+      expect(r.notified).toBe(false)
+      expect(r.reason).toBe("already_notified_for_path")
+      expect(inserts).toHaveLength(0)
+      // stamps ITS OWN row too, so a third retry short-circuits on the cheap
+      // per-job check instead of re-querying siblings again.
+      expect(jobQueueUpdates).toHaveLength(1)
+      expect((jobQueueUpdates[0].result as Record<string, unknown>).client_failure_notified).toBe(true)
+    })
+
+    it("still notifies normally when sibling jobs exist for the path but NONE of them notified yet", async () => {
+      fixtures.siblingJobResults = [{ result: {} }, { result: null }]
+      const r = await notifyClientOfStatementIngestFailure(ingestJob())
+      expect(r.notified).toBe(true)
+      expect(inserts).toHaveLength(1)
+    })
+
+    it("still notifies normally on a genuinely first-ever job for the path (no siblings)", async () => {
+      fixtures.siblingJobResults = []
+      const r = await notifyClientOfStatementIngestFailure(ingestJob())
+      expect(r.notified).toBe(true)
+      expect(inserts).toHaveLength(1)
+    })
+
+    it("does not run the sibling lookup at all when the path is empty (nothing to key on)", async () => {
+      fixtures.siblingJobResults = [{ result: { client_failure_notified: true } }]
+      const r = await notifyClientOfStatementIngestFailure(ingestJob({ payload: { path: "" } }))
+      // an empty path skips the cross-job check entirely — falls through to
+      // the normal per-job flow, which still notifies (no bug: an empty path
+      // can't be attributed to a "same file" collision in the first place).
+      expect(r.notified).toBe(true)
+    })
   })
 })
