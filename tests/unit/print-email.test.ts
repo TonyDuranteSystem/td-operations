@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { buildPrintDocument, type PrintMessage } from '@/lib/inbox/print-email'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { buildPrintDocument, printEmailThread, type PrintMessage } from '@/lib/inbox/print-email'
 
 const fmt = (s: string) => (s ? `TIME(${s})` : '')
 
@@ -71,5 +71,91 @@ describe('buildPrintDocument', () => {
     ]
     const doc = buildPrintDocument({ subject: 'S', messages, formatTime: fmt })
     expect(doc.match(/<section class="msg">/g)).toHaveLength(2)
+  })
+})
+
+// The frame's `load` event doesn't fire until every subresource it references
+// (including invisible tracking-pixel <img> requests real email HTML embeds)
+// has settled — a single slow/dead one can hold that up well past a minute
+// (Antonio, 2026-08-25: the print button was taking ~2 minutes to open).
+// This suite pins the fix: printEmailThread must open the dialog on whichever
+// comes first, the frame's own load or a bounded ceiling, and never twice.
+describe('printEmailThread', () => {
+  const messages: PrintMessage[] = [
+    { sender: 's', direction: 'inbound', createdAt: 'd', content: 'hi', isHtml: false },
+  ]
+
+  function stubDocument() {
+    const win = {
+      focus: vi.fn(),
+      print: vi.fn(),
+      addEventListener: vi.fn(),
+    }
+    const iframe = {
+      style: {} as Record<string, string>,
+      setAttribute: vi.fn(),
+      remove: vi.fn(),
+      contentWindow: win,
+      onload: null as (() => void) | null,
+      srcdoc: '',
+    }
+    vi.stubGlobal('document', {
+      createElement: vi.fn(() => iframe),
+      body: { appendChild: vi.fn() },
+    })
+    return { iframe, win }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('opens the dialog shortly after the frame loads, when loading is fast', () => {
+    const { iframe, win } = stubDocument()
+    printEmailThread({ subject: 'S', messages, formatTime: (s) => s })
+    iframe.onload?.()
+    expect(win.print).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(350)
+    expect(win.print).toHaveBeenCalledTimes(1)
+    expect(win.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens the dialog after a bounded ceiling even if the frame never finishes loading', () => {
+    const { win } = stubDocument()
+    printEmailThread({ subject: 'S', messages, formatTime: (s) => s })
+    // onload never fires — simulates a hanging tracking-pixel request.
+    vi.advanceTimersByTime(1_799)
+    expect(win.print).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(win.print).toHaveBeenCalledTimes(1)
+  })
+
+  it('never opens the dialog twice when the ceiling fires first and the frame loads late', () => {
+    const { iframe, win } = stubDocument()
+    printEmailThread({ subject: 'S', messages, formatTime: (s) => s })
+    vi.advanceTimersByTime(1_800)
+    expect(win.print).toHaveBeenCalledTimes(1)
+    iframe.onload?.() // fires late, after the ceiling already opened it
+    vi.advanceTimersByTime(350)
+    expect(win.print).toHaveBeenCalledTimes(1)
+  })
+
+  it('registers an afterprint handler that removes the frame', () => {
+    const { iframe, win } = stubDocument()
+    printEmailThread({ subject: 'S', messages, formatTime: (s) => s })
+    vi.advanceTimersByTime(1_800)
+    expect(win.addEventListener).toHaveBeenCalledWith(
+      'afterprint',
+      expect.any(Function),
+      { once: true }
+    )
+    const afterprintHandler = win.addEventListener.mock.calls[0][1] as () => void
+    afterprintHandler()
+    expect(iframe.remove).toHaveBeenCalledTimes(1)
   })
 })

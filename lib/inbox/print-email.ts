@@ -122,7 +122,10 @@ export function printEmailThread(opts: BuildPrintDocumentOptions): void {
     iframe.remove()
   }
 
-  iframe.onload = () => {
+  let triggered = false
+  const openPrintDialog = () => {
+    if (triggered) return
+    triggered = true
     const win = iframe.contentWindow
     if (!win) {
       cleanup()
@@ -135,17 +138,28 @@ export function printEmailThread(opts: BuildPrintDocumentOptions): void {
     } catch {
       /* same-origin guaranteed by allow-same-origin, but stay defensive */
     }
-    // Give inline images a moment to load before opening the dialog.
-    setTimeout(() => {
-      try {
-        win.focus()
-        win.print()
-      } catch {
-        cleanup()
-      }
-    }, 350)
-    setTimeout(cleanup, 120_000)
+    try {
+      win.focus()
+      win.print()
+    } catch {
+      cleanup()
+    }
   }
+
+  // Real email HTML routinely embeds tracking-pixel / redirect <img> requests
+  // (marketing and automated-notification senders do this on nearly every
+  // send). A browser iframe's `load` event does not fire until EVERY
+  // referenced subresource has finished loading, errored, OR TIMED OUT — a
+  // single slow or dead tracker can hold that up for well over a minute
+  // (Antonio, 2026-08-25: the print button was taking ~2 minutes to open).
+  // So the dialog opens on WHICHEVER comes first: the frame finishing its
+  // normal load (plus a brief settle so freshly-loaded images finish
+  // painting), or a hard ceiling. Anything still in flight past that point is
+  // simply left out of the print — in practice almost always an invisible
+  // tracker nobody was looking at anyway.
+  iframe.onload = () => setTimeout(openPrintDialog, 350)
+  setTimeout(openPrintDialog, 1_800)
+  setTimeout(cleanup, 120_000)
 
   document.body.appendChild(iframe)
 }
