@@ -89,6 +89,34 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       aiOverrides.push(...((preRows ?? []) as Array<{ id: string; category: string; notes: string }>))
     }
 
+    // DEFENSE IN DEPTH — a plain (non-owner-flagged) staff answer must never
+    // touch a row already confirmed to a specific member, even on a stale tab
+    // or a future regression. Mirrors the identical fix on the portal's own
+    // answer route (app/api/portal/tax-financials/answer/route.ts) tonight —
+    // this staff surface shares the same underlying risk: the client-side
+    // exclusion in the shared review component is not a server-side guarantee
+    // on its own. Bulk needs no separate check — its own update below is
+    // already restricted to FROM-category 'uncategorized' only, which a
+    // confirmed distribution/contribution row can never be.
+    let plainAnswerIds = ids
+    if (!isBulk && !isSuspectedAnswer) {
+      const { confirmedMemberFromNote } = await import('@/lib/tax/member-names')
+      const protectedIds = new Set<string>()
+      for (let i = 0; i < ids.length; i += 200) {
+        const { data } = await db
+          .from('pnl_workspace_transactions')
+          .select('id, notes')
+          .eq('workspace_id', params.id)
+          .in('id', ids.slice(i, i + 200))
+        for (const r of ((data ?? []) as Array<{ id: string; notes: string | null }>)) {
+          if (confirmedMemberFromNote(r.notes)) protectedIds.add(r.id)
+        }
+      }
+      if (protectedIds.size > 0) {
+        plainAnswerIds = ids.filter(id => !protectedIds.has(id))
+      }
+    }
+
     // Only re-file rows still in a reviewable state (never override a prior
     // manual decision by re-answering a stale group), scoped to this workspace.
     // 'refund' is re-answerable (a mis-booked refund must be correctable);
@@ -98,7 +126,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     // otherwise changed rows would be missing their bookkeeping side-effects.
     const updatedRows: Array<{ id: string; description: string | null; counterparty: string | null; amount: number | string }> = []
     let updateError: string | null = null
-    for (let i = 0; i < ids.length; i += 200) {
+    for (let i = 0; i < plainAnswerIds.length; i += 200) {
       const { data, error } = await db
         .from('pnl_workspace_transactions')
         .update({ category: mapped.category, subcategory: mapped.subcategory, notes: (() => {
@@ -110,7 +138,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
         // heterogeneous prior bookings (that also keeps undo exact: prior state
         // is uniformly 'uncategorized').
         .in('category', isBulk ? ['uncategorized'] : ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution', 'refund'])
-        .in('id', ids.slice(i, i + 200))
+        .in('id', plainAnswerIds.slice(i, i + 200))
         .select('id, description, counterparty, amount')
       if (error) { updateError = error.message; break }
       updatedRows.push(...((data ?? []) as typeof updatedRows))
