@@ -12,7 +12,7 @@ import { printEmailThread } from '@/lib/inbox/print-email'
 import { resolveAttachmentType, shouldOpenInTab } from '@/lib/inbox/attachment-open'
 import { EmailHtmlFrame } from './email-html-frame'
 import { NoteQuickCreate } from '@/components/dashboard/note-quick-create'
-import { Link2 } from 'lucide-react'
+import { Link2, Printer } from 'lucide-react'
 import { trackOpenMarkRead } from '@/lib/inbox/pending-mark-read'
 
 type ThreadAttachment = NonNullable<InboxMessage['attachments']>[number]
@@ -490,38 +490,71 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
                 isOutbound ? 'border-blue-200' : 'border-zinc-200'
               )}
             >
-              {/* The whole header is the expand/collapse toggle (Gmail-style).
-                  Collapsed cards show a one-line snippet and mount NO iframe —
-                  a 40-message thread renders one viewer, not forty. */}
-              <button
-                type="button"
-                onClick={() => toggleMessage(msg.id)}
-                title={isOpen ? 'Collapse this email' : 'Expand this email'}
+              {/* The row toggles expand/collapse (Gmail-style, left button);
+                  the print icon is a separate sibling button so ONE specific
+                  email can be printed without pulling in the rest of the
+                  thread (Luca, #td-bug 2026-08-25 — the toolbar Print button
+                  above still prints the whole thread, unchanged). Collapsed
+                  cards show a one-line snippet and mount NO iframe — a
+                  40-message thread renders one viewer, not forty. */}
+              <div
                 className={cn(
-                  'w-full flex items-center justify-between gap-2 px-4 py-2 text-xs text-left cursor-pointer',
+                  'w-full flex items-center gap-0.5 pr-1',
                   isOpen && 'border-b',
                   isOutbound
-                    ? 'bg-blue-50/60 border-blue-100 hover:bg-blue-50'
-                    : 'bg-zinc-50 border-zinc-100 hover:bg-zinc-100'
+                    ? 'bg-blue-50/60 border-blue-100'
+                    : 'bg-zinc-50 border-zinc-100'
                 )}
               >
-                <span className="font-semibold text-zinc-700 truncate shrink-0 max-w-[45%]">
-                  {isOutbound ? `To: ${msg.sender}` : msg.sender}
-                </span>
-                {!isOpen && (
-                  <span className="flex-1 min-w-0 truncate text-zinc-400 font-normal">
-                    {snippets.get(msg.id) || ''}
+                <button
+                  type="button"
+                  onClick={() => toggleMessage(msg.id)}
+                  title={isOpen ? 'Collapse this email' : 'Expand this email'}
+                  className={cn(
+                    'flex-1 min-w-0 flex items-center justify-between gap-2 px-4 py-2 text-xs text-left cursor-pointer',
+                    isOutbound ? 'hover:bg-blue-50' : 'hover:bg-zinc-100'
+                  )}
+                >
+                  <span className="font-semibold text-zinc-700 truncate shrink-0 max-w-[45%]">
+                    {isOutbound ? `To: ${msg.sender}` : msg.sender}
                   </span>
-                )}
-                <span className="flex items-center gap-2 shrink-0 text-zinc-400">
-                  {isNew && (
-                    <span className="rounded-full bg-emerald-100 text-emerald-700 px-2 py-0.5 text-[10px] font-semibold">
-                      New
+                  {!isOpen && (
+                    <span className="flex-1 min-w-0 truncate text-zinc-400 font-normal">
+                      {snippets.get(msg.id) || ''}
                     </span>
                   )}
-                  {formatMessageTime(msg.createdAt)}
-                </span>
-              </button>
+                  <span className="flex items-center gap-2 shrink-0 text-zinc-400">
+                    {isNew && (
+                      <span className="rounded-full bg-emerald-100 text-emerald-700 px-2 py-0.5 text-[10px] font-semibold">
+                        New
+                      </span>
+                    )}
+                    {formatMessageTime(msg.createdAt)}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    printEmailThread({
+                      subject: data?.subject,
+                      messages: [
+                        {
+                          sender: msg.sender,
+                          direction: msg.direction,
+                          createdAt: msg.createdAt,
+                          content: msg.content || '',
+                          isHtml: msg.isHtml,
+                        },
+                      ],
+                      formatTime: formatMessageTime,
+                    })
+                  }
+                  title="Print this email"
+                  className="shrink-0 p-1.5 rounded text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200/60"
+                >
+                  <Printer className="h-3.5 w-3.5" />
+                </button>
+              </div>
 
               {isOpen && (
                 <>
