@@ -1835,13 +1835,21 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             summary above — a client with one failed file among fourteen clean
             ones must still see it without expanding anything (Antonio, 2026-08-25:
             the statements list itself is noisy, but nothing that needs their
-            attention may go quiet). */}
+            attention may go quiet). A succeeded-but-empty file is deliberately
+            EXCLUDED from this always-visible list (2026-08-25b) — Antonio's own
+            standing rule, earlier the same night: a zero-transaction statement
+            "doesn't matter for us, it's zero." THW alone had 23 empty-month
+            cards sitting here permanently, which is the exact noise the
+            collapsed summary above was built to remove — this list was quietly
+            defeating it. Genuine problems (pending/failed/quarantined) still
+            always show; only the informational "read correctly, nothing in it"
+            case is gone. */}
         {/* W9 (card 4a39e0fd): live per-file status — every in-flight, failed
             or quarantined file gets its own named card; never a naked spinner,
             never a bare error. Succeeded files render above as source cards. */}
-        {(view.file_statuses ?? []).filter(f => f.state !== 'succeeded' || f.empty).length > 0 && (
+        {(view.file_statuses ?? []).filter(f => f.state !== 'succeeded').length > 0 && (
           <ul className="space-y-2 mb-4">
-            {(view.file_statuses ?? []).filter(f => f.state !== 'succeeded' || f.empty).map(f => (
+            {(view.file_statuses ?? []).filter(f => f.state !== 'succeeded').map(f => (
               <li
                 key={f.path}
                 className={`rounded-lg border px-3 py-2 ${
@@ -1861,7 +1869,6 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                             ? (it ? 'Non è un estratto conto' : 'Not a bank statement')
                             : (it ? 'Non leggibile' : 'Could not be read')
                       )}
-                      {f.state === 'succeeded' && f.empty && (it ? 'Letto correttamente — nessuna transazione nel periodo (mese senza attività)' : 'Read correctly — no transactions in its period (a month with no activity)')}
                     </span>
                   </div>
                   {f.state === 'failed' && (
