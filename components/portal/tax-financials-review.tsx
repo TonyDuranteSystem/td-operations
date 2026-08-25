@@ -558,7 +558,17 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
    */
   const merchantAnswerIds = (g: QuestionGroup) => {
     const flagged = new Set(g.suspected_ids ?? [])
-    return flagged.size === 0 ? g.transaction_ids : g.transaction_ids.filter(id => !flagged.has(id))
+    // Rows already confirmed to a specific owner (g.confirmed_by_member) must
+    // be excluded here too, not just currently-flagged ones — a mixed group
+    // (some rows confirmed, some still open) usually still computes as
+    // 'uncategorized' overall, so the generic chips render normally, and a
+    // plain click carries no owner/member info. Without this, "Business
+    // expense" on a mixed group silently overwrites an already-confirmed
+    // owner attribution with no warning and no way back (2026-08-23,
+    // senior-engineer review finding).
+    const confirmed = new Set(Object.values(g.confirmed_by_member ?? {}).flat())
+    if (flagged.size === 0 && confirmed.size === 0) return g.transaction_ids
+    return g.transaction_ids.filter(id => !flagged.has(id) && !confirmed.has(id))
   }
 
   /**
@@ -915,17 +925,36 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     const undecided = (g.current_category ?? 'uncategorized') === 'uncategorized'
     const checked = bulkSel.has(g.group_key)
     const dirBlocked = bulkDir !== null && bulkDir !== g.direction && !checked
+    // When every transaction in the group is still waiting on the owner
+    // question above, the merchant chips (and new bulk selections) have
+    // nothing left to act on — merchantAnswerIds returns []. Offering them
+    // anyway sends an empty id list and the server correctly (but
+    // unhelpfully) 400s it (2026-08-23, Peter/THW Global — reported as "I get
+    // an error message"). This does NOT close the separate, pre-existing gap
+    // where a group ticked BEFORE it became fully-flagged can still ride a
+    // stale snapshot into a bulk confirm (bug-hunter/senior-engineer finding,
+    // 2026-08-23) — that needs its own fix in confirmBulkAnswer/bulkSel, not
+    // this render gate.
+    const merchantIds = merchantAnswerIds(g)
     return (
       <div key={g.group_key} className={`rounded-lg border bg-white p-3 ${checked ? 'border-blue-400 ring-1 ring-blue-200' : 'border-zinc-200'}`}>
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <div className="flex items-center gap-2">
-            {undecided && (
+            {/* Keep rendering (never hard-disable) when already `checked`,
+                even if merchantIds just went to 0 — otherwise a group that
+                flips to fully-flagged AFTER being ticked has no control left
+                to remove it from the bulk selection at all. */}
+            {undecided && (merchantIds.length > 0 || checked) && (
               <input
                 type="checkbox"
                 checked={checked}
                 disabled={busyOrLocked || dirBlocked}
                 onChange={() => toggleBulk(g)}
-                title={dirBlocked ? (it ? 'Prima completa la selezione nell’altra sezione' : 'Finish your selection in the other section first') : (it ? 'Seleziona per rispondere in blocco' : 'Select to answer together')}
+                title={
+                  merchantIds.length === 0
+                    ? (it ? 'Questo gruppo ora richiede prima una risposta alla domanda sopra — deseleziona per continuare' : 'This group now needs the question above answered first — untick to continue')
+                    : dirBlocked ? (it ? 'Prima completa la selezione nell’altra sezione' : 'Finish your selection in the other section first') : (it ? 'Seleziona per rispondere in blocco' : 'Select to answer together')
+                }
                 className="h-4 w-4 accent-blue-600 disabled:opacity-40"
               />
             )}
@@ -1049,31 +1078,37 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             {view?.buckets.map(b => <option key={b.slug} value={b.slug}>{b.label}</option>)}
           </select>
         </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span className="text-xs text-zinc-400">{it ? 'Impostato come:' : 'Set as:'}</span>
-          {visibleAnswers(g).map(a => {
-            const selected = a.value === activeAnswerOf(g)
-            // Batch-by-intent (Antonio 2026-07-06: "what is the sense to
-            // check them if I can't categorize in batch"): when THIS card is
-            // among the ticked ones, its chips act on the WHOLE selection —
-            // through the same confirm modal. Unticked cards keep
-            // single-card behavior.
-            const actsOnSelection = checked && bulkSel.size > 1
-            return (
-              <button
-                key={a.value}
-                disabled={busyOrLocked || selected}
-                onClick={() => { if (actsOnSelection) setBulkConfirm(a.value); else void answer(g, a.value) }}
-                aria-pressed={selected}
-                className={selected
-                  ? 'rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-xs font-semibold text-white'
-                  : 'rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50'}
-              >
-                {selected ? '✓ ' : ''}{it ? a.it : a.en}{actsOnSelection ? ` (${bulkSel.size})` : ''}
-              </button>
-            )
-          })}
-        </div>
+        {merchantIds.length > 0 ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-zinc-400">{it ? 'Impostato come:' : 'Set as:'}</span>
+            {visibleAnswers(g).map(a => {
+              const selected = a.value === activeAnswerOf(g)
+              // Batch-by-intent (Antonio 2026-07-06: "what is the sense to
+              // check them if I can't categorize in batch"): when THIS card is
+              // among the ticked ones, its chips act on the WHOLE selection —
+              // through the same confirm modal. Unticked cards keep
+              // single-card behavior.
+              const actsOnSelection = checked && bulkSel.size > 1
+              return (
+                <button
+                  key={a.value}
+                  disabled={busyOrLocked || selected}
+                  onClick={() => { if (actsOnSelection) setBulkConfirm(a.value); else void answer(g, a.value) }}
+                  aria-pressed={selected}
+                  className={selected
+                    ? 'rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-xs font-semibold text-white'
+                    : 'rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50'}
+                >
+                  {selected ? '✓ ' : ''}{it ? a.it : a.en}{actsOnSelection ? ` (${bulkSel.size})` : ''}
+                </button>
+              )
+            })}
+          </div>
+        ) : (g.suspected_count ?? 0) > 0 ? (
+          <div className="mt-2 text-[11px] text-zinc-400">
+            {it ? 'Rispondi prima alla domanda qui sopra.' : 'Answer the question above first.'}
+          </div>
+        ) : null}
         {/* Human-answered "company transfer" cards (2026-08-05, VSV210): these
             used to vanish forever. Now that they are back and changeable, say
             the one thing the mis-tap needs — personal money is NOT a company
@@ -1759,27 +1794,48 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
         <h2 className="text-sm font-semibold text-zinc-900 mb-3">{it ? 'Estratti conto' : 'Bank statements'}</h2>
         {view.files.length > 0 && (
-          <ul className="space-y-2 mb-4">
-            {view.files.map(f => (
-              <li key={f.source_file_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-100 px-3 py-2">
-                <div className="min-w-0 text-sm text-zinc-800">
-                  <span className="font-medium">{f.bank_name}</span>
-                  {/* The uploaded file's own name — without it, fourteen Relay
-                      lines are indistinguishable and Delete is a coin flip. */}
-                  {f.file_name && <span className="ml-2 break-all text-xs text-zinc-600">{f.file_name}</span>}
-                  <span className="text-zinc-500 text-xs ml-2">{f.count} {it ? 'transazioni' : 'transactions'} · {f.from} → {f.to}</span>
-                </div>
-                <button
-                  disabled={busyOrLocked}
-                  onClick={() => void deleteFile(f)}
-                  className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
-                >
-                  {it ? 'Elimina' : 'Delete'}
-                </button>
-              </li>
-            ))}
-          </ul>
+          <div className="rounded-lg border border-zinc-200 bg-zinc-50 mb-4">
+            <button
+              type="button"
+              onClick={() => setOpenSections(s => {
+                const n = new Set(s); if (n.has('statements')) n.delete('statements'); else n.add('statements'); return n
+              })}
+              className="flex w-full items-center justify-between p-3 text-left"
+            >
+              <span className="text-sm text-zinc-700">
+                {view.files.length} {it ? 'estratti conto caricati' : 'bank statements on file'}
+              </span>
+              <span className="text-zinc-400 text-xs">{openSections.has('statements') ? '▲' : '▼'}</span>
+            </button>
+            {openSections.has('statements') && (
+              <ul className="space-y-2 px-3 pb-3">
+                {view.files.map(f => (
+                  <li key={f.source_file_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-100 bg-white px-3 py-2">
+                    <div className="min-w-0 text-sm text-zinc-800">
+                      <span className="font-medium">{f.bank_name}</span>
+                      {/* The uploaded file's own name — without it, fourteen Relay
+                          lines are indistinguishable and Delete is a coin flip. */}
+                      {f.file_name && <span className="ml-2 break-all text-xs text-zinc-600">{f.file_name}</span>}
+                      <span className="text-zinc-500 text-xs ml-2">{f.count} {it ? 'transazioni' : 'transactions'} · {f.from} → {f.to}</span>
+                    </div>
+                    <button
+                      disabled={busyOrLocked}
+                      onClick={() => void deleteFile(f)}
+                      className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                    >
+                      {it ? 'Elimina' : 'Delete'}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
+        {/* Problem/in-flight files (below) are NEVER folded into the collapsed
+            summary above — a client with one failed file among fourteen clean
+            ones must still see it without expanding anything (Antonio, 2026-08-25:
+            the statements list itself is noisy, but nothing that needs their
+            attention may go quiet). */}
         {/* W9 (card 4a39e0fd): live per-file status — every in-flight, failed
             or quarantined file gets its own named card; never a naked spinner,
             never a bare error. Succeeded files render above as source cards. */}
