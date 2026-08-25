@@ -128,8 +128,10 @@ describe('printEmailThread', () => {
   it('opens the dialog after a bounded ceiling even if the frame never finishes loading', () => {
     const { win } = stubDocument()
     printEmailThread({ subject: 'S', messages, formatTime: (s) => s })
-    // onload never fires — simulates a hanging tracking-pixel request.
-    vi.advanceTimersByTime(1_799)
+    // onload never fires — simulates a hanging tracking-pixel request (in
+    // production, HubSpot "engagement duration" beacons that stay pending by
+    // design and would never fire onload at all, no matter how long we wait).
+    vi.advanceTimersByTime(399)
     expect(win.print).not.toHaveBeenCalled()
     vi.advanceTimersByTime(1)
     expect(win.print).toHaveBeenCalledTimes(1)
@@ -138,7 +140,7 @@ describe('printEmailThread', () => {
   it('never opens the dialog twice when the ceiling fires first and the frame loads late', () => {
     const { iframe, win } = stubDocument()
     printEmailThread({ subject: 'S', messages, formatTime: (s) => s })
-    vi.advanceTimersByTime(1_800)
+    vi.advanceTimersByTime(400)
     expect(win.print).toHaveBeenCalledTimes(1)
     iframe.onload?.() // fires late, after the ceiling already opened it
     vi.advanceTimersByTime(350)
@@ -148,7 +150,7 @@ describe('printEmailThread', () => {
   it('registers an afterprint handler that removes the frame', () => {
     const { iframe, win } = stubDocument()
     printEmailThread({ subject: 'S', messages, formatTime: (s) => s })
-    vi.advanceTimersByTime(1_800)
+    vi.advanceTimersByTime(400)
     expect(win.addEventListener).toHaveBeenCalledWith(
       'afterprint',
       expect.any(Function),
