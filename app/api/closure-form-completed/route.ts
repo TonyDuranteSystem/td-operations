@@ -75,7 +75,11 @@ export async function POST(req: NextRequest) {
     const llcName = String(submittedData.llc_name || "Unknown LLC")
     const llcEin = String(submittedData.llc_ein || "N/A")
     const llcState = String(submittedData.llc_state || (sub as Record<string, unknown>).state || "N/A")
-    const formationYear = String(submittedData.formation_year || "N/A")
+    // llc_formation_year is the actual key both closure frontends write
+    // (lib/types/closure-form.ts, components/portal/wizard/wizard-configs.ts) —
+    // this read the wrong key for as long as this route has existed, so
+    // "Formation Year" has always shown N/A in every closure email/task.
+    const formationYear = String(submittedData.llc_formation_year || "N/A")
     const taxFiled = String(submittedData.tax_returns_filed || "N/A")
     const taxYears = String(submittedData.tax_returns_years || "N/A")
     const registeredAgent = String(submittedData.registered_agent || "N/A")
@@ -157,6 +161,12 @@ export async function POST(req: NextRequest) {
 
     // ---- STEP 3: Ensure Service Delivery exists ----
     let deliveryId: string | null = null
+    // Tracks which branch below fired, so step 5 only creates its own plain
+    // task on a RESUBMISSION — createSD's own dispatch (dispatchWorkflowForSdCreated)
+    // already creates a proper workflow task card the moment a NEW SD is
+    // created, so unconditionally also inserting the plain task below produced
+    // two tasks for one event (AI architect finding, dev job fbbf4abe).
+    let sdWasNewlyCreated = false
     try {
       const orFilters = [`notes.ilike.%${token}%`]
       if (accountId) orFilters.push(`account_id.eq.${accountId}`)
@@ -181,6 +191,7 @@ export async function POST(req: NextRequest) {
           notes: `Auto-created from closure form ${token}`,
         })
         deliveryId = newSd.id
+        sdWasNewlyCreated = true
         results.push({ step: "sd_created", status: "ok", detail: `SD auto-created: ${deliveryId}` })
       }
     } catch (e) {
@@ -239,31 +250,40 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
       results.push({ step: "luca_email", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
-    // ---- STEP 5: Create task for Luca ----
-    try {
-      await dbWriteSafe(
-        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
-        supabaseAdmin
-          .from("tasks")
-          .insert({
-            task_title: `Start closure: ${llcName} (${llcState})`,
-            description: `Closure form completed for ${clientName}.\n\nLLC: ${llcName}\nState: ${llcState}\nEIN: ${llcEin}\nFormation: ${formationYear}\nTax Filed: ${taxFiled}\n\nSteps:\n1. State compliance check (outstanding taxes, fees, annual reports)\n2. Resolve any outstanding obligations\n3. Prepare Articles of Dissolution\n4. Mark this task as Done to advance pipeline`,
-            assigned_to: "Luca",
-            priority: "High",
-            category: "Filing",
-            status: "To Do",
-            due_date: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-            delivery_id: deliveryId || null,
-            account_id: accountId || null,
-            contact_id: contactId || null,
-            created_by: "System",
-          }),
-        "tasks.insert"
-      )
+    // ---- STEP 5: Create task for Luca (RESUBMISSION only) ----
+    // On a brand-new SD, createSD's own dispatch (step 3 above) already created
+    // a proper workflow task card for "Company Closure" — inserting this plain
+    // task unconditionally duplicated it. On a resubmission (existing SD, no
+    // fresh dispatch), this plain task remains the only staff signal, so it
+    // still fires there.
+    if (!sdWasNewlyCreated) {
+      try {
+        await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
+          supabaseAdmin
+            .from("tasks")
+            .insert({
+              task_title: `Start closure: ${llcName} (${llcState})`,
+              description: `Closure form completed for ${clientName}.\n\nLLC: ${llcName}\nState: ${llcState}\nEIN: ${llcEin}\nFormation: ${formationYear}\nTax Filed: ${taxFiled}\n\nSteps:\n1. State compliance check (outstanding taxes, fees, annual reports)\n2. Resolve any outstanding obligations\n3. Prepare Articles of Dissolution\n4. Mark this task as Done to advance pipeline`,
+              assigned_to: "Luca",
+              priority: "High",
+              category: "Filing",
+              status: "To Do",
+              due_date: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+              delivery_id: deliveryId || null,
+              account_id: accountId || null,
+              contact_id: contactId || null,
+              created_by: "System",
+            }),
+          "tasks.insert"
+        )
 
-      results.push({ step: "luca_task", status: "ok", detail: `Task created. Delivery: ${deliveryId || "none"}` })
-    } catch (e) {
-      results.push({ step: "luca_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        results.push({ step: "luca_task", status: "ok", detail: `Task created. Delivery: ${deliveryId || "none"}` })
+      } catch (e) {
+        results.push({ step: "luca_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    } else {
+      results.push({ step: "luca_task", status: "skipped", detail: "createSD's own workflow dispatch already created a task for the new SD" })
     }
 
     // ---- STEP 6: Update service delivery ----

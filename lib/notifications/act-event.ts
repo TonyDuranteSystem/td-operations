@@ -40,6 +40,7 @@ export type ActEvent =
   | "banking_wizard_submitted" // legacy, provider-blind slug — superseded by the two below, kept unused rather than removed
   | "banking_wizard_submitted_payset"
   | "banking_wizard_submitted_relay"
+  | "financials_confirmed"
   | "ss4_signed"
   | "tax_return_signed"
   | "itin_number_provided"

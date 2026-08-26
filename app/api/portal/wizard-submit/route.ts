@@ -1026,6 +1026,48 @@ export async function POST(req: NextRequest) {
       })().catch(err => console.error('[wizard-submit] Tax background task error:', err))
     }
 
+    // ─── 7. FIRE-AND-FORGET EXECUTION (for closure jobs) ───
+    // Same hybrid shape as step 6: the job is already durably enqueued (step 5),
+    // so this is purely a speed optimization — if the platform kills this
+    // function before the claim below even runs, the job just sits 'pending'
+    // and the /api/cron/process-jobs safety net (every 5 minutes) picks it up
+    // and runs the exact same handler later. Dev job fbbf4abe.
+    if (jobType === 'closure_setup' && jobId) {
+      const capturedJobId = jobId
+
+      ;(async () => {
+        const claimNow = new Date().toISOString()
+        const { data: claimedJob } = await supabaseAdmin
+          .from('job_queue')
+          .update({ status: 'processing', started_at: claimNow, attempts: 1 })
+          .eq('id', capturedJobId)
+          .eq('status', 'pending')
+          .select('*')
+          .single()
+
+        if (!claimedJob) {
+          console.warn(`[wizard-submit] Closure job ${capturedJobId} already claimed by worker — skipping background execution`)
+          return
+        }
+
+        try {
+          const { handleClosureSetup } = await import('@/lib/jobs/handlers/closure-setup')
+          const result = await handleClosureSetup(claimedJob as unknown as Job)
+          if (result.ok === false) {
+            await failJob(capturedJobId, result.summary || 'Handler reported failure', result)
+            console.warn(`[wizard-submit] Closure job ${capturedJobId} background-completed as failed: ${result.summary}`)
+          } else {
+            await completeJob(capturedJobId, result)
+            console.warn(`[wizard-submit] Closure job ${capturedJobId} completed in background: ${result.summary}`)
+          }
+        } catch (handlerErr) {
+          const errMsg = handlerErr instanceof Error ? handlerErr.message : String(handlerErr)
+          await failJob(capturedJobId, errMsg)
+          console.error(`[wizard-submit] Closure job ${capturedJobId} failed in background:`, errMsg)
+        }
+      })().catch(err => console.error('[wizard-submit] Closure background task error:', err))
+    }
+
     return NextResponse.json({
       success: true,
       job_id: jobId,
