@@ -34,14 +34,16 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors }: Uploa
 
   if (!open) return null
 
+  const NEW_VENDOR = '__new__'
   const selectedVendor = vendors.find(v => v.id === form.vendor_id)
+  const addingNewVendor = form.vendor_id === NEW_VENDOR
 
   const handleVendorChange = (vendorId: string) => {
     const vendor = vendors.find(v => v.id === vendorId)
     setForm(f => ({
       ...f,
       vendor_id: vendorId,
-      vendor_name: vendor?.name ?? '',
+      vendor_name: vendorId === NEW_VENDOR ? '' : (vendor?.name ?? ''),
     }))
   }
 
@@ -87,7 +89,8 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors }: Uploa
   }
 
   const handleSubmit = async () => {
-    if (!form.vendor_name && !form.vendor_id) {
+    const hasVendor = (form.vendor_id && !addingNewVendor) || form.vendor_name.trim()
+    if (!hasVendor) {
       toast.error(t('uploadExpense.selectVendorError'))
       return
     }
@@ -107,7 +110,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors }: Uploa
       const res = await createExpense({
         account_id: accountId,
         vendor_name: vendorName,
-        vendor_id: form.vendor_id || undefined,
+        vendor_id: (form.vendor_id && !addingNewVendor) ? form.vendor_id : undefined,
         invoice_number: form.invoice_number || undefined,
         description: form.description || undefined,
         currency: form.currency,
@@ -146,7 +149,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors }: Uploa
           {/* Vendor */}
           <div>
             <label className="block text-xs font-medium text-zinc-600 mb-1">{t('uploadExpense.vendorLabel')}</label>
-            {vendors.length > 0 ? (
+            {vendors.length > 0 && !addingNewVendor ? (
               <select
                 value={form.vendor_id}
                 onChange={e => handleVendorChange(e.target.value)}
@@ -156,14 +159,27 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors }: Uploa
                 {vendors.map(v => (
                   <option key={v.id} value={v.id}>{v.name}</option>
                 ))}
+                <option value={NEW_VENDOR}>{t('uploadExpense.addNewVendorOption')}</option>
               </select>
             ) : (
-              <input
-                value={form.vendor_name}
-                onChange={e => setForm(f => ({ ...f, vendor_name: e.target.value }))}
-                className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder={t('uploadExpense.vendorNamePlaceholder')}
-              />
+              <div className="space-y-1.5">
+                <input
+                  value={form.vendor_name}
+                  onChange={e => setForm(f => ({ ...f, vendor_name: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder={t('uploadExpense.vendorNamePlaceholder')}
+                  autoFocus={addingNewVendor}
+                />
+                {vendors.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, vendor_id: '', vendor_name: '' }))}
+                    className="text-xs text-blue-600 hover:text-blue-700"
+                  >
+                    {t('uploadExpense.chooseExistingVendor')}
+                  </button>
+                )}
+              </div>
             )}
           </div>
 
