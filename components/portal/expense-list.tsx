@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
-import { Search, FileText, Building2, Upload, PenLine, Download, Loader2, CreditCard, Check, X } from 'lucide-react'
+import { Search, FileText, Building2, Upload, PenLine, Download, Loader2, CreditCard, Banknote, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { TdPayModal } from './td-pay-modal'
 import { markExpensePaid } from '@/app/portal/invoices/expense-actions'
@@ -252,7 +252,7 @@ export function ExpenseList({
                       className="p-1 rounded hover:bg-emerald-50 text-emerald-600 hover:text-emerald-700 disabled:opacity-50"
                       title={t('expenseList.markPaid')}
                     >
-                      {markingPaidId === exp.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                      {markingPaidId === exp.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Banknote className="h-4 w-4" />}
                     </button>
                   )}
                   {exp.td_payment_id ? (
