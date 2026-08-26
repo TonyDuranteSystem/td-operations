@@ -50,7 +50,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors }: Uploa
     if (f) setFile(f)
   }
 
-  const uploadFile = async (): Promise<{ url: string; name: string } | null> => {
+  const uploadFile = async (): Promise<{ path: string; name: string } | null> => {
     if (!file) return null
     setUploading(true)
     try {
@@ -60,7 +60,10 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors }: Uploa
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ account_id: accountId, file_name: file.name }),
       })
-      if (!res.ok) throw new Error('Failed to get upload URL')
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || 'Failed to get upload URL')
+      }
       const { signedUrl, path } = await res.json()
 
       // Upload directly to Supabase Storage
@@ -69,13 +72,15 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors }: Uploa
         headers: { 'Content-Type': file.type },
         body: file,
       })
-      if (!uploadRes.ok) throw new Error('Upload failed')
+      if (!uploadRes.ok) {
+        const body = await uploadRes.json().catch(() => ({}))
+        throw new Error(body.message || body.error || 'Upload failed — please try again.')
+      }
 
-      // Construct public URL
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-      const publicUrl = `${supabaseUrl}/storage/v1/object/public/portal-uploads/${path}`
-
-      return { url: publicUrl, name: file.name }
+      // portal-uploads is a PRIVATE bucket — store the bucket-relative path,
+      // never a public-style URL (that link would 404/error for the client).
+      // A fresh, short-lived signed URL is resolved at read time instead.
+      return { path, name: file.name }
     } finally {
       setUploading(false)
     }
@@ -93,7 +98,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors }: Uploa
 
     setSaving(true)
     try {
-      let attachment: { url: string; name: string } | null = null
+      let attachment: { path: string; name: string } | null = null
       if (file) {
         attachment = await uploadFile()
       }
@@ -111,7 +116,7 @@ export function UploadExpenseDialog({ open, onClose, accountId, vendors }: Uploa
         due_date: form.due_date || undefined,
         category: form.category || undefined,
         source: file ? 'upload' : 'manual',
-        attachment_url: attachment?.url,
+        attachment_storage_path: attachment?.path,
         attachment_name: attachment?.name,
       })
 
