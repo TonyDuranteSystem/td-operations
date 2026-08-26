@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
-import { Search, FileText, Building2, Upload, PenLine, Download, Loader2, CreditCard, Check } from 'lucide-react'
+import { Search, FileText, Building2, Upload, PenLine, Download, Loader2, CreditCard, Check, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { TdPayModal } from './td-pay-modal'
 import { markExpensePaid } from '@/app/portal/invoices/expense-actions'
@@ -76,8 +76,10 @@ export function ExpenseList({
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   const [payingExpense, setPayingExpense] = useState<Expense | null>(null)
   const [markingPaidId, setMarkingPaidId] = useState<string | null>(null)
+  const [confirmingPaidExpense, setConfirmingPaidExpense] = useState<Expense | null>(null)
 
   const handleMarkPaid = async (exp: Expense) => {
+    setConfirmingPaidExpense(null)
     setMarkingPaidId(exp.id)
     try {
       const res = await markExpensePaid(exp.id)
@@ -245,7 +247,7 @@ export function ExpenseList({
                   )}
                   {exp.source !== 'td_invoice' && (exp.status === 'Pending' || exp.status === 'Overdue') && (
                     <button
-                      onClick={() => handleMarkPaid(exp)}
+                      onClick={() => setConfirmingPaidExpense(exp)}
                       disabled={markingPaidId === exp.id}
                       className="p-1 rounded hover:bg-emerald-50 text-emerald-600 hover:text-emerald-700 disabled:opacity-50"
                       title={t('expenseList.markPaid')}
@@ -283,6 +285,53 @@ export function ExpenseList({
           currency={payingExpense.currency}
           onClose={() => setPayingExpense(null)}
         />
+      )}
+
+      {/* Mark-as-paid confirm — the row's checkmark icon has no label a client
+          would recognize on sight (esp. on mobile, where nothing hovers), so
+          this dialog spells the action out in plain words before it commits. */}
+      {confirmingPaidExpense && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setConfirmingPaidExpense(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl max-w-sm w-full p-5"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <h3 className="text-base font-semibold text-zinc-900">
+                {t('expenseList.markPaidConfirmTitle')}
+              </h3>
+              <button
+                onClick={() => setConfirmingPaidExpense(null)}
+                className="text-zinc-400 hover:text-zinc-600 p-1 -m-1"
+                title={t('common.cancel')}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-zinc-600">
+              {t('expenseList.markPaidConfirmBody')
+                .replace('{vendor}', confirmingPaidExpense.vendor_name)
+                .replace('{amount}', `${confirmingPaidExpense.currency === 'EUR' ? '€' : '$'}${Number(confirmingPaidExpense.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}`)}
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmingPaidExpense(null)}
+                className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                onClick={() => handleMarkPaid(confirmingPaidExpense)}
+                className="px-4 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+              >
+                {t('expenseList.markPaid')}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
