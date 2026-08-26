@@ -1,8 +1,25 @@
 'use server'
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { createClient } from '@/lib/supabase/server'
+import { canAccessAccount } from '@/lib/portal/team/gate'
 import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
+
+/**
+ * Verify the logged-in caller owns the account a vendor belongs to.
+ * Unlike client_expenses, client_vendors has no contact-only mode — account_id
+ * is required on every row — so this is a single-branch check, not the dual
+ * account/contact shape used for expenses.
+ */
+async function assertOwnsVendorAccount(accountId: string): Promise<void> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Unauthorized')
+  if (!(await canAccessAccount(user, accountId, 'invoices_billing'))) {
+    throw new Error('Access denied')
+  }
+}
 
 export interface Vendor {
   id: string
@@ -44,6 +61,8 @@ export async function createVendor(input: {
   notes?: string
 }): Promise<ActionResult<{ id: string }>> {
   return safeAction(async () => {
+    await assertOwnsVendorAccount(input.account_id)
+
     const { data, error } = await supabaseAdmin
       .from('client_vendors')
       .insert({
@@ -84,6 +103,14 @@ export async function updateVendor(
   }
 ): Promise<ActionResult> {
   return safeAction(async () => {
+    const { data: vendor } = await supabaseAdmin
+      .from('client_vendors')
+      .select('account_id')
+      .eq('id', vendorId)
+      .single()
+    if (!vendor) throw new Error('Vendor not found')
+    await assertOwnsVendorAccount(vendor.account_id)
+
     const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() }
     if (updates.name !== undefined) updateData.name = updates.name
     if (updates.contact_person !== undefined) updateData.contact_person = updates.contact_person || null
@@ -111,6 +138,14 @@ export async function updateVendor(
  */
 export async function deleteVendor(vendorId: string): Promise<ActionResult> {
   return safeAction(async () => {
+    const { data: vendor } = await supabaseAdmin
+      .from('client_vendors')
+      .select('account_id')
+      .eq('id', vendorId)
+      .single()
+    if (!vendor) throw new Error('Vendor not found')
+    await assertOwnsVendorAccount(vendor.account_id)
+
     // Check for linked expenses
     const { count } = await supabaseAdmin
       .from('client_expenses')
