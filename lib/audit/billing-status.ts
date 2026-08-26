@@ -232,7 +232,7 @@ export function computeBillingStatus(
     status: inst2Amt && inst2Amt > 0 ? 'ok' : 'missing',
     context: inst2Amt && inst2Amt > 0
       ? `$${inst2Amt} ${inst2Currency} configured`
-      : 'Not set — cron falls back to $1,000 (SMLLC) / $1,250 (MMLLC)',
+      : 'Not set — the June cron has no fallback and will skip billing this account until it is set',
     amount: inst2Amt ?? null,
   })
 
