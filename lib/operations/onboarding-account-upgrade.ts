@@ -97,7 +97,14 @@ export function parsePrice(raw: unknown): { amount: number; currency: "USD" | "E
   const digits = s.replace(/[^0-9.]/g, "")
   if (!digits) return null
   const amount = parseFloat(digits)
-  if (!Number.isFinite(amount) || amount <= 0) return null
+  // Upper bound is a sanity check, not a business limit: a real TD setup fee
+  // or installment is always well under six figures. A combined/descriptive
+  // price string (e.g. "$2,000/year ($1,000 Jan + $1,000 Jun)") strips down
+  // to concatenated digits like 200010001000 — finite and positive, so it
+  // would otherwise pass silently and get written as a real dollar amount
+  // (found live on a real signed contract, DoctorGut LLC, 2026-08-26).
+  // Fail closed to null (→ "needs manual entry") instead of writing garbage.
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 100_000) return null
 
   const upper = s.toUpperCase()
   let currency: "USD" | "EUR" = "USD"
@@ -344,4 +351,82 @@ export async function applyOnboardingAccountUpgrades(params: {
   )
 
   return result
+}
+
+/**
+ * Fill the three financial fields (setup fee + both installments) on a
+ * freshly-materialized formation account from its signed offer, reusing the
+ * same pure parsers as applyOnboardingAccountUpgrades above.
+ *
+ * Unlike applyOnboardingAccountUpgrades this does NOT touch account_type —
+ * a formation account is already created with account_type='Client' at
+ * insert (lib/operations/formation-materialize.ts), so there is no flip to
+ * perform. And unlike that helper's JS-side read-then-patch, each column is
+ * written with its own `.is(column, null)` DB-level guard — same pattern as
+ * applyRenewalDateFills (lib/operations/renewal-dates.ts) for the identical
+ * "fill only if empty, at company-creation moment" problem. The account was
+ * just created moments earlier in the same request, so nothing else can
+ * realistically race this, but the guard costs nothing and matches the
+ * established local convention instead of a weaker one.
+ *
+ * Best-effort by design: caller wraps this in its own try/catch and must
+ * never let a parse failure block company creation.
+ */
+export async function applyFormationFinancialFills(
+  accountId: string,
+  offer: { recurring_costs: unknown; cost_summary: unknown },
+): Promise<string[]> {
+  const applied: string[] = []
+
+  const installment1 = findInstallment(offer.recurring_costs, "jan")
+  const i1 = installment1 ? parsePrice(installment1.price) : null
+  if (i1 && installment1?.currency) {
+    const c = String(installment1.currency).toUpperCase()
+    if (c === "USD" || c === "EUR") i1.currency = c
+  }
+
+  const installment2 = findInstallment(offer.recurring_costs, "jun")
+  const i2 = installment2 ? parsePrice(installment2.price) : null
+  if (i2 && installment2?.currency) {
+    const c = String(installment2.currency).toUpperCase()
+    if (c === "USD" || c === "EUR") i2.currency = c
+  }
+
+  const setupSection = findSetupFeeSection(offer.cost_summary)
+  const setupFee = setupSection?.total ? parsePrice(setupSection.total) : null
+
+  const fills: Array<{ amountCol: string; currencyCol: string; parsed: { amount: number; currency: "USD" | "EUR" } | null }> = [
+    { amountCol: "installment_1_amount", currencyCol: "installment_1_currency", parsed: i1 },
+    { amountCol: "installment_2_amount", currencyCol: "installment_2_currency", parsed: i2 },
+    { amountCol: "setup_fee_amount", currencyCol: "setup_fee_currency", parsed: setupFee },
+  ]
+
+  for (const { amountCol, currencyCol, parsed } of fills) {
+    if (!parsed) continue
+    // eslint-disable-next-line no-restricted-syntax -- formation financial fill; single writer for initial amounts, same pattern as applyRenewalDateFills
+    const { data, error } = await supabaseAdmin
+      .from("accounts")
+      .update({ [amountCol]: parsed.amount, [currencyCol]: parsed.currency, updated_at: new Date().toISOString() })
+      .eq("id", accountId)
+      .is(amountCol, null)
+      .select("id")
+    if (!error && data?.length) applied.push(`${amountCol}=${parsed.amount} ${parsed.currency}`)
+  }
+
+  if (applied.length) {
+    await dbWriteSafe(
+      supabaseAdmin.from("action_log").insert({
+        actor: "materialize-formation",
+        action_type: "formation_financial_fill",
+        table_name: "accounts",
+        record_id: accountId,
+        account_id: accountId,
+        summary: applied.join(", "),
+        details: { applied },
+      }),
+      "action_log.insert",
+    )
+  }
+
+  return applied
 }
