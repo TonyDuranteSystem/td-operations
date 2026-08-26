@@ -246,12 +246,20 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
   // rejects a category (prod's CHECK lacked 'contribution', Dynamiq lost
   // $3,059.99 across 2 rows) used to fail only those rows with no trace beyond
   // the step text. Every error'd row now counts + reports to the error-audit
-  // feed. Dedup skips are NOT errors (ignoreDuplicates returns no error).
+  // feed. Dedup skips are NOT errors (ignoreDuplicates returns no error) —
+  // which is exactly why `.select("id")` below is required: with no error to
+  // distinguish them, a genuine insert and a row silently dropped by ON
+  // CONFLICT DO NOTHING both leave `error` null, so counting on `!error` alone
+  // overclaims every dedup skip as "inserted" (Economicamente LLC, 2026-08-25:
+  // two jobs each logged "58 inserted" with zero rows landing). Postgres only
+  // RETURNs a row from ON CONFLICT DO NOTHING when the insert actually
+  // happened, so `.select("id")` lets each iteration tell the two cases apart
+  // for real — same fix as workspace-save.ts's Merge path (2026-08-22).
   let inserted = 0
   let failedCount = 0
   let firstInsertError: string | null = null
   for (const tx of categorized) {
-    const { error } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from("bank_transactions")
       .upsert({
         account_id: accountId,
@@ -272,10 +280,12 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
         is_related_party: tx.is_related_party,
         notes: tx.notes,
       }, { onConflict: "account_id,transaction_ref,transaction_date,amount", ignoreDuplicates: true })
-    if (!error) inserted++
-    else {
+      .select("id")
+    if (error) {
       failedCount++
       if (!firstInsertError) firstInsertError = error.message
+    } else if (data && data.length > 0) {
+      inserted++
     }
   }
   if (inserted === 0 && categorized.length > 0 && firstInsertError) {

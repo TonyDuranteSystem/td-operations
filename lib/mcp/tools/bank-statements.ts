@@ -206,9 +206,19 @@ export function registerBankStatementTools(server: McpServer) {
               return txYear === tax_year
             })
 
-            // Insert into bank_transactions
+            // Insert into bank_transactions. `.select("id")` is required, not
+            // optional: with no error to tell them apart, a genuine insert and
+            // a row silently dropped by ON CONFLICT DO NOTHING both leave
+            // `error` null, so the tally below must not be built from every
+            // PARSED row — that overclaims a dedup skip as real income/expense
+            // (same bug found in the portal/workspace ingest twins of this
+            // loop, Economicamente LLC, 2026-08-25, fixed together). Postgres
+            // only RETURNs a row from ON CONFLICT DO NOTHING when the insert
+            // actually happened, so tallying only rows that came back tells
+            // the two cases apart for real.
+            const actuallyInserted: CategorizedTransaction[] = []
             for (const tx of yearFiltered) {
-              const { error } = await supabaseAdmin
+              const { data, error } = await supabaseAdmin
                 .from("bank_transactions")
                 .upsert({
                   account_id,
@@ -231,14 +241,17 @@ export function registerBankStatementTools(server: McpServer) {
                   onConflict: "account_id,transaction_ref,transaction_date,amount",
                   ignoreDuplicates: true,
                 })
+                .select("id")
 
               if (error) {
                 allErrors.push(`Insert error: ${error.message}`)
+              } else if (data && data.length > 0) {
+                actuallyInserted.push(tx)
               }
             }
 
-            // Tally
-            for (const tx of yearFiltered) {
+            // Tally — only rows that actually landed, never every parsed row.
+            for (const tx of actuallyInserted) {
               totalTransactions++
               if (tx.category === "income") totalIncome += tx.amount
               if (["cogs", "expense", "fee", "refund"].includes(tx.category)) totalExpenses += Math.abs(tx.amount)
