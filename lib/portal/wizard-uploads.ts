@@ -14,6 +14,20 @@
  * robust as new wizard types are added.
  */
 
+/** Maximum size for any wizard-uploaded file. Matches the onboarding-uploads
+ *  bucket's own Supabase-enforced limit and the ceiling already used
+ *  elsewhere in this codebase for direct-to-storage uploads (assets,
+ *  td-comm-deliverables) — not an arbitrary number. A client who selects a
+ *  file over this size gets a clear message instead of a silent stuck upload
+ *  (dev_task: Turcanu/Tacoli passport investigation). */
+export const WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024
+
+/** User-facing message for a file that exceeds WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES. */
+export function wizardUploadTooLargeMessage(fileSizeBytes: number): string {
+  const mb = (fileSizeBytes / (1024 * 1024)).toFixed(1)
+  return `This file is too large (${mb} MB). Please upload a file under 100 MB.`
+}
+
 export const WIZARD_UPLOAD_PREFIXES = [
   'formation/',
   'onboarding/',

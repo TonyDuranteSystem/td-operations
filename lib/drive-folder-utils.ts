@@ -54,6 +54,36 @@ async function getDriveHelpers() {
   return { createFolder, listFiles, moveFile }
 }
 
+// ─── Helper: self-heal standard subfolders on an already-linked folder ─────
+// A folder we're about to reuse (already on file for a contact or account)
+// may predate the standard structure, or may have lost a subfolder some
+// other way. Callers depend on specific subfolder names (e.g. "2. Contacts"
+// for passport filing) existing — silently trusting whatever's already
+// there caused documents to fail filing with no visible error (dev_task:
+// Turcanu/Tacoli passport investigation). This creates any standard
+// subfolder that's missing, same as the brand-new-folder path already did.
+async function ensureSubfoldersOn(folderId: string): Promise<Record<string, string>> {
+  const { listFiles, createFolder } = await getDriveHelpers()
+  const existingSubs = await listFiles(folderId)
+  const existingSubMap: Record<string, string> = {}
+  for (const f of existingSubs) {
+    if (f.mimeType === 'application/vnd.google-apps.folder') {
+      existingSubMap[f.name] = f.id
+    }
+  }
+  const subfolders: Record<string, string> = { ...existingSubMap }
+  for (const subName of STANDARD_SUBFOLDERS) {
+    if (existingSubMap[subName]) continue
+    try {
+      const sub = await createFolder(folderId, subName) as { id: string }
+      subfolders[subName] = sub.id
+    } catch (err) {
+      console.warn(`[drive-folder-utils] Failed to create subfolder ${subName}:`, err)
+    }
+  }
+  return subfolders
+}
+
 // ─── Ensure Contacts root folder exists ───────────────────────────────────
 async function ensureContactsRoot(): Promise<string> {
   if (contactsRootId) return contactsRootId
@@ -83,6 +113,34 @@ export async function ensureContactFolder(
   contactId: string,
   contactName: string,
 ): Promise<{ folderId: string; created: boolean; subfolders: Record<string, string> }> {
+  // A contact who already has a materialized company may have had
+  // drive_folder_id repointed at the COMPANY's own "2. Contacts" leaf by
+  // migrateContactToCompany() — a leaf folder, not a root with its own
+  // subfolder tree. Resolve through the company's real folder in that case
+  // instead of treating the leaf as a Phase-1 root and grafting a nested
+  // "2. Contacts" folder inside it. service_deliveries is the durable link
+  // (formation-materialize.ts writes account_id onto the contact's SD row).
+  const { data: linkedSd } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('account_id')
+    .eq('contact_id', contactId)
+    .not('account_id', 'is', null)
+    .limit(1)
+    .maybeSingle()
+
+  if (linkedSd?.account_id) {
+    const { data: account } = await supabaseAdmin
+      .from('accounts')
+      .select('drive_folder_id')
+      .eq('id', linkedSd.account_id)
+      .single()
+
+    if (account?.drive_folder_id) {
+      const subfolders = await ensureSubfoldersOn(account.drive_folder_id)
+      return { folderId: account.drive_folder_id, created: false, subfolders }
+    }
+  }
+
   // Check if contact already has drive_folder_id or gdrive_folder_url
   const { data: contact } = await supabaseAdmin
     .from('contacts')
@@ -90,16 +148,11 @@ export async function ensureContactFolder(
     .eq('id', contactId)
     .single()
 
-  // If contact already has a Drive folder ID, return it
+  // If contact already has a Drive folder ID, return it — self-healing any
+  // standard subfolder that's missing (folder may predate the standard
+  // structure, e.g. an old manually-created folder).
   if (contact?.drive_folder_id) {
-    const { listFiles } = await getDriveHelpers()
-    const subs = await listFiles(contact.drive_folder_id)
-    const subfolders: Record<string, string> = {}
-    for (const f of subs) {
-      if (f.mimeType === 'application/vnd.google-apps.folder') {
-        subfolders[f.name] = f.id
-      }
-    }
+    const subfolders = await ensureSubfoldersOn(contact.drive_folder_id)
     return { folderId: contact.drive_folder_id, created: false, subfolders }
   }
 
@@ -109,18 +162,12 @@ export async function ensureContactFolder(
     if (idMatch) {
       const existingId = idMatch[1]
       // Backfill drive_folder_id
+      // eslint-disable-next-line no-restricted-syntax -- Drive-folder-link bookkeeping, not client-facing CRM data; central path
       await supabaseAdmin
         .from('contacts')
         .update({ drive_folder_id: existingId, updated_at: new Date().toISOString() })
         .eq('id', contactId)
-      const { listFiles } = await getDriveHelpers()
-      const subs = await listFiles(existingId)
-      const subfolders: Record<string, string> = {}
-      for (const f of subs) {
-        if (f.mimeType === 'application/vnd.google-apps.folder') {
-          subfolders[f.name] = f.id
-        }
-      }
+      const subfolders = await ensureSubfoldersOn(existingId)
       return { folderId: existingId, created: false, subfolders }
     }
   }
@@ -149,25 +196,10 @@ export async function ensureContactFolder(
   }
 
   // Ensure standard subfolders exist
-  const existingSubs = await listFiles(contactFolder.id)
-  const existingSubMap: Record<string, string> = {}
-  for (const f of existingSubs) {
-    if (f.mimeType === 'application/vnd.google-apps.folder') {
-      existingSubMap[f.name] = f.id
-    }
-  }
-  const subfolders: Record<string, string> = { ...existingSubMap }
-  for (const subName of STANDARD_SUBFOLDERS) {
-    if (existingSubMap[subName]) continue
-    try {
-      const sub = await createFolder(contactFolder.id, subName) as { id: string }
-      subfolders[subName] = sub.id
-    } catch (err) {
-      console.warn(`[drive-folder-utils] Failed to create subfolder ${subName}:`, err)
-    }
-  }
+  const subfolders = await ensureSubfoldersOn(contactFolder.id)
 
   // Save both drive_folder_id and gdrive_folder_url to contact record
+  // eslint-disable-next-line no-restricted-syntax -- Drive-folder-link bookkeeping, not client-facing CRM data; central path
   await supabaseAdmin
     .from('contacts')
     .update({
@@ -196,14 +228,7 @@ export async function ensureCompanyFolder(
     .single()
 
   if (account?.drive_folder_id) {
-    const { listFiles } = await getDriveHelpers()
-    const subs = await listFiles(account.drive_folder_id)
-    const subfolders: Record<string, string> = {}
-    for (const f of subs) {
-      if (f.mimeType === 'application/vnd.google-apps.folder') {
-        subfolders[f.name] = f.id
-      }
-    }
+    const subfolders = await ensureSubfoldersOn(account.drive_folder_id)
     return { folderId: account.drive_folder_id, created: false, subfolders }
   }
 
@@ -244,25 +269,10 @@ export async function ensureCompanyFolder(
   }
 
   // Ensure standard subfolders exist (safe for both new and linked folders)
-  const existingSubs = await listFiles(companyFolder.id)
-  const existingSubMap: Record<string, string> = {}
-  for (const f of existingSubs) {
-    if (f.mimeType === 'application/vnd.google-apps.folder') {
-      existingSubMap[f.name] = f.id
-    }
-  }
-  const subfolders: Record<string, string> = { ...existingSubMap }
-  for (const subName of STANDARD_SUBFOLDERS) {
-    if (existingSubMap[subName]) continue // already exists
-    try {
-      const sub = await createFolder(companyFolder.id, subName) as { id: string }
-      subfolders[subName] = sub.id
-    } catch (err) {
-      console.warn(`[drive-folder-utils] Failed to create subfolder ${subName}:`, err)
-    }
-  }
+  const subfolders = await ensureSubfoldersOn(companyFolder.id)
 
   // Save to account
+  // eslint-disable-next-line no-restricted-syntax -- Drive-folder-link bookkeeping, not client-facing CRM data; central path
   await supabaseAdmin
     .from('accounts')
     .update({
@@ -322,6 +332,7 @@ export async function migrateContactToCompany(
   if (contactId) {
     const contactsSubfolderId = companySubMap['2. Contacts']
     if (contactsSubfolderId) {
+      // eslint-disable-next-line no-restricted-syntax -- Drive-folder-link bookkeeping, not client-facing CRM data; central path
       await supabaseAdmin
         .from('contacts')
         .update({

@@ -9,6 +9,7 @@ import { useLocale } from '@/lib/portal/use-locale'
 import { createClient } from '@/lib/supabase/client'
 import { resolveInstitution } from '@/lib/tax/bank-identity'
 import { interpolateString } from '@/lib/template-interpolation'
+import { WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES, wizardUploadTooLargeMessage } from '@/lib/portal/wizard-uploads'
 import { AlertCircle, CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
 
 const UPLOAD_BUCKET = 'onboarding-uploads'
@@ -415,6 +416,15 @@ export function WizardClient({
   const handleFileUpload = useCallback(
     async (fieldName: string, file: File, onProgress?: (pct: number) => void): Promise<string | null> => {
       try {
+        // Instant client-side check — no need to round-trip to the server for
+        // something we already know. The server re-checks authoritatively
+        // below (this check can be bypassed).
+        if (file.size > WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES) {
+          const guided = new Error(wizardUploadTooLargeMessage(file.size)) as Error & { isUserMessage?: boolean }
+          guided.isUserMessage = true
+          throw guided
+        }
+
         // 1. Ask the server to mint the storage path (it owns the path scheme).
         const res = await fetch('/api/portal/wizard-upload-url', {
           method: 'POST',
@@ -422,6 +432,7 @@ export function WizardClient({
           body: JSON.stringify({
             field_name: fieldName,
             file_name: file.name,
+            file_size: file.size,
             wizard_type: wizardType,
             // Prefer leadId so a new-company formation's uploads stay in their own
             // folder (not co-mingled with an existing account or contact).

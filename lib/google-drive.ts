@@ -579,6 +579,80 @@ export async function ensureDrivePath(rootFolderId: string, pathSegments: string
 }
 
 /**
+ * Google's "multipart" upload type (one request, metadata + bytes concatenated)
+ * is only reliable under ~5MB per Google's own docs — larger files must use the
+ * resumable protocol below. A real 18MB passport photo hit this ceiling with no
+ * retry, silently leaving the file stuck in raw upload storage forever (dev_task:
+ * Turcanu/Tacoli passport investigation). Kept comfortably under Google's limit.
+ */
+const MULTIPART_SAFE_MAX_BYTES = 4 * 1024 * 1024
+
+/**
+ * Upload a binary file (Buffer) to the Shared Drive via Google's resumable
+ * upload protocol (supports up to 5TB) — used for anything over
+ * MULTIPART_SAFE_MAX_BYTES. Sent as a single PUT since the whole file is
+ * already buffered in memory by the caller; no chunking needed at
+ * passport/document sizes.
+ */
+async function uploadBinaryToDriveResumable(
+  fileName: string,
+  data: Buffer,
+  mimeType: string,
+  parentFolderId: string,
+  token: string,
+) {
+  const metadata = JSON.stringify({
+    name: fileName,
+    parents: [parentFolderId],
+    driveId: SHARED_DRIVE_ID(),
+  })
+
+  const initRes = await fetch(
+    `https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-Upload-Content-Type": mimeType,
+        "X-Upload-Content-Length": String(data.length),
+      },
+      body: metadata,
+    },
+  )
+
+  if (!initRes.ok) {
+    const err = await initRes.json().catch(() => ({}))
+    throw new Error(
+      `Drive resumable upload init ${initRes.status}: ${(err as { error?: { message?: string } }).error?.message || initRes.statusText}`
+    )
+  }
+
+  const sessionUrl = initRes.headers.get("location")
+  if (!sessionUrl) {
+    throw new Error("Drive resumable upload init did not return a session URL")
+  }
+
+  const putRes = await fetch(sessionUrl, {
+    method: "PUT",
+    headers: {
+      "Content-Type": mimeType,
+      "Content-Length": String(data.length),
+    },
+    body: new Uint8Array(data),
+  })
+
+  if (!putRes.ok) {
+    const err = await putRes.json().catch(() => ({}))
+    throw new Error(
+      `Drive resumable upload ${putRes.status}: ${(err as { error?: { message?: string } }).error?.message || putRes.statusText}`
+    )
+  }
+
+  return putRes.json()
+}
+
+/**
  * Upload a binary file (Buffer) to the Shared Drive.
  * Used for PDFs, images, and other non-text files.
  */
@@ -593,6 +667,11 @@ export async function uploadBinaryToDrive(
     return { id: 'sandbox-mock', name: fileName }
   }
   const token = await getAccessToken()
+
+  if (data.length > MULTIPART_SAFE_MAX_BYTES) {
+    return uploadBinaryToDriveResumable(fileName, data, mimeType, parentFolderId, token)
+  }
+
   const boundary = "----DriveUploadBinaryBoundary"
 
   const metadata = JSON.stringify({

@@ -428,7 +428,7 @@ export function registerDriveTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "drive_upload_file",
-    "Upload a binary file (PDF, image, etc.) to Google Drive from Gmail attachments, external URLs, or Supabase Storage. Use this for ANY non-text file that drive_upload cannot handle. Workflow for Gmail: 1) gmail_read to get message_id + attachment details, 2) call this with source='gmail'. Workflow for URL: call with source='url' and the direct download link. Workflow for Supabase Storage: call with source='supabase_storage' and storage_path (path inside the bucket, e.g. '{token}/passport_owner_file.pdf'). Default bucket: onboarding-uploads. Max file size: ~4MB.",
+    "Upload a binary file (PDF, image, etc.) to Google Drive from Gmail attachments, external URLs, or Supabase Storage. Use this for ANY non-text file that drive_upload cannot handle. Workflow for Gmail: 1) gmail_read to get message_id + attachment details, 2) call this with source='gmail'. Workflow for URL: call with source='url' and the direct download link. Workflow for Supabase Storage: call with source='supabase_storage' and storage_path (path inside the bucket, e.g. '{token}/passport_owner_file.pdf'). Default bucket: onboarding-uploads. Max file size: 100MB.",
     {
       source: z.enum(["gmail", "url", "supabase_storage"]).describe("Where to get the file: 'gmail' = Gmail attachment, 'url' = download from URL, 'supabase_storage' = Supabase Storage bucket"),
       folder_id: z.string().describe("Target Google Drive folder ID"),
@@ -549,10 +549,13 @@ export function registerDriveTools(server: McpServer) {
           }
         }
 
-        // Check size (~4MB limit for Vercel)
-        if (fileData.length > 4 * 1024 * 1024) {
+        // uploadBinaryToDrive() now handles large files via Google's resumable
+        // upload protocol internally, so this is a sanity ceiling (matches the
+        // onboarding-uploads bucket's own limit), not a workaround for Google's
+        // ~5MB multipart cap.
+        if (fileData.length > 100 * 1024 * 1024) {
           return {
-            content: [{ type: "text" as const, text: `❌ File too large (${formatSize(fileData.length)}). Max supported: ~4MB. Upload manually via Google Drive.` }],
+            content: [{ type: "text" as const, text: `❌ File too large (${formatSize(fileData.length)}). Max supported: 100MB. Upload manually via Google Drive.` }],
           }
         }
 
