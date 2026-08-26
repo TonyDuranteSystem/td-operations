@@ -306,13 +306,14 @@ export function registerBankStatementTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "bank_statement_pnl",
-    "Generate Profit & Loss statement + Balance Sheet from parsed bank transactions. Outputs Excel with dual currency (original + USD at IRS rate). Uploads to client's Drive '3. Tax' folder. IRS RULE: All US tax returns must be in USD — the tool automatically converts using the IRS yearly average exchange rate. Includes K-1 allocation per member based on ownership %. Prerequisite: run bank_statement_process first.",
+    "Generate Profit & Loss statement + Balance Sheet from parsed bank transactions. Outputs Excel with dual currency (original + USD at IRS rate). Uploads to client's Drive '3. Tax' folder and refreshes the client's portal Documents tab. IRS RULE: All US tax returns must be in USD — the tool automatically converts using the IRS yearly average exchange rate. Includes K-1 allocation per member based on ownership %. Prerequisite: run bank_statement_process first. SILENT BY DEFAULT: re-running this while fixing categorization/ownership/data issues never pings the client — only pass notify_client=true on the run you intend the client to actually see and act on (their 'please review and confirm' message + document alert fire ONLY then, not on every regeneration).",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       tax_year: z.number().describe("Tax year (e.g., 2025)"),
       upload_to_drive: z.boolean().optional().default(true).describe("Upload Excel to Drive (default: true)"),
+      notify_client: z.boolean().optional().default(false).describe("Notify the client this P&L is ready to review/confirm (default: false — use ONLY on the genuinely final run; every other regeneration during staff review stays silent)"),
     },
-    async ({ account_id, tax_year, upload_to_drive }) => {
+    async ({ account_id, tax_year, upload_to_drive, notify_client }) => {
       try {
         const ctx = await getAccountContext(account_id)
 
@@ -395,6 +396,7 @@ export function registerBankStatementTools(server: McpServer) {
         // Upload to Drive
         let driveLink = ""
         let documentVisibleToClient = false
+        let clientNotified = false
         if (upload_to_drive && ctx.driveFolderId) {
           const taxFolderId = await findTaxFolder(ctx.driveFolderId)
           const targetFolder = taxFolderId || ctx.driveFolderId
@@ -448,32 +450,52 @@ export function registerBankStatementTools(server: McpServer) {
             // re-sets the same instant, a dedup hit gets the update it never
             // got.
             await supabaseAdmin.from("documents").update({ updated_at: new Date().toISOString(), processed_at: new Date().toISOString() }).eq("id", saved.id)
-            await notifyClientsOfNewDocument(saved.id).catch((e) =>
-              console.warn("[bank_statement_pnl] client notification failed:", e instanceof Error ? e.message : String(e))
-            )
-            // A dedicated "your P&L is ready" chat message with a DIRECT link
-            // to the review page (Antonio, 2026-08-25): the generic new-
-            // document alert above links to /portal/documents, which finds
-            // the file but not the page where the client actually reviews
-            // numbers and confirms. Same action-required pattern + dedup
-            // window as notifyQuestionsReady (lib/jobs/questions-ready-
-            // notify.ts) — a repeat run within 10 minutes (e.g. re-generating
-            // while fixing a categorization) never double-sends.
-            const { notifyClientActionRequired } = await import("@/lib/portal/action-required")
-            await notifyClientActionRequired({
-              account_id,
-              title: {
-                en: `Your ${tax_year} Profit & Loss is ready`,
-                it: `Il tuo Conto Economico ${tax_year} è pronto`,
-              },
-              message: {
-                en: `Please go in — your ${tax_year} Profit & Loss and Balance Sheet are ready to review, download, and confirm.`,
-                it: `Accedi al portale — il tuo Conto Economico e Stato Patrimoniale ${tax_year} sono pronti da rivedere, scaricare e confermare.`,
-              },
-              link: `/portal/tax-financials?year=${tax_year}`,
-            }).catch((e) =>
-              console.warn("[bank_statement_pnl] action-required notification failed:", e instanceof Error ? e.message : String(e))
-            )
+
+            // 2026-08-26 (Antonio): both client-facing signals below used to
+            // fire UNCONDITIONALLY on every successful run. Staff regenerate
+            // this P&L many times over a multi-hour session while fixing
+            // categorization/ownership/data — each regeneration re-sent both
+            // messages (the "new document" alert is dedup-guarded by
+            // client_notified_at so it only ever fires once per document, but
+            // the "please review and confirm" message below has no such
+            // guard beyond a 10-minute window, so a session spread out longer
+            // than that re-sent it every time — Nexo Agency LLC got 4 of
+            // these in one evening, one deleted, two live). Both are now
+            // gated on the SAME explicit notify_client flag — staff pass
+            // notify_client=true only on the run they intend the client to
+            // see. This mirrors every other client-facing artifact in this
+            // codebase (offer_create/offer_send, lease_create/lease_send,
+            // portal_invoice_create/portal_invoice_send): generate silently,
+            // notify only on deliberate intent.
+            if (notify_client) {
+              clientNotified = true
+              await notifyClientsOfNewDocument(saved.id).catch((e) =>
+                console.warn("[bank_statement_pnl] client notification failed:", e instanceof Error ? e.message : String(e))
+              )
+              // A dedicated "your P&L is ready" chat message with a DIRECT link
+              // to the review page (Antonio, 2026-08-25): the generic new-
+              // document alert above links to /portal/documents, which finds
+              // the file but not the page where the client actually reviews
+              // numbers and confirms. Same action-required pattern + dedup
+              // window as notifyQuestionsReady (lib/jobs/questions-ready-
+              // notify.ts) — a repeat run within 10 minutes (e.g. re-generating
+              // while fixing a categorization) never double-sends.
+              const { notifyClientActionRequired } = await import("@/lib/portal/action-required")
+              await notifyClientActionRequired({
+                account_id,
+                title: {
+                  en: `Your ${tax_year} Profit & Loss is ready`,
+                  it: `Il tuo Conto Economico ${tax_year} è pronto`,
+                },
+                message: {
+                  en: `Please go in — your ${tax_year} Profit & Loss and Balance Sheet are ready to review, download, and confirm.`,
+                  it: `Accedi al portale — il tuo Conto Economico e Stato Patrimoniale ${tax_year} sono pronti da rivedere, scaricare e confermare.`,
+                },
+                link: `/portal/tax-financials?year=${tax_year}`,
+              }).catch((e) =>
+                console.warn("[bank_statement_pnl] action-required notification failed:", e instanceof Error ? e.message : String(e))
+              )
+            }
           } else if (saved.error) {
             console.warn("[bank_statement_pnl] document registration failed:", saved.error)
           }
@@ -557,7 +579,8 @@ export function registerBankStatementTools(server: McpServer) {
           ).join(", ") || "N/A"}`,
           uncategorized.length > 0 ? `\n⚠️ ${uncategorized.length} uncategorized transactions — review before sending to India` : "",
           driveLink ? `\n📎 Excel: ${driveLink}` : "",
-          documentVisibleToClient ? "✅ Now visible in the client's portal Documents tab (client notified)." : "",
+          documentVisibleToClient && clientNotified ? "✅ Now visible in the client's portal Documents tab (client notified)." : "",
+          documentVisibleToClient && !clientNotified ? "ℹ️ Saved to the client's portal Documents tab, but the client was NOT notified (notify_client was not set). Re-run with notify_client: true when this is the final version." : "",
           "",
           "5 sheets: P&L Statement, Balance Sheet, Income Detail, Expense Detail, Distributions",
         ].filter(Boolean).join("\n")
