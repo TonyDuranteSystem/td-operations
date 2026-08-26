@@ -20,9 +20,46 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_closure_sd_active_per_account
     AND status = 'active'
     AND account_id IS NOT NULL;
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_closure_sd_active_per_contact
-  ON service_deliveries (contact_id)
+-- REVISED same day (independent post-build review, both Senior Engineer and
+-- Bug Hunter, run at Antonio's request): a plain contact_id index is too
+-- coarse. A contact-only client can have MORE THAN ONE untracked external LLC
+-- (the exact case this branch exists for) — keying on contact_id alone means
+-- a second, unrelated LLC's closure would be misread as a resubmission of the
+-- first one's record. Formation's own dedup fix (the precedent this file
+-- already cites) hit the identical shape and solved it by scoping on
+-- (contact_id, source_offer_token) instead of contact_id alone
+-- (20260610-1710-formation-sd-dedup-unique.sql) — this does the same thing
+-- with a closure-specific token column.
+ALTER TABLE service_deliveries ADD COLUMN IF NOT EXISTS source_closure_token text;
+
+-- Backfill: every contact-only Company Closure row that exists today was
+-- created by the one known code path (app/api/closure-form-completed/route.ts),
+-- which has always written `notes = 'Auto-created from closure form <token>'`.
+-- Recovering the token from that text (rather than leaving it NULL) means an
+-- existing client's genuine resubmission still matches their own row after
+-- this migration, instead of silently minting a second one.
+UPDATE service_deliveries
+SET source_closure_token = substring(notes from 'Auto-created from closure form (\S+)')
+WHERE service_type = 'Company Closure'
+  AND account_id IS NULL
+  AND contact_id IS NOT NULL
+  AND source_closure_token IS NULL
+  AND notes ~ 'Auto-created from closure form \S+';
+
+DROP INDEX IF EXISTS uq_closure_sd_active_per_contact;
+
+-- A row whose source_closure_token still ends up NULL (no known creator, or an
+-- untraceable notes format) is simply unconstrained by this index — Postgres
+-- unique indexes never treat two NULLs as equal — so it can't collide with, or
+-- block, any other row. That is an acceptable, narrow gap (nothing today
+-- retroactively protected), not a correctness regression: this index's job is
+-- to stop FUTURE duplicates, and every future row gets a real token at
+-- creation time (see the app/api/closure-form-completed/route.ts change in
+-- this same push).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_closure_sd_active_per_contact_token
+  ON service_deliveries (contact_id, source_closure_token)
   WHERE service_type = 'Company Closure'
     AND status = 'active'
     AND account_id IS NULL
-    AND contact_id IS NOT NULL;
+    AND contact_id IS NOT NULL
+    AND source_closure_token IS NOT NULL;

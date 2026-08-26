@@ -81,6 +81,7 @@ export async function handleClosureSetup(job: Job): Promise<JobResult> {
 
   if (!p.token || !p.submission_id) {
     return {
+      ok: false,
       steps: [
         {
           name: "validate_payload",
@@ -121,20 +122,30 @@ export async function handleClosureSetup(job: Job): Promise<JobResult> {
         timestamp: now,
       })
       return {
+        ok: false,
         steps,
         summary: `Closure setup failed: ${body.error ?? `HTTP ${res.status}`}`,
       }
     }
 
+    // The route itself always answers HTTP 200 / body.ok:true even when one of
+    // its own internal steps failed (e.g. a transient Drive/Gmail error) — its
+    // per-step results are the only place that failure shows up. Without this
+    // check, a partially-failed chain would report itself as a clean success:
+    // the worker only calls failJob() on `ok === false` (app/api/jobs/process/
+    // route.ts), so an unset `ok` here means retry + Exception-Center
+    // visibility never trigger, no matter how many steps actually errored.
     const okCount = steps.filter((s) => s.status === "ok").length
     const errCount = steps.filter((s) => s.status === "error").length
     return {
+      ok: errCount === 0,
       steps,
       summary: `Closure auto-chain: ${okCount} ok, ${errCount} error${errCount === 1 ? "" : "s"}`,
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return {
+      ok: false,
       steps: [
         {
           name: "invoke_route",

@@ -168,17 +168,40 @@ export async function POST(req: NextRequest) {
     // two tasks for one event (AI architect finding, dev job fbbf4abe).
     let sdWasNewlyCreated = false
     try {
-      const orFilters = [`notes.ilike.%${token}%`]
-      if (accountId) orFilters.push(`account_id.eq.${accountId}`)
-      if (contactId) orFilters.push(`contact_id.eq.${contactId}`)
-
-      const { data: existingSd } = await supabaseAdmin
-        .from("service_deliveries")
-        .select("id")
-        .eq("service_type", "Company Closure")
-        .or(orFilters.join(","))
-        .eq("status", "active")
-        .limit(1)
+      // Account-linked: one CRM account is one company, so account_id alone
+      // is already an exact, unambiguous match — unchanged (Senior Engineer
+      // confirmed this scoping is correct as-is).
+      //
+      // Contact-only (no CRM account, an untracked external LLC): matching by
+      // contact_id ALONE would treat a genuinely different LLC closed by the
+      // same person as a resubmission of an unrelated one — the multi-LLC
+      // conflation both reviewers found on the independent post-build check.
+      // source_closure_token (this form submission's own token, one per
+      // closure, see scripts/migrations/20260826-1400-closure-sd-dedup-unique.sql)
+      // is what actually identifies WHICH closure this is; contact_id alone
+      // never did.
+      let existingSd: { id: string }[] | null = null
+      if (accountId) {
+        const { data } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id")
+          .eq("service_type", "Company Closure")
+          .eq("account_id", accountId)
+          .eq("status", "active")
+          .limit(1)
+        existingSd = data
+      } else if (contactId) {
+        const { data } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id")
+          .eq("service_type", "Company Closure")
+          .eq("contact_id", contactId)
+          .eq("source_closure_token", token)
+          .is("account_id", null)
+          .eq("status", "active")
+          .limit(1)
+        existingSd = data
+      }
 
       if (existingSd?.length) {
         deliveryId = existingSd[0].id
@@ -189,6 +212,7 @@ export async function POST(req: NextRequest) {
           account_id: accountId,
           contact_id: contactId,
           notes: `Auto-created from closure form ${token}`,
+          source_closure_token: token,
         })
         deliveryId = newSd.id
         sdWasNewlyCreated = true

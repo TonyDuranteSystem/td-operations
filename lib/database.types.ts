@@ -11074,6 +11074,7 @@ export type Database = {
           shipping_submitted_at: string | null
           shipping_tracking_number: string | null
           source_offer_token: string | null
+          source_closure_token: string | null
           stage: string | null
           stage_entered_at: string | null
           stage_history: Json | null
@@ -11110,6 +11111,7 @@ export type Database = {
           shipping_submitted_at?: string | null
           shipping_tracking_number?: string | null
           source_offer_token?: string | null
+          source_closure_token?: string | null
           stage?: string | null
           stage_entered_at?: string | null
           stage_history?: Json | null
@@ -11146,6 +11148,7 @@ export type Database = {
           shipping_submitted_at?: string | null
           shipping_tracking_number?: string | null
           source_offer_token?: string | null
+          source_closure_token?: string | null
           stage?: string | null
           stage_entered_at?: string | null
           stage_history?: Json | null

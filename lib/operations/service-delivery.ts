@@ -102,6 +102,15 @@ export interface CreateSDParams {
    * other service types.
    */
   source_offer_token?: string | null
+  /**
+   * Originating closure-form submission token. For contact-scoped "Company
+   * Closure" SDs this is the dedup key enforced by the partial unique index
+   * uq_closure_sd_active_per_contact_token — set it so a second, different
+   * LLC closed by the same contact-only client gets its own SD instead of
+   * being read as a resubmission of an unrelated one. Harmless (stored, not
+   * constrained) for other service types.
+   */
+  source_closure_token?: string | null
 }
 
 export interface CreateSDResult {
@@ -357,6 +366,7 @@ export async function createSD(
         assigned_to: params.assigned_to || defaultTaskAssignee(),
         notes: params.notes || null,
         source_offer_token: params.source_offer_token ?? null,
+        source_closure_token: params.source_closure_token ?? null,
         stage_entered_at: new Date().toISOString(),
         is_test,
         ...(params.amount != null && {
