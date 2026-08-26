@@ -1,8 +1,31 @@
 'use server'
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { createClient } from '@/lib/supabase/server'
+import { canAccessAccount } from '@/lib/portal/team/gate'
+import { getClientContactId } from '@/lib/portal-auth'
 import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
+
+/**
+ * Verify the logged-in caller owns the expense being touched, before any
+ * update/mark-paid/delete. Same dual-check shape already proven for portal
+ * documents (app/api/portal/documents/[id]/route.ts): account-scoped rows go
+ * through canAccessAccount (capability-gated); contact-scoped rows (no
+ * account_id — formation-gap clients) match only the exact owning contact,
+ * never a teammate. Throws (safeAction turns it into a clean ActionResult)
+ * rather than returning a boolean, since every caller must stop on failure.
+ */
+async function assertOwnsExpense(exp: { account_id: string | null; contact_id: string | null }): Promise<void> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Unauthorized')
+
+  const hasAccountAccess = exp.account_id ? await canAccessAccount(user, exp.account_id, 'invoices_billing') : false
+  const contactId = getClientContactId(user)
+  const hasContactAccess = !exp.account_id && !!contactId && exp.contact_id === contactId
+  if (!hasAccountAccess && !hasContactAccess) throw new Error('Access denied')
+}
 
 /**
  * Create a manual expense entry (client adds an invoice they received from a vendor).
@@ -19,11 +42,18 @@ export async function createExpense(input: {
   due_date?: string
   category?: string
   notes?: string
-  attachment_url?: string
+  attachment_storage_path?: string
   attachment_name?: string
   source?: 'manual' | 'upload'
 }): Promise<ActionResult<{ id: string }>> {
   return safeAction(async () => {
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error('Unauthorized')
+    if (!(await canAccessAccount(user, input.account_id, 'invoices_billing'))) {
+      throw new Error('Access denied')
+    }
+
     // Generate internal reference
     const { data: lastExp } = await supabaseAdmin
       .from('client_expenses')
@@ -58,7 +88,11 @@ export async function createExpense(input: {
         category: input.category || 'General',
         notes: input.notes || null,
         vendor_id: input.vendor_id || null,
-        attachment_url: input.attachment_url || null,
+        // attachment_url is intentionally NOT written here — it's resolved fresh
+        // (a short-lived signed link) at read time in getPortalExpenses/
+        // getPortalExpensesByContact from attachment_storage_path. A null value
+        // here does NOT mean "no attachment" — check attachment_storage_path.
+        attachment_storage_path: input.attachment_storage_path || null,
         attachment_name: input.attachment_name || null,
       })
       .select('id')
@@ -89,13 +123,14 @@ export async function updateExpense(
   }
 ): Promise<ActionResult> {
   return safeAction(async () => {
-    // Verify it's not a TD invoice (those can't be edited by client)
     const { data: exp } = await supabaseAdmin
       .from('client_expenses')
-      .select('source')
+      .select('source, account_id, contact_id')
       .eq('id', expenseId)
       .single()
     if (!exp) throw new Error('Expense not found')
+    await assertOwnsExpense(exp)
+    // Verify it's not a TD invoice (those can't be edited by client)
     if (exp.source === 'td_invoice') throw new Error('Cannot edit TD invoices')
 
     const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() }
@@ -128,16 +163,17 @@ export async function updateExpense(
  */
 export async function markExpensePaid(expenseId: string, paidDate?: string): Promise<ActionResult> {
   return safeAction(async () => {
+    const { data: exp } = await supabaseAdmin
+      .from('client_expenses')
+      .select('source, account_id, contact_id')
+      .eq('id', expenseId)
+      .single()
+    if (!exp) throw new Error('Expense not found')
+    await assertOwnsExpense(exp)
     // Verify it's not a TD invoice (those settle only through the real
     // invoice being paid — never a direct client-side edit of the mirror;
     // matches the same guard on updateExpense/deleteExpense above, and is
     // now also enforced at the database layer, dev job 0dcb0a18).
-    const { data: exp } = await supabaseAdmin
-      .from('client_expenses')
-      .select('source')
-      .eq('id', expenseId)
-      .single()
-    if (!exp) throw new Error('Expense not found')
     if (exp.source === 'td_invoice') throw new Error('Cannot mark a TD invoice paid directly')
 
     const { error } = await supabaseAdmin
@@ -164,10 +200,11 @@ export async function deleteExpense(expenseId: string): Promise<ActionResult> {
   return safeAction(async () => {
     const { data: exp } = await supabaseAdmin
       .from('client_expenses')
-      .select('source')
+      .select('source, account_id, contact_id')
       .eq('id', expenseId)
       .single()
     if (!exp) throw new Error('Expense not found')
+    await assertOwnsExpense(exp)
     if (exp.source === 'td_invoice') throw new Error('Cannot delete TD invoices')
 
     const { error } = await supabaseAdmin

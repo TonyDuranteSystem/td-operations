@@ -812,14 +812,38 @@ export async function getPortalPaymentsByContact(contactId: string) {
 export async function getPortalExpenses(accountId: string) {
   const { data } = await supabaseAdmin
     .from('client_expenses')
-    .select('id, vendor_name, invoice_number, internal_ref, description, currency, total, subtotal, tax_amount, amount_due, amount_paid, issue_date, due_date, paid_date, status, source, category, attachment_url, attachment_name, td_payment_id, created_at')
+    .select('id, vendor_name, invoice_number, internal_ref, description, currency, total, subtotal, tax_amount, amount_due, amount_paid, issue_date, due_date, paid_date, status, source, category, attachment_url, attachment_storage_path, attachment_name, td_payment_id, created_at')
     .eq('account_id', accountId)
     .order('created_at', { ascending: false })
     .limit(100)
 
   // TD-invoice mirrors of UNSENT drafts are staff-internal until reviewed and
   // sent — same rule as Payment History (Kasabi incident, 2026-07-04).
-  return hideUnsentDraftMirrors(data ?? [])
+  return resolveExpenseAttachmentLinks(await hideUnsentDraftMirrors(data ?? []))
+}
+
+/**
+ * Resolve a fresh, short-lived signed download link for every row that has a
+ * private-bucket attachment (attachment_storage_path). Never trust a stored
+ * attachment_url at rest — client_expenses.attachment_url is populated ONLY
+ * here, per request, and is never written back to the database (dev job
+ * 06e57270: the old code fabricated a public-style URL for a bucket that is
+ * actually private, which 404/errored for the client). Resolved in parallel
+ * (not a sequential loop) so an account with many receipts doesn't serialize
+ * one Storage API round trip per row. 1-hour TTL matches the existing
+ * same-bucket precedent (app/(dashboard)/partners/[id]/page.tsx) — long
+ * enough that a client who loads the page and clicks minutes later still
+ * gets a working link, not a fresh "expired" error.
+ */
+async function resolveExpenseAttachmentLinks<
+  T extends { attachment_storage_path?: string | null; attachment_url?: string | null },
+>(rows: T[]): Promise<T[]> {
+  const { createRecordedSignedUrl } = await import('@/lib/storage/signed-download')
+  return Promise.all(rows.map(async row => {
+    if (!row.attachment_storage_path) return row
+    const signedUrl = await createRecordedSignedUrl('portal-uploads', row.attachment_storage_path, 3600)
+    return signedUrl ? { ...row, attachment_url: signedUrl } : row
+  }))
 }
 
 /**
@@ -851,14 +875,14 @@ async function hideUnsentDraftMirrors<
 export async function getPortalExpensesByContact(contactId: string) {
   const { data } = await supabaseAdmin
     .from('client_expenses')
-    .select('id, vendor_name, invoice_number, internal_ref, description, currency, total, subtotal, tax_amount, amount_due, amount_paid, issue_date, due_date, paid_date, status, source, category, attachment_url, attachment_name, td_payment_id, created_at')
+    .select('id, vendor_name, invoice_number, internal_ref, description, currency, total, subtotal, tax_amount, amount_due, amount_paid, issue_date, due_date, paid_date, status, source, category, attachment_url, attachment_storage_path, attachment_name, td_payment_id, created_at')
     .eq('contact_id', contactId)
     .is('account_id', null)
     .order('created_at', { ascending: false })
     .limit(100)
 
   // Same unsent-draft mirror rule as getPortalExpenses.
-  return hideUnsentDraftMirrors(data ?? [])
+  return resolveExpenseAttachmentLinks(await hideUnsentDraftMirrors(data ?? []))
 }
 
 /**
