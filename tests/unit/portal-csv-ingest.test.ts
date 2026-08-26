@@ -11,6 +11,11 @@ const upsertCalls: unknown[] = []
 const existingRows: unknown[] = []
 const jobInserts: unknown[] = []
 let existingSourceCount = 0
+// transaction_refs in this set simulate a row silently dropped by the DB's
+// ON CONFLICT DO NOTHING (a real dedup skip) — .select("id") returns no row
+// for these, matching real Postgres behavior, so tests can tell "inserted"
+// apart from "skipped" instead of every upsert call counting as a success.
+const dupRefs = new Set<string>()
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
     from: (table: string) => {
@@ -24,7 +29,12 @@ vi.mock("@/lib/supabase-admin", () => ({
         const chain: Record<string, unknown> = {}
         chain.select = () => chain
         chain.eq = () => chain
-        chain.upsert = (row: unknown) => { upsertCalls.push(row); return Promise.resolve({ error: null }) }
+        chain.upsert = (row: unknown) => {
+          upsertCalls.push(row)
+          const ref = (row as { transaction_ref?: string }).transaction_ref
+          const skipped = ref !== undefined && dupRefs.has(ref)
+          return { select: () => Promise.resolve({ data: skipped ? [] : [{ id: `id-${upsertCalls.length}` }], error: null }) }
+        }
         chain.then = (resolve: (v: unknown) => unknown) =>
           resolve({ data: existingRows, count: existingSourceCount, error: null })
         return chain
@@ -74,7 +84,7 @@ const INPUT = {
   buffer: Buffer.from("csv-content"), fileName: "export.csv",
 }
 
-beforeEach(() => { parseMock.mockReset(); recatMock.mockClear(); jobInserts.length = 0; upsertCalls.length = 0; existingRows.length = 0; existingSourceCount = 0 })
+beforeEach(() => { parseMock.mockReset(); recatMock.mockClear(); jobInserts.length = 0; upsertCalls.length = 0; existingRows.length = 0; existingSourceCount = 0; dupRefs.clear() })
 
 describe("ingestPortalCsv", () => {
   it("idempotent: same file content already ingested → ok WITHOUT re-parsing (no flip-to-failed)", async () => {
@@ -194,6 +204,39 @@ describe("ingestPortalCsv", () => {
     const aiJob = jobInserts[0] as { job_type: string; payload: unknown }
     expect(aiJob.job_type).toBe("recategorize_ai")
     expect(aiJob.payload).toEqual({ account_id: "acc-1", tax_year: 2025 })
+  })
+
+  it("a row silently dropped as a duplicate is NOT counted as inserted (the Economicamente miscount)", async () => {
+    // Real incident, 2026-08-25: `if (!error) inserted++` counted every
+    // upserted row as inserted because ignoreDuplicates never errors, even
+    // when Postgres actually dropped the row via ON CONFLICT DO NOTHING — two
+    // real jobs logged "58 inserted / 58 parsed" with zero rows landing. This
+    // pins the fix: only a row genuinely returned by the upsert counts.
+    dupRefs.add("r-dup")
+    parseMock.mockResolvedValue({
+      transactions: [parsedTx("2025-01-05", "r-new", 100), parsedTx("2025-01-06", "r-dup", -50)],
+      bank_name: "Mercury", errors: [],
+    })
+    const r = await ingestPortalCsv(INPUT)
+    expect(r.ok).toBe(true)
+    expect(r.parsed).toBe(2)
+    expect(upsertCalls).toHaveLength(2) // both rows were attempted
+    expect(r.inserted).toBe(1) // only the genuinely new row actually landed
+  })
+
+  it("every row in the file is a silent duplicate skip → inserted:0, not an infra failure", async () => {
+    // A fully-duplicate resubmit: no error anywhere (ignoreDuplicates), but
+    // nothing landed either. Must report success with inserted:0 — never the
+    // "could not be saved" transient-failure branch, which requires an error.
+    dupRefs.add("r1").add("r2")
+    parseMock.mockResolvedValue({
+      transactions: [parsedTx("2025-01-05", "r1", 100), parsedTx("2025-01-06", "r2", -50)],
+      bank_name: "Mercury", errors: [],
+    })
+    const r = await ingestPortalCsv(INPUT)
+    expect(r.ok).toBe(true)
+    expect(r.inserted).toBe(0)
+    expect(r.transient).toBeUndefined()
   })
 
   it("unknown bank signature → falls back to the client's label", async () => {

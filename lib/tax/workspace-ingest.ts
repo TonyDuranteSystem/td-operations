@@ -124,10 +124,19 @@ export async function ingestWorkspaceCsv(input: WorkspaceIngestInput): Promise<W
   const months = Array.from(new Set(categorized.map(t => t.transaction_date.slice(0, 7)))).sort()
 
   // 3. Insert — the workspace unique index drops exact-duplicate rows.
+  // `.select("id")` is required, not optional: with no error to tell them
+  // apart, a genuine insert and a row silently dropped by ON CONFLICT DO
+  // NOTHING both leave `error` null, so counting on `!error` alone overclaims
+  // every dedup skip as "inserted" (same bug found in the portal ingest twin
+  // of this function, Economicamente LLC, 2026-08-25 — fixed there and here
+  // together; same fix already proven in workspace-save.ts's Merge path,
+  // 2026-08-22). Postgres only RETURNs a row from ON CONFLICT DO NOTHING when
+  // the insert actually happened, so counting returned rows tells the two
+  // cases apart for real.
   let inserted = 0
   let firstInsertError: string | null = null
   for (const tx of categorized) {
-    const { error } = await db
+    const { data, error } = await db
       .from("pnl_workspace_transactions")
       .upsert({
         workspace_id: workspaceId,
@@ -148,8 +157,12 @@ export async function ingestWorkspaceCsv(input: WorkspaceIngestInput): Promise<W
         is_related_party: tx.is_related_party,
         notes: tx.notes,
       }, { onConflict: "workspace_id,transaction_ref,transaction_date,amount", ignoreDuplicates: true })
-    if (!error) inserted++
-    else if (!firstInsertError) firstInsertError = error.message
+      .select("id")
+    if (error) {
+      if (!firstInsertError) firstInsertError = error.message
+    } else if (data && data.length > 0) {
+      inserted++
+    }
   }
   if (inserted === 0 && categorized.length > 0 && firstInsertError) {
     return fail(`The file was read correctly (${categorized.length} transactions) but could not be saved: ${firstInsertError}.`)
