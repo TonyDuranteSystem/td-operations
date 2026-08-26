@@ -46,6 +46,7 @@ export type ChatEventKind =
   | "financials_confirm_unlocked" // staff overrode the failed-statement hard block (card 4a39e0fd)
   | "plan_referrer_ready_to_release" // a payment-plan deal with a referrer/partner is now fully paid — release commission
   | "recurring_invoice_generated" // the recurring-invoices cron auto-generated a Draft invoice — review + send it
+  | "banking_wizard_submitted" // client submitted a Payset/Relay banking application via the portal wizard
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */
@@ -483,4 +484,83 @@ export async function emitRecurringInvoiceGeneratedEvent(params: {
     source: { table: "payments", id: params.payment_id },
     event_kind: "recurring_invoice_generated",
   })
+}
+
+/**
+ * Emit a "banking wizard submitted" event when a client submits a Payset or
+ * Relay application through the portal wizard (dev job fb527ac8). Staff-only —
+ * this is a SEPARATE write from the client-visible plain-text confirmation
+ * that the wizard route already posts to `portal_messages`; that message is
+ * left untouched on purpose, since any marker-carrying message here is hidden
+ * from the client's own chat view (see app/api/portal/chat/route.ts). Pass
+ * `is_resubmission: true` when the caller has confirmed (by checking the
+ * `banking_submissions` row's prior status) that this is a second-or-later
+ * submission for the same provider — the message wording reflects that, and
+ * the caller must call `retireBankingWizardSubmittedNote` first so the
+ * dedup marker below doesn't swallow this new note.
+ */
+export async function emitBankingWizardSubmittedEvent(params: {
+  banking_submission_id: string
+  contact_id?: string | null
+  account_id?: string | null
+  provider: string
+  is_resubmission?: boolean
+}): Promise<EmitResult> {
+  const message = params.is_resubmission
+    ? `Client resubmitted a ${params.provider} banking application via the portal wizard.`
+    : `Client submitted a ${params.provider} banking application via the portal wizard.`
+  return await emitClientChatEvent({
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    topic: "Banking",
+    message,
+    source: { table: "banking_submissions", id: params.banking_submission_id },
+    event_kind: "banking_wizard_submitted",
+  })
+}
+
+/**
+ * Retire the "banking wizard submitted" note for a `banking_submissions` row
+ * so a genuine resubmission (client corrects data and resubmits the same
+ * provider — dev job fb527ac8) can produce a fresh notification. Same
+ * SOFT-delete rationale as `retirePaymentReceivedNote`: the old row stays as
+ * audit trail, and the dedup pre-check in `emitClientChatEvent` filters
+ * `deleted_at IS NULL`, so retiring it unblocks the next emit for the same
+ * (source.table, source.id, event_kind) marker. Call this BEFORE
+ * `emitBankingWizardSubmittedEvent` whenever the caller has confirmed the
+ * `banking_submissions` row was already `status='completed'` prior to this
+ * submission — i.e. this is submission #2+, not #1.
+ */
+export async function retireBankingWizardSubmittedNote(params: {
+  bankingSubmissionId: string
+  deletedBy?: string | null
+}): Promise<{ retired: number }> {
+  const marker = buildMarker({ table: "banking_submissions", id: params.bankingSubmissionId }, "banking_wizard_submitted")
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("portal_messages")
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: params.deletedBy ?? SYSTEM_ACTOR_ID,
+      })
+      .eq("sender_type", "system")
+      .like("message", `%${marker}%`)
+      .is("deleted_at", null)
+      .select("id")
+
+    if (error) {
+      console.error(
+        `[retireBankingWizardSubmittedNote] could not retire the note for banking_submissions ${params.bankingSubmissionId}:`,
+        error.message,
+      )
+      return { retired: 0 }
+    }
+    return { retired: (data ?? []).length }
+  } catch (err) {
+    console.error(
+      `[retireBankingWizardSubmittedNote] non-fatal for ${params.bankingSubmissionId}:`,
+      err instanceof Error ? err.message : String(err),
+    )
+    return { retired: 0 }
+  }
 }

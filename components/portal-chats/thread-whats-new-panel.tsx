@@ -42,6 +42,7 @@ const EVENT_KEY_LABELS: Record<string, string> = {
   banking_review_payset: 'Banking',
   banking_review_relay: 'Banking',
   banking_physical_progress: 'Banking',
+  banking_wizard_submitted: 'Banking',
   tax_form_review: 'Tax',
   itin_review: 'ITIN',
 }
