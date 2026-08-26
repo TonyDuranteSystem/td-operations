@@ -191,12 +191,24 @@ export async function POST(req: NextRequest) {
           .limit(1)
         existingSd = data
       } else if (contactId) {
+        // A pre-existing row from before this column existed has
+        // source_closure_token NULL and no recoverable token (confirmed
+        // against the one known real case: notes never got the
+        // "Auto-created from closure form <token>" text this route writes,
+        // because that record was never actually created by this route's own
+        // "new SD" branch). An exact-token match alone would never find it,
+        // so a legitimate first-time resubmission through the new wizard
+        // would wrongly create a second, duplicate SD instead of landing on
+        // it. Matching a NULL token too keeps that one legacy shape working;
+        // it does NOT reopen the multi-LLC conflation, because every row
+        // created FROM NOW ON always gets a real, distinct token — two new
+        // closures for the same contact can never both be NULL.
         const { data } = await supabaseAdmin
           .from("service_deliveries")
           .select("id")
           .eq("service_type", "Company Closure")
           .eq("contact_id", contactId)
-          .eq("source_closure_token", token)
+          .or(`source_closure_token.eq.${token},source_closure_token.is.null`)
           .is("account_id", null)
           .eq("status", "active")
           .limit(1)
