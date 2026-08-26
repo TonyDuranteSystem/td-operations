@@ -12,6 +12,7 @@
 # Lines starting with # and blank lines are ignored.
 
 docs/systems/todo-board.md|components/dashboard/action-board.tsx,app/api/crm/admin-actions/message-actions/,lib/notifications/act-event.ts,lib/todo-board/,components/portal-chats/thread-todo-panel.tsx
+docs/systems/whats-new.md|lib/portal/chat-events.ts,app/api/crm/admin-actions/whats-new/,components/portal-chats/thread-whats-new-panel.tsx,lib/notifications/whats-new-defaults.ts
 docs/systems/client-decision-requests.md|lib/decisions/,lib/operations/decision-request.ts,app/api/portal/decisions/,app/api/portal/my-decisions/,components/portal/decision-card.tsx
 docs/systems/billing-invoicing.md|lib/portal/td-invoice.ts,lib/portal/unified-invoice.ts,lib/portal/invoice-number.ts,lib/billing/,lib/operations/credit-netting.ts,lib/portal/invoice-row-actions-policy.ts,components/portal/invoice-row-actions.tsx,components/portal/invoice-list.tsx,app/portal/invoices/actions.ts,app/api/portal/invoices/,lib/payments/card-fee.ts,lib/payments/card-fee-config.ts,lib/finance/card-fee-booking.ts,lib/finance/card-fee-issues.ts,lib/portal/invoice-regenerate.ts,app/(dashboard)/finance/card-fee-switch.tsx
 docs/systems/formation.md|lib/operations/service-delivery.ts,lib/operations/activation.ts,lib/operations/ein-received.ts,lib/operations/sync-tier.ts,lib/portal/auto-create.ts,lib/mcp/tools/formation.ts,lib/jobs/handlers/formation-setup.ts,lib/portal/formation-resubmit-gate.ts

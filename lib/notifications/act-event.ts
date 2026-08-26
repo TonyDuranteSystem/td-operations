@@ -37,7 +37,9 @@ export type ActEvent =
   | "formation_wizard_submitted"
   | "onboarding_wizard_submitted"
   | "tax_wizard_submitted"
-  | "banking_wizard_submitted"
+  | "banking_wizard_submitted" // legacy, provider-blind slug — superseded by the two below, kept unused rather than removed
+  | "banking_wizard_submitted_payset"
+  | "banking_wizard_submitted_relay"
   | "ss4_signed"
   | "tax_return_signed"
   | "itin_number_provided"

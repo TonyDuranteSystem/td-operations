@@ -530,6 +530,7 @@ export async function POST(req: NextRequest) {
       const capturedWizardType = wizard_type
       const capturedProgressId = progress_id
       const capturedCompanyName = companyName
+      const providerSlug = capturedWizardType === 'banking_relay' ? 'relay' : 'payset'
 
       // Fire-and-forget: Drive PDF, portal chat, CRM task, SD advance, action_log
       ;(async () => {
@@ -588,7 +589,11 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // Portal chat notification — message to the account
+        // Portal chat notification — message to the account. Left exactly as-is:
+        // this is client-visible (no chat-event marker), and any marker-carrying
+        // message is hidden from the client's own chat view (app/api/portal/chat/
+        // route.ts) — converting this into a marked note would silently remove
+        // a confirmation the client can see today.
         if (capturedAccountId) {
           try {
             await supabaseAdmin.from('portal_messages').insert({
@@ -599,6 +604,64 @@ export async function POST(req: NextRequest) {
             })
           } catch (e) {
             console.error('[wizard-submit] Chat notification error:', e)
+          }
+        }
+
+        // Staff-only notifications (dev job fb527ac8): What's New chat note +
+        // Notification Center card. A SEPARATE write from the client-visible
+        // note above, on purpose (see comment above). Looks up the existing
+        // banking_submissions row (normally pre-seeded at onboarding, but not
+        // guaranteed — see the "no row found" case a few blocks below) so both
+        // notifications carry a stable source id. Hardened against duplicate
+        // rows for the same account+provider (no unique constraint on that
+        // pair) via order+limit before maybeSingle. If the row was ALREADY
+        // 'completed' before this submission, this is a resubmission — retire
+        // the old chat-event note first so the dedup marker doesn't swallow
+        // the new one.
+        let bankingSubmissionId: string | null = null
+        let bankingSubmissionWasAlreadyCompleted = false
+        if (capturedAccountId) {
+          try {
+            const { data: subRow } = await supabaseAdmin
+              .from('banking_submissions')
+              .select('id, status')
+              .eq('account_id', capturedAccountId)
+              .eq('provider', providerSlug)
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
+            bankingSubmissionId = subRow?.id ?? null
+            bankingSubmissionWasAlreadyCompleted = subRow?.status === 'completed'
+            if (!bankingSubmissionId) {
+              console.error(`[wizard-submit] no banking_submissions row for account ${capturedAccountId} provider ${providerSlug} — staff notifications NOT sent (client confirmation above still sent)`)
+            }
+          } catch (e) {
+            console.error('[wizard-submit] banking_submissions lookup error (staff notifications):', e)
+          }
+        }
+
+        if (capturedAccountId && bankingSubmissionId) {
+          try {
+            const { emitBankingWizardSubmittedEvent, retireBankingWizardSubmittedNote } = await import('@/lib/portal/chat-events')
+            if (bankingSubmissionWasAlreadyCompleted) {
+              await retireBankingWizardSubmittedNote({ bankingSubmissionId })
+            }
+            await emitBankingWizardSubmittedEvent({
+              banking_submission_id: bankingSubmissionId,
+              account_id: capturedAccountId,
+              contact_id: capturedContactId ?? null,
+              provider,
+              is_resubmission: bankingSubmissionWasAlreadyCompleted,
+            })
+            const { emitActionNeeded } = await import('@/lib/notifications/act-event')
+            await emitActionNeeded({
+              event: providerSlug === 'relay' ? 'banking_wizard_submitted_relay' : 'banking_wizard_submitted_payset',
+              account_id: capturedAccountId,
+              contact_id: capturedContactId ?? null,
+              source_ref: `banking_submissions:${bankingSubmissionId}`,
+            })
+          } catch (e) {
+            console.error('[wizard-submit] Staff notification error:', e)
           }
         }
 
@@ -663,19 +726,26 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // Update banking_submissions record so MCP tools see current data
+        // Update banking_submissions record so MCP tools see current data.
+        // Updates BY PRIMARY KEY when the id is already known from the staff-
+        // notification lookup above (unconditionally single-row regardless of
+        // duplicate account+provider rows); falls back to the original
+        // account_id+provider match only when that lookup didn't find a row —
+        // i.e. today's exact prior behavior for that rare edge case.
         if (capturedAccountId) {
           try {
-            const providerSlug = capturedWizardType === 'banking_relay' ? 'relay' : 'payset'
-            const { data: updatedRow } = await supabaseAdmin
+            const updateQuery = supabaseAdmin
               .from('banking_submissions')
               .update({
                 submitted_data: capturedData,
                 status: 'completed',
                 updated_at: new Date().toISOString(),
               })
-              .eq('account_id', capturedAccountId)
-              .eq('provider', providerSlug)
+            const { data: updatedRow } = await (
+              bankingSubmissionId
+                ? updateQuery.eq('id', bankingSubmissionId)
+                : updateQuery.eq('account_id', capturedAccountId).eq('provider', providerSlug)
+            )
               .select('id')
               .maybeSingle()
 
