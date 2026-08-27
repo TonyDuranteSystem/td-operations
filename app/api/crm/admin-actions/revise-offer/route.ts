@@ -114,14 +114,54 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: insertErr.message }, { status: 500 })
     }
 
-    // Mark original as superseded (only changes status + superseded_by — nothing else)
-    await supabaseAdmin
+    // Mark original as superseded (only changes status + superseded_by — nothing
+    // else) — conditioned on the row STILL matching what we read it as
+    // (found by a second adversarial pass): the v2 draft above was already
+    // built from that same read, so if a client's pick or signature landed
+    // on the original in between, v2 is stale and superseding v1 underneath
+    // it would bury the client's real, just-committed choice with no error
+    // to anyone. Tying this write to both fields that read could have
+    // changed catches either race; on a miss, the stale v2 is deleted and
+    // staff is told to retry rather than silently shipping wrong data.
+    const originalPackageLockedAt = (original as { package_locked_at?: string | null }).package_locked_at ?? null
+    let supersedeQuery = supabaseAdmin
       .from("offers")
       .update({
         status: "superseded",
         superseded_by: finalToken,
       })
       .eq("token", offer_token)
+      .eq("status", original.status)
+    supersedeQuery = originalPackageLockedAt === null
+      ? supersedeQuery.is("package_locked_at" as never, null)
+      : supersedeQuery.eq("package_locked_at" as never, originalPackageLockedAt as never)
+    const { data: superseded, error: supersedeErr } = await supersedeQuery.select("token")
+
+    // ⛔ A real DB error here (e.g. a constraint violation) must NEVER be reported as
+    // the race-condition message below — that exact conflation is what hid a live bug
+    // for months: the offers_status_check constraint didn't allow 'superseded' until
+    // 2026-08-27 (migration 20260827-2000), so this UPDATE failed on EVERY revision,
+    // and every failure was misreported to staff as "the client just signed" when no
+    // client had touched anything. Confirmed on production: christian-benavente-2026
+    // is the one offer ever revised, and its v1 is still stuck un-superseded from
+    // this exact failure. Surface the real error (R099) instead of guessing why.
+    if (supersedeErr) {
+      await supabaseAdmin.from("offers").delete().eq("token", finalToken)
+      return NextResponse.json(
+        { error: `Could not mark the original offer as superseded: ${supersedeErr.message}` },
+        { status: 500 },
+      )
+    }
+
+    if (!superseded || superseded.length === 0) {
+      await supabaseAdmin.from("offers").delete().eq("token", finalToken)
+      return NextResponse.json(
+        {
+          error: "This offer changed right as the revision was being created (the client likely just picked an option or signed). Nothing was changed — please try Revise again.",
+        },
+        { status: 409 },
+      )
+    }
 
     // Update lead to point to new offer
     if (original.lead_id) {

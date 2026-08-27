@@ -52,7 +52,7 @@ export const SD_STATUS = [
 ] as const
 
 export const OFFER_STATUS = [
-  'draft', 'sent', 'viewed', 'accepted', 'signed', 'completed', 'expired',
+  'draft', 'sent', 'viewed', 'accepted', 'signed', 'completed', 'expired', 'superseded',
 ] as const
 
 export const LEASE_STATUS = [

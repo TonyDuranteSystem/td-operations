@@ -26,6 +26,7 @@ import { availableCreditForDisplay, unspentCreditByCurrency } from "@/lib/operat
 import { resolveCreditSubject, subjectForDisplay, type CreditSubject } from "@/lib/operations/credit-subject"
 import { parsePriceQuirk, resolveOfferCurrency, ambiguousDotPrices } from "@/lib/offers/compute-offer-totals"
 import { signingPart, validatePaymentPlan } from "@/lib/offers/payment-plan"
+import { validatePackages } from "@/lib/offers/package-pick"
 import type { Json } from "@/lib/database.types"
 
 // ─── JSONB validation ───────────────────────────────────────
@@ -271,6 +272,13 @@ export interface CreateOfferParams {
   installment_currency?: string | null
   bundled_pipelines?: string[]
 
+  /**
+   * Multi-option offers (dev job 3c1bb5fa). 2+ complete price/state/company-type/
+   * renewal bundles the client picks between; see lib/offers/package-pick.ts.
+   * Omitted/empty = an ordinary single-price offer, unchanged.
+   */
+  packages?: unknown
+
   payment_links?: unknown
   /**
    * WS-C: a setup fee paid in parts. Validated on the way in — an offer is a document a client
@@ -279,6 +287,18 @@ export interface CreateOfferParams {
    * separately and much further from whoever typed it.
    */
   payment_plan?: unknown
+  /**
+   * Client-chosen split (2026-08-27, redesigned second pass same day) — distinct from
+   * `payment_plan` above. When true, the client chooses, BEFORE signing (after picking for a
+   * multi-option offer, right at the "Accept & Sign" step — app/api/offers/choose-payment-split
+   * /route.ts), to split the setup fee 50/50 over 30 days instead of paying in full. Compatible
+   * with `packages` on purpose. NOT compatible with an authored `payment_plan` at the UI layer —
+   * the Create Offer dialog enforces that as a choice, not validated here — but a later
+   * `offer_update` call CAN still attach both to the same row; choose-payment-split's own "full"
+   * branch defends against that specific case by clearing any stale `payment_plan` when the
+   * client explicitly picks full (bug-hunter, full E2E QA, 2026-08-27).
+   */
+  allow_split_payment_choice?: boolean
   bank_details?: unknown
   effective_date?: string | null
   expires_at?: string | null
@@ -363,7 +383,7 @@ async function generateUniqueToken(clientName: string): Promise<string> {
  * (SMLLC/MMLLC/Corp) from MCP callers or full enum values from internal code.
  * Returns null for anything unrecognized so the DB leaves the column NULL.
  */
-function normalizeEntityType(
+export function normalizeEntityType(
   v: string | null | undefined
 ): "Single Member LLC" | "Multi Member LLC" | "C-Corp Elected" | null {
   if (!v) return null
@@ -475,6 +495,27 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
       return { success: false, outcome: "validation_error", error: validationError }
     }
 
+    // Multi-option offers (dev job 3c1bb5fa). Refused at the door for the same
+    // reason as the payment plan below: every problem in an incomplete package
+    // is much further from whoever typed it once a client is looking at it.
+    const packagesError = validatePackages(params.packages)
+    if (packagesError) {
+      return { success: false, outcome: "validation_error", error: `Packages: ${packagesError}` }
+    }
+    const hasPackages = Array.isArray(params.packages) && params.packages.length >= 2
+    // A split setup fee and multiple price options is two variable-price
+    // features stacked at once — reviewed and deliberately excluded from v1
+    // (Antonio, 2026-08-26): the plan-vs-gross crosscheck would need to know
+    // which package's gross to validate against, real added complexity for a
+    // combination nobody has asked to use yet.
+    if (hasPackages && params.payment_plan != null) {
+      return {
+        success: false,
+        outcome: "validation_error",
+        error: "An offer cannot have both multiple options and a split setup fee — choose one.",
+      }
+    }
+
     // WS-C: refuse a malformed payment plan at the door. The plan is money a client will sign
     // for, and every downstream consumer fails separately and far from whoever typed it — the
     // signing webhook silently bills the whole fee, the card rail refuses, the client's schedule
@@ -503,7 +544,10 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     if (!params.client_name) {
       return { success: false, outcome: "validation_error", error: "client_name is required" }
     }
-    if (!params.services || !params.cost_summary) {
+    // A multi-option offer's price/state/company-type are decided by the
+    // client's pick, not at authoring time — services/cost_summary are
+    // populated on the offer only once a package is locked (lockPackagePick).
+    if (!hasPackages && (!params.services || !params.cost_summary)) {
       return { success: false, outcome: "validation_error", error: "services and cost_summary are required" }
     }
 
@@ -675,8 +719,15 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
 
     // 7. Currency + bank details
     const currency = detectCurrency(params.currency, params.cost_summary, params.services)
-    const bank_details = params.bank_details
-      || getBankDetailsByPreference((params.bank_preference || "auto") as BankPreference, currency)
+    // Multi-option offers ALWAYS resolve the bank account "auto" by currency —
+    // never a manually pinned preference. A pinned bank chosen for whichever
+    // package the author had in mind at creation time would show the wrong
+    // wire details the moment a client picks a different-currency option;
+    // lockPackagePick recomputes this fresh from the PICKED currency anyway,
+    // so the pre-pick value here is only ever a harmless placeholder.
+    const bank_details = hasPackages
+      ? getBankDetailsByPreference("auto", currency)
+      : params.bank_details || getBankDetailsByPreference((params.bank_preference || "auto") as BankPreference, currency)
 
     // PIN the card fee rate onto the offer (dev_task 6ec6872a). Drives the contract
     // wording and is inherited by the invoice at creation, so editing the configured
@@ -792,8 +843,10 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         credit_kind: creditKind,
         payment_type: params.payment_type,
         contract_type: params.contract_type || "formation",
-        services: params.services as Json,
-        cost_summary: params.cost_summary as Json,
+        services: (params.services ?? null) as Json,
+        cost_summary: (params.cost_summary ?? null) as Json,
+        // eslint-disable-next-line no-restricted-syntax -- packages postdates generated types (migration 20260826-1800)
+        packages: (hasPackages ? params.packages : null) as never,
         recurring_costs: (params.recurring_costs ?? null) as Json,
         additional_services: (params.additional_services ?? null) as Json,
         issues: (params.issues ?? null) as Json,
@@ -812,6 +865,8 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         bank_details: bank_details as unknown as Json,
         payment_links: (params.payment_links ?? null) as Json,
         payment_plan: (params.payment_plan ?? null) as Json,
+        // eslint-disable-next-line no-restricted-syntax -- allow_split_payment_choice postdates generated types (migration 20260827-1200)
+        allow_split_payment_choice: (params.allow_split_payment_choice === true) as never,
         effective_date: params.effective_date ?? null,
         expires_at: params.expires_at ?? null,
         currency,
@@ -858,9 +913,14 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         .eq("id", params.lead_id)
     }
 
-    // 10. Whop auto-plan (default on when payment_gateway=whop + payment_type=checkout)
+    // 10. Whop auto-plan (default on when payment_gateway=whop + payment_type=checkout).
+    // Skipped for multi-option offers: Whop mints a link priced off a single
+    // header total, and there is no single price until a package is locked —
+    // Stripe checkout (create-checkout route) needs no such link because it
+    // computes its amount fresh from the offer row at click time, correctly
+    // picking up whichever package ends up locked.
     let whopUrl: string | null = null
-    const whopEnabled = params.create_whop_plan !== false
+    const whopEnabled = params.create_whop_plan !== false && !hasPackages
     if (whopEnabled && params.payment_type === "checkout" && params.payment_gateway === "whop") {
       whopUrl = await tryCreateWhopPlan({
         client_name: params.client_name,

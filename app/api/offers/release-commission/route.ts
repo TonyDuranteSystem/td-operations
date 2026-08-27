@@ -102,6 +102,12 @@ async function releaseReferrerCredit(
   // outright. Commission basis is still the REAL total actually billed and cash-verified across
   // every part — grounded in the same rows `settlement.eligible` was just proven true against,
   // not a separately re-derived offer gross.
+  //
+  // ⛔ EX-FEE, NOT totalAgreed (fixed 2026-08-27, Antonio, split-payment build). A card payment
+  // has its 5% processing fee folded straight into the invoice's own total by bookCardFee — real
+  // for cash-flow purposes, but a referrer's commission is a percentage of what TD was actually
+  // paid for the service, never of the fee the client paid to use a card. `totalAgreed` would
+  // overpay every referrer/partner on a card-settled plan by commission% × fee%.
   const commission = resolveOfferCommission(
     {
       referrer_commission_type: offer.referrer_commission_type,
@@ -109,7 +115,7 @@ async function releaseReferrerCredit(
       referrer_commission_pct: offer.referrer_commission_pct != null ? Number(offer.referrer_commission_pct) : null,
       referrer_agreed_price: offer.referrer_agreed_price != null ? Number(offer.referrer_agreed_price) : null,
     },
-    settlement.totalAgreed,
+    settlement.totalAgreedExFee,
   )
   if (!(commission.commissionAmount > 0)) {
     return {
@@ -211,12 +217,13 @@ async function releasePartnerPayout(
   const tdBaseCosts = (partnerRow?.td_base_costs ?? {}) as Record<string, number>
   const tdBaseCost = primarySlug ? (Number(tdBaseCosts[primarySlug]) || null) : null
 
-  // Same basis as the referrer rail: the REAL, cash-verified total across the whole plan — never
-  // a single activation's amount, which for a plan deal is only PART of the commitment.
+  // Same basis as the referrer rail: the REAL, cash-verified total across the whole plan, WITHOUT
+  // the card-processing fee (see the doc comment on the referrer rail's identical fix, above) —
+  // never a single activation's amount, which for a plan deal is only PART of the commitment.
   const result = calculatePartnerPayout({
     model: offer.partner_payout_model as Parameters<typeof calculatePartnerPayout>[0]["model"],
     rate: offer.partner_payout_rate != null ? Number(offer.partner_payout_rate) : null,
-    paymentAmount: settlement.totalAgreed,
+    paymentAmount: settlement.totalAgreedExFee,
     tdBaseCost,
   })
 

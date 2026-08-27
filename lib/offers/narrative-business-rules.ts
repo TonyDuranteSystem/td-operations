@@ -107,6 +107,7 @@ export function buildSystemPrompt(
   language: 'en' | 'it',
   businessRules: string,
   includesManagement: boolean,
+  hasMultipleOptions: boolean,
 ): string {
   // Single-language intro — match the client's preferred language only. The
   // access-code offer page renders both fields; generating both produced
@@ -122,6 +123,15 @@ export function buildSystemPrompt(
   const managementRule = includesManagement
     ? `SCOPE — this offer INCLUDES ongoing management. In addition to the SELECTED SERVICES, you SHOULD describe the standard management services and the Client Portal exactly as defined in the BUSINESS RULES below.`
     : `SCOPE — this offer does NOT include ongoing management. Describe ONLY the SELECTED SERVICES. Do NOT mention registered agent, annual/state-compliance filings, mail handling, "ongoing management", or the Client Portal UNLESS a SELECTED SERVICE explicitly provides it.`
+
+  // Antonio's bug report (dev job 3c1bb5fa, 2026-08-26): the writer had no idea
+  // a package offer even had multiple options, so the intro read like a normal
+  // single-price offer and never told the client a choice existed. The offer
+  // page itself shows the options' real details (price/state/company type) —
+  // the writer must not invent or restate them, only point the client there.
+  const multipleOptionsRule = hasMultipleOptions
+    ? `\n\nMULTIPLE OPTIONS: This offer presents the client with more than one option to choose from (different combinations of price, U.S. state, and/or company type) on the offer page. In the intro, explicitly tell the client that this offer includes multiple options and that they should review each one on the offer page and select the one that fits them best. Do NOT describe what the specific options are, their prices, or their states — you were not given those details and the client sees them directly.`
+    : ''
 
   return `You are a senior business consultant at Tony Durante LLC, a professional consulting firm based in Florida that helps international entrepreneurs set up and manage U.S. LLCs.
 
@@ -150,7 +160,7 @@ CONTRACT TYPE — structural rule only (what stage the company is at):
 - "onboarding": the client ALREADY HAS a company and is joining ongoing management. Do NOT mention forming the company, registering it, or gathering formation documents — it already exists. Describe taking the existing company under management.
 - "renewal": the client is renewing an existing management agreement. Emphasize continuity and the coming year.
 
-${managementRule}
+${managementRule}${multipleOptionsRule}
 
 BUSINESS RULES — AUTHORITATIVE, follow EXACTLY. These define what Tony Durante does and does NOT offer, the tax filing by company type, and the Client Portal. They override anything in the notes or your own assumptions:
 ${businessRules}

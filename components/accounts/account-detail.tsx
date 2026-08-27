@@ -39,7 +39,7 @@ import { ClientDiagnosticDialog } from '@/app/(dashboard)/accounts/[id]/componen
 import { FileManager } from './file-manager'
 import { AccountDocumentsList } from './account-documents-list'
 import { CorrespondenceUpload } from './correspondence-upload'
-import { AccountOfferPanel } from '@/components/offers/account-offer-panel'
+import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
 import { AccountJourney } from './account-journey'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -142,17 +142,12 @@ interface DocumentRecord {
   portal_visible: boolean
 }
 
-interface OfferData {
-  token: string
-  status: string
-  contract_type: string | null
-  cost_summary: Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null
-  bundled_pipelines: string[] | null
-  view_count: number
-  viewed_at: string | null
-  created_at: string
-  required_documents: Array<{ id: string; name: string }> | null
-}
+// OfferData is imported from account-offer-panel.tsx (the panel that actually
+// renders it) rather than duplicated here — a second, independent copy of
+// this shape is exactly what let packages/selected_package_key/
+// package_locked_at go unnoticed on this file the first time (found by
+// adversarial review). One definition now; this file never needs touching
+// again when the panel's data needs change.
 
 interface AccountDetailProps {
   account: Account

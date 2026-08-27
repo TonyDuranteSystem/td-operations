@@ -69,6 +69,12 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   // real cash — flags staff toward the "Release commission" action. State-based
   // sweep, deliberately not a hook on any single payment-confirmation path.
   "/api/cron/plan-referrer-notify": "*/15 * * * *",
+  // Payment-plan parts whose date trigger has arrived — creates the invoice and
+  // sends it to the client automatically (never charges anything; the client
+  // still pays it themselves, same as any other invoice). Daily: date triggers
+  // don't need finer granularity. Council review 2026-08-27: the safe
+  // alternative to full unattended card auto-charging.
+  "/api/cron/plan-part-auto-raise": "0 9 * * *",
   "/api/cron/forms-archive-sweep": "*/15 * * * *",
   "/api/cron/airwallex-sync": "*/15 * * * *",
   "/api/cron/stripe-sync": "0 */6 * * *",

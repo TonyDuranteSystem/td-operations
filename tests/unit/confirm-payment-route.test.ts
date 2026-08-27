@@ -432,6 +432,45 @@ describe("confirm-payment — offer_token path", () => {
     const body = await res.json()
     expect(body.error).toMatch(/Offer not found/)
   })
+
+  // Council QA (dev job 3c1bb5fa follow-up): when no pending_activation exists
+  // yet (the offer-signed webhook never ran — sandbox blocks it outright, and
+  // in production this admin action can also win the race), this branch used
+  // to create the activation WITHOUT the offer's formation_state at all,
+  // silently defaulting the formation wizard to New Mexico regardless of what
+  // the client actually picked. Pin the fix: it must carry the offer's state
+  // the same way the webhook's own insert already does.
+  it("carries the offer's formation_state onto a newly-created activation", async () => {
+    setTable("offers", {
+      selectMaybeSingle: {
+        data: {
+          token: "explicit-token",
+          status: "signed",
+          contract_type: "formation",
+          bundled_pipelines: [],
+          cost_summary: [],
+          client_email: "x@example.com",
+          client_name: "Direct",
+          services: [],
+          account_id: "account-X",
+          lead_id: null,
+          formation_state: "FL",
+        },
+        error: null,
+      },
+    })
+    setTable("contacts", { selectMaybeSingle: { data: null, error: null } })
+    setTable("pending_activations", {
+      selectMaybeSingle: { data: null, error: null },
+      insertResult: { data: { id: "pa-tok" }, error: null },
+    })
+
+    const res = await POST(
+      makeRequest({ ...baseBody, offer_token: "explicit-token" }) as Parameters<typeof POST>[0],
+    )
+    expect(res.status).toBe(200)
+    expect(tables.pending_activations.lastInsert?.formation_state).toBe("FL")
+  })
 })
 
 // ── lead_id path (regression) ──────────────────────────────────────────────

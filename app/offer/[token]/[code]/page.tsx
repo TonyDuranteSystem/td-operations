@@ -8,6 +8,8 @@ import { clientFacingSchedule, validatePaymentPlan } from '@/lib/offers/payment-
 import { openCheckoutTab, deliverCheckout, closeCheckoutTab } from '@/lib/payments/checkout-redirect'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import type { Offer } from '@/lib/types/offer'
+import { PackagePicker } from './package-picker'
+import { PaymentChoicePicker } from './payment-choice-picker'
 
 // ─── Bilingual Labels ───────────────────────────────────────
 
@@ -67,6 +69,7 @@ const LABELS = {
     contactPayment: 'Write to us in the App to proceed with payment.',
     payByCard: 'Pay by Card',
     payByTransfer: 'Bank Transfer',
+    // English only on both languages (Antonio, 2026-08-11 ruling on this feature's vocabulary).
     scheduleTitle: 'Partial Payment',
     // ⚠️ PLACEHOLDER pending Antonio's read at the gate — identical to the sibling offer page on
     // purpose: two client-facing proposals must not word the same refusal differently.
@@ -439,6 +442,26 @@ export default function OfferPageWithCode() {
             </form>
           </div>
         </div>
+      </>
+    )
+  }
+
+  // Multi-option offers (dev job 3c1bb5fa): show the picker instead of the
+  // normal flow until the client has locked a choice. The moment
+  // package_locked_at is set (or the offer never had packages at all), every
+  // line below this runs completely unchanged — a locked offer is, by
+  // construction, indistinguishable from an ordinary single-option offer.
+  if (Array.isArray(offer.packages) && offer.packages.length > 0 && !offer.package_locked_at) {
+    return (
+      <>
+        <OfferStyles />
+        <PackagePicker
+          token={token}
+          accessCode={accessCode || ''}
+          packages={offer.packages}
+          lang={lang}
+          onLocked={loadOffer}
+        />
       </>
     )
   }
@@ -961,17 +984,43 @@ export default function OfferPageWithCode() {
             {/* Contract signing */}
             {!isSigned && (
               <div className="offer-contract-cta">
-                <a href={`/offer/${encodeURIComponent(token)}/contract${selectedOptional.size > 0 ? '?sel=' + encodeURIComponent(Array.from(selectedOptional).join('|')) : ''}`}
-                  className="offer-accept-btn"
-                  onClick={async () => {
-                    const allSelected = (o.services || [])
+                {/* ⛔ NO STATEABLE AMOUNT → NO SIGNING EITHER (bug-hunter, full E2E QA, 2026-08-27):
+                    the payment panels above already refuse to show a price or a pay button when
+                    the plan disagrees with the offer's own total (planRefusal) — this CTA used to
+                    be the one control on the page that skipped that check, so a client could still
+                    sign right next to a "your payment schedule needs a correction" warning. Same
+                    defensive shape as the amountUnavailable blocks elsewhere on this page. */}
+                {dynamicTotal?.planRefusal ? (
+                  <div className="offer-pay-info">
+                    <p className="offer-pay-info-note">{L.amountUnavailable}</p>
+                  </div>
+                ) : (o as { allow_split_payment_choice?: boolean }).allow_split_payment_choice &&
+                !(o as { payment_choice_made_at?: string | null }).payment_choice_made_at &&
+                dynamicTotal && dynamicTotal.gross > 0 ? (
+                  <PaymentChoicePicker
+                    token={token}
+                    accessCode={accessCode || ''}
+                    selectedServices={(o.services || [])
                       .filter(sv => !(sv as any).optional || selectedOptional.has(sv.name))
-                      .map(sv => sv.name)
-                    try {
-                      await supabasePublic.from('offers').update({ selected_services: allSelected }).eq('token', token)
-                    } catch { /* non-blocking */ }
-                  }}
-                >&#9997;&#65039; {L.acceptAndSign}</a>
+                      .map(sv => sv.name)}
+                    fullAmount={dynamicTotal?.total ?? 0}
+                    grossAmount={dynamicTotal?.gross ?? 0}
+                    currencySymbol={dynamicTotal?.symbol ?? '$'}
+                    onChosen={loadOffer}
+                  />
+                ) : (
+                  <a href={`/offer/${encodeURIComponent(token)}/contract${selectedOptional.size > 0 ? '?sel=' + encodeURIComponent(Array.from(selectedOptional).join('|')) : ''}`}
+                    className="offer-accept-btn"
+                    onClick={async () => {
+                      const allSelected = (o.services || [])
+                        .filter(sv => !(sv as any).optional || selectedOptional.has(sv.name))
+                        .map(sv => sv.name)
+                      try {
+                        await supabasePublic.from('offers').update({ selected_services: allSelected }).eq('token', token)
+                      } catch { /* non-blocking */ }
+                    }}
+                  >&#9997;&#65039; {L.acceptAndSign}</a>
+                )}
               </div>
             )}
 

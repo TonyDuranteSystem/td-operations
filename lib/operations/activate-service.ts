@@ -24,6 +24,7 @@ import { shouldRunReferralCredit, buildPartnerDeal } from "@/lib/partners/partne
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
+import { normalizeFormationState, DEFAULT_FORMATION_STATE } from "@/lib/formation/states"
 
 // Auto-execute all steps immediately. Previous supervised mode with threshold
 // silently blocked Valerio Sicari and Antonio Truocchio — pending_activations stayed
@@ -1696,7 +1697,15 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
               lead_id: leadId,
               contract_type: contractType,
               entity_type: entityTypeForForm,
-              state: contractType === "formation" ? "NM" : undefined,
+              // The client's actual pick (offer.formation_state, carried onto
+              // this activation at creation) — never a bare "NM" literal. Found
+              // live during Council QA: a Florida pick still produced a New
+              // Mexico wizard because this was hardcoded, ignoring the signed
+              // contract entirely. Falls back to the single source of truth's
+              // documented default only when nothing was ever captured.
+              state: contractType === "formation"
+                ? (normalizeFormationState((activation as { formation_state?: string | null }).formation_state) ?? DEFAULT_FORMATION_STATE)
+                : undefined,
               language: formLang,
               client_name: lead.full_name,
               client_email: lead.email,

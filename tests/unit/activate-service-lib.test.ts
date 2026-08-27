@@ -186,4 +186,77 @@ describe('runActivation', () => {
       expect.objectContaining({ step: 'lead_converted', status: 'done', detail: expect.stringContaining('already Converted') }),
     ]))
   })
+
+  // Council QA (dev job 3c1bb5fa follow-up): a live Florida pick still produced
+  // a New Mexico formation wizard because the data-form step's `state` param
+  // was a bare "NM" literal, ignoring the signed contract entirely. These two
+  // tests pin the fix: the activation's own formation_state drives the wizard,
+  // falling back to the documented default only when nothing was captured.
+  describe('data-form state param', () => {
+    function pendingActivationsChainCapturingUpdates(fixture: Record<string, unknown>) {
+      const updateArgs: Array<Record<string, unknown>> = []
+      const chain = makeChain(fixture)
+      chain.update = vi.fn((args: Record<string, unknown>) => {
+        updateArgs.push(args)
+        return makeChain([{ id: 'pa-id' }])
+      })
+      return { chain, updateArgs }
+    }
+
+    function dataFormStateFrom(updateArgs: Array<Record<string, unknown>>): unknown {
+      const finalUpdate = updateArgs.find((a) => Array.isArray(a.prepared_steps))
+      const steps = finalUpdate?.prepared_steps as Array<{ step: string; params?: { state?: unknown } }> | undefined
+      return steps?.find((s) => s.step === 'data_form')?.params?.state
+    }
+
+    it("uses the activation's real formation_state instead of a hardcoded default", async () => {
+      const leadsChain = makeChain(leadFixture)
+      leadsChain.update = vi.fn(() => makeChain([]))
+      const { chain: paChain, updateArgs } = pendingActivationsChainCapturingUpdates({
+        ...activationFixture,
+        formation_state: 'FL',
+      })
+
+      vi.mocked(supabaseAdmin.from).mockImplementation((table: string) => {
+        if (table === 'pending_activations') return paChain as ReturnType<typeof supabaseAdmin.from>
+        if (table === 'offers') return makeChain(offerFixture) as ReturnType<typeof supabaseAdmin.from>
+        if (table === 'leads') return leadsChain as ReturnType<typeof supabaseAdmin.from>
+        if (table === 'contacts') return makeChain(contactFixture) as ReturnType<typeof supabaseAdmin.from>
+        return makeChain(null) as ReturnType<typeof supabaseAdmin.from>
+      })
+      vi.mocked(autoCreatePortalUser).mockResolvedValue(
+        { success: false, alreadyExists: true, email: 'test@x.com' } as Awaited<ReturnType<typeof autoCreatePortalUser>>
+      )
+
+      const result = await runActivation('pa-id')
+
+      expect(result.ok).toBe(true)
+      expect(dataFormStateFrom(updateArgs)).toBe('FL')
+    })
+
+    it('falls back to the documented default state when the activation captured none', async () => {
+      const leadsChain = makeChain(leadFixture)
+      leadsChain.update = vi.fn(() => makeChain([]))
+      const { chain: paChain, updateArgs } = pendingActivationsChainCapturingUpdates({
+        ...activationFixture,
+        formation_state: null,
+      })
+
+      vi.mocked(supabaseAdmin.from).mockImplementation((table: string) => {
+        if (table === 'pending_activations') return paChain as ReturnType<typeof supabaseAdmin.from>
+        if (table === 'offers') return makeChain(offerFixture) as ReturnType<typeof supabaseAdmin.from>
+        if (table === 'leads') return leadsChain as ReturnType<typeof supabaseAdmin.from>
+        if (table === 'contacts') return makeChain(contactFixture) as ReturnType<typeof supabaseAdmin.from>
+        return makeChain(null) as ReturnType<typeof supabaseAdmin.from>
+      })
+      vi.mocked(autoCreatePortalUser).mockResolvedValue(
+        { success: false, alreadyExists: true, email: 'test@x.com' } as Awaited<ReturnType<typeof autoCreatePortalUser>>
+      )
+
+      const result = await runActivation('pa-id')
+
+      expect(result.ok).toBe(true)
+      expect(dataFormStateFrom(updateArgs)).toBe('NM')
+    })
+  })
 })

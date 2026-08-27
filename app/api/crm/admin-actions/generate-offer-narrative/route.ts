@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json()
-    const { client_name, language, services, notes_context, contract_type, entity_type, includes_management, lead_id, account_id } = body
+    const { client_name, language, services, notes_context, contract_type, entity_type, includes_management, has_multiple_options, lead_id, account_id } = body
 
     if (!client_name || !services || !Array.isArray(services) || services.length === 0) {
       return NextResponse.json(
@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
       route: '/api/crm/admin-actions/generate-offer-narrative',
       userEmail: user?.email,
     })
-    const systemPrompt = buildSystemPrompt(lang, businessRules, includesManagement)
+    const systemPrompt = buildSystemPrompt(lang, businessRules, includesManagement, has_multiple_options === true)
 
     // Enrich the context with the client's actual call (notes + full transcript)
     // so the narrative is grounded in what they really said, not just the capped

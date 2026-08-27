@@ -240,7 +240,7 @@ function CheckoutPreview({ offer: rawOffer, cl, hasCard, hasBank, token }: { off
 
 export default function ContractPage() {
   const params = useParams()
-  const _router = useRouter()
+  const router = useRouter()
   const searchParams = useSearchParams()
   const token = params.token as string
   const isCheckoutPreview = searchParams.get('checkout') === '1'
@@ -260,7 +260,6 @@ export default function ContractPage() {
   const [form, setForm] = useState<FormData>({ name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', country: '', nationality: '', passport: '', passport_exp: '' })
   const formRef = useRef<FormData>(form)
   useEffect(() => { formRef.current = form }, [form])
-  const [passportFile, setPassportFile] = useState<File | null>(null)
 
   const sigMsaRef = useRef<HTMLCanvasElement>(null)
   const sigSowRef = useRef<HTMLCanvasElement>(null)
@@ -302,12 +301,50 @@ export default function ContractPage() {
       }
       if (!rawData) { setError('Offer not found.'); setLoading(false); return }
       const o = rawData as Offer
+      // Multi-option offers (dev job 3c1bb5fa follow-up, bug-hunter blocker):
+      // this page has no picker-gate of its own, and the top-level fields it
+      // signs from are Option 1's real, complete data — a placeholder ONLY by
+      // convention, not by any check here. Reaching this URL directly (or
+      // even just editing it) before the client has picked would sign them
+      // to whichever option happens to be first, without ever seeing the
+      // others. Send them back to the real picker instead of rendering
+      // anything signable.
+      if (Array.isArray(o.packages) && o.packages.length > 0 && !o.package_locked_at) {
+        router.replace(`/offer/${encodeURIComponent(token as string)}/${encodeURIComponent(o.access_code || '')}`)
+        return
+      }
       // Safeguard: parse JSONB fields that may be stored as strings
       const jsonFields = ['issues', 'immediate_actions', 'strategy', 'services', 'additional_services', 'cost_summary', 'recurring_costs', 'future_developments', 'next_steps', 'payment_links'] as const
       for (const f of jsonFields) {
         const val = (o as any)[f]
         if (typeof val === 'string') {
           try { (o as any)[f] = JSON.parse(val) } catch { (o as any)[f] = [] }
+        }
+      }
+      // Client-chosen split payment (council review, 2026-08-27, second pass): the choice must
+      // be locked BEFORE this page can sign anything — a client reaching this URL directly
+      // (or a stale tab from before the choice existed) must not be able to sign an offer whose
+      // payment_plan is still unresolved. Same reasoning and same redirect target as the
+      // package-pick gate above — placed AFTER the JSON-parsing safeguard (unlike the package
+      // gate) because it needs computeOfferPayable's real gross, which reads o.services/
+      // cost_summary as parsed arrays.
+      //
+      // The gross>0 guard mirrors the offer page's own picker-render condition (bug-hunter,
+      // second council pass): without it, an offer whose amount can't be determined would redirect
+      // back to a page that ALSO can't show the picker for the same reason — client stuck bouncing
+      // between the two pages with no way to ever set payment_choice_made_at.
+      if ((o as { allow_split_payment_choice?: boolean }).allow_split_payment_choice && !(o as { payment_choice_made_at?: string | null }).payment_choice_made_at) {
+        const gatePayable = computeOfferPayable({
+          services: o.services,
+          cost_summary: o.cost_summary,
+          selected_services: (o as { selected_services?: unknown }).selected_services,
+          currency: (o as { currency?: string | null }).currency,
+          credit_amount: (o as { credit_amount?: number | null }).credit_amount,
+          payment_plan: null,
+        })
+        if (gatePayable.gross > 0) {
+          router.replace(`/offer/${encodeURIComponent(token as string)}/${encodeURIComponent(o.access_code || '')}`)
+          return
         }
       }
       setOffer(o)
@@ -1199,10 +1236,9 @@ export default function ContractPage() {
         <div className="contract-section" style={{ marginTop: 36 }}>
           <h3>Exhibit A &mdash; Client Identification</h3>
           <p>The Client shall provide a clear, legible copy of a valid government-issued passport.</p>
-          <div className="contract-exhibit-box" onClick={() => document.getElementById('passport-file')?.click()}>
-            <input type="file" id="passport-file" accept="image/*,.pdf" style={{ display: 'none' }} onChange={e => { if (e.target.files?.[0]) setPassportFile(e.target.files[0]) }} />
-            <p>{passportFile ? <span className="contract-uploaded-name">{passportFile.name}</span> : 'Click to upload your passport copy'}</p>
-          </div>
+          <p style={{ color: '#666', fontSize: 14 }}>
+            You&apos;ll upload this right after signing, as part of the company setup form we send you next.
+          </p>
         </div>
 
         {/* MSA SIGNATURES */}

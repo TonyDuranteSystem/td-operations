@@ -42,10 +42,19 @@ export async function POST(req: NextRequest) {
       issues: body.issues,
       admin_notes: body.admin_notes,
       installment_currency: body.installment_currency,
+      // Multiple options (dev job 3c1bb5fa). Passed straight through — createOffer
+      // validates every package (price, currency, entity type, state, both renewal
+      // installments) and refuses an incomplete one at the door.
+      packages: body.packages ?? null,
       // WS-C: the setup fee paid in parts. Passed straight through — createOffer
       // validates it and refuses a malformed plan, or one sharing an offer with a
       // referrer/managed partner, at the door.
       payment_plan: body.payment_plan ?? null,
+      // Client-chosen split (2026-08-27, distinct from payment_plan above): the client may
+      // choose, at pay-time, to split the setup fee 50/50 over 30 days. Compatible with
+      // multi-option offers on purpose — that split is computed from whichever price the
+      // client actually ends up owing, not authored here.
+      allow_split_payment_choice: body.allow_split_payment_choice === true,
       intro_en: body.intro_en,
       intro_it: body.intro_it,
       strategy: body.strategy,

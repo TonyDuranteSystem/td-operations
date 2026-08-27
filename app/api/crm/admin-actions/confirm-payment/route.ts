@@ -40,6 +40,7 @@ import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { runActivation } from "@/lib/operations/activate-service"
+import { normalizeFormationState } from "@/lib/formation/states"
 
 interface ConfirmPaymentBody {
   // Identifier — exactly one required
@@ -129,41 +130,45 @@ export async function POST(request: Request) {
       services: unknown
       account_id: string | null
       lead_id: string | null
+      formation_state: string | null
     }
     const offerSelect =
-      "token, status, contract_type, bundled_pipelines, cost_summary, client_email, client_name, services, account_id, lead_id"
+      "token, status, contract_type, bundled_pipelines, cost_summary, client_email, client_name, services, account_id, lead_id, formation_state"
     let offer: ResolvedOffer | null = null
 
     if (offer_token) {
       const { data } = await supabaseAdmin
         .from("offers")
-        .select(offerSelect)
+        // eslint-disable-next-line no-restricted-syntax -- formation_state is a real offers column missing from the stale generated types (same gap the offer-signed webhook works around)
+        .select(offerSelect as never)
         .eq("token", offer_token)
         .maybeSingle()
-      offer = (data as ResolvedOffer | null) ?? null
+      offer = (data as unknown as ResolvedOffer | null) ?? null
       if (!offer) {
         return NextResponse.json({ error: `Offer not found: ${offer_token}` }, { status: 404 })
       }
     } else if (lead_id) {
       const { data } = await supabaseAdmin
         .from("offers")
-        .select(offerSelect)
+        // eslint-disable-next-line no-restricted-syntax -- formation_state is a real offers column missing from the stale generated types (same gap the offer-signed webhook works around)
+        .select(offerSelect as never)
         .eq("lead_id", lead_id)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle()
-      offer = (data as ResolvedOffer | null) ?? null
+      offer = (data as unknown as ResolvedOffer | null) ?? null
     } else if (account_id) {
       // Existing-account re-entry (Mojo case): pick most recent non-expired offer.
       const { data } = await supabaseAdmin
         .from("offers")
-        .select(offerSelect)
+        // eslint-disable-next-line no-restricted-syntax -- formation_state is a real offers column missing from the stale generated types (same gap the offer-signed webhook works around)
+        .select(offerSelect as never)
         .eq("account_id", account_id)
         .neq("status", "expired")
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle()
-      offer = (data as ResolvedOffer | null) ?? null
+      offer = (data as unknown as ResolvedOffer | null) ?? null
       if (!offer) {
         return NextResponse.json(
           { error: `No offer found for account ${account_id}. Create an offer first, then confirm payment.` },
@@ -186,13 +191,14 @@ export async function POST(request: Request) {
       }
       const { data } = await supabaseAdmin
         .from("offers")
-        .select(offerSelect)
+        // eslint-disable-next-line no-restricted-syntax -- formation_state is a real offers column missing from the stale generated types (same gap the offer-signed webhook works around)
+        .select(offerSelect as never)
         .ilike("client_email", contact.email)
         .neq("status", "expired")
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle()
-      offer = (data as ResolvedOffer | null) ?? null
+      offer = (data as unknown as ResolvedOffer | null) ?? null
       if (!offer) {
         return NextResponse.json(
           { error: `No offer found for contact ${contact_id} (email match against offers.client_email).` },
@@ -355,6 +361,14 @@ export async function POST(request: Request) {
             paid_by_name ? `Paid by: ${paid_by_name}.` : null,
             reason ? `Reason: ${reason}` : null,
           ].filter(Boolean).join(" "),
+          // Same field the offer-signed webhook stamps on its own insert
+          // (app/api/webhooks/offer-signed/route.ts) — this branch runs
+          // instead of that webhook precisely when it didn't fire (sandbox
+          // blocks it outright; in production it can also lose a race with
+          // this admin action), so it must carry the offer's pinned state the
+          // same way or the formation flow silently defaults to New Mexico
+          // regardless of what the client actually chose.
+          formation_state: normalizeFormationState(offer?.formation_state),
         })
         .select("id")
         .single()

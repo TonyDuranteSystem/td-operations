@@ -157,3 +157,34 @@ describe("WS-C: the payment plan survives a revision, triggers and all", () => {
     expect("payment_plan" in out).toBe(true)
   })
 })
+
+describe("allow_split_payment_choice survives a revision (2026-08-27)", () => {
+  it("carries true forward — dropping it would silently take away a choice the client was promised", () => {
+    const out = buildRevisedOfferInsert({ ...fullOriginal(), allow_split_payment_choice: true }, seed)
+    expect(out.allow_split_payment_choice).toBe(true)
+  })
+
+  it("defaults to false, not undefined, when the original never set it", () => {
+    const out = buildRevisedOfferInsert(fullOriginal(), seed)
+    expect(out.allow_split_payment_choice).toBe(false)
+    expect("allow_split_payment_choice" in out).toBe(true)
+  })
+})
+
+describe("payment_choice_made_at travels WITH payment_plan, never alone (bug-hunter, second council pass, 2026-08-27)", () => {
+  it("carries a locked split choice forward alongside its plan — v2 does not re-open a picker the write route would then refuse", () => {
+    const plan = [{ amount: 750, currency: "USD" as const, trigger: { kind: "signing" as const } }, { amount: 750, currency: "USD" as const, trigger: { kind: "manual" as const } }]
+    const out = buildRevisedOfferInsert(
+      { ...fullOriginal(), allow_split_payment_choice: true, payment_plan: plan, payment_choice_made_at: "2026-08-20T10:00:00Z" },
+      seed,
+    )
+    expect(out.payment_choice_made_at).toBe("2026-08-20T10:00:00Z")
+    expect(out.payment_plan).toEqual(plan)
+  })
+
+  it("defaults to null, not undefined, when the original never had a choice made", () => {
+    const out = buildRevisedOfferInsert(fullOriginal(), seed)
+    expect(out.payment_choice_made_at).toBe(null)
+    expect("payment_choice_made_at" in out).toBe(true)
+  })
+})

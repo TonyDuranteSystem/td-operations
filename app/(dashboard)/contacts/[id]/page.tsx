@@ -11,6 +11,7 @@ import { ItinWorkspaceBanner } from '@/components/flows/itin-workspace-banner'
 import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/types'
+import type { OfferPackageOption } from '@/lib/types/offer'
 
 export default async function ContactDetailPage({ params }: { params: { id: string } }) {
   const supabase = createClient()
@@ -64,7 +65,8 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     // Offers — by client_email or lead_id
     supabase
       .from('offers')
-      .select('id, token, client_email, status, contract_type, services, bundled_pipelines, selected_services, cost_summary, view_count, required_documents, created_at, viewed_at, expires_at')
+      // eslint-disable-next-line no-restricted-syntax -- packages/selected_package_key/package_locked_at postdate generated types (migration 20260826-1800)
+      .select('id, token, client_email, status, contract_type, services, bundled_pipelines, selected_services, cost_summary, view_count, required_documents, created_at, viewed_at, expires_at, packages, selected_package_key, package_locked_at' as never)
       .eq('client_email', contact.email ?? '__no_match__')
       .order('created_at', { ascending: false }),
     // Pending activations — by client_email
@@ -153,11 +155,12 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   const contactDocuments = Array.from(allDocsMap.values())
 
   // Journey data
-  const offers = (offersResult.data ?? []) as Array<{
+  const offers = (offersResult.data ?? []) as unknown as Array<{
     id: string; token: string; client_email: string; status: string; contract_type: string | null
     services: unknown; bundled_pipelines: string[] | null; selected_services: unknown
     cost_summary: unknown; view_count: number; required_documents: unknown
     created_at: string; viewed_at: string | null; expires_at: string | null
+    packages: OfferPackageOption[] | null; selected_package_key: string | null; package_locked_at: string | null
   }>
   const pendingActivations = (pendingActivationsResult.data ?? []) as Array<{
     id: string; offer_token: string | null; client_email: string; status: string; signed_at: string | null

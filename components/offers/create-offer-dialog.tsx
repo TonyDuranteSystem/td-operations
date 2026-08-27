@@ -8,6 +8,8 @@ import { ReferrerPicker, type ReferrerValue } from './referrer-picker'
 import { FORMATION_STATE_CODES, FORMATION_STATE_NAMES, type FormationStateCode } from '@/lib/formation/states'
 import { parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
 import { parseAuthoredAmount, authoredAmountValue } from '@/lib/offers/parse-authored-amount'
+import { deriveContractType } from '@/lib/offers/derive-contract-type'
+import { formatOptionLabel } from '@/lib/offers/package-option-label'
 import {
   validatePaymentPlan,
   clientFacingPartLabel,
@@ -265,6 +267,24 @@ export function CreateOfferDialog({
   const [installment1, setInstallment1] = useState('')
   const [installment2, setInstallment2] = useState('')
 
+  // ── Multiple options (dev job 3c1bb5fa) ─────────────────────────────────────
+  // Everything above (services, entity type, state, annual rates) IS "Option 1"
+  // when extra options exist — reused as-is, not duplicated. Extra options are
+  // deliberately a SIMPLER single-price form (no add-on checklist) rather than
+  // repeating the full services section N times; that scope boundary is
+  // intentional for v1, not an oversight.
+  interface ExtraPackageDraft {
+    label: string
+    price: string
+    currency: 'EUR' | 'USD'
+    entityType: '' | 'SMLLC' | 'MMLLC' | 'Corp'
+    formationState: '' | FormationStateCode
+    installment1: string
+    installment2: string
+    installmentCurrency: 'EUR' | 'USD'
+  }
+  const [extraPackages, setExtraPackages] = useState<ExtraPackageDraft[]>([])
+
   // ── WS-C: the setup fee paid in parts ──────────────────────────────────────
   // The engine (validatePaymentPlan + createOffer) shipped 2026-08-12 with NO way to
   // author a plan outside the MCP tool, so a real split deal could not be sold from
@@ -273,6 +293,7 @@ export function CreateOfferDialog({
   // because the engine refuses the shape, and a UI that lets you type a refusable plan
   // just moves the error later.
   const [splitEnabled, setSplitEnabled] = useState(false)
+  const [allowSplitPaymentChoice, setAllowSplitPaymentChoice] = useState(false)
   const [splitParts, setSplitParts] = useState<Array<{ amount: string; kind: TrancheTriggerKind; date: string; label: string }>>([
     { amount: '', kind: 'signing', date: '', label: '' },
     { amount: '', kind: 'manual', date: '', label: '' },
@@ -280,9 +301,14 @@ export function CreateOfferDialog({
   // The component stays mounted when closed, so without this a plan authored for one client
   // rides onto the next offer raised from the same panel — money attached to the wrong deal
   // (bug-hunter, 2026-08-13). Client name and referrer already reset the same way.
+  // allowSplitPaymentChoice joined this reset 2026-08-27 (bug-hunter, second council pass):
+  // it was declared alongside splitEnabled/splitParts but omitted here, so a staff member
+  // who opted one client into the client-chosen split checkbox would find it still checked
+  // for the next, unrelated offer.
   useEffect(() => {
     if (!open) return
     setSplitEnabled(false)
+    setAllowSplitPaymentChoice(false)
     setSplitParts([
       { amount: '', kind: 'signing', date: '', label: '' },
       { amount: '', kind: 'manual', date: '', label: '' },
@@ -474,6 +500,9 @@ export function CreateOfferDialog({
           // Gates the management/portal language so standalone offers don't
           // over-promise ongoing services.
           includes_management: includesManagement,
+          // Tells the writer to mention (without inventing details of) the
+          // picker on the offer page — Antonio's bug report, dev job 3c1bb5fa.
+          has_multiple_options: extraPackages.length > 0,
           // Let the server pull the client's full call transcript (notes + every
           // turn) from call_summaries for a richer, personalized narrative.
           lead_id: leadId || null,
@@ -587,12 +616,10 @@ export function CreateOfferDialog({
   }
 
   // ── Derived values ──
+  // See lib/offers/derive-contract-type.ts for why this can't be a plain
+  // first-match loop over click order (dev job 3c1bb5fa bug report, 2026-08-26).
   const derivedContractType = useMemo(() => {
-    for (const s of selected) {
-      const svc = catalog.find(c => c.id === s.id)
-      if (svc?.contract_type) return svc.contract_type
-    }
-    return 'formation'
+    return deriveContractType(selected.map(s => catalog.find(c => c.id === s.id)?.contract_type))
   }, [selected, catalog])
 
   const derivedPipelines = useMemo(() => {
@@ -784,6 +811,26 @@ export function CreateOfferDialog({
       return
     }
 
+    if (extraPackages.length > 0) {
+      if (splitEnabled) {
+        toast.error('Multiple options can’t be combined with paying the setup fee in parts')
+        return
+      }
+      for (let i = 0; i < extraPackages.length; i++) {
+        const p = extraPackages[i]
+        const label = `Option ${i + 2}`
+        if (!p.label.trim()) { toast.error(`${label}: needs a label`); return }
+        if (!p.price.trim() || !(parseFloat(p.price.replace(/[^0-9.]/g, '')) > 0)) {
+          toast.error(`${label}: needs a setup price`); return
+        }
+        if (!p.entityType) { toast.error(`${label}: pick a company type`); return }
+        if (!p.formationState) { toast.error(`${label}: pick a US state`); return }
+        if (!p.installment1.trim() || !p.installment2.trim()) {
+          toast.error(`${label}: needs both renewal installment amounts`); return
+        }
+      }
+    }
+
     startTransition(async () => {
       try {
         const servicesJson = selected
@@ -885,6 +932,48 @@ export function CreateOfferDialog({
         }
         const combinedNotes = noteParts.length > 0 ? noteParts.join('\n\n') : null
 
+        // Multiple options (dev job 3c1bb5fa): Option 1 is exactly what's already
+        // been built above (servicesJson/costSummary/recurringCosts) — reused, not
+        // recomputed — plus one simplified single-price package per extra option.
+        const packages = extraPackages.length > 0
+          ? [
+              {
+                key: 'option-1',
+                label: 'Option 1',
+                currency,
+                entity_type: entityType,
+                formation_state: formationState,
+                services: servicesJson,
+                cost_summary: costSummary,
+                recurring_costs: recurringCosts,
+                installment_currency: showAnnual ? installmentCurrency : installmentCurrency,
+              },
+              ...extraPackages.map((p, i) => {
+                const pkgSymbol = p.currency === 'EUR' ? '€' : '$'
+                const pkgInstSymbol = p.installmentCurrency === 'EUR' ? '€' : '$'
+                const cleanPrice = p.price.replace(/[^0-9.]/g, '')
+                return {
+                  key: `option-${i + 2}`,
+                  label: p.label,
+                  currency: p.currency,
+                  entity_type: p.entityType,
+                  formation_state: p.formationState,
+                  services: [{ name: 'Company Formation', price: `${pkgSymbol}${cleanPrice}` }],
+                  cost_summary: [{
+                    label: 'Setup Fee',
+                    total: `${pkgSymbol}${cleanPrice}`,
+                    items: [{ name: 'Company Formation', price: `${pkgSymbol}${cleanPrice}` }],
+                  }],
+                  recurring_costs: [
+                    { label: '1st Installment (January)', price: `${pkgInstSymbol}${p.installment1}`, currency: p.installmentCurrency },
+                    { label: '2nd Installment (June)', price: `${pkgInstSymbol}${p.installment2}`, currency: p.installmentCurrency },
+                  ],
+                  installment_currency: p.installmentCurrency,
+                }
+              }),
+            ]
+          : null
+
         const res = await fetch('/api/crm/admin-actions/create-offer', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -902,6 +991,7 @@ export function CreateOfferDialog({
             client_email: clientEmail,
             language,
             contract_type: derivedContractType,
+            packages,
             entity_type: entityType || null,
             // Gated on the DERIVED type: a state picked while the offer looked like a
             // formation must not ride along if service edits turned it into onboarding
@@ -917,6 +1007,7 @@ export function CreateOfferDialog({
             // early otherwise), so an enabled split is ALWAYS sent as a valid plan and
             // can never degrade into a silent full-payment offer.
             payment_plan: splitActive ? (planCheck?.plan ?? null) : null,
+            allow_split_payment_choice: allowSplitPaymentChoice,
             services: servicesJson,
             cost_summary: costSummary,
             recurring_costs: recurringCosts,
@@ -1500,7 +1591,10 @@ export function CreateOfferDialog({
               <input
                 type="checkbox"
                 checked={splitEnabled}
-                onChange={e => setSplitEnabled(e.target.checked)}
+                onChange={e => {
+                  setSplitEnabled(e.target.checked)
+                  if (e.target.checked) setAllowSplitPaymentChoice(false)
+                }}
               />
               Client pays the setup fee in parts
             </label>
@@ -1650,6 +1744,38 @@ export function CreateOfferDialog({
             )}
           </div>
 
+          {/* Let the CLIENT choose to split, BEFORE signing — distinct from the staff-authored
+              plan above. Works with multi-option offers too (the split is computed from
+              whichever option the client picks, after they pick it, before they sign) — that's
+              the whole reason this exists as a separate, simpler toggle (Antonio, 2026-08-27,
+              following the auto-charge council review). Mutually exclusive with the
+              staff-authored plan above: one offer can't carry both a pre-decided split and a
+              client-decided one.
+              ⛔ REDESIGNED (council review, second pass, 2026-08-27): originally the client chose
+              AFTER signing, which fabricated paid revenue against the full-amount invoice
+              signing had already minted — see choose-payment-split/route.ts and
+              docs/systems/offers.md for the incident. The choice now happens BEFORE signing, so
+              the copy below must never again say "after signing". */}
+          {!splitActive && (
+            <div className="border rounded-md p-3 bg-zinc-50/60">
+              <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={allowSplitPaymentChoice}
+                  onChange={e => setAllowSplitPaymentChoice(e.target.checked)}
+                />
+                Let the client choose to split the setup fee (50% now, 50% in 30 days, +5% fee) before they sign
+              </label>
+              {allowSplitPaymentChoice && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  The client sees this as a choice right before they sign — after picking an option
+                  if this is a multi-option offer, but before the contract is generated. You never
+                  set an amount here; it&apos;s calculated from whatever price they end up owing.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Annual Rates */}
           {showAnnual && (
             <div>
@@ -1673,7 +1799,13 @@ export function CreateOfferDialog({
                       type="text"
                       value={installment1}
                       onChange={e => setInstallment1(e.target.value)}
-                      placeholder="1,000"
+                      // ⛔ NOT "1,000" (bug-hunter, full E2E QA, 2026-08-27): a numeric placeholder here
+                      // reads as an already-filled value on an EMPTY, required, easy-to-miss field —
+                      // confirmed live: staff can submit the whole offer believing this is set, only to
+                      // be rejected by the packages validator with "missing the 1st (January) renewal
+                      // installment amount". The per-option fields below (Multiple options) never had
+                      // this problem — they use a descriptive hint, not a number. Matched here.
+                      placeholder="1st (Jan)"
                       className="w-full pl-7 pr-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
@@ -1686,12 +1818,177 @@ export function CreateOfferDialog({
                       type="text"
                       value={installment2}
                       onChange={e => setInstallment2(e.target.value)}
-                      placeholder="1,000"
+                      placeholder="2nd (Jun)"
                       className="w-full pl-7 pr-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Multiple options (dev job 3c1bb5fa) — formation offers only, same gate as
+              entity type / state above. Everything filled in above becomes "Option 1". */}
+          {derivedContractType === 'formation' && (
+            <div className="border rounded-md p-3 bg-zinc-50/60">
+              <label className="block text-sm font-medium mb-1">Multiple options (optional)</label>
+              <p className="text-xs text-muted-foreground mb-3">
+                Everything above is Option 1. Add more complete options below — the client picks
+                one on the offer page, and whichever they pick becomes the real price, state,
+                company type, and renewal rate. Each option needs its own renewal amounts too.
+              </p>
+              {extraPackages.map((pkg, i) => {
+                const pkgSymbol = pkg.currency === 'EUR' ? '€' : '$'
+                const pkgInstSymbol = pkg.installmentCurrency === 'EUR' ? '€' : '$'
+                const update = (patch: Partial<ExtraPackageDraft>) =>
+                  setExtraPackages(prev => prev.map((p, j) => (j === i ? { ...p, ...patch } : p)))
+                return (
+                  <div key={i} className="border rounded-md p-3 mb-2 bg-white space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs font-medium text-muted-foreground">Option {i + 2}</span>
+                      <button
+                        type="button"
+                        onClick={() => setExtraPackages(prev => prev.filter((_, j) => j !== i))}
+                        className="text-xs text-red-600 hover:underline"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    <div
+                      className={`w-full px-2 py-1.5 text-sm border rounded-md bg-zinc-50 ${pkg.label ? 'text-zinc-900' : 'text-zinc-400 italic'}`}
+                    >
+                      {pkg.label || 'Label fills in automatically once you pick a company type and state below'}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="relative">
+                        <span className="absolute left-3 top-2 text-sm text-zinc-400">{pkgSymbol}</span>
+                        <input
+                          type="text"
+                          placeholder="Setup price"
+                          value={pkg.price}
+                          onChange={e => update({ price: e.target.value })}
+                          className="w-full pl-7 pr-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <select
+                        value={pkg.currency}
+                        onChange={e => update({ currency: e.target.value as 'EUR' | 'USD' })}
+                        className="px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="EUR">EUR (€)</option>
+                        <option value="USD">USD ($)</option>
+                      </select>
+                    </div>
+                    <div className="flex gap-2">
+                      {[
+                        { value: 'SMLLC', label: 'Single-Member LLC' },
+                        { value: 'MMLLC', label: 'Multi-Member LLC' },
+                        { value: 'Corp', label: 'C-Corp' },
+                      ].map(opt => (
+                        <label
+                          key={opt.value}
+                          className={`flex-1 text-center px-2 py-1.5 text-xs border rounded-md cursor-pointer ${
+                            pkg.entityType === opt.value ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium' : 'border-zinc-200'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            className="sr-only"
+                            checked={pkg.entityType === opt.value}
+                            onChange={() => {
+                              const entityType = opt.value as ExtraPackageDraft['entityType']
+                              update({ entityType, label: formatOptionLabel(entityType, pkg.formationState) })
+                            }}
+                          />
+                          {opt.label}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      {FORMATION_STATE_CODES.map(code => (
+                        <label
+                          key={code}
+                          className={`flex-1 text-center px-2 py-1.5 text-xs border rounded-md cursor-pointer ${
+                            pkg.formationState === code ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium' : 'border-zinc-200'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            className="sr-only"
+                            checked={pkg.formationState === code}
+                            onChange={() => update({ formationState: code, label: formatOptionLabel(pkg.entityType, code) })}
+                          />
+                          {FORMATION_STATE_NAMES[code]}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="relative">
+                        <span className="absolute left-3 top-2 text-sm text-zinc-400">{pkgInstSymbol}</span>
+                        <input
+                          type="text"
+                          placeholder="1st (Jan)"
+                          value={pkg.installment1}
+                          onChange={e => update({ installment1: e.target.value })}
+                          className="w-full pl-7 pr-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div className="relative">
+                        <span className="absolute left-3 top-2 text-sm text-zinc-400">{pkgInstSymbol}</span>
+                        <input
+                          type="text"
+                          placeholder="2nd (Jun)"
+                          value={pkg.installment2}
+                          onChange={e => update({ installment2: e.target.value })}
+                          className="w-full pl-7 pr-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <select
+                        value={pkg.installmentCurrency}
+                        onChange={e => update({ installmentCurrency: e.target.value as 'EUR' | 'USD' })}
+                        className="px-2 py-1.5 text-xs border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="USD">USD ($)</option>
+                        <option value="EUR">EUR (€)</option>
+                      </select>
+                    </div>
+                  </div>
+                )
+              })}
+              <button
+                type="button"
+                onClick={() =>
+                  setExtraPackages(prev => [
+                    ...prev,
+                    {
+                      label: '',
+                      price: '',
+                      currency: currency as 'EUR' | 'USD',
+                      entityType: '',
+                      formationState: '',
+                      installment1: '',
+                      installment2: '',
+                      installmentCurrency: installmentCurrency as 'EUR' | 'USD',
+                    },
+                  ])
+                }
+                className="text-xs text-blue-600 hover:underline"
+              >
+                + Add another option
+              </button>
+              {extraPackages.length > 0 && splitEnabled && (
+                <p className="text-xs text-red-600 mt-2">
+                  Multiple options can&apos;t be combined with paying the setup fee in parts — turn one off.
+                </p>
+              )}
+              {extraPackages.length > 0 && extraPackages.some(p => p.entityType && p.entityType !== entityType) && (
+                <p className="text-xs text-amber-600 mt-2">
+                  ⚠ These options are different company types. The written description below (and
+                  &quot;Generate with AI&quot;) is only written once, for Option 1 — the system does not
+                  rewrite it per option. Keep the wording generic, or the client may read a signed
+                  contract that describes the wrong company type for whichever option they picked.
+                </p>
+              )}
             </div>
           )}
 

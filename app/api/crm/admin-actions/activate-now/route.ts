@@ -32,6 +32,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 import { runActivation } from "@/lib/operations/activate-service"
+import { normalizeFormationState } from "@/lib/formation/states"
 
 interface ActivateNowBody {
   offer_token?: string
@@ -61,7 +62,7 @@ export async function POST(request: Request) {
     // 1. Resolve the offer (token is most specific; otherwise latest
     // non-expired offer on the account).
     const offerSelect =
-      "token, status, client_name, client_email, account_id, lead_id"
+      "token, status, client_name, client_email, account_id, lead_id, formation_state"
     type ResolvedOffer = {
       token: string
       status: string | null
@@ -69,6 +70,7 @@ export async function POST(request: Request) {
       client_email: string | null
       account_id: string | null
       lead_id: string | null
+      formation_state: string | null
     }
     let offer: ResolvedOffer | null = null
 
@@ -77,25 +79,27 @@ export async function POST(request: Request) {
       // so order by recency + limit(1) — maybeSingle() alone errors on >1 row.
       const { data } = await supabaseAdmin
         .from("offers")
-        .select(offerSelect)
+        // eslint-disable-next-line no-restricted-syntax -- formation_state is a real offers column missing from the stale generated types (same gap confirm-payment works around)
+        .select(offerSelect as never)
         .eq("token", offer_token)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle()
-      offer = (data as ResolvedOffer | null) ?? null
+      offer = (data as unknown as ResolvedOffer | null) ?? null
       if (!offer) {
         return NextResponse.json({ error: `Offer not found: ${offer_token}` }, { status: 404 })
       }
     } else {
       const { data } = await supabaseAdmin
         .from("offers")
-        .select(offerSelect)
+        // eslint-disable-next-line no-restricted-syntax -- formation_state is a real offers column missing from the stale generated types (same gap confirm-payment works around)
+        .select(offerSelect as never)
         .eq("account_id", account_id as string)
         .neq("status", "expired")
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle()
-      offer = (data as ResolvedOffer | null) ?? null
+      offer = (data as unknown as ResolvedOffer | null) ?? null
       if (!offer) {
         return NextResponse.json(
           { error: `No offer found for account ${account_id}. Create and sign an offer first.` },
@@ -131,6 +135,11 @@ export async function POST(request: Request) {
           // to safe placeholders if the offer somehow lacks them.
           client_name: offer.client_name || "Unknown client",
           client_email: offer.client_email || "unknown@tonydurante.us",
+          // Same gap the confirm-payment admin action had: without this, a
+          // client's real picked state (or any signed formation offer's
+          // state) is lost and the formation wizard silently defaults to
+          // New Mexico regardless of what was actually agreed.
+          formation_state: normalizeFormationState(offer.formation_state),
           status: "awaiting_payment",
           payment_method: "none",
           notes: [

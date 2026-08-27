@@ -38,6 +38,7 @@ function simulate(opts: {
   contractType: string
   entityType?: string | null
   includesManagement?: boolean
+  hasMultipleOptions?: boolean
   notes?: string
   kbArticle?: { content?: string | null } | null // null → article missing → floor
 }) {
@@ -50,7 +51,7 @@ function simulate(opts: {
       ? opts.includesManagement
       : offerIncludesManagement(opts.contractType)
   const serviceLines = renderServiceLines(opts.services)
-  const systemPrompt = buildSystemPrompt(lang, rules, includesManagement)
+  const systemPrompt = buildSystemPrompt(lang, rules, includesManagement, opts.hasMultipleOptions ?? false)
   const userPrompt = buildUserPrompt(
     opts.clientName,
     lang,
@@ -197,5 +198,28 @@ describe('offer-narrative scenario simulation', () => {
     expect(on.systemPrompt).toContain('INCLUDES ongoing management')
     expect(off.systemPrompt).toContain('does NOT include ongoing management')
     expect(on.systemPrompt).not.toEqual(off.systemPrompt)
+  })
+
+  it('multiple options (dev job 3c1bb5fa) — tells the writer to mention the picker without inventing option details', () => {
+    const { systemPrompt } = simulate({
+      clientName: 'Mattia Tedesco',
+      services: [{ name: 'Company Formation', description: 'Form a new US LLC.' }],
+      contractType: 'formation',
+      entityType: 'SMLLC',
+      hasMultipleOptions: true,
+    })
+    expect(systemPrompt).toContain('MULTIPLE OPTIONS')
+    expect(systemPrompt).toContain('review each one on the offer page and select the one that fits them best')
+    expect(systemPrompt).toContain('Do NOT describe what the specific options are')
+  })
+
+  it('single option (default) — no multiple-options instruction reaches the writer', () => {
+    const { systemPrompt } = simulate({
+      clientName: 'Solo Client',
+      services: [{ name: 'Company Formation', description: 'Form a new US LLC.' }],
+      contractType: 'formation',
+      entityType: 'SMLLC',
+    })
+    expect(systemPrompt).not.toContain('MULTIPLE OPTIONS')
   })
 })

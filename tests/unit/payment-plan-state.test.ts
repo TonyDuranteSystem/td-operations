@@ -11,6 +11,7 @@ import {
   computePlanStatus,
   computePlanSettlementFromStatus,
   isRaisable,
+  duePartsToAutoRaise,
   DEAD_INVOICE_STATUSES,
   type TrancheInvoiceRow,
 } from "@/lib/offers/payment-plan-state"
@@ -133,6 +134,48 @@ describe("isRaisable — one condition, not a second opinion", () => {
       row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1250 }),
     ])
     expect(isRaisable(s.parts[0])).toBe(false)
+  })
+})
+
+describe("duePartsToAutoRaise — what the auto-raise cron acts on", () => {
+  const DATED_PLAN = validatePaymentPlan([
+    { seq: 1, amount: 1750, currency: "EUR", trigger: { kind: "signing" } },
+    { seq: 2, amount: 1750, currency: "EUR", trigger: { kind: "date", date: "2026-09-23" } },
+  ]).plan!
+
+  it("is empty before the due date arrives", () => {
+    const s = computePlanStatus(DATED_PLAN, [row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1750 })])
+    expect(duePartsToAutoRaise(s, "2026-09-22")).toEqual([])
+  })
+
+  it("includes the part on its due date, and every day after", () => {
+    const s = computePlanStatus(DATED_PLAN, [row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1750 })])
+    expect(duePartsToAutoRaise(s, "2026-09-23").map((p) => p.part.seq)).toEqual([2])
+    expect(duePartsToAutoRaise(s, "2026-10-01").map((p) => p.part.seq)).toEqual([2])
+  })
+
+  it("never includes a part a staffer already raised, even unsent — the cron must not mint a second invoice for a slot a human is handling", () => {
+    const s = computePlanStatus(DATED_PLAN, [
+      row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1750 }),
+      row({ tranche_seq: 2, invoice_status: "Draft" }),
+    ])
+    expect(duePartsToAutoRaise(s, "2026-10-01")).toEqual([])
+  })
+
+  it("never includes a signing-triggered part — signing is billed at signing, never by this cron", () => {
+    const s = computePlanStatus(DATED_PLAN, [])
+    // Part 1 (signing) is technically "not_raised" here (no invoice yet) and far in the "past"
+    // relative to any today — but it has no date trigger at all, so it can never match.
+    expect(duePartsToAutoRaise(s, "2099-01-01").map((p) => p.part.seq)).toEqual([2])
+  })
+
+  it("never includes a manual-triggered part — nothing in the system knows when a manual condition is met", () => {
+    const manualPlan = validatePaymentPlan([
+      { seq: 1, amount: 1000, currency: "USD", trigger: { kind: "signing" } },
+      { seq: 2, amount: 1000, currency: "USD", trigger: { kind: "manual", label: "when the bank account opens" } },
+    ]).plan!
+    const s = computePlanStatus(manualPlan, [row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1000 })])
+    expect(duePartsToAutoRaise(s, "2099-01-01")).toEqual([])
   })
 })
 
@@ -310,6 +353,22 @@ describe("computePlanSettlementFromStatus — the release gate", () => {
     expect(settlement.parts[1].agreedAmount).toBe(1000)
     expect(settlement.eligible).toBe(true) // fully paid against what was ACTUALLY billed
     expect(settlement.totalAgreed).toBe(2250)
+  })
+
+  it("⛔ totalAgreedExFee strips out a booked card fee — the commission base, never totalAgreed (2026-08-27 fix)", () => {
+    // bookCardFee raises a part's invoice `amount` to base+fee once paid by card. A referrer's
+    // commission must be computed on the base only — this is what release-commission now reads.
+    const status = computePlanStatus(PLAN, [
+      // Part 1 paid by card: billed 1250 base + 62.50 fee (5%) = 1312.50 total.
+      row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1312.5, amount: 1312.5, card_fee_amount: 62.5 }),
+      // Part 2 paid by wire: no fee ever booked, card_fee_amount stays null.
+      row({ tranche_seq: 2, invoice_status: "Paid", amount_paid: 1250, amount: 1250 }),
+    ])
+    const settlement = computePlanSettlementFromStatus("tok", status)
+    expect(settlement.totalAgreed).toBe(2562.5) // real cash-flow total, fee included — unchanged
+    expect(settlement.parts[0].agreedAmountExFee).toBe(1250)
+    expect(settlement.parts[1].agreedAmountExFee).toBe(1250) // no fee to strip — unaffected
+    expect(settlement.totalAgreedExFee).toBe(2500) // the real contract price — what commission is owed on
   })
 
   it("⚠️ the known false negative, pinned rather than hidden: the auto-matcher's rarer shape (job c2751393) reads as NOT eligible even though real cash arrived", () => {

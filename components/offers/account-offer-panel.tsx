@@ -11,6 +11,8 @@ import { CreateOfferDialog } from './create-offer-dialog'
 import { WelcomeLinkButton, type WelcomeLinkButtonHandle } from './welcome-link-button'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import { canResetPackagePick } from '@/lib/offers/package-pick-status'
+import type { OfferPackageOption } from '@/lib/types/offer'
 
 const OFFER_STATUS_COLORS: Record<string, string> = {
   draft: 'bg-zinc-100 text-zinc-700',
@@ -31,6 +33,11 @@ export interface OfferData {
   viewed_at: string | null
   created_at: string
   required_documents: Array<{ id: string; name: string }> | null
+  /** Multi-option offers (dev job 3c1bb5fa). Absent/empty on an ordinary
+   *  single-price offer — nothing below reads these unless populated. */
+  packages?: OfferPackageOption[] | null
+  selected_package_key?: string | null
+  package_locked_at?: string | null
 }
 
 interface AccountOfferPanelProps {
@@ -69,6 +76,7 @@ export function AccountOfferPanel({
   const [showSendConfirm, setShowSendConfirm] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
+  const [showUndoPickConfirm, setShowUndoPickConfirm] = useState(false)
   const [resendingEmail, setResendingEmail] = useState(false)
   const welcomeLinkRef = useRef<WelcomeLinkButtonHandle | null>(null)
 
@@ -77,6 +85,19 @@ export function AccountOfferPanel({
   const hasOffer = !!offer
   const isOfferDraft = hasOffer && offer.status === 'draft'
   const isOfferClosed = hasOffer && (offer.status === 'expired' || offer.status === 'completed' || offer.contract_type === 'renewal')
+
+  // Multi-option offers: which option (if any) the client picked, so staff
+  // can see it without opening the database directly.
+  const packageOptions: OfferPackageOption[] = Array.isArray(offer?.packages) ? offer.packages : []
+  const hasPackages = packageOptions.length > 0
+  const pickedPackage = hasPackages && offer?.selected_package_key
+    ? packageOptions.find((p) => p.key === offer.selected_package_key) ?? null
+    : null
+  // The key is set but no package in the array matches it — shouldn't happen
+  // (packages are frozen once a pick locks) but if the data ever drifts,
+  // staff should see a plain explanation, not a blank label.
+  const pickIsUnresolved = hasPackages && !!offer?.selected_package_key && !pickedPackage
+  const canUndoPick = hasOffer && hasPackages && !!offer?.selected_package_key && canResetPackagePick(offer.status)
 
   // Activation state (decoupled from payment). "Activated · payment pending"
   // is the persistent reminder that the contract was turned on before the
@@ -195,6 +216,22 @@ export function AccountOfferPanel({
     }
   }
 
+  const doUndoPackagePick = async (): Promise<{ success: boolean; error?: string; message?: string }> => {
+    if (!offer?.token) return { success: false, error: 'No offer token' }
+    try {
+      const res = await fetch('/api/crm/admin-actions/reset-package-pick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offer_token: offer.token }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) return { success: false, error: data.error || 'Failed to undo the pick' }
+      return { success: true, message: data.message || "Client's pick cleared — they'll see the picker again" }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'An error occurred' }
+    }
+  }
+
   const doResetOffer = async (): Promise<{ success: boolean; error?: string; message?: string }> => {
     if (!offer?.token) return { success: false, error: 'No offer token' }
     try {
@@ -266,6 +303,15 @@ export function AccountOfferPanel({
               {isActivated && isPaid && (
                 <span className="text-xs font-medium px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 flex items-center gap-1">
                   <CheckCircle2 className="h-3 w-3" /> Activated
+                </span>
+              )}
+              {hasPackages && (
+                <span className="text-xs text-zinc-500">
+                  {!offer!.selected_package_key
+                    ? "Awaiting the client's pick"
+                    : pickIsUnresolved
+                      ? 'Picked option details not found — check the offer directly'
+                      : `Picked: ${pickedPackage!.label}`}
                 </span>
               )}
             </div>
@@ -423,6 +469,20 @@ export function AccountOfferPanel({
                 </button>
               )}
 
+              {/* Undo the client's package pick — only while there's a pick
+                  to undo and the deal isn't already closed (same rule the
+                  server enforces; this just avoids showing a button that
+                  would always fail). */}
+              {canUndoPick && (
+                <button
+                  onClick={() => setShowUndoPickConfirm(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-amber-300 text-amber-700 hover:bg-amber-50 transition-colors"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Undo Pick
+                </button>
+              )}
+
               {/* Reset Offer (not draft) */}
               {offer.status !== 'draft' && (
                 <button
@@ -476,6 +536,18 @@ export function AccountOfferPanel({
           }}
         />
       )}
+
+      {/* Undo Pick dialog */}
+      <ConfirmDestructiveDialog
+        open={showUndoPickConfirm}
+        onClose={() => setShowUndoPickConfirm(false)}
+        title="Undo the client's pick?"
+        description="This clears the option the client chose. They'll see the picker again next time they open the offer and will need to choose once more."
+        severity="amber"
+        confirmLabel="Yes, undo the pick"
+        onConfirm={doUndoPackagePick}
+        onSuccess={() => router.refresh()}
+      />
 
       {/* Reset Offer dialog */}
       <ConfirmDestructiveDialog

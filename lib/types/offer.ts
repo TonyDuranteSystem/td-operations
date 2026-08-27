@@ -145,6 +145,22 @@ export interface Offer {
   // column existed may have this field unset — consumers must fall back to
   // legacy derivation (e.g., service-name string match).
   entity_type?: 'Single Member LLC' | 'Multi Member LLC' | 'C-Corp Elected'
+  // Multi-option offers (dev job 3c1bb5fa). See lib/offers/package-pick.ts.
+  packages?: OfferPackageOption[]
+  selected_package_key?: string | null
+  package_locked_at?: string | null
+}
+
+export interface OfferPackageOption {
+  key: string
+  label: string
+  currency: string
+  entity_type: string
+  formation_state: string
+  services: OfferService[]
+  cost_summary: CostSummary[]
+  recurring_costs?: RecurringCost[]
+  installment_currency?: string | null
 }
 
 // ─── Contract Interface ─────────────────────────────────────

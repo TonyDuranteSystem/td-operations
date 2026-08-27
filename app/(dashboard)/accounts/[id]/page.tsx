@@ -14,6 +14,7 @@ import { resolveFlows } from '@/lib/flows/resolve-flows'
 import { FormationWorkspaceBanner } from '@/components/flows/formation-workspace-banner'
 import { TaxWorkspaceBanner } from '@/components/flows/tax-workspace-banner'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
+import type { OfferPackageOption } from '@/lib/types/offer'
 
 interface DocumentRecord {
   id: string
@@ -101,7 +102,8 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     // Offer (latest for this account)
     supabase
       .from('offers')
-      .select('token, status, contract_type, cost_summary, bundled_pipelines, view_count, viewed_at, created_at, required_documents')
+      // eslint-disable-next-line no-restricted-syntax -- packages/selected_package_key/package_locked_at postdate generated types (migration 20260826-1800)
+      .select('token, status, contract_type, cost_summary, bundled_pipelines, view_count, viewed_at, created_at, required_documents, packages, selected_package_key, package_locked_at' as never)
       .eq('account_id', params.id)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -176,7 +178,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   const deals: Deal[] = (dealsResult.data ?? []).map(d => ({ ...d, account_id: params.id })) as Deal[]
   const taxReturns: TaxReturn[] = (taxReturnsResult.data ?? []) as TaxReturn[]
   const documents = (documentsResult.data ?? []) as DocumentRecord[]
-  const offer = offerResult.data as {
+  const offer = offerResult.data as unknown as {
     token: string
     status: string
     contract_type: string | null
@@ -186,6 +188,9 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     viewed_at: string | null
     created_at: string
     required_documents: Array<{ id: string; name: string }> | null
+    packages: OfferPackageOption[] | null
+    selected_package_key: string | null
+    package_locked_at: string | null
   } | null
 
   // Fetch pending activation for this offer (if exists)

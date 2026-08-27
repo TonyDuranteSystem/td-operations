@@ -152,4 +152,20 @@ describe("activate-now", () => {
     expect(ins.payment_confirmed_at).toBeUndefined()
     expect(ins.amount).toBeUndefined()
   })
+
+  // Council QA (dev job 3c1bb5fa follow-up): this route had the identical gap
+  // as confirm-payment's own fallback-insert branch — the offer's picked
+  // formation state was never carried onto a freshly-created activation, so
+  // the formation wizard silently defaulted to New Mexico regardless of what
+  // the client actually chose. Pin the fix here too.
+  it("carries the offer's formation_state onto a newly-created activation", async () => {
+    setTable("offers", { selectMaybeSingle: { data: { ...signedOffer, formation_state: "FL" }, error: null } })
+    setTable("pending_activations", {
+      selectMaybeSingle: { data: null, error: null },
+      insertResult: { data: { id: "pa-created" }, error: null },
+    })
+    const res = await POST(makeRequest({ account_id: "acct-1" }) as Parameters<typeof POST>[0])
+    expect(res.status).toBe(200)
+    expect((tables.pending_activations.lastInsert as Record<string, unknown>).formation_state).toBe("FL")
+  })
 })

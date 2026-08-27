@@ -61,6 +61,10 @@ export interface TrancheInvoiceRow {
   tranche_seq: number | null
   due_date: string | null
   sent_at?: string | null
+  /** Set by bookCardFee once a card payment lands — the fee portion ALREADY folded into
+   *  `amount`/`total` above. Needed to back it back out for anything computing a commission,
+   *  which must be a percentage of the real contract price, never of the card-processing fee. */
+  card_fee_amount?: number | null
 }
 
 export interface PartStatus {
@@ -151,6 +155,28 @@ export function isRaisable(status: PartStatus): boolean {
 }
 
 /**
+ * Which parts the auto-raise cron should act on RIGHT NOW — a date-triggered part whose date has
+ * arrived, with no live invoice already occupying its slot.
+ *
+ * Deliberately reuses `isRaisable` rather than re-deriving "not raised" — same reasoning as that
+ * function's own comment: a part a staffer already raised (even Draft/unsent) is NOT raisable,
+ * and the cron must never mint a second invoice for a slot a human is already handling.
+ *
+ * `todayIso` is an explicit argument, not `new Date()` read inside — this codebase's own pattern
+ * for date-based cron eligibility (see `decideReminder`/`decideSlaTier`), so a test can assert
+ * "3 days after the due date" without mocking the system clock.
+ */
+export function duePartsToAutoRaise(status: PlanStatus, todayIso: string): PartStatus[] {
+  return status.parts.filter(
+    (p) =>
+      p.part.trigger.kind === "date" &&
+      typeof p.part.trigger.date === "string" &&
+      p.part.trigger.date <= todayIso &&
+      isRaisable(p),
+  )
+}
+
+/**
  * Where an offer's plan stands, read from the database.
  *
  * Returns null when the offer carries no plan — which is every offer today — so callers can treat
@@ -179,7 +205,7 @@ export async function planStatusForOffer(offerToken: string): Promise<PlanStatus
   // the select list is a plain string and the row shape is asserted rather than inferred.
   const { data: rows, error: rowsErr } = await supabaseAdmin
     .from("payments")
-    .select("id, invoice_number, invoice_status, amount_paid, amount, tranche_seq, due_date")
+    .select("id, invoice_number, invoice_status, amount_paid, amount, tranche_seq, due_date, card_fee_amount" as never)
     .eq("tranche_offer_token" as never, offerToken as never)
 
   if (rowsErr) throw new Error(`tranche invoice lookup failed: ${rowsErr.message}`)
@@ -194,6 +220,13 @@ export interface PlanSettlementPart {
    *  precedence `classify()` uses: invoice amount first, plan amount only as a fallback for a
    *  part never raised), never the plan's stated figure once a real invoice disagrees with it. */
   agreedAmount: number
+  /** `agreedAmount` with any booked card-processing fee subtracted back out — the REAL contract
+   *  price for this part. `agreedAmount` itself is fee-INCLUSIVE once a card payment lands
+   *  (bookCardFee raises the invoice's own total to base+fee), which is correct for "how much
+   *  cash has genuinely moved" but wrong for anything computing a referrer's or partner's
+   *  commission — that must be a percentage of what TD was actually owed for the service, never
+   *  of the processing fee the client pays to be allowed to use a card. */
+  agreedAmountExFee: number
   /** REAL cash received against this part. Never inflated by a credit-only settlement — see the
    *  ⛔ note on `settledInCash` below for why that distinction is the whole point of this type. */
   amountPaid: number
@@ -214,6 +247,9 @@ export interface PlanSettlement {
    *  part, as raised. Computed from the SAME rows `parts` is built from, so it cannot silently
    *  disagree with what `parts` itself says. */
   totalAgreed: number
+  /** Sum of every part's `agreedAmountExFee` — the figure a referrer's or partner's commission
+   *  must be computed from, never `totalAgreed` (see `agreedAmountExFee`'s own doc comment). */
+  totalAgreedExFee: number
   /** Sum of every part's REAL cash received. Credit-only settlements contribute nothing here. */
   totalReceived: number
   /**
@@ -250,24 +286,28 @@ export interface PlanSettlement {
  * so the actual money predicate is unit-testable directly, without a live offer.
  */
 export function computePlanSettlementFromStatus(offerToken: string, status: PlanStatus): PlanSettlement {
+  const round2 = (n: number) => Math.round(n * 100) / 100
+
   const parts: PlanSettlementPart[] = status.parts.map((p) => {
     const invoice = p.invoice
     const agreedAmount = invoice ? Number(invoice.amount ?? p.part.amount) : p.part.amount
+    // A part never raised has no booked fee to strip; a raised one nets out whatever
+    // bookCardFee actually added (0 for a wire/manual settlement — the column is null then).
+    const agreedAmountExFee = round2(agreedAmount - Number(invoice?.card_fee_amount ?? 0))
     const amountPaid = invoice ? Number(invoice.amount_paid ?? 0) : 0
     const settledInCash =
       invoice != null &&
       invoice.invoice_status === "Paid" &&
       amountPaid >= agreedAmount - PLAN_TOTAL_TOLERANCE
-    return { seq: p.part.seq, agreedAmount, amountPaid, settledInCash }
+    return { seq: p.part.seq, agreedAmount, agreedAmountExFee, amountPaid, settledInCash }
   })
-
-  const round2 = (n: number) => Math.round(n * 100) / 100
 
   return {
     offerToken,
     currency: planCurrency(status.plan),
     parts,
     totalAgreed: round2(parts.reduce((s, p) => s + p.agreedAmount, 0)),
+    totalAgreedExFee: round2(parts.reduce((s, p) => s + p.agreedAmountExFee, 0)),
     totalReceived: round2(parts.reduce((s, p) => s + p.amountPaid, 0)),
     eligible: parts.length > 0 && parts.every((p) => p.settledInCash),
   }
@@ -283,4 +323,46 @@ export async function computePlanSettlement(offerToken: string): Promise<PlanSet
   const status = await planStatusForOffer(offerToken)
   if (!status) return null
   return computePlanSettlementFromStatus(offerToken, status)
+}
+
+/**
+ * The card-fee rate a LATER part of a plan must inherit (council, 2026-08-11) — the single,
+ * shared implementation. Part one gets its rate pinned by the signing webhook; without this, a
+ * part raised after that — by a staffer or by the auto-raise cron — would otherwise pin whatever
+ * the CURRENT configured rate is, charging a card fee a signed, waived-fee agreement never
+ * carried. Two callers need the identical answer (the manual "Raise invoice" action and the
+ * auto-raise cron); this exists so there is exactly one implementation, not two that can drift
+ * (bug-hunter finding, 2026-08-27 auto-raise review: a second hand-rolled copy is exactly the
+ * bug class already fixed once as dev_task 6ec6872a).
+ *
+ * Resolution order: part 1's OWN stamped rate (what was actually charged), falling back to the
+ * offer's pinned `card_fee_rate` column only if part 1 was never raised/charged through Stripe.
+ * Both reads are edge-cast: the tranche columns and `offers.card_fee_rate` postdate the
+ * deliberately-stale generated types (same pattern as the plan fetch in activation).
+ */
+export async function resolveTrancheCardFeeRate(offerToken: string): Promise<number | undefined> {
+  const part1Query = supabaseAdmin
+    .from("payments")
+    .select("card_fee_rate" as never) as unknown as {
+      eq: (c: string, v: unknown) => {
+        eq: (c: string, v: unknown) => {
+          limit: (n: number) => { maybeSingle: () => Promise<{ data: { card_fee_rate?: number | null } | null }> }
+        }
+      }
+    }
+  const { data: part1 } = await part1Query
+    .eq("tranche_offer_token", offerToken)
+    .eq("tranche_seq", 1)
+    .limit(1)
+    .maybeSingle()
+  if (typeof part1?.card_fee_rate === "number") return part1.card_fee_rate
+
+  const offerQuery = supabaseAdmin
+    .from("offers")
+    .select("card_fee_rate" as never)
+    .eq("token", offerToken) as unknown as {
+      maybeSingle: () => Promise<{ data: { card_fee_rate?: number | null } | null }>
+    }
+  const { data: offerRow } = await offerQuery.maybeSingle()
+  return typeof offerRow?.card_fee_rate === "number" ? offerRow.card_fee_rate : undefined
 }

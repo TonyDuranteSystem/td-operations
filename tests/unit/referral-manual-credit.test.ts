@@ -364,8 +364,8 @@ describe('blockedByUnsettledPlan — the one gate all four older referral-paymen
   it('blocks on an explicit offer token whose plan is not yet fully settled', async () => {
     settlementMock.mockResolvedValue({
       offerToken: 'offer-X', currency: 'USD',
-      parts: [{ seq: 1, agreedAmount: 500, amountPaid: 500, settledInCash: true }, { seq: 2, agreedAmount: 500, amountPaid: 0, settledInCash: false }],
-      totalAgreed: 1000, totalReceived: 500, eligible: false,
+      parts: [{ seq: 1, agreedAmount: 500, agreedAmountExFee: 500, amountPaid: 500, settledInCash: true }, { seq: 2, agreedAmount: 500, agreedAmountExFee: 500, amountPaid: 0, settledInCash: false }],
+      totalAgreed: 1000, totalAgreedExFee: 1000, totalReceived: 500, eligible: false,
     })
     const { supabase } = makePlanBlockDb()
     const res = await blockedByUnsettledPlan({ offerToken: 'offer-X' }, supabase)
@@ -380,8 +380,8 @@ describe('blockedByUnsettledPlan — the one gate all four older referral-paymen
   it('does not block when the named offer plan is already fully settled', async () => {
     settlementMock.mockResolvedValue({
       offerToken: 'offer-X', currency: 'USD',
-      parts: [{ seq: 1, agreedAmount: 500, amountPaid: 500, settledInCash: true }],
-      totalAgreed: 500, totalReceived: 500, eligible: true,
+      parts: [{ seq: 1, agreedAmount: 500, agreedAmountExFee: 500, amountPaid: 500, settledInCash: true }],
+      totalAgreed: 500, totalAgreedExFee: 500, totalReceived: 500, eligible: true,
     })
     const { supabase } = makePlanBlockDb()
     const res = await blockedByUnsettledPlan({ offerToken: 'offer-X' }, supabase)
@@ -398,8 +398,8 @@ describe('blockedByUnsettledPlan — the one gate all four older referral-paymen
   it('resolves candidate offers by referred account/contact when no token is given, and blocks on an unsettled one', async () => {
     settlementMock.mockResolvedValue({
       offerToken: 'offer-Y', currency: 'USD',
-      parts: [{ seq: 1, agreedAmount: 300, amountPaid: 0, settledInCash: false }],
-      totalAgreed: 300, totalReceived: 0, eligible: false,
+      parts: [{ seq: 1, agreedAmount: 300, agreedAmountExFee: 300, amountPaid: 0, settledInCash: false }],
+      totalAgreed: 300, totalAgreedExFee: 300, totalReceived: 0, eligible: false,
     })
     const { supabase, state } = makePlanBlockDb({ offerRows: [{ token: 'offer-Y' }] })
     const res = await blockedByUnsettledPlan({ referredAccountId: 'acct-1', referredContactId: 'contact-1' }, supabase)

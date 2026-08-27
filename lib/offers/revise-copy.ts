@@ -72,6 +72,11 @@ export function buildRevisedOfferInsert(
     issues: original.issues,
     admin_notes: original.admin_notes,
     currency: original.currency,
+    // Found by bug-hunter (full E2E QA, 2026-08-27): a package's setup fee and its renewal
+    // installments can be quoted in different currencies on purpose (lockPackagePick writes
+    // installment_currency independently of currency) — omitting it here silently reverted a
+    // revised offer's renewal-installment symbol to the setup currency instead of the picked one.
+    installment_currency: (original.installment_currency as string | null | undefined) ?? null,
     referrer_name: original.referrer_name,
     referrer_type: original.referrer_type,
     contact_id: original.contact_id ?? null,
@@ -95,6 +100,32 @@ export function buildRevisedOfferInsert(
     // bill on v2, and a trigger flattened to a plain amount loses the answer to "when is part
     // two due?" — which is the only thing the schedule and the mint action have to go on.
     payment_plan: (original.payment_plan as unknown) ?? null,
+    // Client-chosen split (2026-08-27) — same reasoning as payment_plan just above: a staff
+    // setting made at authoring time, not something v2 should silently lose.
+    allow_split_payment_choice: (original.allow_split_payment_choice as boolean | null | undefined) ?? false,
+    // ⛔ MUST TRAVEL WITH payment_plan, NEVER ALONE (bug-hunter, second council pass,
+    // 2026-08-27). If the client had already chosen "split" on v1, dropping ONLY this
+    // timestamp while payment_plan is copied above (as it already, correctly, is) leaves v2
+    // showing the pre-sign choice picker again — but the write route refuses outright the
+    // moment the client picks anything, because payment_plan is already non-null. A picker
+    // that can never be completed is a worse regression than carrying the old choice forward:
+    // the existing gross-mismatch check in decideSigningBill already safely degrades a
+    // now-stale split to full-fee billing (with a loud staff-visible warning) if a revision
+    // changed the price — the same accepted fallback this codebase already relies on for a
+    // staff-authored plan surviving a revision.
+    payment_choice_made_at: (original.payment_choice_made_at as string | null | undefined) ?? null,
+    // Multi-option offers (dev job 3c1bb5fa) — found by adversarial review, not
+    // built correctly the first time: `packages` was missing from this explicit
+    // list, so revising a package offer produced a v2 draft with NO options at
+    // all (the top-level services/cost_summary/entity_type/formation_state are
+    // only ever placeholders on a package offer — see createOffer — so dropping
+    // `packages` here left v2 with nothing real). Copied together with the pick
+    // state: if the client had already locked a choice on v1, v2 keeps the same
+    // resolved option rather than confusingly re-opening a picker on a deal
+    // that was already decided.
+    packages: (original.packages as unknown) ?? null,
+    selected_package_key: (original.selected_package_key as string | null | undefined) ?? null,
+    package_locked_at: (original.package_locked_at as string | null | undefined) ?? null,
     view_count: 0,
     version: seed.newVersion,
   }

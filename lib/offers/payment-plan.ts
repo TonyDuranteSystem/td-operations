@@ -463,6 +463,31 @@ export function decideSigningBill(args: {
 export const PARTIAL_PAYMENT_LABEL = "Partial Payment"
 
 /**
+ * The STANDARD 50/50 split a client can choose at pay-time (Antonio, 2026-08-27) — distinct from
+ * the fully staff-authored plan the rest of this file otherwise assumes. Pure: given the final
+ * contract price (already resolved for whichever option a multi-option offer's client picked)
+ * and today's date, returns the raw two-part plan shape ready for `validatePaymentPlan`.
+ *
+ * `todayIso` is explicit, not read from `new Date()` inside — this codebase's own pattern for
+ * date-based logic (see `duePartsToAutoRaise`), so a test can assert "30 days from a fixed date"
+ * without mocking the system clock.
+ *
+ * Splits by SUBTRACTION, not by halving twice: part 2 is `gross - part1`, so the two parts always
+ * sum EXACTLY to the contract price even on an odd-cent gross (same reasoning
+ * `PLAN_TOTAL_TOLERANCE` exists to guard against elsewhere in this file).
+ */
+export function buildSplitPaymentPlan(gross: number, currency: string, todayIso: string): unknown[] {
+  const round2 = (n: number) => Math.round(n * 100) / 100
+  const half = round2(gross / 2)
+  const due = new Date(`${todayIso}T00:00:00Z`)
+  due.setUTCDate(due.getUTCDate() + 30)
+  return [
+    { seq: 1, amount: half, currency, trigger: { kind: "signing" } },
+    { seq: 2, amount: round2(gross - half), currency, trigger: { kind: "date", date: due.toISOString().slice(0, 10) } },
+  ]
+}
+
+/**
  * The description that goes ON the invoice for a part. English, like every other invoice
  * description in the system — and like every other string in this feature (Antonio, 2026-08-11).
  */

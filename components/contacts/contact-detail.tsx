@@ -29,6 +29,7 @@ import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
 import { ReferralsGivenCard } from '@/components/referrals/referrals-given-card'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
+import type { OfferPackageOption } from '@/lib/types/offer'
 import { LlcNameSelectionCard } from '@/components/contacts/llc-name-selection-card'
 import { ServiceDeliveriesSection, type ServiceDeliveryForStepper } from '@/components/accounts/service-deliveries-section'
 import type { PipelineStage } from '@/components/accounts/sd-pipeline-stepper'
@@ -221,6 +222,9 @@ interface OfferRecord {
   created_at: string
   viewed_at: string | null
   expires_at: string | null
+  packages: OfferPackageOption[] | null
+  selected_package_key: string | null
+  package_locked_at: string | null
 }
 
 interface PendingActivationRecord {
@@ -1362,15 +1366,18 @@ function OfferStatusCard({
 }) {
   const primaryOffer = offers.find(o => o.status !== 'draft') ?? offers[0] ?? null
 
+  // Spread rather than list every field by hand: primaryOffer already carries
+  // everything OfferData needs (plus a few extras this panel doesn't use,
+  // which spreading through is harmless). A field-by-field copy is exactly
+  // the pattern that silently dropped packages/selected_package_key/
+  // package_locked_at the first time this was wired up (found by adversarial
+  // review) — spreading means a FUTURE new field reaches the panel without
+  // this file needing to be remembered and touched again. Only the two
+  // fields OfferRecord types as `unknown` need an explicit cast.
   const offerData: OfferData | null = primaryOffer ? {
-    token: primaryOffer.token,
-    status: primaryOffer.status,
-    contract_type: primaryOffer.contract_type,
-    cost_summary: primaryOffer.cost_summary as OfferData['cost_summary'],
-    bundled_pipelines: primaryOffer.bundled_pipelines,
+    ...primaryOffer,
     view_count: primaryOffer.view_count ?? 0,
-    viewed_at: primaryOffer.viewed_at,
-    created_at: primaryOffer.created_at,
+    cost_summary: primaryOffer.cost_summary as OfferData['cost_summary'],
     required_documents: primaryOffer.required_documents as OfferData['required_documents'],
   } : null
 
