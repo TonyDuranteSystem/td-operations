@@ -242,13 +242,18 @@ export function VendorList({ vendors: initialVendors, accountId, expenses }: Ven
                   </div>
                 </div>
                 <div className="flex gap-1 shrink-0">
-                  <button
-                    onClick={() => setStatementVendor(v)}
-                    className="p-1.5 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600"
-                    title={t('vendorList.viewStatement')}
-                  >
-                    <FileText className="h-3.5 w-3.5" />
-                  </button>
+                  <div className="relative group">
+                    <button
+                      onClick={() => setStatementVendor(v)}
+                      className="p-1.5 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600"
+                      aria-label={t('vendorList.viewStatement')}
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                    </button>
+                    <span className="pointer-events-none absolute right-0 top-full z-20 mt-1 whitespace-nowrap rounded-md bg-zinc-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity duration-75 group-hover:opacity-100">
+                      {t('vendorList.viewStatement')}
+                    </span>
+                  </div>
                   <button onClick={() => openEdit(v)} className="p-1.5 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700">
                     <Pencil className="h-3.5 w-3.5" />
                   </button>
