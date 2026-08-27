@@ -1,14 +1,17 @@
 'use client'
 
 import { useState } from 'react'
-import { Search, Plus, Building2, Pencil, Trash2, X, Loader2, Mail, Phone, MapPin, User } from 'lucide-react'
+import { Search, Plus, Building2, Pencil, Trash2, X, Loader2, Mail, Phone, MapPin, User, FileText } from 'lucide-react'
 import { createVendor, updateVendor, deleteVendor, type Vendor } from '@/app/portal/invoices/vendor-actions'
 import { toast } from 'sonner'
 import { useLocale } from '@/lib/portal/use-locale'
+import { VendorStatementModal } from './vendor-statement-modal'
+import type { Expense } from './expense-list'
 
 interface VendorListProps {
   vendors: Vendor[]
   accountId: string
+  expenses: Expense[]
 }
 
 const EMPTY_FORM = {
@@ -21,7 +24,7 @@ const EMPTY_FORM = {
   notes: '',
 }
 
-export function VendorList({ vendors: initialVendors, accountId }: VendorListProps) {
+export function VendorList({ vendors: initialVendors, accountId, expenses }: VendorListProps) {
   const { t } = useLocale()
   const [search, setSearch] = useState('')
   const [showForm, setShowForm] = useState(false)
@@ -29,6 +32,7 @@ export function VendorList({ vendors: initialVendors, accountId }: VendorListPro
   const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [statementVendor, setStatementVendor] = useState<Vendor | null>(null)
 
   const filtered = initialVendors.filter(v => {
     if (!search) return true
@@ -238,6 +242,13 @@ export function VendorList({ vendors: initialVendors, accountId }: VendorListPro
                   </div>
                 </div>
                 <div className="flex gap-1 shrink-0">
+                  <button
+                    onClick={() => setStatementVendor(v)}
+                    className="p-1.5 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600"
+                    title={t('vendorList.viewStatement')}
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                  </button>
                   <button onClick={() => openEdit(v)} className="p-1.5 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700">
                     <Pencil className="h-3.5 w-3.5" />
                   </button>
@@ -259,6 +270,14 @@ export function VendorList({ vendors: initialVendors, accountId }: VendorListPro
             </div>
           ))}
         </div>
+      )}
+
+      {statementVendor && (
+        <VendorStatementModal
+          vendor={statementVendor}
+          expenses={expenses}
+          onClose={() => setStatementVendor(null)}
+        />
       )}
     </div>
   )
