@@ -45,6 +45,8 @@ const EVENT_KEY_LABELS: Record<string, string> = {
   banking_wizard_submitted: 'Banking',
   tax_form_review: 'Tax',
   itin_review: 'ITIN',
+  aged_credit_applied: 'Credit Applied',
+  financials_confirm_unlocked: 'Financials Unlocked',
 }
 
 /** Deep-link target for a note's source entity. Returns null when there's no
