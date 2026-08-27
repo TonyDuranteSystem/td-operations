@@ -108,11 +108,17 @@ export async function POST(request: NextRequest) {
   }
 
   if (account_id) {
+    // Admin reads also clear plain system notices (out-of-office autoreply and
+    // similar) alongside client messages — otherwise a topic that ever got one
+    // stays permanently "unread" no matter how many times it's opened (2026-08-27).
+    // Chat-event marker rows are EXCLUDED: those are acknowledged via their own
+    // handled_at flag (What's New panel), never via read_at — see chat-events.ts.
     let q = supabaseAdmin
       .from('portal_messages')
       .update({ read_at: now })
       .eq('account_id', account_id)
-      .eq('sender_type', senderTypeToMark)
+      .in('sender_type', dashUser ? [senderTypeToMark, 'system'] : [senderTypeToMark])
+      .not('message', 'ilike', '%<!-- chat-event:%')
       .is('read_at', null)
     // Skip messages the client explicitly kept unread.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
@@ -146,11 +152,14 @@ export async function POST(request: NextRequest) {
   const excludedSet = new Set(excludedAccountIds)
 
   // (a) messages tagged with contact_id
+  // Same system-notice inclusion as the account_id branch above (2026-08-27):
+  // admin reads also clear plain system notices, never chat-event marker rows.
   let q1 = supabaseAdmin
     .from('portal_messages')
     .update({ read_at: now })
     .eq('contact_id', contact_id)
-    .eq('sender_type', senderTypeToMark)
+    .in('sender_type', dashUser ? [senderTypeToMark, 'system'] : [senderTypeToMark])
+    .not('message', 'ilike', '%<!-- chat-event:%')
     .is('read_at', null)
   if (excludedAccountIds.length > 0) {
     q1 = q1.or(`account_id.is.null,account_id.not.in.(${excludedAccountIds.join(',')})`)
@@ -174,7 +183,8 @@ export async function POST(request: NextRequest) {
       .update({ read_at: now })
       .is('contact_id', null)
       .in('account_id', companyOnlyAccountIds)
-      .eq('sender_type', senderTypeToMark)
+      .in('sender_type', dashUser ? [senderTypeToMark, 'system'] : [senderTypeToMark])
+      .not('message', 'ilike', '%<!-- chat-event:%')
       .is('read_at', null)
     // Skip messages the client explicitly kept unread.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
