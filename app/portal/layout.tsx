@@ -138,10 +138,11 @@ export default async function PortalLayout({
   let accounts = contactId ? await getPortalAccounts(contactId) : []
   const inProgress = contactId ? await getInProgressFormations(contactId) : []
 
-  // Office clock "YOUR TIME": resolve the (logged-in / viewed) client's timezone
-  // from their stored country, so it reflects the CLIENT — not the device — even
-  // under staff "View as". Unknown/empty country → null → clock falls back to the
-  // device/browser timezone (R-decision: browser fallback).
+  // Office clock "YOUR TIME": resolve the client's stored-country timezone.
+  // OfficeClock only actually USES this as the primary source under staff
+  // "View as client" (where the browser is the staff member's, not the
+  // client's); for a real client visit, the device's own timezone wins
+  // instead — see resolveYourTimeZone in lib/portal/client-timezone.ts.
   let clientTz: { tz: string; label: string } | null = null
   if (contactId) {
     const { data: ctzRow } = await supabaseAdmin
@@ -286,7 +287,11 @@ export default async function PortalLayout({
           {/* International office clock — shows US (ET) office time + Open/Closed
               status + the client's own local time, on every page. */}
           <div className="px-4 pt-4 sm:px-6 lg:px-8">
-            <OfficeClock clientTimeZone={clientTz?.tz} clientTimeZoneLabel={clientTz?.label} />
+            <OfficeClock
+              clientTimeZone={clientTz?.tz}
+              clientTimeZoneLabel={clientTz?.label}
+              isViewAs={!!viewAsMarker}
+            />
           </div>
           {/* Notification bell - top right on desktop (always shown if contactId exists) */}
           {contactId && (

@@ -152,3 +152,35 @@ export function countryToTimeZone(country: string | null | undefined): ClientTim
   const aliased = ALIASES[key] ?? key
   return COUNTRY_TZ[aliased] ?? null
 }
+
+/**
+ * Decide which signal wins for the portal "YOUR TIME" clock.
+ *
+ * A real client visit reads the device's own timezone (their actual
+ * connection right now), since that reflects where they are even when
+ * traveling or when the address on file is stale. A staff "View as client"
+ * session renders in the STAFF's browser, so the device signal there belongs
+ * to the wrong person — those sessions use the client's stored-country
+ * timezone instead. If neither signal is available, whatever timezone is
+ * passed is used as-is (undefined lets the caller fall back to the browser's
+ * own default formatting).
+ */
+export function resolveYourTimeZone({
+  isViewAs,
+  deviceTimeZone,
+  storedTimeZone,
+}: {
+  isViewAs: boolean
+  deviceTimeZone?: string | null
+  storedTimeZone?: ClientTimeZone | null
+}): { tz: string | undefined; label: string } {
+  const deviceLabel = deviceTimeZone ? (deviceTimeZone.split('/').pop()?.replace(/_/g, ' ') ?? '') : ''
+
+  if (!isViewAs && deviceTimeZone) {
+    return { tz: deviceTimeZone, label: deviceLabel }
+  }
+  if (storedTimeZone) {
+    return { tz: storedTimeZone.tz, label: storedTimeZone.label }
+  }
+  return { tz: deviceTimeZone ?? undefined, label: deviceLabel }
+}
