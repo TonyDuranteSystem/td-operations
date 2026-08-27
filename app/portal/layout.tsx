@@ -31,8 +31,9 @@ import { PasswordGate } from '@/components/portal/password-gate'
 import { SuspendedGuard } from '@/components/portal/suspended-guard'
 import { ViewAsBanner } from '@/components/portal/view-as-banner'
 import { verifyViewAs, VIEW_AS_COOKIE } from '@/lib/portal/view-as'
+import { isValidTimeZone, shouldRefreshLastSeen } from '@/lib/portal/last-seen-location'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { resolvePortalMode } from '@/lib/portal/portal-mode'
 import Script from 'next/script'
 
@@ -138,26 +139,6 @@ export default async function PortalLayout({
   let accounts = contactId ? await getPortalAccounts(contactId) : []
   const inProgress = contactId ? await getInProgressFormations(contactId) : []
 
-  // Office clock "YOUR TIME": resolve the client's stored-country timezone.
-  // OfficeClock only actually USES this as the primary source under staff
-  // "View as client" (where the browser is the staff member's, not the
-  // client's); for a real client visit, the device's own timezone wins
-  // instead — see resolveYourTimeZone in lib/portal/client-timezone.ts.
-  let clientTz: { tz: string; label: string } | null = null
-  if (contactId) {
-    const { data: ctzRow } = await supabaseAdmin
-      .from('contacts')
-      .select('address_country')
-      .eq('id', contactId)
-      .maybeSingle()
-    clientTz = countryToTimeZone(ctzRow?.address_country ?? null)
-  }
-
-  // If admin without contact_id, show empty portal (debugging mode)
-  if (!isClient(user) && accounts.length === 0) {
-    accounts = []
-  }
-
   // Resolve the selected entity from the two selection cookies. portal_account_id
   // stays account-id-only; portal_formation (set only by the company switcher)
   // selects an in-progress formation. The contact-level tier is now only the
@@ -168,8 +149,56 @@ export default async function PortalLayout({
 
   // Read-only "View as client": if a valid marker cookie is present, render the
   // persistent banner. The minted session is the client's, so the rest of the
-  // layout already reflects exactly what the client sees.
+  // layout already reflects exactly what the client sees. Needed BEFORE the
+  // clock resolution below — a real visit and a staff View-as session prefer
+  // different signals (see resolveYourTimeZone).
   const viewAsMarker = await verifyViewAs(cookieStore.get(VIEW_AS_COOKIE)?.value)
+
+  // Office clock "YOUR TIME": resolve every signal OfficeClock might use —
+  // the client's stored-country address on file, and where the client's own
+  // connection actually was on their last real visit (captured below). A
+  // real client visit still prefers the device's own live timezone over
+  // both — see resolveYourTimeZone in lib/portal/client-timezone.ts.
+  let clientTz: { tz: string; label: string } | null = null
+  let lastSeenTimeZone: string | null = null
+  if (contactId) {
+    const { data: ctzRow } = await supabaseAdmin
+      .from('contacts')
+      .select('address_country, last_seen_timezone, last_seen_at')
+      .eq('id', contactId)
+      .maybeSingle()
+    clientTz = countryToTimeZone(ctzRow?.address_country ?? null)
+    lastSeenTimeZone = isValidTimeZone(ctzRow?.last_seen_timezone) ? ctzRow!.last_seen_timezone! : null
+
+    // Passive capture on a REAL visit only — View-as runs in the STAFF's
+    // browser, so its connection tells us nothing about the client.
+    // Throttled so a client browsing several pages doesn't write repeatedly.
+    if (!viewAsMarker && shouldRefreshLastSeen(ctzRow?.last_seen_at ?? null)) {
+      const ipTimeZone = (await headers()).get('x-vercel-ip-timezone')
+      if (isValidTimeZone(ipTimeZone)) {
+        lastSeenTimeZone = ipTimeZone
+        try {
+          // Deliberately NOT routed through lib/operations/contact.ts::updateContact —
+          // that helper bumps `updated_at` and writes an action_log audit row on every
+          // call, both meant for genuine contact edits. This is passive telemetry that
+          // can fire up to hourly per active client; going through it would make
+          // "updated_at" meaningless as a real-edit signal and flood the audit trail.
+          // eslint-disable-next-line no-restricted-syntax -- see comment above (P2.4)
+          await supabaseAdmin
+            .from('contacts')
+            .update({ last_seen_timezone: ipTimeZone, last_seen_at: new Date().toISOString() })
+            .eq('id', contactId)
+        } catch (e) {
+          console.error('[portal] failed to record last-seen timezone:', e)
+        }
+      }
+    }
+  }
+
+  // If admin without contact_id, show empty portal (debugging mode)
+  if (!isClient(user) && accounts.length === 0) {
+    accounts = []
+  }
   let viewAsName = ''
   if (viewAsMarker) {
     const { data: vc } = await supabaseAdmin
@@ -291,6 +320,7 @@ export default async function PortalLayout({
               clientTimeZone={clientTz?.tz}
               clientTimeZoneLabel={clientTz?.label}
               isViewAs={!!viewAsMarker}
+              lastSeenTimeZone={lastSeenTimeZone ?? undefined}
             />
           </div>
           {/* Notification bell - top right on desktop (always shown if contactId exists) */}

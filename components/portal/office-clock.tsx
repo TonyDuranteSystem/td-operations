@@ -21,16 +21,20 @@ export function OfficeClock({
   clientTimeZone,
   clientTimeZoneLabel,
   isViewAs = false,
+  lastSeenTimeZone,
 }: {
-  /** IANA timezone resolved from the client's stored country. Used only as a
-   *  fallback for real visits (the device timezone wins), and as the primary
-   *  source under staff "View as client" (see isViewAs). */
+  /** IANA timezone resolved from the client's stored country. The fallback of
+   *  last resort once a real signal exists (see lastSeenTimeZone). */
   clientTimeZone?: string
   clientTimeZoneLabel?: string
   /** True when staff are viewing the portal as this client ("View as"). The
    *  browser here is the STAFF's, so the device timezone belongs to the wrong
-   *  person — the stored-country timezone is used instead. */
+   *  person — lastSeenTimeZone (or the stored country) is used instead. */
   isViewAs?: boolean
+  /** Where the CLIENT's own connection actually was on their last real visit
+   *  (captured server-side, never during View-as). This is what View-as
+   *  prefers over the stored country — see resolveYourTimeZone. */
+  lastSeenTimeZone?: string
 } = {}) {
   const { locale, t } = useLocale()
   const [now, setNow] = useState<Date | null>(null)
@@ -65,6 +69,7 @@ export function OfficeClock({
   const resolvedTz = resolveYourTimeZone({
     isViewAs,
     deviceTimeZone,
+    lastSeenTimeZone,
     storedTimeZone: clientTimeZone ? { tz: clientTimeZone, label: clientTimeZoneLabel ?? '' } : null,
   })
   const yourTime = timeFmt(locale, resolvedTz.tz).format(now)

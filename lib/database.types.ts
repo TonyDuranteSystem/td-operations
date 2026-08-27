@@ -4390,6 +4390,8 @@ export type Database = {
           kyc_status: string | null
           language: string | null
           last_name: string | null
+          last_seen_at: string | null
+          last_seen_timezone: string | null
           lead_id: string | null
           merged_into: string | null
           notes: string | null
@@ -4443,6 +4445,8 @@ export type Database = {
           kyc_status?: string | null
           language?: string | null
           last_name?: string | null
+          last_seen_at?: string | null
+          last_seen_timezone?: string | null
           lead_id?: string | null
           merged_into?: string | null
           notes?: string | null
@@ -4496,6 +4500,8 @@ export type Database = {
           kyc_status?: string | null
           language?: string | null
           last_name?: string | null
+          last_seen_at?: string | null
+          last_seen_timezone?: string | null
           lead_id?: string | null
           merged_into?: string | null
           notes?: string | null
