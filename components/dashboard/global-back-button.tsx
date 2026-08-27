@@ -5,6 +5,7 @@ import { useEffect, useRef } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { markInAppNavigation, canGoBackInApp } from '@/lib/nav/in-app-history'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 /**
  * Global in-app Back — rendered on every dashboard page, in BOTH the desktop
@@ -39,13 +40,14 @@ export function GlobalBackButton({ className }: { className?: string }) {
   }
 
   return (
-    <button
-      onClick={onBack}
-      title="Back"
-      aria-label="Back"
-      className={cn('p-2 rounded-md hover:bg-zinc-100 text-zinc-500 transition-colors', className)}
-    >
-      <ArrowLeft className="h-5 w-5" />
-    </button>
+    <FastTooltip label="Back" align="left">
+      <button
+        onClick={onBack}
+        aria-label="Back"
+        className={cn('p-2 rounded-md hover:bg-zinc-100 text-zinc-500 transition-colors', className)}
+      >
+        <ArrowLeft className="h-5 w-5" />
+      </button>
+    </FastTooltip>
   )
 }

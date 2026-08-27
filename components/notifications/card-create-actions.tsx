@@ -30,6 +30,7 @@ import { Briefcase, FileText, X, Loader2 } from 'lucide-react'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import { HelpDot } from '@/components/help/help-dot'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface SvcOption { id: string; name: string; pipeline: string | null }
 
@@ -52,21 +53,25 @@ export function CardCreateActions({
   return (
     <>
       <div className="flex items-center gap-1">
-        <button
-          onClick={() => setSvcOpen(true)}
-          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-800 border rounded px-1.5 py-0.5"
-          title="Create a service for this client"
-        >
-          <Briefcase className="h-3 w-3" /> Service
-        </button>
+        <FastTooltip label="Create a service for this client">
+          <button
+            onClick={() => setSvcOpen(true)}
+            className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-800 border rounded px-1.5 py-0.5"
+            aria-label="Create a service for this client"
+          >
+            <Briefcase className="h-3 w-3" /> Service
+          </button>
+        </FastTooltip>
         <HelpDot helpKey="card.service" />
-        <button
-          onClick={() => setInvOpen(true)}
-          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-800 border rounded px-1.5 py-0.5"
-          title="Create an invoice for this client"
-        >
-          <FileText className="h-3 w-3" /> Invoice
-        </button>
+        <FastTooltip label="Create an invoice for this client">
+          <button
+            onClick={() => setInvOpen(true)}
+            className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-800 border rounded px-1.5 py-0.5"
+            aria-label="Create an invoice for this client"
+          >
+            <FileText className="h-3 w-3" /> Invoice
+          </button>
+        </FastTooltip>
         <HelpDot helpKey="card.invoice" />
       </div>
 

@@ -10,6 +10,7 @@ import type { PortalChatEntity } from '@/lib/portal/queries'
 import type { ChatAttachment, PortalMessage } from '@/lib/types'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { MessageReactions } from '@/components/chat/message-reactions'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { useLocale } from '@/lib/portal/use-locale'
 import { interpolateString } from '@/lib/template-interpolation'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -506,14 +507,16 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
       onDrop={handleDrop}
     >
       {/* Refresh button — replaces pull-to-refresh gesture on chat page */}
-      <button
-        onClick={handleRefresh}
-        disabled={isRefreshing || loading}
-        className="absolute top-2 right-2 z-10 p-1.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-40 transition-colors"
-        title={t('portalChat.refreshMessages')}
-      >
-        <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
-      </button>
+      <FastTooltip label={t('portalChat.refreshMessages')}>
+        <button
+          onClick={handleRefresh}
+          disabled={isRefreshing || loading}
+          className="absolute top-2 right-2 z-10 p-1.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-40 transition-colors"
+          aria-label={t('portalChat.refreshMessages')}
+        >
+          <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
+        </button>
+      </FastTooltip>
       {/* Drag overlay */}
       {isDragging && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center border-2 border-dashed border-blue-400 bg-blue-50/90 rounded-xl pointer-events-none">
@@ -692,13 +695,15 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                         <Pin className="h-3 w-3 text-amber-500 mt-0.5 shrink-0" />
                         <span className="truncate flex-1">{pm.message || t('portalChat.attachmentPlaceholder')}</span>
                       </button>
-                      <button
-                        onClick={() => togglePin(pm.id, false)}
-                        className="shrink-0 text-zinc-400 hover:text-red-600"
-                        title={t('portalChat.unpin')}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
+                      <FastTooltip label={t('portalChat.unpin')}>
+                        <button
+                          onClick={() => togglePin(pm.id, false)}
+                          className="shrink-0 text-zinc-400 hover:text-red-600"
+                          aria-label={t('portalChat.unpin')}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </FastTooltip>
                     </div>
                   ))}
                 </div>
@@ -729,20 +734,24 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                   {/* Reply button — left side for own messages */}
                   {isOwn && (
                     <>
-                      <button
-                        onClick={() => togglePin(msg.id, !msg.pinned_at)}
-                        className={cn('p-1 rounded-full hover:bg-zinc-100 transition-colors shrink-0', msg.pinned_at ? 'text-amber-500' : 'text-zinc-300 hover:text-zinc-600')}
-                        title={msg.pinned_at ? t('portalChat.unpin') : t('portalChat.pin')}
-                      >
-                        <Pin className={cn('h-3.5 w-3.5', msg.pinned_at && 'fill-amber-400')} />
-                      </button>
-                      <button
-                        onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
-                        className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
-                        title={t('portalChat.reply')}
-                      >
-                        <Reply className="h-3.5 w-3.5" />
-                      </button>
+                      <FastTooltip label={msg.pinned_at ? t('portalChat.unpin') : t('portalChat.pin')}>
+                        <button
+                          onClick={() => togglePin(msg.id, !msg.pinned_at)}
+                          className={cn('p-1 rounded-full hover:bg-zinc-100 transition-colors shrink-0', msg.pinned_at ? 'text-amber-500' : 'text-zinc-300 hover:text-zinc-600')}
+                          aria-label={msg.pinned_at ? t('portalChat.unpin') : t('portalChat.pin')}
+                        >
+                          <Pin className={cn('h-3.5 w-3.5', msg.pinned_at && 'fill-amber-400')} />
+                        </button>
+                      </FastTooltip>
+                      <FastTooltip label={t('portalChat.reply')}>
+                        <button
+                          onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
+                          className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
+                          aria-label={t('portalChat.reply')}
+                        >
+                          <Reply className="h-3.5 w-3.5" />
+                        </button>
+                      </FastTooltip>
                     </>
                   )}
                   <div className={cn(
@@ -877,28 +886,34 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                   {/* Reply button — right side for other's messages */}
                   {!isOwn && (
                     <>
-                      <button
-                        onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
-                        className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
-                        title={t('portalChat.reply')}
-                      >
-                        <Reply className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        onClick={() => togglePin(msg.id, !msg.pinned_at)}
-                        className={cn('p-1 rounded-full hover:bg-zinc-100 transition-colors shrink-0', msg.pinned_at ? 'text-amber-500' : 'text-zinc-300 hover:text-zinc-600')}
-                        title={msg.pinned_at ? t('portalChat.unpin') : t('portalChat.pin')}
-                      >
-                        <Pin className={cn('h-3.5 w-3.5', msg.pinned_at && 'fill-amber-400')} />
-                      </button>
-                      {msg.sender_type === 'admin' && (
+                      <FastTooltip label={t('portalChat.reply')}>
                         <button
-                          onClick={() => toggleKeepUnread(msg.id, !msg.client_kept_unread)}
-                          className={cn('p-1 rounded-full hover:bg-zinc-100 transition-colors shrink-0', msg.client_kept_unread ? 'text-blue-500' : 'text-zinc-300 hover:text-zinc-600')}
-                          title={msg.client_kept_unread ? t('portalChat.markRead') : t('portalChat.markUnread')}
+                          onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
+                          className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
+                          aria-label={t('portalChat.reply')}
                         >
-                          <MailOpen className="h-3.5 w-3.5" />
+                          <Reply className="h-3.5 w-3.5" />
                         </button>
+                      </FastTooltip>
+                      <FastTooltip label={msg.pinned_at ? t('portalChat.unpin') : t('portalChat.pin')}>
+                        <button
+                          onClick={() => togglePin(msg.id, !msg.pinned_at)}
+                          className={cn('p-1 rounded-full hover:bg-zinc-100 transition-colors shrink-0', msg.pinned_at ? 'text-amber-500' : 'text-zinc-300 hover:text-zinc-600')}
+                          aria-label={msg.pinned_at ? t('portalChat.unpin') : t('portalChat.pin')}
+                        >
+                          <Pin className={cn('h-3.5 w-3.5', msg.pinned_at && 'fill-amber-400')} />
+                        </button>
+                      </FastTooltip>
+                      {msg.sender_type === 'admin' && (
+                        <FastTooltip label={msg.client_kept_unread ? t('portalChat.markRead') : t('portalChat.markUnread')}>
+                          <button
+                            onClick={() => toggleKeepUnread(msg.id, !msg.client_kept_unread)}
+                            className={cn('p-1 rounded-full hover:bg-zinc-100 transition-colors shrink-0', msg.client_kept_unread ? 'text-blue-500' : 'text-zinc-300 hover:text-zinc-600')}
+                            aria-label={msg.client_kept_unread ? t('portalChat.markRead') : t('portalChat.markUnread')}
+                          >
+                            <MailOpen className="h-3.5 w-3.5" />
+                          </button>
+                        </FastTooltip>
                       )}
                     </>
                   )}
@@ -929,19 +944,21 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
           Inverted styling vs the "Older messages" pill. Shows when scrolled
           >200px from the bottom, smooth-scrolls to newest, hides at bottom. */}
       {showJumpToLatest && (
-        <button
-          onClick={jumpToLatest}
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-zinc-800 rounded-full shadow-lg hover:bg-zinc-700 transition-colors"
-          title={t('portalChat.jumpToLatest')}
-        >
-          <ChevronDown className="h-3 w-3" />
-          {t('portalChat.latest')}
-          {unreadBelowCount > 0 && (
-            <span className="ml-0.5 min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-semibold leading-none">
-              {unreadBelowCount}
-            </span>
-          )}
-        </button>
+        <FastTooltip label={t('portalChat.jumpToLatest')}>
+          <button
+            onClick={jumpToLatest}
+            className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-zinc-800 rounded-full shadow-lg hover:bg-zinc-700 transition-colors"
+            aria-label={t('portalChat.jumpToLatest')}
+          >
+            <ChevronDown className="h-3 w-3" />
+            {t('portalChat.latest')}
+            {unreadBelowCount > 0 && (
+              <span className="ml-0.5 min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-semibold leading-none">
+                {unreadBelowCount}
+              </span>
+            )}
+          </button>
+        </FastTooltip>
       )}
       </div>
 
@@ -1095,13 +1112,15 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
           )}>
             {/* Emoji */}
             <div className="relative shrink-0" ref={emojiPickerRef}>
-              <button
-                onClick={() => setShowEmojiPicker(v => !v)}
-                className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
-                title={t('portalChat.emoji')}
-              >
-                <Smile className="h-5 w-5" />
-              </button>
+              <FastTooltip label={t('portalChat.emoji')} align="left">
+                <button
+                  onClick={() => setShowEmojiPicker(v => !v)}
+                  className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
+                  aria-label={t('portalChat.emoji')}
+                >
+                  <Smile className="h-5 w-5" />
+                </button>
+              </FastTooltip>
               {showEmojiPicker && (
                 <div className="absolute bottom-12 left-0 z-30">
                   <EmojiPicker
@@ -1176,13 +1195,15 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
               <Send className="h-5 w-5" />
             </button>
           ) : isRecording ? (
-            <button
-              onClick={handleMicToggle}
-              className="w-12 h-12 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse flex items-center justify-center shrink-0 transition-all"
-              title={t('chat.stopRecording') || 'Stop recording'}
-            >
-              <Square className="h-5 w-5 fill-current" />
-            </button>
+            <FastTooltip label={t('chat.stopRecording') || 'Stop recording'}>
+              <button
+                onClick={handleMicToggle}
+                className="w-12 h-12 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse flex items-center justify-center shrink-0 transition-all"
+                aria-label={t('chat.stopRecording') || 'Stop recording'}
+              >
+                <Square className="h-5 w-5 fill-current" />
+              </button>
+            </FastTooltip>
           ) : isTranscribing ? (
             <button
               disabled
@@ -1191,13 +1212,15 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
               <Loader2 className="h-5 w-5 animate-spin" />
             </button>
           ) : micSupported ? (
-            <button
-              onClick={handleMicToggle}
-              className="w-12 h-12 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 flex items-center justify-center shrink-0 transition-colors"
-              title={t('chat.startRecording') || 'Voice input'}
-            >
-              <Mic className="h-5 w-5" />
-            </button>
+            <FastTooltip label={t('chat.startRecording') || 'Voice input'}>
+              <button
+                onClick={handleMicToggle}
+                className="w-12 h-12 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 flex items-center justify-center shrink-0 transition-colors"
+                aria-label={t('chat.startRecording') || 'Voice input'}
+              >
+                <Mic className="h-5 w-5" />
+              </button>
+            </FastTooltip>
           ) : (
             <button
               onClick={handleSend}

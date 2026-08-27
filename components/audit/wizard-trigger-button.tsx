@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { ClipboardCheck, Loader2, Bell, CheckCircle2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface WizardEntry {
   status: string
@@ -103,20 +104,22 @@ export function WizardTriggerButton({
           <ClipboardCheck className={compact ? 'h-2.5 w-2.5' : 'h-3 w-3'} />
           {label}
         </span>
-        <button
-          onClick={handleSendReminder}
-          disabled={sending}
-          className={cn(
-            'inline-flex items-center gap-1 font-medium rounded transition-colors disabled:opacity-50',
-            compact
-              ? 'text-[10px] px-1.5 py-0.5 bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-              : 'text-xs px-2 py-1 bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-          )}
-          title="Send wizard reminder email"
-        >
-          {sending ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Bell className="h-2.5 w-2.5" />}
-          {!compact && 'Remind'}
-        </button>
+        <FastTooltip label="Send wizard reminder email">
+          <button
+            onClick={handleSendReminder}
+            disabled={sending}
+            className={cn(
+              'inline-flex items-center gap-1 font-medium rounded transition-colors disabled:opacity-50',
+              compact
+                ? 'text-[10px] px-1.5 py-0.5 bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+                : 'text-xs px-2 py-1 bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+            )}
+            aria-label="Send wizard reminder email"
+          >
+            {sending ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Bell className="h-2.5 w-2.5" />}
+            {!compact && 'Remind'}
+          </button>
+        </FastTooltip>
       </div>
     )
   }
@@ -133,20 +136,22 @@ export function WizardTriggerButton({
         <ClipboardCheck className={compact ? 'h-2.5 w-2.5' : 'h-3 w-3'} />
         Not Started
       </span>
-      <button
-        onClick={handleSendReminder}
-        disabled={sending}
-        className={cn(
-          'inline-flex items-center gap-1 font-medium rounded transition-colors disabled:opacity-50',
-          compact
-            ? 'text-[10px] px-1.5 py-0.5 bg-purple-100 text-purple-700 hover:bg-purple-200'
-            : 'text-xs px-2 py-1 bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100'
-        )}
-        title="Send wizard reminder email"
-      >
-        {sending ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Bell className="h-2.5 w-2.5" />}
-        {!compact && 'Send Reminder'}
-      </button>
+      <FastTooltip label="Send wizard reminder email">
+        <button
+          onClick={handleSendReminder}
+          disabled={sending}
+          className={cn(
+            'inline-flex items-center gap-1 font-medium rounded transition-colors disabled:opacity-50',
+            compact
+              ? 'text-[10px] px-1.5 py-0.5 bg-purple-100 text-purple-700 hover:bg-purple-200'
+              : 'text-xs px-2 py-1 bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100'
+          )}
+          aria-label="Send wizard reminder email"
+        >
+          {sending ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Bell className="h-2.5 w-2.5" />}
+          {!compact && 'Send Reminder'}
+        </button>
+      </FastTooltip>
     </div>
   )
 }

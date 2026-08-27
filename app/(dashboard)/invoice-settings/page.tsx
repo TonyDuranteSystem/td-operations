@@ -18,6 +18,7 @@ import {
   ImageIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface BankAccount {
   id?: string
@@ -502,14 +503,18 @@ export default function InvoiceSettingsPage() {
                   </span>
                   <span className="text-center text-xs text-zinc-400">{svc.default_currency ?? 'USD'}</span>
                   <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => { setEditingService(svc.id); setEditName(svc.name); setEditPrice(svc.default_price != null ? String(svc.default_price) : ''); setEditCurrency(svc.default_currency ?? 'USD') }}
-                      className="p-1 rounded hover:bg-zinc-200" title="Edit">
-                      <Pencil className="h-3.5 w-3.5 text-zinc-400" />
-                    </button>
-                    <button onClick={() => deactivateService(svc.id)}
-                      className="p-1 rounded hover:bg-red-50" title="Remove">
-                      <Trash2 className="h-3.5 w-3.5 text-red-400" />
-                    </button>
+                    <FastTooltip label="Edit">
+                      <button onClick={() => { setEditingService(svc.id); setEditName(svc.name); setEditPrice(svc.default_price != null ? String(svc.default_price) : ''); setEditCurrency(svc.default_currency ?? 'USD') }}
+                        className="p-1 rounded hover:bg-zinc-200" aria-label="Edit">
+                        <Pencil className="h-3.5 w-3.5 text-zinc-400" />
+                      </button>
+                    </FastTooltip>
+                    <FastTooltip label="Remove">
+                      <button onClick={() => deactivateService(svc.id)}
+                        className="p-1 rounded hover:bg-red-50" aria-label="Remove">
+                        <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                      </button>
+                    </FastTooltip>
                   </div>
                 </div>
               )

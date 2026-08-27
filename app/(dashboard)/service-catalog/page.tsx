@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, Pencil, Trash2, RotateCcw, Loader2, Package } from 'lucide-react'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { toast } from 'sonner'
 
 interface ServiceItem {
@@ -279,34 +280,40 @@ export default function ServiceCatalogPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => openEdit(svc)}
-                    className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500"
-                    title="Edit"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
+                  <FastTooltip label="Edit">
+                    <button
+                      onClick={() => openEdit(svc)}
+                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500"
+                      aria-label="Edit"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  </FastTooltip>
                   {svc.active ? (
-                    <button
-                      onClick={() => handleDelete(svc.id)}
-                      disabled={deletingId === svc.id}
-                      className="p-1.5 rounded hover:bg-red-50 text-zinc-500 hover:text-red-600"
-                      title="Deactivate"
-                    >
-                      {deletingId === svc.id ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Trash2 className="h-3.5 w-3.5" />
-                      )}
-                    </button>
+                    <FastTooltip label="Deactivate">
+                      <button
+                        onClick={() => handleDelete(svc.id)}
+                        disabled={deletingId === svc.id}
+                        className="p-1.5 rounded hover:bg-red-50 text-zinc-500 hover:text-red-600"
+                        aria-label="Deactivate"
+                      >
+                        {deletingId === svc.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </FastTooltip>
                   ) : (
-                    <button
-                      onClick={() => handleReactivate(svc.id)}
-                      className="p-1.5 rounded hover:bg-green-50 text-zinc-500 hover:text-green-600"
-                      title="Reactivate"
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                    </button>
+                    <FastTooltip label="Reactivate">
+                      <button
+                        onClick={() => handleReactivate(svc.id)}
+                        className="p-1.5 rounded hover:bg-green-50 text-zinc-500 hover:text-green-600"
+                        aria-label="Reactivate"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                      </button>
+                    </FastTooltip>
                   )}
                 </div>
               </div>

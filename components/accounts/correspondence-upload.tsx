@@ -5,6 +5,7 @@ import { Mail, Upload, Loader2, FileText, ExternalLink, Circle } from 'lucide-re
 import { toast } from 'sonner'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface CorrespondenceRecord {
   id: string
@@ -150,15 +151,17 @@ export function CorrespondenceUpload({ accountId, contactId }: Props) {
                 </p>
               </div>
               {item.drive_file_url && (
-                <a
-                  href={item.drive_file_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex-shrink-0 p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 transition-colors"
-                  title="Open in Drive"
-                >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                </a>
+                <FastTooltip label="Open in Drive">
+                  <a
+                    href={item.drive_file_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-shrink-0 p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 transition-colors"
+                    aria-label="Open in Drive"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                </FastTooltip>
               )}
             </div>
           ))}

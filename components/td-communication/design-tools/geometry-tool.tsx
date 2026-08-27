@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { Download, Save, Loader2, Bookmark } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { normalizeHex, type NamedColor } from '@/lib/td-communication/color-tools'
 import {
   GEOMETRY_PRESETS,
@@ -184,13 +185,14 @@ export function GeometryTool({
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs text-zinc-500">Colour</span>
         {swatches.map((h) => (
-          <button
-            key={h}
-            onClick={() => setBg(h)}
-            title={h}
-            className={cn('h-6 w-6 rounded border', bg === h ? 'ring-2 ring-blue-400 border-blue-400' : 'border-zinc-200')}
-            style={{ backgroundColor: h }}
-          />
+          <FastTooltip key={h} label={h}>
+            <button
+              onClick={() => setBg(h)}
+              aria-label={h}
+              className={cn('h-6 w-6 rounded border', bg === h ? 'ring-2 ring-blue-400 border-blue-400' : 'border-zinc-200')}
+              style={{ backgroundColor: h }}
+            />
+          </FastTooltip>
         ))}
         <input type="color" value={normalizeHex(bg) ?? '#1f2937'} onChange={(e) => setBg(e.target.value)} className="h-6 w-8 rounded border border-zinc-200 bg-white p-0.5" aria-label="Custom colour" />
       </div>
@@ -215,14 +217,18 @@ export function GeometryTool({
           {busy === 'export-png' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
           Export PNG
         </button>
-        <button onClick={onSave} disabled={busy !== null || !enrollmentId} title={!enrollmentId ? 'Select a project to save into its Deliverables' : undefined} className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded border border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-50">
-          {busy === 'save' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-          Save to Deliverables
-        </button>
-        <button onClick={onSaveToBrand} disabled={busy !== null || !enrollmentId} title={!enrollmentId ? 'Select a project to save its brand geometry' : 'Save this as the brand’s logo geometry'} className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">
-          {busy === 'brand' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bookmark className="h-3.5 w-3.5" />}
-          Save to brand
-        </button>
+        <FastTooltip label={!enrollmentId ? 'Select a project to save into its Deliverables' : undefined}>
+          <button onClick={onSave} disabled={busy !== null || !enrollmentId} aria-label={!enrollmentId ? 'Select a project to save into its Deliverables' : undefined} className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded border border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-50">
+            {busy === 'save' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            Save to Deliverables
+          </button>
+        </FastTooltip>
+        <FastTooltip label={!enrollmentId ? 'Select a project to save its brand geometry' : 'Save this as the brand’s logo geometry'}>
+          <button onClick={onSaveToBrand} disabled={busy !== null || !enrollmentId} aria-label={!enrollmentId ? 'Select a project to save its brand geometry' : 'Save this as the brand’s logo geometry'} className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">
+            {busy === 'brand' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bookmark className="h-3.5 w-3.5" />}
+            Save to brand
+          </button>
+        </FastTooltip>
       </div>
     </div>
   )

@@ -18,6 +18,7 @@ import {
 } from "@/lib/dev-tracker/board"
 import { DEFAULT_STAGE_SET, labelForStage, parseMilestones } from "@/lib/dev-tracker/milestones"
 import { parseProgressLog, type DevJob } from "./types"
+import { FastTooltip } from "@/components/ui/fast-tooltip"
 
 export type { DevJob } from "./types"
 
@@ -185,23 +186,24 @@ export function DevBoard({ jobs, initialChannel }: { jobs: DevJob[]; initialChan
               {j.parent_task_id && (
                 <GitBranch className="h-3 w-3 text-violet-400" aria-label="child job" />
               )}
-              <button
-                type="button"
-                aria-label="Refresh the plain-English summary"
-                title="Refresh summary (re-runs the AI on this card)"
-                disabled={refreshing}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (!refreshing) refreshPlain(j.id)
-                }}
-                className="ml-auto p-0.5 rounded text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 disabled:opacity-60"
-              >
-                {refreshing ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-3 w-3" />
-                )}
-              </button>
+              <FastTooltip label="Refresh summary (re-runs the AI on this card)">
+                <button
+                  type="button"
+                  aria-label="Refresh the plain-English summary"
+                  disabled={refreshing}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (!refreshing) refreshPlain(j.id)
+                  }}
+                  className="ml-auto p-0.5 rounded text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 disabled:opacity-60"
+                >
+                  {refreshing ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3 w-3" />
+                  )}
+                </button>
+              </FastTooltip>
               {!techView && (
                 <button
                   type="button"

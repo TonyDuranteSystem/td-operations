@@ -17,6 +17,7 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { StickyNote } from 'lucide-react'
 import { NoteEditor, type Member } from '@/components/dashboard/note-editor'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const API = '/api/crm/staff-notes'
 
@@ -98,14 +99,16 @@ export function NoteQuickCreate({
   const [open, setOpen] = useState(false)
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        title="Make a note about this"
-        className={className ?? 'flex shrink-0 items-center gap-1 rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-amber-50'}
-      >
-        <StickyNote className="h-3.5 w-3.5" />{label}
-      </button>
+      <FastTooltip label="Make a note about this">
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-label="Make a note about this"
+          className={className ?? 'flex shrink-0 items-center gap-1 rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-amber-50'}
+        >
+          <StickyNote className="h-3.5 w-3.5" />{label}
+        </button>
+      </FastTooltip>
       {open && (
         <NoteComposeDialog
           accountId={accountId}

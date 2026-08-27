@@ -6,6 +6,7 @@ import { createVendor, updateVendor, deleteVendor, type Vendor } from '@/app/por
 import { toast } from 'sonner'
 import { useLocale } from '@/lib/portal/use-locale'
 import { VendorStatementModal } from './vendor-statement-modal'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { Expense } from './expense-list'
 
 interface VendorListProps {
@@ -242,7 +243,7 @@ export function VendorList({ vendors: initialVendors, accountId, expenses }: Ven
                   </div>
                 </div>
                 <div className="flex gap-1 shrink-0">
-                  <div className="relative group">
+                  <FastTooltip label={t('vendorList.viewStatement')}>
                     <button
                       onClick={() => setStatementVendor(v)}
                       className="p-1.5 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600"
@@ -250,20 +251,26 @@ export function VendorList({ vendors: initialVendors, accountId, expenses }: Ven
                     >
                       <FileText className="h-3.5 w-3.5" />
                     </button>
-                    <span className="pointer-events-none absolute right-0 top-full z-20 mt-1 whitespace-nowrap rounded-md bg-zinc-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity duration-75 group-hover:opacity-100">
-                      {t('vendorList.viewStatement')}
-                    </span>
-                  </div>
-                  <button onClick={() => openEdit(v)} className="p-1.5 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700">
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(v.id)}
-                    disabled={deletingId === v.id}
-                    className="p-1.5 rounded hover:bg-red-50 text-zinc-400 hover:text-red-600 disabled:opacity-50"
-                  >
-                    {deletingId === v.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                  </button>
+                  </FastTooltip>
+                  <FastTooltip label={t('vendorList.editVendor')}>
+                    <button
+                      onClick={() => openEdit(v)}
+                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700"
+                      aria-label={t('vendorList.editVendor')}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  </FastTooltip>
+                  <FastTooltip label={t('common.delete')}>
+                    <button
+                      onClick={() => handleDelete(v.id)}
+                      disabled={deletingId === v.id}
+                      className="p-1.5 rounded hover:bg-red-50 text-zinc-400 hover:text-red-600 disabled:opacity-50"
+                      aria-label={t('common.delete')}
+                    >
+                      {deletingId === v.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                    </button>
+                  </FastTooltip>
                 </div>
               </div>
               <div className="space-y-0.5 text-xs text-zinc-500">

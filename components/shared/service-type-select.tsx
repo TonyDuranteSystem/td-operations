@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { ChevronDown, Plus, Pencil, Check, X, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface ServiceCatalogItem {
   id: string
@@ -234,14 +235,16 @@ export function ServiceTypeSelect({
                     {formatPrice(svc.default_price, svc.default_currency)}
                   </span>
                 )}
-                <button
-                  type="button"
-                  onClick={(e) => startEdit(svc, e)}
-                  className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-zinc-200 transition-opacity"
-                  title="Edit service"
-                >
-                  <Pencil className="h-3 w-3 text-zinc-400" />
-                </button>
+                <FastTooltip label="Edit service">
+                  <button
+                    type="button"
+                    onClick={(e) => startEdit(svc, e)}
+                    className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-zinc-200 transition-opacity"
+                    aria-label="Edit service"
+                  >
+                    <Pencil className="h-3 w-3 text-zinc-400" />
+                  </button>
+                </FastTooltip>
               </button>
             )
           ))}

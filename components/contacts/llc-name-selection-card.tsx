@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from 'react'
 import { Building2, CheckCircle2, ExternalLink, Loader2, AlertCircle, Plus, X, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { mergeNames, type AdminAddedName, type UnifiedNameOption } from '@/lib/llc-name-helpers'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 // ─── State SOS search portals ─────────────────────────────────────────────
 const SOS_LINKS: Record<string, { url: string; label: string }> = {
@@ -357,18 +358,20 @@ export function LlcNameSelectionCard({
                       </div>
                     </button>
                     {isAdmin && (
-                      <button
-                        onClick={() => handleRemoveName(option.name)}
-                        disabled={removingName === option.name}
-                        className="p-1 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 shrink-0 disabled:opacity-50"
-                        title="Remove this name"
-                      >
-                        {removingName === option.name ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <X className="h-3.5 w-3.5" />
-                        )}
-                      </button>
+                      <FastTooltip label="Remove this name">
+                        <button
+                          onClick={() => handleRemoveName(option.name)}
+                          disabled={removingName === option.name}
+                          className="p-1 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 shrink-0 disabled:opacity-50"
+                          aria-label="Remove this name"
+                        >
+                          {removingName === option.name ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <X className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                      </FastTooltip>
                     )}
                   </div>
                 )

@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { Plus, Pencil, Trash2, Eye, EyeOff, Megaphone } from 'lucide-react'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 export interface AnnouncementRow {
   id: string
@@ -253,11 +254,13 @@ export function AnnouncementsTab({ initialRows }: { initialRows: AnnouncementRow
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1">
-                      <button onClick={() => handleToggleActive(row)}
-                        title={row.active ? 'Deactivate' : 'Activate'}
-                        className="p-1.5 text-zinc-400 hover:text-zinc-700 rounded">
-                        {row.active ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </button>
+                      <FastTooltip label={row.active ? 'Deactivate' : 'Activate'}>
+                        <button onClick={() => handleToggleActive(row)}
+                          aria-label={row.active ? 'Deactivate' : 'Activate'}
+                          className="p-1.5 text-zinc-400 hover:text-zinc-700 rounded">
+                          {row.active ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </FastTooltip>
                       <button onClick={() => setDialog(row)} className="p-1.5 text-zinc-400 hover:text-zinc-700 rounded">
                         <Pencil className="h-4 w-4" />
                       </button>

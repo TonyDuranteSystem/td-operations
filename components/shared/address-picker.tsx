@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Pencil, Plus, Loader2, X, ShieldCheck, ShieldAlert } from 'lucide-react'
 import { toast } from 'sonner'
 import { AddressDropdown } from '@/components/shared/address-dropdown'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { AddressRow } from '@/lib/addresses'
 import { updateAccountField } from '@/app/(dashboard)/accounts/actions'
 
@@ -353,31 +354,35 @@ export function AddressPicker({
 
         {/* Edit button — only when a row is selected */}
         {value && (
-          <button
-            type="button"
-            onClick={openEdit}
-            disabled={!selectedRow || saving || fetchLoading}
-            title={`Edit this ${label} entry`}
-            className="shrink-0 p-2 rounded-md border hover:bg-zinc-50 disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            {fetchLoading
-              ? <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
-              : <Pencil className="h-4 w-4 text-zinc-500" />
-            }
-          </button>
+          <FastTooltip label={`Edit this ${label} entry`}>
+            <button
+              type="button"
+              onClick={openEdit}
+              disabled={!selectedRow || saving || fetchLoading}
+              aria-label={`Edit this ${label} entry`}
+              className="shrink-0 p-2 rounded-md border hover:bg-zinc-50 disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {fetchLoading
+                ? <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
+                : <Pencil className="h-4 w-4 text-zinc-500" />
+              }
+            </button>
+          </FastTooltip>
         )}
 
         {/* Add New button — always visible */}
-        <button
-          type="button"
-          onClick={openAdd}
-          disabled={saving || pickSaving}
-          title={`Add new ${label} entry`}
-          className="shrink-0 flex items-center gap-1 px-2.5 py-2 text-xs text-blue-600 rounded-md border hover:bg-blue-50 disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          New
-        </button>
+        <FastTooltip label={`Add new ${label} entry`}>
+          <button
+            type="button"
+            onClick={openAdd}
+            disabled={saving || pickSaving}
+            aria-label={`Add new ${label} entry`}
+            className="shrink-0 flex items-center gap-1 px-2.5 py-2 text-xs text-blue-600 rounded-md border hover:bg-blue-50 disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New
+          </button>
+        </FastTooltip>
       </div>
 
       {/* Verification status — only when a row is selected */}

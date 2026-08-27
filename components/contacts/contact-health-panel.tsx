@@ -21,6 +21,7 @@ import {
 import { cn } from '@/lib/utils'
 import { ContactDiagnosticDialog } from './contact-diagnostic-dialog'
 import { ChainAuditDialog } from './chain-audit-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { combineSummaries, rollupStatus, type HealthCheck as Check, type HealthSummary } from '@/lib/contact-health-helpers'
 
 interface DiagnoseResult {
@@ -142,22 +143,26 @@ export function ContactHealthPanel({ contactId, contactName }: Props) {
         </div>
 
         <div className="flex flex-wrap gap-2 pt-2 border-t">
-          <button
-            onClick={() => setShowDiagnose(true)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium hover:bg-zinc-50"
-            title="Open the full diagnostic dialog with fix actions"
-          >
-            <Stethoscope className="h-3.5 w-3.5" />
-            Run Fix Actions — Diagnostic
-          </button>
-          <button
-            onClick={() => setShowChain(true)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium hover:bg-zinc-50"
-            title="Open the full chain audit dialog with fix actions"
-          >
-            <Link2 className="h-3.5 w-3.5" />
-            Run Fix Actions — Chain Audit
-          </button>
+          <FastTooltip label="Open the full diagnostic dialog with fix actions">
+            <button
+              onClick={() => setShowDiagnose(true)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium hover:bg-zinc-50"
+              aria-label="Open the full diagnostic dialog with fix actions"
+            >
+              <Stethoscope className="h-3.5 w-3.5" />
+              Run Fix Actions — Diagnostic
+            </button>
+          </FastTooltip>
+          <FastTooltip label="Open the full chain audit dialog with fix actions">
+            <button
+              onClick={() => setShowChain(true)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium hover:bg-zinc-50"
+              aria-label="Open the full chain audit dialog with fix actions"
+            >
+              <Link2 className="h-3.5 w-3.5" />
+              Run Fix Actions — Chain Audit
+            </button>
+          </FastTooltip>
         </div>
       </div>
 

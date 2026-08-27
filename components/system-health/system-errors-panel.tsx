@@ -13,6 +13,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { CheckCircle2, EyeOff, Loader2, Sparkles } from 'lucide-react'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { SystemErrorRow } from '@/lib/system-errors'
 
 const STATUS_BADGE: Record<string, string> = {
@@ -90,24 +91,28 @@ export function SystemErrorsPanel({ rows }: { rows: SystemErrorRow[] }) {
               )}
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
-              <button
-                onClick={() => setStatus(row.id, 'resolved')}
-                disabled={busyId === row.id || isPending}
-                className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs text-zinc-600 hover:bg-emerald-50 hover:text-emerald-700 disabled:opacity-50"
-                title="Mark resolved (a repeat occurrence reopens it)"
-              >
-                {busyId === row.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
-                Resolve
-              </button>
-              <button
-                onClick={() => setStatus(row.id, 'ignored')}
-                disabled={busyId === row.id || isPending}
-                className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-100 disabled:opacity-50"
-                title="Ignore (known noise)"
-              >
-                <EyeOff className="h-3 w-3" />
-                Ignore
-              </button>
+              <FastTooltip label="Mark resolved (a repeat occurrence reopens it)">
+                <button
+                  onClick={() => setStatus(row.id, 'resolved')}
+                  disabled={busyId === row.id || isPending}
+                  className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs text-zinc-600 hover:bg-emerald-50 hover:text-emerald-700 disabled:opacity-50"
+                  aria-label="Mark resolved (a repeat occurrence reopens it)"
+                >
+                  {busyId === row.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                  Resolve
+                </button>
+              </FastTooltip>
+              <FastTooltip label="Ignore (known noise)">
+                <button
+                  onClick={() => setStatus(row.id, 'ignored')}
+                  disabled={busyId === row.id || isPending}
+                  className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-100 disabled:opacity-50"
+                  aria-label="Ignore (known noise)"
+                >
+                  <EyeOff className="h-3 w-3" />
+                  Ignore
+                </button>
+              </FastTooltip>
             </div>
           </div>
         </li>

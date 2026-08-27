@@ -13,6 +13,7 @@ import { Loader2, Plus, CalendarClock, Check, Moon } from 'lucide-react'
 import { createManualCard } from '@/components/dashboard/action-board-actions'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
 import { HelpDot } from '@/components/help/help-dot'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const API = '/api/crm/admin-actions/message-actions'
 
@@ -237,13 +238,15 @@ export function ThreadTodoPanel({
               <div key={card.id} className={`rounded-md border bg-white p-2.5 ${overdue || p === 'urgent' ? 'border-l-4 border-l-red-400' : p === 'high' ? 'border-l-4 border-l-amber-400' : ''}`}>
                 <div className="flex items-start gap-2">
                   <p className="flex-1 text-sm text-zinc-800">{card.label || '(no description)'}</p>
-                  <button
-                    onClick={() => complete(card.id)}
-                    className="shrink-0 flex items-center gap-1 text-[11px] text-emerald-600 hover:text-emerald-800 border border-emerald-200 rounded px-1.5 py-0.5"
-                    title="Mark done"
-                  >
-                    <Check className="h-3 w-3" /> Done
-                  </button>
+                  <FastTooltip label="Mark done">
+                    <button
+                      onClick={() => complete(card.id)}
+                      className="shrink-0 flex items-center gap-1 text-[11px] text-emerald-600 hover:text-emerald-800 border border-emerald-200 rounded px-1.5 py-0.5"
+                      aria-label="Mark done"
+                    >
+                      <Check className="h-3 w-3" /> Done
+                    </button>
+                  </FastTooltip>
                 </div>
                 <div className="flex items-center gap-2 mt-1.5">
                   {p !== 'normal' && (

@@ -25,6 +25,7 @@ import {
   X,
 } from 'lucide-react'
 import { DeleteLeadDialog } from '@/app/(dashboard)/leads/[id]/components/delete-lead-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const LEAD_STATUSES = [
   'New',
@@ -193,16 +194,18 @@ export function LeadRowActions({ lead }: Props) {
 
   return (
     <>
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMenuOpen(o => !o) }}
-        disabled={isPending}
-        className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 disabled:opacity-50"
-        title="More actions"
-      >
-        {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MoreVertical className="h-3.5 w-3.5" />}
-      </button>
+      <FastTooltip label="More actions">
+        <button
+          ref={buttonRef}
+          type="button"
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMenuOpen(o => !o) }}
+          disabled={isPending}
+          className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 disabled:opacity-50"
+          aria-label="More actions"
+        >
+          {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MoreVertical className="h-3.5 w-3.5" />}
+        </button>
+      </FastTooltip>
       {menuPortal}
 
       <DeleteLeadDialog

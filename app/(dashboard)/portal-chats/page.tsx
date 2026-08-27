@@ -30,6 +30,7 @@ import { MessageReactions } from '@/components/chat/message-reactions'
 import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-team-dialog'
 import type { MessageReaction } from '@/lib/portal/reactions'
 import { filterForSurfaceAndContext, validateMetadata, type ChatContext, type QuickAction } from '@/lib/chat/quick-actions'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import { HelpDot } from '@/components/help/help-dot'
 import {
@@ -1812,40 +1813,46 @@ export default function PortalChatsPage() {
           <div className="flex items-center justify-between mb-2">
             <h1 className="flex items-center gap-1 text-lg font-semibold text-zinc-900">Portal Chats <HelpDot helpKey="chat.page_tabs" /></h1>
             <div className="flex items-center gap-1">
-              <button
-                onClick={() => {
-                  setNewChatOpen(true)
-                  setNewChatSearch('')
-                  setNewChatResults([])
-                }}
-                className={cn(
-                  "p-2 rounded-lg transition-colors",
-                  sidebarView === 'internal'
-                    ? "text-orange-600 bg-orange-50 hover:bg-orange-100"
-                    : "text-blue-600 bg-blue-50 hover:bg-blue-100"
-                )}
-                title={sidebarView === 'internal' ? 'New team discussion' : 'Start new chat with a client'}
-              >
-                <Plus className="h-4 w-4" />
-              </button>
-              <button
-                onClick={enableNotifications}
-                className={cn(
-                  "p-2 rounded-lg transition-colors",
-                  notificationsEnabled ? "text-blue-600 bg-blue-50" : "text-zinc-400 hover:bg-zinc-100"
-                )}
-                title={notificationsEnabled ? 'Notifications enabled' : 'Enable browser notifications'}
-              >
-                {notificationsEnabled ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
-              </button>
-              <button
-                onClick={handleRefresh}
-                disabled={isRefreshing}
-                className="p-2 rounded-lg text-zinc-400 hover:bg-zinc-100 disabled:opacity-40 transition-colors"
-                title="Refresh chats"
-              >
-                <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
-              </button>
+              <FastTooltip label={sidebarView === 'internal' ? 'New team discussion' : 'Start new chat with a client'}>
+                <button
+                  onClick={() => {
+                    setNewChatOpen(true)
+                    setNewChatSearch('')
+                    setNewChatResults([])
+                  }}
+                  className={cn(
+                    "p-2 rounded-lg transition-colors",
+                    sidebarView === 'internal'
+                      ? "text-orange-600 bg-orange-50 hover:bg-orange-100"
+                      : "text-blue-600 bg-blue-50 hover:bg-blue-100"
+                  )}
+                  aria-label={sidebarView === 'internal' ? 'New team discussion' : 'Start new chat with a client'}
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              </FastTooltip>
+              <FastTooltip label={notificationsEnabled ? 'Notifications enabled' : 'Enable browser notifications'}>
+                <button
+                  onClick={enableNotifications}
+                  className={cn(
+                    "p-2 rounded-lg transition-colors",
+                    notificationsEnabled ? "text-blue-600 bg-blue-50" : "text-zinc-400 hover:bg-zinc-100"
+                  )}
+                  aria-label={notificationsEnabled ? 'Notifications enabled' : 'Enable browser notifications'}
+                >
+                  {notificationsEnabled ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
+                </button>
+              </FastTooltip>
+              <FastTooltip label="Refresh chats">
+                <button
+                  onClick={handleRefresh}
+                  disabled={isRefreshing}
+                  className="p-2 rounded-lg text-zinc-400 hover:bg-zinc-100 disabled:opacity-40 transition-colors"
+                  aria-label="Refresh chats"
+                >
+                  <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
+                </button>
+              </FastTooltip>
             </div>
           </div>
           {/* Sidebar tabs: Chats | Actions | Team */}
@@ -1915,13 +1922,15 @@ export default function PortalChatsPage() {
             </button>
           ))}
           {Object.keys(issueCounts?.counts || {}).length > 0 && (
-            <button
-              onClick={() => setListFilter('issues')}
-              className="ml-auto text-[11px] text-amber-700 font-medium hover:underline"
-              title="Clients with open issues — click to filter"
-            >
-              ⚠️ {Object.keys(issueCounts?.counts || {}).length}
-            </button>
+            <FastTooltip label="Clients with open issues — click to filter">
+              <button
+                onClick={() => setListFilter('issues')}
+                className="ml-auto text-[11px] text-amber-700 font-medium hover:underline"
+                aria-label="Clients with open issues — click to filter"
+              >
+                ⚠️ {Object.keys(issueCounts?.counts || {}).length}
+              </button>
+            </FastTooltip>
           )}
         </div>
         <div className="flex-1 overflow-y-auto">
@@ -1955,206 +1964,207 @@ export default function PortalChatsPage() {
                 ? selectedAccountId === thread.account_id
                 : selectedContactId === thread.contact_id
               return (
-              <button
-                key={threadKey}
-                onClick={() => {
-                  const members = thread.members ?? []
-                  const companies = thread.companies ?? []
-                  if (thread.account_id && members.length > 0) {
-                    // Account-level thread (multi-member LLC): fetch by account_id
-                    setSelectedName({ company: thread.contact_name || thread.company_name, contact: members.map(m => m.name).join(' · ') })
-                    setSelectedAccountId(thread.account_id)
-                    setSelectedContactId(null)
-                    setSelectedThreadContactId(thread.contact_id)
-                    setSelectedThreadMembers(members)
-                    setSelectedThreadCompanies([])
-                    setSelectedCompanyId(null)
-                  } else {
-                    // Contact-level thread: fetch by contact_id
-                    setSelectedName({ company: thread.contact_name || thread.company_name, contact: companies.map(c => c.name).join(' · ') || undefined })
-                    setSelectedAccountId(null)
-                    setSelectedContactId(thread.contact_id)
-                    setSelectedThreadContactId(thread.contact_id)
-                    setSelectedThreadMembers([])
-                    setSelectedThreadCompanies(companies)
-                    // Person threads default to PERSONAL scope — no auto-selected
-                    // company. The old first-open-company default is how the
-                    // 2026-08-07 cross-company leak happened (dev job 4bad3094):
-                    // replies meant for the person landed in a company-visible
-                    // thread. Sending as a company now requires an explicit chip
-                    // click; read-only panels keep their company context via
-                    // panelCompanyId.
-                    setSelectedCompanyId(null)
-                  }
-                  setSidebarView('chats')
-                }}
-                title={thread.contact_name ? `${thread.company_name} — ${thread.contact_name}` : thread.company_name}
-                className={cn(
-                  'w-full px-4 py-3 text-left border-b hover:bg-zinc-50 transition-colors',
-                  isSelected && 'bg-blue-50 border-l-2 border-l-blue-600'
-                )}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <User className="h-4 w-4 text-zinc-400 shrink-0" />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        {thread.account_id && (thread.members ?? []).length > 0 ? (
-                          // Account-level thread: show company name linked to account
-                          <Link href={`/accounts/${thread.account_id}`} onClick={e => e.stopPropagation()} className="text-sm font-medium text-zinc-900 truncate hover:text-blue-600 hover:underline transition-colors">{thread.contact_name || thread.company_name}</Link>
-                        ) : thread.contact_id ? (
-                          <Link href={`/contacts/${thread.contact_id}`} onClick={e => e.stopPropagation()} className="text-sm font-medium text-zinc-900 truncate hover:text-blue-600 hover:underline transition-colors">{thread.contact_name || thread.company_name}</Link>
-                        ) : (
-                          <span className="text-sm font-medium text-zinc-900 truncate">{thread.contact_name || thread.company_name}</span>
+              <FastTooltip key={threadKey} label={thread.contact_name ? `${thread.company_name} — ${thread.contact_name}` : thread.company_name} className="w-full">
+                <button
+                  onClick={() => {
+                    const members = thread.members ?? []
+                    const companies = thread.companies ?? []
+                    if (thread.account_id && members.length > 0) {
+                      // Account-level thread (multi-member LLC): fetch by account_id
+                      setSelectedName({ company: thread.contact_name || thread.company_name, contact: members.map(m => m.name).join(' · ') })
+                      setSelectedAccountId(thread.account_id)
+                      setSelectedContactId(null)
+                      setSelectedThreadContactId(thread.contact_id)
+                      setSelectedThreadMembers(members)
+                      setSelectedThreadCompanies([])
+                      setSelectedCompanyId(null)
+                    } else {
+                      // Contact-level thread: fetch by contact_id
+                      setSelectedName({ company: thread.contact_name || thread.company_name, contact: companies.map(c => c.name).join(' · ') || undefined })
+                      setSelectedAccountId(null)
+                      setSelectedContactId(thread.contact_id)
+                      setSelectedThreadContactId(thread.contact_id)
+                      setSelectedThreadMembers([])
+                      setSelectedThreadCompanies(companies)
+                      // Person threads default to PERSONAL scope — no auto-selected
+                      // company. The old first-open-company default is how the
+                      // 2026-08-07 cross-company leak happened (dev job 4bad3094):
+                      // replies meant for the person landed in a company-visible
+                      // thread. Sending as a company now requires an explicit chip
+                      // click; read-only panels keep their company context via
+                      // panelCompanyId.
+                      setSelectedCompanyId(null)
+                    }
+                    setSidebarView('chats')
+                  }}
+                  aria-label={thread.contact_name ? `${thread.company_name} — ${thread.contact_name}` : thread.company_name}
+                  className={cn(
+                    'w-full px-4 py-3 text-left border-b hover:bg-zinc-50 transition-colors',
+                    isSelected && 'bg-blue-50 border-l-2 border-l-blue-600'
+                  )}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <User className="h-4 w-4 text-zinc-400 shrink-0" />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {thread.account_id && (thread.members ?? []).length > 0 ? (
+                            // Account-level thread: show company name linked to account
+                            <Link href={`/accounts/${thread.account_id}`} onClick={e => e.stopPropagation()} className="text-sm font-medium text-zinc-900 truncate hover:text-blue-600 hover:underline transition-colors">{thread.contact_name || thread.company_name}</Link>
+                          ) : thread.contact_id ? (
+                            <Link href={`/contacts/${thread.contact_id}`} onClick={e => e.stopPropagation()} className="text-sm font-medium text-zinc-900 truncate hover:text-blue-600 hover:underline transition-colors">{thread.contact_name || thread.company_name}</Link>
+                          ) : (
+                            <span className="text-sm font-medium text-zinc-900 truncate">{thread.contact_name || thread.company_name}</span>
+                          )}
+                          {thread.overdue && <OverdueBadge summary={thread.overdue} className="shrink-0" />}
+                        </div>
+                        {/* Account-level: show member names as pills */}
+                        {(thread.members ?? []).length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-0.5">
+                            {thread.members.map(m => (
+                              <Link key={m.id} href={`/contacts/${m.id}`} onClick={e => e.stopPropagation()} className="text-[10px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded hover:bg-purple-100 transition-colors truncate max-w-[120px]">{m.name}</Link>
+                            ))}
+                          </div>
                         )}
-                        {thread.overdue && <OverdueBadge summary={thread.overdue} className="shrink-0" />}
+                        {/* Contact-level: show company pills */}
+                        {(thread.members ?? []).length === 0 && thread.companies?.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                            {thread.companies.map(c => (
+                              <span key={c.id} className="inline-flex items-center gap-1">
+                                <Link href={`/accounts/${c.id}`} onClick={e => e.stopPropagation()} className="text-[10px] bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded hover:bg-blue-50 hover:text-blue-600 transition-colors truncate max-w-[120px]">{c.name}</Link>
+                                {c.overdue && <OverdueBadge summary={c.overdue} className="shrink-0" />}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {/* Active SD badges removed (2026-06-07): the amber service-delivery
+                            pills were noise in the conversation list. The data is still
+                            returned by the threads API (thread.active_services) for any
+                            future use, but it is intentionally not rendered here. */}
                       </div>
-                      {/* Account-level: show member names as pills */}
-                      {(thread.members ?? []).length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-0.5">
-                          {thread.members.map(m => (
-                            <Link key={m.id} href={`/contacts/${m.id}`} onClick={e => e.stopPropagation()} className="text-[10px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded hover:bg-purple-100 transition-colors truncate max-w-[120px]">{m.name}</Link>
-                          ))}
-                        </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                      {/* Pin conversation (staff, shared) — pinned threads sort above everything */}
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={e => {
+                          e.stopPropagation()
+                          pinThreadMutation.mutate({ account_id: thread.account_id, contact_id: thread.contact_id, pinned: !thread.is_pinned })
+                        }}
+                        title={thread.is_pinned ? 'Unpin conversation' : 'Pin conversation to top'}
+                        className={cn(
+                          'shrink-0 rounded p-0.5 cursor-pointer hover:bg-zinc-200',
+                          thread.is_pinned ? 'text-amber-600' : 'text-zinc-300 hover:text-zinc-500'
+                        )}
+                      >
+                        <Pin className={cn('h-3.5 w-3.5', thread.is_pinned && 'fill-amber-500')} />
+                      </span>
+                      {/* What's New dot: PURPLE pill = UNHANDLED incoming notes for
+                          this client. Clears as you tick them handled / open a card;
+                          gone at zero. Replaces the legacy orange task dot below. */}
+                      {(() => {
+                        // Key the count the SAME way this thread opens (see the
+                        // onClick scope decision above): a multi-member account
+                        // thread reads its account bucket; every other thread is
+                        // contact-keyed and reads its contact bucket. This keeps
+                        // the dot, the What's New tab badge, and the panel in
+                        // agreement — including notes that carry both ids.
+                        const isAccountThread = !!thread.account_id && (thread.members ?? []).length > 0
+                        const newCount = isAccountThread
+                          ? whatsNewCounts?.by_account?.[thread.account_id] ?? 0
+                          : thread.contact_id
+                            ? whatsNewCounts?.by_contact?.[thread.contact_id] ?? 0
+                            : thread.account_id
+                              ? whatsNewCounts?.by_account?.[thread.account_id] ?? 0
+                              : 0
+                        return newCount > 0 ? (
+                          <span
+                            className="px-1.5 py-0.5 rounded-full text-xs font-semibold text-white bg-violet-600"
+                            title={`${newCount} new item${newCount === 1 ? '' : 's'} to look at`}
+                          >
+                            {newCount}
+                          </span>
+                        ) : null
+                      })()}
+                      {/* Email dot: GREEN pill = unread email threads from this
+                          client in support@ (Gmail UNREAD state). Reading the
+                          email — in the Email tab or in Gmail — clears it. */}
+                      {(() => {
+                        const isAccountThread = !!thread.account_id && (thread.members ?? []).length > 0
+                        const emailCount = isAccountThread
+                          ? emailUnreadCounts?.by_account?.[thread.account_id] ?? 0
+                          : thread.contact_id
+                            ? emailUnreadCounts?.by_contact?.[thread.contact_id] ?? 0
+                            : thread.account_id
+                              ? emailUnreadCounts?.by_account?.[thread.account_id] ?? 0
+                              : 0
+                        return emailCount > 0 ? (
+                          <span
+                            className="px-1.5 py-0.5 rounded-full text-xs font-semibold text-white bg-emerald-600"
+                            title={`${emailCount} unread email${emailCount === 1 ? '' : 's'}`}
+                          >
+                            {emailCount}
+                          </span>
+                        ) : null
+                      })()}
+                      {/* Issues: ⚠️ = this client has open diagnostic problems (red = errors,
+                          amber = warnings). Reads the cached count; the Issues tab shows the
+                          detail + one-click fixes. */}
+                      {(() => {
+                        const ic = thread.account_id ? issueCounts?.counts?.[thread.account_id] : undefined
+                        const total = ic ? ic.error + ic.warning : 0
+                        if (total <= 0) return null
+                        const hasError = (ic?.error ?? 0) > 0
+                        return (
+                          <span
+                            className={`px-1.5 py-0.5 rounded-full text-xs font-semibold text-white ${hasError ? 'bg-red-600' : 'bg-amber-500'}`}
+                            title={`${total} issue${total === 1 ? '' : 's'} — open the Issues tab to fix`}
+                          >
+                            ⚠️ {total}
+                          </span>
+                        )
+                      })()}
+                      {/* (Legacy orange task-count dot retired — purple What's New dot above is the single signal now.) */}
+                      {/* Chat unread: RED pill (red=chat, purple=What's New, green=email) */}
+                      {thread.unread_count > 0 && (
+                        <span className="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-red-600 text-white">
+                          {thread.unread_count}
+                        </span>
                       )}
-                      {/* Contact-level: show company pills */}
-                      {(thread.members ?? []).length === 0 && thread.companies?.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-1 mt-0.5">
-                          {thread.companies.map(c => (
-                            <span key={c.id} className="inline-flex items-center gap-1">
-                              <Link href={`/accounts/${c.id}`} onClick={e => e.stopPropagation()} className="text-[10px] bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded hover:bg-blue-50 hover:text-blue-600 transition-colors truncate max-w-[120px]">{c.name}</Link>
-                              {c.overdue && <OverdueBadge summary={c.overdue} className="shrink-0" />}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      {/* Active SD badges removed (2026-06-07): the amber service-delivery
-                          pills were noise in the conversation list. The data is still
-                          returned by the threads API (thread.active_services) for any
-                          future use, but it is intentionally not rendered here. */}
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5 ml-2 shrink-0">
-                    {/* Pin conversation (staff, shared) — pinned threads sort above everything */}
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={e => {
-                        e.stopPropagation()
-                        pinThreadMutation.mutate({ account_id: thread.account_id, contact_id: thread.contact_id, pinned: !thread.is_pinned })
-                      }}
-                      title={thread.is_pinned ? 'Unpin conversation' : 'Pin conversation to top'}
-                      className={cn(
-                        'shrink-0 rounded p-0.5 cursor-pointer hover:bg-zinc-200',
-                        thread.is_pinned ? 'text-amber-600' : 'text-zinc-300 hover:text-zinc-500'
-                      )}
-                    >
-                      <Pin className={cn('h-3.5 w-3.5', thread.is_pinned && 'fill-amber-500')} />
-                    </span>
-                    {/* What's New dot: PURPLE pill = UNHANDLED incoming notes for
-                        this client. Clears as you tick them handled / open a card;
-                        gone at zero. Replaces the legacy orange task dot below. */}
-                    {(() => {
-                      // Key the count the SAME way this thread opens (see the
-                      // onClick scope decision above): a multi-member account
-                      // thread reads its account bucket; every other thread is
-                      // contact-keyed and reads its contact bucket. This keeps
-                      // the dot, the What's New tab badge, and the panel in
-                      // agreement — including notes that carry both ids.
-                      const isAccountThread = !!thread.account_id && (thread.members ?? []).length > 0
-                      const newCount = isAccountThread
-                        ? whatsNewCounts?.by_account?.[thread.account_id] ?? 0
-                        : thread.contact_id
-                          ? whatsNewCounts?.by_contact?.[thread.contact_id] ?? 0
-                          : thread.account_id
-                            ? whatsNewCounts?.by_account?.[thread.account_id] ?? 0
-                            : 0
-                      return newCount > 0 ? (
-                        <span
-                          className="px-1.5 py-0.5 rounded-full text-xs font-semibold text-white bg-violet-600"
-                          title={`${newCount} new item${newCount === 1 ? '' : 's'} to look at`}
-                        >
-                          {newCount}
-                        </span>
-                      ) : null
-                    })()}
-                    {/* Email dot: GREEN pill = unread email threads from this
-                        client in support@ (Gmail UNREAD state). Reading the
-                        email — in the Email tab or in Gmail — clears it. */}
-                    {(() => {
-                      const isAccountThread = !!thread.account_id && (thread.members ?? []).length > 0
-                      const emailCount = isAccountThread
-                        ? emailUnreadCounts?.by_account?.[thread.account_id] ?? 0
-                        : thread.contact_id
-                          ? emailUnreadCounts?.by_contact?.[thread.contact_id] ?? 0
-                          : thread.account_id
-                            ? emailUnreadCounts?.by_account?.[thread.account_id] ?? 0
-                            : 0
-                      return emailCount > 0 ? (
-                        <span
-                          className="px-1.5 py-0.5 rounded-full text-xs font-semibold text-white bg-emerald-600"
-                          title={`${emailCount} unread email${emailCount === 1 ? '' : 's'}`}
-                        >
-                          {emailCount}
-                        </span>
-                      ) : null
-                    })()}
-                    {/* Issues: ⚠️ = this client has open diagnostic problems (red = errors,
-                        amber = warnings). Reads the cached count; the Issues tab shows the
-                        detail + one-click fixes. */}
-                    {(() => {
-                      const ic = thread.account_id ? issueCounts?.counts?.[thread.account_id] : undefined
-                      const total = ic ? ic.error + ic.warning : 0
-                      if (total <= 0) return null
-                      const hasError = (ic?.error ?? 0) > 0
-                      return (
-                        <span
-                          className={`px-1.5 py-0.5 rounded-full text-xs font-semibold text-white ${hasError ? 'bg-red-600' : 'bg-amber-500'}`}
-                          title={`${total} issue${total === 1 ? '' : 's'} — open the Issues tab to fix`}
-                        >
-                          ⚠️ {total}
-                        </span>
-                      )
-                    })()}
-                    {/* (Legacy orange task-count dot retired — purple What's New dot above is the single signal now.) */}
-                    {/* Chat unread: RED pill (red=chat, purple=What's New, green=email) */}
-                    {thread.unread_count > 0 && (
-                      <span className="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-red-600 text-white">
-                        {thread.unread_count}
+                  <div className="flex items-center justify-between mt-1">
+                    <p className="text-xs text-zinc-500 truncate flex-1">{thread.last_message}</p>
+                    {thread.unread_count > 0 ? (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => { e.stopPropagation(); markAsRead(thread) }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); markAsRead(thread) } }}
+                        className="p-1 rounded text-zinc-400 hover:text-blue-600 hover:bg-blue-50 transition-colors shrink-0 ml-1 cursor-pointer"
+                        title="Mark as read"
+                      >
+                        <MailCheck className="h-3 w-3" />
+                      </span>
+                    ) : (thread.account_id || thread.contact_id) && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => { e.stopPropagation(); markAsUnread(thread) }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); markAsUnread(thread) } }}
+                        className="p-1 rounded text-zinc-300 hover:text-blue-600 hover:bg-blue-50 transition-colors shrink-0 ml-1 cursor-pointer"
+                        title="Mark as unread"
+                      >
+                        <MailOpen className="h-3 w-3" />
                       </span>
                     )}
                   </div>
-                </div>
-                <div className="flex items-center justify-between mt-1">
-                  <p className="text-xs text-zinc-500 truncate flex-1">{thread.last_message}</p>
-                  {thread.unread_count > 0 ? (
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={(e) => { e.stopPropagation(); markAsRead(thread) }}
-                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); markAsRead(thread) } }}
-                      className="p-1 rounded text-zinc-400 hover:text-blue-600 hover:bg-blue-50 transition-colors shrink-0 ml-1 cursor-pointer"
-                      title="Mark as read"
-                    >
-                      <MailCheck className="h-3 w-3" />
-                    </span>
-                  ) : (thread.account_id || thread.contact_id) && (
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={(e) => { e.stopPropagation(); markAsUnread(thread) }}
-                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); markAsUnread(thread) } }}
-                      className="p-1 rounded text-zinc-300 hover:text-blue-600 hover:bg-blue-50 transition-colors shrink-0 ml-1 cursor-pointer"
-                      title="Mark as unread"
-                    >
-                      <MailOpen className="h-3 w-3" />
-                    </span>
-                  )}
-                </div>
-                <p className="text-xs text-zinc-400 mt-0.5">
-                  {thread.last_message_at ? format(parseISO(thread.last_message_at), 'MMM d, h:mm a') : ''}
-                </p>
-              </button>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    {thread.last_message_at ? format(parseISO(thread.last_message_at), 'MMM d, h:mm a') : ''}
+                  </p>
+                </button>
+              </FastTooltip>
               )
             })
           )}
@@ -2328,16 +2338,18 @@ export default function PortalChatsPage() {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={() => setAiPanelOpen(v => !v)}
-                className={cn(
-                  'p-2 rounded-lg transition-colors',
-                  aiPanelOpen ? 'bg-violet-100 text-violet-600' : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600'
-                )}
-                title="AI Assistant"
-              >
-                <Sparkles className="h-4 w-4" />
-              </button>
+              <FastTooltip label="AI Assistant">
+                <button
+                  onClick={() => setAiPanelOpen(v => !v)}
+                  className={cn(
+                    'p-2 rounded-lg transition-colors',
+                    aiPanelOpen ? 'bg-violet-100 text-violet-600' : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600'
+                  )}
+                  aria-label="AI Assistant"
+                >
+                  <Sparkles className="h-4 w-4" />
+                </button>
+              </FastTooltip>
               <button
                 onClick={() => resolveThread(selectedThreadId, !internalMessages?.thread?.resolved_at)}
                 className={cn(
@@ -2455,19 +2467,21 @@ export default function PortalChatsPage() {
           <div className={cn('p-4 border-t bg-white shrink-0', internalPendingFile && 'border-t-0')}>
             <div className="flex gap-2 items-end">
               {/* Paperclip */}
-              <button
-                onClick={() => internalFileRef.current?.click()}
-                disabled={internalUploading}
-                className={cn(
-                  'p-3 rounded-lg transition-colors shrink-0',
-                  internalPendingFile
-                    ? 'text-orange-600 bg-orange-100 hover:bg-orange-200'
-                    : 'text-zinc-400 bg-zinc-100 hover:bg-zinc-200 disabled:opacity-50'
-                )}
-                title="Attach file"
-              >
-                {internalUploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
-              </button>
+              <FastTooltip label="Attach file">
+                <button
+                  onClick={() => internalFileRef.current?.click()}
+                  disabled={internalUploading}
+                  className={cn(
+                    'p-3 rounded-lg transition-colors shrink-0',
+                    internalPendingFile
+                      ? 'text-orange-600 bg-orange-100 hover:bg-orange-200'
+                      : 'text-zinc-400 bg-zinc-100 hover:bg-zinc-200 disabled:opacity-50'
+                  )}
+                  aria-label="Attach file"
+                >
+                  {internalUploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
+                </button>
+              </FastTooltip>
               <input
                 ref={internalFileRef}
                 type="file"
@@ -2476,13 +2490,15 @@ export default function PortalChatsPage() {
               />
               {/* Emoji button */}
               <div className="relative" ref={internalEmojiPickerRef}>
-                <button
-                  onClick={() => setShowInternalEmojiPicker(v => !v)}
-                  className="p-3 rounded-lg text-zinc-400 bg-zinc-100 hover:bg-zinc-200 transition-colors shrink-0"
-                  title="Emoji"
-                >
-                  <Smile className="h-5 w-5" />
-                </button>
+                <FastTooltip label="Emoji">
+                  <button
+                    onClick={() => setShowInternalEmojiPicker(v => !v)}
+                    className="p-3 rounded-lg text-zinc-400 bg-zinc-100 hover:bg-zinc-200 transition-colors shrink-0"
+                    aria-label="Emoji"
+                  >
+                    <Smile className="h-5 w-5" />
+                  </button>
+                </FastTooltip>
                 {showInternalEmojiPicker && (
                   <div className="absolute bottom-14 left-0 z-30">
                     <EmojiPicker
@@ -2524,17 +2540,21 @@ export default function PortalChatsPage() {
               {/* Mic */}
               {micSupported && (
                 internalIsRecording ? (
-                  <button onClick={internalStopRecording} className="p-3 rounded-lg bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse transition-all shrink-0" title="Stop recording">
-                    <Square className="h-5 w-5 fill-current" />
-                  </button>
+                  <FastTooltip label="Stop recording">
+                    <button onClick={internalStopRecording} className="p-3 rounded-lg bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse transition-all shrink-0" aria-label="Stop recording">
+                      <Square className="h-5 w-5 fill-current" />
+                    </button>
+                  </FastTooltip>
                 ) : internalIsTranscribing ? (
                   <button disabled className="p-3 rounded-lg bg-blue-100 text-blue-500 shrink-0">
                     <Loader2 className="h-5 w-5 animate-spin" />
                   </button>
                 ) : (
-                  <button onClick={internalStartRecording} className="p-3 rounded-lg bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 transition-colors shrink-0" title="Voice input">
-                    <Mic className="h-5 w-5" />
-                  </button>
+                  <FastTooltip label="Voice input">
+                    <button onClick={internalStartRecording} className="p-3 rounded-lg bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 transition-colors shrink-0" aria-label="Voice input">
+                      <Mic className="h-5 w-5" />
+                    </button>
+                  </FastTooltip>
                 )
               )}
               {/* Send */}
@@ -2605,13 +2625,15 @@ export default function PortalChatsPage() {
                         )}
                         {currentThread?.overdue && <OverdueBadge summary={currentThread.overdue} />}
                         {threadLinkScope && (
-                          <button
-                            onClick={() => copyDeepLink()}
-                            title="Copy link to this chat"
-                            className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600"
-                          >
-                            <Link2 className="h-3.5 w-3.5" />
-                          </button>
+                          <FastTooltip label="Copy link to this chat">
+                            <button
+                              onClick={() => copyDeepLink()}
+                              aria-label="Copy link to this chat"
+                              className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600"
+                            >
+                              <Link2 className="h-3.5 w-3.5" />
+                            </button>
+                          </FastTooltip>
                         )}
                       </div>
                       {(selectedContactId || selectedThreadContactId) && (
@@ -2645,35 +2667,41 @@ export default function PortalChatsPage() {
                     </div>
                     <div className="flex items-center gap-1">
                       {(selectedAccountId || selectedContactId) && (
-                        <button
-                          onClick={async () => {
-                            await markAsUnread({ account_id: selectedAccountId, contact_id: selectedContactId })
-                            toast.success('Marked as unread')
-                          }}
-                          className="p-2 rounded-lg text-zinc-400 hover:bg-blue-50 hover:text-blue-600 transition-colors"
-                          title="Mark this conversation as unread"
-                        >
-                          <MailOpen className="h-4 w-4" />
-                        </button>
+                        <FastTooltip label="Mark this conversation as unread">
+                          <button
+                            onClick={async () => {
+                              await markAsUnread({ account_id: selectedAccountId, contact_id: selectedContactId })
+                              toast.success('Marked as unread')
+                            }}
+                            className="p-2 rounded-lg text-zinc-400 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                            aria-label="Mark this conversation as unread"
+                          >
+                            <MailOpen className="h-4 w-4" />
+                          </button>
+                        </FastTooltip>
                       )}
-                      <button
-                        onClick={handleRefresh}
-                        disabled={isRefreshing}
-                        className="p-2 rounded-lg text-zinc-400 hover:bg-zinc-100 disabled:opacity-40 transition-colors"
-                        title="Refresh messages"
-                      >
-                        <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
-                      </button>
-                      <button
-                        onClick={() => setAiPanelOpen(v => !v)}
-                        className={cn(
-                          'p-2 rounded-lg transition-colors',
-                          aiPanelOpen ? 'bg-violet-100 text-violet-600' : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600'
-                        )}
-                        title="AI Assistant"
-                      >
-                        <Sparkles className="h-4 w-4" />
-                      </button>
+                      <FastTooltip label="Refresh messages">
+                        <button
+                          onClick={handleRefresh}
+                          disabled={isRefreshing}
+                          className="p-2 rounded-lg text-zinc-400 hover:bg-zinc-100 disabled:opacity-40 transition-colors"
+                          aria-label="Refresh messages"
+                        >
+                          <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
+                        </button>
+                      </FastTooltip>
+                      <FastTooltip label="AI Assistant">
+                        <button
+                          onClick={() => setAiPanelOpen(v => !v)}
+                          className={cn(
+                            'p-2 rounded-lg transition-colors',
+                            aiPanelOpen ? 'bg-violet-100 text-violet-600' : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600'
+                          )}
+                          aria-label="AI Assistant"
+                        >
+                          <Sparkles className="h-4 w-4" />
+                        </button>
+                      </FastTooltip>
                     </div>
                   </div>
                 )
@@ -2790,19 +2818,21 @@ export default function PortalChatsPage() {
                     </button>
                   )
                 })()}
-                <button
-                  onClick={() => setChatViewMode('worker')}
-                  className={cn(
-                    'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
-                    chatViewMode === 'worker'
-                      ? 'text-violet-600 border-b-2 border-violet-600 bg-violet-50/30'
-                      : 'text-zinc-500 hover:text-zinc-700 border-b-2 border-transparent'
-                  )}
-                  title="The Slack worker for this client — reads CRM, DB & memory"
-                >
-                  <Wand2 className="h-3.5 w-3.5" />
-                  Worker
-                </button>
+                <FastTooltip label="The Slack worker for this client — reads CRM, DB & memory" className="flex-1">
+                  <button
+                    onClick={() => setChatViewMode('worker')}
+                    className={cn(
+                      'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
+                      chatViewMode === 'worker'
+                        ? 'text-violet-600 border-b-2 border-violet-600 bg-violet-50/30'
+                        : 'text-zinc-500 hover:text-zinc-700 border-b-2 border-transparent'
+                    )}
+                    aria-label="The Slack worker for this client — reads CRM, DB & memory"
+                  >
+                    <Wand2 className="h-3.5 w-3.5" />
+                    Worker
+                  </button>
+                </FastTooltip>
                 <div className="flex items-center px-2 shrink-0">
                   <HelpDot helpKey="chat.tabs" />
                 </div>
@@ -3038,21 +3068,25 @@ export default function PortalChatsPage() {
                   <div className="space-y-0.5 max-h-28 overflow-y-auto">
                     {pinned.map(pm => (
                       <div key={pm.id} className="group flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-amber-100/60">
-                        <button
-                          onClick={() => scrollToMessage(pm.id)}
-                          className="flex items-start gap-1.5 text-xs text-zinc-700 flex-1 min-w-0 text-left"
-                          title="Jump to message"
-                        >
-                          <Pin className="h-3 w-3 text-amber-500 mt-0.5 shrink-0" />
-                          <span className="truncate flex-1">{pm.message || '[Attachment]'}</span>
-                        </button>
-                        <button
-                          onClick={() => pinMessageMutation.mutate({ messageId: pm.id, pinned: false })}
-                          className="shrink-0 text-[10px] text-zinc-400 hover:text-red-600 sm:opacity-0 sm:group-hover:opacity-100"
-                          title="Unpin"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
+                        <FastTooltip label="Jump to message" className="flex-1 min-w-0">
+                          <button
+                            onClick={() => scrollToMessage(pm.id)}
+                            className="flex items-start gap-1.5 text-xs text-zinc-700 flex-1 min-w-0 text-left"
+                            aria-label="Jump to message"
+                          >
+                            <Pin className="h-3 w-3 text-amber-500 mt-0.5 shrink-0" />
+                            <span className="truncate flex-1">{pm.message || '[Attachment]'}</span>
+                          </button>
+                        </FastTooltip>
+                        <FastTooltip label="Unpin" className="shrink-0">
+                          <button
+                            onClick={() => pinMessageMutation.mutate({ messageId: pm.id, pinned: false })}
+                            className="shrink-0 text-[10px] text-zinc-400 hover:text-red-600 sm:opacity-0 sm:group-hover:opacity-100"
+                            aria-label="Unpin"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </FastTooltip>
                       </div>
                     ))}
                   </div>
@@ -3151,14 +3185,16 @@ export default function PortalChatsPage() {
 
                   const actionButton = (
                     <DropdownMenu.Root>
-                      <DropdownMenu.Trigger asChild>
-                        <button
-                          className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
-                          title="Actions"
-                        >
-                          <MoreVertical className="h-3.5 w-3.5" />
-                        </button>
-                      </DropdownMenu.Trigger>
+                      <FastTooltip label="Actions">
+                        <DropdownMenu.Trigger asChild>
+                          <button
+                            className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
+                            aria-label="Actions"
+                          >
+                            <MoreVertical className="h-3.5 w-3.5" />
+                          </button>
+                        </DropdownMenu.Trigger>
+                      </FastTooltip>
                       <DropdownMenu.Portal>
                         <DropdownMenu.Content
                           className="z-50 w-48 py-1 bg-white rounded-lg shadow-lg border text-sm animate-in fade-in-0 zoom-in-95 max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
@@ -3565,19 +3601,25 @@ export default function PortalChatsPage() {
                 Inverted styling vs the "Older messages" pill. Shows an unread
                 count badge when unread messages sit below the fold. */}
             {showJumpToLatest && (
-              <button
-                onClick={jumpToLatest}
-                className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-zinc-800 rounded-full shadow-lg hover:bg-zinc-700 transition-colors"
-                title="Jump to latest message"
+              <FastTooltip
+                label="Jump to latest message"
+                align="center"
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10"
               >
-                <ChevronDown className="h-3 w-3" />
-                Latest
-                {unreadBelowCount > 0 && (
-                  <span className="ml-0.5 min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-semibold leading-none">
-                    {unreadBelowCount}
-                  </span>
-                )}
-              </button>
+                <button
+                  onClick={jumpToLatest}
+                  aria-label="Jump to latest message"
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-zinc-800 rounded-full shadow-lg hover:bg-zinc-700 transition-colors"
+                >
+                  <ChevronDown className="h-3 w-3" />
+                  Latest
+                  {unreadBelowCount > 0 && (
+                    <span className="ml-0.5 min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-semibold leading-none">
+                      {unreadBelowCount}
+                    </span>
+                  )}
+                </button>
+              </FastTooltip>
             )}
             </div>
 
@@ -3735,40 +3777,43 @@ export default function PortalChatsPage() {
                 <span className="text-[10px] uppercase tracking-wide text-zinc-400 font-medium shrink-0">Send as</span>
                 <div className="flex gap-1 flex-wrap">
                   {selectedThreadCompanies.map(c => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => setSelectedCompanyId(c.id)}
-                      className={cn(
-                        'px-2.5 py-0.5 text-[11px] rounded-full transition-colors max-w-[200px] truncate inline-flex items-center gap-1',
-                        c.closed
-                          ? (selectedCompanyId === c.id
-                              ? 'bg-red-600 text-white'
-                              : 'bg-white border border-red-200 text-red-600 hover:bg-red-50')
-                          : (selectedCompanyId === c.id
-                              ? 'bg-blue-600 text-white'
-                              : 'bg-white border text-zinc-600 hover:bg-zinc-100')
-                      )}
-                      title={c.closed ? `${c.name} — CLOSED company. The client cannot see messages sent here.` : c.name}
-                    >
-                      {c.closed && <XCircle className="h-3 w-3 shrink-0" />}
-                      <span className="truncate">{c.name}</span>
-                      {c.closed && <span className="text-[9px] font-semibold uppercase tracking-wide shrink-0">Closed</span>}
-                    </button>
+                    <FastTooltip key={c.id} label={c.closed ? `${c.name} — CLOSED company. The client cannot see messages sent here.` : c.name}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCompanyId(c.id)}
+                        className={cn(
+                          'px-2.5 py-0.5 text-[11px] rounded-full transition-colors max-w-[200px] truncate inline-flex items-center gap-1',
+                          c.closed
+                            ? (selectedCompanyId === c.id
+                                ? 'bg-red-600 text-white'
+                                : 'bg-white border border-red-200 text-red-600 hover:bg-red-50')
+                            : (selectedCompanyId === c.id
+                                ? 'bg-blue-600 text-white'
+                                : 'bg-white border text-zinc-600 hover:bg-zinc-100')
+                        )}
+                        aria-label={c.closed ? `${c.name} — CLOSED company. The client cannot see messages sent here.` : c.name}
+                      >
+                        {c.closed && <XCircle className="h-3 w-3 shrink-0" />}
+                        <span className="truncate">{c.name}</span>
+                        {c.closed && <span className="text-[9px] font-semibold uppercase tracking-wide shrink-0">Closed</span>}
+                      </button>
+                    </FastTooltip>
                   ))}
-                  <button
-                    type="button"
-                    onClick={() => setSelectedCompanyId(null)}
-                    className={cn(
-                      'px-2.5 py-0.5 text-[11px] rounded-full transition-colors',
-                      !selectedCompanyId
-                        ? 'bg-zinc-900 text-white'
-                        : 'bg-white border text-zinc-600 hover:bg-zinc-100'
-                    )}
-                    title="Only this person (and staff) can see the reply — no company thread."
-                  >
-                    Personal
-                  </button>
+                  <FastTooltip label="Only this person (and staff) can see the reply — no company thread.">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCompanyId(null)}
+                      className={cn(
+                        'px-2.5 py-0.5 text-[11px] rounded-full transition-colors',
+                        !selectedCompanyId
+                          ? 'bg-zinc-900 text-white'
+                          : 'bg-white border text-zinc-600 hover:bg-zinc-100'
+                      )}
+                      aria-label="Only this person (and staff) can see the reply — no company thread."
+                    >
+                      Personal
+                    </button>
+                  </FastTooltip>
                 </div>
               </div>
             )}
@@ -3817,13 +3862,15 @@ export default function PortalChatsPage() {
                 )}>
                   {/* Emoji */}
                   <div className="relative shrink-0" ref={emojiPickerRef}>
-                    <button
-                      onClick={() => setShowEmojiPicker(v => !v)}
-                      className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
-                      title="Emoji"
-                    >
-                      <Smile className="h-5 w-5" />
-                    </button>
+                    <FastTooltip label="Emoji">
+                      <button
+                        onClick={() => setShowEmojiPicker(v => !v)}
+                        className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
+                        aria-label="Emoji"
+                      >
+                        <Smile className="h-5 w-5" />
+                      </button>
+                    </FastTooltip>
                     {showEmojiPicker && (
                       <div className="absolute bottom-12 left-0 z-30">
                         <EmojiPicker
@@ -3851,19 +3898,21 @@ export default function PortalChatsPage() {
                     )}
                   </div>
                   {/* Paperclip */}
-                  <button
-                    onClick={() => adminFileRef.current?.click()}
-                    disabled={uploadingAdminFile}
-                    className={cn(
-                      'p-2 rounded-full transition-colors shrink-0',
-                      pendingAdminFiles.length > 0
-                        ? 'text-blue-600 bg-blue-100 hover:bg-blue-200'
-                        : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50'
-                    )}
-                    title="Attach file"
-                  >
-                    {uploadingAdminFile ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
-                  </button>
+                  <FastTooltip label="Attach file">
+                    <button
+                      onClick={() => adminFileRef.current?.click()}
+                      disabled={uploadingAdminFile}
+                      className={cn(
+                        'p-2 rounded-full transition-colors shrink-0',
+                        pendingAdminFiles.length > 0
+                          ? 'text-blue-600 bg-blue-100 hover:bg-blue-200'
+                          : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50'
+                      )}
+                      aria-label="Attach file"
+                    >
+                      {uploadingAdminFile ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
+                    </button>
+                  </FastTooltip>
                   <input
                     ref={adminFileRef}
                     type="file"
@@ -3872,14 +3921,16 @@ export default function PortalChatsPage() {
                     className="hidden"
                   />
                   {/* AI Suggest — on-demand reply suggestion */}
-                  <button
-                    onClick={handleSuggest}
-                    disabled={aiLoading || (!selectedAccountId && !selectedContactId)}
-                    className="p-2 rounded-full text-violet-500 hover:text-violet-600 hover:bg-violet-100 disabled:opacity-50 transition-colors shrink-0"
-                    title="AI Suggest"
-                  >
-                    {aiLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}
-                  </button>
+                  <FastTooltip label="AI Suggest">
+                    <button
+                      onClick={handleSuggest}
+                      disabled={aiLoading || (!selectedAccountId && !selectedContactId)}
+                      className="p-2 rounded-full text-violet-500 hover:text-violet-600 hover:bg-violet-100 disabled:opacity-50 transition-colors shrink-0"
+                      aria-label="AI Suggest"
+                    >
+                      {aiLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}
+                    </button>
+                  </FastTooltip>
                   {/* Textarea */}
                   <textarea
                     ref={inputRef}
@@ -3910,13 +3961,15 @@ export default function PortalChatsPage() {
                       >
                         Italian
                       </button>
-                      <button
-                        onClick={() => setPolishAskLanguage(false)}
-                        className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
-                        title="Cancel"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
+                      <FastTooltip label="Cancel">
+                        <button
+                          onClick={() => setPolishAskLanguage(false)}
+                          className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
+                          aria-label="Cancel"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </FastTooltip>
                     </div>
                   ) : (
                     <>
@@ -3925,29 +3978,33 @@ export default function PortalChatsPage() {
                           on keeps the draft exactly as written. Visible only alongside
                           Polish so it never reads as a general setting. */}
                       {replyText.trim() && (
-                        <button
-                          onClick={() => setPreserveLanguage(v => !v)}
-                          className={cn(
-                            'p-2 rounded-full transition-colors shrink-0',
-                            preserveLanguage
-                              ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                              : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100'
-                          )}
-                          title={preserveLanguage ? 'Polish will keep the language as written — click to match the client instead' : 'Polish will match the language the client is writing — click to keep it as written instead'}
-                        >
-                          <Languages className="h-5 w-5" />
-                        </button>
+                        <FastTooltip label={preserveLanguage ? 'Polish will keep the language as written — click to match the client instead' : 'Polish will match the language the client is writing — click to keep it as written instead'}>
+                          <button
+                            onClick={() => setPreserveLanguage(v => !v)}
+                            className={cn(
+                              'p-2 rounded-full transition-colors shrink-0',
+                              preserveLanguage
+                                ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                                : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100'
+                            )}
+                            aria-label={preserveLanguage ? 'Polish will keep the language as written — click to match the client instead' : 'Polish will match the language the client is writing — click to keep it as written instead'}
+                          >
+                            <Languages className="h-5 w-5" />
+                          </button>
+                        </FastTooltip>
                       )}
                       {/* Polish button — inside pill, shows when text */}
                       {replyText.trim() && (
-                        <button
-                          onClick={() => handlePolish()}
-                          disabled={polishing}
-                          className="p-2 rounded-full bg-violet-100 text-violet-600 hover:bg-violet-200 disabled:opacity-50 transition-colors shrink-0"
-                          title={preserveLanguage ? 'AI Polish — clean up grammar, keep language as written' : 'AI Polish — clean up grammar and match the client\'s language'}
-                        >
-                          {polishing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
-                        </button>
+                        <FastTooltip label={preserveLanguage ? 'AI Polish — clean up grammar, keep language as written' : 'AI Polish — clean up grammar and match the client\'s language'}>
+                          <button
+                            onClick={() => handlePolish()}
+                            disabled={polishing}
+                            className="p-2 rounded-full bg-violet-100 text-violet-600 hover:bg-violet-200 disabled:opacity-50 transition-colors shrink-0"
+                            aria-label={preserveLanguage ? 'AI Polish — clean up grammar, keep language as written' : 'AI Polish — clean up grammar and match the client\'s language'}
+                          >
+                            {polishing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
+                          </button>
+                        </FastTooltip>
                       )}
                     </>
                   )}
@@ -3963,37 +4020,43 @@ export default function PortalChatsPage() {
                     <Loader2 className="h-5 w-5 animate-spin" />
                   </button>
                 ) : (replyText.trim() || pendingAdminFiles.length > 0) ? (
-                  <button
-                    onClick={handleSend}
-                    disabled={uploadingAdminFile || sendingToClosedAccount}
-                    title={sendingToClosedAccount ? `${closedTargetName} is closed — the client can't see messages here.` : undefined}
-                    className={cn(
-                      'w-12 h-12 rounded-full text-white disabled:opacity-50 flex items-center justify-center shrink-0 transition-colors',
-                      sendingToClosedAccount ? 'bg-red-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700',
-                    )}
-                  >
-                    <Send className="h-5 w-5" />
-                  </button>
+                  <FastTooltip label={sendingToClosedAccount ? `${closedTargetName} is closed — the client can't see messages here.` : undefined}>
+                    <button
+                      onClick={handleSend}
+                      disabled={uploadingAdminFile || sendingToClosedAccount}
+                      aria-label={sendingToClosedAccount ? `${closedTargetName} is closed — the client can't see messages here.` : undefined}
+                      className={cn(
+                        'w-12 h-12 rounded-full text-white disabled:opacity-50 flex items-center justify-center shrink-0 transition-colors',
+                        sendingToClosedAccount ? 'bg-red-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700',
+                      )}
+                    >
+                      <Send className="h-5 w-5" />
+                    </button>
+                  </FastTooltip>
                 ) : isRecording ? (
-                  <button
-                    onClick={stopRecording}
-                    className="w-12 h-12 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse flex items-center justify-center shrink-0 transition-all"
-                    title="Stop recording"
-                  >
-                    <Square className="h-5 w-5 fill-current" />
-                  </button>
+                  <FastTooltip label="Stop recording">
+                    <button
+                      onClick={stopRecording}
+                      className="w-12 h-12 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse flex items-center justify-center shrink-0 transition-all"
+                      aria-label="Stop recording"
+                    >
+                      <Square className="h-5 w-5 fill-current" />
+                    </button>
+                  </FastTooltip>
                 ) : isTranscribing ? (
                   <button disabled className="w-12 h-12 rounded-full bg-blue-100 text-blue-500 flex items-center justify-center shrink-0">
                     <Loader2 className="h-5 w-5 animate-spin" />
                   </button>
                 ) : micSupported ? (
-                  <button
-                    onClick={startRecording}
-                    className="w-12 h-12 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 flex items-center justify-center shrink-0 transition-colors"
-                    title="Voice input"
-                  >
-                    <Mic className="h-5 w-5" />
-                  </button>
+                  <FastTooltip label="Voice input">
+                    <button
+                      onClick={startRecording}
+                      className="w-12 h-12 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 flex items-center justify-center shrink-0 transition-colors"
+                      aria-label="Voice input"
+                    >
+                      <Mic className="h-5 w-5" />
+                    </button>
+                  </FastTooltip>
                 ) : (
                   <button
                     onClick={handleSend}

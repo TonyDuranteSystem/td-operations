@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { FileText, Loader2, X, CheckCircle2, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface GenerateSS4DialogProps {
   open: boolean
@@ -196,15 +197,17 @@ export function GenerateSS4Dialog({
                 Cancel
               </button>
               {existingUnsignedStatus ? (
-                <button
-                  onClick={() => handleGenerate(true)}
-                  disabled={isPending}
-                  title="Refresh the unsigned SS-4 from the account's current data — entity type, members, state. The client's existing link stays valid."
-                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
-                >
-                  {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-                  Regenerate from account data
-                </button>
+                <FastTooltip label="Refresh the unsigned SS-4 from the account's current data — entity type, members, state. The client's existing link stays valid.">
+                  <button
+                    onClick={() => handleGenerate(true)}
+                    disabled={isPending}
+                    aria-label="Refresh the unsigned SS-4 from the account's current data — entity type, members, state. The client's existing link stays valid."
+                    className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+                  >
+                    {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                    Regenerate from account data
+                  </button>
+                </FastTooltip>
               ) : (
                 <button
                   onClick={() => handleGenerate()}
@@ -219,15 +222,17 @@ export function GenerateSS4Dialog({
           ) : (
             <>
               {result.canRegenerate && (
-                <button
-                  onClick={() => handleGenerate(true)}
-                  disabled={isPending}
-                  title="Refresh the unsigned SS-4 from the account's current data — entity type, members, state. The client's existing link stays valid."
-                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
-                >
-                  {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-                  Regenerate from account data
-                </button>
+                <FastTooltip label="Refresh the unsigned SS-4 from the account's current data — entity type, members, state. The client's existing link stays valid.">
+                  <button
+                    onClick={() => handleGenerate(true)}
+                    disabled={isPending}
+                    aria-label="Refresh the unsigned SS-4 from the account's current data — entity type, members, state. The client's existing link stays valid."
+                    className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+                  >
+                    {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                    Regenerate from account data
+                  </button>
+                </FastTooltip>
               )}
               <button
                 onClick={onClose}

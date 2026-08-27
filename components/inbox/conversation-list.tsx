@@ -22,6 +22,7 @@ import {
 import { toInboxView, viewKey } from '@/lib/inbox/view-query'
 import { buildPageNumbers } from '@/lib/inbox/pager'
 import { HoverHint } from './hover-hint'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const EMPTY_OVERRIDES: Map<string, RowOverride> = new Map()
 const EMPTY_UNREAD: Map<string, UnreadOverride> = new Map()
@@ -802,6 +803,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
               <div className="sm:hidden shrink-0 self-center flex items-center">
                 {inTrash ? (
                   <>
+                  <FastTooltip label="Restore to Inbox">
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
@@ -809,10 +811,12 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                     }}
                     disabled={restoreMutation.isPending}
                     className="p-1.5 rounded hover:bg-green-100 text-zinc-400 hover:text-green-600 transition-colors"
-                    title="Restore to Inbox"
+                    aria-label="Restore to Inbox"
                   >
                     <ArchiveRestore className="h-4 w-4" />
                   </button>
+                  </FastTooltip>
+                    <FastTooltip label="Erase from our storage">
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
@@ -822,14 +826,16 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                       }}
                       disabled={deleteForeverMutation.isPending}
                       className="p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
-                      title="Erase from our storage"
+                      aria-label="Erase from our storage"
                     >
                       <FlameKindling className="h-4 w-4" />
                     </button>
+                    </FastTooltip>
                   </>
                 ) : (
                   <>
                     {/* Pin — phone parity with the hover bar's pin. */}
+                    <FastTooltip label={conv.starred ? 'Unpin' : 'Pin'}>
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
@@ -837,15 +843,17 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                       }}
                       disabled={pinMutation.isPending}
                       className="p-1.5 rounded hover:bg-amber-50 text-zinc-400 hover:text-amber-500 transition-colors"
-                      title={conv.starred ? 'Unpin' : 'Pin'}
+                      aria-label={conv.starred ? 'Unpin' : 'Pin'}
                     >
                       <Star className={cn('h-4 w-4', conv.starred && 'fill-amber-400 text-amber-400')} />
                     </button>
+                    </FastTooltip>
                     {/* Archive — the phone's first row-level archive control
                         (rows offered Delete ONLY; the hover bar never appears
                         on touch). Hidden on an already-archived row: a repeat
                         archive is a Gmail no-op that only pretends to work. */}
                     {!inArchived && conv.inInbox !== false && (
+                      <FastTooltip label="Archive">
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
@@ -853,11 +861,13 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                         }}
                         disabled={archiveMutation.isPending}
                         className="p-1.5 rounded hover:bg-zinc-200 text-zinc-400 hover:text-zinc-700 transition-colors"
-                        title="Archive"
+                        aria-label="Archive"
                       >
                         <Archive className="h-4 w-4" />
                       </button>
+                      </FastTooltip>
                     )}
+                    <FastTooltip label="Delete">
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
@@ -865,10 +875,11 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                       }}
                       disabled={deleteMutation.isPending}
                       className="p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
-                      title="Delete"
+                      aria-label="Delete"
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
+                    </FastTooltip>
                   </>
                 )}
               </div>
@@ -909,7 +920,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                         setRowMenu(rowMenu?.id === conv.id && rowMenu.kind === 'color' ? null : { id: conv.id, kind: 'color' })
                       }}
                       className="p-1.5 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600 transition-colors"
-                      title="Mark with a color"
+                      aria-label="Mark with a color"
                     >
                       {conv.colorMark ? (
                         <span
@@ -925,32 +936,35 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                         <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setRowMenu(null) }} />
                         <div className="absolute right-0 top-full mt-1 z-50 bg-white rounded-lg shadow-xl border border-zinc-200 p-2 flex items-center gap-1.5">
                           {COLOR_MARKS.map(m => (
+                            <FastTooltip key={m.key} label={m.label}>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setRowMenu(null)
+                                  onSetColor(conv, m.key)
+                                }}
+                                className={cn(
+                                  'h-5 w-5 rounded-full hover:scale-110 transition-transform',
+                                  conv.colorMark === m.key && 'ring-2 ring-offset-1 ring-zinc-400'
+                                )}
+                                style={{ backgroundColor: m.hex }}
+                                aria-label={m.label}
+                              />
+                            </FastTooltip>
+                          ))}
+                          <FastTooltip label="Remove mark">
                             <button
-                              key={m.key}
                               onClick={(e) => {
                                 e.stopPropagation()
                                 setRowMenu(null)
-                                onSetColor(conv, m.key)
+                                onSetColor(conv, null)
                               }}
-                              className={cn(
-                                'h-5 w-5 rounded-full hover:scale-110 transition-transform',
-                                conv.colorMark === m.key && 'ring-2 ring-offset-1 ring-zinc-400'
-                              )}
-                              style={{ backgroundColor: m.hex }}
-                              title={m.label}
-                            />
-                          ))}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setRowMenu(null)
-                              onSetColor(conv, null)
-                            }}
-                            className="h-5 w-5 rounded-full border border-zinc-300 flex items-center justify-center text-zinc-400 hover:text-zinc-600 hover:scale-110 transition-transform"
-                            title="Remove mark"
-                          >
-                            <Ban className="h-3 w-3" />
-                          </button>
+                              className="h-5 w-5 rounded-full border border-zinc-300 flex items-center justify-center text-zinc-400 hover:text-zinc-600 hover:scale-110 transition-transform"
+                              aria-label="Remove mark"
+                            >
+                              <Ban className="h-3 w-3" />
+                            </button>
+                          </FastTooltip>
                         </div>
                       </>
                     )}
@@ -964,7 +978,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                         setRowMenu(rowMenu?.id === conv.id && rowMenu.kind === 'label' ? null : { id: conv.id, kind: 'label' })
                       }}
                       className="p-1.5 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600 transition-colors"
-                      title="File to folder"
+                      aria-label="File to folder"
                     >
                       <FolderInput className="h-4 w-4" />
                     </button></HoverHint>
@@ -1004,7 +1018,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                   }}
                   disabled={markMutation.isPending}
                   className="p-1.5 rounded hover:bg-blue-100 text-zinc-400 hover:text-blue-600 transition-colors"
-                  title={conv.unread > 0 ? 'Mark as read' : 'Mark as unread'}
+                  aria-label={conv.unread > 0 ? 'Mark as read' : 'Mark as unread'}
                 >
                   {conv.unread > 0 ? <Mail className="h-4 w-4" /> : <MailOpen className="h-4 w-4" />}
                 </button></HoverHint>
@@ -1016,7 +1030,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                         setRowMenu(rowMenu?.id === conv.id && rowMenu.kind === 'snooze' ? null : { id: conv.id, kind: 'snooze' })
                       }}
                       className="p-1.5 rounded hover:bg-amber-100 text-zinc-400 hover:text-amber-600 transition-colors"
-                      title="Snooze"
+                      aria-label="Snooze"
                     >
                       <AlarmClock className="h-4 w-4" />
                     </button></HoverHint>
@@ -1056,7 +1070,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                     }}
                     disabled={restoreMutation.isPending}
                     className="p-1.5 rounded hover:bg-green-100 text-zinc-400 hover:text-green-600 transition-colors"
-                    title="Restore to Inbox"
+                    aria-label="Restore to Inbox"
                   >
                     <ArchiveRestore className="h-4 w-4" />
                   </button></HoverHint>
@@ -1069,7 +1083,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                       }}
                       disabled={deleteForeverMutation.isPending}
                       className="p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
-                      title="Erase from our storage"
+                      aria-label="Erase from our storage"
                     >
                       <FlameKindling className="h-4 w-4" />
                     </button></HoverHint>
@@ -1082,7 +1096,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                     }}
                     disabled={deleteMutation.isPending}
                     className="p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
-                    title="Delete"
+                    aria-label="Delete"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button></HoverHint>

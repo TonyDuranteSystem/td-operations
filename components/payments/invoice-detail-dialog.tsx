@@ -4,6 +4,7 @@ import { useState, useEffect, useTransition } from 'react'
 import { X, Loader2, FileText, Send, Bell, Download, Trash2, CheckCircle2, Ban, Plus, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { format, parseISO } from 'date-fns'
 import {
   updateInvoice,
@@ -542,11 +543,13 @@ export function InvoiceDetailDialog({ open, onClose, paymentId, invoiceNumber, i
 
                   {/* Regenerate — reflect an applied credit as a line (Draft/Sent/Overdue) */}
                   {canRegenerate && (
-                    <button onClick={handleRegenerate} disabled={isPending}
-                      title="Rebuild this invoice so an applied credit shows as a line and the total nets to the amount owed"
-                      className="px-3 py-2 text-sm text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-md disabled:opacity-50 flex items-center gap-1.5">
-                      {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Regenerate
-                    </button>
+                    <FastTooltip label="Rebuild this invoice so an applied credit shows as a line and the total nets to the amount owed">
+                      <button onClick={handleRegenerate} disabled={isPending}
+                        aria-label="Rebuild this invoice so an applied credit shows as a line and the total nets to the amount owed"
+                        className="px-3 py-2 text-sm text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-md disabled:opacity-50 flex items-center gap-1.5">
+                        {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Regenerate
+                      </button>
+                    </FastTooltip>
                   )}
 
                   {/* Spacer */}

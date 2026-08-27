@@ -19,6 +19,7 @@ import {
 } from '@/lib/portal/document-templates'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { interpolateString } from '@/lib/template-interpolation'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface HistoryItem {
   id: string
@@ -761,14 +762,16 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
 
           {/* Preview button */}
           <div className="flex justify-end">
-            <button
-              onClick={handlePreview}
-              disabled={(!isOA && (formData.amount <= 0 || members.length === 0)) || (isOA && !oaCanProceed)}
-              className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-300 disabled:text-zinc-500 text-white rounded-lg font-medium text-sm transition"
-              title={isOA && !oaCanProceed ? t('documentGenerate.portalOnlyTooltip') : undefined}
-            >
-              {t('documentGenerate.preview')}
-            </button>
+            <FastTooltip label={isOA && !oaCanProceed ? t('documentGenerate.portalOnlyTooltip') : undefined}>
+              <button
+                onClick={handlePreview}
+                disabled={(!isOA && (formData.amount <= 0 || members.length === 0)) || (isOA && !oaCanProceed)}
+                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-300 disabled:text-zinc-500 text-white rounded-lg font-medium text-sm transition"
+                aria-label={isOA && !oaCanProceed ? t('documentGenerate.portalOnlyTooltip') : undefined}
+              >
+                {t('documentGenerate.preview')}
+              </button>
+            </FastTooltip>
           </div>
         </div>
       )}

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { CreditCard, Smartphone, Building2, ChevronDown, Copy, Check, ExternalLink } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { t, type Locale } from '@/lib/portal/i18n'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface PaymentMethod {
   name: string
@@ -36,9 +37,11 @@ function CopyButton({ text }: { text: string }) {
     setTimeout(() => setCopied(false), 2000)
   }
   return (
-    <button onClick={handleCopy} className="p-1 rounded hover:bg-zinc-100 transition-colors" title="Copy">
-      {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5 text-zinc-400" />}
-    </button>
+    <FastTooltip label="Copy">
+      <button onClick={handleCopy} className="p-1 rounded hover:bg-zinc-100 transition-colors" aria-label="Copy">
+        {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5 text-zinc-400" />}
+      </button>
+    </FastTooltip>
   )
 }
 

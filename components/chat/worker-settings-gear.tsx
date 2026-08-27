@@ -18,6 +18,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Settings, Loader2, Check } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { WorkerModelOption } from '@/lib/ai-agent/worker-models'
 
 interface ModelState {
@@ -85,15 +86,16 @@ export function WorkerSettingsGear({ className }: { className?: string }) {
 
   return (
     <div className={cn('relative', className)} ref={popRef}>
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        title="Assistant settings"
-        aria-label="Assistant settings"
-        className="inline-flex items-center justify-center rounded-md p-1.5 min-h-[32px] min-w-[32px] text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors"
-      >
-        <Settings className="h-4 w-4" />
-      </button>
+      <FastTooltip label="Assistant settings">
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          aria-label="Assistant settings"
+          className="inline-flex items-center justify-center rounded-md p-1.5 min-h-[32px] min-w-[32px] text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors"
+        >
+          <Settings className="h-4 w-4" />
+        </button>
+      </FastTooltip>
 
       {open && (
         <div className="absolute right-0 top-full z-50 mt-1 w-[min(20rem,calc(100vw-2rem))] rounded-lg border bg-white shadow-lg p-3 text-left">

@@ -5,6 +5,7 @@ import { Loader2, CheckCircle, AlertCircle, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
 import { interpolateString } from '@/lib/template-interpolation'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 export interface FieldConfig {
   name: string
@@ -181,25 +182,29 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
             />
             {field.aiAssist && (
               aiEnabled ? (
-                <button
-                  type="button"
-                  onClick={runAiAssist}
-                  disabled={aiBusy}
-                  title={pick('Draft an answer with AI', 'Genera una bozza con l’AI')}
-                  className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-60 disabled:cursor-wait"
-                >
-                  {aiBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <span>✨</span>}
-                  {aiBusy ? pick('Drafting…', 'Genero…') : pick('Generate', 'Genera')}
-                </button>
+                <FastTooltip label={pick('Draft an answer with AI', 'Genera una bozza con l’AI')}>
+                  <button
+                    type="button"
+                    onClick={runAiAssist}
+                    disabled={aiBusy}
+                    aria-label={pick('Draft an answer with AI', 'Genera una bozza con l’AI')}
+                    className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-60 disabled:cursor-wait"
+                  >
+                    {aiBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <span>✨</span>}
+                    {aiBusy ? pick('Drafting…', 'Genero…') : pick('Generate', 'Genera')}
+                  </button>
+                </FastTooltip>
               ) : (
-                <button
-                  type="button"
-                  disabled
-                  title={pick('AI generation — coming soon', 'Generazione AI — in arrivo')}
-                  className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] font-medium text-zinc-400 cursor-not-allowed"
-                >
-                  ✨ {pick('Generate', 'Genera')}
-                </button>
+                <FastTooltip label={pick('AI generation — coming soon', 'Generazione AI — in arrivo')}>
+                  <button
+                    type="button"
+                    disabled
+                    aria-label={pick('AI generation — coming soon', 'Generazione AI — in arrivo')}
+                    className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] font-medium text-zinc-400 cursor-not-allowed"
+                  >
+                    ✨ {pick('Generate', 'Genera')}
+                  </button>
+                </FastTooltip>
               )
             )}
           </div>

@@ -27,6 +27,7 @@ import {
   Circle,
 } from 'lucide-react'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import {
   updateTaskStatus,
   deleteTask,
@@ -188,16 +189,18 @@ export function TaskRowActions({ task }: Props) {
 
   return (
     <>
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o) }}
-        disabled={isPending}
-        className="p-1.5 rounded hover:bg-zinc-100 text-muted-foreground hover:text-zinc-700 disabled:opacity-50"
-        title="More actions"
-      >
-        {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MoreVertical className="h-3.5 w-3.5" />}
-      </button>
+      <FastTooltip label="More actions">
+        <button
+          ref={buttonRef}
+          type="button"
+          onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o) }}
+          disabled={isPending}
+          className="p-1.5 rounded hover:bg-zinc-100 text-muted-foreground hover:text-zinc-700 disabled:opacity-50"
+          aria-label="More actions"
+        >
+          {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MoreVertical className="h-3.5 w-3.5" />}
+        </button>
+      </FastTooltip>
       {menuPortal}
 
       <ConfirmDestructiveDialog

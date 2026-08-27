@@ -12,6 +12,7 @@ import { printEmailThread } from '@/lib/inbox/print-email'
 import { resolveAttachmentType, shouldOpenInTab } from '@/lib/inbox/attachment-open'
 import { EmailHtmlFrame } from './email-html-frame'
 import { NoteQuickCreate } from '@/components/dashboard/note-quick-create'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { Link2, Printer } from 'lucide-react'
 import { trackOpenMarkRead } from '@/lib/inbox/pending-mark-read'
 
@@ -126,25 +127,27 @@ function AttachmentChip({
   }
 
   return (
-    <button
-      type="button"
-      onClick={open}
-      disabled={busy}
-      title={att.filename}
-      className={cn(className, busy && 'opacity-60 cursor-wait')}
-    >
-      <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-      </svg>
-      <span className="truncate max-w-[200px]">{att.filename}</span>
-      <span className="text-[10px] opacity-60 shrink-0">
-        {busy
-          ? 'Opening…'
-          : att.size > 1024 * 1024
-            ? `${(att.size / 1024 / 1024).toFixed(1)}MB`
-            : `${Math.round(att.size / 1024)}KB`}
-      </span>
-    </button>
+    <FastTooltip label={att.filename}>
+      <button
+        type="button"
+        onClick={open}
+        disabled={busy}
+        aria-label={att.filename}
+        className={cn(className, busy && 'opacity-60 cursor-wait')}
+      >
+        <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+        </svg>
+        <span className="truncate max-w-[200px]">{att.filename}</span>
+        <span className="text-[10px] opacity-60 shrink-0">
+          {busy
+            ? 'Opening…'
+            : att.size > 1024 * 1024
+              ? `${(att.size / 1024 / 1024).toFixed(1)}MB`
+              : `${Math.round(att.size / 1024)}KB`}
+        </span>
+      </button>
+    </FastTooltip>
   )
 }
 
@@ -442,19 +445,21 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
             only; other channels have no deep-link consumer. Synchronous write keeps
             the iOS PWA user gesture; honest then/catch, never a false "Copied". */}
         {conversation.id.startsWith('gmail:') && (
-          <button
-            type="button"
-            onClick={() => {
-              const rel = `/inbox?thread=${encodeURIComponent(conversation.id)}${mailbox ? `&mailbox=${mailbox}` : ''}`
-              navigator.clipboard.writeText(`${window.location.origin}${rel}`)
-                .then(() => toast.success('Link copied.'))
-                .catch(() => toast.error('Could not copy the link on this device.'))
-            }}
-            title="Copy link to this email"
-            className="flex shrink-0 items-center gap-1 rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50"
-          >
-            <Link2 className="h-3.5 w-3.5" />Copy link
-          </button>
+          <FastTooltip label="Copy link to this email">
+            <button
+              type="button"
+              onClick={() => {
+                const rel = `/inbox?thread=${encodeURIComponent(conversation.id)}${mailbox ? `&mailbox=${mailbox}` : ''}`
+                navigator.clipboard.writeText(`${window.location.origin}${rel}`)
+                  .then(() => toast.success('Link copied.'))
+                  .catch(() => toast.error('Could not copy the link on this device.'))
+              }}
+              aria-label="Copy link to this email"
+              className="flex shrink-0 items-center gap-1 rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50"
+            >
+              <Link2 className="h-3.5 w-3.5" />Copy link
+            </button>
+          </FastTooltip>
         )}
         {isEmailThread && messages.length > 1 && (
           <button
@@ -506,54 +511,58 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
                     : 'bg-zinc-50 border-zinc-100'
                 )}
               >
-                <button
-                  type="button"
-                  onClick={() => toggleMessage(msg.id)}
-                  title={isOpen ? 'Collapse this email' : 'Expand this email'}
-                  className={cn(
-                    'flex-1 min-w-0 flex items-center justify-between gap-2 px-4 py-2 text-xs text-left cursor-pointer',
-                    isOutbound ? 'hover:bg-blue-50' : 'hover:bg-zinc-100'
-                  )}
-                >
-                  <span className="font-semibold text-zinc-700 truncate shrink-0 max-w-[45%]">
-                    {isOutbound ? `To: ${msg.sender}` : msg.sender}
-                  </span>
-                  {!isOpen && (
-                    <span className="flex-1 min-w-0 truncate text-zinc-400 font-normal">
-                      {snippets.get(msg.id) || ''}
+                <FastTooltip label={isOpen ? 'Collapse this email' : 'Expand this email'} align="left" className="flex-1 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => toggleMessage(msg.id)}
+                    aria-label={isOpen ? 'Collapse this email' : 'Expand this email'}
+                    className={cn(
+                      'w-full flex items-center justify-between gap-2 px-4 py-2 text-xs text-left cursor-pointer',
+                      isOutbound ? 'hover:bg-blue-50' : 'hover:bg-zinc-100'
+                    )}
+                  >
+                    <span className="font-semibold text-zinc-700 truncate shrink-0 max-w-[45%]">
+                      {isOutbound ? `To: ${msg.sender}` : msg.sender}
                     </span>
-                  )}
-                  <span className="flex items-center gap-2 shrink-0 text-zinc-400">
-                    {isNew && (
-                      <span className="rounded-full bg-emerald-100 text-emerald-700 px-2 py-0.5 text-[10px] font-semibold">
-                        New
+                    {!isOpen && (
+                      <span className="flex-1 min-w-0 truncate text-zinc-400 font-normal">
+                        {snippets.get(msg.id) || ''}
                       </span>
                     )}
-                    {formatMessageTime(msg.createdAt)}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    printEmailThread({
-                      subject: data?.subject,
-                      messages: [
-                        {
-                          sender: msg.sender,
-                          direction: msg.direction,
-                          createdAt: msg.createdAt,
-                          content: msg.content || '',
-                          isHtml: msg.isHtml,
-                        },
-                      ],
-                      formatTime: formatMessageTime,
-                    })
-                  }
-                  title="Print this email"
-                  className="shrink-0 p-1.5 rounded text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200/60"
-                >
-                  <Printer className="h-3.5 w-3.5" />
-                </button>
+                    <span className="flex items-center gap-2 shrink-0 text-zinc-400">
+                      {isNew && (
+                        <span className="rounded-full bg-emerald-100 text-emerald-700 px-2 py-0.5 text-[10px] font-semibold">
+                          New
+                        </span>
+                      )}
+                      {formatMessageTime(msg.createdAt)}
+                    </span>
+                  </button>
+                </FastTooltip>
+                <FastTooltip label="Print this email">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      printEmailThread({
+                        subject: data?.subject,
+                        messages: [
+                          {
+                            sender: msg.sender,
+                            direction: msg.direction,
+                            createdAt: msg.createdAt,
+                            content: msg.content || '',
+                            isHtml: msg.isHtml,
+                          },
+                        ],
+                        formatTime: formatMessageTime,
+                      })
+                    }
+                    aria-label="Print this email"
+                    className="shrink-0 p-1.5 rounded text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200/60"
+                  >
+                    <Printer className="h-3.5 w-3.5" />
+                  </button>
+                </FastTooltip>
               </div>
 
               {isOpen && (

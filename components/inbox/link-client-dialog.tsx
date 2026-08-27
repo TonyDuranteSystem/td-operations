@@ -13,6 +13,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Building2, Link2, Loader2, Search, Trash2, User, UserPlus, Handshake, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { InboxConversation } from '@/lib/types'
 
 type TargetType = 'account' | 'contact' | 'lead' | 'partner'
@@ -175,14 +176,16 @@ export function LinkClientDialog({ conversation, mailbox, onClose }: LinkClientD
                     <span className={cn('text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded', meta.cls)}>
                       {meta.label}
                     </span>
-                    <button
-                      onClick={() => unlinkMutation.mutate(l.id)}
-                      disabled={unlinkMutation.isPending}
-                      className="p-1 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600"
-                      title="Remove link"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <FastTooltip label="Remove link">
+                      <button
+                        onClick={() => unlinkMutation.mutate(l.id)}
+                        disabled={unlinkMutation.isPending}
+                        className="p-1 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600"
+                        aria-label="Remove link"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </FastTooltip>
                   </div>
                 )
               })}

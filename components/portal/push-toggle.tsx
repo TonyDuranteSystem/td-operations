@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { Bell, BellOff, Loader2, Send } from 'lucide-react'
 import { toast } from 'sonner'
 import { useLocale } from '@/lib/portal/use-locale'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { urlBase64ToUint8Array } from '@/lib/push/dashboard-push'
 import { PORTAL_SW_PATH, PORTAL_SW_SCOPE } from '@/lib/portal/sw-scope'
 
@@ -148,15 +149,17 @@ export function PushToggle({ accountId, compact = false }: PushToggleProps) {
     if (permission === 'denied') return null
     if (subscribed) {
       return (
-        <button
-          onClick={handleDisable}
-          disabled={loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors"
-          title="Disable notifications"
-        >
-          <Bell className="h-3.5 w-3.5" />
-          Notifications on
-        </button>
+        <FastTooltip label="Disable notifications">
+          <button
+            onClick={handleDisable}
+            disabled={loading}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors"
+            aria-label="Disable notifications"
+          >
+            <Bell className="h-3.5 w-3.5" />
+            Notifications on
+          </button>
+        </FastTooltip>
       )
     }
     return (

@@ -8,6 +8,7 @@ import { format } from 'date-fns'
 import { TEAM_WORK_STATUSES, TEAM_WORK_STATUS_LABELS, type TeamWorkStatus } from '@/lib/team/workspace'
 import { TurnBadge } from '@/components/team-chat/turn-badge'
 import type { BoardThread } from './types'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const COLUMN_STYLE: Record<TeamWorkStatus, { top: string; badge: string }> = {
   todo: { top: 'border-t-zinc-400', badge: 'bg-zinc-100 text-zinc-600' },
@@ -75,11 +76,13 @@ export function TeamBoard({ threads, onStatusChange, onOpenThread, showArchived,
       <div className="shrink-0 flex items-center justify-between px-5 py-3 border-b border-zinc-200 bg-white">
         <h2 className="text-sm font-semibold text-zinc-900">{showArchived ? 'Archived threads' : 'All threads'}</h2>
         <div className="flex items-center gap-2">
-        <button onClick={() => onToggleArchived(!showArchived)}
-          className={cn('text-xs px-2.5 py-1.5 rounded-lg border flex items-center gap-1.5', showArchived ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}
-          title={showArchived ? 'Back to active threads' : 'Show archived threads'}>
-          <Archive className="h-3.5 w-3.5" /> Archived
-        </button>
+        <FastTooltip label={showArchived ? 'Back to active threads' : 'Show archived threads'}>
+          <button onClick={() => onToggleArchived(!showArchived)}
+            className={cn('text-xs px-2.5 py-1.5 rounded-lg border flex items-center gap-1.5', showArchived ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}
+            aria-label={showArchived ? 'Back to active threads' : 'Show archived threads'}>
+            <Archive className="h-3.5 w-3.5" /> Archived
+          </button>
+        </FastTooltip>
         <select
           value={channelFilter}
           onChange={e => setChannelFilter(e.target.value)}

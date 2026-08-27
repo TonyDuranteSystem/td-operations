@@ -1,9 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, Loader2, CheckCircle2, Circle, Landmark, DollarSign, Euro } from 'lucide-react'
+import { Plus, Trash2, Loader2, CheckCircle2, Circle, DollarSign, Euro } from 'lucide-react'
 import { toast } from 'sonner'
 import { useLocale } from '@/lib/portal/use-locale'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface BankAccount {
   id: string
@@ -118,20 +119,22 @@ export function BankAccounts({ accountId }: { accountId: string }) {
                   <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600">{acc.currency}</span>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    onClick={() => handleSetInvoice(acc.id)}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg transition-colors ${
-                      acc.show_on_invoice
-                        ? 'bg-blue-100 text-blue-700 font-medium'
-                        : 'text-zinc-400 hover:text-blue-600 hover:bg-blue-50'
-                    }`}
-                    title={t('bank.showOnInvoices')}
-                  >
-                    {acc.show_on_invoice
-                      ? <><CheckCircle2 className="h-3.5 w-3.5" /> <span className="hidden sm:inline">{t('bank.onInvoice')}</span></>
-                      : <><Circle className="h-3.5 w-3.5" /> <span className="hidden sm:inline">{t('bank.useOnInvoice')}</span></>
-                    }
-                  </button>
+                  <FastTooltip label={t('bank.showOnInvoices')}>
+                    <button
+                      onClick={() => handleSetInvoice(acc.id)}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                        acc.show_on_invoice
+                          ? 'bg-blue-100 text-blue-700 font-medium'
+                          : 'text-zinc-400 hover:text-blue-600 hover:bg-blue-50'
+                      }`}
+                      aria-label={t('bank.showOnInvoices')}
+                    >
+                      {acc.show_on_invoice
+                        ? <><CheckCircle2 className="h-3.5 w-3.5" /> <span className="hidden sm:inline">{t('bank.onInvoice')}</span></>
+                        : <><Circle className="h-3.5 w-3.5" /> <span className="hidden sm:inline">{t('bank.useOnInvoice')}</span></>
+                      }
+                    </button>
+                  </FastTooltip>
                   <button onClick={() => handleDelete(acc.id)} className="p-1.5 text-zinc-400 hover:text-red-600 rounded">
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>

@@ -10,6 +10,7 @@ import { updateTaskStatus } from '@/app/(dashboard)/tasks/actions'
 import { TASK_CATEGORY } from '@/lib/constants'
 import type { Task, TaskStats } from '@/lib/types'
 import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import {
   Plus,
   Search,
@@ -121,26 +122,30 @@ function FilterBar({
           <Plus className="h-3.5 w-3.5" />
           New Task
         </button>
-        <button
-          onClick={() => onViewChange('kanban')}
-          className={cn(
-            'p-1.5 rounded-lg transition-colors',
-            viewMode === 'kanban' ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-          )}
-          title="Kanban view"
-        >
-          <LayoutGrid className="h-4 w-4" />
-        </button>
-        <button
-          onClick={() => onViewChange('list')}
-          className={cn(
-            'p-1.5 rounded-lg transition-colors',
-            viewMode === 'list' ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-          )}
-          title="List view"
-        >
-          <List className="h-4 w-4" />
-        </button>
+        <FastTooltip label="Kanban view">
+          <button
+            onClick={() => onViewChange('kanban')}
+            className={cn(
+              'p-1.5 rounded-lg transition-colors',
+              viewMode === 'kanban' ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+            )}
+            aria-label="Kanban view"
+          >
+            <LayoutGrid className="h-4 w-4" />
+          </button>
+        </FastTooltip>
+        <FastTooltip label="List view">
+          <button
+            onClick={() => onViewChange('list')}
+            className={cn(
+              'p-1.5 rounded-lg transition-colors',
+              viewMode === 'list' ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+            )}
+            aria-label="List view"
+          >
+            <List className="h-4 w-4" />
+          </button>
+        </FastTooltip>
       </div>
     </div>
   )

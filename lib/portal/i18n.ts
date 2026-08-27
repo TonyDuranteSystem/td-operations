@@ -617,6 +617,10 @@ const translations: Record<Locale, Record<string, string>> = {
     'payment.whopCta': 'Get Started with Whop',
     'payment.invoiceNote': 'Payment links appear as "Pay Now" buttons on your invoices. The default link is used automatically unless you choose a specific one.',
     'payment.stripeNote': 'Stripe Connect integration coming soon — connect your Stripe account to create payment links automatically from the portal.',
+    'payment.setDefault': 'Set as default',
+    'payment.openLink': 'Open link',
+    'payment.removeConfirmTitle': 'Remove this payment link?',
+    'payment.removeConfirmBody': 'This removes "{label}" from your payment links. This can\'t be undone.',
 
     // Tax Documents Upload
     'taxUpload.taxYear': 'Tax Year',
@@ -1933,6 +1937,10 @@ const translations: Record<Locale, Record<string, string>> = {
     'payment.whopCta': 'Inizia con Whop',
     'payment.invoiceNote': 'I link di pagamento appaiono come pulsanti "Paga Ora" sulle tue fatture. Il link predefinito viene usato automaticamente.',
     'payment.stripeNote': 'Integrazione Stripe Connect in arrivo \u2014 collega il tuo account Stripe per creare link di pagamento automaticamente dal portale.',
+    'payment.setDefault': 'Imposta come predefinito',
+    'payment.openLink': 'Apri link',
+    'payment.removeConfirmTitle': 'Rimuovere questo link di pagamento?',
+    'payment.removeConfirmBody': 'Questo rimuove "{label}" dai tuoi link di pagamento. Non pu\u00f2 essere annullato.',
 
     // Tax Documents Upload
     'taxUpload.taxYear': 'Anno Fiscale',

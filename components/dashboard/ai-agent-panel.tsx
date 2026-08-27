@@ -16,6 +16,7 @@ import {
 import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ConfirmAttachments } from '@/components/inbox/confirm-attachments'
 import { SignatureControls, SignaturePreview } from '@/components/inbox/signature-controls'
 import { DEFAULT_SIGNATURE_VARIANT, type SignatureVariant } from '@/lib/email/signature'
@@ -563,28 +564,32 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
             <WorkerSettingsGear />
             {/* Past conversations. Opening the list fetches it — there is no reason to
                 pay for that on every page load when the panel is usually closed. */}
-            <button
-              onClick={() => {
-                const next = !historyOpen
-                setHistoryOpen(next)
-                if (next) void loadHistory()
-              }}
-              className={cn(
-                'p-2 rounded-lg transition-colors',
-                historyOpen ? 'bg-violet-100 text-violet-600' : 'text-zinc-400 hover:text-violet-600 hover:bg-violet-50',
-              )}
-              title="Past conversations"
-            >
-              <History className="h-4 w-4" />
-            </button>
-            {messages.length > 0 && (
+            <FastTooltip label="Past conversations">
               <button
-                onClick={clearChat}
-                className="p-2 rounded-lg text-zinc-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
-                title="New chat (this one is saved)"
+                onClick={() => {
+                  const next = !historyOpen
+                  setHistoryOpen(next)
+                  if (next) void loadHistory()
+                }}
+                className={cn(
+                  'p-2 rounded-lg transition-colors',
+                  historyOpen ? 'bg-violet-100 text-violet-600' : 'text-zinc-400 hover:text-violet-600 hover:bg-violet-50',
+                )}
+                aria-label="Past conversations"
               >
-                <SquarePen className="h-4 w-4" />
+                <History className="h-4 w-4" />
               </button>
+            </FastTooltip>
+            {messages.length > 0 && (
+              <FastTooltip label="New chat (this one is saved)">
+                <button
+                  onClick={clearChat}
+                  className="p-2 rounded-lg text-zinc-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
+                  aria-label="New chat (this one is saved)"
+                >
+                  <SquarePen className="h-4 w-4" />
+                </button>
+              </FastTooltip>
             )}
             <button
               onClick={() => setOpen(false)}
@@ -643,20 +648,24 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
                   where there is no hover. */}
               {msg.role === 'user' && msg.turnId && !loading && (
                 <div className="flex flex-col gap-0.5 shrink-0">
-                  <button
-                    onClick={() => void editMessage(i)}
-                    className="p-1 rounded text-zinc-300 hover:text-violet-600 hover:bg-violet-50 transition-colors"
-                    title="Edit this message and continue from here"
-                  >
-                    <Pencil className="h-3 w-3" />
-                  </button>
-                  <button
-                    onClick={() => void deleteFromMessage(i)}
-                    className="p-1 rounded text-zinc-300 hover:text-red-500 hover:bg-red-50 transition-colors"
-                    title="Delete this message and everything after it"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
+                  <FastTooltip label="Edit this message and continue from here">
+                    <button
+                      onClick={() => void editMessage(i)}
+                      className="p-1 rounded text-zinc-300 hover:text-violet-600 hover:bg-violet-50 transition-colors"
+                      aria-label="Edit this message and continue from here"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  </FastTooltip>
+                  <FastTooltip label="Delete this message and everything after it">
+                    <button
+                      onClick={() => void deleteFromMessage(i)}
+                      className="p-1 rounded text-zinc-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                      aria-label="Delete this message and everything after it"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </FastTooltip>
                 </div>
               )}
               <div
@@ -849,13 +858,15 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
                     {f.error ? f.error : f.path ? formatFileSize(f.size) : 'Uploading…'}
                   </p>
                 </div>
-                <button
-                  onClick={() => att.remove(f.localId)}
-                  className="p-1 rounded-full text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors shrink-0"
-                  title="Remove attachment"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+                <FastTooltip label="Remove attachment">
+                  <button
+                    onClick={() => att.remove(f.localId)}
+                    className="p-1 rounded-full text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors shrink-0"
+                    aria-label="Remove attachment"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </FastTooltip>
               </div>
             ))}
             {att.limitNotice && <p className="text-[11px] text-amber-700">{att.limitNotice}</p>}
@@ -895,19 +906,21 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
               className="hidden"
             />
             {/* Attach */}
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={loading}
-              className={cn(
-                'p-3 rounded-xl transition-colors shrink-0',
-                att.files.length
-                  ? 'bg-violet-100 text-violet-600'
-                  : 'bg-zinc-100 text-zinc-600 hover:bg-violet-100 hover:text-violet-600'
-              )}
-              title="Attach files (up to 5 — documents, spreadsheets, images)"
-            >
-              <Paperclip className="h-5 w-5" />
-            </button>
+            <FastTooltip label="Attach files (up to 5 — documents, spreadsheets, images)">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={loading}
+                className={cn(
+                  'p-3 rounded-xl transition-colors shrink-0',
+                  att.files.length
+                    ? 'bg-violet-100 text-violet-600'
+                    : 'bg-zinc-100 text-zinc-600 hover:bg-violet-100 hover:text-violet-600'
+                )}
+                aria-label="Attach files (up to 5 — documents, spreadsheets, images)"
+              >
+                <Paperclip className="h-5 w-5" />
+              </button>
+            </FastTooltip>
             {/* Mic */}
             {micSupported && (
               isRecording ? (
@@ -922,28 +935,32 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
                   <Loader2 className="h-5 w-5 animate-spin" />
                 </button>
               ) : (
-                <button
-                  onClick={startRecording}
-                  className="p-3 rounded-xl bg-zinc-100 text-zinc-600 hover:bg-violet-100 hover:text-violet-600 transition-colors shrink-0"
-                  title="Voice input"
-                >
-                  <Mic className="h-5 w-5" />
-                </button>
+                <FastTooltip label="Voice input">
+                  <button
+                    onClick={startRecording}
+                    className="p-3 rounded-xl bg-zinc-100 text-zinc-600 hover:bg-violet-100 hover:text-violet-600 transition-colors shrink-0"
+                    aria-label="Voice input"
+                  >
+                    <Mic className="h-5 w-5" />
+                  </button>
+                </FastTooltip>
               )
             )}
             {/* Send — amber while the message is held, so the state is visible at a
                 glance and the same button doubles as "send it now". */}
-            <button
-              onClick={handleSend}
-              disabled={(!input.trim() && !readyFiles.length) || loading}
-              className={cn(
-                'p-3 rounded-xl text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0',
-                armed ? 'bg-amber-500 hover:bg-amber-600' : 'bg-violet-600 hover:bg-violet-700',
-              )}
-              title={armed ? 'Send now' : 'Send'}
-            >
-              {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
-            </button>
+            <FastTooltip label={armed ? 'Send now' : 'Send'}>
+              <button
+                onClick={handleSend}
+                disabled={(!input.trim() && !readyFiles.length) || loading}
+                className={cn(
+                  'p-3 rounded-xl text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0',
+                  armed ? 'bg-amber-500 hover:bg-amber-600' : 'bg-violet-600 hover:bg-violet-700',
+                )}
+                aria-label={armed ? 'Send now' : 'Send'}
+              >
+                {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+              </button>
+            </FastTooltip>
           </div>
           {armed && (
             <div className="flex items-center gap-2 px-1 pt-1.5">

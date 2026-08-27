@@ -18,6 +18,7 @@ import { toast } from 'sonner'
 import { Loader2, Plus, Star, Trash2, Eye, EyeOff, ArrowUp, ArrowDown, ShieldCheck, Upload, ImageIcon, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { PortfolioEntryWithConsent } from '@/lib/td-communication/types'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const API = '/api/td-communication/admin/portfolio'
 
@@ -247,17 +248,23 @@ export function PortfolioManager({ canEdit, isAdmin }: { canEdit: boolean; isAdm
                     )}
                     {isAdmin && (
                       <>
-                        <button type="button" disabled={busy} onClick={() => togglePublish(e)} title={e.published ? 'Unpublish' : 'Publish'}
-                          className="text-xs px-2 py-1 rounded border border-zinc-200 hover:bg-zinc-50 inline-flex items-center gap-1">
-                          {e.published ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}{e.published ? 'Unpublish' : 'Publish'}
-                        </button>
-                        <button type="button" disabled={busy} onClick={() => toggleFeature(e)} title="Feature"
-                          className={cn('text-xs px-2 py-1 rounded border inline-flex items-center gap-1', e.featured ? 'border-amber-300 text-amber-700 bg-amber-50' : 'border-zinc-200 hover:bg-zinc-50')}>
-                          <Star className="h-3 w-3" />
-                        </button>
+                        <FastTooltip label={e.published ? 'Unpublish' : 'Publish'}>
+                          <button type="button" disabled={busy} onClick={() => togglePublish(e)} aria-label={e.published ? 'Unpublish' : 'Publish'}
+                            className="text-xs px-2 py-1 rounded border border-zinc-200 hover:bg-zinc-50 inline-flex items-center gap-1">
+                            {e.published ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}{e.published ? 'Unpublish' : 'Publish'}
+                          </button>
+                        </FastTooltip>
+                        <FastTooltip label="Feature">
+                          <button type="button" disabled={busy} onClick={() => toggleFeature(e)} aria-label="Feature"
+                            className={cn('text-xs px-2 py-1 rounded border inline-flex items-center gap-1', e.featured ? 'border-amber-300 text-amber-700 bg-amber-50' : 'border-zinc-200 hover:bg-zinc-50')}>
+                            <Star className="h-3 w-3" />
+                          </button>
+                        </FastTooltip>
                         {e.consent_state === 'none' && (
-                          <button type="button" disabled={busy} onClick={() => attest(e)} title="Mark written permission on file"
-                            className="text-xs px-2 py-1 rounded border border-zinc-200 hover:bg-zinc-50">Written permission</button>
+                          <FastTooltip label="Mark written permission on file">
+                            <button type="button" disabled={busy} onClick={() => attest(e)} aria-label="Mark written permission on file"
+                              className="text-xs px-2 py-1 rounded border border-zinc-200 hover:bg-zinc-50">Written permission</button>
+                          </FastTooltip>
                         )}
                         <button type="button" disabled={busy || idx === 0} onClick={() => move(idx, -1)} className="text-xs p-1 rounded border border-zinc-200 hover:bg-zinc-50 disabled:opacity-30"><ArrowUp className="h-3 w-3" /></button>
                         <button type="button" disabled={busy || idx === entries.length - 1} onClick={() => move(idx, 1)} className="text-xs p-1 rounded border border-zinc-200 hover:bg-zinc-50 disabled:opacity-30"><ArrowDown className="h-3 w-3" /></button>
