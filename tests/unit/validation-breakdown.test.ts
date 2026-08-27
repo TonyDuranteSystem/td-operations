@@ -127,6 +127,24 @@ describe('invariant: breakdown reproduces the draft', () => {
     expect(breakdown.invariant.ok).toBe(true)
   })
 
+  it('F5 (Dynamiq 2026-08-27): a distribution refund/reversal nets in BOTH the draft and this breakdown, or the invariant would silently disagree', () => {
+    // Guards the exact failure mode the System Counselor flagged when this fix
+    // shipped: fixing pnl-generator.ts alone would leave this file's own
+    // distTotal on the old (buggy) per-row Math.abs formula, so it would start
+    // disagreeing with the now-correct draft total instead of agreeing with
+    // the old wrong one. Both must move together.
+    const rows = [
+      row({ category: 'distribution', amount: -1058.41 }),
+      row({ category: 'distribution', amount: -779.81 }),
+      row({ category: 'distribution', amount: 931.51 }), // corporate-card refund
+    ]
+    const { draft, breakdown } = build(rows)
+    expect(breakdown.invariant.ok).toBe(true)
+    const dist = breakdown.pnl_lines.find(l => l.key === 'distributions')!
+    expect(dist.total_usd).toBeCloseTo(906.71, 2) // netted, NOT 2769.73
+    expect(dist.total_usd).toBeCloseTo(draft.pnl.totalDistributions, 2)
+  })
+
   it('related-party rows surface per line and workspace-wide', () => {
     const rows = [
       row({ category: 'expense', amount: -800, is_related_party: true, counterparty: 'Acme FZCO' }),

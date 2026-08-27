@@ -387,8 +387,11 @@ export function registerBankStatementTools(server: McpServer) {
         const distByMember: Record<string, number> = {}
         for (const t of distributions) {
           const name = t.counterparty || "Unknown"
-          distByMember[name] = (distByMember[name] || 0) + Math.abs(Number(t.amount))
+          distByMember[name] = (distByMember[name] || 0) + Number(t.amount)
         }
+        // Signed-sum-then-abs per counterparty — a refund/reversal from the
+        // same counterparty must net against their draws, not inflate them.
+        for (const name of Object.keys(distByMember)) distByMember[name] = Math.abs(distByMember[name])
 
         // ── SINGLE ENGINE ── build the 5-sheet P&L / Balance Sheet workbook from
         // the financials engine draft (buildFinancialsWorkbookForAccount) — the
