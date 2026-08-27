@@ -20,6 +20,7 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import { Loader2, Send, Users, LifeBuoy, MessagesSquare, Search, X, LayoutGrid } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 export interface ShareItem {
   /** Card kind — 'client_message' for a portal message, 'link' for an email. */
@@ -180,21 +181,23 @@ export function ShareToTeamDialog({ items, onClose, label, onShared }: ShareToTe
         <div className="p-4 space-y-3">
           {/* Target toggle */}
           <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => !bulk && setMode('conversation')}
-              disabled={bulk}
-              title={bulk ? 'Share one item at a time into a client conversation' : undefined}
-              className={cn(
-                'flex items-center gap-1.5 px-2.5 py-2 rounded-lg border text-xs',
-                mode === 'conversation'
-                  ? 'border-blue-500 bg-blue-50 text-blue-700'
-                  : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50',
-                bulk && 'opacity-40 cursor-not-allowed',
-              )}
-            >
-              <MessagesSquare className="h-4 w-4 shrink-0" />
-              <span>Conversation</span>
-            </button>
+            <FastTooltip label={bulk ? 'Share one item at a time into a client conversation' : undefined}>
+              <button
+                onClick={() => !bulk && setMode('conversation')}
+                disabled={bulk}
+                aria-label={bulk ? 'Share one item at a time into a client conversation' : undefined}
+                className={cn(
+                  'flex items-center gap-1.5 px-2.5 py-2 rounded-lg border text-xs',
+                  mode === 'conversation'
+                    ? 'border-blue-500 bg-blue-50 text-blue-700'
+                    : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50',
+                  bulk && 'opacity-40 cursor-not-allowed',
+                )}
+              >
+                <MessagesSquare className="h-4 w-4 shrink-0" />
+                <span>Conversation</span>
+              </button>
+            </FastTooltip>
             <button
               onClick={() => setMode('support')}
               className={cn(

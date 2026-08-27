@@ -22,6 +22,7 @@ import { FAB_KEYS } from '@/lib/ui/draggable-fab'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 import { safeOriginPath, describeOrigin } from '@/lib/notes/note-origin'
 import { latestReplyOf, type NoteReplyRow } from '@/lib/notes/staff-notes'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface Note {
   id: string
@@ -175,17 +176,18 @@ function StickyNotesInner() {
       )}
 
       {/* DESKTOP: + button, bottom-left. Draggable (double-click resets). */}
-      <button
-        ref={deskFab.ref}
-        {...deskFab.dragProps}
-        style={deskFab.style}
-        onClick={() => { if (!deskFab.dragging) setComposing(true) }}
-        className="hidden lg:flex fixed bottom-4 left-4 z-[45] h-11 w-11 touch-none items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-lg hover:bg-amber-300"
-        title="New note — drag to move, double-click to reset"
-        aria-label="New note"
-      >
-        <Plus className="h-5 w-5" />
-      </button>
+      <FastTooltip label="New note — drag to move, double-click to reset" align="left">
+        <button
+          ref={deskFab.ref}
+          {...deskFab.dragProps}
+          style={deskFab.style}
+          onClick={() => { if (!deskFab.dragging) setComposing(true) }}
+          className="hidden lg:flex fixed bottom-4 left-4 z-[45] h-11 w-11 touch-none items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-lg hover:bg-amber-300"
+          aria-label="New note"
+        >
+          <Plus className="h-5 w-5" />
+        </button>
+      </FastTooltip>
 
       {/* MOBILE: a pill that opens a sheet.
           RAISED above the composer band (bottom-24). At bottom-4 it sat exactly
@@ -368,10 +370,12 @@ function NoteCardBody({ note, members, meId, onChange, onOpen }: { note: Note; m
         >
           {note.body}
         </p>
-        <button data-no-drag onClick={() => act({ action: 'archive' })} disabled={busy}
-          className="shrink-0 rounded p-0.5 hover:bg-black/10" title="Done" aria-label="Mark done">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-        </button>
+        <FastTooltip label="Done">
+          <button data-no-drag onClick={() => act({ action: 'archive' })} disabled={busy}
+            className="shrink-0 rounded p-0.5 hover:bg-black/10" aria-label="Mark done">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          </button>
+        </FastTooltip>
       </div>
 
       {noteClientName(note) && (
@@ -396,15 +400,17 @@ function NoteCardBody({ note, members, meId, onChange, onOpen }: { note: Note; m
 
       {/* Where the note came from — one tap back to the email / chat / page. */}
       {origin && (
-        <button
-          data-no-drag
-          onClick={() => router.push(origin)}
-          title={origin}
-          className="mt-1 flex items-center gap-1 text-xs opacity-70 hover:underline"
-        >
-          <ExternalLink className="h-3 w-3 shrink-0" />
-          <span className="truncate">From: {describeOrigin(origin)}</span>
-        </button>
+        <FastTooltip label={origin}>
+          <button
+            data-no-drag
+            onClick={() => router.push(origin)}
+            aria-label={origin}
+            className="mt-1 flex items-center gap-1 text-xs opacity-70 hover:underline"
+          >
+            <ExternalLink className="h-3 w-3 shrink-0" />
+            <span className="truncate">From: {describeOrigin(origin)}</span>
+          </button>
+        </FastTooltip>
       )}
 
       <div className="mt-2 flex items-center gap-1 text-xs opacity-70">
@@ -412,21 +418,29 @@ function NoteCardBody({ note, members, meId, onChange, onOpen }: { note: Note; m
         {note.visibility === 'shared' && <><Share2 className="h-3 w-3" />{note.shared_with_name}</>}
         {note.visibility === 'team' && <><Users className="h-3 w-3" />Team</>}
         <span className="ml-auto flex gap-1">
-          <button data-no-drag onClick={discuss} disabled={discussing}
-            className="rounded p-0.5 hover:bg-black/10 disabled:opacity-40"
-            title={noteClientName(note) ? `Discuss ${noteClientName(note)} in chat` : 'Discuss this note with your teammate'}>
-            {discussing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5" />}
-          </button>
-          <button data-no-drag onClick={() => setMenu(menu === 'snooze' ? 'none' : 'snooze')}
-            className="rounded p-0.5 hover:bg-black/10" title="Snooze"><Clock className="h-3.5 w-3.5" /></button>
+          <FastTooltip label={noteClientName(note) ? `Discuss ${noteClientName(note)} in chat` : 'Discuss this note with your teammate'}>
+            <button data-no-drag onClick={discuss} disabled={discussing}
+              className="rounded p-0.5 hover:bg-black/10 disabled:opacity-40"
+              aria-label={noteClientName(note) ? `Discuss ${noteClientName(note)} in chat` : 'Discuss this note with your teammate'}>
+              {discussing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5" />}
+            </button>
+          </FastTooltip>
+          <FastTooltip label="Snooze">
+            <button data-no-drag onClick={() => setMenu(menu === 'snooze' ? 'none' : 'snooze')}
+              className="rounded p-0.5 hover:bg-black/10" aria-label="Snooze"><Clock className="h-3.5 w-3.5" /></button>
+          </FastTooltip>
           {isAuthor && (
-            <button data-no-drag onClick={() => setMenu(menu === 'share' ? 'none' : 'share')}
-              className="rounded p-0.5 hover:bg-black/10" title="Share"><Share2 className="h-3.5 w-3.5" /></button>
+            <FastTooltip label="Share">
+              <button data-no-drag onClick={() => setMenu(menu === 'share' ? 'none' : 'share')}
+                className="rounded p-0.5 hover:bg-black/10" aria-label="Share"><Share2 className="h-3.5 w-3.5" /></button>
+            </FastTooltip>
           )}
           {isAuthor && (
-            <button data-no-drag onClick={() => setConfirmDelete((v) => !v)}
-              className={`rounded p-0.5 hover:bg-black/10 ${confirmDelete ? 'bg-red-600/20 text-red-700' : ''}`}
-              title="Delete this note for everyone"><Trash2 className="h-3.5 w-3.5" /></button>
+            <FastTooltip label="Delete this note for everyone">
+              <button data-no-drag onClick={() => setConfirmDelete((v) => !v)}
+                className={`rounded p-0.5 hover:bg-black/10 ${confirmDelete ? 'bg-red-600/20 text-red-700' : ''}`}
+                aria-label="Delete this note for everyone"><Trash2 className="h-3.5 w-3.5" /></button>
+            </FastTooltip>
           )}
         </span>
       </div>
@@ -435,12 +449,14 @@ function NoteCardBody({ note, members, meId, onChange, onOpen }: { note: Note; m
           tap can't destroy a note. Deleting removes it for EVERYONE (unlike Done). */}
       {confirmDelete && (
         <div data-no-drag className="mt-2 flex gap-1 text-xs">
-          <button onClick={del} disabled={busy}
-            title="Deletes the note for everyone — replies go with it"
-            className="flex flex-1 items-center justify-center gap-1 rounded bg-red-600 px-2 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50">
-            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-            {(note.staff_note_replies ?? []).length > 0 ? 'Delete forever, replies too?' : 'Delete forever?'}
-          </button>
+          <FastTooltip label="Deletes the note for everyone — replies go with it">
+            <button onClick={del} disabled={busy}
+              aria-label="Deletes the note for everyone — replies go with it"
+              className="flex flex-1 items-center justify-center gap-1 rounded bg-red-600 px-2 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50">
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+              {(note.staff_note_replies ?? []).length > 0 ? 'Delete forever, replies too?' : 'Delete forever?'}
+            </button>
+          </FastTooltip>
           <button onClick={() => setConfirmDelete(false)} disabled={busy}
             className="rounded bg-black/10 px-2 py-1">Keep</button>
         </div>

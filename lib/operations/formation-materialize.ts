@@ -983,30 +983,87 @@ export async function materializeFormationCompany(
     }
 
     // 10. Update SD: link to account + update service_name.
+    //
+    // Scoped to a SINGLE, unambiguous SD — not "every active Company Formation
+    // SD for this contact". A contact can legitimately have more than one
+    // formation in flight at once (e.g. Adam Mihaly already owns THW Global
+    // LLC — see the idempotency-check comment above), and the old unscoped
+    // match would silently re-point a DIFFERENT, already-materialized
+    // company's SD onto THIS account, and (via offerTokens below) attach that
+    // other company's offer — and its dollar amounts — to this one (council
+    // review, senior-engineer + bug-hunter finding, 2026-08-26).
+    //
+    // .is("account_id", null) excludes any SD that already belongs to a
+    // previously-materialized company. Among what's left, wp.lead_id (this
+    // specific wizard submission's own originating lead) disambiguates when
+    // more than one candidate remains. If it still can't be resolved to
+    // exactly one, we refuse to guess — better to flag for a human than to
+    // silently cross-link two companies' formation records.
     // eslint-disable-next-line no-restricted-syntax -- materialization writes to service_deliveries directly; central path
-    const { data: updatedSds } = await supabaseAdmin
+    const { data: sdCandidates } = await supabaseAdmin
       .from("service_deliveries")
-      .update({
-        account_id: accountId,
-        service_name: `Company Formation - ${chosenName}`,
-        updated_at: new Date().toISOString(),
-      })
+      .select("id, source_offer_token")
       .eq("contact_id", params.contact_id)
       .eq("service_type", "Company Formation")
       .eq("status", "active")
-      .select("id, source_offer_token")
-    steps.push({
-      step: "sd_link",
-      status: "ok",
-      detail: `${updatedSds?.length ?? 0} SD(s) linked to account`,
-    })
+      .is("account_id", null)
+
+    let resolvedSd: { id: string; source_offer_token: string | null } | null = null
+    if (sdCandidates && sdCandidates.length === 1) {
+      resolvedSd = sdCandidates[0] as { id: string; source_offer_token: string | null }
+    } else if (sdCandidates && sdCandidates.length > 1 && wp?.lead_id) {
+      const tokens = sdCandidates
+        .map(s => (s as { source_offer_token: string | null }).source_offer_token)
+        .filter((t): t is string => !!t)
+      if (tokens.length > 0) {
+        const { data: leadOffers } = await supabaseAdmin
+          .from("offers")
+          .select("token")
+          .in("token", tokens)
+          .eq("lead_id", wp.lead_id)
+        const leadTokenSet = new Set((leadOffers ?? []).map(o => (o as { token: string }).token))
+        const matches = sdCandidates.filter(s => leadTokenSet.has((s as { source_offer_token: string | null }).source_offer_token || ""))
+        if (matches.length === 1) resolvedSd = matches[0] as { id: string; source_offer_token: string | null }
+      }
+    }
+
+    let updatedSds: { id: string; source_offer_token: string | null }[] = []
+    if (resolvedSd) {
+      // eslint-disable-next-line no-restricted-syntax -- materialization writes to service_deliveries directly; central path
+      const { data } = await supabaseAdmin
+        .from("service_deliveries")
+        .update({
+          account_id: accountId,
+          service_name: `Company Formation - ${chosenName}`,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", resolvedSd.id)
+        .is("account_id", null)
+        .select("id, source_offer_token")
+      updatedSds = (data ?? []) as { id: string; source_offer_token: string | null }[]
+      steps.push({ step: "sd_link", status: "ok", detail: `1 SD(s) linked to account` })
+    } else if (sdCandidates && sdCandidates.length > 1) {
+      steps.push({
+        step: "sd_link",
+        status: "skipped",
+        detail: `${sdCandidates.length} candidate Company Formation SDs for this contact could not be narrowed to one — none linked, avoiding a wrong cross-link. Needs manual review.`,
+      })
+    } else {
+      steps.push({ step: "sd_link", status: "skipped", detail: "No unlinked active Company Formation SD found for this contact" })
+    }
 
     // 10d. Link the formation OFFER to the new account. The portal "Set up your
     // new company" banner (app/portal/page.tsx) shows for COMPLETED formation
     // offers with account_id IS NULL — once the company is real, that offer must
     // carry the account_id or the banner persists forever. Match by the SD's
-    // source_offer_token (canonical link), falling back to the formation lead.
+    // source_offer_token (canonical link, and now scoped to the single resolved
+    // SD above), falling back to the formation lead when the SD carries no
+    // token (legacy). The lead fallback is restricted to signed/completed
+    // offers, newest first, so a stale/superseded pre-negotiation offer (a
+    // revised offer keeps its old row at status='superseded') can never be
+    // the one picked (bug-hunter finding, 2026-08-26).
     // Best-effort — never fail materialization over a banner link.
+    let resolvedOfferToken: string | null = null
     try {
       const offerTokens = (updatedSds ?? [])
         .map((s) => (s as { source_offer_token?: string | null }).source_offer_token)
@@ -1021,16 +1078,40 @@ export async function materializeFormationCompany(
           .is("account_id", null)
           .select("token")
         linkedOffers = upd?.length ?? 0
+        resolvedOfferToken = offerTokens[0] ?? upd?.[0]?.token ?? null
       } else if (wp?.lead_id) {
-        // eslint-disable-next-line no-restricted-syntax -- central materialization path; clears the portal banner
-        const { data: upd } = await supabaseAdmin
+        // Reached whenever step 10 didn't yield a usable offer token — no SD
+        // matched at all, OR (the legacy case) the single resolved SD carries
+        // no source_offer_token. wp.lead_id is THIS specific wizard
+        // submission's own originating lead, so it is not itself ambiguous
+        // even when the SD-side resolution above was.
+        //
+        // Resolve the single correct offer with a SELECT first (order+limit,
+        // newest signed/completed row wins — a superseded pre-negotiation
+        // revision, status='superseded', is excluded by the status filter),
+        // then UPDATE by its token. Deliberately not order+limit on the
+        // UPDATE itself — unsupported in this environment.
+        const { data: candidate } = await supabaseAdmin
           .from("offers")
-          .update({ account_id: accountId, updated_at: new Date().toISOString() })
+          .select("token")
           .eq("lead_id", wp.lead_id)
           .eq("contract_type", "formation")
+          .in("status", ["signed", "completed"])
           .is("account_id", null)
-          .select("token")
-        linkedOffers = upd?.length ?? 0
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (candidate?.token) {
+          // eslint-disable-next-line no-restricted-syntax -- central materialization path; clears the portal banner
+          const { data: upd } = await supabaseAdmin
+            .from("offers")
+            .update({ account_id: accountId, updated_at: new Date().toISOString() })
+            .eq("token", candidate.token)
+            .is("account_id", null)
+            .select("token")
+          linkedOffers = upd?.length ?? 0
+          resolvedOfferToken = upd?.[0]?.token ?? null
+        }
       }
       steps.push({
         step: "offer_account_link",
@@ -1043,6 +1124,40 @@ export async function materializeFormationCompany(
         status: "error",
         detail: offerErr instanceof Error ? offerErr.message : String(offerErr),
       })
+    }
+
+    // 10e. Fill setup fee + both installment amounts from the same resolved
+    // offer, write-if-null. Its own step and its own try/catch — deliberately
+    // NOT folded into 10d's, so a parse failure here can never block the
+    // offer-account link above from completing (ai-architect review,
+    // 2026-08-26). See applyFormationFinancialFills for the write pattern.
+    if (resolvedOfferToken) {
+      try {
+        const { data: offerRow } = await supabaseAdmin
+          .from("offers")
+          .select("recurring_costs, cost_summary")
+          .eq("token", resolvedOfferToken)
+          .maybeSingle()
+        if (offerRow) {
+          const { applyFormationFinancialFills } = await import("@/lib/operations/onboarding-account-upgrade")
+          const applied = await applyFormationFinancialFills(accountId, offerRow as { recurring_costs: unknown; cost_summary: unknown })
+          steps.push({
+            step: "formation_financial_fill",
+            status: "ok",
+            detail: applied.length ? applied.join(", ") : "nothing parsed from offer (needs manual entry)",
+          })
+        } else {
+          steps.push({ step: "formation_financial_fill", status: "skipped", detail: `Offer ${resolvedOfferToken} not found` })
+        }
+      } catch (finErr) {
+        steps.push({
+          step: "formation_financial_fill",
+          status: "error",
+          detail: finErr instanceof Error ? finErr.message : String(finErr),
+        })
+      }
+    } else {
+      steps.push({ step: "formation_financial_fill", status: "skipped", detail: "No resolved offer token to read amounts from" })
     }
 
     // 10a. Backfill account_id on flow-stamped documents. The workspace "Filed

@@ -125,6 +125,14 @@ describe("parsePrice", () => {
     expect(parsePrice("included")).toBeNull()
     expect(parsePrice("$0")).toBeNull()
   })
+  it("rejects a combined/descriptive price string instead of concatenating its digits (DoctorGut LLC, 2026-08-26)", () => {
+    // "$2,000/year ($1,000 Jan + $1,000 Jun)" strips to "200010001000" —
+    // finite and positive, so without the upper bound this used to parse.
+    expect(parsePrice("$2,000/year ($1,000 Jan + $1,000 Jun)")).toBeNull()
+  })
+  it("still parses a normal five-figure price under the sanity cap", () => {
+    expect(parsePrice("$99,999")).toEqual({ amount: 99999, currency: "USD" })
+  })
 })
 
 describe("findInstallment", () => {

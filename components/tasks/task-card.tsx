@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 import { STATUS_COLORS } from '@/lib/constants'
 import { updateTaskStatus, updateTaskPriority, updateTaskAssignee } from '@/app/(dashboard)/tasks/actions'
 import { TaskRowActions } from '@/components/tasks/task-row-actions'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { WorkflowTaskCard } from '@/components/tasks/workflow-task-card'
 import type { Task } from '@/lib/types'
 import type { CrmRole } from '@/lib/tasks/types'
@@ -147,19 +148,20 @@ function LegacyTaskCard({ task, today, onEdit }: { task: Task; today: string; on
       {task.attachments && task.attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-2">
           {task.attachments.map((att, i) => (
-            <a
-              key={`${att.url}-${i}`}
-              href={att.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-xs hover:bg-blue-100 transition-colors"
-              title={att.name}
-            >
-              <Paperclip className="h-3 w-3 shrink-0" />
-              <span className="truncate max-w-[160px]">{att.name}</span>
-              <ExternalLink className="h-2.5 w-2.5 shrink-0 opacity-60" />
-            </a>
+            <FastTooltip key={`${att.url}-${i}`} label={att.name}>
+              <a
+                href={att.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-xs hover:bg-blue-100 transition-colors"
+                aria-label={att.name}
+              >
+                <Paperclip className="h-3 w-3 shrink-0" />
+                <span className="truncate max-w-[160px]">{att.name}</span>
+                <ExternalLink className="h-2.5 w-2.5 shrink-0 opacity-60" />
+              </a>
+            </FastTooltip>
           ))}
         </div>
       )}
@@ -181,38 +183,46 @@ function LegacyTaskCard({ task, today, onEdit }: { task: Task; today: string; on
 
         {/* Quick actions */}
         <div className="flex items-center gap-1">
-          <button
-            onClick={handleComplete}
-            disabled={isPending}
-            className="p-1.5 rounded hover:bg-emerald-50 text-muted-foreground hover:text-emerald-600 transition-colors"
-            title="Segna completato"
-          >
-            <Check className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={handleReassign}
-            disabled={isPending}
-            className="p-1.5 rounded hover:bg-blue-50 text-muted-foreground hover:text-blue-600 transition-colors"
-            title={`Riassegna a ${task.assigned_to === 'Luca' ? 'Antonio' : 'Luca'}`}
-          >
-            <RotateCw className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={handlePriorityUp}
-            disabled={isPending || task.priority === 'Urgent'}
-            className="p-1.5 rounded hover:bg-orange-50 text-muted-foreground hover:text-orange-600 transition-colors disabled:opacity-30"
-            title="Aumenta priorita"
-          >
-            <ChevronUp className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={handlePriorityDown}
-            disabled={isPending || task.priority === 'Low'}
-            className="p-1.5 rounded hover:bg-zinc-100 text-muted-foreground hover:text-zinc-600 transition-colors disabled:opacity-30"
-            title="Diminuisci priorita"
-          >
-            <ChevronDown className="h-3.5 w-3.5" />
-          </button>
+          <FastTooltip label="Segna completato">
+            <button
+              onClick={handleComplete}
+              disabled={isPending}
+              className="p-1.5 rounded hover:bg-emerald-50 text-muted-foreground hover:text-emerald-600 transition-colors"
+              aria-label="Segna completato"
+            >
+              <Check className="h-3.5 w-3.5" />
+            </button>
+          </FastTooltip>
+          <FastTooltip label={`Riassegna a ${task.assigned_to === 'Luca' ? 'Antonio' : 'Luca'}`}>
+            <button
+              onClick={handleReassign}
+              disabled={isPending}
+              className="p-1.5 rounded hover:bg-blue-50 text-muted-foreground hover:text-blue-600 transition-colors"
+              aria-label={`Riassegna a ${task.assigned_to === 'Luca' ? 'Antonio' : 'Luca'}`}
+            >
+              <RotateCw className="h-3.5 w-3.5" />
+            </button>
+          </FastTooltip>
+          <FastTooltip label="Aumenta priorita">
+            <button
+              onClick={handlePriorityUp}
+              disabled={isPending || task.priority === 'Urgent'}
+              className="p-1.5 rounded hover:bg-orange-50 text-muted-foreground hover:text-orange-600 transition-colors disabled:opacity-30"
+              aria-label="Aumenta priorita"
+            >
+              <ChevronUp className="h-3.5 w-3.5" />
+            </button>
+          </FastTooltip>
+          <FastTooltip label="Diminuisci priorita">
+            <button
+              onClick={handlePriorityDown}
+              disabled={isPending || task.priority === 'Low'}
+              className="p-1.5 rounded hover:bg-zinc-100 text-muted-foreground hover:text-zinc-600 transition-colors disabled:opacity-30"
+              aria-label="Diminuisci priorita"
+            >
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+          </FastTooltip>
           <ChatWithClientButton accountId={task.account_id} contactId={task.contact_id} />
           <TaskRowActions task={task} />
         </div>

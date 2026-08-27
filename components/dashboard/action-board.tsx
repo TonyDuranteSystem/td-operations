@@ -21,6 +21,7 @@ import { ManageColumnsDialog } from './action-board-columns-dialog'
 import { NewCardDialog } from './action-board-new-card-dialog'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
 import { HelpDot } from '@/components/help/help-dot'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface Column {
   slug: string
@@ -542,30 +543,35 @@ export function ActionBoard() {
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-zinc-700 bg-zinc-100 px-2 py-0.5 rounded-full">{total}</span>
           {snoozedCards.length > 0 && (
-            <button
-              onClick={() => setShowSnoozed((v) => !v)}
-              className={`flex items-center gap-1 text-[11px] font-medium border rounded px-2 py-0.5 ${showSnoozed ? 'bg-violet-100 text-violet-700 border-violet-200' : 'text-zinc-600 hover:text-zinc-900'}`}
-              title="Show snoozed cards"
-            >
-              <Moon className="h-3 w-3" /> Snoozed ({snoozedCards.length})
-            </button>
+            <FastTooltip label="Show snoozed cards">
+              <button
+                onClick={() => setShowSnoozed((v) => !v)}
+                className={`flex items-center gap-1 text-[11px] font-medium border rounded px-2 py-0.5 ${showSnoozed ? 'bg-violet-100 text-violet-700 border-violet-200' : 'text-zinc-600 hover:text-zinc-900'}`}
+                aria-label="Show snoozed cards"
+              >
+                <Moon className="h-3 w-3" /> Snoozed ({snoozedCards.length})
+              </button>
+            </FastTooltip>
           )}
-          <button
-            onClick={() => setNewCardOpen(true)}
-            className="flex items-center gap-1 text-[11px] font-medium text-zinc-600 hover:text-zinc-900 border rounded px-2 py-0.5"
-            title="Add a card"
-          >
-            <Plus className="h-3 w-3" /> New card
-          </button>
+          <FastTooltip label="Add a card">
+            <button
+              onClick={() => setNewCardOpen(true)}
+              className="flex items-center gap-1 text-[11px] font-medium text-zinc-600 hover:text-zinc-900 border rounded px-2 py-0.5"
+              aria-label="Add a card"
+            >
+              <Plus className="h-3 w-3" /> New card
+            </button>
+          </FastTooltip>
           <HelpDot helpKey="board.new_card" />
-          <button
-            onClick={() => setEditingColumns(true)}
-            className="text-zinc-400 hover:text-zinc-700"
-            aria-label="Edit board columns"
-            title="Edit columns"
-          >
-            <Settings2 className="h-3.5 w-3.5" />
-          </button>
+          <FastTooltip label="Edit columns">
+            <button
+              onClick={() => setEditingColumns(true)}
+              className="text-zinc-400 hover:text-zinc-700"
+              aria-label="Edit board columns"
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+            </button>
+          </FastTooltip>
           <HelpDot helpKey="board.settings" />
         </div>
       </div>
@@ -689,14 +695,15 @@ export function ActionBoard() {
                             <p className="flex-1 min-w-0 break-words text-xs text-zinc-600">
                               {card.label || <span className="italic text-zinc-300">No note — click to add</span>}
                             </p>
-                            <button
-                              onClick={() => { setEditingNoteId(card.id); setNoteDraft(card.label || '') }}
-                              className="shrink-0 text-zinc-300 hover:text-violet-600"
-                              title="Edit note"
-                              aria-label="Edit note"
-                            >
-                              <Pencil className="h-3 w-3" />
-                            </button>
+                            <FastTooltip label="Edit note">
+                              <button
+                                onClick={() => { setEditingNoteId(card.id); setNoteDraft(card.label || '') }}
+                                className="shrink-0 text-zinc-300 hover:text-violet-600"
+                                aria-label="Edit note"
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                            </FastTooltip>
                           </div>
                         )}
                         {card.source_ref?.startsWith('tax_submission:') && (
@@ -752,26 +759,29 @@ export function ActionBoard() {
                             <option value="urgent">!!</option>
                           </select>
                           {terminalSlug && (
-                            <button
-                              disabled={movingId === card.id}
-                              onClick={() => move(card.id, terminalSlug)}
-                              className="flex items-center gap-0.5 text-[11px] text-emerald-600 hover:text-emerald-800 border border-emerald-200 rounded px-1.5 py-1 disabled:opacity-50"
-                              title="Mark done"
-                              aria-label="Mark done"
-                            >
-                              <Check className="h-3 w-3" />
-                            </button>
+                            <FastTooltip label="Mark done">
+                              <button
+                                disabled={movingId === card.id}
+                                onClick={() => move(card.id, terminalSlug)}
+                                className="flex items-center gap-0.5 text-[11px] text-emerald-600 hover:text-emerald-800 border border-emerald-200 rounded px-1.5 py-1 disabled:opacity-50"
+                                aria-label="Mark done"
+                              >
+                                <Check className="h-3 w-3" />
+                              </button>
+                            </FastTooltip>
                           )}
                         </div>
                         {(card.action_type === 'waiting_on_client' || card.action_type === 'send_followup') && (
-                          <button
-                            disabled={(!card.account_id && !card.contact_id) || movingId === card.id}
-                            onClick={() => { setFollowUpError(null); setFollowUpDraft(defaultFollowUpText(clientName, card.label)); setFollowUpCard(card) }}
-                            className="mt-2 w-full flex items-center justify-center gap-1 text-[11px] text-violet-700 hover:text-white hover:bg-violet-600 border border-violet-200 rounded px-1.5 py-1 disabled:opacity-40"
-                            title="Send the client a portal-chat reminder and move this card to Followup Sent"
-                          >
-                            <Send className="h-3 w-3" /> {card.action_type === 'send_followup' ? 'Follow up again' : 'Follow up'}
-                          </button>
+                          <FastTooltip label="Send the client a portal-chat reminder and move this card to Followup Sent">
+                            <button
+                              disabled={(!card.account_id && !card.contact_id) || movingId === card.id}
+                              onClick={() => { setFollowUpError(null); setFollowUpDraft(defaultFollowUpText(clientName, card.label)); setFollowUpCard(card) }}
+                              className="mt-2 w-full flex items-center justify-center gap-1 text-[11px] text-violet-700 hover:text-white hover:bg-violet-600 border border-violet-200 rounded px-1.5 py-1 disabled:opacity-40"
+                              aria-label="Send the client a portal-chat reminder and move this card to Followup Sent"
+                            >
+                              <Send className="h-3 w-3" /> {card.action_type === 'send_followup' ? 'Follow up again' : 'Follow up'}
+                            </button>
+                          </FastTooltip>
                         )}
                         {/* Stacked so the native date inputs never overflow the
                             narrow card. Each row: icon + short label + full-width input. */}
@@ -848,13 +858,15 @@ export function ActionBoard() {
                     <span className="flex items-center gap-1 text-[10px] text-violet-600">
                       <Moon className="h-3 w-3" /> Until {until}
                     </span>
-                    <button
-                      onClick={() => updateCard(card.id, { snoozed_until: null })}
-                      className="text-[11px] text-violet-700 hover:text-violet-900 border border-violet-200 rounded px-1.5 py-0.5"
-                      title="Bring this card back to the board now"
-                    >
-                      Un-snooze
-                    </button>
+                    <FastTooltip label="Bring this card back to the board now">
+                      <button
+                        onClick={() => updateCard(card.id, { snoozed_until: null })}
+                        className="text-[11px] text-violet-700 hover:text-violet-900 border border-violet-200 rounded px-1.5 py-0.5"
+                        aria-label="Bring this card back to the board now"
+                      >
+                        Un-snooze
+                      </button>
+                    </FastTooltip>
                   </div>
                 </div>
               )

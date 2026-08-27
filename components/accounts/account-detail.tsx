@@ -45,6 +45,7 @@ import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive, createDBA, updateDBADetails } from '@/app/(dashboard)/accounts/actions'
 import { StatusChangeDialog } from './status-change-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
 import { ClientConversationsPanel } from '@/components/conversations/client-conversations-panel'
@@ -413,15 +414,17 @@ function ContactsSection({
           Contacts ({contacts.length})
         </h3>
         <div className="flex items-center gap-3">
-          <button
-            onClick={handleSendNewContactRequest}
-            disabled={sendingNewContact || contacts.length === 0}
-            className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed"
-            title={contacts.length === 0 ? 'Link a contact first to receive the request' : 'Send a form to the owner to add a new contact'}
-          >
-            {sendingNewContact ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-            Request New Contact
-          </button>
+          <FastTooltip label={contacts.length === 0 ? 'Link a contact first to receive the request' : 'Send a form to the owner to add a new contact'}>
+            <button
+              onClick={handleSendNewContactRequest}
+              disabled={sendingNewContact || contacts.length === 0}
+              className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              aria-label={contacts.length === 0 ? 'Link a contact first to receive the request' : 'Send a form to the owner to add a new contact'}
+            >
+              {sendingNewContact ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+              Request New Contact
+            </button>
+          </FastTooltip>
           <button
             onClick={() => setShowSearch(!showSearch)}
             className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
@@ -545,21 +548,25 @@ function ContactsSection({
                 <Link href={`/contacts/${c.id}`} className="font-medium text-sm text-blue-600 hover:underline">
                   {c.full_name}
                 </Link>
-                <button
-                  onClick={() => handleSendUpdateRequest(c.id, c.full_name)}
-                  disabled={updatingContactId === c.id}
-                  className="ml-auto p-1 rounded hover:bg-emerald-50 text-zinc-300 hover:text-emerald-600 transition-colors disabled:opacity-40"
-                  title={`Ask ${c.full_name} to confirm or update their info`}
-                >
-                  {updatingContactId === c.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                </button>
-                <button
-                  onClick={() => setUnlinkTarget({ id: c.id, name: c.full_name, role: c.role ?? null })}
-                  className="p-1 rounded hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-colors"
-                  title={`Remove ${c.full_name} from this company`}
-                >
-                  <Unlink className="h-3.5 w-3.5" />
-                </button>
+                <FastTooltip label={`Ask ${c.full_name} to confirm or update their info`}>
+                  <button
+                    onClick={() => handleSendUpdateRequest(c.id, c.full_name)}
+                    disabled={updatingContactId === c.id}
+                    className="ml-auto p-1 rounded hover:bg-emerald-50 text-zinc-300 hover:text-emerald-600 transition-colors disabled:opacity-40"
+                    aria-label={`Ask ${c.full_name} to confirm or update their info`}
+                  >
+                    {updatingContactId === c.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                  </button>
+                </FastTooltip>
+                <FastTooltip label={`Remove ${c.full_name} from this company`}>
+                  <button
+                    onClick={() => setUnlinkTarget({ id: c.id, name: c.full_name, role: c.role ?? null })}
+                    className="p-1 rounded hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-colors"
+                    aria-label={`Remove ${c.full_name} from this company`}
+                  >
+                    <Unlink className="h-3.5 w-3.5" />
+                  </button>
+                </FastTooltip>
               </div>
               <div className="pl-9 grid gap-1.5">
                 <EditableField icon={Users} label="Role" type="select" options={CONTACT_ROLE_OPTIONS} value={c.role ?? ''} onSave={makeRoleSaver(c.id)} />
@@ -1572,16 +1579,18 @@ function DBARow({
           className="hidden"
           onChange={handleFileChange}
         />
-        <button
-          type="button"
-          onClick={handleUploadClick}
-          disabled={uploading || !detailId}
-          title={!detailId ? 'Save the DBA before uploading documents' : 'Upload a document for this DBA. OCR will try to auto-fill missing fields.'}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-          {uploading ? 'Uploading…' : 'Upload Document'}
-        </button>
+        <FastTooltip label={!detailId ? 'Save the DBA before uploading documents' : 'Upload a document for this DBA. OCR will try to auto-fill missing fields.'}>
+          <button
+            type="button"
+            onClick={handleUploadClick}
+            disabled={uploading || !detailId}
+            aria-label={!detailId ? 'Save the DBA before uploading documents' : 'Upload a document for this DBA. OCR will try to auto-fill missing fields.'}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+            {uploading ? 'Uploading…' : 'Upload Document'}
+          </button>
+        </FastTooltip>
         {!detailId && (
           <span className="text-xs text-muted-foreground">Save the DBA first to enable upload</span>
         )}
@@ -2028,27 +2037,31 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
                 <button onClick={() => setEditingMemberCount(false)} className="text-xs text-zinc-400 hover:text-zinc-600">Cancel</button>
               </>
             ) : (
-              <button
-                onClick={() => { setMemberCountDraft(memberCount?.toString() ?? ''); setEditingMemberCount(true) }}
-                className="text-xs text-zinc-500 hover:text-zinc-700 border border-dashed border-zinc-300 px-2 py-0.5 rounded"
-                title="Official member count (from SS-4 or set manually). Used for OA generation validation."
-              >
-                {memberCount != null ? `${memberCount} official` : 'Set member count'}
-              </button>
+              <FastTooltip label="Official member count (from SS-4 or set manually). Used for OA generation validation.">
+                <button
+                  onClick={() => { setMemberCountDraft(memberCount?.toString() ?? ''); setEditingMemberCount(true) }}
+                  className="text-xs text-zinc-500 hover:text-zinc-700 border border-dashed border-zinc-300 px-2 py-0.5 rounded"
+                  aria-label="Official member count (from SS-4 or set manually). Used for OA generation validation."
+                >
+                  {memberCount != null ? `${memberCount} official` : 'Set member count'}
+                </button>
+              </FastTooltip>
             )}
           </div>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1.5">
-            <button
-              onClick={handleSendMemberInfoForm}
-              disabled={sendingForm || !hasPrimaryContact}
-              className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed"
-              title={!hasPrimaryContact ? 'Primary member has no linked contact — link a contact to the primary member first' : 'Send member info form via portal chat'}
-            >
-              {sendingForm ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-              {formRequest ? 'Resend' : 'Send Info Form'}
-            </button>
+            <FastTooltip label={!hasPrimaryContact ? 'Primary member has no linked contact — link a contact to the primary member first' : 'Send member info form via portal chat'}>
+              <button
+                onClick={handleSendMemberInfoForm}
+                disabled={sendingForm || !hasPrimaryContact}
+                className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                aria-label={!hasPrimaryContact ? 'Primary member has no linked contact — link a contact to the primary member first' : 'Send member info form via portal chat'}
+              >
+                {sendingForm ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                {formRequest ? 'Resend' : 'Send Info Form'}
+              </button>
+            </FastTooltip>
             {!hasPrimaryContact && (
               <span className="text-xs text-amber-600">Primary member has no linked contact</span>
             )}
@@ -2181,12 +2194,16 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
                       {m.ownership_pct != null && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">{m.ownership_pct}%</span>}
                     </div>
                     <div className="ml-auto flex gap-0.5">
-                      <button onClick={() => handleEdit(m)} className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 transition-colors" title="Edit member">
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                      <button onClick={() => setDeleteTarget(m)} className="p-1 rounded hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-colors" title="Remove member">
-                        <X className="h-3.5 w-3.5" />
-                      </button>
+                      <FastTooltip label="Edit member">
+                        <button onClick={() => handleEdit(m)} className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 transition-colors" aria-label="Edit member">
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                      </FastTooltip>
+                      <FastTooltip label="Remove member">
+                        <button onClick={() => setDeleteTarget(m)} className="p-1 rounded hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-colors" aria-label="Remove member">
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </FastTooltip>
                     </div>
                   </div>
                   {m.member_type === 'individual' && (m.email || m.phone) && (
@@ -2391,15 +2408,16 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
             <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
             <span className="text-muted-foreground min-w-[80px]">Status</span>
             <span className="flex-1">{account.status}</span>
-            <button
-              type="button"
-              onClick={onOpenStatusDialog}
-              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-zinc-100 rounded"
-              aria-label="Change Status"
-              title="Change Status"
-            >
-              <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-            </button>
+            <FastTooltip label="Change Status">
+              <button
+                type="button"
+                onClick={onOpenStatusDialog}
+                className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-zinc-100 rounded"
+                aria-label="Change Status"
+              >
+                <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            </FastTooltip>
           </div>
           <EditableField icon={Building2} label="Entity Type" value={account.entity_type ?? ''} type="select" options={ENTITY_OPTIONS} onSave={makeAccountSaver('entity_type')} />
           <EditableField icon={Users} label="Member Structure" value={account.member_structure ?? ''} type="select" options={[{ label: 'Single Member', value: 'single_member' }, { label: 'Multi Member', value: 'multi_member' }]} onSave={makeAccountSaver('member_structure')} />

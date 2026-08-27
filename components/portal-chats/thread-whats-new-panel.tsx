@@ -19,6 +19,7 @@ import { formatDistanceToNow, format } from 'date-fns'
 import { WorkflowTaskCard } from '@/components/tasks/workflow-task-card'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
 import { HelpDot } from '@/components/help/help-dot'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { Task } from '@/lib/types'
 
 const WHATS_NEW_API = '/api/crm/admin-actions/whats-new'
@@ -43,8 +44,14 @@ const EVENT_KEY_LABELS: Record<string, string> = {
   banking_review_relay: 'Banking',
   banking_physical_progress: 'Banking',
   banking_wizard_submitted: 'Banking',
+  financials_attested: 'Financials',
   tax_form_review: 'Tax',
   itin_review: 'ITIN',
+  aged_credit_applied: 'Credit Applied',
+  financials_confirm_unlocked: 'Financials Unlocked',
+  plan_referrer_ready_to_release: 'Referral',
+  recurring_invoice_generated: 'Invoice',
+  itin_data_collection: 'ITIN',
 }
 
 /** Deep-link target for a note's source entity. Returns null when there's no
@@ -225,26 +232,30 @@ export function ThreadWhatsNewPanel({
                         {/* Deep-link to the related entity (payment / document / SS-4).
                             Opens in a new tab so the triage feed stays put. */}
                         {deepLink && (
-                          <a
-                            href={deepLink}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1 text-[11px] font-medium text-blue-700 hover:text-blue-900 border border-blue-200 rounded px-2 py-0.5 bg-white"
-                            title="Open the related record"
-                          >
-                            <ExternalLink className="h-3 w-3" /> Open
-                          </a>
+                          <FastTooltip label="Open the related record">
+                            <a
+                              href={deepLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1 text-[11px] font-medium text-blue-700 hover:text-blue-900 border border-blue-200 rounded px-2 py-0.5 bg-white"
+                              aria-label="Open the related record"
+                            >
+                              <ExternalLink className="h-3 w-3" /> Open
+                            </a>
+                          </FastTooltip>
                         )}
                         {/* No "Open card" for workflow notes — the workflow itself IS the to-do
                             and its action buttons are shown below. */}
                         {!handled && !wfTask && (
-                          <button
-                            onClick={() => open(note)}
-                            className="flex items-center gap-1 text-[11px] font-medium text-violet-700 hover:text-violet-900 border border-violet-200 rounded px-2 py-0.5 bg-white"
-                            title="Open a To-Do card for this"
-                          >
-                            <Plus className="h-3 w-3" /> Open card
-                          </button>
+                          <FastTooltip label="Open a To-Do card for this">
+                            <button
+                              onClick={() => open(note)}
+                              className="flex items-center gap-1 text-[11px] font-medium text-violet-700 hover:text-violet-900 border border-violet-200 rounded px-2 py-0.5 bg-white"
+                              aria-label="Open a To-Do card for this"
+                            >
+                              <Plus className="h-3 w-3" /> Open card
+                            </button>
+                          </FastTooltip>
                         )}
                       </div>
                     )
@@ -257,14 +268,16 @@ export function ThreadWhatsNewPanel({
                     inline action card. */}
                 {wfTask && (
                   note.event_key === 'formation_progress' && wfTask.delivery_id ? (
-                    <a
-                      href={`/flows/${wfTask.delivery_id}`}
-                      className="mt-2 flex items-center justify-between gap-2 rounded-md border border-blue-200 bg-blue-50/60 px-3 py-2 text-[12px] font-medium text-blue-800 hover:bg-blue-100 transition-colors"
-                      title="Open the Company Formation workspace"
-                    >
-                      <span>Open the Company Formation workspace</span>
-                      <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-                    </a>
+                    <FastTooltip label="Open the Company Formation workspace">
+                      <a
+                        href={`/flows/${wfTask.delivery_id}`}
+                        className="mt-2 flex items-center justify-between gap-2 rounded-md border border-blue-200 bg-blue-50/60 px-3 py-2 text-[12px] font-medium text-blue-800 hover:bg-blue-100 transition-colors"
+                        aria-label="Open the Company Formation workspace"
+                      >
+                        <span>Open the Company Formation workspace</span>
+                        <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                      </a>
+                    </FastTooltip>
                   ) : (
                     <div className="mt-2 rounded-md bg-zinc-50 border p-1.5">
                       <WorkflowTaskCard task={wfTask} today={today} role="admin" />
@@ -272,21 +285,23 @@ export function ThreadWhatsNewPanel({
                   )
                 )}
                 <div className="mt-1.5 flex items-center justify-between">
-                  <button
-                    disabled={busy}
-                    onClick={() => toggleHandled(note)}
-                    className={`flex items-center gap-1 text-[11px] ${handled ? 'text-emerald-600 hover:text-emerald-800' : 'text-zinc-500 hover:text-zinc-800'} disabled:opacity-50`}
-                    title={handled ? 'Mark as not handled (the dot returns)' : 'Mark handled — I know what to do (no card needed)'}
-                  >
-                    {busy ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : handled ? (
-                      <CheckSquare className="h-3.5 w-3.5" />
-                    ) : (
-                      <Square className="h-3.5 w-3.5" />
-                    )}
-                    {handled ? 'Handled' : 'Mark handled'}
-                  </button>
+                  <FastTooltip label={handled ? 'Mark as not handled (the dot returns)' : 'Mark handled — I know what to do (no card needed)'} align="left">
+                    <button
+                      disabled={busy}
+                      onClick={() => toggleHandled(note)}
+                      className={`flex items-center gap-1 text-[11px] ${handled ? 'text-emerald-600 hover:text-emerald-800' : 'text-zinc-500 hover:text-zinc-800'} disabled:opacity-50`}
+                      aria-label={handled ? 'Mark as not handled (the dot returns)' : 'Mark handled — I know what to do (no card needed)'}
+                    >
+                      {busy ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : handled ? (
+                        <CheckSquare className="h-3.5 w-3.5" />
+                      ) : (
+                        <Square className="h-3.5 w-3.5" />
+                      )}
+                      {handled ? 'Handled' : 'Mark handled'}
+                    </button>
+                  </FastTooltip>
                   {handled && (
                     <button onClick={() => open(note)} className="text-[10px] text-zinc-400 hover:text-violet-700">
                       + card

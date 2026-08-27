@@ -12,6 +12,7 @@ import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-p
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -301,13 +302,15 @@ function FileRow({
                 {saving && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400 shrink-0" />}
               </div>
             ) : (
-              <button
-                onClick={() => onPreview(file)}
-                className="text-left truncate block w-full text-zinc-900 hover:text-blue-600 transition-colors"
-                title={file.name}
-              >
-                {file.name}
-              </button>
+              <FastTooltip label={file.name}>
+                <button
+                  onClick={() => onPreview(file)}
+                  className="text-left truncate block w-full text-zinc-900 hover:text-blue-600 transition-colors"
+                  aria-label={file.name}
+                >
+                  {file.name}
+                </button>
+              </FastTooltip>
             )}
           </div>
 
@@ -320,45 +323,51 @@ function FileRow({
           </span>
 
           {/* Quick preview button — magnifying glass to distinguish from portal toggle */}
-          <button
-            onClick={() => onPreview(file)}
-            className="p-1 rounded hover:bg-blue-100 text-zinc-400 hover:text-blue-600 transition-colors shrink-0"
-            title="Preview document"
-          >
-            <Search className="h-3.5 w-3.5" />
-          </button>
+          <FastTooltip label="Preview document">
+            <button
+              onClick={() => onPreview(file)}
+              className="p-1 rounded hover:bg-blue-100 text-zinc-400 hover:text-blue-600 transition-colors shrink-0"
+              aria-label="Preview document"
+            >
+              <Search className="h-3.5 w-3.5" />
+            </button>
+          </FastTooltip>
 
           {/* View OCR text — shown when this Drive file has a CRM document record */}
           {docInfo?.docId && onViewOcr && (
-            <button
-              onClick={() => onViewOcr(docInfo.docId)}
-              className="p-1 rounded hover:bg-blue-100 text-zinc-400 hover:text-blue-600 transition-colors shrink-0"
-              title="View OCR text"
-            >
-              <ScanText className="h-3.5 w-3.5" />
-            </button>
+            <FastTooltip label="View OCR text">
+              <button
+                onClick={() => onViewOcr(docInfo.docId)}
+                className="p-1 rounded hover:bg-blue-100 text-zinc-400 hover:text-blue-600 transition-colors shrink-0"
+                aria-label="View OCR text"
+              >
+                <ScanText className="h-3.5 w-3.5" />
+              </button>
+            </FastTooltip>
           )}
 
           {/* Portal visibility toggle — shown for all files, processes unprocessed ones on click */}
-          <button
-              onClick={handleTogglePortalVisibility}
-              disabled={togglingVisibility}
-              title={portalVisible ? 'Visible to client — click to hide' : 'Hidden from client — click to show'}
-              className={cn(
-                'p-1 rounded transition-colors shrink-0',
-                portalVisible
-                  ? 'text-green-600 hover:bg-green-50'
-                  : 'text-zinc-300 hover:bg-zinc-100 hover:text-zinc-500'
-              )}
-            >
-              {togglingVisibility ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : portalVisible ? (
-                <Globe className="h-4 w-4" />
-              ) : (
-                <EyeOff className="h-4 w-4" />
-              )}
-            </button>
+          <FastTooltip label={portalVisible ? 'Visible to client — click to hide' : 'Hidden from client — click to show'}>
+            <button
+                onClick={handleTogglePortalVisibility}
+                disabled={togglingVisibility}
+                aria-label={portalVisible ? 'Visible to client — click to hide' : 'Hidden from client — click to show'}
+                className={cn(
+                  'p-1 rounded transition-colors shrink-0',
+                  portalVisible
+                    ? 'text-green-600 hover:bg-green-50'
+                    : 'text-zinc-300 hover:bg-zinc-100 hover:text-zinc-500'
+                )}
+              >
+                {togglingVisibility ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : portalVisible ? (
+                  <Globe className="h-4 w-4" />
+                ) : (
+                  <EyeOff className="h-4 w-4" />
+                )}
+              </button>
+          </FastTooltip>
 
           {/* Context menu */}
           <div className="relative shrink-0" ref={menuRef}>
@@ -866,30 +875,32 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
           >
             <Upload className="h-3.5 w-3.5" /> Upload Document
           </button>
-          <button
-            onClick={async () => {
-              setFolderAction('validating')
-              try {
-                const { validateFolder: validateFn } = await import('@/app/(dashboard)/accounts/folder-actions')
-                const result = await validateFn(accountId)
-                if (result.success && result.data) {
-                  setValidationResult(result.data)
-                } else {
-                  toast.error(result.error ?? 'Validation failed')
+          <FastTooltip label="Validate folder structure">
+            <button
+              onClick={async () => {
+                setFolderAction('validating')
+                try {
+                  const { validateFolder: validateFn } = await import('@/app/(dashboard)/accounts/folder-actions')
+                  const result = await validateFn(accountId)
+                  if (result.success && result.data) {
+                    setValidationResult(result.data)
+                  } else {
+                    toast.error(result.error ?? 'Validation failed')
+                  }
+                } catch {
+                  toast.error('Validation failed')
+                } finally {
+                  setFolderAction('idle')
                 }
-              } catch {
-                toast.error('Validation failed')
-              } finally {
-                setFolderAction('idle')
-              }
-            }}
-            disabled={folderAction === 'validating'}
-            className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-700 px-2 py-1 rounded hover:bg-zinc-100 transition-colors"
-            title="Validate folder structure"
-          >
-            {folderAction === 'validating' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
-            Validate
-          </button>
+              }}
+              disabled={folderAction === 'validating'}
+              className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-700 px-2 py-1 rounded hover:bg-zinc-100 transition-colors"
+              aria-label="Validate folder structure"
+            >
+              {folderAction === 'validating' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+              Validate
+            </button>
+          </FastTooltip>
           <button
             onClick={handleRefresh}
             className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-700 px-2 py-1 rounded hover:bg-zinc-100 transition-colors"

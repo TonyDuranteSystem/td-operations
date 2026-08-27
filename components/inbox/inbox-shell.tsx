@@ -18,6 +18,7 @@ import { WorkerChatPanel } from './worker-chat-panel'
 import { LinkClientDialog } from './link-client-dialog'
 import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-team-dialog'
 import { HoverHint } from './hover-hint'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { COLOR_MARKS, markByKey } from '@/lib/inbox/color-marks'
 import {
   type RowOverride,
@@ -1265,16 +1266,18 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
               to everything (archived included). Part of the list's identity —
               flipping it is a different list, new page 1. */}
           {searchActive && (
-            <button
-              onClick={() => setSearchScope(s => (s === 'inbox' ? 'all' : 'inbox'))}
-              className={cn(
-                'px-2 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap',
-                searchScope === 'all' ? 'bg-amber-100 text-amber-700' : 'text-zinc-400 hover:bg-zinc-100'
-              )}
-              title={searchScope === 'all' ? 'Searching all mail (archived included) — click for inbox only' : 'Searching your inbox only — click to include archived mail'}
-            >
-              {searchScope === 'all' ? 'All mail' : 'Include archived'}
-            </button>
+            <FastTooltip label={searchScope === 'all' ? 'Searching all mail (archived included) — click for inbox only' : 'Searching your inbox only — click to include archived mail'}>
+              <button
+                onClick={() => setSearchScope(s => (s === 'inbox' ? 'all' : 'inbox'))}
+                className={cn(
+                  'px-2 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap',
+                  searchScope === 'all' ? 'bg-amber-100 text-amber-700' : 'text-zinc-400 hover:bg-zinc-100'
+                )}
+                aria-label={searchScope === 'all' ? 'Searching all mail (archived included) — click for inbox only' : 'Searching your inbox only — click to include archived mail'}
+              >
+                {searchScope === 'all' ? 'All mail' : 'Include archived'}
+              </button>
+            </FastTooltip>
           )}
           <div className="flex items-center gap-0.5 border-l pl-2 ml-1">
             {(['all', 'unread', 'read'] as const).map(f => (
@@ -1392,13 +1395,15 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
               <Send className="h-3.5 w-3.5" />
               Share to team
             </button>
-            <button
-              onClick={clearSelection}
-              className="p-1 rounded hover:bg-zinc-200 text-zinc-500 ml-1"
-              title="Clear selection"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <FastTooltip label="Clear selection">
+              <button
+                onClick={clearSelection}
+                className="p-1 rounded hover:bg-zinc-200 text-zinc-500 ml-1"
+                aria-label="Clear selection"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </FastTooltip>
           </div>
         </div>
       )}
@@ -1470,13 +1475,15 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                   on narrow windows/mobile the button cluster wraps to its own
                   row instead of crushing the subject to one word per line. */}
               <div className="flex items-center gap-x-3 gap-y-1.5 px-4 py-2.5 border-b bg-white shrink-0 flex-wrap">
-                <button
-                  onClick={handleBack}
-                  title="Back to the email list"
-                  className="p-1 rounded hover:bg-zinc-100"
-                >
-                  <ArrowLeft className="h-5 w-5" />
-                </button>
+                <FastTooltip label="Back to the email list" align="left">
+                  <button
+                    onClick={handleBack}
+                    aria-label="Back to the email list"
+                    className="p-1 rounded hover:bg-zinc-100"
+                  >
+                    <ArrowLeft className="h-5 w-5" />
+                  </button>
+                </FastTooltip>
 
                 {(() => {
                   const Icon = channelIcons[selected.channel]
@@ -1594,30 +1601,33 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                               <div className="fixed inset-0 z-40" onClick={() => setColorMenuOpen(false)} />
                               <div className="absolute right-0 top-full mt-1 z-50 bg-white rounded-lg shadow-xl border border-zinc-200 p-2 flex items-center gap-1.5">
                                 {COLOR_MARKS.map(m => (
+                                  <FastTooltip key={m.key} label={m.label}>
+                                    <button
+                                      onClick={() => {
+                                        setColorMenuOpen(false)
+                                        emailActionMutation.mutate({ action: 'set_color', color: m.key, conv: selected })
+                                      }}
+                                      className={cn(
+                                        'h-5 w-5 rounded-full hover:scale-110 transition-transform',
+                                        selected.colorMark === m.key && 'ring-2 ring-offset-1 ring-zinc-400'
+                                      )}
+                                      style={{ backgroundColor: m.hex }}
+                                      aria-label={m.label}
+                                    />
+                                  </FastTooltip>
+                                ))}
+                                <FastTooltip label="Remove mark">
                                   <button
-                                    key={m.key}
                                     onClick={() => {
                                       setColorMenuOpen(false)
-                                      emailActionMutation.mutate({ action: 'set_color', color: m.key, conv: selected })
+                                      emailActionMutation.mutate({ action: 'set_color', color: null, conv: selected })
                                     }}
-                                    className={cn(
-                                      'h-5 w-5 rounded-full hover:scale-110 transition-transform',
-                                      selected.colorMark === m.key && 'ring-2 ring-offset-1 ring-zinc-400'
-                                    )}
-                                    style={{ backgroundColor: m.hex }}
-                                    title={m.label}
-                                  />
-                                ))}
-                                <button
-                                  onClick={() => {
-                                    setColorMenuOpen(false)
-                                    emailActionMutation.mutate({ action: 'set_color', color: null, conv: selected })
-                                  }}
-                                  className="h-5 w-5 rounded-full border border-zinc-300 flex items-center justify-center text-zinc-400 hover:text-zinc-600 hover:scale-110 transition-transform"
-                                  title="Remove mark"
-                                >
-                                  <Ban className="h-3 w-3" />
-                                </button>
+                                    className="h-5 w-5 rounded-full border border-zinc-300 flex items-center justify-center text-zinc-400 hover:text-zinc-600 hover:scale-110 transition-transform"
+                                    aria-label="Remove mark"
+                                  >
+                                    <Ban className="h-3 w-3" />
+                                  </button>
+                                </FastTooltip>
                               </div>
                             </>
                           )}

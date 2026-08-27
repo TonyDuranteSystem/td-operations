@@ -35,13 +35,24 @@ export interface BuildSubmissionTokenParams {
   contactId?: string | null
   /** Calendar year for non-tax tokens; injectable for tests. */
   calendarYear: number
+  /**
+   * Closure only (dev job fbbf4abe): the specific pending record this
+   * submission belongs to. account_id/lead_id/contact_id alone cannot tell
+   * two closures for the same person apart — closure is the one wizard type
+   * where a client can genuinely have more than one in flight at once (two
+   * untracked LLCs, or one managed + one untracked). When set, this WINS over
+   * every other scope id below, so two different closures always produce
+   * different tokens even when account/lead/contact are otherwise identical
+   * (the untracked-LLC case has no account_id at all).
+   */
+  explicitScopeId?: string | null
 }
 
 export function buildSubmissionToken(p: BuildSubmissionTokenParams): string {
   const slug = slugifyClientName(p.clientName)
   const isTax = p.wizardType === "tax" || p.wizardType === "tax_return"
   const period = isTax && p.taxYear != null ? `ty${p.taxYear}` : String(p.calendarYear)
-  const scopeId = p.accountId || p.leadId || p.contactId || ""
+  const scopeId = p.explicitScopeId || p.accountId || p.leadId || p.contactId || ""
   const scope = scopeId ? `-${String(scopeId).slice(0, 8)}` : ""
   return `portal-${slug}-${period}${scope}`
 }

@@ -66,6 +66,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { DashboardPushToggle } from '@/components/dashboard/push-toggle'
 import { GlobalBackButton } from '@/components/dashboard/global-back-button'
 import { MfaSettingsDialog } from '@/components/dashboard/mfa-settings-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface NavItem {
   id: string
@@ -173,16 +174,18 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
       )}
     >
       {editMode && (
-        <button
-          {...attributes}
-          {...listeners}
-          onDragStart={e => e.preventDefault()}
-          className="p-1 cursor-grab active:cursor-grabbing text-sidebar-foreground/30 hover:text-sidebar-foreground/60 shrink-0"
-          style={{ touchAction: 'none' }}
-          title="Drag to reorder"
-        >
-          <GripVertical className="h-3.5 w-3.5" />
-        </button>
+        <FastTooltip label="Drag to reorder" align="left">
+          <button
+            {...attributes}
+            {...listeners}
+            onDragStart={e => e.preventDefault()}
+            className="p-1 cursor-grab active:cursor-grabbing text-sidebar-foreground/30 hover:text-sidebar-foreground/60 shrink-0"
+            style={{ touchAction: 'none' }}
+            aria-label="Drag to reorder"
+          >
+            <GripVertical className="h-3.5 w-3.5" />
+          </button>
+        </FastTooltip>
       )}
       <Link
         href={item.href}
@@ -247,13 +250,14 @@ function TeamNotifDot({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <span className="shrink-0 flex items-center">
-      <button
-        ref={btnRef}
-        onClick={toggle}
-        className="w-2.5 h-2.5 mr-1 rounded-full bg-red-500 animate-pulse"
-        title="New — click to see what"
-        aria-label="Team chat notifications"
-      />
+      <FastTooltip label="New — click to see what">
+        <button
+          ref={btnRef}
+          onClick={toggle}
+          className="w-2.5 h-2.5 mr-1 rounded-full bg-red-500 animate-pulse"
+          aria-label="Team chat notifications"
+        />
+      </FastTooltip>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={toggle} />
@@ -708,30 +712,36 @@ export function Sidebar({
               <p className="text-xs text-sidebar-foreground/50 truncate">{user.email}</p>
             </div>
             <div className="flex items-center gap-0.5 shrink-0">
-              <button
-                onClick={() => setPasswordDialogOpen(true)}
-                className="p-1.5 rounded hover:bg-sidebar-accent"
-                title="Change password"
-              >
-                <KeyRound className="h-4 w-4" />
-              </button>
+              <FastTooltip label="Change password">
+                <button
+                  onClick={() => setPasswordDialogOpen(true)}
+                  className="p-1.5 rounded hover:bg-sidebar-accent"
+                  aria-label="Change password"
+                >
+                  <KeyRound className="h-4 w-4" />
+                </button>
+              </FastTooltip>
               {/* Two-factor self-service: replace authenticator (planned phone
                   change) + regenerate backup codes. Both require a session
                   that has just passed a code. */}
-              <button
-                onClick={() => setMfaDialogOpen(true)}
-                className="p-1.5 rounded hover:bg-sidebar-accent"
-                title="Two-factor security"
-              >
-                <ShieldCheck className="h-4 w-4" />
-              </button>
-              <button
-                onClick={handleLogout}
-                className="p-1.5 rounded hover:bg-sidebar-accent"
-                title="Sign out"
-              >
-                <LogOut className="h-4 w-4" />
-              </button>
+              <FastTooltip label="Two-factor security">
+                <button
+                  onClick={() => setMfaDialogOpen(true)}
+                  className="p-1.5 rounded hover:bg-sidebar-accent"
+                  aria-label="Two-factor security"
+                >
+                  <ShieldCheck className="h-4 w-4" />
+                </button>
+              </FastTooltip>
+              <FastTooltip label="Sign out">
+                <button
+                  onClick={handleLogout}
+                  className="p-1.5 rounded hover:bg-sidebar-accent"
+                  aria-label="Sign out"
+                >
+                  <LogOut className="h-4 w-4" />
+                </button>
+              </FastTooltip>
             </div>
           </div>
         </div>

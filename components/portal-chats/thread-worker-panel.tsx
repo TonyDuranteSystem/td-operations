@@ -23,6 +23,7 @@ import {
 import { WorkerComposer } from '@/components/chat/worker-composer'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { useWorkerAttachments, type UploadedAttachment } from '@/components/chat/use-worker-attachments'
 import { ConfirmAttachments } from '@/components/inbox/confirm-attachments'
 import { SignatureControls, SignaturePreview } from '@/components/inbox/signature-controls'
@@ -364,36 +365,44 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName, onHandoffT
             {/* 🧠 — make THIS reply a rule for everyone (global, client details
                 scrubbed). Only on worker replies we have a row id for. */}
             {m.role === 'worker' && m.id && (
-              <button
-                type="button"
-                onClick={() => void rememberReply(m.id!)}
-                disabled={remembered[m.id] === 'saving' || remembered[m.id] === 'saved'}
-                title={
+              <FastTooltip
+                label={
                   remembered[m.id] === 'saved'
                     ? 'Saved to memory as a rule for everyone'
                     : 'Save as a rule for everyone (client details are removed)'
                 }
-                className={cn(
-                  'mt-1 ml-1 inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs min-h-[28px]',
-                  'transition-colors disabled:cursor-default',
-                  remembered[m.id] === 'saved'
-                    ? 'text-emerald-700 bg-emerald-50'
-                    : 'text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100'
-                )}
               >
-                {remembered[m.id] === 'saving' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <span aria-hidden>🧠</span>
-                )}
-                <span>
-                  {remembered[m.id] === 'saved'
-                    ? 'Saved'
-                    : remembered[m.id] === 'saving'
-                      ? 'Saving…'
-                      : 'Remember'}
-                </span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => void rememberReply(m.id!)}
+                  disabled={remembered[m.id] === 'saving' || remembered[m.id] === 'saved'}
+                  aria-label={
+                    remembered[m.id] === 'saved'
+                      ? 'Saved to memory as a rule for everyone'
+                      : 'Save as a rule for everyone (client details are removed)'
+                  }
+                  className={cn(
+                    'mt-1 ml-1 inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs min-h-[28px]',
+                    'transition-colors disabled:cursor-default',
+                    remembered[m.id] === 'saved'
+                      ? 'text-emerald-700 bg-emerald-50'
+                      : 'text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100'
+                  )}
+                >
+                  {remembered[m.id] === 'saving' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <span aria-hidden>🧠</span>
+                  )}
+                  <span>
+                    {remembered[m.id] === 'saved'
+                      ? 'Saved'
+                      : remembered[m.id] === 'saving'
+                        ? 'Saving…'
+                        : 'Remember'}
+                  </span>
+                </button>
+              </FastTooltip>
             )}
           </div>
         ))}

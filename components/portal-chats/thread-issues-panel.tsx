@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, AlertCircle, Wrench, CheckCircle2, RefreshCw } from 'lucide-react'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface DiagnosticFix {
   action: string
@@ -133,15 +134,17 @@ export function ThreadIssuesPanel({ accountId }: { accountId: string | null }) {
                     <div className="text-xs font-semibold text-zinc-800">{check.label}</div>
                     <div className="text-xs text-zinc-600 mt-0.5 whitespace-pre-wrap">{check.detail}</div>
                     {check.fix && (
-                      <button
-                        onClick={() => runFix(check)}
-                        disabled={fixing === check.id}
-                        className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-md bg-zinc-900 text-white hover:bg-zinc-700 disabled:opacity-50"
-                        title={check.fix.description}
-                      >
-                        {fixing === check.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wrench className="h-3 w-3" />}
-                        {check.fix.label}
-                      </button>
+                      <FastTooltip label={check.fix.description}>
+                        <button
+                          onClick={() => runFix(check)}
+                          disabled={fixing === check.id}
+                          className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-md bg-zinc-900 text-white hover:bg-zinc-700 disabled:opacity-50"
+                          aria-label={check.fix.description}
+                        >
+                          {fixing === check.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wrench className="h-3 w-3" />}
+                          {check.fix.label}
+                        </button>
+                      </FastTooltip>
                     )}
                   </div>
                 </div>

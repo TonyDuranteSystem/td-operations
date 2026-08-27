@@ -1,6 +1,7 @@
 'use client'
 
 import { FileText, ExternalLink } from 'lucide-react'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 /**
  * pdf_list — Attachment template for tasks that reference a list of PDFs
@@ -65,18 +66,20 @@ export function PdfListAttachment({ taskMeta }: { taskMeta: Record<string, unkno
         return (
           <li key={`${fileId ?? 'na'}-${i}`}>
             {fileId ? (
-              <a
-                href={driveUrl(fileId)}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-xs hover:bg-blue-100 transition-colors"
-                title={label}
-              >
-                <FileText className="h-3 w-3 shrink-0" />
-                <span className="truncate max-w-[200px]">{label}</span>
-                <ExternalLink className="h-2.5 w-2.5 shrink-0 opacity-60" />
-              </a>
+              <FastTooltip label={label}>
+                <a
+                  href={driveUrl(fileId)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-xs hover:bg-blue-100 transition-colors"
+                  aria-label={label}
+                >
+                  <FileText className="h-3 w-3 shrink-0" />
+                  <span className="truncate max-w-[200px]">{label}</span>
+                  <ExternalLink className="h-2.5 w-2.5 shrink-0 opacity-60" />
+                </a>
+              </FastTooltip>
             ) : (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-100 text-zinc-600 text-xs">
                 <FileText className="h-3 w-3 shrink-0" />

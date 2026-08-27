@@ -13,6 +13,7 @@ import { ArrowLeft, Loader2, Mail, Paperclip, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { MessageThread } from '@/components/inbox/message-thread'
 import { ComposeReply } from '@/components/inbox/compose-reply'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { InboxConversation } from '@/lib/types'
 
 interface ThreadEmailPanelProps {
@@ -58,18 +59,20 @@ export function ThreadEmailPanel({ accountId, contactId }: ThreadEmailPanelProps
     return (
       <div className="flex-1 flex flex-col min-h-0">
         <div className="flex items-center gap-2 px-3 py-2 border-b bg-white shrink-0">
-          <button
-            onClick={() => {
-              setSelected(null)
-              // Opening the thread marked it read in Gmail — refresh list + green dots
-              queryClient.invalidateQueries({ queryKey: ['client-emails'] })
-              queryClient.invalidateQueries({ queryKey: ['email-unread'] })
-            }}
-            className="p-1 rounded hover:bg-zinc-100 text-zinc-500"
-            title="Back to email list"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
+          <FastTooltip label="Back to email list" align="left">
+            <button
+              onClick={() => {
+                setSelected(null)
+                // Opening the thread marked it read in Gmail — refresh list + green dots
+                queryClient.invalidateQueries({ queryKey: ['client-emails'] })
+                queryClient.invalidateQueries({ queryKey: ['email-unread'] })
+              }}
+              className="p-1 rounded hover:bg-zinc-100 text-zinc-500"
+              aria-label="Back to email list"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+          </FastTooltip>
           <Mail className="h-4 w-4 text-zinc-400 shrink-0" />
           <p className="text-sm font-medium text-zinc-800 truncate">
             {selected.subject || selected.name}
@@ -106,13 +109,15 @@ export function ThreadEmailPanel({ accountId, contactId }: ThreadEmailPanelProps
               {f}
             </button>
           ))}
-          <button
-            onClick={() => refetch()}
-            className="p-1 rounded hover:bg-zinc-100 text-zinc-400"
-            title="Refresh"
-          >
-            <RefreshCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
-          </button>
+          <FastTooltip label="Refresh">
+            <button
+              onClick={() => refetch()}
+              className="p-1 rounded hover:bg-zinc-100 text-zinc-400"
+              aria-label="Refresh"
+            >
+              <RefreshCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
+            </button>
+          </FastTooltip>
         </div>
       </div>
 

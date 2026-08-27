@@ -21,6 +21,7 @@ import {
   isOverdue,
   type CalendarNoteLike,
 } from '@/lib/notes/note-calendar'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 export interface CalendarNote extends CalendarNoteLike {
   body: string
@@ -151,15 +152,16 @@ export function NotesCalendar({ notes, onOpen }: { notes: CalendarNote[]; onOpen
                 </span>
                 <div className="mt-1 flex flex-col gap-0.5">
                   {dayNotes.slice(0, 3).map((n) => (
-                    <button
-                      key={n.id}
-                      onClick={(e) => { e.stopPropagation(); onOpen?.(n) }}
-                      title="Open this note"
-                      className="flex w-full items-center gap-1 truncate rounded text-left text-[11px] leading-tight hover:bg-black/10"
-                    >
-                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT[n.color] || DOT.yellow}`} />
-                      <span className="truncate">{n.body}</span>
-                    </button>
+                    <FastTooltip key={n.id} label="Open this note">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onOpen?.(n) }}
+                        aria-label="Open this note"
+                        className="flex w-full items-center gap-1 truncate rounded text-left text-[11px] leading-tight hover:bg-black/10"
+                      >
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT[n.color] || DOT.yellow}`} />
+                        <span className="truncate">{n.body}</span>
+                      </button>
+                    </FastTooltip>
                   ))}
                   {dayNotes.length > 3 && (
                     <span className="text-[11px] text-zinc-500">+{dayNotes.length - 3} more</span>

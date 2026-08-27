@@ -5,6 +5,7 @@ import { Plus, Pencil, Trash2, Loader2, MapPin, ShieldCheck, AlertCircle, X } fr
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { AddressRow } from '@/lib/addresses'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -332,24 +333,28 @@ function AddressRowItem({
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            onClick={() => onEdit(row)}
-            className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700"
-            title="Edit"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
-          {row.active && (
+          <FastTooltip label="Edit">
             <button
               type="button"
-              onClick={handleDeactivate}
-              disabled={deactivating || row.linked_account_count > 0}
-              title={row.linked_account_count > 0 ? `Cannot deactivate — ${row.linked_account_count} account(s) linked` : 'Deactivate'}
-              className="p-1.5 rounded hover:bg-red-50 text-zinc-400 hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed"
+              onClick={() => onEdit(row)}
+              className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700"
+              aria-label="Edit"
             >
-              {deactivating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              <Pencil className="h-3.5 w-3.5" />
             </button>
+          </FastTooltip>
+          {row.active && (
+            <FastTooltip label={row.linked_account_count > 0 ? `Cannot deactivate — ${row.linked_account_count} account(s) linked` : 'Deactivate'}>
+              <button
+                type="button"
+                onClick={handleDeactivate}
+                disabled={deactivating || row.linked_account_count > 0}
+                aria-label={row.linked_account_count > 0 ? `Cannot deactivate — ${row.linked_account_count} account(s) linked` : 'Deactivate'}
+                className="p-1.5 rounded hover:bg-red-50 text-zinc-400 hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                {deactivating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              </button>
+            </FastTooltip>
           )}
         </div>
       </div>

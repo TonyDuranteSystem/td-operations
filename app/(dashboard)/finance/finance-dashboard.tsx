@@ -10,6 +10,7 @@ import { AllInvoicesTab, type InvoiceRecord } from './all-invoices-tab'
 import { ExpensesTab, type TDExpenseRecord } from './expenses-tab'
 import { RecurringTab } from './recurring-tab'
 import type { RecurringTemplateListRow } from '@/app/(dashboard)/payments/recurring-invoice-actions'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface ClientSummary {
   id: string
@@ -91,19 +92,20 @@ export function FinanceDashboard({
         {/* Tabs — horizontally scrollable on mobile so all tabs stay reachable */}
         <div className="flex gap-1 overflow-x-auto -mx-1 px-1">
           {allTabs.filter(t => !t.adminOnly || isAdmin).map(t => (
-            <button
-              key={t.id}
-              onClick={() => switchTab(t.id)}
-              title={t.tooltip}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors shrink-0 whitespace-nowrap ${
-                tab === t.id
-                  ? 'bg-blue-600 text-white'
-                  : 'text-muted-foreground hover:bg-muted'
-              }`}
-            >
-              <t.icon className="w-4 h-4" />
-              {t.label}
-            </button>
+            <FastTooltip key={t.id} label={t.tooltip}>
+              <button
+                onClick={() => switchTab(t.id)}
+                aria-label={t.tooltip}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors shrink-0 whitespace-nowrap ${
+                  tab === t.id
+                    ? 'bg-blue-600 text-white'
+                    : 'text-muted-foreground hover:bg-muted'
+                }`}
+              >
+                <t.icon className="w-4 h-4" />
+                {t.label}
+              </button>
+            </FastTooltip>
           ))}
         </div>
       </div>

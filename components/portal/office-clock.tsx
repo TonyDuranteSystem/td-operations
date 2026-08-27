@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Clock } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
 import { getOfficeStatus, OFFICE_TZ } from '@/lib/portal/office-hours'
+import { resolveYourTimeZone } from '@/lib/portal/client-timezone'
 import { cn } from '@/lib/utils'
 
 function timeFmt(locale: string, timeZone?: string) {
@@ -19,11 +20,21 @@ function timeFmt(locale: string, timeZone?: string) {
 export function OfficeClock({
   clientTimeZone,
   clientTimeZoneLabel,
+  isViewAs = false,
+  lastSeenTimeZone,
 }: {
-  /** IANA timezone resolved from the client's stored country. When set, "YOUR
-   *  TIME" uses it; when absent we fall back to the device/browser timezone. */
+  /** IANA timezone resolved from the client's stored country. The fallback of
+   *  last resort once a real signal exists (see lastSeenTimeZone). */
   clientTimeZone?: string
   clientTimeZoneLabel?: string
+  /** True when staff are viewing the portal as this client ("View as"). The
+   *  browser here is the STAFF's, so the device timezone belongs to the wrong
+   *  person — lastSeenTimeZone (or the stored country) is used instead. */
+  isViewAs?: boolean
+  /** Where the CLIENT's own connection actually was on their last real visit
+   *  (captured server-side, never during View-as). This is what View-as
+   *  prefers over the stored country — see resolveYourTimeZone. */
+  lastSeenTimeZone?: string
 } = {}) {
   const { locale, t } = useLocale()
   const [now, setNow] = useState<Date | null>(null)
@@ -45,19 +56,24 @@ export function OfficeClock({
   const open = status.open
 
   const ourTime = timeFmt(locale, OFFICE_TZ).format(now)
-  // "YOUR TIME": prefer the client's stored-country timezone (works even when
-  // staff open the client's portal); fall back to the device/browser timezone.
-  const yourTime = timeFmt(locale, clientTimeZone).format(now)
-  const yourTz =
-    clientTimeZoneLabel ??
-    (() => {
-      try {
-        // The device's own timezone, e.g. "Europe/Rome" → "Rome".
-        return Intl.DateTimeFormat().resolvedOptions().timeZone?.split('/').pop()?.replace(/_/g, ' ') ?? ''
-      } catch {
-        return ''
-      }
-    })()
+  // "YOUR TIME": for a real visit, the device's own timezone (their actual
+  // connection, right now) wins over the stored country; under staff "View
+  // as client" the device is the STAFF's, so the stored-country timezone is
+  // used instead. See resolveYourTimeZone for the full rule.
+  let deviceTimeZone: string | null = null
+  try {
+    deviceTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || null
+  } catch {
+    deviceTimeZone = null
+  }
+  const resolvedTz = resolveYourTimeZone({
+    isViewAs,
+    deviceTimeZone,
+    lastSeenTimeZone,
+    storedTimeZone: clientTimeZone ? { tz: clientTimeZone, label: clientTimeZoneLabel ?? '' } : null,
+  })
+  const yourTime = timeFmt(locale, resolvedTz.tz).format(now)
+  const yourTz = resolvedTz.label
 
   return (
     <div

@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Loader2, FileText, RefreshCw, Download, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 export interface FaxHistoryRow {
   id: string
@@ -139,17 +140,19 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
                 </td>
                 <td className="px-4 py-3">
                   {row.documentId ? (
-                    <a
-                      href={`/api/documents/${encodeURIComponent(row.documentId)}/preview`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="Open the original document that was faxed"
-                      className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-700 hover:underline"
-                    >
-                      <FileText className="h-3.5 w-3.5 shrink-0" />
-                      <span className="truncate max-w-[160px]">{row.fileName}</span>
-                      <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
-                    </a>
+                    <FastTooltip label="Open the original document that was faxed">
+                      <a
+                        href={`/api/documents/${encodeURIComponent(row.documentId)}/preview`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label="Open the original document that was faxed"
+                        className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-700 hover:underline"
+                      >
+                        <FileText className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate max-w-[160px]">{row.fileName}</span>
+                        <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
+                      </a>
+                    </FastTooltip>
                   ) : (
                     <span className="inline-flex items-center gap-1.5 text-zinc-700" title="Uploaded file — not stored, nothing to view">
                       <FileText className="h-3.5 w-3.5 text-zinc-400 shrink-0" />

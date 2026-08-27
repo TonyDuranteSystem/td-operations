@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { ChevronDown, MapPin, X, Search, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { AddressKind, AddressRow } from '@/lib/addresses'
 
 export type { AddressRow }
@@ -140,14 +141,16 @@ export function AddressDropdown({
 
         {/* Clear button — only visible when a value is selected */}
         {selectedRow && !disabled && (
-          <button
-            type="button"
-            onClick={handleClear}
-            className="px-2 py-2 rounded-r-md hover:bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            title="Clear selection"
-          >
-            <X className="h-3.5 w-3.5 text-muted-foreground" />
-          </button>
+          <FastTooltip label="Clear selection">
+            <button
+              type="button"
+              onClick={handleClear}
+              className="px-2 py-2 rounded-r-md hover:bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              aria-label="Clear selection"
+            >
+              <X className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+          </FastTooltip>
         )}
       </div>
 

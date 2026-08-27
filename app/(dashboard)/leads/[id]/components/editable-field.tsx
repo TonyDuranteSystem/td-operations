@@ -4,6 +4,7 @@ import { useState, useTransition, useRef, useEffect } from 'react'
 import { Pencil, Check, X, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface EditableFieldProps {
   leadId: string
@@ -136,22 +137,26 @@ export function EditableField({
             className="flex-1 min-w-0 px-1.5 py-0.5 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
           />
         )}
-        <button
-          onClick={handleSave}
-          disabled={isPending}
-          className="p-0.5 text-emerald-600 hover:text-emerald-700 disabled:opacity-50"
-          title="Save"
-        >
-          {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-        </button>
-        <button
-          onClick={handleCancel}
-          disabled={isPending}
-          className="p-0.5 text-zinc-400 hover:text-zinc-600 disabled:opacity-50"
-          title="Cancel"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        <FastTooltip label="Save">
+          <button
+            onClick={handleSave}
+            disabled={isPending}
+            className="p-0.5 text-emerald-600 hover:text-emerald-700 disabled:opacity-50"
+            aria-label="Save"
+          >
+            {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+          </button>
+        </FastTooltip>
+        <FastTooltip label="Cancel">
+          <button
+            onClick={handleCancel}
+            disabled={isPending}
+            className="p-0.5 text-zinc-400 hover:text-zinc-600 disabled:opacity-50"
+            aria-label="Cancel"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </FastTooltip>
         {warning && editing && (
           <span className="text-[10px] text-amber-600 ml-1">{warning}</span>
         )}
@@ -166,22 +171,26 @@ export function EditableField({
   return (
     <span className="font-medium inline-flex items-center gap-1 group min-w-0">
       <span className="truncate">{displayValue || '\u2014'}</span>
-      <button
-        onClick={() => { setEditValue(value ?? ''); setEditing(true) }}
-        className="p-0.5 text-zinc-300 opacity-0 group-hover:opacity-100 hover:text-zinc-600 transition-opacity"
-        title="Edit"
-      >
-        <Pencil className="h-3 w-3" />
-      </button>
-      {clearable && value && (
+      <FastTooltip label="Edit">
         <button
-          onClick={handleClear}
-          disabled={isPending}
-          className="p-0.5 text-zinc-300 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity disabled:opacity-50"
-          title="Remove"
+          onClick={() => { setEditValue(value ?? ''); setEditing(true) }}
+          className="p-0.5 text-zinc-300 opacity-0 group-hover:opacity-100 hover:text-zinc-600 transition-opacity"
+          aria-label="Edit"
         >
-          {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+          <Pencil className="h-3 w-3" />
         </button>
+      </FastTooltip>
+      {clearable && value && (
+        <FastTooltip label="Remove">
+          <button
+            onClick={handleClear}
+            disabled={isPending}
+            className="p-0.5 text-zinc-300 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity disabled:opacity-50"
+            aria-label="Remove"
+          >
+            {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+          </button>
+        </FastTooltip>
       )}
     </span>
   )

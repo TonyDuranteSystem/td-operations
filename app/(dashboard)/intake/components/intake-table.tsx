@@ -7,6 +7,7 @@ import { createLeadFromIntake, linkIntakeToExisting, dismissIntake } from '../ac
 import type { IntakeEntry } from '../page'
 import { useRouter } from 'next/navigation'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const STATUS_BADGES: Record<string, { label: string; className: string }> = {
   pending_review: { label: 'Pending', className: 'bg-amber-100 text-amber-700' },
@@ -139,14 +140,16 @@ function IntakeRow({ entry, readonly }: { entry: IntakeEntry; readonly: boolean 
 
           {/* Existing lead/contact indicator */}
           {matches.existing_lead_id && (
-            <a
-              href={`/leads/${matches.existing_lead_id}`}
-              className="flex items-center gap-1 text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded-md hover:bg-blue-100"
-              title={`Existing lead: ${matches.existing_lead_status}`}
-            >
-              <ExternalLink className="h-3 w-3" />
-              Lead exists
-            </a>
+            <FastTooltip label={`Existing lead: ${matches.existing_lead_status}`}>
+              <a
+                href={`/leads/${matches.existing_lead_id}`}
+                className="flex items-center gap-1 text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded-md hover:bg-blue-100"
+                aria-label={`Existing lead: ${matches.existing_lead_status}`}
+              >
+                <ExternalLink className="h-3 w-3" />
+                Lead exists
+              </a>
+            </FastTooltip>
           )}
           {matches.existing_contact_id && !matches.existing_lead_id && (
             <span className="text-xs bg-amber-50 text-amber-700 px-2 py-1 rounded-md">
@@ -160,15 +163,17 @@ function IntakeRow({ entry, readonly }: { entry: IntakeEntry; readonly: boolean 
           <div className="flex items-center gap-1.5 shrink-0">
             {!linkMode ? (
               <>
-                <button
-                  onClick={handleCreateLead}
-                  disabled={isPending}
-                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-zinc-900 text-white hover:bg-zinc-800 disabled:opacity-50"
-                  title={matches.existing_lead_id ? 'A lead already exists — consider linking instead' : 'Create new lead'}
-                >
-                  {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <UserPlus className="h-3 w-3" />}
-                  Create
-                </button>
+                <FastTooltip label={matches.existing_lead_id ? 'A lead already exists — consider linking instead' : 'Create new lead'}>
+                  <button
+                    onClick={handleCreateLead}
+                    disabled={isPending}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-zinc-900 text-white hover:bg-zinc-800 disabled:opacity-50"
+                    aria-label={matches.existing_lead_id ? 'A lead already exists — consider linking instead' : 'Create new lead'}
+                  >
+                    {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <UserPlus className="h-3 w-3" />}
+                    Create
+                  </button>
+                </FastTooltip>
                 <button
                   onClick={() => {
                     setLinkMode(true)
@@ -180,14 +185,16 @@ function IntakeRow({ entry, readonly }: { entry: IntakeEntry; readonly: boolean 
                   <Link2 className="h-3 w-3" />
                   Link
                 </button>
-                <button
-                  onClick={() => setDismissTarget('lost')}
-                  disabled={isPending}
-                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border text-zinc-400 hover:bg-zinc-50 hover:text-zinc-600 disabled:opacity-50"
-                  title="Mark as lost"
-                >
-                  <X className="h-3 w-3" />
-                </button>
+                <FastTooltip label="Mark as lost">
+                  <button
+                    onClick={() => setDismissTarget('lost')}
+                    disabled={isPending}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border text-zinc-400 hover:bg-zinc-50 hover:text-zinc-600 disabled:opacity-50"
+                    aria-label="Mark as lost"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </FastTooltip>
               </>
             ) : (
               <div className="flex items-center gap-1.5">

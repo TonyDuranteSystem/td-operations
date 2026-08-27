@@ -11,6 +11,7 @@ import { toast } from 'sonner'
 import { format, parseISO, isToday, isYesterday } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { isOwnMessage } from '@/lib/td-communication/helpers'
 import { uploadCommAttachment, validateChatAttachment } from '@/lib/td-communication/upload-attachment'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -288,7 +289,7 @@ export function ConversationChat({ conversationId, viewer }: { conversationId: s
                   <Pin className="h-3 w-3 text-amber-500 mt-0.5 shrink-0" />
                   <span className="truncate flex-1">{pm.body || '[Attachment]'}</span>
                 </button>
-                <button onClick={() => togglePin(pm)} className="shrink-0 text-zinc-400 hover:text-red-600" title="Unpin"><X className="h-3 w-3" /></button>
+                <FastTooltip label="Unpin"><button onClick={() => togglePin(pm)} className="shrink-0 text-zinc-400 hover:text-red-600" aria-label="Unpin"><X className="h-3 w-3" /></button></FastTooltip>
               </div>
             ))}
           </div>
@@ -325,10 +326,10 @@ export function ConversationChat({ conversationId, viewer }: { conversationId: s
               <div className={cn('flex mb-1 items-end gap-1', own ? 'justify-end' : 'justify-start')}>
                 {own && !tombstone && editingId !== m.id && (
                   <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                    <button onClick={() => togglePin(m)} className={cn('p-1 rounded-full hover:bg-zinc-100', m.pinned_at ? 'text-amber-500' : 'text-zinc-300 hover:text-zinc-600')} title={m.pinned_at ? 'Unpin' : 'Pin'}><Pin className={cn('h-3.5 w-3.5', m.pinned_at && 'fill-amber-400')} /></button>
-                    {atts.length === 0 && <button onClick={() => startEdit(m)} className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100" title="Edit"><Pencil className="h-3.5 w-3.5" /></button>}
-                    <button onClick={() => deleteMessage(m)} className="p-1 rounded-full text-zinc-300 hover:text-red-600 hover:bg-zinc-100" title="Delete"><Trash2 className="h-3.5 w-3.5" /></button>
-                    <button onClick={() => setReplyTo(m)} className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100" title="Reply"><Reply className="h-3.5 w-3.5" /></button>
+                    <FastTooltip label={m.pinned_at ? 'Unpin' : 'Pin'}><button onClick={() => togglePin(m)} className={cn('p-1 rounded-full hover:bg-zinc-100', m.pinned_at ? 'text-amber-500' : 'text-zinc-300 hover:text-zinc-600')} aria-label={m.pinned_at ? 'Unpin' : 'Pin'}><Pin className={cn('h-3.5 w-3.5', m.pinned_at && 'fill-amber-400')} /></button></FastTooltip>
+                    {atts.length === 0 && <FastTooltip label="Edit"><button onClick={() => startEdit(m)} className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100" aria-label="Edit"><Pencil className="h-3.5 w-3.5" /></button></FastTooltip>}
+                    <FastTooltip label="Delete"><button onClick={() => deleteMessage(m)} className="p-1 rounded-full text-zinc-300 hover:text-red-600 hover:bg-zinc-100" aria-label="Delete"><Trash2 className="h-3.5 w-3.5" /></button></FastTooltip>
+                    <FastTooltip label="Reply"><button onClick={() => setReplyTo(m)} className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100" aria-label="Reply"><Reply className="h-3.5 w-3.5" /></button></FastTooltip>
                   </div>
                 )}
                 <div className={cn('max-w-[78%] px-3.5 py-2 rounded-2xl text-sm', own ? 'bg-blue-600 text-white rounded-br-md' : 'bg-zinc-100 text-zinc-900 rounded-bl-md', m.kept_unread && 'ring-2 ring-blue-300')}>
@@ -382,10 +383,10 @@ export function ConversationChat({ conversationId, viewer }: { conversationId: s
                 </div>
                 {!own && !tombstone && (
                   <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                    <button onClick={() => setReplyTo(m)} className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100" title="Reply"><Reply className="h-3.5 w-3.5" /></button>
-                    <button onClick={() => togglePin(m)} className={cn('p-1 rounded-full hover:bg-zinc-100', m.pinned_at ? 'text-amber-500' : 'text-zinc-300 hover:text-zinc-600')} title={m.pinned_at ? 'Unpin' : 'Pin'}><Pin className={cn('h-3.5 w-3.5', m.pinned_at && 'fill-amber-400')} /></button>
-                    <button onClick={() => toggleKeepUnread(m)} className={cn('p-1 rounded-full hover:bg-zinc-100', m.kept_unread ? 'text-blue-500' : 'text-zinc-300 hover:text-zinc-600')} title={m.kept_unread ? 'Mark read' : 'Mark unread'}><MailOpen className="h-3.5 w-3.5" /></button>
-                    {isStaff && <button onClick={() => deleteMessage(m)} className="p-1 rounded-full text-zinc-300 hover:text-red-600 hover:bg-zinc-100" title="Delete"><Trash2 className="h-3.5 w-3.5" /></button>}
+                    <FastTooltip label="Reply"><button onClick={() => setReplyTo(m)} className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100" aria-label="Reply"><Reply className="h-3.5 w-3.5" /></button></FastTooltip>
+                    <FastTooltip label={m.pinned_at ? 'Unpin' : 'Pin'}><button onClick={() => togglePin(m)} className={cn('p-1 rounded-full hover:bg-zinc-100', m.pinned_at ? 'text-amber-500' : 'text-zinc-300 hover:text-zinc-600')} aria-label={m.pinned_at ? 'Unpin' : 'Pin'}><Pin className={cn('h-3.5 w-3.5', m.pinned_at && 'fill-amber-400')} /></button></FastTooltip>
+                    <FastTooltip label={m.kept_unread ? 'Mark read' : 'Mark unread'}><button onClick={() => toggleKeepUnread(m)} className={cn('p-1 rounded-full hover:bg-zinc-100', m.kept_unread ? 'text-blue-500' : 'text-zinc-300 hover:text-zinc-600')} aria-label={m.kept_unread ? 'Mark read' : 'Mark unread'}><MailOpen className="h-3.5 w-3.5" /></button></FastTooltip>
+                    {isStaff && <FastTooltip label="Delete"><button onClick={() => deleteMessage(m)} className="p-1 rounded-full text-zinc-300 hover:text-red-600 hover:bg-zinc-100" aria-label="Delete"><Trash2 className="h-3.5 w-3.5" /></button></FastTooltip>}
                   </div>
                 )}
               </div>
@@ -437,7 +438,7 @@ export function ConversationChat({ conversationId, viewer }: { conversationId: s
         <div className="flex items-end gap-2">
           <div className={cn('flex items-end flex-1 min-w-0 bg-white border border-zinc-200 rounded-[24px] px-1 sm:px-2 py-1 gap-0.5 min-h-[48px]', isRecording && 'border-red-300 bg-red-50/30')}>
             <div className="relative shrink-0" ref={emojiRef}>
-              <button onClick={() => setShowEmojiPicker((v) => !v)} className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100" title="Emoji"><Smile className="h-5 w-5" /></button>
+              <FastTooltip label="Emoji" align="left"><button onClick={() => setShowEmojiPicker((v) => !v)} className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100" aria-label="Emoji"><Smile className="h-5 w-5" /></button></FastTooltip>
               {showEmojiPicker && (
                 <div className="absolute bottom-12 left-0 z-30">
                   <EmojiPicker onEmojiClick={(d: { emoji: string }) => {
@@ -464,7 +465,7 @@ export function ConversationChat({ conversationId, viewer }: { conversationId: s
           ) : isRecording ? (
             <button onClick={handleMic} className="w-12 h-12 rounded-full bg-red-500 text-white hover:bg-red-600 animate-pulse flex items-center justify-center shrink-0"><Square className="h-5 w-5 fill-current" /></button>
           ) : micSupported ? (
-            <button onClick={handleMic} className="w-12 h-12 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 flex items-center justify-center shrink-0" title="Voice input"><Mic className="h-5 w-5" /></button>
+            <FastTooltip label="Voice input"><button onClick={handleMic} className="w-12 h-12 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 flex items-center justify-center shrink-0" aria-label="Voice input"><Mic className="h-5 w-5" /></button></FastTooltip>
           ) : (
             <button onClick={doSend} disabled className="w-12 h-12 rounded-full bg-blue-600 text-white opacity-50 flex items-center justify-center shrink-0"><Send className="h-5 w-5" /></button>
           )}

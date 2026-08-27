@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { countryToTimeZone } from '@/lib/portal/client-timezone'
+import { countryToTimeZone, resolveYourTimeZone } from '@/lib/portal/client-timezone'
 
 describe('countryToTimeZone', () => {
   it('maps clean country names', () => {
@@ -50,5 +50,113 @@ describe('countryToTimeZone', () => {
       const z = countryToTimeZone(c)!
       expect(() => new Intl.DateTimeFormat('en-US', { timeZone: z.tz }).format(new Date(0))).not.toThrow()
     }
+  })
+})
+
+describe('resolveYourTimeZone', () => {
+  const malta = { tz: 'Europe/Malta', label: 'Malta' }
+
+  it('a real client visit prefers the device timezone over the stored country', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: false,
+      deviceTimeZone: 'Europe/Rome',
+      storedTimeZone: malta,
+    })
+    expect(result).toEqual({ tz: 'Europe/Rome', label: 'Rome' })
+  })
+
+  it('staff "View as client" uses the stored country, not the staff device', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: true,
+      deviceTimeZone: 'America/New_York',
+      storedTimeZone: malta,
+    })
+    expect(result).toEqual({ tz: 'Europe/Malta', label: 'Malta' })
+  })
+
+  it('View as with no stored country falls back to the device signal', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: true,
+      deviceTimeZone: 'America/New_York',
+      storedTimeZone: null,
+    })
+    expect(result).toEqual({ tz: 'America/New_York', label: 'New York' })
+  })
+
+  it('real visit with no device signal falls back to the stored country', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: false,
+      deviceTimeZone: null,
+      storedTimeZone: malta,
+    })
+    expect(result).toEqual({ tz: 'Europe/Malta', label: 'Malta' })
+  })
+
+  it('no signal at all leaves tz undefined so the caller uses its own default', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: false,
+      deviceTimeZone: null,
+      storedTimeZone: null,
+    })
+    expect(result).toEqual({ tz: undefined, label: '' })
+  })
+
+  it('multi-segment IANA zones label from the last segment', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: false,
+      deviceTimeZone: 'America/Argentina/Buenos_Aires',
+      storedTimeZone: null,
+    })
+    expect(result).toEqual({ tz: 'America/Argentina/Buenos_Aires', label: 'Buenos Aires' })
+  })
+
+  it('View as prefers the client\'s last real connection over a stale stored address', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: true,
+      deviceTimeZone: 'America/New_York', // staff's own browser — must lose
+      lastSeenTimeZone: 'Asia/Jakarta',
+      storedTimeZone: malta, // address on file — must lose to the fresher signal
+    })
+    expect(result).toEqual({ tz: 'Asia/Jakarta', label: 'Jakarta' })
+  })
+
+  it('View as with no last-seen signal falls back to the stored country', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: true,
+      deviceTimeZone: 'America/New_York',
+      lastSeenTimeZone: null,
+      storedTimeZone: malta,
+    })
+    expect(result).toEqual({ tz: 'Europe/Malta', label: 'Malta' })
+  })
+
+  it('View as with neither last-seen nor stored country falls back to the device (staff) as last resort', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: true,
+      deviceTimeZone: 'America/New_York',
+      lastSeenTimeZone: null,
+      storedTimeZone: null,
+    })
+    expect(result).toEqual({ tz: 'America/New_York', label: 'New York' })
+  })
+
+  it('a real visit still prefers the live device signal over a captured last-seen value', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: false,
+      deviceTimeZone: 'Europe/Rome',
+      lastSeenTimeZone: 'Asia/Jakarta',
+      storedTimeZone: malta,
+    })
+    expect(result).toEqual({ tz: 'Europe/Rome', label: 'Rome' })
+  })
+
+  it('a real visit with no live device signal falls back to last-seen before the stored country', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: false,
+      deviceTimeZone: null,
+      lastSeenTimeZone: 'Asia/Jakarta',
+      storedTimeZone: malta,
+    })
+    expect(result).toEqual({ tz: 'Asia/Jakarta', label: 'Jakarta' })
   })
 })

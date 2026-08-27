@@ -152,3 +152,50 @@ export function countryToTimeZone(country: string | null | undefined): ClientTim
   const aliased = ALIASES[key] ?? key
   return COUNTRY_TZ[aliased] ?? null
 }
+
+/**
+ * Decide which signal wins for the portal "YOUR TIME" clock. Three signals,
+ * different trust per mode:
+ *
+ *  - deviceTimeZone: the VIEWER's own browser, read live. Most trustworthy on
+ *    a real client visit (it IS the client's device); meaningless under
+ *    View-as (it's the STAFF's device, not the client's).
+ *  - lastSeenTimeZone: where the CLIENT's own connection actually was on
+ *    their last real visit (captured server-side via IP geolocation — see
+ *    lib/portal/last-seen-location.ts). This is the client's real signal
+ *    regardless of who is currently viewing, so it is what View-as prefers.
+ *  - storedTimeZone: the client's stored-country address on file — the
+ *    fallback of last resort once a real signal exists, since a client can
+ *    move without ever updating their file.
+ *
+ * A real client visit: device → lastSeen → stored.
+ * A staff "View as client" session: lastSeen → stored → device (device is
+ * only reached here if the client has never once been seen for real, and is
+ * then just the staff member's own browser — better than nothing shown).
+ */
+export function resolveYourTimeZone({
+  isViewAs,
+  deviceTimeZone,
+  lastSeenTimeZone,
+  storedTimeZone,
+}: {
+  isViewAs: boolean
+  deviceTimeZone?: string | null
+  lastSeenTimeZone?: string | null
+  storedTimeZone?: ClientTimeZone | null
+}): { tz: string | undefined; label: string } {
+  const fromIana = (tz: string) => ({ tz, label: tz.split('/').pop()?.replace(/_/g, ' ') ?? '' })
+  const fromStored = () => ({ tz: storedTimeZone!.tz, label: storedTimeZone!.label })
+
+  if (isViewAs) {
+    if (lastSeenTimeZone) return fromIana(lastSeenTimeZone)
+    if (storedTimeZone) return fromStored()
+    if (deviceTimeZone) return fromIana(deviceTimeZone)
+    return { tz: undefined, label: '' }
+  }
+
+  if (deviceTimeZone) return fromIana(deviceTimeZone)
+  if (lastSeenTimeZone) return fromIana(lastSeenTimeZone)
+  if (storedTimeZone) return fromStored()
+  return { tz: undefined, label: '' }
+}

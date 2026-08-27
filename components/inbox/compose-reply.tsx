@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Send, Sparkles, Loader2, Paperclip } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { useEmailAttachments } from './use-email-attachments'
 import { EmailAttachmentChips } from './email-attachment-chips'
@@ -323,27 +324,31 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
                 e.target.value = '' // re-picking the same file must fire again
               }}
             />
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="shrink-0 p-2.5 rounded-xl bg-zinc-100 text-zinc-500 hover:bg-zinc-200
-                hover:text-zinc-700 transition-colors"
-              title="Attach files"
-            >
-              <Paperclip className="h-4 w-4" />
-            </button>
-            <button
-              onClick={handleAiSuggest}
-              disabled={aiLoading}
-              className="shrink-0 p-2.5 rounded-xl bg-violet-100 text-violet-600 hover:bg-violet-200
-                disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              title="AI Draft Reply"
-            >
-              {aiLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Sparkles className="h-4 w-4" />
-              )}
-            </button>
+            <FastTooltip label="Attach files">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="shrink-0 p-2.5 rounded-xl bg-zinc-100 text-zinc-500 hover:bg-zinc-200
+                  hover:text-zinc-700 transition-colors"
+                aria-label="Attach files"
+              >
+                <Paperclip className="h-4 w-4" />
+              </button>
+            </FastTooltip>
+            <FastTooltip label="AI Draft Reply">
+              <button
+                onClick={handleAiSuggest}
+                disabled={aiLoading}
+                className="shrink-0 p-2.5 rounded-xl bg-violet-100 text-violet-600 hover:bg-violet-200
+                  disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                aria-label="AI Draft Reply"
+              >
+                {aiLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4" />
+                )}
+              </button>
+            </FastTooltip>
           </>
         )}
 
@@ -351,24 +356,32 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
             staged: drafts are text-only for now and silently dropping a
             staged passport would be worse than a disabled button. */}
         {isEmail && composing && message.trim() && (
-          <button
-            onClick={() => draftMutation.mutate(message)}
-            disabled={
-              draftMutation.isPending ||
-              sendMutation.isPending ||
-              attachments.files.length > 0
-            }
-            title={
+          <FastTooltip
+            label={
               attachments.files.length > 0
                 ? 'Drafts cannot carry attachments yet — send directly, or remove the files first.'
                 : 'Save as a Gmail draft (threaded to this conversation)'
             }
-            className="shrink-0 px-3 py-2.5 rounded-xl bg-zinc-100 text-zinc-600 text-xs font-medium
-              hover:bg-zinc-200 hover:text-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed
-              transition-colors"
           >
-            {draftMutation.isPending ? 'Saving…' : 'Save draft'}
-          </button>
+            <button
+              onClick={() => draftMutation.mutate(message)}
+              disabled={
+                draftMutation.isPending ||
+                sendMutation.isPending ||
+                attachments.files.length > 0
+              }
+              aria-label={
+                attachments.files.length > 0
+                  ? 'Drafts cannot carry attachments yet — send directly, or remove the files first.'
+                  : 'Save as a Gmail draft (threaded to this conversation)'
+              }
+              className="shrink-0 px-3 py-2.5 rounded-xl bg-zinc-100 text-zinc-600 text-xs font-medium
+                hover:bg-zinc-200 hover:text-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed
+                transition-colors"
+            >
+              {draftMutation.isPending ? 'Saving…' : 'Save draft'}
+            </button>
+          </FastTooltip>
         )}
 
         <button

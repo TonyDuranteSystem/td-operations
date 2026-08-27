@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
+import { assertServiceTypeNotDeprecated } from '@/lib/services'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -24,6 +25,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'account_id required' }, { status: 400 })
   }
 
+  // Refuses a deprecated catalog type (e.g. "Annual Renewal" — a billing
+  // cycle, not a deliverable, R106) — this route does a raw insert with no
+  // other guard, so this is the only thing stopping it here (2026-08-27, dev
+  // job bb48eba1).
+  try {
+    await assertServiceTypeNotDeprecated(service_type, 'service-deliveries quick-create')
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'This service type can no longer be created.' },
+      { status: 400 },
+    )
+  }
+
   // Get company name for service_name
   const { data: account } = await supabaseAdmin
     .from('accounts')
@@ -34,6 +48,7 @@ export async function POST(request: NextRequest) {
   const serviceName = `${service_type} — ${account?.company_name || 'Unknown'}`
   const now = new Date().toISOString()
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw service_deliveries.insert; refactor deferred (dev_task 7ebb1e0c). The deprecated-catalog guard above is a targeted fix, not a substitute for routing this through lib/operations/service-delivery.ts.
   const { data, error } = await supabaseAdmin
     .from('service_deliveries')
     .insert({

@@ -40,6 +40,7 @@ import {
   type TaxWizardClosedReason,
 } from '@/lib/tax/wizard-eligibility'
 import { buildReviewHistoryEntry, type ReviewStatus } from '@/lib/tax/review-status'
+import { verifyClosureServiceDelivery } from '@/lib/portal/closure-subject'
 
 /** Extract file upload paths from wizard data.
  * All wizard uploads follow the pattern: {wizardType}/{identifier}/{fieldName}_{unique}_{filename}
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json()
-  const { wizard_type, entity_type, data, account_id: rawAccountId, contact_id, lead_id, progress_id, allow_resubmit } = body
+  const { wizard_type, entity_type, data, account_id: rawAccountId, contact_id, lead_id, progress_id, allow_resubmit, service_delivery_id: rawServiceDeliveryId } = body
 
   if (!wizard_type || !data) {
     return NextResponse.json({ error: 'wizard_type and data are required' }, { status: 400 })
@@ -111,6 +112,23 @@ export async function POST(req: NextRequest) {
     if (!formationLeadOwned(leadOffer, ctcId, ownerEmails)) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
+  }
+
+  // ─── 0b2. CLOSURE SUBJECT RE-VERIFICATION (dev job fbbf4abe) ───
+  // Re-check server-side at the moment of ACTUAL submit — not just once when
+  // the page rendered — that the client-supplied record genuinely names a
+  // still-active closure this contact is really linked to. Closes the
+  // stale-tab window Senior Engineer found: the wizard page resolves this
+  // once at render time, but a client can leave the tab open while staff
+  // cancel/complete the record, or while a second tab switches company, and
+  // still submit minutes later with the old value.
+  let closureServiceDeliveryId: string | null = null
+  if (wizard_type === 'closure' && rawServiceDeliveryId && identity.kind === 'contact') {
+    const verified = await verifyClosureServiceDelivery(String(rawServiceDeliveryId), identity.contactId)
+    if (!verified) {
+      return NextResponse.json({ error: 'This closure request is no longer available. Refresh the page and try again.' }, { status: 409 })
+    }
+    closureServiceDeliveryId = String(rawServiceDeliveryId)
   }
 
   // ─── 0. SYNCHRONOUS VALIDATION ───
@@ -249,6 +267,7 @@ export async function POST(req: NextRequest) {
             account_id: account_id || null,
             contact_id: contact_id || null,
             lead_id: lead_id || null,
+            service_delivery_id: closureServiceDeliveryId,
             status: 'submitted',
             current_step: 99,
           })
@@ -382,6 +401,7 @@ export async function POST(req: NextRequest) {
           leadId: lead_id || null,
           contactId: contact_id || null,
           calendarYear: new Date().getFullYear(),
+          explicitScopeId: closureServiceDeliveryId,
         })
 
         // The submission tables do NOT share one column set (formation has no
@@ -914,6 +934,11 @@ export async function POST(req: NextRequest) {
         upload_paths: extractUploadPaths(data),
         // Portal-specific: signals this came from the portal wizard (not MCP review)
         source: 'portal_wizard',
+        // Closure only (dev job fbbf4abe): the specific, server-verified
+        // record this submission belongs to. Lets closure-form-completed
+        // look this up by the exact record instead of guessing from
+        // account/contact — see lib/portal/closure-subject.ts.
+        service_delivery_id: closureServiceDeliveryId,
       }
 
       // For tax wizard, carry the PINNED year + tax_returns row from the
@@ -1024,6 +1049,48 @@ export async function POST(req: NextRequest) {
           console.error(`[wizard-submit] Tax job ${capturedJobId} failed in background:`, errMsg)
         }
       })().catch(err => console.error('[wizard-submit] Tax background task error:', err))
+    }
+
+    // ─── 7. FIRE-AND-FORGET EXECUTION (for closure jobs) ───
+    // Same hybrid shape as step 6: the job is already durably enqueued (step 5),
+    // so this is purely a speed optimization — if the platform kills this
+    // function before the claim below even runs, the job just sits 'pending'
+    // and the /api/cron/process-jobs safety net (every 5 minutes) picks it up
+    // and runs the exact same handler later. Dev job fbbf4abe.
+    if (jobType === 'closure_setup' && jobId) {
+      const capturedJobId = jobId
+
+      ;(async () => {
+        const claimNow = new Date().toISOString()
+        const { data: claimedJob } = await supabaseAdmin
+          .from('job_queue')
+          .update({ status: 'processing', started_at: claimNow, attempts: 1 })
+          .eq('id', capturedJobId)
+          .eq('status', 'pending')
+          .select('*')
+          .single()
+
+        if (!claimedJob) {
+          console.warn(`[wizard-submit] Closure job ${capturedJobId} already claimed by worker — skipping background execution`)
+          return
+        }
+
+        try {
+          const { handleClosureSetup } = await import('@/lib/jobs/handlers/closure-setup')
+          const result = await handleClosureSetup(claimedJob as unknown as Job)
+          if (result.ok === false) {
+            await failJob(capturedJobId, result.summary || 'Handler reported failure', result)
+            console.warn(`[wizard-submit] Closure job ${capturedJobId} background-completed as failed: ${result.summary}`)
+          } else {
+            await completeJob(capturedJobId, result)
+            console.warn(`[wizard-submit] Closure job ${capturedJobId} completed in background: ${result.summary}`)
+          }
+        } catch (handlerErr) {
+          const errMsg = handlerErr instanceof Error ? handlerErr.message : String(handlerErr)
+          await failJob(capturedJobId, errMsg)
+          console.error(`[wizard-submit] Closure job ${capturedJobId} failed in background:`, errMsg)
+        }
+      })().catch(err => console.error('[wizard-submit] Closure background task error:', err))
     }
 
     return NextResponse.json({

@@ -6,6 +6,7 @@ import { SmilePlus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { summarizeReactions, type MessageReaction } from '@/lib/portal/reactions'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 
@@ -80,36 +81,39 @@ export function MessageReactions({
   return (
     <div className={cn('flex flex-wrap items-center gap-1', align === 'right' ? 'justify-end' : 'justify-start')}>
       {groups.map(g => (
-        <button
-          key={g.emoji}
-          type="button"
-          onClick={() => react(g.emoji)}
-          disabled={busy}
-          title={g.names.join(', ')}
-          className={cn(
-            'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs leading-none transition-colors disabled:opacity-60',
-            g.mine
-              ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100'
-              : 'border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50'
-          )}
-        >
-          <span className="text-sm leading-none">{g.emoji}</span>
-          <span className="tabular-nums">{g.count}</span>
-        </button>
+        <FastTooltip key={g.emoji} label={g.names.join(', ')}>
+          <button
+            type="button"
+            onClick={() => react(g.emoji)}
+            disabled={busy}
+            aria-label={g.names.join(', ')}
+            className={cn(
+              'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs leading-none transition-colors disabled:opacity-60',
+              g.mine
+                ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                : 'border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50'
+            )}
+          >
+            <span className="text-sm leading-none">{g.emoji}</span>
+            <span className="tabular-nums">{g.count}</span>
+          </button>
+        </FastTooltip>
       ))}
 
       {/* Add a reaction — opens the full picker (which surfaces recently-used
           emojis at the top for fast re-use). */}
       <div className="relative" ref={pickerRef}>
-        <button
-          type="button"
-          onClick={() => setShowPicker(v => !v)}
-          disabled={busy}
-          title={locale === 'it' ? 'Aggiungi reazione' : 'Add reaction'}
-          className="inline-flex items-center justify-center rounded-full p-1 text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors disabled:opacity-60"
-        >
-          <SmilePlus className="h-3.5 w-3.5" />
-        </button>
+        <FastTooltip label={locale === 'it' ? 'Aggiungi reazione' : 'Add reaction'}>
+          <button
+            type="button"
+            onClick={() => setShowPicker(v => !v)}
+            disabled={busy}
+            aria-label={locale === 'it' ? 'Aggiungi reazione' : 'Add reaction'}
+            className="inline-flex items-center justify-center rounded-full p-1 text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors disabled:opacity-60"
+          >
+            <SmilePlus className="h-3.5 w-3.5" />
+          </button>
+        </FastTooltip>
         {showPicker && (
           <div className={cn('absolute z-50 bottom-full mb-1', align === 'right' ? 'right-0' : 'left-0')}>
             <EmojiPicker

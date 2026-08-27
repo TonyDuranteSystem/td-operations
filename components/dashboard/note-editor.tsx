@@ -28,6 +28,7 @@ import { AccountCombobox } from '@/components/shared/account-combobox'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 import { safeOriginPath, describeOrigin, splitLinkSegments } from '@/lib/notes/note-origin'
 import { isArchivedFor, sortReplies, type NoteReplyRow } from '@/lib/notes/staff-notes'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 /**
  * Note/reply text with pasted URLs rendered as real links (Antonio, 2026-07-29:
@@ -403,27 +404,31 @@ export function NoteEditor({
                 placeholder="Write your answer…" rows={2}
                 className="w-full resize-none rounded border border-sky-300 bg-white p-2 text-sm text-sky-950 outline-none focus:border-sky-500"
               />
-              <button
-                onClick={sendReply} disabled={busy || !replyDirty}
-                title="Send reply — the other person gets a notification"
-                className="flex shrink-0 items-center gap-1 rounded bg-sky-500 px-3 py-2 text-sm font-medium text-white hover:bg-sky-600 disabled:opacity-50"
-              >
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              </button>
+              <FastTooltip label="Send reply — the other person gets a notification">
+                <button
+                  onClick={sendReply} disabled={busy || !replyDirty}
+                  aria-label="Send reply — the other person gets a notification"
+                  className="flex shrink-0 items-center gap-1 rounded bg-sky-500 px-3 py-2 text-sm font-medium text-white hover:bg-sky-600 disabled:opacity-50"
+                >
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                </button>
+              </FastTooltip>
             </div>
           </div>
         )}
 
         {/* Where this note came from — the email / chat / page it was written on. */}
         {origin && (
-          <button
-            onClick={openOrigin}
-            className="mb-3 flex items-center gap-1 rounded bg-black/5 px-2 py-1 text-xs text-amber-900 hover:bg-black/10"
-            title={origin}
-          >
-            <ExternalLink className="h-3 w-3" />
-            From: {describeOrigin(origin)}
-          </button>
+          <FastTooltip label={origin}>
+            <button
+              onClick={openOrigin}
+              className="mb-3 flex items-center gap-1 rounded bg-black/5 px-2 py-1 text-xs text-amber-900 hover:bg-black/10"
+              aria-label={origin}
+            >
+              <ExternalLink className="h-3 w-3" />
+              From: {describeOrigin(origin)}
+            </button>
+          </FastTooltip>
         )}
 
         <label className="mb-1 block text-xs font-medium text-amber-900">About a client</label>
@@ -548,12 +553,14 @@ export function NoteEditor({
                   recipients so it's never a dead click). Two taps: a deleted note doesn't
                   come back, unlike Done which is per-person. */}
               {isAuthor && (confirmDelete ? (
-                <button onClick={del} disabled={busy}
-                  title="Deletes the note for everyone — replies go with it"
-                  className="ml-auto flex items-center gap-1 rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50">
-                  {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                  {replies.length > 0 ? 'Delete forever, replies too?' : 'Delete forever?'}
-                </button>
+                <FastTooltip label="Deletes the note for everyone — replies go with it">
+                  <button onClick={del} disabled={busy}
+                    aria-label="Deletes the note for everyone — replies go with it"
+                    className="ml-auto flex items-center gap-1 rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50">
+                    {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                    {replies.length > 0 ? 'Delete forever, replies too?' : 'Delete forever?'}
+                  </button>
+                </FastTooltip>
               ) : (
                 <button onClick={() => setConfirmDelete(true)} disabled={busy}
                   className="ml-auto flex items-center gap-1 rounded px-2 py-1 text-xs text-red-600 hover:bg-red-50">

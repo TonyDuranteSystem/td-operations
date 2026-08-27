@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import type { ReferralRow } from './page'
 import { AddReferralModal } from './add-referral-modal'
 import { IssueCreditAction } from './issue-credit-action'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface Props {
   referrals: ReferralRow[]
@@ -133,13 +134,15 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
                   <span className="text-sm text-zinc-600">{r.count} referral{r.count !== 1 ? 's' : ''}</span>
                   <span className="text-sm font-medium">{fmtByCur(r.commissionByCur)}</span>
                   {r.code && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); copyLink(r.code!) }}
-                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600"
-                      title="Copy referral link"
-                    >
-                      {copiedCode === r.code ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-                    </button>
+                    <FastTooltip label="Copy referral link">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); copyLink(r.code!) }}
+                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600"
+                        aria-label="Copy referral link"
+                      >
+                        {copiedCode === r.code ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                      </button>
+                    </FastTooltip>
                   )}
                 </div>
               </div>
@@ -161,13 +164,15 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
             />
           </div>
           {referrerFilter && (
-            <button
-              onClick={() => setReferrerFilter(null)}
-              className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2.5 py-1 text-xs font-medium text-violet-700 hover:bg-violet-200"
-              title="Clear referrer filter"
-            >
-              Referrer: {referrerFilter.name} <X className="h-3 w-3" />
-            </button>
+            <FastTooltip label="Clear referrer filter">
+              <button
+                onClick={() => setReferrerFilter(null)}
+                className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2.5 py-1 text-xs font-medium text-violet-700 hover:bg-violet-200"
+                aria-label="Clear referrer filter"
+              >
+                Referrer: {referrerFilter.name} <X className="h-3 w-3" />
+              </button>
+            </FastTooltip>
           )}
           <select
             value={statusFilter}

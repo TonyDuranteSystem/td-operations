@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface DocStatus {
   id: string
@@ -260,13 +261,15 @@ export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, o
           <FileText className="h-4 w-4" />
           Documents to Sign
         </h3>
-        <button
-          onClick={fetchStatuses}
-          className="p-1 rounded hover:bg-zinc-100 text-muted-foreground"
-          title="Refresh"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-        </button>
+        <FastTooltip label="Refresh">
+          <button
+            onClick={fetchStatuses}
+            className="p-1 rounded hover:bg-zinc-100 text-muted-foreground"
+            aria-label="Refresh"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+        </FastTooltip>
       </div>
 
       <div className="divide-y">
@@ -324,57 +327,65 @@ export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, o
                         to the client, so deleting it is safe and frees the
                         "one lease per year" block. Never shown once sent/signed. */}
                     {doc.key === 'lease' && status === 'draft' && (
-                      <button
-                        onClick={() => handleCancelDraft(doc.data!.token)}
-                        disabled={cancellingDoc === doc.key}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-red-50 text-red-700 hover:bg-red-100 transition-colors disabled:opacity-50"
-                        title="Permanently delete this draft lease"
-                      >
-                        {cancellingDoc === doc.key ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                        Cancel draft
-                      </button>
+                      <FastTooltip label="Permanently delete this draft lease">
+                        <button
+                          onClick={() => handleCancelDraft(doc.data!.token)}
+                          disabled={cancellingDoc === doc.key}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-red-50 text-red-700 hover:bg-red-100 transition-colors disabled:opacity-50"
+                          aria-label="Permanently delete this draft lease"
+                        >
+                          {cancellingDoc === doc.key ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                          Cancel draft
+                        </button>
+                      </FastTooltip>
                     )}
 
                     {/* Recreate button for OA */}
                     {doc.key === 'oa' && doc.onGenerate && (
-                      <button
-                        onClick={doc.onGenerate}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-zinc-50 text-zinc-600 hover:bg-zinc-100 transition-colors"
-                        title="Recreate OA"
-                      >
-                        <RefreshCw className="h-3 w-3" />
-                        Recreate
-                      </button>
+                      <FastTooltip label="Recreate OA">
+                        <button
+                          onClick={doc.onGenerate}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-zinc-50 text-zinc-600 hover:bg-zinc-100 transition-colors"
+                          aria-label="Recreate OA"
+                        >
+                          <RefreshCw className="h-3 w-3" />
+                          Recreate
+                        </button>
+                      </FastTooltip>
                     )}
 
                     {/* Regenerate button for UNSIGNED SS-4 — opens the dialog,
                         which offers the in-place refresh (same token/link).
                         Signed/submitted SS-4s get no button: locked. */}
                     {doc.key === 'ss4' && doc.onGenerate && (status === 'draft' || status === 'awaiting_signature') && (
-                      <button
-                        onClick={doc.onGenerate}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-zinc-50 text-zinc-600 hover:bg-zinc-100 transition-colors"
-                        title="Regenerate the unsigned SS-4 from the account's current data (entity type, members) — the client's link stays the same"
-                      >
-                        <RefreshCw className="h-3 w-3" />
-                        Regenerate
-                      </button>
+                      <FastTooltip label="Regenerate the unsigned SS-4 from the account's current data (entity type, members) — the client's link stays the same">
+                        <button
+                          onClick={doc.onGenerate}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-zinc-50 text-zinc-600 hover:bg-zinc-100 transition-colors"
+                          aria-label="Regenerate the unsigned SS-4 from the account's current data (entity type, members) — the client's link stays the same"
+                        >
+                          <RefreshCw className="h-3 w-3" />
+                          Regenerate
+                        </button>
+                      </FastTooltip>
                     )}
 
                     {/* Regen PDF button for signed lease */}
                     {doc.key === 'lease' && status === 'signed' && doc.data && (
-                      <button
-                        onClick={() => onRegenLease(doc.data!.id, {
-                          signedAt: doc.data!.signed_at,
-                          termStartDate: doc.data!.term_start_date,
-                          termEndDate: doc.data!.term_end_date,
-                        })}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-zinc-50 text-zinc-600 hover:bg-zinc-100 transition-colors"
-                        title="Regenerate PDF with new dates"
-                      >
-                        <RefreshCw className="h-3 w-3" />
-                        Regen PDF
-                      </button>
+                      <FastTooltip label="Regenerate PDF with new dates">
+                        <button
+                          onClick={() => onRegenLease(doc.data!.id, {
+                            signedAt: doc.data!.signed_at,
+                            termStartDate: doc.data!.term_start_date,
+                            termEndDate: doc.data!.term_end_date,
+                          })}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-zinc-50 text-zinc-600 hover:bg-zinc-100 transition-colors"
+                          aria-label="Regenerate PDF with new dates"
+                        >
+                          <RefreshCw className="h-3 w-3" />
+                          Regen PDF
+                        </button>
+                      </FastTooltip>
                     )}
 
                     {/* Preview link */}
@@ -384,39 +395,43 @@ export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, o
                       // session and the bare ?preview=td flag no longer skips the
                       // email gate or tracking, so a plain link would ask staff
                       // for the client's email and register a false "client viewed".
-                      <button
-                        type="button"
-                        onClick={() => handleOaPreview(doc.data.token as string, doc.data.access_code)}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded text-muted-foreground hover:bg-zinc-100 transition-colors"
-                        title="Open the document as the client sees it (no email is sent, nothing is marked as opened)"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                        View
-                      </button>
+                      <FastTooltip label="Open the document as the client sees it (no email is sent, nothing is marked as opened)">
+                        <button
+                          type="button"
+                          onClick={() => handleOaPreview(doc.data.token as string, doc.data.access_code)}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded text-muted-foreground hover:bg-zinc-100 transition-colors"
+                          aria-label="Open the document as the client sees it (no email is sent, nothing is marked as opened)"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          View
+                        </button>
+                      </FastTooltip>
                     )}
                     {doc.data.token && doc.key !== 'oa' && (
-                      <a
-                        href={
-                          // Lease preview MUST carry the access code. On the client-facing
-                          // domain the staff session cookie is absent, so ?preview=td alone
-                          // does not authenticate — the page falls back to requiring the code
-                          // and, without it, errors with "Invalid access code". The coded URL
-                          // satisfies that check. Fall back to codeless only for a legacy row
-                          // that has no code, rather than interpolating "undefined".
-                          doc.key === 'lease' ? (doc.data.access_code
-                            ? `${previewBase}/lease/${doc.data.token}/${doc.data.access_code}?preview=td`
-                            : `${previewBase}/lease/${doc.data.token}?preview=td`) :
-                          doc.key === 'ss4' ? `${previewBase}/ss4/${doc.data.token}/${doc.data.access_code}?preview=td` :
-                          '#'
-                        }
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded text-muted-foreground hover:bg-zinc-100 transition-colors"
-                        title="Open the document as the client sees it (no email is sent, nothing is marked as opened)"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                        View
-                      </a>
+                      <FastTooltip label="Open the document as the client sees it (no email is sent, nothing is marked as opened)">
+                        <a
+                          href={
+                            // Lease preview MUST carry the access code. On the client-facing
+                            // domain the staff session cookie is absent, so ?preview=td alone
+                            // does not authenticate — the page falls back to requiring the code
+                            // and, without it, errors with "Invalid access code". The coded URL
+                            // satisfies that check. Fall back to codeless only for a legacy row
+                            // that has no code, rather than interpolating "undefined".
+                            doc.key === 'lease' ? (doc.data.access_code
+                              ? `${previewBase}/lease/${doc.data.token}/${doc.data.access_code}?preview=td`
+                              : `${previewBase}/lease/${doc.data.token}?preview=td`) :
+                            doc.key === 'ss4' ? `${previewBase}/ss4/${doc.data.token}/${doc.data.access_code}?preview=td` :
+                            '#'
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded text-muted-foreground hover:bg-zinc-100 transition-colors"
+                          aria-label="Open the document as the client sees it (no email is sent, nothing is marked as opened)"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          View
+                        </a>
+                      </FastTooltip>
                     )}
                   </>
                 ) : (

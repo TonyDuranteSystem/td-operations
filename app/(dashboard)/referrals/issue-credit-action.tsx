@@ -15,6 +15,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Loader2, BadgeDollarSign } from 'lucide-react'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 type Candidate = { id: string; name: string | null }
 type Prompt =
@@ -116,14 +117,16 @@ export function IssueCreditAction({ referralId, referredName, defaultAmount }: {
 
   // Default button ----------------------------------------------------------
   return (
-    <button
-      disabled={busy}
-      onClick={(e) => { e.stopPropagation(); post({}) }}
-      title={`Issue the referral credit note for ${referredName}`}
-      className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
-    >
-      {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <BadgeDollarSign className="h-3 w-3" />}
-      Issue credit
-    </button>
+    <FastTooltip label={`Issue the referral credit note for ${referredName}`}>
+      <button
+        disabled={busy}
+        onClick={(e) => { e.stopPropagation(); post({}) }}
+        aria-label={`Issue the referral credit note for ${referredName}`}
+        className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+      >
+        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <BadgeDollarSign className="h-3 w-3" />}
+        Issue credit
+      </button>
+    </FastTooltip>
   )
 }

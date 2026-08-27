@@ -32,6 +32,7 @@ import {
   X,
 } from 'lucide-react'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import {
   markInvoicePaid,
   sendInvoiceReminder,
@@ -304,16 +305,18 @@ export function PaymentRowActions({ payment, reminderPaused }: Props) {
 
   return (
     <>
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o) }}
-        disabled={isPending}
-        className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 disabled:opacity-50"
-        title="Row actions"
-      >
-        {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
-      </button>
+      <FastTooltip label="Row actions">
+        <button
+          ref={buttonRef}
+          type="button"
+          onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o) }}
+          disabled={isPending}
+          className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 disabled:opacity-50"
+          aria-label="Row actions"
+        >
+          {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
+        </button>
+      </FastTooltip>
       {menuPortal}
 
       <ConfirmDestructiveDialog

@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { Download, Save, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import {
   MOCKUP_TEMPLATES,
   getMockupTemplate,
@@ -109,16 +110,17 @@ export function MockupPreviewer({
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs text-zinc-500">Background</span>
         {bgSwatches.map((h) => (
-          <button
-            key={h}
-            onClick={() => setBg(h)}
-            title={h}
-            className={cn(
-              'h-6 w-6 rounded border',
-              bg === h ? 'ring-2 ring-blue-400 border-blue-400' : 'border-zinc-200',
-            )}
-            style={{ backgroundColor: h }}
-          />
+          <FastTooltip key={h} label={h}>
+            <button
+              onClick={() => setBg(h)}
+              aria-label={h}
+              className={cn(
+                'h-6 w-6 rounded border',
+                bg === h ? 'ring-2 ring-blue-400 border-blue-400' : 'border-zinc-200',
+              )}
+              style={{ backgroundColor: h }}
+            />
+          </FastTooltip>
         ))}
         <input
           type="color"
@@ -169,15 +171,17 @@ export function MockupPreviewer({
           {busy === 'export' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
           Export PNG
         </button>
-        <button
-          onClick={onSave}
-          disabled={!logo || busy !== null || !enrollmentId}
-          title={!enrollmentId ? 'Select a project to save into its Deliverables' : undefined}
-          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded border border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-50"
-        >
-          {busy === 'save' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-          Save to Deliverables
-        </button>
+        <FastTooltip label={!enrollmentId ? 'Select a project to save into its Deliverables' : undefined}>
+          <button
+            onClick={onSave}
+            disabled={!logo || busy !== null || !enrollmentId}
+            aria-label={!enrollmentId ? 'Select a project to save into its Deliverables' : undefined}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded border border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+          >
+            {busy === 'save' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            Save to Deliverables
+          </button>
+        </FastTooltip>
       </div>
     </div>
   )

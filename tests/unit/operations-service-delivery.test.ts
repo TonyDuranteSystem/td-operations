@@ -15,11 +15,29 @@ vi.mock("@sentry/nextjs", () => ({
 // Catalog lookup is mocked so createSD's FK resolution is isolated from the
 // catalog framework's DB layer (covered separately in catalog-framework.test).
 const { catalogLookup } = vi.hoisted(() => ({
-  catalogLookup: vi.fn<(serviceType: string) => Promise<{ id: string } | null>>(),
+  catalogLookup: vi.fn<(serviceType: string) => Promise<{ id: string; status?: string } | null>>(),
 }))
 
 vi.mock("@/lib/services", () => ({
   getEntryByServiceType: (serviceType: string) => catalogLookup(serviceType),
+  // Mirrors the real lib/services/index.ts implementation closely enough to
+  // exercise createSD/createBackfilledSD's deprecated-guard call sites: warn
+  // + return null on a rejected lookup, throw on a resolved deprecated entry.
+  assertServiceTypeNotDeprecated: async (serviceType: string, label: string) => {
+    let entry: { id: string; status?: string } | null = null
+    try {
+      entry = await catalogLookup(serviceType)
+    } catch (err) {
+      console.warn(`[${label}] catalog lookup failed for service_type="${serviceType}":`, err)
+      return null
+    }
+    if (entry?.status === "deprecated") {
+      throw new Error(
+        `[${label}] service_type="${serviceType}" is deprecated in the catalog and can no longer be created.`,
+      )
+    }
+    return entry
+  },
 }))
 
 // ─── Mock harness ──────────────────────────────────────
@@ -716,6 +734,23 @@ describe("createSD — service_type_entry_id (catalog FK)", () => {
     )
 
     warn.mockRestore()
+  })
+
+  it("2026-08-27 (dev job bb48eba1) — refuses to create an SD when the catalog entry is deprecated, even though the pipeline still has stages", async () => {
+    // Mirrors production reality: pipeline_stages still carries rows for the
+    // retired "Annual Renewal" type (nothing has cleaned those up), so stage
+    // resolution alone would succeed — the catalog's deprecated flag is the
+    // only thing standing between a caller and a wrong insert.
+    pipelineFixture = {
+      "Annual Renewal": [{ stage_name: "Invoice Sent", stage_order: 1 }],
+    }
+    catalogLookup.mockResolvedValueOnce({ id: "cat-annual-renewal-uuid", status: "deprecated" })
+
+    await expect(createSD({ service_type: "Annual Renewal" })).rejects.toThrow(
+      /deprecated/i,
+    )
+
+    expect(insertCapture).toBeNull()
   })
 
   it("Phase 4 Step 3 — passes amount + amount_currency through to insert when provided", async () => {

@@ -15,6 +15,7 @@ import {
 import { InvoiceDialog, type InvoiceDialogDefaults } from '@/components/payments/invoice-dialog'
 import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
 import { ClientConversationsPanel } from '@/components/conversations/client-conversations-panel'
@@ -372,22 +373,26 @@ export function ContactDetail({
             to={contact.email || undefined}
             linkLabel={contact.full_name || contact.email || undefined}
           />
-          <button
-            onClick={() => setShowChainAudit(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-violet-100 text-violet-700 hover:bg-violet-200 transition-colors"
-            title="Audit the full client lifecycle — lead, offer, activation, account, services, portal, profile completeness."
-          >
-            <Stethoscope className="h-3.5 w-3.5" />
-            Lifecycle Audit
-          </button>
-          <button
-            onClick={() => setShowDeleteContact(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
-            title="Delete this contact (orphans with no linked history) or merge it into the real contact."
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            Delete / Merge
-          </button>
+          <FastTooltip label="Audit the full client lifecycle — lead, offer, activation, account, services, portal, profile completeness.">
+            <button
+              onClick={() => setShowChainAudit(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-violet-100 text-violet-700 hover:bg-violet-200 transition-colors"
+              aria-label="Audit the full client lifecycle — lead, offer, activation, account, services, portal, profile completeness."
+            >
+              <Stethoscope className="h-3.5 w-3.5" />
+              Lifecycle Audit
+            </button>
+          </FastTooltip>
+          <FastTooltip label="Delete this contact (orphans with no linked history) or merge it into the real contact.">
+            <button
+              onClick={() => setShowDeleteContact(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
+              aria-label="Delete this contact (orphans with no linked history) or merge it into the real contact."
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete / Merge
+            </button>
+          </FastTooltip>
         </div>
       </div>
 
@@ -444,28 +449,29 @@ export function ContactDetail({
             if (tab.key === 'activity') count = conversations.length
 
             return (
-              <button
-                key={tab.key}
-                onClick={() => setActiveTab(tab.key)}
-                title={tab.tooltip}
-                className={cn(
-                  'flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
-                  activeTab === tab.key
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-muted-foreground hover:text-foreground hover:border-zinc-300'
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {tab.label}
-                {count > 0 && (
-                  <span className={cn(
-                    'ml-1 px-1.5 py-0.5 text-xs rounded-full font-medium',
-                    tab.key === 'chat' && chatUnread > 0 ? 'bg-red-500 text-white' : 'bg-zinc-100 text-zinc-600'
-                  )}>
-                    {count}
-                  </span>
-                )}
-              </button>
+              <FastTooltip key={tab.key} label={tab.tooltip}>
+                <button
+                  onClick={() => setActiveTab(tab.key)}
+                  aria-label={tab.tooltip}
+                  className={cn(
+                    'flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
+                    activeTab === tab.key
+                      ? 'border-blue-500 text-blue-600'
+                      : 'border-transparent text-muted-foreground hover:text-foreground hover:border-zinc-300'
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  {tab.label}
+                  {count > 0 && (
+                    <span className={cn(
+                      'ml-1 px-1.5 py-0.5 text-xs rounded-full font-medium',
+                      tab.key === 'chat' && chatUnread > 0 ? 'bg-red-500 text-white' : 'bg-zinc-100 text-zinc-600'
+                    )}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              </FastTooltip>
             )
           })}
         </div>
@@ -1607,15 +1613,17 @@ function WizardReminderButton({ contactId }: { contactId: string }) {
   }
 
   return (
-    <button
-      onClick={handleSend}
-      disabled={sending}
-      className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 disabled:opacity-50 transition-colors"
-      title="Send wizard reminder email to client"
-    >
-      {sending ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Bell className="h-2.5 w-2.5" />}
-      Remind
-    </button>
+    <FastTooltip label="Send wizard reminder email to client">
+      <button
+        onClick={handleSend}
+        disabled={sending}
+        className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 disabled:opacity-50 transition-colors"
+        aria-label="Send wizard reminder email to client"
+      >
+        {sending ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Bell className="h-2.5 w-2.5" />}
+        Remind
+      </button>
+    </FastTooltip>
   )
 }
 
@@ -2083,13 +2091,15 @@ function ChatTab({
                 >
                   Italian
                 </button>
-                <button
-                  onClick={() => setPolishAskLanguage(false)}
-                  className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
-                  title="Cancel"
-                >
-                  <X className="h-4 w-4" />
-                </button>
+                <FastTooltip label="Cancel">
+                  <button
+                    onClick={() => setPolishAskLanguage(false)}
+                    className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
+                    aria-label="Cancel"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </FastTooltip>
               </div>
             ) : (
               <>
@@ -2097,42 +2107,48 @@ function ChatTab({
                     language the client is actually writing in this conversation,
                     on keeps the draft exactly as written. */}
                 {draft.trim() && (
-                  <button
-                    onClick={() => setPreserveLanguage(v => !v)}
-                    className={cn(
-                      'p-2 rounded-full transition-colors shrink-0',
-                      preserveLanguage
-                        ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                        : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100'
-                    )}
-                    title={preserveLanguage ? 'Polish will keep the language as written — click to match the client instead' : 'Polish will match the language the client is writing — click to keep it as written instead'}
-                  >
-                    <Languages className="h-5 w-5" />
-                  </button>
+                  <FastTooltip label={preserveLanguage ? 'Polish will keep the language as written — click to match the client instead' : 'Polish will match the language the client is writing — click to keep it as written instead'}>
+                    <button
+                      onClick={() => setPreserveLanguage(v => !v)}
+                      className={cn(
+                        'p-2 rounded-full transition-colors shrink-0',
+                        preserveLanguage
+                          ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                          : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100'
+                      )}
+                      aria-label={preserveLanguage ? 'Polish will keep the language as written — click to match the client instead' : 'Polish will match the language the client is writing — click to keep it as written instead'}
+                    >
+                      <Languages className="h-5 w-5" />
+                    </button>
+                  </FastTooltip>
                 )}
                 {/* AI Polish — appears when text typed */}
                 {draft.trim() && (
-                  <button
-                    onClick={() => handlePolish()}
-                    disabled={polishing}
-                    className="p-2 rounded-full bg-violet-100 text-violet-600 hover:bg-violet-200 disabled:opacity-50 transition-colors shrink-0"
-                    title={preserveLanguage ? 'AI Polish — clean up grammar, keep language as written' : 'AI Polish — clean up grammar and match the client\'s language'}
-                  >
-                    {polishing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
-                  </button>
+                  <FastTooltip label={preserveLanguage ? 'AI Polish — clean up grammar, keep language as written' : 'AI Polish — clean up grammar and match the client\'s language'}>
+                    <button
+                      onClick={() => handlePolish()}
+                      disabled={polishing}
+                      className="p-2 rounded-full bg-violet-100 text-violet-600 hover:bg-violet-200 disabled:opacity-50 transition-colors shrink-0"
+                      aria-label={preserveLanguage ? 'AI Polish — clean up grammar, keep language as written' : 'AI Polish — clean up grammar and match the client\'s language'}
+                    >
+                      {polishing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
+                    </button>
+                  </FastTooltip>
                 )}
               </>
             )}
             {/* AI Suggest — appears when no text */}
             {!draft.trim() && messages.length > 0 && (
-              <button
-                onClick={handleSuggest}
-                disabled={suggesting}
-                className="p-2 rounded-full bg-violet-50 text-violet-500 hover:bg-violet-100 disabled:opacity-50 transition-colors shrink-0"
-                title="AI Suggest — generate reply"
-              >
-                {suggesting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}
-              </button>
+              <FastTooltip label="AI Suggest — generate reply">
+                <button
+                  onClick={handleSuggest}
+                  disabled={suggesting}
+                  className="p-2 rounded-full bg-violet-50 text-violet-500 hover:bg-violet-100 disabled:opacity-50 transition-colors shrink-0"
+                  aria-label="AI Suggest — generate reply"
+                >
+                  {suggesting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}
+                </button>
+              </FastTooltip>
             )}
             {/* Send button */}
             {sending ? (
@@ -2716,28 +2732,32 @@ function PortalTab({
               because tier drift (contact vs linked accounts vs auth user) can
               exist whenever the contact has a tier, with or without an auth
               user. reconcileTier handles the "no auth user" case gracefully. */}
-          <button
-            onClick={handleReconcileTier}
-            disabled={loading === 'reconcile_tier' || !contact.portal_tier}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-sm font-medium hover:bg-indigo-100 disabled:opacity-50 transition-colors mt-3"
-            title="Force contact, linked accounts, and portal login to use the same tier"
-          >
-            {loading === 'reconcile_tier' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            Reconcile Portal Tier
-          </button>
+          <FastTooltip label="Force contact, linked accounts, and portal login to use the same tier">
+            <button
+              onClick={handleReconcileTier}
+              disabled={loading === 'reconcile_tier' || !contact.portal_tier}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-sm font-medium hover:bg-indigo-100 disabled:opacity-50 transition-colors mt-3"
+              aria-label="Force contact, linked accounts, and portal login to use the same tier"
+            >
+              {loading === 'reconcile_tier' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Reconcile Portal Tier
+            </button>
+          </FastTooltip>
 
           {/* Clean up duplicate portal logins — keeps the login matching the
               contact's primary email, removes strays (orphans). Previews before
               deleting; no-op when there's only the canonical login. */}
-          <button
-            onClick={handleCleanupLogins}
-            disabled={loading === 'cleanup_logins'}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 text-sm font-medium hover:bg-amber-100 disabled:opacity-50 transition-colors mt-3"
-            title="Remove duplicate/orphan portal logins for this contact, keeping the one matching the primary email"
-          >
-            {loading === 'cleanup_logins' ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
-            Clean Up Duplicate Logins
-          </button>
+          <FastTooltip label="Remove duplicate/orphan portal logins for this contact, keeping the one matching the primary email">
+            <button
+              onClick={handleCleanupLogins}
+              disabled={loading === 'cleanup_logins'}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 text-sm font-medium hover:bg-amber-100 disabled:opacity-50 transition-colors mt-3"
+              aria-label="Remove duplicate/orphan portal logins for this contact, keeping the one matching the primary email"
+            >
+              {loading === 'cleanup_logins' ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+              Clean Up Duplicate Logins
+            </button>
+          </FastTooltip>
         </div>
 
       {/* Member Access — per-account revoke/restore for contacts with Member role */}
@@ -2820,13 +2840,15 @@ function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { cont
   const [ocrViewDocId, setOcrViewDocId] = useState<string | null>(null)
 
   const ocrBtn = (fileId: string) => docMap[fileId]?.docId ? (
-    <button
-      onClick={() => setOcrViewDocId(docMap[fileId].docId)}
-      className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-all"
-      title="View OCR text"
-    >
-      <ScanText className="h-3.5 w-3.5" />
-    </button>
+    <FastTooltip label="View OCR text">
+      <button
+        onClick={() => setOcrViewDocId(docMap[fileId].docId)}
+        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-all"
+        aria-label="View OCR text"
+      >
+        <ScanText className="h-3.5 w-3.5" />
+      </button>
+    </FastTooltip>
   ) : null
 
   const handleProcess = async (driveFileId: string, fileName: string) => {
@@ -2906,14 +2928,16 @@ function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { cont
                   <a href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-zinc-600 hover:text-blue-600">{file.name}</a>
                   {file.size && <span className="text-xs text-zinc-400">{formatFileSize(Number(file.size))}</span>}
                   {ocrBtn(file.id)}
-                  <button
-                    onClick={() => handleProcess(file.id, file.name)}
-                    disabled={processing === file.id}
-                    className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-all disabled:opacity-50"
-                    title="Process & OCR"
-                  >
-                    {processing === file.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                  </button>
+                  <FastTooltip label="Process & OCR">
+                    <button
+                      onClick={() => handleProcess(file.id, file.name)}
+                      disabled={processing === file.id}
+                      className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-all disabled:opacity-50"
+                      aria-label="Process & OCR"
+                    >
+                      {processing === file.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                    </button>
+                  </FastTooltip>
                 </div>
               ))}
               {folder.subfolders.map(sf => (
@@ -2926,14 +2950,16 @@ function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { cont
                       <FileText className="h-3.5 w-3.5 text-zinc-400" />
                       <a href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-zinc-600 hover:text-blue-600">{file.name}</a>
                       {ocrBtn(file.id)}
-                      <button
-                        onClick={() => handleProcess(file.id, file.name)}
-                        disabled={processing === file.id}
-                        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-all disabled:opacity-50"
-                        title="Process & OCR"
-                      >
-                        {processing === file.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                      </button>
+                      <FastTooltip label="Process & OCR">
+                        <button
+                          onClick={() => handleProcess(file.id, file.name)}
+                          disabled={processing === file.id}
+                          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-all disabled:opacity-50"
+                          aria-label="Process & OCR"
+                        >
+                          {processing === file.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                        </button>
+                      </FastTooltip>
                     </div>
                   ))}
                 </div>
@@ -2953,14 +2979,16 @@ function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { cont
               <FileText className="h-3.5 w-3.5 text-zinc-400" />
               <a href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-zinc-600 hover:text-blue-600">{file.name}</a>
               {ocrBtn(file.id)}
-              <button
-                onClick={() => handleProcess(file.id, file.name)}
-                disabled={processing === file.id}
-                className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-all disabled:opacity-50"
-                title="Process & OCR"
-              >
-                {processing === file.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-              </button>
+              <FastTooltip label="Process & OCR">
+                <button
+                  onClick={() => handleProcess(file.id, file.name)}
+                  disabled={processing === file.id}
+                  className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-all disabled:opacity-50"
+                  aria-label="Process & OCR"
+                >
+                  {processing === file.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                </button>
+              </FastTooltip>
             </div>
           ))}
         </div>
@@ -3723,15 +3751,17 @@ function InvoicesTab({ invoices, accounts }: { invoices: ContactInvoice[]; accou
       {/* Header with "Invoice this contact" button */}
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Invoices</h3>
-        <button
-          onClick={() => setDialogOpen(true)}
-          disabled={!primaryAccount}
-          title={primaryAccount ? `Invoice ${primaryAccount.company_name}` : 'No linked account'}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Invoice
-        </button>
+        <FastTooltip label={primaryAccount ? `Invoice ${primaryAccount.company_name}` : 'No linked account'}>
+          <button
+            onClick={() => setDialogOpen(true)}
+            disabled={!primaryAccount}
+            aria-label={primaryAccount ? `Invoice ${primaryAccount.company_name}` : 'No linked account'}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Invoice
+          </button>
+        </FastTooltip>
       </div>
 
       <InvoiceDialog

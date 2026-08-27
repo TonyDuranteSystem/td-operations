@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { toast } from 'sonner'
 import { applyVendorRulesTo, normalizeVendorKey, type VendorRule } from '@/lib/owner-vendor-match'
 import type { OwnerTransaction, OwnerCategory } from '@/lib/owner-finance'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const CATEGORIES: OwnerCategory[] = ['income', 'cogs', 'expense', 'distribution', 'contribution', 'transfer', 'fee', 'conversion', 'refund', 'uncategorized']
 
@@ -554,13 +555,15 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                   {(() => {
                     const s = suggestionFor(tx)
                     return s ? (
-                      <button
-                        onClick={() => acceptSuggestion(tx)}
-                        title="Suggested by your saved rule — click to apply"
-                        className="ml-1.5 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
-                      >
-                        → {CATEGORY_LABELS[s.category] ?? s.category}{s.subcategory ? ` · ${s.subcategory.replace(/_/g, ' ')}` : ''} ✓
-                      </button>
+                      <FastTooltip label="Suggested by your saved rule — click to apply">
+                        <button
+                          onClick={() => acceptSuggestion(tx)}
+                          aria-label="Suggested by your saved rule — click to apply"
+                          className="ml-1.5 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                        >
+                          → {CATEGORY_LABELS[s.category] ?? s.category}{s.subcategory ? ` · ${s.subcategory.replace(/_/g, ' ')}` : ''} ✓
+                        </button>
+                      </FastTooltip>
                     ) : null
                   })()}
                 </td>
@@ -582,14 +585,16 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                         escape hatch: anything the system could not identify as a client
                         payment lands here, and one click returns it to the Bank Feed. */}
                     {tx.transaction_ref?.startsWith('feed:') && (
-                      <button
-                        onClick={() => sendToFinance(tx)}
-                        disabled={sendingRef === tx.transaction_ref}
-                        title="Move this back to Finance — it is a client paying an invoice"
-                        className="rounded border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50"
-                      >
-                        {sendingRef === tx.transaction_ref ? 'Moving…' : 'This is for a client →'}
-                      </button>
+                      <FastTooltip label="Move this back to Finance — it is a client paying an invoice">
+                        <button
+                          onClick={() => sendToFinance(tx)}
+                          disabled={sendingRef === tx.transaction_ref}
+                          aria-label="Move this back to Finance — it is a client paying an invoice"
+                          className="rounded border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50"
+                        >
+                          {sendingRef === tx.transaction_ref ? 'Moving…' : 'This is for a client →'}
+                        </button>
+                      </FastTooltip>
                     )}
                   </div>
                 </td>

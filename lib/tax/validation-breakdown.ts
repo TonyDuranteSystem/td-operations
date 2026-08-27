@@ -240,7 +240,10 @@ export function buildValidationBreakdown(input: BuildValidationInput): Validatio
   const incomeTotal = signedSum(income)
   const cogsTotal = -signedSum(cogs)
   const expenseTotal = -signedSum(expenses) + -signedSum(refunds)
-  const distTotal = distributions.reduce((s, r) => s + Math.abs(usdOf(r).usd), 0)
+  // Signed-sum-then-abs — must mirror computePnlTotals's totalDistributions
+  // fix exactly, or this invariant check will disagree with the (now correct)
+  // engine total every time a distribution row is a refund/reversal.
+  const distTotal = Math.abs(distributions.reduce((s, r) => s + usdOf(r).usd, 0))
   const contribTotal = signedSum(contributions)
   const uncatTotal = signedSum(uncategorized)
 

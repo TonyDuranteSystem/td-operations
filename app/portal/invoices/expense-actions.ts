@@ -6,6 +6,32 @@ import { canAccessAccount } from '@/lib/portal/team/gate'
 import { getClientContactId } from '@/lib/portal-auth'
 import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
+import { listVendors, createVendor } from './vendor-actions'
+
+/**
+ * Find an existing vendor matching `name` (trimmed, case-insensitive — never
+ * a database LIKE/ILIKE match, which would treat `%`/`_` in a typed name as
+ * wildcards and could silently attach the expense to the WRONG vendor) or
+ * create a new one. Fail-open: any lookup/create error is swallowed and
+ * returns null — a client-recorded expense must never fail to save just
+ * because the vendor-linking enrichment step had trouble. dev job 06e57270:
+ * previously a typed vendor name was NEVER linked to a real vendor record at
+ * all, so it never appeared in the client's own Suppliers list.
+ */
+async function resolveOrCreateVendorId(accountId: string, name: string): Promise<string | null> {
+  const trimmed = name.trim()
+  if (!trimmed) return null
+  try {
+    const existing = await listVendors(accountId)
+    const match = existing.find(v => v.name.trim().toLowerCase() === trimmed.toLowerCase())
+    if (match) return match.id
+
+    const res = await createVendor({ account_id: accountId, name: trimmed })
+    return res.success && res.data ? res.data.id : null
+  } catch {
+    return null
+  }
+}
 
 /**
  * Verify the logged-in caller owns the expense being touched, before any
@@ -70,6 +96,12 @@ export async function createExpense(input: {
     }
     const internalRef = `EXP-${String(expSeq).padStart(6, '0')}`
 
+    // Find-or-create the matching vendor so it shows up in the client's own
+    // Suppliers list — previously a typed name was never linked to a real
+    // vendor record at all (dev job 06e57270). Best-effort: never blocks the
+    // expense from saving if this step has trouble.
+    const vendorId = input.vendor_id || await resolveOrCreateVendorId(input.account_id, input.vendor_name)
+
     const { data, error } = await supabaseAdmin
       .from('client_expenses')
       .insert({
@@ -87,7 +119,7 @@ export async function createExpense(input: {
         source: input.source || 'manual',
         category: input.category || 'General',
         notes: input.notes || null,
-        vendor_id: input.vendor_id || null,
+        vendor_id: vendorId,
         // attachment_url is intentionally NOT written here — it's resolved fresh
         // (a short-lived signed link) at read time in getPortalExpenses/
         // getPortalExpensesByContact from attachment_storage_path. A null value

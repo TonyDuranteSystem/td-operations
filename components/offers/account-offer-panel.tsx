@@ -13,6 +13,7 @@ import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/co
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { canResetPackagePick } from '@/lib/offers/package-pick-status'
 import type { OfferPackageOption } from '@/lib/types/offer'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const OFFER_STATUS_COLORS: Record<string, string> = {
   draft: 'bg-zinc-100 text-zinc-700',
@@ -396,15 +397,17 @@ export function AccountOfferPanel({
               {/* Resend Email — non-draft offers only. Sends a portal reminder
                   email and refreshes the welcome-link state from the response. */}
               {hasOffer && !isOfferDraft && clientEmail && (
-                <button
-                  onClick={doResendEmail}
-                  disabled={resendingEmail}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 transition-colors"
-                  title="Re-send the portal reminder email. Status is unchanged."
-                >
-                  {resendingEmail ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                  Resend Email
-                </button>
+                <FastTooltip label="Re-send the portal reminder email. Status is unchanged.">
+                  <button
+                    onClick={doResendEmail}
+                    disabled={resendingEmail}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 transition-colors"
+                    aria-label="Re-send the portal reminder email. Status is unchanged."
+                  >
+                    {resendingEmail ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                    Resend Email
+                  </button>
+                </FastTooltip>
               )}
 
               {/* Publish Offer (draft only) — inline confirm avoids browser dialog suppression */}
@@ -458,15 +461,17 @@ export function AccountOfferPanel({
                   (owner decides; link the money later). Works for account and
                   individual since it resolves by offer token. */}
               {canActivateNow && (
-                <button
-                  onClick={handleActivateNow}
-                  disabled={activatingNow}
-                  title="Turn this contract on now, without requiring payment. Link the money later."
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 transition-colors"
-                >
-                  {activatingNow ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                  Activate now
-                </button>
+                <FastTooltip label="Turn this contract on now, without requiring payment. Link the money later.">
+                  <button
+                    onClick={handleActivateNow}
+                    disabled={activatingNow}
+                    aria-label="Turn this contract on now, without requiring payment. Link the money later."
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 transition-colors"
+                  >
+                    {activatingNow ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                    Activate now
+                  </button>
+                </FastTooltip>
               )}
 
               {/* Undo the client's package pick — only while there's a pick

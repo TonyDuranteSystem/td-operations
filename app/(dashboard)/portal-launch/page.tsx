@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { Send, Mail, CheckCircle, AlertCircle, Loader2, Eye, RefreshCw, Globe } from 'lucide-react'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface PortalAccount {
   id: string
@@ -113,13 +114,15 @@ export default function PortalLaunchPage() {
             Send launch announcement emails to portal clients
           </p>
         </div>
-        <button
-          onClick={fetchAccounts}
-          className="p-2 rounded-lg text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
-          title="Refresh"
-        >
-          <RefreshCw className="h-5 w-5" />
-        </button>
+        <FastTooltip label="Refresh">
+          <button
+            onClick={fetchAccounts}
+            className="p-2 rounded-lg text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
+            aria-label="Refresh"
+          >
+            <RefreshCw className="h-5 w-5" />
+          </button>
+        </FastTooltip>
       </div>
 
       {/* Stats */}

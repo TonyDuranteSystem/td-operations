@@ -31,6 +31,7 @@ import {
   X,
 } from 'lucide-react'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import {
   updateDeliveryNotes,
   reassignDelivery,
@@ -198,7 +199,7 @@ export function DeliveryRowActions({ delivery }: Props) {
         <div
           ref={menuRef}
           style={menuPos ? { position: 'fixed', top: menuPos.top, left: menuPos.left, visibility: 'visible' } : { position: 'fixed', top: -9999, left: -9999, visibility: 'hidden' }}
-          className="z-[100] w-[220px] bg-white border rounded-lg shadow-lg overflow-hidden"
+          className="z-[100] w-[220px] bg-white border rounded-lg shadow-lg overflow-hidden flex flex-col"
           role="menu"
           onClick={(e) => e.stopPropagation()}
         >
@@ -220,14 +221,16 @@ export function DeliveryRowActions({ delivery }: Props) {
             )}
           </button>
           {isOnHold && (
-            <button
-              type="button"
-              onClick={handleResume}
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-blue-700 hover:bg-blue-50 text-left border-t"
-              title="Force-process an on_hold service (e.g. override tax-season pause)"
-            >
-              <Play className="h-4 w-4" /> Resume (override hold)
-            </button>
+            <FastTooltip label="Force-process an on_hold service (e.g. override tax-season pause)">
+              <button
+                type="button"
+                onClick={handleResume}
+                className="flex items-center gap-2 w-full px-3 py-2 text-sm text-blue-700 hover:bg-blue-50 text-left border-t"
+                aria-label="Force-process an on_hold service (e.g. override tax-season pause)"
+              >
+                <Play className="h-4 w-4" /> Resume (override hold)
+              </button>
+            </FastTooltip>
           )}
           {!isCompleted && !isCancelled && (
             <button
@@ -261,17 +264,19 @@ export function DeliveryRowActions({ delivery }: Props) {
 
   return (
     <>
-      <button
-        ref={buttonRef}
-        type="button"
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMenuOpen(o => !o) }}
-        disabled={isPending}
-        className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 disabled:opacity-50"
-        title="More actions"
-      >
-        {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MoreVertical className="h-3.5 w-3.5" />}
-      </button>
+      <FastTooltip label="More actions">
+        <button
+          ref={buttonRef}
+          type="button"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMenuOpen(o => !o) }}
+          disabled={isPending}
+          className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 disabled:opacity-50"
+          aria-label="More actions"
+        >
+          {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MoreVertical className="h-3.5 w-3.5" />}
+        </button>
+      </FastTooltip>
       {menuPortal}
 
       <ConfirmDestructiveDialog

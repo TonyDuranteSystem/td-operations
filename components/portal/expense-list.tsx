@@ -1,15 +1,19 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
-import { Search, FileText, Building2, Upload, PenLine, Download, Loader2, CreditCard } from 'lucide-react'
+import { Search, FileText, Building2, Upload, PenLine, Download, Loader2, CreditCard, Banknote, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { TdPayModal } from './td-pay-modal'
+import { markExpensePaid } from '@/app/portal/invoices/expense-actions'
 import { useLocale } from '@/lib/portal/use-locale'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
-interface Expense {
+export interface Expense {
   id: string
+  vendor_id: string | null
   vendor_name: string
   invoice_number: string | null
   internal_ref: string | null
@@ -68,10 +72,28 @@ export function ExpenseList({
   initialFilter?: 'All' | 'Pending' | 'Paid' | 'Overdue'
 }) {
   const { t } = useLocale()
+  const router = useRouter()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>(initialFilter)
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   const [payingExpense, setPayingExpense] = useState<Expense | null>(null)
+  const [markingPaidId, setMarkingPaidId] = useState<string | null>(null)
+  const [confirmingPaidExpense, setConfirmingPaidExpense] = useState<Expense | null>(null)
+
+  const handleMarkPaid = async (exp: Expense) => {
+    setConfirmingPaidExpense(null)
+    setMarkingPaidId(exp.id)
+    try {
+      const res = await markExpensePaid(exp.id)
+      if (!res.success) throw new Error(res.error)
+      toast.success(t('expenseList.markedPaid'))
+      router.refresh()
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : t('expenseList.markPaidFailed'))
+    } finally {
+      setMarkingPaidId(null)
+    }
+  }
 
   const handleDownloadPdf = async (exp: Expense) => {
     if (!exp.td_payment_id) return
@@ -162,12 +184,11 @@ export function ExpenseList({
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="font-medium truncate">{exp.vendor_name}</span>
                   {exp.scope_label && (
-                    <span
-                      className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-zinc-100 text-zinc-600 border border-zinc-200"
-                      title={exp.scope_label}
-                    >
-                      {exp.scope_label}
-                    </span>
+                    <FastTooltip label={exp.scope_label} align="left">
+                      <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-zinc-100 text-zinc-600 border border-zinc-200">
+                        {exp.scope_label}
+                      </span>
+                    </FastTooltip>
                   )}
                   {exp.attachment_url && (
                     <a href={exp.attachment_url} target="_blank" rel="noopener noreferrer" className="shrink-0 text-zinc-400 hover:text-blue-600">
@@ -217,23 +238,39 @@ export function ExpenseList({
                 </span>
                 <span className="flex items-center justify-center gap-1">
                   {exp.source === 'td_invoice' && exp.td_payment_id && (exp.status === 'Pending' || exp.status === 'Overdue') && (
-                    <button
-                      onClick={() => setPayingExpense(exp)}
-                      className="p-1 rounded hover:bg-blue-50 text-blue-600 hover:text-blue-700"
-                      title={t('expenseList.pay')}
-                    >
-                      <CreditCard className="h-4 w-4" />
-                    </button>
+                    <FastTooltip label={t('expenseList.pay')}>
+                      <button
+                        onClick={() => setPayingExpense(exp)}
+                        className="p-1 rounded hover:bg-blue-50 text-blue-600 hover:text-blue-700"
+                        aria-label={t('expenseList.pay')}
+                      >
+                        <CreditCard className="h-4 w-4" />
+                      </button>
+                    </FastTooltip>
+                  )}
+                  {exp.source !== 'td_invoice' && (exp.status === 'Pending' || exp.status === 'Overdue') && (
+                    <FastTooltip label={t('expenseList.markPaid')}>
+                      <button
+                        onClick={() => setConfirmingPaidExpense(exp)}
+                        disabled={markingPaidId === exp.id}
+                        className="p-1 rounded hover:bg-emerald-50 text-emerald-600 hover:text-emerald-700 disabled:opacity-50"
+                        aria-label={t('expenseList.markPaid')}
+                      >
+                        {markingPaidId === exp.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Banknote className="h-4 w-4" />}
+                      </button>
+                    </FastTooltip>
                   )}
                   {exp.td_payment_id ? (
-                    <button
-                      onClick={() => handleDownloadPdf(exp)}
-                      disabled={downloadingId === exp.id}
-                      className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-blue-600 disabled:opacity-50"
-                      title={t('expenseList.downloadPdf')}
-                    >
-                      {downloadingId === exp.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                    </button>
+                    <FastTooltip label={t('expenseList.downloadPdf')}>
+                      <button
+                        onClick={() => handleDownloadPdf(exp)}
+                        disabled={downloadingId === exp.id}
+                        className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-blue-600 disabled:opacity-50"
+                        aria-label={t('expenseList.downloadPdf')}
+                      >
+                        {downloadingId === exp.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                      </button>
+                    </FastTooltip>
                   ) : exp.attachment_url ? (
                     <a href={exp.attachment_url} target="_blank" rel="noopener noreferrer" className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-blue-600">
                       <Download className="h-4 w-4" />
@@ -255,6 +292,55 @@ export function ExpenseList({
           currency={payingExpense.currency}
           onClose={() => setPayingExpense(null)}
         />
+      )}
+
+      {/* Mark-as-paid confirm — the row's checkmark icon has no label a client
+          would recognize on sight (esp. on mobile, where nothing hovers), so
+          this dialog spells the action out in plain words before it commits. */}
+      {confirmingPaidExpense && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setConfirmingPaidExpense(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl max-w-sm w-full p-5"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <h3 className="text-base font-semibold text-zinc-900">
+                {t('expenseList.markPaidConfirmTitle')}
+              </h3>
+              <FastTooltip label={t('common.cancel')}>
+                <button
+                  onClick={() => setConfirmingPaidExpense(null)}
+                  className="text-zinc-400 hover:text-zinc-600 p-1 -m-1"
+                  aria-label={t('common.cancel')}
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </FastTooltip>
+            </div>
+            <p className="mt-2 text-sm text-zinc-600">
+              {t('expenseList.markPaidConfirmBody')
+                .replace('{vendor}', confirmingPaidExpense.vendor_name)
+                .replace('{amount}', `${confirmingPaidExpense.currency === 'EUR' ? '€' : '$'}${Number(confirmingPaidExpense.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}`)}
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmingPaidExpense(null)}
+                className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                onClick={() => handleMarkPaid(confirmingPaidExpense)}
+                className="px-4 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+              >
+                {t('expenseList.markPaid')}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

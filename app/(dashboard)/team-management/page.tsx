@@ -17,6 +17,7 @@ import {
   Bot,
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface TeamUser {
   id: string
@@ -385,41 +386,49 @@ export default function TeamManagementPage() {
                           authenticator + backup codes and revokes trusted
                           devices — they re-enroll at next login. The server
                           route refuses to target protected admin accounts. */}
-                      <button
-                        onClick={() => handleResetMfa(u.id, u.full_name)}
-                        className="p-1.5 text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded-md"
-                        title="Reset MFA (forces re-enrollment)"
-                      >
-                        <ShieldOff className="h-3.5 w-3.5" />
-                      </button>
+                      <FastTooltip label="Reset MFA (forces re-enrollment)">
+                        <button
+                          onClick={() => handleResetMfa(u.id, u.full_name)}
+                          className="p-1.5 text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded-md"
+                          aria-label="Reset MFA (forces re-enrollment)"
+                        >
+                          <ShieldOff className="h-3.5 w-3.5" />
+                        </button>
+                      </FastTooltip>
                       {/* Can't edit own account */}
                       {!isSelf(u.email) && (
                         <>
-                          <button
-                            onClick={() => { setEditingId(u.id); setEditRole(u.role) }}
-                            className="p-1.5 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 rounded-md"
-                            title="Edit role"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleToggleDisabled(u.id, u.disabled)}
-                            className={`p-1.5 rounded-md ${
-                              u.disabled
-                                ? 'text-emerald-600 hover:bg-emerald-50'
-                                : 'text-red-500 hover:bg-red-50'
-                            }`}
-                            title={u.disabled ? 'Enable access' : 'Disable access'}
-                          >
-                            {u.disabled ? <Shield className="h-3.5 w-3.5" /> : <ShieldOff className="h-3.5 w-3.5" />}
-                          </button>
-                          <button
-                            onClick={() => handleDelete(u.id, u.full_name)}
-                            className="p-1.5 text-red-400 hover:text-red-700 hover:bg-red-50 rounded-md"
-                            title="Delete user permanently"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
+                          <FastTooltip label="Edit role">
+                            <button
+                              onClick={() => { setEditingId(u.id); setEditRole(u.role) }}
+                              className="p-1.5 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 rounded-md"
+                              aria-label="Edit role"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                          </FastTooltip>
+                          <FastTooltip label={u.disabled ? 'Enable access' : 'Disable access'}>
+                            <button
+                              onClick={() => handleToggleDisabled(u.id, u.disabled)}
+                              className={`p-1.5 rounded-md ${
+                                u.disabled
+                                  ? 'text-emerald-600 hover:bg-emerald-50'
+                                  : 'text-red-500 hover:bg-red-50'
+                              }`}
+                              aria-label={u.disabled ? 'Enable access' : 'Disable access'}
+                            >
+                              {u.disabled ? <Shield className="h-3.5 w-3.5" /> : <ShieldOff className="h-3.5 w-3.5" />}
+                            </button>
+                          </FastTooltip>
+                          <FastTooltip label="Delete user permanently">
+                            <button
+                              onClick={() => handleDelete(u.id, u.full_name)}
+                              className="p-1.5 text-red-400 hover:text-red-700 hover:bg-red-50 rounded-md"
+                              aria-label="Delete user permanently"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </FastTooltip>
                         </>
                       )}
                     </div>

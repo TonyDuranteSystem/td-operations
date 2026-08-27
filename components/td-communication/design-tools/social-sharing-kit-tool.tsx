@@ -5,6 +5,7 @@ import JSZip from 'jszip'
 import { Download, Send, Loader2, Package, CheckCircle2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { NamedColor } from '@/lib/td-communication/color-tools'
 import {
   SOCIAL_PRESETS,
@@ -442,15 +443,17 @@ export function SocialSharingKitTool({
           {busy === 'download' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
           Download ZIP
         </button>
-        <button
-          onClick={() => run('send')}
-          disabled={!logo || busy !== null || !enrollmentId}
-          title={!enrollmentId ? 'Select a project to send the kit to its client' : undefined}
-          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded border border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-50"
-        >
-          {busy === 'send' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-          Generate &amp; send to client
-        </button>
+        <FastTooltip label={!enrollmentId ? 'Select a project to send the kit to its client' : undefined}>
+          <button
+            onClick={() => run('send')}
+            disabled={!logo || busy !== null || !enrollmentId}
+            aria-label={!enrollmentId ? 'Select a project to send the kit to its client' : undefined}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded border border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+          >
+            {busy === 'send' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+            Generate &amp; send to client
+          </button>
+        </FastTooltip>
       </div>
       <p className="text-[11px] text-zinc-400">
         The client can download the kit from their portal once the project is <strong>delivered</strong> and the

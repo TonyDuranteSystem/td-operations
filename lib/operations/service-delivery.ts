@@ -47,7 +47,7 @@ import {
   isValidServiceType,
   type ValidServiceType,
 } from "@/lib/operations/service-types"
-import { getEntryByServiceType, isPerPersonServiceType } from "@/lib/services"
+import { assertServiceTypeNotDeprecated, isPerPersonServiceType } from "@/lib/services"
 import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import { updateTasksBulk } from "@/lib/operations/task"
 import { setAccountRenewalDate, anniversaryForYear } from "@/lib/operations/renewal-dates"
@@ -102,6 +102,15 @@ export interface CreateSDParams {
    * other service types.
    */
   source_offer_token?: string | null
+  /**
+   * Originating closure-form submission token. For contact-scoped "Company
+   * Closure" SDs this is the dedup key enforced by the partial unique index
+   * uq_closure_sd_active_per_contact_token — set it so a second, different
+   * LLC closed by the same contact-only client gets its own SD instead of
+   * being read as a resubmission of an unrelated one. Harmless (stored, not
+   * constrained) for other service types.
+   */
+  source_closure_token?: string | null
 }
 
 export interface CreateSDResult {
@@ -322,20 +331,15 @@ export async function createSD(
   // lib/services/index.ts mirrors 20260510-catalog-backfill.sql §1).
   // Graceful: unmapped types stay null with a warning so legitimate but
   // not-yet-mapped service types (Support, Client Offboarding) still insert.
+  // assertServiceTypeNotDeprecated also refuses a DEPRECATED entry outright —
+  // see its own doc comment in lib/services/index.ts.
+  const catalogEntry = await assertServiceTypeNotDeprecated(params.service_type, "createSD")
   let service_type_entry_id: string | null = null
-  try {
-    const entry = await getEntryByServiceType(params.service_type)
-    if (entry) {
-      service_type_entry_id = entry.id
-    } else {
-      console.warn(
-        `[createSD] no catalog entry for service_type="${params.service_type}" — service_type_entry_id left null`,
-      )
-    }
-  } catch (err) {
+  if (catalogEntry) {
+    service_type_entry_id = catalogEntry.id
+  } else {
     console.warn(
-      `[createSD] catalog lookup failed for service_type="${params.service_type}":`,
-      err,
+      `[createSD] no catalog entry for service_type="${params.service_type}" — service_type_entry_id left null`,
     )
   }
 
@@ -357,6 +361,7 @@ export async function createSD(
         assigned_to: params.assigned_to || defaultTaskAssignee(),
         notes: params.notes || null,
         source_offer_token: params.source_offer_token ?? null,
+        source_closure_token: params.source_closure_token ?? null,
         stage_entered_at: new Date().toISOString(),
         is_test,
         ...(params.amount != null && {
@@ -533,6 +538,12 @@ export async function createBackfilledSD(
         `Allowed: ${VALID_SERVICE_TYPES.join(", ")}`,
     )
   }
+
+  // Same deprecated-catalog guard as createSD (2026-08-27, dev job bb48eba1) —
+  // this function bypassed it entirely, reachable from the bank-feed "Create
+  // service" dropdown, which still lists the retired "Annual Renewal" type
+  // (VALID_SERVICE_TYPES mirrors the DB constraint, not the catalog).
+  await assertServiceTypeNotDeprecated(params.service_type, "createBackfilledSD")
 
   const service_name = params.service_name || params.service_type
 

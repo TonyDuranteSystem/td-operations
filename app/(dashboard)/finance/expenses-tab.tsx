@@ -4,6 +4,7 @@ import { useState, useMemo, useTransition } from 'react'
 import { Search, Plus, CheckCircle2, Ban, Loader2, X, FileText } from 'lucide-react'
 import { createTDExpense, markTDExpensePaid, voidTDExpense } from './expense-actions'
 import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { format, parseISO } from 'date-fns'
 
 export interface TDExpenseRecord {
@@ -209,24 +210,28 @@ export function ExpensesTab({ expenses }: { expenses: TDExpenseRecord[] }) {
                 <td className="px-4 py-3 text-right">
                   <div className="flex items-center justify-end gap-1">
                     {['Pending', 'Overdue'].includes(exp.status) && (
-                      <button
-                        onClick={() => handleMarkPaid(exp.id)}
-                        disabled={isPending}
-                        title="Mark as Paid"
-                        className="p-1.5 rounded hover:bg-emerald-50 text-emerald-600"
-                      >
-                        {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                      </button>
+                      <FastTooltip label="Mark as Paid">
+                        <button
+                          onClick={() => handleMarkPaid(exp.id)}
+                          disabled={isPending}
+                          aria-label="Mark as Paid"
+                          className="p-1.5 rounded hover:bg-emerald-50 text-emerald-600"
+                        >
+                          {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                        </button>
+                      </FastTooltip>
                     )}
                     {exp.status !== 'Cancelled' && exp.status !== 'Paid' && (
-                      <button
-                        onClick={() => handleVoid(exp.id)}
-                        disabled={isPending}
-                        title="Void"
-                        className="p-1.5 rounded hover:bg-red-50 text-red-500"
-                      >
-                        <Ban className="h-3.5 w-3.5" />
-                      </button>
+                      <FastTooltip label="Void">
+                        <button
+                          onClick={() => handleVoid(exp.id)}
+                          disabled={isPending}
+                          aria-label="Void"
+                          className="p-1.5 rounded hover:bg-red-50 text-red-500"
+                        >
+                          <Ban className="h-3.5 w-3.5" />
+                        </button>
+                      </FastTooltip>
                     )}
                   </div>
                 </td>

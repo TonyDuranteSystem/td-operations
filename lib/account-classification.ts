@@ -10,11 +10,15 @@
 
 // ── Standard SD bundle for active clients ──
 
+// 'Annual Renewal' was deliberately removed (2026-08-27, dev job bb48eba1):
+// it's a billing cycle, not a real deliverable (R106) — the catalog entry
+// backing it is marked deprecated. Expecting it here flagged every client as
+// "missing a service" that should never exist, with a one-click button that
+// would have created it anyway (see the createSD deprecated-catalog guard).
 export const STANDARD_CLIENT_SDS = [
   'State RA Renewal',
   'State Annual Report',
   'CMRA Mailing Address',
-  'Annual Renewal',
 ] as const
 
 export const TAX_RETURN_SD = 'Tax Return' as const

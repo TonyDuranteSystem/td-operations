@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { differenceInDays, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import Link from 'next/link'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd'
 import { completeService, updateServiceStatus, advanceServiceStep } from '@/app/(dashboard)/services/actions'
 import { EditServiceDialog } from '@/components/services/edit-service-dialog'
@@ -75,30 +76,32 @@ function CompleteButton({ serviceId, serviceName }: { serviceId: string; service
   const [isPending, startTransition] = useTransition()
 
   return (
-    <button
-      disabled={isPending}
-      onClick={(e) => {
-        e.stopPropagation()
-        startTransition(async () => {
-          const result = await completeService(serviceId)
-          if (result.success) {
-            toast.success('Service completed', { description: serviceName })
-          } else {
-            toast.error(result.error ?? 'Errore nel completare il servizio')
-          }
-        })
-      }}
-      className={cn(
-        'inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors',
-        isPending
-          ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
-          : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-      )}
-      title="Segna come completato"
-    >
-      {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
-      <span className="hidden sm:inline">Completa</span>
-    </button>
+    <FastTooltip label="Segna come completato">
+      <button
+        disabled={isPending}
+        onClick={(e) => {
+          e.stopPropagation()
+          startTransition(async () => {
+            const result = await completeService(serviceId)
+            if (result.success) {
+              toast.success('Service completed', { description: serviceName })
+            } else {
+              toast.error(result.error ?? 'Errore nel completare il servizio')
+            }
+          })
+        }}
+        className={cn(
+          'inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors',
+          isPending
+            ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
+            : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+        )}
+        aria-label="Segna come completato"
+      >
+        {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+        <span className="hidden sm:inline">Completa</span>
+      </button>
+    </FastTooltip>
   )
 }
 
@@ -108,29 +111,31 @@ function AdvanceStepButton({ serviceId, currentStep, totalSteps, updatedAt }: { 
   if (currentStep >= totalSteps) return null
 
   return (
-    <button
-      disabled={isPending}
-      onClick={(e) => {
-        e.stopPropagation()
-        startTransition(async () => {
-          const result = await advanceServiceStep(serviceId, updatedAt)
-          if (result.success) {
-            toast.success(`Step ${currentStep + 1}/${totalSteps}`)
-          } else {
-            toast.error(result.error ?? 'Errore')
-          }
-        })
-      }}
-      className={cn(
-        'inline-flex items-center gap-0.5 px-1.5 py-1 text-xs font-medium rounded transition-colors',
-        isPending
-          ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
-          : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
-      )}
-      title={`Avanza a step ${currentStep + 1}`}
-    >
-      {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <ChevronRightIcon className="h-3 w-3" />}
-    </button>
+    <FastTooltip label={`Avanza a step ${currentStep + 1}`}>
+      <button
+        disabled={isPending}
+        onClick={(e) => {
+          e.stopPropagation()
+          startTransition(async () => {
+            const result = await advanceServiceStep(serviceId, updatedAt)
+            if (result.success) {
+              toast.success(`Step ${currentStep + 1}/${totalSteps}`)
+            } else {
+              toast.error(result.error ?? 'Errore')
+            }
+          })
+        }}
+        className={cn(
+          'inline-flex items-center gap-0.5 px-1.5 py-1 text-xs font-medium rounded transition-colors',
+          isPending
+            ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
+            : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+        )}
+        aria-label={`Avanza a step ${currentStep + 1}`}
+      >
+        {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <ChevronRightIcon className="h-3 w-3" />}
+      </button>
+    </FastTooltip>
   )
 }
 

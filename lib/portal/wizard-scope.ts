@@ -11,13 +11,20 @@ import { isContactScopedWizard, isPersonOwnedWizard } from './wizard-map'
  * excludes lead-anchored rows. See dev_task 21fd1f4a.
  */
 export interface WizardProgressScope {
-  col: 'lead_id' | 'account_id' | 'contact_id'
+  col: 'lead_id' | 'account_id' | 'contact_id' | 'service_delivery_id'
   val: string
   restrictToNoLead: boolean
 }
 
 /**
  * Resolve where to look for a wizard's saved progress, by precedence:
+ *  0. Closure, once its subject is resolved (dev job fbbf4abe) — keyed on the
+ *     SPECIFIC service_delivery_id, never just account/contact. Closure is
+ *     the only FLEXIBLE_WIZARD_TYPE: a client can have more than one pending
+ *     closure at once (two untracked LLCs, or one managed + one untracked),
+ *     and account_id/contact_id alone can't tell those drafts apart — a
+ *     second closure's draft would silently load and overwrite the first's
+ *     saved answers. See lib/portal/closure-subject.ts.
  *  1. ?lead= new-company formation (PR #75) — keyed on lead_id.
  *  2. Contact-owned wizard (formation) with no lead scope — keyed on
  *     contact_id even when an account exists, so a materialized formation is
@@ -33,9 +40,16 @@ export function resolveWizardProgressScope(params: {
   formationLeadId: string | null
   accountId: string | null
   contactId: string | null
+  /** Closure only — the specific pending record this wizard visit resolved
+   *  to (lib/portal/closure-subject.ts). When set, takes precedence over
+   *  every other rule below, including formationLeadId. */
+  serviceDeliveryId?: string | null
 }): WizardProgressScope | null {
-  const { wizardType, formationLeadId, accountId, contactId } = params
+  const { wizardType, formationLeadId, accountId, contactId, serviceDeliveryId } = params
 
+  if (wizardType === 'closure' && serviceDeliveryId) {
+    return { col: 'service_delivery_id', val: serviceDeliveryId, restrictToNoLead: false }
+  }
   if (formationLeadId) {
     return { col: 'lead_id', val: formationLeadId, restrictToNoLead: false }
   }

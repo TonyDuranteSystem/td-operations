@@ -3,6 +3,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useState } from 'react'
 import { Check, Copy, Link as LinkIcon } from 'lucide-react'
 import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 export interface WelcomeLinkButtonHandle {
   setWelcomeUrl: (url: string | null) => void
@@ -57,15 +58,17 @@ export const WelcomeLinkButton = forwardRef<WelcomeLinkButtonHandle, WelcomeLink
     const linkIconClass = size === 'sm' ? 'h-3 w-3' : 'h-3.5 w-3.5'
 
     return (
-      <button
-        onClick={onClick}
-        className={`inline-flex items-center gap-1.5 ${sizeClass} font-medium rounded-md border border-emerald-300 text-emerald-700 hover:bg-emerald-50 transition-colors`}
-        title="Share with the client via WhatsApp/Telegram. Link decrypts the temp password and expires in 7 days."
-      >
-        {welcomeCopied ? <Check className={iconClass} /> : <Copy className={iconClass} />}
-        {welcomeCopied ? 'Copied' : 'Copy Welcome Link'}
-        <LinkIcon className={`${linkIconClass} opacity-60`} />
-      </button>
+      <FastTooltip label="Share with the client via WhatsApp/Telegram. Link decrypts the temp password and expires in 7 days.">
+        <button
+          onClick={onClick}
+          className={`inline-flex items-center gap-1.5 ${sizeClass} font-medium rounded-md border border-emerald-300 text-emerald-700 hover:bg-emerald-50 transition-colors`}
+          aria-label="Share with the client via WhatsApp/Telegram. Link decrypts the temp password and expires in 7 days."
+        >
+          {welcomeCopied ? <Check className={iconClass} /> : <Copy className={iconClass} />}
+          {welcomeCopied ? 'Copied' : 'Copy Welcome Link'}
+          <LinkIcon className={`${linkIconClass} opacity-60`} />
+        </button>
+      </FastTooltip>
     )
   }
 )

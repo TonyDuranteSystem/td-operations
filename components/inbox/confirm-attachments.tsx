@@ -18,6 +18,7 @@
  */
 import { useRef, useState } from 'react'
 import { FileText, Loader2, Paperclip, Plus, X } from 'lucide-react'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 export interface ConfirmAttachment {
   name: string
@@ -141,37 +142,41 @@ export function ConfirmAttachments({
         return (
           <div key={i} className="relative">
           {onChange && (
-            <button
-              type="button"
-              onClick={() => removeFile(i)}
-              disabled={busy}
-              title={`Remove ${a.name}`}
-              className="absolute right-1 top-1 z-10 rounded-full bg-white/90 p-0.5 text-zinc-400 hover:text-red-600 disabled:opacity-50"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
+            <FastTooltip label={`Remove ${a.name}`} className="absolute right-1 top-1 z-10">
+              <button
+                type="button"
+                onClick={() => removeFile(i)}
+                disabled={busy}
+                aria-label={`Remove ${a.name}`}
+                className="rounded-full bg-white/90 p-0.5 text-zinc-400 hover:text-red-600 disabled:opacity-50"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </FastTooltip>
           )}
-          <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block rounded-lg border border-amber-200 bg-white p-1.5 hover:border-amber-300 hover:bg-amber-50/60"
-            title={`Open ${a.name}`}
-          >
-            {isImage(a) ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={href} alt={a.name} className="max-h-40 w-auto rounded-md border border-zinc-200" />
-            ) : null}
-            <div className="flex items-center gap-1.5 text-xs text-zinc-700">
-              {isImage(a) ? <Paperclip className="h-3 w-3 shrink-0" /> : <FileText className="h-3.5 w-3.5 shrink-0" />}
-              <span className="truncate font-medium">{a.name}</span>
-              {size && <span className="shrink-0 text-zinc-400">{size}</span>}
-            </div>
-            {a.origin && <p className="mt-0.5 pl-5 text-[11px] text-zinc-500">{a.origin}</p>}
-            {a.warning && (
-              <p className="mt-1 rounded-md bg-red-50 px-2 py-1 text-[11px] font-medium text-red-700">{a.warning}</p>
-            )}
-          </a>
+          <FastTooltip label={`Open ${a.name}`} className="w-full">
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block rounded-lg border border-amber-200 bg-white p-1.5 hover:border-amber-300 hover:bg-amber-50/60"
+              aria-label={`Open ${a.name}`}
+            >
+              {isImage(a) ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={href} alt={a.name} className="max-h-40 w-auto rounded-md border border-zinc-200" />
+              ) : null}
+              <div className="flex items-center gap-1.5 text-xs text-zinc-700">
+                {isImage(a) ? <Paperclip className="h-3 w-3 shrink-0" /> : <FileText className="h-3.5 w-3.5 shrink-0" />}
+                <span className="truncate font-medium">{a.name}</span>
+                {size && <span className="shrink-0 text-zinc-400">{size}</span>}
+              </div>
+              {a.origin && <p className="mt-0.5 pl-5 text-[11px] text-zinc-500">{a.origin}</p>}
+              {a.warning && (
+                <p className="mt-1 rounded-md bg-red-50 px-2 py-1 text-[11px] font-medium text-red-700">{a.warning}</p>
+              )}
+            </a>
+          </FastTooltip>
           </div>
         )
       })}

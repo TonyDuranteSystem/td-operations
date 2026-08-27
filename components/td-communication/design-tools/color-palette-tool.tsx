@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 import { Copy, Check, Download } from 'lucide-react'
 import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import {
   normalizeHex,
   rgbString,
@@ -40,25 +41,27 @@ async function copy(text: string, label: string) {
 function Swatch({ hex, name }: { hex: string; name?: string }) {
   const ink = bestTextColor(hex)
   return (
-    <button
-      onClick={() => copy(hex, hex)}
-      title="Copy hex"
-      className="group relative h-16 w-full rounded-lg border border-black/10 flex flex-col justify-end p-1.5 text-left"
-      style={{ backgroundColor: hex }}
-    >
-      <span className="text-[10px] font-mono font-semibold" style={{ color: ink }}>
-        {hex}
-      </span>
-      {name ? (
-        <span className="text-[9px] truncate" style={{ color: ink, opacity: 0.85 }}>
-          {name}
+    <FastTooltip label="Copy hex">
+      <button
+        onClick={() => copy(hex, hex)}
+        aria-label="Copy hex"
+        className="group relative h-16 w-full rounded-lg border border-black/10 flex flex-col justify-end p-1.5 text-left"
+        style={{ backgroundColor: hex }}
+      >
+        <span className="text-[10px] font-mono font-semibold" style={{ color: ink }}>
+          {hex}
         </span>
-      ) : null}
-      <Copy
-        className="absolute top-1.5 right-1.5 h-3 w-3 opacity-0 group-hover:opacity-70"
-        style={{ color: ink }}
-      />
-    </button>
+        {name ? (
+          <span className="text-[9px] truncate" style={{ color: ink, opacity: 0.85 }}>
+            {name}
+          </span>
+        ) : null}
+        <Copy
+          className="absolute top-1.5 right-1.5 h-3 w-3 opacity-0 group-hover:opacity-70"
+          style={{ color: ink }}
+        />
+      </button>
+    </FastTooltip>
   )
 }
 

@@ -40,10 +40,9 @@ describe("wizard-map — exhaustiveness", () => {
 
   it("job_type map covers every wizard type except known manual-workflow types", () => {
     // Once a submission row exists, a background handler is the norm.
-    // Exception: closure (plan §16.4 — deferred; submissions land in
-    // closure_submissions and Luca handles them manually). When a
-    // closure-setup handler lands, remove 'closure' from this allowlist.
-    const KNOWN_MANUAL_TYPES = new Set(["closure"])
+    // No exceptions currently — closure_setup landed 2026-08-26 (dev job
+    // fbbf4abe), so this set is empty until the next deliberately-manual type.
+    const KNOWN_MANUAL_TYPES = new Set<string>([])
     const withoutJob = VALID_WIZARD_TYPES.filter(
       (t) =>
         getSubmissionTable(t) !== null &&
@@ -118,6 +117,7 @@ describe("wizard-map — known mappings", () => {
       tax_return: "tax_form_setup",
       company_info: "tax_return_intake",
       itin: "itin_wizard_setup",
+      closure: "closure_setup",
     })
   })
 

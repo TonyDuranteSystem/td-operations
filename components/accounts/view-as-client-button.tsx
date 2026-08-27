@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Eye, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 /**
  * Admin-only "View as client" button. Opens a read-only portal session as the
@@ -57,14 +58,16 @@ export function ViewAsClientButton({
   }
 
   return (
-    <button
-      onClick={handleClick}
-      disabled={loading}
-      title="Open this client's portal as they see it (read-only)"
-      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 transition-colors"
-    >
-      {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
-      {label}
-    </button>
+    <FastTooltip label="Open this client's portal as they see it (read-only)">
+      <button
+        onClick={handleClick}
+        disabled={loading}
+        aria-label="Open this client's portal as they see it (read-only)"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 transition-colors"
+      >
+        {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
+        {label}
+      </button>
+    </FastTooltip>
   )
 }

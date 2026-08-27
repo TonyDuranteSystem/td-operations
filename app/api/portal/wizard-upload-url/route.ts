@@ -20,6 +20,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
+import { WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES, wizardUploadTooLargeMessage } from '@/lib/portal/wizard-uploads'
 
 const BUCKET = 'onboarding-uploads' // Shared bucket for all wizard uploads
 
@@ -34,11 +35,18 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const fieldName = body.field_name as string
     const fileName = body.file_name as string
+    const fileSize = typeof body.file_size === 'number' ? body.file_size : undefined
     const wizardType = body.wizard_type as string
     const identifier = (body.identifier as string) || user.email || user.id
 
     if (!fieldName || !fileName) {
       return NextResponse.json({ error: 'field_name and file_name are required' }, { status: 400 })
+    }
+
+    // The browser already checks this before calling here — this is the
+    // authoritative check (the browser check can be skipped/bypassed).
+    if (fileSize !== undefined && fileSize > WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES) {
+      return NextResponse.json({ error: wizardUploadTooLargeMessage(fileSize) }, { status: 400 })
     }
 
     // CSV or PDF guard for the tax per-bank statement sections (master plan

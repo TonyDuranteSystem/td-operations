@@ -8,6 +8,7 @@ import {
   deactivateServiceDelivery,
   reactivateServiceDelivery,
 } from '@/app/(dashboard)/accounts/[id]/actions'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 /**
  * Service types whose renewal is driven by an account-level date + a nightly
@@ -59,14 +60,16 @@ export function DeactivateServiceButton({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1 text-xs text-red-600 hover:text-red-700 hover:underline shrink-0"
-        title="Deactivate this service"
-      >
-        <Ban className="h-3.5 w-3.5" /> Deactivate
-      </button>
+      <FastTooltip label="Deactivate this service">
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="inline-flex items-center gap-1 text-xs text-red-600 hover:text-red-700 hover:underline shrink-0"
+          aria-label="Deactivate this service"
+        >
+          <Ban className="h-3.5 w-3.5" /> Deactivate
+        </button>
+      </FastTooltip>
 
       {open && (
         <div
@@ -164,15 +167,17 @@ export function ReactivateServiceButton({
   }
 
   return (
-    <button
-      type="button"
-      onClick={handleReactivate}
-      disabled={isPending}
-      className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 hover:underline shrink-0 disabled:opacity-50"
-      title="Reactivate this service"
-    >
-      {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-      Reactivate
-    </button>
+    <FastTooltip label="Reactivate this service">
+      <button
+        type="button"
+        onClick={handleReactivate}
+        disabled={isPending}
+        className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 hover:underline shrink-0 disabled:opacity-50"
+        aria-label="Reactivate this service"
+      >
+        {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+        Reactivate
+      </button>
+    </FastTooltip>
   )
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Plus, Pencil, ArchiveX, Loader2, X, HelpCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { TdCommQuestion, TdCommOption, QuestionFieldType, QuestionAudience } from '@/lib/td-communication/types'
 
 const TYPES: QuestionFieldType[] = ['text', 'textarea', 'select', 'number', 'file']
@@ -192,8 +193,8 @@ export function QuestionsAdmin({ isAdmin }: { isAdmin: boolean }) {
                     </div>
                     {isAdmin && (
                       <div className="shrink-0 whitespace-nowrap">
-                        <button onClick={() => setEditing(q)} className="text-zinc-500 hover:text-blue-700 p-1" title="Edit"><Pencil className="w-4 h-4" /></button>
-                        {q.active && <button onClick={() => softDelete(q)} className="text-zinc-500 hover:text-red-700 p-1" title="Remove"><ArchiveX className="w-4 h-4" /></button>}
+                        <FastTooltip label="Edit"><button onClick={() => setEditing(q)} className="text-zinc-500 hover:text-blue-700 p-1" aria-label="Edit"><Pencil className="w-4 h-4" /></button></FastTooltip>
+                        {q.active && <FastTooltip label="Remove"><button onClick={() => softDelete(q)} className="text-zinc-500 hover:text-red-700 p-1" aria-label="Remove"><ArchiveX className="w-4 h-4" /></button></FastTooltip>}
                       </div>
                     )}
                   </div>
@@ -342,7 +343,7 @@ function QuestionModal({
                     <div key={idx} className="border rounded p-2 bg-zinc-50/60 space-y-1.5">
                       <div className="flex items-center gap-2">
                         <input className={input} value={o.value} onChange={(e) => setOption(idx, 'value', e.target.value)} placeholder="value (stored)" />
-                        <button type="button" onClick={() => removeOption(idx)} className="shrink-0 text-zinc-400 hover:text-red-600 p-1" title="Remove option"><X className="w-4 h-4" /></button>
+                        <FastTooltip label="Remove option"><button type="button" onClick={() => removeOption(idx)} className="shrink-0 text-zinc-400 hover:text-red-600 p-1" aria-label="Remove option"><X className="w-4 h-4" /></button></FastTooltip>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <input className={input} value={o.label_en} onChange={(e) => setOption(idx, 'label_en', e.target.value)} placeholder="Label (EN)" />

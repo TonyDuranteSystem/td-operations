@@ -6,6 +6,7 @@ import { CheckCircle2, Download, Clock, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { BankReferralsPanel, type BankReferralEntry } from './bank-referrals-panel'
 import { HelpDot } from '@/components/help/help-dot'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 // --- Types ---
 
@@ -615,14 +616,16 @@ function WizardCard({ entry }: { entry: WizardCardEntry }) {
         )}
       </div>
       {entry.status === 'submitted' && entry.data && Object.keys(entry.data).length > 0 && (
-        <button
-          onClick={downloadData}
-          className="shrink-0 flex items-center gap-1 text-[11px] font-medium text-emerald-700 hover:text-emerald-900 bg-emerald-100 hover:bg-emerald-200 px-2 py-1 rounded transition-colors"
-          title="Download submitted data"
-        >
-          <Download className="h-3 w-3" />
-          Export
-        </button>
+        <FastTooltip label="Download submitted data">
+          <button
+            onClick={downloadData}
+            className="shrink-0 flex items-center gap-1 text-[11px] font-medium text-emerald-700 hover:text-emerald-900 bg-emerald-100 hover:bg-emerald-200 px-2 py-1 rounded transition-colors"
+            aria-label="Download submitted data"
+          >
+            <Download className="h-3 w-3" />
+            Export
+          </button>
+        </FastTooltip>
       )}
       {entry.status === 'pending' && (
         <span className="shrink-0 text-[10px] text-amber-600 font-medium">Awaiting client</span>

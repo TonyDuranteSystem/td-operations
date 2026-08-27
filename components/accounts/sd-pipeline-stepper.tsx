@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { CheckCircle2, Circle, ChevronRight, Loader2, AlertTriangle } from 'lucide-react'
 import { advanceSDStage } from '@/app/(dashboard)/accounts/[id]/actions'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 export interface PipelineStage {
   stage_name: string
@@ -116,14 +117,8 @@ export function SdPipelineStepper({
 
           return (
             <div key={`${s.stage_order}-${s.stage_name}`} className="flex items-center gap-1">
-              <button
-                type="button"
-                disabled={!isClickable}
-                onClick={() => setConfirmTarget(s)}
-                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs whitespace-nowrap transition-colors ${chipClass} ${
-                  !isClickable ? 'cursor-default' : ''
-                }`}
-                title={
+              <FastTooltip
+                label={
                   isNext
                     ? `Click to advance ${serviceName} to ${s.stage_name}`
                     : isCurrent
@@ -133,15 +128,33 @@ export function SdPipelineStepper({
                         : `Upcoming`
                 }
               >
-                {isPast || (isTerminalStatus && idx <= currentIdx) ? (
-                  <CheckCircle2 className="h-3 w-3" />
-                ) : isCurrent ? (
-                  <Circle className="h-3 w-3 fill-blue-600 text-blue-600" />
-                ) : (
-                  <Circle className="h-3 w-3" />
-                )}
-                <span>{s.stage_name}</span>
-              </button>
+                <button
+                  type="button"
+                  disabled={!isClickable}
+                  onClick={() => setConfirmTarget(s)}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs whitespace-nowrap transition-colors ${chipClass} ${
+                    !isClickable ? 'cursor-default' : ''
+                  }`}
+                  aria-label={
+                    isNext
+                      ? `Click to advance ${serviceName} to ${s.stage_name}`
+                      : isCurrent
+                        ? `Current stage`
+                        : isPast
+                          ? `Completed`
+                          : `Upcoming`
+                  }
+                >
+                  {isPast || (isTerminalStatus && idx <= currentIdx) ? (
+                    <CheckCircle2 className="h-3 w-3" />
+                  ) : isCurrent ? (
+                    <Circle className="h-3 w-3 fill-blue-600 text-blue-600" />
+                  ) : (
+                    <Circle className="h-3 w-3" />
+                  )}
+                  <span>{s.stage_name}</span>
+                </button>
+              </FastTooltip>
               {!isLast && <ChevronRight className="h-3 w-3 text-zinc-300" />}
             </div>
           )

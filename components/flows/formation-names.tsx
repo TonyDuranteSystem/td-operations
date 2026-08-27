@@ -5,6 +5,7 @@ import { Loader2, ExternalLink, Building2, ArrowRight } from 'lucide-react'
 import { NAME_STATUS_META, hasFiledName, type NameCheck, type NameCheckStatus } from '@/lib/flows/name-checks'
 import { resolveFormationFilingLink } from '@/lib/flows/state-links'
 import type { NameAction } from '@/lib/operations/formation-name-checks'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface FormationNamesProps {
   serviceDeliveryId: string
@@ -288,15 +289,28 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
 
       {stage === 'Wizard Submitted' && (
         <div className="mt-4 border-t border-zinc-100 pt-3">
-          <button
-            onClick={advance}
-            disabled={!canAdvance || advancing}
-            title={canAdvance ? undefined : 'File an accepted name on the SOS first'}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {advancing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-            Name Confirmed &amp; Filed — Waiting for Articles
-          </button>
+          {canAdvance ? (
+            <button
+              onClick={advance}
+              disabled={!canAdvance || advancing}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {advancing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+              Name Confirmed &amp; Filed — Waiting for Articles
+            </button>
+          ) : (
+            <FastTooltip label="File an accepted name on the SOS first">
+              <button
+                onClick={advance}
+                disabled={!canAdvance || advancing}
+                aria-label="File an accepted name on the SOS first"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {advancing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                Name Confirmed &amp; Filed — Waiting for Articles
+              </button>
+            </FastTooltip>
+          )}
           {!canAdvance && <p className="mt-1.5 text-[11px] text-zinc-400">Enabled once a client-accepted name is filed with the Secretary of State.</p>}
         </div>
       )}

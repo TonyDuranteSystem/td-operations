@@ -17,6 +17,7 @@ import { matchBankFeedToInvoices, ignoreBankFeed, deleteDuplicateBankFeed, resto
 import { invoicePartyName } from '@/lib/finance/invoice-party'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { VALID_SERVICE_TYPES } from '@/lib/operations/service-types'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 // ── Types ──
 
@@ -360,15 +361,17 @@ function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activ
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleSyncAllBanks}
-            disabled={syncingAllBanks}
-            title="Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs every 15 min."
-            className="flex items-center gap-1.5 bg-blue-600 text-white rounded px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
-          >
-            {syncingAllBanks ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-            Sync All Banks Now
-          </button>
+          <FastTooltip label="Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs every 15 min.">
+            <button
+              onClick={handleSyncAllBanks}
+              disabled={syncingAllBanks}
+              aria-label="Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs every 15 min."
+              className="flex items-center gap-1.5 bg-blue-600 text-white rounded px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
+            >
+              {syncingAllBanks ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              Sync All Banks Now
+            </button>
+          </FastTooltip>
           <button
             onClick={handleSync}
             disabled={syncing || loading}
@@ -490,14 +493,16 @@ function ClaimForOwnerButton({ feedId }: { feedId: string }) {
     }
   }
   return (
-    <button
-      onClick={handleClaim}
-      disabled={busy}
-      className="rounded border border-purple-200 bg-purple-50 px-2 py-0.5 text-[11px] font-medium text-purple-700 hover:bg-purple-100 disabled:opacity-50 shrink-0"
-      title="This is TD's own money, not a client payment — move it to My Finances"
-    >
-      {busy ? 'Moving…' : 'Mine →'}
-    </button>
+    <FastTooltip label="This is TD's own money, not a client payment — move it to My Finances">
+      <button
+        onClick={handleClaim}
+        disabled={busy}
+        className="rounded border border-purple-200 bg-purple-50 px-2 py-0.5 text-[11px] font-medium text-purple-700 hover:bg-purple-100 disabled:opacity-50 shrink-0"
+        aria-label="This is TD's own money, not a client payment — move it to My Finances"
+      >
+        {busy ? 'Moving…' : 'Mine →'}
+      </button>
+    </FastTooltip>
   )
 }
 
@@ -847,17 +852,23 @@ function UnmatchedRow({
           {!isMatching ? (
             <>
               {isAdmin && <ClaimForOwnerButton feedId={feed.id} />}
-              <button onClick={onStartMatch} className="p-1 rounded hover:bg-blue-50 text-blue-500" title="Match to invoice" disabled={isPending}>
-                <Link2 className="h-4 w-4" />
-              </button>
-              <button onClick={handleIgnore} className="p-1 rounded hover:bg-zinc-100 text-zinc-400" title="Ignore" disabled={isPending}>
-                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
-              </button>
+              <FastTooltip label="Match to invoice">
+                <button onClick={onStartMatch} className="p-1 rounded hover:bg-blue-50 text-blue-500" aria-label="Match to invoice" disabled={isPending}>
+                  <Link2 className="h-4 w-4" />
+                </button>
+              </FastTooltip>
+              <FastTooltip label="Ignore">
+                <button onClick={handleIgnore} className="p-1 rounded hover:bg-zinc-100 text-zinc-400" aria-label="Ignore" disabled={isPending}>
+                  {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
+                </button>
+              </FastTooltip>
             </>
           ) : (
-            <button onClick={onCancelMatch} className="p-1 rounded hover:bg-zinc-100 text-zinc-500" title="Cancel">
-              <X className="h-4 w-4" />
-            </button>
+            <FastTooltip label="Cancel">
+              <button onClick={onCancelMatch} className="p-1 rounded hover:bg-zinc-100 text-zinc-500" aria-label="Cancel">
+                <X className="h-4 w-4" />
+              </button>
+            </FastTooltip>
           )}
         </div>
       </div>
@@ -1141,9 +1152,11 @@ function UnmatchedRow({
                           <span className="text-zinc-400"> / {formatCurrency(s.appliedAmount, s.currency)}</span>
                         )}
                       </span>
-                      <button type="button" onClick={() => removeSelect(s.id)} className="p-0.5 rounded hover:bg-blue-100 text-blue-500" title="Remove">
-                        <X className="h-3 w-3" />
-                      </button>
+                      <FastTooltip label="Remove">
+                        <button type="button" onClick={() => removeSelect(s.id)} className="p-0.5 rounded hover:bg-blue-100 text-blue-500" aria-label="Remove">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </FastTooltip>
                     </div>
                   ))}
                 </div>
@@ -1330,7 +1343,12 @@ function UnmatchedRow({
                   disabled={createSubmitting}
                 >
                   <option value="">— pick a service type —</option>
-                  {VALID_SERVICE_TYPES.map(t => (
+                  {/* "Annual Renewal" stays in VALID_SERVICE_TYPES (it mirrors
+                      the DB constraint, for historical rows) but is retired
+                      as a real deliverable (R106) — the backend now refuses
+                      to create one, so don't offer a choice that always fails
+                      (2026-08-27, dev job bb48eba1). */}
+                  {VALID_SERVICE_TYPES.filter(t => t !== 'Annual Renewal').map(t => (
                     <option key={t} value={t}>{t}</option>
                   ))}
                 </select>
@@ -1423,15 +1441,17 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
       <span className="text-xs text-muted-foreground truncate">{feed.sender_name || '—'}</span>
       <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
       {payment?.invoice_number && feed.matched_payment_id ? (
-        <a
-          href={`/api/invoices/${feed.matched_payment_id}/pdf`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-mono text-xs text-blue-600 hover:underline shrink-0"
-          title="Open invoice PDF"
-        >
-          {payment.invoice_number}
-        </a>
+        <FastTooltip label="Open invoice PDF">
+          <a
+            href={`/api/invoices/${feed.matched_payment_id}/pdf`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono text-xs text-blue-600 hover:underline shrink-0"
+            aria-label="Open invoice PDF"
+          >
+            {payment.invoice_number}
+          </a>
+        </FastTooltip>
       ) : (
         <span className="font-mono text-xs text-blue-600 shrink-0">{payment?.invoice_number ?? '—'}</span>
       )}
@@ -1461,13 +1481,15 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
       )}
       {canDeleteDuplicate && (
         <>
-          <button
-            onClick={() => setConfirmOpen(true)}
-            title="Delete this Plaid duplicate — Mercury API twin already matched to the same invoice"
-            className="p-1 rounded hover:bg-red-50 text-red-500 shrink-0"
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
+          <FastTooltip label="Delete this Plaid duplicate — Mercury API twin already matched to the same invoice">
+            <button
+              onClick={() => setConfirmOpen(true)}
+              aria-label="Delete this Plaid duplicate — Mercury API twin already matched to the same invoice"
+              className="p-1 rounded hover:bg-red-50 text-red-500 shrink-0"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </FastTooltip>
           <ConfirmDestructiveDialog
             open={confirmOpen}
             onClose={() => setConfirmOpen(false)}
@@ -1539,15 +1561,17 @@ function CrashedRow({ feed }: { feed: BankFeedRecord }) {
         <span className={cn('text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0', STATUS_COLORS.activation_crashed)}>
           activation crashed
         </span>
-        <button
-          onClick={handleRetry}
-          disabled={busy}
-          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-red-50 hover:bg-red-100 text-red-700 disabled:opacity-50 shrink-0"
-          title="Retry activation"
-        >
-          {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCw className="h-3 w-3" />}
-          Retry
-        </button>
+        <FastTooltip label="Retry activation">
+          <button
+            onClick={handleRetry}
+            disabled={busy}
+            className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-red-50 hover:bg-red-100 text-red-700 disabled:opacity-50 shrink-0"
+            aria-label="Retry activation"
+          >
+            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCw className="h-3 w-3" />}
+            Retry
+          </button>
+        </FastTooltip>
       </div>
       <div className="px-4 pb-3">
         <div className="border border-red-300 bg-red-50 rounded-md px-3 py-2 flex items-start gap-2 text-xs text-red-800">
@@ -1598,15 +1622,17 @@ function DuplicateRow({ feed }: { feed: BankFeedRecord }) {
       <span className={cn('text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0', STATUS_COLORS.duplicate)}>
         duplicate
       </span>
-      <button
-        onClick={handleRestore}
-        disabled={isPending}
-        title="Not a duplicate — put this payment back in the queue"
-        className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-purple-200 text-purple-700 hover:bg-purple-50 disabled:opacity-50 shrink-0"
-      >
-        {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Undo2 className="h-3 w-3" />}
-        Restore
-      </button>
+      <FastTooltip label="Not a duplicate — put this payment back in the queue">
+        <button
+          onClick={handleRestore}
+          disabled={isPending}
+          aria-label="Not a duplicate — put this payment back in the queue"
+          className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-purple-200 text-purple-700 hover:bg-purple-50 disabled:opacity-50 shrink-0"
+        >
+          {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Undo2 className="h-3 w-3" />}
+          Restore
+        </button>
+      </FastTooltip>
     </div>
   )
 }
