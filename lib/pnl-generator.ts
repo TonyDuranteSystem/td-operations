@@ -68,7 +68,12 @@ export function computePnlTotals(
     refunds.reduce((s, t) => s - Number(t.amount), 0) +
     -uncatExpense.reduce((s, t) => s + Number(t.amount), 0)
   const netIncome = grossProfit - totalExpenses
-  const totalDistributions = distributions.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+  // Signed-sum-then-abs, same contra treatment as totalCogs above (F4): a
+  // positive-amount distribution row is a refund/reversal of an earlier draw
+  // and must REDUCE the total, not add to it (Dynamiq: a $931.51 personal-draw
+  // refund was counted as a second withdrawal, inflating distributions by
+  // 2x931.51=$1,863.02 and breaking the balance-sheet tie by the same amount).
+  const totalDistributions = Math.abs(distributions.reduce((s, t) => s + Number(t.amount), 0))
   // F3 fix: contributions (owner money in) are equity, never revenue.
   // Tracked separately for the capital-account roll-forward.
   const totalContributions = contributions.reduce((s, t) => s + Number(t.amount), 0)

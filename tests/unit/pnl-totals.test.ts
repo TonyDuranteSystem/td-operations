@@ -126,6 +126,27 @@ describe('computePnlTotals', () => {
     expect(t.netIncome).toBe(1000)
     expect(t.totalDistributions).toBe(400)
   })
+
+  it('F5 (Dynamiq, 2026-08-27): a POSITIVE amount inside the distribution category is a refund/reversal of an earlier draw and REDUCES the total, not doubles it', () => {
+    // A $931.51 corporate-card credit refunding an earlier personal draw was
+    // counted as a SECOND withdrawal by the old Math.abs()-per-row formula,
+    // inflating totalDistributions by 2x931.51 and breaking the balance-sheet
+    // tie by the same amount. Same bug shape as F4, just missed for this category.
+    const t = computePnlTotals([
+      tx('distribution', -1058.41),
+      tx('distribution', -779.81),
+      tx('distribution', 931.51), // corporate-card refund of an earlier draw
+    ])
+    expect(t.totalDistributions).toBeCloseTo(906.71, 2) // 1058.41 + 779.81 − 931.51, NOT 2769.73
+  })
+
+  it('F5: a distribution and its exact reversal net to zero, not double-counted', () => {
+    const t = computePnlTotals([
+      tx('distribution', -4002),
+      tx('distribution', 4002), // fully reversed
+    ])
+    expect(t.totalDistributions).toBe(0)
+  })
 })
 
 describe('computePnlTotals — folded-visibility fields (2026-07-02, B&P $594k incident)', () => {

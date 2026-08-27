@@ -618,3 +618,42 @@ describe("confirmed owner attribution survives note trailers", () => {
     expect(d.members.find(m => m.name === "Gabriele Finelli")!.distributions).toBe(0)
   })
 })
+
+/**
+ * F5 (Dynamiq SR LLC, 2026-08-27): a refund/reversal of an earlier draw must
+ * NET against a member's distributions, not add to them. The old per-row
+ * Math.abs() counted a $931.51 corporate-card credit as a second withdrawal,
+ * inflating the member's (and the balance sheet's) distributions by 2x931.51.
+ */
+describe("distribution refund/reversal nets correctly (2026-08-27)", () => {
+  const members = [
+    { name: "Sofia Marinoni", pct: 50, source: "wizard" as const },
+    { name: "Donato Renato Berini", pct: 50, source: "wizard" as const },
+  ]
+
+  it("a confirmed member's own refund nets against their own draws, not the other member's", () => {
+    const d = buildFinancialDraft({
+      taxYear: 2025, members, priorReturn: null,
+      transactions: [
+        tx({ id: "d1", amount: -1000, category: "distribution", notes: "Member: Sofia Marinoni" }),
+        tx({ id: "d2", amount: 300, category: "distribution", notes: "Member: Sofia Marinoni" }), // refund
+      ],
+    })
+    expect(d.members.find(m => m.name === "Sofia Marinoni")!.distributions).toBe(700)
+    expect(d.members.find(m => m.name === "Donato Renato Berini")!.distributions).toBe(0)
+  })
+
+  it("an unattributed refund nets against the unattributed pool before it is spread by ownership %", () => {
+    const d = buildFinancialDraft({
+      taxYear: 2025, members, priorReturn: null,
+      transactions: [
+        tx({ id: "d1", amount: -1058.41, category: "distribution" }),
+        tx({ id: "d2", amount: -779.81, category: "distribution" }),
+        tx({ id: "d3", amount: 931.51, category: "distribution" }), // unattributed refund
+      ],
+    })
+    // net unattributed pool = 906.71, split 50/50 — NOT (1058.41+779.81+931.51)/2
+    expect(d.members.find(m => m.name === "Sofia Marinoni")!.distributions).toBeCloseTo(453.355, 2)
+    expect(d.members.find(m => m.name === "Donato Renato Berini")!.distributions).toBeCloseTo(453.355, 2)
+  })
+})

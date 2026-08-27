@@ -388,8 +388,8 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
     const m = confirmedMemberFromNotes(t.notes, allocatable)
       ?? attributeToMember(t.counterparty, allocatable)
       ?? attributeToMember(t.description, allocatable)
-    if (m) byMember.get(m.name)!.distributions += Math.abs(Number(t.amount))
-    else unattributedDist += Math.abs(Number(t.amount))
+    if (m) byMember.get(m.name)!.distributions += Number(t.amount)
+    else unattributedDist += Number(t.amount)
   }
   if (unattributedContrib !== 0 || unattributedDist !== 0) {
     notes.push(
@@ -402,7 +402,11 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
     const own = byMember.get(m.name)!
     const share = m.pct / 100
     const contributions = own.contributions + unattributedContrib * share
-    const distributions = own.distributions + unattributedDist * share
+    // Signed-sum-then-abs (matches pnl-generator.ts's totalDistributions fix):
+    // a member's own attributed rows plus their ownership share of the
+    // unattributed pool are combined SIGNED first, so a refund/reversal nets
+    // against real draws instead of inflating the magnitude.
+    const distributions = Math.abs(own.distributions + unattributedDist * share)
     // No validated prior → seed opening capital from the statements' opening cash
     // (by ownership %) so the balance sheet ties; else use the prior K-1 figure.
     const beginning = usingStatementOpening
