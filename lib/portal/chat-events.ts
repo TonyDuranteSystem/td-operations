@@ -640,3 +640,48 @@ export async function retireBankingWizardSubmittedNote(params: {
     return { retired: 0 }
   }
 }
+
+/**
+ * Retire the "wizard submitted" note for a `tax_return_submissions` row so a
+ * genuine resubmission (client corrects their tax form and resubmits) can
+ * produce a fresh notification. Same soft-delete rationale as
+ * `retireBankingWizardSubmittedNote`. Call this BEFORE re-emitting whenever
+ * the caller has confirmed the row's `review_status` was already non-null
+ * prior to this write — i.e. this pass is submission #2+, not #1. Verified
+ * live 2026-08-27: real production submission `e6fdfd9b-e0af-4a73-ae62-25c8747e28de`
+ * was corrected 11 days after its first submission and produced no second
+ * note before this fix existed.
+ */
+export async function retireWizardSubmittedNote(params: {
+  taxReturnSubmissionId: string
+  deletedBy?: string | null
+}): Promise<{ retired: number }> {
+  const marker = buildMarker({ table: "tax_return_submissions", id: params.taxReturnSubmissionId }, "wizard_submitted")
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("portal_messages")
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: params.deletedBy ?? SYSTEM_ACTOR_ID,
+      })
+      .eq("sender_type", "system")
+      .like("message", `%${marker}%`)
+      .is("deleted_at", null)
+      .select("id")
+
+    if (error) {
+      console.error(
+        `[retireWizardSubmittedNote] could not retire the note for tax_return_submissions ${params.taxReturnSubmissionId}:`,
+        error.message,
+      )
+      return { retired: 0 }
+    }
+    return { retired: (data ?? []).length }
+  } catch (err) {
+    console.error(
+      `[retireWizardSubmittedNote] non-fatal for ${params.taxReturnSubmissionId}:`,
+      err instanceof Error ? err.message : String(err),
+    )
+    return { retired: 0 }
+  }
+}

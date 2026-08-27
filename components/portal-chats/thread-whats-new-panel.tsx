@@ -48,6 +48,9 @@ const EVENT_KEY_LABELS: Record<string, string> = {
   itin_review: 'ITIN',
   aged_credit_applied: 'Credit Applied',
   financials_confirm_unlocked: 'Financials Unlocked',
+  plan_referrer_ready_to_release: 'Referral',
+  recurring_invoice_generated: 'Invoice',
+  itin_data_collection: 'ITIN',
 }
 
 /** Deep-link target for a note's source entity. Returns null when there's no

@@ -533,6 +533,7 @@ ${(entityType === "MMLLC" || entityType === "Corp") ? `<li>Bank statements auto-
   // 'resubmitted'. We no longer set submission.status='reviewed' on submit —
   // the review state now lives in review_status, and "reviewed" was the old
   // model's auto-approve. review_history records each round.
+  let reviewStatusPriorToThisSubmission: ReviewStatus | null = null
   if (p.submission_id) {
     try {
       const { data: curSub } = await supabaseAdmin
@@ -542,6 +543,7 @@ ${(entityType === "MMLLC" || entityType === "Corp") ? `<li>Bank statements auto-
         .single()
 
       const prev = (curSub?.review_status ?? null) as ReviewStatus | null
+      reviewStatusPriorToThisSubmission = prev
       // A client re-editing from an ALREADY-resubmitted state must stay
       // 'resubmitted' (2026-08-03). This branch used to fall through to
       // 'submitted' for anything that wasn't 'revision_requested', and nothing
@@ -595,6 +597,15 @@ ${(entityType === "MMLLC" || entityType === "Corp") ? `<li>Bank statements auto-
   }
   if (p.submission_id && (p.contact_id || p.account_id)) {
     const locale = await resolveLocale(p.contact_id ?? null, p.account_id ?? null)
+    // A non-null prior review_status means this row already went through this
+    // exact notify step once — this pass is a genuine resubmission, not the
+    // first submission. Retire the old marker first so the dedup check in
+    // emitClientChatEvent doesn't silently swallow the new note (dev job
+    // fbbf4abe follow-up — same class of bug already fixed for banking).
+    if (reviewStatusPriorToThisSubmission !== null) {
+      const { retireWizardSubmittedNote } = await import("@/lib/portal/chat-events")
+      await retireWizardSubmittedNote({ taxReturnSubmissionId: p.submission_id })
+    }
     const chat = await emitClientChatEvent({
       contact_id: p.contact_id,
       account_id: p.account_id,
