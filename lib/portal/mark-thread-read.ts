@@ -94,13 +94,22 @@ export async function markClientMessagesReadForStaffReply(params: {
   const now = new Date().toISOString()
   let marked = 0
 
+  // Staff replies also clear plain system notices (out-of-office autoreply and
+  // similar) alongside the client's own messages — otherwise a conversation
+  // that ever got one stays permanently "unread" no matter how many times
+  // staff replies (2026-08-27). Chat-event marker rows are EXCLUDED: those are
+  // acknowledged via their own handled_at flag (What's New panel), never via
+  // read_at — see lib/portal/chat-events.ts.
+  const NOT_CHAT_EVENT = '%<!-- chat-event:%'
+
   for (const step of plan) {
     if (step.kind === "account") {
       let q = supabaseAdmin
         .from("portal_messages")
         .update({ read_at: now })
         .eq("account_id", step.account_id)
-        .eq("sender_type", "client")
+        .in("sender_type", ["client", "system"])
+        .not("message", "ilike", NOT_CHAT_EVENT)
         .is("read_at", null)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
       q = (q as any).eq("client_kept_unread", false)
@@ -111,7 +120,8 @@ export async function markClientMessagesReadForStaffReply(params: {
         .from("portal_messages")
         .update({ read_at: now })
         .eq("contact_id", step.contact_id)
-        .eq("sender_type", "client")
+        .in("sender_type", ["client", "system"])
+        .not("message", "ilike", NOT_CHAT_EVENT)
         .is("read_at", null)
       if (step.excludeAccountIds.length > 0) {
         q = q.or(`account_id.is.null,account_id.not.in.(${step.excludeAccountIds.join(",")})`)
@@ -126,7 +136,8 @@ export async function markClientMessagesReadForStaffReply(params: {
         .update({ read_at: now })
         .is("contact_id", null)
         .in("account_id", step.accountIds)
-        .eq("sender_type", "client")
+        .in("sender_type", ["client", "system"])
+        .not("message", "ilike", NOT_CHAT_EVENT)
         .is("read_at", null)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
       q = (q as any).eq("client_kept_unread", false)
