@@ -109,4 +109,54 @@ describe('resolveYourTimeZone', () => {
     })
     expect(result).toEqual({ tz: 'America/Argentina/Buenos_Aires', label: 'Buenos Aires' })
   })
+
+  it('View as prefers the client\'s last real connection over a stale stored address', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: true,
+      deviceTimeZone: 'America/New_York', // staff's own browser — must lose
+      lastSeenTimeZone: 'Asia/Jakarta',
+      storedTimeZone: malta, // address on file — must lose to the fresher signal
+    })
+    expect(result).toEqual({ tz: 'Asia/Jakarta', label: 'Jakarta' })
+  })
+
+  it('View as with no last-seen signal falls back to the stored country', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: true,
+      deviceTimeZone: 'America/New_York',
+      lastSeenTimeZone: null,
+      storedTimeZone: malta,
+    })
+    expect(result).toEqual({ tz: 'Europe/Malta', label: 'Malta' })
+  })
+
+  it('View as with neither last-seen nor stored country falls back to the device (staff) as last resort', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: true,
+      deviceTimeZone: 'America/New_York',
+      lastSeenTimeZone: null,
+      storedTimeZone: null,
+    })
+    expect(result).toEqual({ tz: 'America/New_York', label: 'New York' })
+  })
+
+  it('a real visit still prefers the live device signal over a captured last-seen value', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: false,
+      deviceTimeZone: 'Europe/Rome',
+      lastSeenTimeZone: 'Asia/Jakarta',
+      storedTimeZone: malta,
+    })
+    expect(result).toEqual({ tz: 'Europe/Rome', label: 'Rome' })
+  })
+
+  it('a real visit with no live device signal falls back to last-seen before the stored country', () => {
+    const result = resolveYourTimeZone({
+      isViewAs: false,
+      deviceTimeZone: null,
+      lastSeenTimeZone: 'Asia/Jakarta',
+      storedTimeZone: malta,
+    })
+    expect(result).toEqual({ tz: 'Asia/Jakarta', label: 'Jakarta' })
+  })
 })
