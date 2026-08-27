@@ -29,7 +29,12 @@ import type { Json } from "@/lib/database.types"
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { submission_id, token } = body as { submission_id?: string; token?: string }
+    const { submission_id, token, service_delivery_id: explicitServiceDeliveryId, dedupe_key: dedupeKey } = body as {
+      submission_id?: string
+      token?: string
+      service_delivery_id?: string | null
+      dedupe_key?: string | null
+    }
 
     if (!submission_id || !token) {
       return NextResponse.json({ error: "submission_id and token required" }, { status: 400 })
@@ -47,8 +52,40 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Submission not found" }, { status: 404 })
     }
 
-    if (sub.status !== "completed") {
+    // dev job fbbf4abe (Senior Engineer finding): once staff have reviewed a
+    // submission, its own status is deliberately kept at "reviewed" — not
+    // reset back to "completed" — through any later resubmission, precisely
+    // so a correction never erases the fact it was already looked at once
+    // (preserveReviewedStatus, lib/portal/submission-record.ts). Rejecting
+    // "reviewed" here as "Form not completed" meant the FIRST correction a
+    // client made after any review permanently failed this auto-chain — no
+    // email, no task, no Drive save, ever again, for that submission. Both
+    // statuses mean the client actually finished the form; "reviewed" is a
+    // later, ADDITIONAL stage on top of "completed", never a replacement for
+    // needing the auto-chain to run.
+    if (sub.status !== "completed" && sub.status !== "reviewed") {
       return NextResponse.json({ error: "Form not completed" }, { status: 400 })
+    }
+
+    // dev job fbbf4abe (Senior Engineer finding): a stale/forwarded link to an
+    // explicit record that staff have since cancelled or completed must be
+    // REFUSED, never silently fall through to creating a brand-new SD — that
+    // would resurrect a matter staff already closed out. Only the NEW,
+    // server-verified explicit-id path can distinguish this; the legacy
+    // account/contact-based lookup below has no id to check status against
+    // and is left exactly as it was for the old emailed-link flow.
+    if (explicitServiceDeliveryId) {
+      const { data: explicitSd } = await supabaseAdmin
+        .from("service_deliveries")
+        .select("id, status")
+        .eq("id", explicitServiceDeliveryId)
+        .maybeSingle()
+      if (!explicitSd || explicitSd.status !== "active") {
+        return NextResponse.json(
+          { error: "This closure is no longer active — it may have already been completed or cancelled." },
+          { status: 409 },
+        )
+      }
     }
 
     const results: Array<{ step: string; status: string; detail?: string }> = []
@@ -75,7 +112,11 @@ export async function POST(req: NextRequest) {
     const llcName = String(submittedData.llc_name || "Unknown LLC")
     const llcEin = String(submittedData.llc_ein || "N/A")
     const llcState = String(submittedData.llc_state || (sub as Record<string, unknown>).state || "N/A")
-    const formationYear = String(submittedData.formation_year || "N/A")
+    // llc_formation_year is the actual key both closure frontends write
+    // (lib/types/closure-form.ts, components/portal/wizard/wizard-configs.ts) —
+    // this read the wrong key for as long as this route has existed, so
+    // "Formation Year" has always shown N/A in every closure email/task.
+    const formationYear = String(submittedData.llc_formation_year || "N/A")
     const taxFiled = String(submittedData.tax_returns_filed || "N/A")
     const taxYears = String(submittedData.tax_returns_years || "N/A")
     const registeredAgent = String(submittedData.registered_agent || "N/A")
@@ -157,18 +198,64 @@ export async function POST(req: NextRequest) {
 
     // ---- STEP 3: Ensure Service Delivery exists ----
     let deliveryId: string | null = null
+    // Tracks which branch below fired, so step 5 only creates its own plain
+    // task on a RESUBMISSION — createSD's own dispatch (dispatchWorkflowForSdCreated)
+    // already creates a proper workflow task card the moment a NEW SD is
+    // created, so unconditionally also inserting the plain task below produced
+    // two tasks for one event (AI architect finding, dev job fbbf4abe).
+    let sdWasNewlyCreated = false
     try {
-      const orFilters = [`notes.ilike.%${token}%`]
-      if (accountId) orFilters.push(`account_id.eq.${accountId}`)
-      if (contactId) orFilters.push(`contact_id.eq.${contactId}`)
-
-      const { data: existingSd } = await supabaseAdmin
-        .from("service_deliveries")
-        .select("id")
-        .eq("service_type", "Company Closure")
-        .or(orFilters.join(","))
-        .eq("status", "active")
-        .limit(1)
+      // dev job fbbf4abe root-cause fix: when the caller (the portal wizard,
+      // via wizard-submit's server-side verification) already knows exactly
+      // WHICH record this is, use that directly — it is unambiguous by
+      // construction and sidesteps every account/contact/token heuristic
+      // below entirely, closing the multi-LLC conflation at its actual
+      // source rather than patching the heuristics that caused it. The
+      // legacy lookup remains the fallback for the OLD emailed-link flow,
+      // which has no explicit id to send.
+      let existingSd: { id: string }[] | null = null
+      if (explicitServiceDeliveryId) {
+        existingSd = [{ id: explicitServiceDeliveryId }]
+      } else if (accountId) {
+        // Account-linked: one CRM account is one company, so account_id alone
+        // is already an exact, unambiguous match — unchanged (Senior Engineer
+        // confirmed this scoping is correct as-is).
+        const { data } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id")
+          .eq("service_type", "Company Closure")
+          .eq("account_id", accountId)
+          .eq("status", "active")
+          .limit(1)
+        existingSd = data
+      } else if (contactId) {
+        // Contact-only (no CRM account, an untracked external LLC): matching by
+        // contact_id ALONE would treat a genuinely different LLC closed by the
+        // same person as a resubmission of an unrelated one — the multi-LLC
+        // conflation both reviewers found on the independent post-build check.
+        // source_closure_token (this form submission's own token, one per
+        // closure, see scripts/migrations/20260826-1400-closure-sd-dedup-unique.sql)
+        // is what actually identifies WHICH closure this is; contact_id alone
+        // never did. A pre-existing row from before this column existed has
+        // source_closure_token NULL and no recoverable token (confirmed
+        // against the one known real case: notes never got the
+        // "Auto-created from closure form <token>" text this route writes,
+        // because that record was never actually created by this route's own
+        // "new SD" branch). Matching a NULL token too keeps that one legacy
+        // shape working; it does NOT reopen the multi-LLC conflation, because
+        // every row created FROM NOW ON always gets a real, distinct token —
+        // two new closures for the same contact can never both be NULL.
+        const { data } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id")
+          .eq("service_type", "Company Closure")
+          .eq("contact_id", contactId)
+          .or(`source_closure_token.eq.${token},source_closure_token.is.null`)
+          .is("account_id", null)
+          .eq("status", "active")
+          .limit(1)
+        existingSd = data
+      }
 
       if (existingSd?.length) {
         deliveryId = existingSd[0].id
@@ -179,8 +266,10 @@ export async function POST(req: NextRequest) {
           account_id: accountId,
           contact_id: contactId,
           notes: `Auto-created from closure form ${token}`,
+          source_closure_token: token,
         })
         deliveryId = newSd.id
+        sdWasNewlyCreated = true
         results.push({ step: "sd_created", status: "ok", detail: `SD auto-created: ${deliveryId}` })
       }
     } catch (e) {
@@ -239,31 +328,74 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
       results.push({ step: "luca_email", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
-    // ---- STEP 5: Create task for Luca ----
-    try {
-      await dbWriteSafe(
-        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
-        supabaseAdmin
-          .from("tasks")
-          .insert({
-            task_title: `Start closure: ${llcName} (${llcState})`,
-            description: `Closure form completed for ${clientName}.\n\nLLC: ${llcName}\nState: ${llcState}\nEIN: ${llcEin}\nFormation: ${formationYear}\nTax Filed: ${taxFiled}\n\nSteps:\n1. State compliance check (outstanding taxes, fees, annual reports)\n2. Resolve any outstanding obligations\n3. Prepare Articles of Dissolution\n4. Mark this task as Done to advance pipeline`,
-            assigned_to: "Luca",
-            priority: "High",
-            category: "Filing",
-            status: "To Do",
-            due_date: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-            delivery_id: deliveryId || null,
-            account_id: accountId || null,
-            contact_id: contactId || null,
-            created_by: "System",
-          }),
-        "tasks.insert"
-      )
+    // ---- STEP 5: Create task for Luca (RESUBMISSION only) ----
+    // On a brand-new SD, createSD's own dispatch (step 3 above) already created
+    // a proper workflow task card for "Company Closure" — inserting this plain
+    // task unconditionally duplicated it. On a resubmission (existing SD, no
+    // fresh dispatch), this plain task remains the only staff signal, so it
+    // still fires there.
+    //
+    // dev job fbbf4abe (AI architect + Senior Engineer finding): "resubmission"
+    // used to mean only "the SD already existed" — but once a failed step
+    // correctly triggers a retry (the ok:false fix), an AUTOMATIC RETRY of the
+    // exact same content also hits this branch and creates a DUPLICATE task
+    // every time it retries. isGenuineChange distinguishes "the client
+    // actually corrected something" from "this is a mechanical retry of what
+    // was already processed" using the submission's own content hash
+    // (dedupeKey, computed once at wizard-submit and forwarded unchanged) —
+    // a real edit always hashes differently and still creates a task; an
+    // exact retry does not. No dedupeKey (the old emailed-link flow, which
+    // has no retry mechanism at all) preserves the original behavior exactly.
+    const isGenuineChange = !dedupeKey || sub.last_processed_hash !== dedupeKey
+    if (!sdWasNewlyCreated && isGenuineChange) {
+      try {
+        await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
+          supabaseAdmin
+            .from("tasks")
+            .insert({
+              task_title: `Start closure: ${llcName} (${llcState})`,
+              description: `Closure form completed for ${clientName}.\n\nLLC: ${llcName}\nState: ${llcState}\nEIN: ${llcEin}\nFormation: ${formationYear}\nTax Filed: ${taxFiled}\n\nSteps:\n1. State compliance check (outstanding taxes, fees, annual reports)\n2. Resolve any outstanding obligations\n3. Prepare Articles of Dissolution\n4. Mark this task as Done to advance pipeline`,
+              assigned_to: "Luca",
+              priority: "High",
+              category: "Filing",
+              status: "To Do",
+              due_date: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+              delivery_id: deliveryId || null,
+              account_id: accountId || null,
+              contact_id: contactId || null,
+              created_by: "System",
+            }),
+          "tasks.insert"
+        )
 
-      results.push({ step: "luca_task", status: "ok", detail: `Task created. Delivery: ${deliveryId || "none"}` })
-    } catch (e) {
-      results.push({ step: "luca_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        results.push({ step: "luca_task", status: "ok", detail: `Task created. Delivery: ${deliveryId || "none"}` })
+      } catch (e) {
+        results.push({ step: "luca_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    } else {
+      results.push({
+        step: "luca_task",
+        status: "skipped",
+        detail: sdWasNewlyCreated
+          ? "createSD's own workflow dispatch already created a task for the new SD"
+          : "identical content already processed for this submission — not a genuine resubmission",
+      })
+    }
+
+    // Stamp the content hash AFTER deciding step 5 above, so a genuine retry
+    // of a step that failed further down (Drive/email/SD-update) still gets
+    // its normal retry behavior on those steps — only the task-creation
+    // decision reads this value. Non-blocking: a failed stamp just means the
+    // next retry re-evaluates isGenuineChange against the OLD hash, which is
+    // still correct (worst case, one extra correctly-deduped retry).
+    if (dedupeKey) {
+      try {
+        await supabaseAdmin
+          .from("closure_submissions")
+          .update({ last_processed_hash: dedupeKey })
+          .eq("id", submission_id)
+      } catch { /* non-blocking, see above */ }
     }
 
     // ---- STEP 6: Update service delivery ----

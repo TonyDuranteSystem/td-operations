@@ -2,11 +2,20 @@
  * Post-attestation handoff (Slice 9, master plan §3.7).
  *
  * After the client confirms the financials: archive the client-confirmed
- * Excel (P&L + Balance Sheet) to the client's Drive 3.Tax/{year} folder and
- * create the staff final-pass task (plan A4 — staff review before
- * tax_send_to_accountant). Fire-and-forget from the attest route; every
- * failure is logged, never surfaced to the client (the attestation itself is
- * already stored).
+ * Excel (P&L + Balance Sheet) to the client's Drive 3.Tax/{year} folder.
+ * Fire-and-forget from the attest route; every failure is logged, never
+ * surfaced to the client (the attestation itself is already stored).
+ *
+ * The staff "you need to do the final pass" signal is NOT this handoff's job
+ * anymore (dev job 9b7892d6, 2026-08-26): the attest route itself now emits a
+ * proper Notification Center card + What's New note right after the
+ * confirmation is durably saved, in the request's own awaited path — reliably,
+ * regardless of whether this fire-and-forget archive step ever runs. Before
+ * this change, this handoff ALSO raised a plain `tasks` row for the same
+ * event, which — once the route grew a real notification — became a second,
+ * duplicate staff signal for one event (AI architect finding). Removed here,
+ * not deduped, since the new signal already carries the "do the final pass,
+ * then send to the accountant" instruction.
  *
  * Re-ingestion safety (W3): the archived Excel is NOT a statement and the
  * raw CSVs already live in Supabase storage with content-hash sources — even
@@ -15,7 +24,6 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 
 export async function runAttestHandoff(accountId: string, taxYear: number): Promise<void> {
   const { data: acct } = await supabaseAdmin
@@ -81,36 +89,26 @@ export async function runAttestHandoff(accountId: string, taxYear: number): Prom
     console.error("[attest-handoff] Drive archive failed:", e)
   }
 
-  // 2. Staff final-pass task (deduped by title, same pattern as back-filing).
+  // 2. Record the archive outcome (audit trail only — no task here anymore,
+  // see the header comment). The outcome detail is genuinely useful to staff
+  // (e.g. "archiving failed, regenerate before the final pass"), so it isn't
+  // discarded — it goes to action_log instead of a second staff task.
   try {
-    const taskTitle = `Final pass: client-confirmed financials (${taxYear}) — ${companyName}`
-    const { data: existing } = await supabaseAdmin
-      .from("tasks")
-      .select("id")
-      .eq("account_id", accountId)
-      .eq("task_title", taskTitle)
-      .neq("status", "Done")
-      .limit(1)
-      .maybeSingle()
-    if (!existing) {
-      // eslint-disable-next-line no-restricted-syntax -- same legacy plain-task path as the wizard tasks
-      await supabaseAdmin.from("tasks").insert({
-        task_title: taskTitle,
-        assigned_to: defaultTaskAssignee(),
-        status: "To Do",
-        priority: "High",
-        category: "Filing",
-        description: {
-          archived: `The client confirmed the generated P&L + Balance Sheet for ${taxYear} (attestation on the tax submission, confirmed Excel archived in Drive 3.Tax/${taxYear}). Do the staff final pass, then send to the accountant (tax_send_to_accountant).`,
-          nothing_to_archive: `The client confirmed the financials for ${taxYear} (attestation stored), but the company has NO transactions for ${taxYear}, so there is no workbook to archive or send. Check this is genuinely a dormant/first year — if so, the accountant send needs no_pnl_reason. If transactions were expected, the bank statements are missing.`,
-          no_drive_folder: `The client confirmed the generated P&L + Balance Sheet for ${taxYear} (attestation stored), but this account has NO Drive folder, so the confirmed Excel could not be archived. Create the client's Drive folder, then regenerate the workbook from the tax financials page before the final pass.`,
-          failed: `The client confirmed the generated P&L + Balance Sheet for ${taxYear} (attestation stored), but ARCHIVING THE EXCEL TO DRIVE FAILED — there is no confirmed workbook in 3.Tax/${taxYear} to send. Regenerate it from the tax financials page before the final pass, then send to the accountant (tax_send_to_accountant).`,
-        }[outcome],
-        account_id: accountId,
-        created_by: "System",
-      })
-    }
+    const detail = {
+      archived: `Confirmed Excel archived in Drive 3.Tax/${taxYear}.`,
+      nothing_to_archive: `No transactions for ${taxYear} — nothing to archive. Confirm this is genuinely a dormant/first year before sending to the accountant.`,
+      no_drive_folder: `This account has no Drive folder — the confirmed Excel could not be archived. Create the client's Drive folder, then regenerate the workbook before the final pass.`,
+      failed: `ARCHIVING THE EXCEL TO DRIVE FAILED — there is no confirmed workbook in 3.Tax/${taxYear} to send. Regenerate it from the tax financials page before the final pass.`,
+    }[outcome]
+    await supabaseAdmin.from("action_log").insert({
+      actor: "system",
+      action_type: "financials_attest_handoff",
+      table_name: "tax_return_submissions",
+      account_id: accountId,
+      summary: `Client-confirmed financials handoff (${taxYear}) — ${companyName}: ${outcome}`,
+      details: { tax_year: taxYear, outcome, detail },
+    })
   } catch (e) {
-    console.error("[attest-handoff] staff task creation failed:", e)
+    console.error("[attest-handoff] action_log write failed:", e)
   }
 }

@@ -21,6 +21,7 @@ import { handleEsignSendEmail } from "./handlers/esign-send-email"
 import { handleArchiveTaxSubmission } from "./handlers/archive-tax-submission"
 import { handleArchiveSubmission } from "./handlers/archive-submission"
 import { handleTranslateLanguage } from "./handlers/translate-language"
+import { handleClosureSetup } from "./handlers/closure-setup"
 
 /** Runner-supplied execution context (Phase 3R): the hard wall-clock deadline
  *  anchored to the RUNNER's invocation start — a chunked handler must stop
@@ -78,6 +79,10 @@ const handlers: Record<string, JobHandler> = {
   // portal's UI text into a client-picked language. One chunk per invocation,
   // same shape as recategorize_ai; chains dictionary source -> wizard source.
   translate_language: handleTranslateLanguage,
+  // Added 2026-08-26 (dev job fbbf4abe) — portal Company Closure wizard
+  // auto-chain, converged onto the same implementation the older emailed-link
+  // closure flow already uses (see handlers/closure-setup.ts doc comment).
+  closure_setup: handleClosureSetup,
 }
 
 export function getJobHandler(jobType: string): JobHandler | null {

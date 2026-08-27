@@ -94,6 +94,18 @@ interface WizardClientProps {
    * getWizardConfig() output. Every wizard type without a DB source leaves this
    * undefined and keeps the synchronous static config. */
   configOverride?: { steps: WizardStep[]; fields: Record<string, FieldConfig[]> }
+  /** Closure only (dev job fbbf4abe): the SPECIFIC pending Company Closure
+   *  record this wizard visit resolved to, server-side. Sent back on submit
+   *  so the server scopes the submission to this exact record instead of
+   *  guessing from account/contact. Null when closure resolved to no pending
+   *  record at all (contact-only, no company assumed). */
+  closureServiceDeliveryId?: string | null
+  /** Closure only: set (never silently) when the client genuinely has 2+
+   *  pending closures at once — verified 2026-08-26 this has never happened
+   *  in production, but the wizard must disclose it rather than pick one
+   *  unannounced if it ever does. Names the count of OTHER pending closures
+   *  besides the one this form is showing. */
+  closureOtherPendingCount?: number | null
 }
 
 // A conditional field is visible only if its condition matches AND its parent
@@ -288,6 +300,8 @@ export function WizardClient({
   bankGuides = [],
   institutions = [],
   configOverride,
+  closureServiceDeliveryId = null,
+  closureOtherPendingCount = null,
 }: WizardClientProps) {
   // Any language beyond en/it (dev job 12cab351) — see the identical
   // comment in wizard-field.tsx. Layered UNDER the existing it/en choice,
@@ -708,6 +722,7 @@ export function WizardClient({
         contact_id: contactId || null,
         lead_id: leadId || null,
         progress_id: currentProgressId,
+        service_delivery_id: closureServiceDeliveryId || null,
       }
 
       const res = await fetch('/api/portal/wizard-progress', {
@@ -730,7 +745,7 @@ export function WizardClient({
     } finally {
       if (!silent) setIsSaving(false)
     }
-  }, [wizardType, currentStep, formData, accountId, contactId, leadId, currentProgressId, pickText])
+  }, [wizardType, currentStep, formData, accountId, contactId, leadId, currentProgressId, pickText, closureServiceDeliveryId])
 
   const handleSave = useCallback(async () => {
     dirtyRef.current = false
@@ -882,6 +897,7 @@ export function WizardClient({
             contact_id: contactId || null,
             lead_id: leadId || null,
             progress_id: currentProgressId,
+            service_delivery_id: closureServiceDeliveryId || null,
             // Attempt 1 carries the caller's flag; retries force the idempotent
             // dedup path (attempt 1 already marked it submitted), so a retry
             // confirms success rather than re-processing / duplicating the job.
@@ -924,7 +940,7 @@ export function WizardClient({
         "Invio non riuscito dopo alcuni tentativi. Aggiorna la pagina: se risulta già inviato, è andato a buon fine.",
       )!,
     )
-  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, currentProgressId, raiseStepErrors, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer, pickText])
+  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, currentProgressId, raiseStepErrors, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer, pickText, closureServiceDeliveryId])
 
   // Auto-save on step change
   const handleStepChange = useCallback((step: number) => {
@@ -952,6 +968,7 @@ export function WizardClient({
           contact_id: contactId || null,
           lead_id: leadId || null,
           progress_id: currentProgressId,
+          service_delivery_id: closureServiceDeliveryId || null,
         }),
       }).then(res => res.ok ? res.json() : null)
         .then(result => { if (result?.id) setCurrentProgressId(result.id) })
@@ -959,7 +976,7 @@ export function WizardClient({
           console.warn('[wizard] Auto-save failed — data preserved in memory')
         })
     }
-  }, [wizardType, formData, accountId, contactId, leadId, currentProgressId, currentStep, raiseStepErrors])
+  }, [wizardType, formData, accountId, contactId, leadId, currentProgressId, currentStep, raiseStepErrors, closureServiceDeliveryId])
 
   // ── One-owner / multi-owner question ──────────────────────────────────────
   // Only reached when the signed contract AND the offer both failed to say what
@@ -1169,6 +1186,27 @@ export function WizardClient({
         ? `${pickText('Saved', 'Salvato')} ${autosavedAt.toLocaleTimeString(locale === 'it' ? 'it-IT' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`
         : null}
     >
+      {/* Multiple pending closures banner (dev job fbbf4abe) — never observed in
+          production (verified 2026-08-26), but if a client ever genuinely has
+          2+ closures in progress at once, this form must say which one it's
+          showing rather than silently pick for them. */}
+      {wizardType === 'closure' && closureOtherPendingCount !== null && closureOtherPendingCount > 0 && (
+        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
+          <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-semibold text-amber-900">
+              {pickText('This form is for your most recent closure request', 'Questo modulo riguarda la tua richiesta di chiusura più recente')}
+            </p>
+            <p className="text-amber-700 mt-0.5">
+              {pickText(
+                "You have more than one company closure in progress with us. This form is for the most recently started one — if that isn't the one you meant, please tell us in chat before submitting.",
+                "Hai più di una chiusura societaria in corso con noi. Questo modulo riguarda quella iniziata più di recente: se non è quella che intendevi, faccelo sapere in chat prima di inviare.",
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Re-submit mode banner */}
       {isResubmitMode && (
         <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">

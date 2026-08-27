@@ -47,6 +47,7 @@ export type ChatEventKind =
   | "plan_referrer_ready_to_release" // a payment-plan deal with a referrer/partner is now fully paid — release commission
   | "recurring_invoice_generated" // the recurring-invoices cron auto-generated a Draft invoice — review + send it
   | "banking_wizard_submitted" // client submitted a Payset/Relay banking application via the portal wizard
+  | "financials_attested" // client confirmed their generated P&L / Balance Sheet
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */
@@ -520,6 +521,81 @@ export async function emitBankingWizardSubmittedEvent(params: {
 }
 
 /**
+ * Emit a "client confirmed their financials" event (dev job 9b7892d6) when a
+ * client attests their generated P&L / Balance Sheet is correct. Staff-only —
+ * this route has no client-visible chat message today, so unlike the banking
+ * wizard fix there is nothing pre-existing to preserve alongside it.
+ *
+ * Pass `is_reattestation: true` when the caller has confirmed the submission's
+ * `confirmation_accepted` was already true before this call — the same
+ * before/after-value pattern the wizard resubmission fixes already use — and
+ * call `retireFinancialsAttestedNote` first so the dedup marker below doesn't
+ * swallow the new one (the client's attestation gets RESET and re-confirmed
+ * across 9 separate correction paths in lib/tax/attestation.ts, so a second,
+ * genuine confirmation on the SAME submission row is a real, designed flow,
+ * not an edge case).
+ */
+export async function emitFinancialsAttestedEvent(params: {
+  tax_return_submission_id: string
+  account_id?: string | null
+  contact_id?: string | null
+  tax_year: number
+  is_reattestation?: boolean
+}): Promise<EmitResult> {
+  const message = params.is_reattestation
+    ? `Client re-confirmed the generated P&L and Balance Sheet for ${params.tax_year} after a correction.`
+    : `Client confirmed the generated P&L and Balance Sheet for ${params.tax_year}.`
+  return await emitClientChatEvent({
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    topic: "Tax",
+    message,
+    source: { table: "tax_return_submissions", id: params.tax_return_submission_id },
+    event_kind: "financials_attested",
+  })
+}
+
+/**
+ * Retire the "financials attested" note for a `tax_return_submissions` row so
+ * a genuine re-attestation (client corrects data, gets asked to re-confirm)
+ * can produce a fresh notification. Same soft-delete rationale as the other
+ * retire helpers in this file — the old row stays as audit trail.
+ */
+export async function retireFinancialsAttestedNote(params: {
+  taxReturnSubmissionId: string
+  deletedBy?: string | null
+}): Promise<{ retired: number }> {
+  const marker = buildMarker({ table: "tax_return_submissions", id: params.taxReturnSubmissionId }, "financials_attested")
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("portal_messages")
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: params.deletedBy ?? SYSTEM_ACTOR_ID,
+      })
+      .eq("sender_type", "system")
+      .like("message", `%${marker}%`)
+      .is("deleted_at", null)
+      .select("id")
+
+    if (error) {
+      console.error(
+        `[retireFinancialsAttestedNote] could not retire the note for tax_return_submissions ${params.taxReturnSubmissionId}:`,
+        error.message,
+      )
+      return { retired: 0 }
+    }
+    return { retired: (data ?? []).length }
+  } catch (err) {
+    console.error(
+      `[retireFinancialsAttestedNote] non-fatal for ${params.taxReturnSubmissionId}:`,
+      err instanceof Error ? err.message : String(err),
+    )
+    return { retired: 0 }
+  }
+}
+
+/**
  * Retire the "banking wizard submitted" note for a `banking_submissions` row
  * so a genuine resubmission (client corrects data and resubmits the same
  * provider — dev job fb527ac8) can produce a fresh notification. Same
@@ -559,6 +635,51 @@ export async function retireBankingWizardSubmittedNote(params: {
   } catch (err) {
     console.error(
       `[retireBankingWizardSubmittedNote] non-fatal for ${params.bankingSubmissionId}:`,
+      err instanceof Error ? err.message : String(err),
+    )
+    return { retired: 0 }
+  }
+}
+
+/**
+ * Retire the "wizard submitted" note for a `tax_return_submissions` row so a
+ * genuine resubmission (client corrects their tax form and resubmits) can
+ * produce a fresh notification. Same soft-delete rationale as
+ * `retireBankingWizardSubmittedNote`. Call this BEFORE re-emitting whenever
+ * the caller has confirmed the row's `review_status` was already non-null
+ * prior to this write — i.e. this pass is submission #2+, not #1. Verified
+ * live 2026-08-27: real production submission `e6fdfd9b-e0af-4a73-ae62-25c8747e28de`
+ * was corrected 11 days after its first submission and produced no second
+ * note before this fix existed.
+ */
+export async function retireWizardSubmittedNote(params: {
+  taxReturnSubmissionId: string
+  deletedBy?: string | null
+}): Promise<{ retired: number }> {
+  const marker = buildMarker({ table: "tax_return_submissions", id: params.taxReturnSubmissionId }, "wizard_submitted")
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("portal_messages")
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: params.deletedBy ?? SYSTEM_ACTOR_ID,
+      })
+      .eq("sender_type", "system")
+      .like("message", `%${marker}%`)
+      .is("deleted_at", null)
+      .select("id")
+
+    if (error) {
+      console.error(
+        `[retireWizardSubmittedNote] could not retire the note for tax_return_submissions ${params.taxReturnSubmissionId}:`,
+        error.message,
+      )
+      return { retired: 0 }
+    }
+    return { retired: (data ?? []).length }
+  } catch (err) {
+    console.error(
+      `[retireWizardSubmittedNote] non-fatal for ${params.taxReturnSubmissionId}:`,
       err instanceof Error ? err.message : String(err),
     )
     return { retired: 0 }

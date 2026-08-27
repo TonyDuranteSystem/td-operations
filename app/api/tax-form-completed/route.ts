@@ -412,9 +412,11 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>⚠ Stateme
     }
 
     // ─── 4C. SET review_status + notify (Slice 2) ───
+    let reviewStatusPriorToThisSubmission: ReviewStatus | null = null
     {
       try {
         const prev = sub.review_status ?? null
+        reviewStatusPriorToThisSubmission = prev as ReviewStatus | null
         // Same rule as the portal handler (2026-08-03): a re-submit from an
         // already-'resubmitted' state STAYS there. Falling through to
         // 'submitted' writes a transition the state machine forbids and erases
@@ -459,6 +461,16 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>⚠ Stateme
       }
       if (sub.contact_id || sub.account_id) {
         const locale = await resolveLocale(sub.contact_id ?? null, sub.account_id ?? null)
+        // A non-null prior review_status means this row already went through
+        // this exact notify step once — this pass is a genuine resubmission,
+        // not the first submission. Retire the old marker first so the dedup
+        // check in emitClientChatEvent doesn't silently swallow the new note
+        // (dev job fbbf4abe follow-up — same class of bug already fixed for
+        // banking).
+        if (reviewStatusPriorToThisSubmission !== null) {
+          const { retireWizardSubmittedNote } = await import("@/lib/portal/chat-events")
+          await retireWizardSubmittedNote({ taxReturnSubmissionId: submission_id })
+        }
         const chat = await emitClientChatEvent({
           contact_id: sub.contact_id,
           account_id: sub.account_id,

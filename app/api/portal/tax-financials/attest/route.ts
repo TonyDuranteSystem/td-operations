@@ -212,6 +212,15 @@ export async function POST(request: NextRequest) {
       suggested_not_reviewed: suggestedNotReviewed,
       suggested_not_reviewed_net: Number(suggestedNet.toFixed(2)),
     }
+    // Captured BEFORE the write below, same value the response already
+    // returns as `already` — the one signal that tells whether this call is a
+    // genuine new confirmation or a re-entrant duplicate (double-click, stale
+    // second tab). Dev job 9b7892d6: the two new staff-notification calls
+    // below MUST be gated on this, not fired unconditionally, or a duplicate
+    // call would post a spurious "client confirmed" signal for nothing that
+    // actually changed.
+    const wasAlreadyConfirmed = sub.confirmation_accepted === true
+
     const { error } = await supabaseAdmin
       .from('tax_return_submissions')
       .update({
@@ -223,15 +232,53 @@ export async function POST(request: NextRequest) {
       .eq('id', sub.id)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
+    // Staff notifications (dev job 9b7892d6): a proper Notification Center
+    // card + What's New note, placed HERE — in the request's own awaited path,
+    // right after the confirmation write above succeeds — not inside the
+    // fire-and-forget handoff below, so they fire reliably regardless of
+    // whether that handoff ever runs. Skipped entirely on a re-entrant
+    // duplicate call (wasAlreadyConfirmed): nothing actually changed, so
+    // nothing should be announced. On a genuine RE-attestation (this row's
+    // confirmation_accepted was reset to false by a correction — see
+    // lib/tax/attestation.ts — and is being confirmed again), retire the
+    // stale note first so the marker dedup doesn't swallow the new one; the
+    // Notification Center card needs no retire step (its own dedup only
+    // blocks while an OPEN card already exists, and self-heals once staff
+    // resolve it).
+    if (!wasAlreadyConfirmed) {
+      try {
+        const { emitFinancialsAttestedEvent, retireFinancialsAttestedNote } = await import('@/lib/portal/chat-events')
+        const isReattestation = Array.isArray(history) && history.some(
+          (h) => h && typeof h === 'object' && (h as { event?: string }).event === 'financials_attested',
+        )
+        if (isReattestation) {
+          await retireFinancialsAttestedNote({ taxReturnSubmissionId: sub.id })
+        }
+        await emitFinancialsAttestedEvent({
+          tax_return_submission_id: sub.id,
+          account_id: accountId,
+          tax_year: taxYear,
+          is_reattestation: isReattestation,
+        })
+        const { emitActionNeeded } = await import('@/lib/notifications/act-event')
+        await emitActionNeeded({
+          event: 'financials_confirmed',
+          account_id: accountId,
+          source_ref: `tax_return_submissions:${sub.id}`,
+        })
+      } catch (e) {
+        console.error('[tax-financials] staff notification error:', e)
+      }
+    }
+
     // Handoff (Slice 9 §3.7, fire-and-forget — the response never waits):
-    // archive the confirmed Excel to Drive 3.Tax/{year} + create the staff
-    // final-pass task. Failures are logged; staff still see the attestation
-    // on the submission either way.
+    // archive the confirmed Excel to Drive 3.Tax/{year}. Failures are logged;
+    // staff already have the notification above regardless of this outcome.
     void import('@/lib/tax/attest-handoff')
       .then(({ runAttestHandoff }) => runAttestHandoff(accountId, taxYear))
       .catch(e => console.error('[tax-financials] attest handoff failed:', e))
 
-    return NextResponse.json({ attested: true, already: sub.confirmation_accepted === true })
+    return NextResponse.json({ attested: true, already: wasAlreadyConfirmed })
   } catch (err) {
     console.error('[tax-financials] attest failed:', err)
     return NextResponse.json({ error: 'Could not record your confirmation — please try again.' }, { status: 500 })

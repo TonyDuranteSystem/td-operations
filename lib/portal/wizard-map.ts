@@ -224,10 +224,6 @@ export const SUBMISSION_TABLES: Partial<Record<WizardType | "tax_return", string
   tax_return: "tax_return_submissions",
   company_info: "company_info_submissions",
   itin: "itin_submissions",
-  // closure_submissions table exists but no closure-setup job handler is
-  // wired up yet (plan §16.4: "Deferred to Phase 1 — 0 stuck closure
-  // clients"). Covering the submission table stops the silent-drop class
-  // of P0.5 bug; the background auto-chain follows in a later phase.
   closure: "closure_submissions",
 }
 
@@ -248,6 +244,8 @@ export const JOB_TYPES: Partial<Record<WizardType | "tax_return", string>> = {
   tax_return: "tax_form_setup",
   company_info: "tax_return_intake",
   itin: "itin_wizard_setup",
+  // Added 2026-08-26 (dev job fbbf4abe) — see lib/jobs/handlers/closure-setup.ts.
+  closure: "closure_setup",
 }
 
 export function getJobType(wizardType: string): string | null {

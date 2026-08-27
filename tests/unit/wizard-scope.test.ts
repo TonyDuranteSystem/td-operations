@@ -113,6 +113,48 @@ describe('resolveWizardProgressScope', () => {
       resolveWizardProgressScope({ wizardType: 'onboarding', formationLeadId: null, accountId: '', contactId: '' }),
     ).toBeNull()
   })
+
+  // ── Closure (dev job fbbf4abe post-build fix) — keyed on the specific
+  // pending record, not account/contact, so a second closure's draft can
+  // never load/overwrite the first's saved answers.
+  const SD = 'sd-1'
+
+  it('Scenario: closure with a resolved service delivery → keyed on service_delivery_id, not account/contact', () => {
+    expect(
+      resolveWizardProgressScope({
+        wizardType: 'closure', formationLeadId: null, accountId: A, contactId: C, serviceDeliveryId: SD,
+      }),
+    ).toEqual({ col: 'service_delivery_id', val: SD, restrictToNoLead: false })
+  })
+
+  it('two different pending closures for the same contact resolve to DIFFERENT rows', () => {
+    const a = resolveWizardProgressScope({
+      wizardType: 'closure', formationLeadId: null, accountId: null, contactId: C, serviceDeliveryId: 'sd-alpha',
+    })
+    const b = resolveWizardProgressScope({
+      wizardType: 'closure', formationLeadId: null, accountId: null, contactId: C, serviceDeliveryId: 'sd-beta',
+    })
+    expect(a).not.toEqual(b)
+    expect(a?.val).toBe('sd-alpha')
+    expect(b?.val).toBe('sd-beta')
+  })
+
+  it('closure with no resolved service delivery falls back to the pre-existing account/contact rules', () => {
+    expect(
+      resolveWizardProgressScope({ wizardType: 'closure', formationLeadId: null, accountId: A, contactId: C }),
+    ).toEqual({ col: 'account_id', val: A, restrictToNoLead: false })
+    expect(
+      resolveWizardProgressScope({ wizardType: 'closure', formationLeadId: null, accountId: null, contactId: C }),
+    ).toEqual({ col: 'contact_id', val: C, restrictToNoLead: false })
+  })
+
+  it('a non-closure wizard type ignores serviceDeliveryId entirely (defensive)', () => {
+    expect(
+      resolveWizardProgressScope({
+        wizardType: 'tax', formationLeadId: null, accountId: A, contactId: C, serviceDeliveryId: SD,
+      }),
+    ).toEqual({ col: 'account_id', val: A, restrictToNoLead: false })
+  })
 })
 
 describe('accountIdForWizardSubmission (THW Global hijack backstop, dev_task 358e8cbe)', () => {

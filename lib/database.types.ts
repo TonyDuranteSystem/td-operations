@@ -3764,6 +3764,7 @@ export type Database = {
           created_at: string | null
           id: string
           language: string
+          last_processed_hash: string | null
           lead_id: string | null
           opened_at: string | null
           prefilled_data: Json | null
@@ -3787,6 +3788,7 @@ export type Database = {
           created_at?: string | null
           id?: string
           language?: string
+          last_processed_hash?: string | null
           lead_id?: string | null
           opened_at?: string | null
           prefilled_data?: Json | null
@@ -3810,6 +3812,7 @@ export type Database = {
           created_at?: string | null
           id?: string
           language?: string
+          last_processed_hash?: string | null
           lead_id?: string | null
           opened_at?: string | null
           prefilled_data?: Json | null
@@ -7082,6 +7085,7 @@ export type Database = {
           created_at: string | null
           id: string
           language: string
+          last_processed_hash: string | null
           lead_id: string | null
           opened_at: string | null
           prefilled_data: Json | null
@@ -7105,6 +7109,7 @@ export type Database = {
           created_at?: string | null
           id?: string
           language?: string
+          last_processed_hash?: string | null
           lead_id?: string | null
           opened_at?: string | null
           prefilled_data?: Json | null
@@ -7128,6 +7133,7 @@ export type Database = {
           created_at?: string | null
           id?: string
           language?: string
+          last_processed_hash?: string | null
           lead_id?: string | null
           opened_at?: string | null
           prefilled_data?: Json | null
@@ -11074,6 +11080,7 @@ export type Database = {
           shipping_submitted_at: string | null
           shipping_tracking_number: string | null
           source_offer_token: string | null
+          source_closure_token: string | null
           stage: string | null
           stage_entered_at: string | null
           stage_history: Json | null
@@ -11110,6 +11117,7 @@ export type Database = {
           shipping_submitted_at?: string | null
           shipping_tracking_number?: string | null
           source_offer_token?: string | null
+          source_closure_token?: string | null
           stage?: string | null
           stage_entered_at?: string | null
           stage_history?: Json | null
@@ -11146,6 +11154,7 @@ export type Database = {
           shipping_submitted_at?: string | null
           shipping_tracking_number?: string | null
           source_offer_token?: string | null
+          source_closure_token?: string | null
           stage?: string | null
           stage_entered_at?: string | null
           stage_history?: Json | null
@@ -12981,6 +12990,7 @@ export type Database = {
           data: Json | null
           id: string
           lead_id: string | null
+          service_delivery_id: string | null
           status: string | null
           updated_at: string | null
           wizard_type: string
@@ -12993,6 +13003,7 @@ export type Database = {
           data?: Json | null
           id?: string
           lead_id?: string | null
+          service_delivery_id?: string | null
           status?: string | null
           updated_at?: string | null
           wizard_type: string
@@ -13005,6 +13016,7 @@ export type Database = {
           data?: Json | null
           id?: string
           lead_id?: string | null
+          service_delivery_id?: string | null
           status?: string | null
           updated_at?: string | null
           wizard_type?: string

@@ -27,6 +27,7 @@ import { listQuestions } from '@/lib/td-communication/questions-queries'
 import { buildTdCommWizardConfig, type TdCommWizardConfig } from '@/lib/td-communication/question-to-field'
 import { isClientEditable, type ReviewStatus } from '@/lib/tax/review-status'
 import { identifyFormation, isFormationWizardEditable } from '@/lib/portal/formation-resubmit-gate'
+import { resolveClosureSubject } from '@/lib/portal/closure-subject'
 import {
   resolveTaxWizardEligibility,
   taxWizardSurfaceVisible,
@@ -374,6 +375,49 @@ export default async function WizardPage({
     }
   }
 
+  // ── CLOSURE WIZARD SUBJECT RESOLUTION (dev job fbbf4abe, post-build council:
+  // senior-engineer, ai-architect, bug-hunter, project-director all
+  // independently found the same defect) ──
+  // Closure is the only FLEXIBLE_WIZARD_TYPE (can be a managed company OR an
+  // untracked external LLC) and until this fix resolved its account from the
+  // ambient "current company" default above (line ~144) — completely
+  // independent of which closure this actually is. A multi-company client
+  // (37 real contacts as of 2026-08-26) could have their closure request, and
+  // its pre-filled company name/EIN, silently attached to the WRONG company.
+  // Fix: override from the client's own pending Company Closure record —
+  // resolved here regardless of how this wizard visit was reached (a forced
+  // link, natural discovery, or any future entry point), so no entry point
+  // needs to remember to pass anything. See lib/portal/closure-subject.ts.
+  let closureServiceDeliveryId: string | null = null
+  // Disclosed, never silent: null unless the client genuinely has 2+ pending
+  // closures at once (verified 2026-08-26: this has never actually happened
+  // in production). Rendered as a plain banner naming the count — see
+  // wizard-client.tsx — rather than resolved without telling the client.
+  let closureOtherPendingCount: number | null = null
+  if (wizardType === 'closure' && contactId) {
+    const subject = await resolveClosureSubject(contactId)
+    if (subject.kind === 'resolved' || subject.kind === 'ambiguous') {
+      const resolved = subject.kind === 'ambiguous' ? subject.chosen : subject
+      if (subject.kind === 'ambiguous') closureOtherPendingCount = subject.otherCount
+      closureServiceDeliveryId = resolved.serviceDeliveryId
+      accountId = resolved.accountId ?? ''
+      account = resolved.companyName
+        ? {
+            company_name: resolved.companyName,
+            ein_number: resolved.ein ?? '',
+            state_of_formation: resolved.stateOfFormation ?? '',
+          }
+        : {}
+    } else {
+      // No pending closure record found at all. Should not occur via normal
+      // navigation (the wizard is only ever offered once staff have created
+      // the record), but a stale/bookmarked link must never fall through to
+      // guessing the ambient account — contact-only, no company assumed.
+      accountId = ''
+      account = {}
+    }
+  }
+
   // ── TAX WIZARD FINAL GATE — covers ?type=tax AND the offer-fallback path ──
   // The derived picker above already consulted the resolver, but a forced
   // ?type=tax link (home card, tax banner, financials-review Edit) and the
@@ -546,7 +590,7 @@ export default async function WizardPage({
   // for the precedence + the lead_id-null disambiguation). Building the query
   // dynamically over a union of columns trips TS's type-instantiation depth
   // (TS2589) on the typed builder, so the builder is cast to any.
-  const progressScope = resolveWizardProgressScope({ wizardType, formationLeadId, accountId, contactId })
+  const progressScope = resolveWizardProgressScope({ wizardType, formationLeadId, accountId, contactId, serviceDeliveryId: closureServiceDeliveryId })
 
   const progressQuery = progressScope
     ? (() => {
@@ -1144,6 +1188,8 @@ export default async function WizardPage({
           bankGuides={bankGuides}
           institutions={institutions}
           configOverride={tdCommConfigOverride}
+          closureServiceDeliveryId={closureServiceDeliveryId}
+          closureOtherPendingCount={closureOtherPendingCount}
         />
       )}
 
