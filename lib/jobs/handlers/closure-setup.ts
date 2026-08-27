@@ -51,6 +51,15 @@ import * as closureFormCompletedRoute from "@/app/api/closure-form-completed/rou
 interface ClosureSetupPayload {
   token?: string
   submission_id?: string
+  /** dev job fbbf4abe: the specific, already-verified pending record this
+   *  submission belongs to. Forwarded through unchanged — wizard-submit
+   *  already did the server-side verification; this handler never
+   *  re-derives or re-checks it. */
+  service_delivery_id?: string | null
+  /** Content hash of the submitted data (lib/portal/wizard-job-dedupe.ts) —
+   *  forwarded so the route can tell a genuine correction apart from an
+   *  automatic retry of the exact same content. */
+  dedupe_key?: string | null
 }
 
 interface ClosureRouteStep {
@@ -99,7 +108,12 @@ export async function handleClosureSetup(job: Job): Promise<JobResult> {
   const req = new NextRequest("http://internal/api/closure-form-completed", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ submission_id: p.submission_id, token: p.token }),
+    body: JSON.stringify({
+      submission_id: p.submission_id,
+      token: p.token,
+      service_delivery_id: p.service_delivery_id ?? null,
+      dedupe_key: p.dedupe_key ?? null,
+    }),
   })
 
   try {

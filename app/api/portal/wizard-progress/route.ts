@@ -13,6 +13,7 @@ import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
 import { formationLeadOwned } from '@/lib/portal/formation-lead-access'
+import { verifyClosureServiceDelivery } from '@/lib/portal/closure-subject'
 
 /**
  * Re-prove that the logged-in identity owns a lead-scoped wizard_progress row
@@ -50,7 +51,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json()
-  const { wizard_type, current_step, data, account_id: rawAccountId, contact_id, lead_id, progress_id } = body
+  const { wizard_type, current_step, data, account_id: rawAccountId, contact_id, lead_id, progress_id, service_delivery_id: rawServiceDeliveryId } = body
 
   if (!wizard_type) {
     return NextResponse.json({ error: 'wizard_type is required' }, { status: 400 })
@@ -123,6 +124,18 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // Closure only (dev job fbbf4abe): re-verify the client-supplied record
+      // server-side rather than trust it — it names WHICH closure this draft
+      // belongs to, and a stale/tampered/cancelled one must never be honored.
+      let closureServiceDeliveryId: string | null = null
+      if (wizard_type === 'closure' && rawServiceDeliveryId && identity.kind === 'contact') {
+        const verified = await verifyClosureServiceDelivery(String(rawServiceDeliveryId), identity.contactId)
+        if (!verified) {
+          return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+        }
+        closureServiceDeliveryId = String(rawServiceDeliveryId)
+      }
+
       const { data: created, error } = await supabaseAdmin
         .from('wizard_progress')
         .insert({
@@ -132,6 +145,7 @@ export async function POST(req: NextRequest) {
           account_id: account_id || null,
           contact_id: contact_id || null,
           lead_id: lead_id || null,
+          service_delivery_id: closureServiceDeliveryId,
           status: 'in_progress',
         })
         .select('id')
