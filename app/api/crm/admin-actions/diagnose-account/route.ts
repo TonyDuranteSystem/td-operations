@@ -104,10 +104,30 @@ export async function GET(req: NextRequest) {
       contactEmail
         ? supabaseAdmin.from("leads").select("id, full_name, status, email, offer_link").ilike("email", contactEmail).limit(1)
         : { data: [] },
-      // Offers
-      supabaseAdmin.from("offers").select("token, status, payment_type, payment_links, bank_details, bundled_pipelines, contract_type, lead_id, account_id")
-        .or(`account_id.eq.${accountId}${contactEmail ? `,client_email.ilike.${contactEmail}` : ""}`)
-        .order("created_at", { ascending: false }).limit(1),
+      // Offers — this account's own offer first; only fall back to an email
+      // match when the offer is genuinely UNLINKED (account_id IS NULL), never
+      // one that belongs to a DIFFERENT, populated account. The old OR query
+      // showed a totally unrelated client's offer whenever this account had no
+      // contact flagged primary and shared a contact's email with another
+      // account's offer (2026-08-27, Estro LLC / Oaris LLC — dev job bb48eba1).
+      (async () => {
+        // 'services' was missing from this select even before today's fix
+        // (pre-existing gap, confirmed via git history) — the payment-amount
+        // pre-fill below reads offer.services, so without it every "Record
+        // payment" suggestion silently defaulted to $0/EUR regardless of the
+        // real contract amount/currency. Fixed in the same pass since it's
+        // the identical query being touched (2026-08-27, dev job bb48eba1).
+        const cols = "token, status, payment_type, payment_links, bank_details, bundled_pipelines, contract_type, lead_id, account_id, services"
+        const own = await supabaseAdmin.from("offers").select(cols)
+          .eq("account_id", accountId)
+          .order("created_at", { ascending: false }).limit(1)
+        if (own.data && own.data.length > 0) return own
+        if (!contactEmail) return { data: [] }
+        return supabaseAdmin.from("offers").select(cols)
+          .is("account_id", null)
+          .ilike("client_email", contactEmail)
+          .order("created_at", { ascending: false }).limit(1)
+      })(),
       // Pending activations
       contactEmail
         ? supabaseAdmin.from("pending_activations").select("id, offer_token, status, activated_at, payment_confirmed_at, payment_method, prepared_steps, confirmation_mode")
@@ -167,7 +187,7 @@ export async function GET(req: NextRequest) {
     ])
 
     const lead = (leadsResult.data as unknown[])?.[0] as { id: string; full_name: string; status: string; email: string; offer_link: string } | undefined
-    const offer = (offersResult.data as unknown[])?.[0] as { token: string; status: string; payment_type: string; payment_links: unknown[]; bank_details: unknown; bundled_pipelines: string[]; contract_type: string; lead_id: string; account_id: string } | undefined
+    const offer = (offersResult.data as unknown[])?.[0] as { token: string; status: string; payment_type: string; payment_links: unknown[]; bank_details: unknown; bundled_pipelines: string[]; contract_type: string; lead_id: string; account_id: string; services: Array<{ price: string; optional?: boolean }> } | undefined
     const pending = (pendingResult.data as unknown[])?.[0] as { id: string; offer_token: string; status: string; activated_at: string | null; payment_confirmed_at: string | null; payment_method: string; prepared_steps: unknown[]; confirmation_mode: string } | undefined
     const payments = (paymentsResult.data || []) as { id: string; amount: number; amount_currency: string; status: string; payment_method: string; paid_date: string; invoice_status: string; description: string }[]
     const services = (servicesResult.data || []) as { id: string; service_type: string; status: string; stage: string; stage_order: number; assigned_to: string; updated_at: string }[]
@@ -203,7 +223,17 @@ export async function GET(req: NextRequest) {
       einNumber: account.ein_number,
       formationDate: account.formation_date,
       entityType: account.entity_type,
-      activeServiceTypes: services.filter(s => s.status === "active").map(s => s.service_type).filter(Boolean),
+      // Counts anything the account currently HAS toward "not missing" — active
+      // (in progress) or completed (done for this cycle) both satisfy the
+      // requirement; only cancelled genuinely means "doesn't count". Filtering
+      // to active-only wrongly flagged "Missing: State Annual Report" the
+      // moment a renewal was actually filed (it sits completed for ~11 months
+      // until the next cycle's cron creates a fresh active SD) — confirmed
+      // live on Estro LLC the same day its annual report was correctly filed
+      // (2026-08-27, dev job bb48eba1). Case-insensitive: this table carries
+      // legacy mixed-case status values elsewhere in this same file (see the
+      // Company Formation lookup above).
+      activeServiceTypes: services.filter(s => s.status?.toLowerCase() !== "cancelled").map(s => s.service_type).filter(Boolean),
       formationSD: formationSD ? { stage: formationSD.stage, stageOrder: formationSD.stage_order, status: formationSD.status } : null,
       taxReturn: taxReturn ? { taxYear: taxReturn.tax_year, extensionFiled: taxReturn.extension_filed, status: taxReturn.status, firstYearSkip: taxReturn.first_year_skip } : null,
       ss4: ss4 ? { status: ss4.status } : null,
@@ -370,7 +400,7 @@ export async function GET(req: NextRequest) {
       let offerAmount = 0
       let offerCurrency: "EUR" | "USD" = "EUR"
       if (offer) {
-        const svc = (offer as unknown as { services: Array<{ price: string; optional?: boolean }> }).services || []
+        const svc = offer.services || []
         for (const s of svc) {
           if (!s.price || s.price.toLowerCase().includes("/year") || s.price.toLowerCase().includes("inclus")) continue
           // Handle European format: €2.500 (dot = thousands) and €2,500 (comma = thousands)

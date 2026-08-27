@@ -255,9 +255,12 @@ describe('classifyAccount — service delivery expectations', () => {
       taxReturn: { taxYear: 2025, extensionFiled: true, status: 'Extension Filed', firstYearSkip: false },
       activeServiceTypes: ['State RA Renewal', 'State Annual Report', 'CMRA Mailing Address', 'Annual Renewal', 'Tax Return'],
     }))
-    expect(r.expectedSDs).toHaveLength(5)
+    // 'Annual Renewal' is a legacy/deprecated SD (R106, removed from
+    // STANDARD_CLIENT_SDS 2026-08-27) — a client that still has one carries
+    // it as an extra, not an expected item.
+    expect(r.expectedSDs).toHaveLength(4)
     expect(r.missingSDs).toHaveLength(0)
-    expect(r.extraSDs).toHaveLength(0)
+    expect(r.extraSDs).toEqual(['Annual Renewal'])
   })
 
   it('active_client with missing SDs', () => {
@@ -268,7 +271,7 @@ describe('classifyAccount — service delivery expectations', () => {
     }))
     expect(r.missingSDs).toContain('State Annual Report')
     expect(r.missingSDs).toContain('CMRA Mailing Address')
-    expect(r.missingSDs).toContain('Annual Renewal')
+    expect(r.missingSDs).not.toContain('Annual Renewal')
   })
 
   it('one_time expects nothing (no standard bundle)', () => {
@@ -374,7 +377,7 @@ describe('classifyAccount — real cases', () => {
     expect(r.category).toBe('legacy_client')
     expect(r.formationComplete).toBe(true)
     expect(r.taxReturnExpected).toBe(true)
-    expect(r.missingSDs).toContain('Annual Renewal')
+    expect(r.missingSDs).not.toContain('Annual Renewal')
   })
 
   it('Oh My Creatives: new formation at EIN Application', () => {
@@ -459,12 +462,12 @@ describe('classifyAccount — real cases', () => {
 // ═══════════════════════════════════════
 
 describe('constants', () => {
-  it('STANDARD_CLIENT_SDS has 4 items', () => {
-    expect(STANDARD_CLIENT_SDS).toHaveLength(4)
+  it('STANDARD_CLIENT_SDS has 3 items — Annual Renewal excluded (deprecated, R106)', () => {
+    expect(STANDARD_CLIENT_SDS).toHaveLength(3)
     expect(STANDARD_CLIENT_SDS).toContain('State RA Renewal')
     expect(STANDARD_CLIENT_SDS).toContain('State Annual Report')
     expect(STANDARD_CLIENT_SDS).toContain('CMRA Mailing Address')
-    expect(STANDARD_CLIENT_SDS).toContain('Annual Renewal')
+    expect(STANDARD_CLIENT_SDS).not.toContain('Annual Renewal')
   })
 
   it('TAX_RETURN_SD is Tax Return', () => {
