@@ -10,8 +10,9 @@ import { TdPayModal } from './td-pay-modal'
 import { markExpensePaid } from '@/app/portal/invoices/expense-actions'
 import { useLocale } from '@/lib/portal/use-locale'
 
-interface Expense {
+export interface Expense {
   id: string
+  vendor_id: string | null
   vendor_name: string
   invoice_number: string | null
   internal_ref: string | null
