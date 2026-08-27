@@ -213,6 +213,45 @@ export async function getEntryByServiceType(
 }
 
 /**
+ * Refuse a DEPRECATED service_type outright (2026-08-27, dev job bb48eba1).
+ * The ONE check every service_delivery-creating call site must share — a
+ * caller's own expected-service list can drift from the catalog (as
+ * `STANDARD_CLIENT_SDS` once did for "Annual Renewal", a retired billing-
+ * cycle concept, R106) without this ever being bypassed. Call sites known at
+ * the time this was written: `createSD` and `createBackfilledSD`
+ * (lib/operations/service-delivery.ts) and the CRM chat quick-create route
+ * (app/api/service-deliveries/route.ts) — any NEW insert path must call this
+ * too, since there is no single choke-point function every caller goes
+ * through (confirmed: at least 2 cron jobs insert into service_deliveries
+ * directly with a hardcoded, currently-non-deprecated type; if either of
+ * those types is ever deprecated, they need this call added too).
+ *
+ * Tolerant of a lookup FAILURE (warns, returns null — matches the pre-2026-08
+ * best-effort catalog resolution every caller already relied on); never
+ * tolerant of a CONFIRMED deprecated entry, which always throws regardless of
+ * caller. `label` is just the calling function/route's name for the warn/
+ * error text.
+ */
+export async function assertServiceTypeNotDeprecated(
+  serviceType: string,
+  label: string,
+): Promise<CatalogEntry | null> {
+  let entry: CatalogEntry | null = null
+  try {
+    entry = await getEntryByServiceType(serviceType)
+  } catch (err) {
+    console.warn(`[${label}] catalog lookup failed for service_type="${serviceType}":`, err)
+    return null
+  }
+  if (entry?.status === "deprecated") {
+    throw new Error(
+      `[${label}] service_type="${serviceType}" is deprecated in the catalog and can no longer be created.`,
+    )
+  }
+  return entry
+}
+
+/**
  * Pipeline / `service_type` names tagged `start_at_wizard` — personal services
  * (e.g. ITIN) whose SD is created at formation/onboarding WIZARD SUBMIT, in
  * parallel, instead of being deferred to company creation. Returned as the

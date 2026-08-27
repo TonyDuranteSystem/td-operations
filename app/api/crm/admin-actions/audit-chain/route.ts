@@ -805,7 +805,12 @@ export async function GET(req: NextRequest) {
         einNumber: acct.ein_number,
         formationDate: acct.formation_date,
         entityType: acct.entity_type,
-        activeServiceTypes: acctServices.filter(s => s.status === "active").map(s => s.service_type).filter(Boolean),
+        // Same fix as diagnose-account/route.ts (2026-08-27, dev job bb48eba1):
+        // "not cancelled" counts toward satisfying the requirement, not just
+        // "active" — a completed renewal sits done for ~11 months until the
+        // next cycle's cron creates a fresh active SD, and active-only
+        // filtering wrongly flagged it "missing" the moment it was filed.
+        activeServiceTypes: acctServices.filter(s => s.status?.toLowerCase() !== "cancelled").map(s => s.service_type).filter(Boolean),
         formationSD: formationSD ? { stage: formationSD.stage, stageOrder: formationSD.stage_order, status: formationSD.status } : null,
         taxReturn: acctTR ? { taxYear: acctTR.tax_year, extensionFiled: acctTR.extension_filed, status: acctTR.status, firstYearSkip: acctTR.first_year_skip } : null,
         ss4: acctSS4.length > 0 ? { status: acctSS4[0].status } : null,

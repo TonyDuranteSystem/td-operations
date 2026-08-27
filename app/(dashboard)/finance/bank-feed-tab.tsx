@@ -1343,7 +1343,12 @@ function UnmatchedRow({
                   disabled={createSubmitting}
                 >
                   <option value="">— pick a service type —</option>
-                  {VALID_SERVICE_TYPES.map(t => (
+                  {/* "Annual Renewal" stays in VALID_SERVICE_TYPES (it mirrors
+                      the DB constraint, for historical rows) but is retired
+                      as a real deliverable (R106) — the backend now refuses
+                      to create one, so don't offer a choice that always fails
+                      (2026-08-27, dev job bb48eba1). */}
+                  {VALID_SERVICE_TYPES.filter(t => t !== 'Annual Renewal').map(t => (
                     <option key={t} value={t}>{t}</option>
                   ))}
                 </select>
