@@ -48,6 +48,10 @@
       {
         "selector": "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(insert|update|upsert)$/][callee.object.type='CallExpression'][callee.object.callee.property.name='from'][callee.object.arguments.0.value='accounts'] Property[key.name=/^(ra_renewal_date|annual_report_due_date)$/]",
         "message": "Dev job 8bd0e51a: direct writes to accounts.ra_renewal_date / accounts.annual_report_due_date must go through setAccountRenewalDate() in lib/operations/renewal-dates.ts, which also keeps the deadlines-table mirror the client portal reads in sync. Four call sites writing the account column directly (never updating that mirror) is what showed clients stale/wrong renewal dates in the first place. Exempted inside lib/operations/** — and note this rule cannot see a write via a computed/dynamic key (e.g. `{ [field]: value }`); those sites need their own explicit guard in code, not just this rule."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name=/^(button|a)$/] > JSXAttribute[name.name='title']",
+        "message": "Dev job 06e57270: a bare `title` on a button/link has a ~1.5s+ native browser tooltip delay (the bug Antonio reported live). Wrap the element in <FastTooltip label=\"...\"> from components/ui/fast-tooltip.tsx instead, and put the same text in aria-label on the element itself so screen readers still get it — council review found the tooltip label and the accessible name must NOT be the same mutable attribute."
       }
     ]
   },

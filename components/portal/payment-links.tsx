@@ -1,10 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, Save, Loader2, ExternalLink, Star, CreditCard } from 'lucide-react'
+import { Plus, Trash2, Save, Loader2, ExternalLink, Star, CreditCard, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { useRouter } from 'next/navigation'
 import { useLocale } from '@/lib/portal/use-locale'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface PaymentLink {
   id: string
@@ -24,12 +24,12 @@ const GATEWAYS = [
 ]
 
 export function PaymentLinks({ accountId }: { accountId: string }) {
-  const router = useRouter()
   const { t } = useLocale()
   const [links, setLinks] = useState<PaymentLink[]>([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null)
 
   // New link form
   const [newLabel, setNewLabel] = useState('')
@@ -79,6 +79,7 @@ export function PaymentLinks({ accountId }: { accountId: string }) {
   }
 
   const handleDelete = async (id: string) => {
+    setConfirmingDeleteId(null)
     try {
       await fetch(`/api/portal/payment-links?id=${id}&account_id=${accountId}`, { method: 'DELETE' })
       setLinks(prev => prev.filter(l => l.id !== id))
@@ -127,16 +128,22 @@ export function PaymentLinks({ accountId }: { accountId: string }) {
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 {!link.is_default && (
-                  <button onClick={() => handleSetDefault(link.id)} className="p-1.5 text-zinc-400 hover:text-blue-600 rounded" title="Set as default">
-                    <Star className="h-3.5 w-3.5" />
-                  </button>
+                  <FastTooltip label={t('payment.setDefault')}>
+                    <button onClick={() => handleSetDefault(link.id)} className="p-1.5 text-zinc-400 hover:text-blue-600 rounded" aria-label={t('payment.setDefault')}>
+                      <Star className="h-3.5 w-3.5" />
+                    </button>
+                  </FastTooltip>
                 )}
-                <a href={link.url} target="_blank" rel="noopener noreferrer" className="p-1.5 text-zinc-400 hover:text-blue-600 rounded">
-                  <ExternalLink className="h-3.5 w-3.5" />
-                </a>
-                <button onClick={() => handleDelete(link.id)} className="p-1.5 text-zinc-400 hover:text-red-600 rounded">
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                <FastTooltip label={t('payment.openLink')}>
+                  <a href={link.url} target="_blank" rel="noopener noreferrer" className="p-1.5 text-zinc-400 hover:text-blue-600 rounded" aria-label={t('payment.openLink')}>
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                </FastTooltip>
+                <FastTooltip label={t('common.delete')}>
+                  <button onClick={() => setConfirmingDeleteId(link.id)} className="p-1.5 text-zinc-400 hover:text-red-600 rounded" aria-label={t('common.delete')}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </FastTooltip>
               </div>
             </div>
           ))}
@@ -209,6 +216,51 @@ export function PaymentLinks({ accountId }: { accountId: string }) {
 
       <p className="text-xs text-zinc-400">{t('payment.invoiceNote')}</p>
       <p className="text-xs text-zinc-400 italic">{t('payment.stripeNote')}</p>
+
+      {confirmingDeleteId && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setConfirmingDeleteId(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl max-w-sm w-full p-5"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <h3 className="text-base font-semibold text-zinc-900">
+                {t('payment.removeConfirmTitle')}
+              </h3>
+              <button
+                onClick={() => setConfirmingDeleteId(null)}
+                className="text-zinc-400 hover:text-zinc-600 p-1 -m-1"
+                aria-label={t('common.cancel')}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-zinc-600">
+              {t('payment.removeConfirmBody').replace(
+                '{label}',
+                links.find(l => l.id === confirmingDeleteId)?.label ?? ''
+              )}
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmingDeleteId(null)}
+                className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                onClick={() => handleDelete(confirmingDeleteId)}
+                className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700"
+              >
+                {t('common.delete')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
