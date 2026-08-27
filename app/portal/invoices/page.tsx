@@ -297,7 +297,7 @@ export default async function PortalInvoicesPage({
 
       {/* ── Vendors Tab ── */}
       {activeTab === 'vendors' && (
-        <VendorList vendors={vendors} accountId={selectedAccountId!} />
+        <VendorList vendors={vendors} accountId={selectedAccountId!} expenses={expenses} />
       )}
     </div>
   )

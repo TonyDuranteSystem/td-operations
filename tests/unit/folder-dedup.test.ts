@@ -121,7 +121,7 @@ describe('ensureCompanyFolder — dedup behavior', () => {
     ).rejects.toThrow(/Multiple Drive folders named/)
   })
 
-  it('skips when account already has drive_folder_id', async () => {
+  it('skips creating a new folder when account already has drive_folder_id, but still heals missing subfolders', async () => {
     const existingId = 'already-linked-id'
 
     // Account already has folder
@@ -133,10 +133,46 @@ describe('ensureCompanyFolder — dedup behavior', () => {
       update: vi.fn().mockReturnValue({ eq: vi.fn() }),
     } as unknown as ReturnType<typeof supabaseAdmin.from>)
 
-    // listFiles for existing folder
+    // listFiles for existing folder — missing 4 of the 5 standard subfolders
     mockListFolderAnyDrive.mockResolvedValueOnce({
       files: [
         { id: 'sub-1', name: '1. Company', mimeType: 'application/vnd.google-apps.folder' },
+      ],
+    })
+    mockCreateFolder.mockResolvedValue({ id: 'sub-new' })
+
+    const { ensureCompanyFolder } = await import('@/lib/drive-folder-utils')
+    const result = await ensureCompanyFolder(accountId, companyName, state, ownerName)
+
+    expect(result.folderId).toBe(existingId)
+    expect(result.created).toBe(false)
+    // The company folder itself is not re-created, but the 4 missing
+    // standard subfolders ARE — this is the self-heal fix (dev_task:
+    // Turcanu/Tacoli passport investigation). Blindly trusting an
+    // already-linked folder's contents caused document filing to fail
+    // silently whenever that folder predated the standard structure.
+    expect(mockCreateFolder).toHaveBeenCalledTimes(4)
+    expect(mockCreateFolder).not.toHaveBeenCalledWith(expect.anything(), expectedFolderName)
+  })
+
+  it('does not touch subfolders when an already-linked folder already has all 5', async () => {
+    const existingId = 'already-linked-id-complete'
+
+    const mockSingle = vi.fn().mockResolvedValue({ data: { drive_folder_id: existingId }, error: null })
+    const mockEq = vi.fn().mockReturnValue({ single: mockSingle })
+    const mockSelect = vi.fn().mockReturnValue({ eq: mockEq })
+    vi.mocked(supabaseAdmin.from).mockReturnValue({
+      select: mockSelect,
+      update: vi.fn().mockReturnValue({ eq: vi.fn() }),
+    } as unknown as ReturnType<typeof supabaseAdmin.from>)
+
+    mockListFolderAnyDrive.mockResolvedValueOnce({
+      files: [
+        { id: 'sub-1', name: '1. Company', mimeType: 'application/vnd.google-apps.folder' },
+        { id: 'sub-2', name: '2. Contacts', mimeType: 'application/vnd.google-apps.folder' },
+        { id: 'sub-3', name: '3. Tax', mimeType: 'application/vnd.google-apps.folder' },
+        { id: 'sub-4', name: '4. Banking', mimeType: 'application/vnd.google-apps.folder' },
+        { id: 'sub-5', name: '5. Correspondence', mimeType: 'application/vnd.google-apps.folder' },
       ],
     })
 
@@ -144,7 +180,7 @@ describe('ensureCompanyFolder — dedup behavior', () => {
     const result = await ensureCompanyFolder(accountId, companyName, state, ownerName)
 
     expect(result.folderId).toBe(existingId)
-    expect(result.created).toBe(false)
+    expect(result.subfolders['2. Contacts']).toBe('sub-2')
     expect(mockCreateFolder).not.toHaveBeenCalled()
   })
 })

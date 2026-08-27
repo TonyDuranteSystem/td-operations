@@ -4,7 +4,28 @@ import {
   firstUploadPath,
   collectUploadPaths,
   isWizardUploadPath,
+  WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES,
+  wizardUploadTooLargeMessage,
 } from '@/lib/portal/wizard-uploads'
+
+describe('WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES / wizardUploadTooLargeMessage', () => {
+  it('the ceiling is 100MB, matching the onboarding-uploads bucket limit', () => {
+    expect(WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES).toBe(100 * 1024 * 1024)
+  })
+
+  it('formats the size in MB with one decimal place', () => {
+    const eighteenMb = 18 * 1024 * 1024
+    expect(wizardUploadTooLargeMessage(eighteenMb)).toBe(
+      'This file is too large (18.0 MB). Please upload a file under 100 MB.',
+    )
+  })
+
+  it('rounds a fractional size sensibly', () => {
+    expect(wizardUploadTooLargeMessage(19_103_578)).toBe(
+      'This file is too large (18.2 MB). Please upload a file under 100 MB.',
+    )
+  })
+})
 
 describe('isWizardUploadPath — external-vs-wizard discriminator (Carasso doc-preservation)', () => {
   it('recognises wizard-prefixed paths', () => {

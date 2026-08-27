@@ -172,13 +172,66 @@ export const DOCAI_INLINE_MAX_BYTES = 15 * 1024 * 1024
 export const DOCAI_SPLIT_MAX_BYTES = 40 * 1024 * 1024
 
 /**
+ * Raster formats we'll shrink-to-fit when they exceed the inline OCR ceiling.
+ * Covers the actual failure mode (a real 18MB phone-camera passport photo,
+ * Turcanu/Tacoli passport investigation, 2026-08-26) — PDFs already have the
+ * page-windowing solution above, and scanned TIFF/BMP/GIF are rare enough at
+ * this size that they're left as a hard error rather than adding untested
+ * format coverage.
+ */
+const SHRINKABLE_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/webp"])
+
+/**
+ * Ceiling for a raw image we'll download in order to shrink it locally.
+ * Higher than the inline ceiling for the same reason DOCAI_SPLIT_MAX_BYTES is:
+ * the inline limit constrains what we SEND, not what we're willing to read and
+ * re-encode. A real-world phone photo essentially never exceeds this.
+ */
+export const DOCAI_IMAGE_SHRINK_MAX_BYTES = 50 * 1024 * 1024
+
+/**
+ * Re-encode an oversized image down to fit under maxBytes for Document AI's
+ * inline request ceiling. A passport bio page (or any ID photo) needs nowhere
+ * near full phone-camera resolution to OCR cleanly, so a single resize +
+ * JPEG re-encode clears the ceiling by a wide margin in the normal case;
+ * quality steps down further only if that single pass isn't enough. This is a
+ * disposable copy for the OCR request only — the ORIGINAL file in Drive is
+ * never touched.
+ */
+async function shrinkImageToFit(data: Buffer, maxBytes: number): Promise<Buffer> {
+  const sharp = (await import("sharp")).default
+  const attempts: Array<{ width: number; quality: number }> = [
+    { width: 2400, quality: 85 },
+    { width: 2000, quality: 70 },
+    { width: 1600, quality: 55 },
+    { width: 1200, quality: 40 },
+  ]
+
+  let last: Buffer | null = null
+  for (const { width, quality } of attempts) {
+    // rotate() with no args applies the image's own EXIF orientation before
+    // resizing — a phone photo saved sideways would otherwise OCR upside down.
+    last = await sharp(data, { failOn: "none" })
+      .rotate()
+      .resize({ width, height: width, fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality })
+      .toBuffer()
+    if (last.length <= maxBytes) return last
+  }
+
+  throw new Error(
+    `Could not shrink this image under ${Math.round(maxBytes / (1024 * 1024))}MB even at the lowest quality setting.`,
+  )
+}
+
+/**
  * Download a file from Drive as binary (ArrayBuffer).
  * Used for PDFs and images before sending to Document AI.
  */
 async function downloadFileAsBinary(
   fileId: string,
   opts: { maxBytes?: number } = {},
-): Promise<{ data: ArrayBuffer; mimeType: string; name: string }> {
+): Promise<{ data: ArrayBuffer | Buffer; mimeType: string; name: string; wasShrunk?: boolean }> {
   const maxBytes = opts.maxBytes ?? DOCAI_INLINE_MAX_BYTES
   const token = await getDriveToken()
 
@@ -198,7 +251,8 @@ async function downloadFileAsBinary(
   // string-matches it to tell staff "file too large for OCR" rather than dumping
   // a raw error at them. Do not reword it without updating that branch.
   const size = meta.size ? parseInt(meta.size, 10) : 0
-  if (size > maxBytes) {
+  const shrinkable = SHRINKABLE_IMAGE_MIMES.has(meta.mimeType) && size <= DOCAI_IMAGE_SHRINK_MAX_BYTES
+  if (size > maxBytes && !shrinkable) {
     throw new Error(`File too large for inline processing: ${(size / (1024 * 1024)).toFixed(1)}MB (max ${Math.round(maxBytes / (1024 * 1024))}MB)`)
   }
 
@@ -212,6 +266,12 @@ async function downloadFileAsBinary(
   }
 
   const data = await dataRes.arrayBuffer()
+
+  if (size > maxBytes && shrinkable) {
+    const shrunk = await shrinkImageToFit(Buffer.from(data), maxBytes)
+    return { data: shrunk, mimeType: "image/jpeg", name: meta.name, wasShrunk: true }
+  }
+
   return { data, mimeType: meta.mimeType, name: meta.name }
 }
 
@@ -239,6 +299,14 @@ export interface OcrResult {
   documentPageCount?: number
   /** Absolute 1-based page number of `pages[0]`. 1 on a non-windowed read. */
   windowStart?: number
+  /**
+   * TRUE when the source image was too large for Document AI's inline request
+   * ceiling and was resized/re-encoded before OCR (Turcanu/Tacoli passport
+   * investigation, 2026-08-26). The extracted text is still real — Document AI
+   * still read the (now smaller) image — but a very tight crop or dense small
+   * print could theoretically lose some fidelity at the lower resolution.
+   */
+  wasShrunk?: boolean
 }
 
 /** Raw Document AI response shape (the subset we consume). */
@@ -366,7 +434,7 @@ export async function ocrDriveFile(
 
   // 1. Download. A windowed read is allowed a larger file, because the inline
   //    ceiling constrains each REQUEST we send, not the file we split locally.
-  const { data, mimeType, name } = await downloadFileAsBinary(fileId, {
+  const { data, mimeType, name, wasShrunk } = await downloadFileAsBinary(fileId, {
     maxBytes: windowed ? (opts.maxBytes ?? DOCAI_SPLIT_MAX_BYTES) : opts.maxBytes,
   })
 
@@ -385,7 +453,9 @@ export async function ocrDriveFile(
   //    images through the splitter would break fax receipts and ID photos,
   //    which read fine today.
   if (windowed && mimeType === "application/pdf") {
-    return ocrPdfWindow(Buffer.from(data), mimeType, name, opts.pages as PageRange, opts.pageLimit)
+    // Shrinking never applies to PDFs (image-only, see SHRINKABLE_IMAGE_MIMES) —
+    // `data` is always a real ArrayBuffer here.
+    return ocrPdfWindow(Buffer.from(data as ArrayBuffer), mimeType, name, opts.pages as PageRange, opts.pageLimit)
   }
 
   // 3. Unwindowed path — byte-identical to the behaviour every existing caller
@@ -400,6 +470,7 @@ export async function ocrDriveFile(
     confidence: parsed.confidenceCount > 0 ? parsed.confidenceSum / parsed.confidenceCount : 0,
     documentPageCount: parsed.pages.length,
     windowStart: 1,
+    ...(wasShrunk ? { wasShrunk: true } : {}),
   }
 }
 

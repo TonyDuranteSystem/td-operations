@@ -812,7 +812,7 @@ export async function getPortalPaymentsByContact(contactId: string) {
 export async function getPortalExpenses(accountId: string) {
   const { data } = await supabaseAdmin
     .from('client_expenses')
-    .select('id, vendor_name, invoice_number, internal_ref, description, currency, total, subtotal, tax_amount, amount_due, amount_paid, issue_date, due_date, paid_date, status, source, category, attachment_url, attachment_storage_path, attachment_name, td_payment_id, created_at')
+    .select('id, vendor_id, vendor_name, invoice_number, internal_ref, description, currency, total, subtotal, tax_amount, amount_due, amount_paid, issue_date, due_date, paid_date, status, source, category, attachment_url, attachment_storage_path, attachment_name, td_payment_id, created_at')
     .eq('account_id', accountId)
     .order('created_at', { ascending: false })
     .limit(100)
@@ -875,7 +875,7 @@ async function hideUnsentDraftMirrors<
 export async function getPortalExpensesByContact(contactId: string) {
   const { data } = await supabaseAdmin
     .from('client_expenses')
-    .select('id, vendor_name, invoice_number, internal_ref, description, currency, total, subtotal, tax_amount, amount_due, amount_paid, issue_date, due_date, paid_date, status, source, category, attachment_url, attachment_storage_path, attachment_name, td_payment_id, created_at')
+    .select('id, vendor_id, vendor_name, invoice_number, internal_ref, description, currency, total, subtotal, tax_amount, amount_due, amount_paid, issue_date, due_date, paid_date, status, source, category, attachment_url, attachment_storage_path, attachment_name, td_payment_id, created_at')
     .eq('contact_id', contactId)
     .is('account_id', null)
     .order('created_at', { ascending: false })
