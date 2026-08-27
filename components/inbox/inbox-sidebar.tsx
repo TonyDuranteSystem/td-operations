@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Inbox, Send, FileText, Star, Trash2, Plus, X, FolderOpen, Loader2, Tag, Archive } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ARCHIVED_VIEW_ID } from '@/lib/inbox/view-query'
 
 interface Label {
@@ -145,13 +146,15 @@ export function InboxSidebar({ activeLabel, onLabelChange, mailbox }: InboxSideb
       {/* Custom folders */}
       <div className="px-2 mt-4 mb-1 flex items-center justify-between">
         <p className="px-2 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">Folders</p>
-        <button
-          onClick={() => setCreating(true)}
-          className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600"
-          title="Create folder"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
+        <FastTooltip label="Create folder">
+          <button
+            onClick={() => setCreating(true)}
+            className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600"
+            aria-label="Create folder"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </FastTooltip>
       </div>
 
       {/* Create new folder input */}
@@ -170,9 +173,11 @@ export function InboxSidebar({ activeLabel, onLabelChange, mailbox }: InboxSideb
             <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
           ) : (
             <>
-              <button onClick={handleCreate} className="p-1 rounded hover:bg-emerald-50 text-emerald-500" title="Create">
-                <Plus className="h-3.5 w-3.5" />
-              </button>
+              <FastTooltip label="Create">
+                <button onClick={handleCreate} className="p-1 rounded hover:bg-emerald-50 text-emerald-500" aria-label="Create">
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </FastTooltip>
               <button onClick={() => { setCreating(false); setNewName('') }} className="p-1 rounded hover:bg-zinc-100 text-zinc-400">
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -205,18 +210,20 @@ export function InboxSidebar({ activeLabel, onLabelChange, mailbox }: InboxSideb
                 </span>
               )}
             </button>
-            <button
-              onClick={() => {
-                if (confirm(`Delete folder "${label.name}"?`)) {
-                  deleteMutation.mutate(label.id)
-                  if (isActive) onLabelChange(null)
-                }
-              }}
-              className="p-1 mr-2 rounded opacity-0 group-hover:opacity-100 hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-all"
-              title="Delete folder"
-            >
-              <X className="h-3 w-3" />
-            </button>
+            <FastTooltip label="Delete folder">
+              <button
+                onClick={() => {
+                  if (confirm(`Delete folder "${label.name}"?`)) {
+                    deleteMutation.mutate(label.id)
+                    if (isActive) onLabelChange(null)
+                  }
+                }}
+                className="p-1 mr-2 rounded opacity-0 group-hover:opacity-100 hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-all"
+                aria-label="Delete folder"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </FastTooltip>
           </div>
         )
       })}

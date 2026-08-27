@@ -19,6 +19,7 @@ import {
 import { TdCommLanding } from './td-comm-landing'
 import { DEFAULT_LANDING_CONTENT, landingContentEqual, MAX_PORTFOLIO_ITEMS } from '@/lib/td-communication/landing-content'
 import type { LandingContent, PortfolioItem, TdCommPackage } from '@/lib/td-communication/types'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const API = '/api/td-communication/landing'
 
@@ -349,9 +350,9 @@ export function LandingEditor({ canEdit }: { canEdit: boolean }) {
                   </div>
                   {canEdit && (
                     <div className="flex flex-col gap-1 shrink-0">
-                      <button onClick={() => moveItem(i, -1)} disabled={i === 0} className="p-1 rounded hover:bg-zinc-100 disabled:opacity-30" title="Move up"><ArrowUp className="h-3.5 w-3.5" /></button>
-                      <button onClick={() => moveItem(i, 1)} disabled={i === draft.portfolio_items.length - 1} className="p-1 rounded hover:bg-zinc-100 disabled:opacity-30" title="Move down"><ArrowDown className="h-3.5 w-3.5" /></button>
-                      <button onClick={() => removeItem(i)} className="p-1 rounded hover:bg-red-50 text-red-500" title="Remove"><Trash2 className="h-3.5 w-3.5" /></button>
+                      <FastTooltip label="Move up"><button onClick={() => moveItem(i, -1)} disabled={i === 0} className="p-1 rounded hover:bg-zinc-100 disabled:opacity-30" aria-label="Move up"><ArrowUp className="h-3.5 w-3.5" /></button></FastTooltip>
+                      <FastTooltip label="Move down"><button onClick={() => moveItem(i, 1)} disabled={i === draft.portfolio_items.length - 1} className="p-1 rounded hover:bg-zinc-100 disabled:opacity-30" aria-label="Move down"><ArrowDown className="h-3.5 w-3.5" /></button></FastTooltip>
+                      <FastTooltip label="Remove"><button onClick={() => removeItem(i)} className="p-1 rounded hover:bg-red-50 text-red-500" aria-label="Remove"><Trash2 className="h-3.5 w-3.5" /></button></FastTooltip>
                     </div>
                   )}
                 </div>
@@ -375,9 +376,9 @@ export function LandingEditor({ canEdit }: { canEdit: boolean }) {
                 <button key={l} onClick={() => setLang(l)} className={`px-2 py-0.5 text-[11px] rounded ${lang === l ? 'bg-blue-100 text-blue-700' : 'text-zinc-500 hover:bg-zinc-100'}`}>{l.toUpperCase()}</button>
               ))}
               <span className="w-px h-4 bg-zinc-200 mx-0.5" />
-              <button onClick={() => setDevice('desktop')} className={`p-1 rounded ${device === 'desktop' ? 'bg-blue-100 text-blue-700' : 'text-zinc-500 hover:bg-zinc-100'}`} title="Desktop"><Monitor className="h-3.5 w-3.5" /></button>
-              <button onClick={() => setDevice('mobile')} className={`p-1 rounded ${device === 'mobile' ? 'bg-blue-100 text-blue-700' : 'text-zinc-500 hover:bg-zinc-100'}`} title="Mobile"><Smartphone className="h-3.5 w-3.5" /></button>
-              <button onClick={() => setShowPreview((s) => !s)} className="lg:hidden p-1 rounded text-zinc-500 hover:bg-zinc-100" title="Toggle preview">{showPreview ? <X className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</button>
+              <FastTooltip label="Desktop"><button onClick={() => setDevice('desktop')} className={`p-1 rounded ${device === 'desktop' ? 'bg-blue-100 text-blue-700' : 'text-zinc-500 hover:bg-zinc-100'}`} aria-label="Desktop"><Monitor className="h-3.5 w-3.5" /></button></FastTooltip>
+              <FastTooltip label="Mobile"><button onClick={() => setDevice('mobile')} className={`p-1 rounded ${device === 'mobile' ? 'bg-blue-100 text-blue-700' : 'text-zinc-500 hover:bg-zinc-100'}`} aria-label="Mobile"><Smartphone className="h-3.5 w-3.5" /></button></FastTooltip>
+              <FastTooltip label="Toggle preview"><button onClick={() => setShowPreview((s) => !s)} className="lg:hidden p-1 rounded text-zinc-500 hover:bg-zinc-100" aria-label="Toggle preview">{showPreview ? <X className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</button></FastTooltip>
             </div>
           </div>
           {showPreview && (

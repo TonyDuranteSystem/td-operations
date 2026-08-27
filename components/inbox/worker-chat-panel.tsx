@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Bot, Loader2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { WorkerMarkdown } from '@/components/chat/worker-markdown'
 import {
   WorkerArtifactLinks,
@@ -487,9 +488,11 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
           </p>
         </div>
         <WorkerSettingsGear className="shrink-0" />
-        <button onClick={onClose} className="p-1 rounded hover:bg-zinc-100 text-zinc-400" title="Close">
-          <X className="h-4 w-4" />
-        </button>
+        <FastTooltip label="Close">
+          <button onClick={onClose} className="p-1 rounded hover:bg-zinc-100 text-zinc-400" aria-label="Close">
+            <X className="h-4 w-4" />
+          </button>
+        </FastTooltip>
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
@@ -800,40 +803,52 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
             </div>
           ) : (
             <div className="mt-2.5 flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => resolvePreparedSend('confirm')}
-                // `pending` is LOAD-BEARING, not tidiness. A rewrite (language switch or
-                // Reformulate) runs as a worker turn taking 20-60s. Without this, an
-                // impatient click during that window confirms the row that is still
-                // pending — delivering the PRE-rewrite text — and then the rewrite lands,
-                // renders a second card, and the same message goes out again in the other
-                // language. Supersede cannot save it: it only cancels rows still pending,
-                // and the first one is already sent.
-                disabled={
-                  confirming ||
-                  pending ||
-                  !portalTarget ||
-                  recipientMismatch ||
-                  // Wait for the access check rather than letting a click race it, and
-                  // never allow a send to someone who cannot open the portal — they
-                  // would get a "you have a new message" email pointing at a door they
-                  // have no key to, and nobody would ever read the message.
-                  reach.checking ||
-                  reach.reachable === false ||
-                  // Never send text whose language disagrees with the card's own label.
-                  !!preparedSend.languageMismatch
-                }
-                title={
-                  !portalTarget
-                    ? 'Choose which client this goes to first'
-                    : recipientMismatch
-                      ? 'This message was written for a different client — rewrite it first'
-                      : undefined
-                }
-                className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
-              >
-                {confirming ? 'Sending…' : 'Confirm & send'}
-              </button>
+              {(() => {
+                // Only a disabled-reason case gets a tooltip — the plain enabled
+                // button already carries its own label ("Confirm & send") as
+                // visible text, so no hover hint is needed (and FastTooltip's
+                // `label` prop can't take `undefined`).
+                const confirmTooltip = !portalTarget
+                  ? 'Choose which client this goes to first'
+                  : recipientMismatch
+                    ? 'This message was written for a different client — rewrite it first'
+                    : undefined
+                const confirmButton = (
+                  <button
+                    onClick={() => resolvePreparedSend('confirm')}
+                    // `pending` is LOAD-BEARING, not tidiness. A rewrite (language switch or
+                    // Reformulate) runs as a worker turn taking 20-60s. Without this, an
+                    // impatient click during that window confirms the row that is still
+                    // pending — delivering the PRE-rewrite text — and then the rewrite lands,
+                    // renders a second card, and the same message goes out again in the other
+                    // language. Supersede cannot save it: it only cancels rows still pending,
+                    // and the first one is already sent.
+                    disabled={
+                      confirming ||
+                      pending ||
+                      !portalTarget ||
+                      recipientMismatch ||
+                      // Wait for the access check rather than letting a click race it, and
+                      // never allow a send to someone who cannot open the portal — they
+                      // would get a "you have a new message" email pointing at a door they
+                      // have no key to, and nobody would ever read the message.
+                      reach.checking ||
+                      reach.reachable === false ||
+                      // Never send text whose language disagrees with the card's own label.
+                      !!preparedSend.languageMismatch
+                    }
+                    aria-label={confirmTooltip}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    {confirming ? 'Sending…' : 'Confirm & send'}
+                  </button>
+                )
+                return confirmTooltip ? (
+                  <FastTooltip label={confirmTooltip}>{confirmButton}</FastTooltip>
+                ) : (
+                  confirmButton
+                )
+              })()}
               <button
                 onClick={() => setReformulating(true)}
                 disabled={confirming || pending}

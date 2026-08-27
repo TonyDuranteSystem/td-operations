@@ -12,6 +12,7 @@ import {
 } from "@/lib/tasks/workflow-handler-params"
 import { introspect } from "@/lib/forms/schema-introspection"
 import { SchemaForm } from "@/components/forms/schema-form"
+import { FastTooltip } from "@/components/ui/fast-tooltip"
 import type { CatalogValidityIssue } from "@/lib/tasks/catalog-validity"
 import {
   createWorkflow,
@@ -848,32 +849,38 @@ function PipelineStagesSection({ draft, updateDraft }: { draft: WorkflowDraft; u
           <div key={idx} className="flex items-center gap-2 p-2 bg-zinc-50 rounded border border-zinc-200">
             <span className="text-xs text-zinc-400 w-5 text-right font-mono">{idx + 1}</span>
             <span className="flex-1 text-sm font-medium text-zinc-800">{stage}</span>
-            <button
-              type="button"
-              onClick={() => moveStage(idx, -1)}
-              disabled={idx === 0}
-              className="p-1 rounded hover:bg-zinc-200 disabled:opacity-30"
-              title="Move up"
-            >
-              <ArrowUp className="h-3 w-3" />
-            </button>
-            <button
-              type="button"
-              onClick={() => moveStage(idx, 1)}
-              disabled={idx === draft.stages.length - 1}
-              className="p-1 rounded hover:bg-zinc-200 disabled:opacity-30"
-              title="Move down"
-            >
-              <ArrowDown className="h-3 w-3" />
-            </button>
-            <button
-              type="button"
-              onClick={() => removeStage(idx)}
-              className="p-1 rounded text-red-500 hover:bg-red-50"
-              title="Remove stage"
-            >
-              <X className="h-3 w-3" />
-            </button>
+            <FastTooltip label="Move up">
+              <button
+                type="button"
+                onClick={() => moveStage(idx, -1)}
+                disabled={idx === 0}
+                className="p-1 rounded hover:bg-zinc-200 disabled:opacity-30"
+                aria-label="Move up"
+              >
+                <ArrowUp className="h-3 w-3" />
+              </button>
+            </FastTooltip>
+            <FastTooltip label="Move down">
+              <button
+                type="button"
+                onClick={() => moveStage(idx, 1)}
+                disabled={idx === draft.stages.length - 1}
+                className="p-1 rounded hover:bg-zinc-200 disabled:opacity-30"
+                aria-label="Move down"
+              >
+                <ArrowDown className="h-3 w-3" />
+              </button>
+            </FastTooltip>
+            <FastTooltip label="Remove stage">
+              <button
+                type="button"
+                onClick={() => removeStage(idx)}
+                className="p-1 rounded text-red-500 hover:bg-red-50"
+                aria-label="Remove stage"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </FastTooltip>
           </div>
         ))}
       </div>
@@ -1034,14 +1041,16 @@ function ActionsSection({
           + Add Action
         </button>
         {stages.length >= 2 && (
-          <button
-            type="button"
-            onClick={generateFromStages}
-            className="px-3 py-1.5 text-sm border border-green-300 text-green-700 rounded-md hover:bg-green-50"
-            title={`Auto-create ${stages.length - 1} transition actions + mark complete + blocked`}
-          >
-            ✦ Auto-generate from stages
-          </button>
+          <FastTooltip label={`Auto-create ${stages.length - 1} transition actions + mark complete + blocked`}>
+            <button
+              type="button"
+              onClick={generateFromStages}
+              className="px-3 py-1.5 text-sm border border-green-300 text-green-700 rounded-md hover:bg-green-50"
+              aria-label={`Auto-create ${stages.length - 1} transition actions + mark complete + blocked`}
+            >
+              ✦ Auto-generate from stages
+            </button>
+          </FastTooltip>
         )}
       </div>
     </Card>
@@ -1094,35 +1103,38 @@ function ActionCard({
           )}
         </span>
         <div className="flex gap-1">
-          <button
-            type="button"
-            onClick={() => onMove(-1)}
-            disabled={idx === 0}
-            className="p-1 rounded hover:bg-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed"
-            aria-label="Move up"
-            title="Move up"
-          >
-            <ArrowUp className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => onMove(1)}
-            disabled={idx === total - 1}
-            className="p-1 rounded hover:bg-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed"
-            aria-label="Move down"
-            title="Move down"
-          >
-            <ArrowDown className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={onRemove}
-            className="p-1 rounded text-red-600 hover:bg-red-50"
-            aria-label="Remove action"
-            title="Remove action"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          <FastTooltip label="Move up">
+            <button
+              type="button"
+              onClick={() => onMove(-1)}
+              disabled={idx === 0}
+              className="p-1 rounded hover:bg-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed"
+              aria-label="Move up"
+            >
+              <ArrowUp className="h-3.5 w-3.5" />
+            </button>
+          </FastTooltip>
+          <FastTooltip label="Move down">
+            <button
+              type="button"
+              onClick={() => onMove(1)}
+              disabled={idx === total - 1}
+              className="p-1 rounded hover:bg-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed"
+              aria-label="Move down"
+            >
+              <ArrowDown className="h-3.5 w-3.5" />
+            </button>
+          </FastTooltip>
+          <FastTooltip label="Remove action">
+            <button
+              type="button"
+              onClick={onRemove}
+              className="p-1 rounded text-red-600 hover:bg-red-50"
+              aria-label="Remove action"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </FastTooltip>
         </div>
       </header>
 
@@ -1511,12 +1523,13 @@ function SaveSection({
               "Save Draft"
             )}
           </button>
+          <FastTooltip label={mode === "new" ? "Save Draft first, then Publish becomes available." : undefined}>
           <button
             type="button"
             onClick={handlePublish}
             disabled={saving !== null || mode === "new" || !entryId}
             className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-            title={mode === "new" ? "Save Draft first, then Publish becomes available." : undefined}
+            aria-label={mode === "new" ? "Save Draft first, then Publish becomes available." : undefined}
           >
             {saving === "publish" ? (
               <>
@@ -1528,6 +1541,7 @@ function SaveSection({
               </>
             )}
           </button>
+          </FastTooltip>
         </div>
       </div>
       {issues.length > 0 && (

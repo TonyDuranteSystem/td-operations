@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Plus, Pencil, ArchiveX, Loader2, X, Star, Package } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { TdCommPackage, PackagePaymentTiming } from '@/lib/td-communication/types'
 
 interface FormState {
@@ -184,13 +185,17 @@ export function PackagesAdmin({ isAdmin }: { isAdmin: boolean }) {
                   </td>
                   {isAdmin && (
                     <td className="px-3 py-2 text-right whitespace-nowrap">
-                      <button onClick={() => setEditing(p)} className="text-zinc-500 hover:text-blue-700 p-1" title="Edit">
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      {p.active && (
-                        <button onClick={() => softDelete(p)} className="text-zinc-500 hover:text-red-700 p-1" title="Retire">
-                          <ArchiveX className="w-4 h-4" />
+                      <FastTooltip label="Edit">
+                        <button onClick={() => setEditing(p)} className="text-zinc-500 hover:text-blue-700 p-1" aria-label="Edit">
+                          <Pencil className="w-4 h-4" />
                         </button>
+                      </FastTooltip>
+                      {p.active && (
+                        <FastTooltip label="Retire">
+                          <button onClick={() => softDelete(p)} className="text-zinc-500 hover:text-red-700 p-1" aria-label="Retire">
+                            <ArchiveX className="w-4 h-4" />
+                          </button>
+                        </FastTooltip>
                       )}
                     </td>
                   )}

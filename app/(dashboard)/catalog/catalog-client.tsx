@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react"
 import { Plus, Pencil, Tag, ArchiveX, RotateCcw, Loader2, X, AlertTriangle } from "lucide-react"
 import { toast } from "sonner"
+import { FastTooltip } from "@/components/ui/fast-tooltip"
 import type { CatalogEntry, CatalogPendingReview } from "@/lib/catalog/framework"
 import {
   addCatalogEntry,
@@ -126,36 +127,44 @@ export function CatalogClient({ catalogId, entries, pending }: Props) {
                   <TranslationFlags entry={e} />
                 </td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
-                  <button
-                    onClick={() => setMode({ kind: "rename", entry: e })}
-                    title="Rename"
-                    className="p-1.5 text-gray-500 hover:text-blue-600"
-                  >
-                    <Pencil className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => setMode({ kind: "tag", entry: e })}
-                    title="Edit tags"
-                    className="p-1.5 text-gray-500 hover:text-blue-600"
-                  >
-                    <Tag className="w-4 h-4" />
-                  </button>
+                  <FastTooltip label="Rename">
+                    <button
+                      onClick={() => setMode({ kind: "rename", entry: e })}
+                      aria-label="Rename"
+                      className="p-1.5 text-gray-500 hover:text-blue-600"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                  </FastTooltip>
+                  <FastTooltip label="Edit tags">
+                    <button
+                      onClick={() => setMode({ kind: "tag", entry: e })}
+                      aria-label="Edit tags"
+                      className="p-1.5 text-gray-500 hover:text-blue-600"
+                    >
+                      <Tag className="w-4 h-4" />
+                    </button>
+                  </FastTooltip>
                   {e.status === "deprecated" ? (
-                    <button
-                      onClick={() => setMode({ kind: "restore", entry: e })}
-                      title="Restore"
-                      className="p-1.5 text-gray-500 hover:text-green-600"
-                    >
-                      <RotateCcw className="w-4 h-4" />
-                    </button>
+                    <FastTooltip label="Restore">
+                      <button
+                        onClick={() => setMode({ kind: "restore", entry: e })}
+                        aria-label="Restore"
+                        className="p-1.5 text-gray-500 hover:text-green-600"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                      </button>
+                    </FastTooltip>
                   ) : (
-                    <button
-                      onClick={() => setMode({ kind: "deprecate", entry: e })}
-                      title="Deprecate"
-                      className="p-1.5 text-gray-500 hover:text-red-600"
-                    >
-                      <ArchiveX className="w-4 h-4" />
-                    </button>
+                    <FastTooltip label="Deprecate">
+                      <button
+                        onClick={() => setMode({ kind: "deprecate", entry: e })}
+                        aria-label="Deprecate"
+                        className="p-1.5 text-gray-500 hover:text-red-600"
+                      >
+                        <ArchiveX className="w-4 h-4" />
+                      </button>
+                    </FastTooltip>
                   )}
                 </td>
               </tr>

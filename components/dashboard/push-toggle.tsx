@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { Bell, BellOff, Loader2, Send } from 'lucide-react'
 import { toast } from 'sonner'
 import { subscribeToDashboardPush } from '@/lib/push/dashboard-push'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 // Throttle silent re-subscription to once per 24h per browser. Re-subscribing
 // keeps the row warm in admin_push_subscriptions (POST upserts), so endpoints
@@ -151,37 +152,29 @@ export function DashboardPushToggle({ compact = false, refreshOnMount = false }:
           ? 'Disable push notifications'
           : 'Enable push notifications'
     return (
-      <button
-        onClick={onClick}
-        disabled={loading || permission === 'denied'}
-        className={`p-2 rounded-md transition-colors ${
-          subscribed
-            ? 'text-emerald-600 hover:bg-emerald-50'
-            : permission === 'denied'
-              ? 'text-zinc-300 cursor-not-allowed'
-              : 'text-zinc-500 hover:bg-zinc-100'
-        }`}
-        title={title}
-        aria-label={title}
-      >
-        <Icon className="h-5 w-5" />
-      </button>
+      <FastTooltip label={title}>
+        <button
+          onClick={onClick}
+          disabled={loading || permission === 'denied'}
+          className={`p-2 rounded-md transition-colors ${
+            subscribed
+              ? 'text-emerald-600 hover:bg-emerald-50'
+              : permission === 'denied'
+                ? 'text-zinc-300 cursor-not-allowed'
+                : 'text-zinc-500 hover:bg-zinc-100'
+          }`}
+          aria-label={title}
+        >
+          <Icon className="h-5 w-5" />
+        </button>
+      </FastTooltip>
     )
   }
 
   return (
     <div className="flex items-center gap-2">
-      <button
-        onClick={subscribed ? handleDisable : handleEnable}
-        disabled={loading || permission === 'denied'}
-        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-colors ${
-          subscribed
-            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-            : permission === 'denied'
-              ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
-              : 'bg-zinc-100 text-zinc-600 border border-zinc-200 hover:bg-zinc-200'
-        }`}
-        title={
+      <FastTooltip
+        label={
           permission === 'denied'
             ? 'Notifications blocked in browser settings'
             : subscribed
@@ -189,22 +182,43 @@ export function DashboardPushToggle({ compact = false, refreshOnMount = false }:
               : 'Enable push notifications'
         }
       >
-        {subscribed ? (
-          <Bell className="h-3.5 w-3.5" />
-        ) : (
-          <BellOff className="h-3.5 w-3.5" />
-        )}
-        {subscribed ? 'Notifications On' : permission === 'denied' ? 'Blocked' : 'Enable Notifications'}
-      </button>
-      {subscribed && (
         <button
-          onClick={handleTest}
-          className="flex items-center gap-1 px-2 py-1.5 text-xs rounded-md border border-zinc-200 text-zinc-500 hover:bg-zinc-50 transition-colors"
-          title="Send a test notification"
+          onClick={subscribed ? handleDisable : handleEnable}
+          disabled={loading || permission === 'denied'}
+          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-colors ${
+            subscribed
+              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+              : permission === 'denied'
+                ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
+                : 'bg-zinc-100 text-zinc-600 border border-zinc-200 hover:bg-zinc-200'
+          }`}
+          aria-label={
+            permission === 'denied'
+              ? 'Notifications blocked in browser settings'
+              : subscribed
+                ? 'Disable push notifications'
+                : 'Enable push notifications'
+          }
         >
-          <Send className="h-3 w-3" />
-          Test
+          {subscribed ? (
+            <Bell className="h-3.5 w-3.5" />
+          ) : (
+            <BellOff className="h-3.5 w-3.5" />
+          )}
+          {subscribed ? 'Notifications On' : permission === 'denied' ? 'Blocked' : 'Enable Notifications'}
         </button>
+      </FastTooltip>
+      {subscribed && (
+        <FastTooltip label="Send a test notification">
+          <button
+            onClick={handleTest}
+            className="flex items-center gap-1 px-2 py-1.5 text-xs rounded-md border border-zinc-200 text-zinc-500 hover:bg-zinc-50 transition-colors"
+            aria-label="Send a test notification"
+          >
+            <Send className="h-3 w-3" />
+            Test
+          </button>
+        </FastTooltip>
       )}
     </div>
   )

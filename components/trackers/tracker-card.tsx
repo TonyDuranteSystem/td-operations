@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import type { ServiceDelivery } from '@/lib/types'
 import { StageHistoryDialog } from './stage-history-dialog'
 import { DeliveryRowActions } from './delivery-row-actions'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface TrackerCardProps {
   delivery: ServiceDelivery
@@ -97,15 +98,17 @@ export function TrackerCard({ delivery, isDragging, isLastStage, onComplete }: T
             Mark Complete
           </button>
         )}
-        <button
-          onClick={(e) => { e.stopPropagation(); setShowHistory(true) }}
-          onMouseDown={(e) => e.stopPropagation()}
-          className="flex items-center gap-1 text-xs font-medium text-zinc-500 hover:text-zinc-800 transition-colors"
-          title="View stage transition history"
-        >
-          <History className="h-3.5 w-3.5" />
-          History
-        </button>
+        <FastTooltip label="View stage transition history">
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowHistory(true) }}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="flex items-center gap-1 text-xs font-medium text-zinc-500 hover:text-zinc-800 transition-colors"
+            aria-label="View stage transition history"
+          >
+            <History className="h-3.5 w-3.5" />
+            History
+          </button>
+        </FastTooltip>
       </div>
 
       <StageHistoryDialog

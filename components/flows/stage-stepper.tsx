@@ -7,6 +7,7 @@ import {
   ClipboardCheck, CreditCard, FileCheck, FileSignature, Landmark, Send,
   type LucideIcon,
 } from 'lucide-react'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 export interface StepperStage {
   stage_name: string
@@ -117,32 +118,34 @@ export function StageStepper({ stages, currentStage, serviceDeliveryId }: StageS
 
           return (
             <div key={`${s.stage_order}-${s.stage_name}`} className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => moveTo(s)}
-                disabled={!interactive}
-                aria-current={isCurrent ? 'step' : undefined}
-                title={isCurrent ? (s.client_label ?? s.stage_name) : `Move to ${s.stage_name}`}
-                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs whitespace-nowrap transition-all ${chipClass} ${hoverClass}`}
-              >
-                {isBusy ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : s.icon && STAGE_ICONS[s.icon] ? (
-                  (() => {
-                    const Ic = STAGE_ICONS[s.icon as string]
-                    return <Ic className="h-3 w-3" aria-hidden />
-                  })()
-                ) : s.icon ? (
-                  <span aria-hidden>{s.icon}</span>
-                ) : isPast ? (
-                  <CheckCircle2 className="h-3 w-3" />
-                ) : isCurrent ? (
-                  <Circle className="h-3 w-3 fill-blue-600 text-blue-600" />
-                ) : (
-                  <Circle className="h-3 w-3" />
-                )}
-                <span>{s.stage_name}</span>
-              </button>
+              <FastTooltip label={isCurrent ? (s.client_label ?? s.stage_name) : `Move to ${s.stage_name}`}>
+                <button
+                  type="button"
+                  onClick={() => moveTo(s)}
+                  disabled={!interactive}
+                  aria-current={isCurrent ? 'step' : undefined}
+                  aria-label={isCurrent ? (s.client_label ?? s.stage_name) : `Move to ${s.stage_name}`}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs whitespace-nowrap transition-all ${chipClass} ${hoverClass}`}
+                >
+                  {isBusy ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : s.icon && STAGE_ICONS[s.icon] ? (
+                    (() => {
+                      const Ic = STAGE_ICONS[s.icon as string]
+                      return <Ic className="h-3 w-3" aria-hidden />
+                    })()
+                  ) : s.icon ? (
+                    <span aria-hidden>{s.icon}</span>
+                  ) : isPast ? (
+                    <CheckCircle2 className="h-3 w-3" />
+                  ) : isCurrent ? (
+                    <Circle className="h-3 w-3 fill-blue-600 text-blue-600" />
+                  ) : (
+                    <Circle className="h-3 w-3" />
+                  )}
+                  <span>{s.stage_name}</span>
+                </button>
+              </FastTooltip>
               {!isLast && <ChevronRight className="h-3 w-3 text-zinc-300" />}
             </div>
           )

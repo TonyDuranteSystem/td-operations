@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Loader2, DollarSign, Check, X, FileText, HandCoins } from 'lucide-react'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { formatUsd, PAYOUT_METHODS, type RevenueDashboard, type RevenueProjectRow, type TdCommPayoutRow } from '@/lib/td-communication/revenue'
 
 const STATUS_LABELS: Record<string, string> = {
@@ -194,20 +195,24 @@ function ProjectRow({ row, isAdmin, busy, onPost }: {
             {row.client_paid_override_at ? 'Paid (off-platform)' : row.clientPaidState === 'paid' ? 'Paid' : row.clientPaidState === 'unbilled' ? 'Not billed' : 'Unpaid'}
           </span>
           {isAdmin && row.clientPaidState === 'unbilled' && (
-            <button className="text-[11px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 text-zinc-600 hover:bg-zinc-100 disabled:opacity-50"
-              disabled={busy === `${base}/bill`}
-              title="Sends a portal invoice the client must pay"
-              onClick={() => onPost(`${base}/bill`, undefined, 'Client invoice created')}>
-              <FileText className="h-3 w-3" /> Bill client
-            </button>
+            <FastTooltip label="Sends a portal invoice the client must pay">
+              <button className="text-[11px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 text-zinc-600 hover:bg-zinc-100 disabled:opacity-50"
+                disabled={busy === `${base}/bill`}
+                aria-label="Sends a portal invoice the client must pay"
+                onClick={() => onPost(`${base}/bill`, undefined, 'Client invoice created')}>
+                <FileText className="h-3 w-3" /> Bill client
+              </button>
+            </FastTooltip>
           )}
           {isAdmin && row.clientPaidState !== 'paid' && !row.client_paid_override_at && (
-            <button className="text-[11px] px-1.5 py-0.5 rounded border border-zinc-200 text-zinc-600 hover:bg-zinc-100 disabled:opacity-50"
-              disabled={busy === `${base}/client-paid`}
-              title="Mark the client as paid off-platform"
-              onClick={() => onPost(`${base}/client-paid`, {}, 'Marked client paid')}>
-              Mark paid
-            </button>
+            <FastTooltip label="Mark the client as paid off-platform">
+              <button className="text-[11px] px-1.5 py-0.5 rounded border border-zinc-200 text-zinc-600 hover:bg-zinc-100 disabled:opacity-50"
+                disabled={busy === `${base}/client-paid`}
+                aria-label="Mark the client as paid off-platform"
+                onClick={() => onPost(`${base}/client-paid`, {}, 'Marked client paid')}>
+                Mark paid
+              </button>
+            </FastTooltip>
           )}
         </div>
       </td>

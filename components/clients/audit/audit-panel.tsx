@@ -10,6 +10,7 @@ import {
 import { AddressPicker } from '@/components/shared/address-picker'
 import { RAPicker } from '@/components/shared/ra-picker'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { toast } from 'sonner'
 import { format, parseISO } from 'date-fns'
 import { type AccountRow, type ContactRow } from './audit-shell'
@@ -308,15 +309,17 @@ function BillingCheckRow({
       return (
         <span className="text-zinc-400 ml-1.5">
           {before}
-          <a
-            href={`/api/invoices/${paymentId}/pdf`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-600 hover:underline font-mono"
-            title="Open invoice PDF"
-          >
-            {invoiceNumber}
-          </a>
+          <FastTooltip label="Open invoice PDF">
+            <a
+              href={`/api/invoices/${paymentId}/pdf`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 hover:underline font-mono"
+              aria-label="Open invoice PDF"
+            >
+              {invoiceNumber}
+            </a>
+          </FastTooltip>
           {after}
         </span>
       )
@@ -2126,15 +2129,17 @@ export function AuditPanel({
                       <tr key={p.id} className="border-b border-zinc-50">
                         <td className="py-1.5 pr-2 font-mono">
                           {p.invoice_number ? (
-                            <a
-                              href={`/api/invoices/${p.id}/pdf`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-600 hover:underline"
-                              title="Open invoice PDF"
-                            >
-                              {p.invoice_number}
-                            </a>
+                            <FastTooltip label="Open invoice PDF">
+                              <a
+                                href={`/api/invoices/${p.id}/pdf`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:underline"
+                                aria-label="Open invoice PDF"
+                              >
+                                {p.invoice_number}
+                              </a>
+                            </FastTooltip>
                           ) : '—'}
                         </td>
                         <td className="py-1.5 pr-2 max-w-[160px] truncate">

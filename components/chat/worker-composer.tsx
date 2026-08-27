@@ -14,6 +14,7 @@ import { Loader2, Paperclip, Send, X, FileText, Image as ImageIcon } from 'lucid
 import { cn } from '@/lib/utils'
 import { useHoldToSend } from '@/components/chat/use-hold-to-send'
 import type { UploadedAttachment, WorkerAttachments } from './use-worker-attachments'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 function fileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -105,13 +106,15 @@ export function WorkerComposer({ placeholder, pending, disabled, onSend, value, 
               ) : (
                 <Loader2 className="h-3 w-3 animate-spin text-zinc-400" />
               )}
-              <button
-                onClick={() => remove(f.localId)}
-                className="p-0.5 rounded hover:bg-black/5 shrink-0"
-                title="Remove"
-              >
-                <X className="h-3 w-3" />
-              </button>
+              <FastTooltip label="Remove">
+                <button
+                  onClick={() => remove(f.localId)}
+                  className="p-0.5 rounded hover:bg-black/5 shrink-0"
+                  aria-label="Remove"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </FastTooltip>
             </div>
           ))}
         </div>
@@ -120,17 +123,19 @@ export function WorkerComposer({ placeholder, pending, disabled, onSend, value, 
       {limitNotice && <p className="text-[11px] text-amber-700 pb-1.5">{limitNotice}</p>}
 
       <div className="flex items-end gap-2">
-        <button
-          onClick={() => fileRef.current?.click()}
-          disabled={pending || disabled}
-          className={cn(
-            'shrink-0 p-2 rounded-xl transition-colors disabled:opacity-40',
-            files.length ? 'text-violet-600 bg-violet-100' : 'text-zinc-400 hover:bg-zinc-100',
-          )}
-          title="Attach a file"
-        >
-          <Paperclip className="h-4 w-4" />
-        </button>
+        <FastTooltip label="Attach a file" align="left">
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={pending || disabled}
+            className={cn(
+              'shrink-0 p-2 rounded-xl transition-colors disabled:opacity-40',
+              files.length ? 'text-violet-600 bg-violet-100' : 'text-zinc-400 hover:bg-zinc-100',
+            )}
+            aria-label="Attach a file"
+          >
+            <Paperclip className="h-4 w-4" />
+          </button>
+        </FastTooltip>
         <input
           ref={fileRef}
           type="file"
@@ -165,17 +170,19 @@ export function WorkerComposer({ placeholder, pending, disabled, onSend, value, 
           rows={4}
           className="flex-1 resize-y rounded-xl border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent placeholder:text-zinc-400 min-h-[96px] max-h-64"
         />
-        <button
-          onClick={() => submit()}
-          disabled={!canSend && !armed}
-          className={cn(
-            'shrink-0 p-2 rounded-xl text-white transition-colors disabled:opacity-40',
-            armed ? 'bg-amber-500 hover:bg-amber-600' : 'bg-violet-600 hover:bg-violet-700',
-          )}
-          title={armed ? 'Send now' : uploading ? 'Waiting for the upload to finish…' : 'Send'}
-        >
-          <Send className="h-4 w-4" />
-        </button>
+        <FastTooltip label={armed ? 'Send now' : uploading ? 'Waiting for the upload to finish…' : 'Send'}>
+          <button
+            onClick={() => submit()}
+            disabled={!canSend && !armed}
+            className={cn(
+              'shrink-0 p-2 rounded-xl text-white transition-colors disabled:opacity-40',
+              armed ? 'bg-amber-500 hover:bg-amber-600' : 'bg-violet-600 hover:bg-violet-700',
+            )}
+            aria-label={armed ? 'Send now' : uploading ? 'Waiting for the upload to finish…' : 'Send'}
+          >
+            <Send className="h-4 w-4" />
+          </button>
+        </FastTooltip>
       </div>
       {armed ? (
         <div className="flex items-center gap-2 pt-1.5">

@@ -17,6 +17,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import type { AttentionItem } from '@/app/api/crm/dashboard-attention/route'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const TYPE_CONFIG: Record<AttentionItem['type'], { icon: React.ElementType; label: string }> = {
   awaiting_payment: { icon: Clock, label: 'Payment' },
@@ -126,18 +127,20 @@ export function NeedsAttentionCard() {
             )}
           </div>
         </div>
-        <button
-          onClick={() => fetchItems(true)}
-          disabled={refreshing}
-          className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600 transition-colors"
-          title="Refresh"
-        >
-          {refreshing ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="h-3.5 w-3.5" />
-          )}
-        </button>
+        <FastTooltip label="Refresh">
+          <button
+            onClick={() => fetchItems(true)}
+            disabled={refreshing}
+            className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600 transition-colors"
+            aria-label="Refresh"
+          >
+            {refreshing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+          </button>
+        </FastTooltip>
       </div>
 
       {/* Type filters */}

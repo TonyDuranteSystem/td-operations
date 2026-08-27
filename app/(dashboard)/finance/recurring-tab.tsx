@@ -5,6 +5,7 @@ import { Repeat, Loader2, Pencil, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { toggleRecurringInvoice, deleteRecurringInvoiceTemplate, type RecurringTemplateListRow } from '@/app/(dashboard)/payments/recurring-invoice-actions'
 import { RecurringEditDialog } from '@/components/payments/recurring-edit-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const FREQUENCY_LABELS: Record<string, string> = {
   weekly: 'Weekly',
@@ -85,25 +86,27 @@ export function RecurringTab({ templates }: { templates: RecurringTemplateListRo
                   {row.description ?? row.label}
                 </p>
               </div>
-              <button
-                type="button"
-                disabled={pendingId === row.id}
-                onClick={() => handleToggle(row.id, !row.active)}
-                title={row.active ? 'Turn off' : 'Turn on'}
-                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
-                  row.active ? 'bg-green-600' : 'bg-zinc-300'
-                }`}
-              >
-                {pendingId === row.id ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-white absolute left-1/2 -translate-x-1/2" />
-                ) : (
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                      row.active ? 'translate-x-6' : 'translate-x-1'
-                    }`}
-                  />
-                )}
-              </button>
+              <FastTooltip label={row.active ? 'Turn off' : 'Turn on'}>
+                <button
+                  type="button"
+                  disabled={pendingId === row.id}
+                  onClick={() => handleToggle(row.id, !row.active)}
+                  aria-label={row.active ? 'Turn off' : 'Turn on'}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+                    row.active ? 'bg-green-600' : 'bg-zinc-300'
+                  }`}
+                >
+                  {pendingId === row.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-white absolute left-1/2 -translate-x-1/2" />
+                  ) : (
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        row.active ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  )}
+                </button>
+              </FastTooltip>
             </div>
             <div className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mt-2 text-xs ${row.active ? 'text-zinc-500' : 'text-zinc-400'}`}>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -114,23 +117,27 @@ export function RecurringTab({ templates }: { templates: RecurringTemplateListRo
                 <span>{row.active ? `Next bill ${row.next_run_date}` : 'Paused'}</span>
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setEditingId(row.id)}
-                  title="Edit"
-                  className="p-1.5 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600"
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmDeleteId(row.id)}
-                  disabled={pendingId === row.id}
-                  title="Delete"
-                  className="p-1.5 rounded hover:bg-red-50 text-zinc-400 hover:text-red-500 disabled:opacity-50"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                <FastTooltip label="Edit">
+                  <button
+                    type="button"
+                    onClick={() => setEditingId(row.id)}
+                    aria-label="Edit"
+                    className="p-1.5 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                </FastTooltip>
+                <FastTooltip label="Delete">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteId(row.id)}
+                    disabled={pendingId === row.id}
+                    aria-label="Delete"
+                    className="p-1.5 rounded hover:bg-red-50 text-zinc-400 hover:text-red-500 disabled:opacity-50"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </FastTooltip>
               </div>
             </div>
           </div>

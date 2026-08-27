@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { matchFeedToInvoice, ignoreFeed } from '@/app/(dashboard)/reconciliation/actions'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { invoicePartyName } from '@/lib/finance/invoice-party'
 
 interface BankFeed {
@@ -253,17 +254,23 @@ function UnmatchedRow({
         <div className="flex items-center gap-1 shrink-0">
           {!isMatching ? (
             <>
-              <button onClick={onStartMatch} className="p-1 rounded hover:bg-blue-50 text-blue-500" title="Match to invoice" disabled={isPending}>
-                <Link2 className="h-4 w-4" />
-              </button>
-              <button onClick={handleIgnore} className="p-1 rounded hover:bg-zinc-100 text-zinc-400" title="Ignore" disabled={isPending}>
-                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
-              </button>
+              <FastTooltip label="Match to invoice">
+                <button onClick={onStartMatch} className="p-1 rounded hover:bg-blue-50 text-blue-500" aria-label="Match to invoice" disabled={isPending}>
+                  <Link2 className="h-4 w-4" />
+                </button>
+              </FastTooltip>
+              <FastTooltip label="Ignore">
+                <button onClick={handleIgnore} className="p-1 rounded hover:bg-zinc-100 text-zinc-400" aria-label="Ignore" disabled={isPending}>
+                  {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
+                </button>
+              </FastTooltip>
             </>
           ) : (
-            <button onClick={onCancelMatch} className="p-1 rounded hover:bg-zinc-100 text-zinc-500" title="Cancel">
-              <X className="h-4 w-4" />
-            </button>
+            <FastTooltip label="Cancel">
+              <button onClick={onCancelMatch} className="p-1 rounded hover:bg-zinc-100 text-zinc-500" aria-label="Cancel">
+                <X className="h-4 w-4" />
+              </button>
+            </FastTooltip>
           )}
         </div>
       </div>

@@ -27,6 +27,7 @@ import { sortPanelThreads, filterStreamRoots } from '@/lib/team/thread-meta'
 import { TEAM_COLORS, CLAUDE_SENDER_UUID, channelSlug, TEAM_WORK_STATUSES, TEAM_WORK_STATUS_LABELS, TEAM_STATUS_COLORS, type TeamWorkStatus } from '@/lib/team/workspace'
 import type { ChatAttachment } from '@/lib/types'
 import type { TeamMsg, TeamThread, TeamMember, Reaction, ThreadMeta, ThreadListItem, BoardThread, LaterThread } from './types'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const AVATAR_COLORS = ['bg-blue-500', 'bg-emerald-500', 'bg-violet-500', 'bg-orange-500', 'bg-rose-500', 'bg-cyan-500', 'bg-amber-500', 'bg-indigo-500']
 const QUICK_EMOJIS = ['👍', '✅', '🙏', '🔥', '👀', '❤️', '😂', '🎉']
@@ -1400,41 +1401,53 @@ export default function TeamWorkspacePage() {
               </div>
               {isThreadedChannel && (
                 <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => setShowNewThread(true)}
-                    className="text-xs px-2.5 py-1 rounded-full border bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50 flex items-center gap-1"
-                    title="Start a new thread on a topic"
-                  >
-                    <Plus className="h-3.5 w-3.5" /> New thread
-                  </button>
-                  <button
-                    onClick={() => { setShowThreadsPanel(v => !v); setOpenRootId(null) }}
-                    className={cn('text-xs px-2.5 py-1 rounded-full border flex items-center gap-1.5',
-                      showThreadsPanel ? 'bg-zinc-800 text-white border-zinc-800' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}
-                    title="Manage this channel's threads by status"
-                  >
-                    <ListIcon className="h-3.5 w-3.5" /> Threads
-                    {threadsList.some(t => t.following && t.unread) && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
-                  </button>
+                  <FastTooltip label="Start a new thread on a topic">
+                    <button
+                      onClick={() => setShowNewThread(true)}
+                      className="text-xs px-2.5 py-1 rounded-full border bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50 flex items-center gap-1"
+                      aria-label="Start a new thread on a topic"
+                    >
+                      <Plus className="h-3.5 w-3.5" /> New thread
+                    </button>
+                  </FastTooltip>
+                  <FastTooltip label="Manage this channel's threads by status">
+                    <button
+                      onClick={() => { setShowThreadsPanel(v => !v); setOpenRootId(null) }}
+                      className={cn('text-xs px-2.5 py-1 rounded-full border flex items-center gap-1.5',
+                        showThreadsPanel ? 'bg-zinc-800 text-white border-zinc-800' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}
+                      aria-label="Manage this channel's threads by status"
+                    >
+                      <ListIcon className="h-3.5 w-3.5" /> Threads
+                      {threadsList.some(t => t.following && t.unread) && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
+                    </button>
+                  </FastTooltip>
                 </div>
               )}
               {selected.thread_type === 'discussion' && (
                 selected.resolution === 'solved' ? (
-                  <button onClick={() => setResolution(null)} title="Reopen this conversation" className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1 bg-emerald-50 border-emerald-200 text-emerald-700">
-                    <Check className="h-3 w-3" /> Solved
-                  </button>
-                ) : selected.resolution === 'closed' ? (
-                  <button onClick={() => setResolution(null)} title="Reopen this conversation" className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1 bg-zinc-100 border-zinc-300 text-zinc-500">
-                    <X className="h-3 w-3" /> Closed
-                  </button>
-                ) : (
-                  <div className="flex items-center gap-1.5">
-                    <button onClick={() => setResolution('solved')} title="Mark the work done" className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1 bg-white border-emerald-200 text-emerald-700 hover:bg-emerald-50">
+                  <FastTooltip label="Reopen this conversation">
+                    <button onClick={() => setResolution(null)} aria-label="Reopen this conversation" className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1 bg-emerald-50 border-emerald-200 text-emerald-700">
                       <Check className="h-3 w-3" /> Solved
                     </button>
-                    <button onClick={() => setResolution('closed')} title="Drop this — no action needed" className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1 bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50">
+                  </FastTooltip>
+                ) : selected.resolution === 'closed' ? (
+                  <FastTooltip label="Reopen this conversation">
+                    <button onClick={() => setResolution(null)} aria-label="Reopen this conversation" className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1 bg-zinc-100 border-zinc-300 text-zinc-500">
                       <X className="h-3 w-3" /> Closed
                     </button>
+                  </FastTooltip>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <FastTooltip label="Mark the work done">
+                      <button onClick={() => setResolution('solved')} aria-label="Mark the work done" className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1 bg-white border-emerald-200 text-emerald-700 hover:bg-emerald-50">
+                        <Check className="h-3 w-3" /> Solved
+                      </button>
+                    </FastTooltip>
+                    <FastTooltip label="Drop this — no action needed">
+                      <button onClick={() => setResolution('closed')} aria-label="Drop this — no action needed" className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1 bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50">
+                        <X className="h-3 w-3" /> Closed
+                      </button>
+                    </FastTooltip>
                   </div>
                 )
               )}
@@ -1512,20 +1525,24 @@ export default function TeamWorkspacePage() {
                         obvious place to look for it. The back arrow returns to
                         the channel's list of threads. */}
                     <span className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5 min-w-0">
-                      <button onClick={backFromThread} className="p-1 -ml-1 rounded-full text-zinc-500 hover:bg-zinc-100 shrink-0" title="Back to threads" aria-label="Back to threads">
-                        <ChevronLeft className="h-4 w-4" />
-                      </button>
+                      <FastTooltip label="Back to threads">
+                        <button onClick={backFromThread} className="p-1 -ml-1 rounded-full text-zinc-500 hover:bg-zinc-100 shrink-0" aria-label="Back to threads">
+                          <ChevronLeft className="h-4 w-4" />
+                        </button>
+                      </FastTooltip>
                       <MessageSquare className="h-4 w-4 shrink-0" />
                       <span className="truncate">{threadsList.find(t => t.root_id === openRootId)?.title ?? 'Thread'}</span>
                     </span>
                     <div className="flex items-center gap-2 shrink-0">
                       {/* Follow bell — follow/unfollow this thread from inside it. */}
                       {(() => { const ti = threadsList.find(t => t.root_id === openRootId); const following = ti?.following ?? false; return (
-                        <button onClick={() => { if (openRootId) setThreadFollow(openRootId, !following) }}
-                          className={cn('p-1 rounded-full', following ? 'text-blue-600 hover:bg-blue-50' : 'text-zinc-400 hover:bg-zinc-100')}
-                          title={following ? 'Following — click to unfollow' : 'Follow this thread'}>
-                          {following ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
-                        </button>
+                        <FastTooltip label={following ? 'Following — click to unfollow' : 'Follow this thread'}>
+                          <button onClick={() => { if (openRootId) setThreadFollow(openRootId, !following) }}
+                            className={cn('p-1 rounded-full', following ? 'text-blue-600 hover:bg-blue-50' : 'text-zinc-400 hover:bg-zinc-100')}
+                            aria-label={following ? 'Following — click to unfollow' : 'Follow this thread'}>
+                            {following ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
+                          </button>
+                        </FastTooltip>
                       ) })()}
                       {/* Status control — set Working / Pending / Done from inside the thread. */}
                       <div className="relative">
@@ -1557,7 +1574,9 @@ export default function TeamWorkspacePage() {
                             onMarkUnread={rid => markThreadUnread(rid)} />
                         ) : null
                       })()}
-                      <button onClick={backFromThread} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Close thread"><X className="h-4 w-4" /></button>
+                      <FastTooltip label="Close thread">
+                        <button onClick={backFromThread} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" aria-label="Close thread"><X className="h-4 w-4" /></button>
+                      </FastTooltip>
                     </div>
                   </div>
                   {/* Comfortable centered reading column so a full-width thread
@@ -1822,7 +1841,9 @@ function ThreadsPanel({ channelId, channelName, threads, members, currentUserId,
     <>
       <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-zinc-200">
         <span className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5"><ListIcon className="h-4 w-4" /> Threads in #{channelName}</span>
-        <button onClick={onClose} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Back to messages"><X className="h-4 w-4" /></button>
+        <FastTooltip label="Back to messages">
+          <button onClick={onClose} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" aria-label="Back to messages"><X className="h-4 w-4" /></button>
+        </FastTooltip>
       </div>
       {/* Filter bar */}
       <div className="shrink-0 flex items-center gap-1.5 px-3 py-2 border-b border-zinc-100 overflow-x-auto">
@@ -1836,11 +1857,13 @@ function ThreadsPanel({ channelId, channelName, threads, members, currentUserId,
           className={cn('ml-auto text-[11px] px-2.5 py-1 rounded-full border flex items-center gap-1 whitespace-nowrap', followingOnly ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}>
           <Bell className="h-3 w-3" /> Following
         </button>
-        <button onClick={() => onToggleArchived(!showArchived)}
-          className={cn('text-[11px] px-2.5 py-1 rounded-full border flex items-center gap-1 whitespace-nowrap', showArchived ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}
-          title={showArchived ? 'Back to active threads' : 'Show archived threads'}>
-          <Archive className="h-3 w-3" /> Archived
-        </button>
+        <FastTooltip label={showArchived ? 'Back to active threads' : 'Show archived threads'}>
+          <button onClick={() => onToggleArchived(!showArchived)}
+            className={cn('text-[11px] px-2.5 py-1 rounded-full border flex items-center gap-1 whitespace-nowrap', showArchived ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}
+            aria-label={showArchived ? 'Back to active threads' : 'Show archived threads'}>
+            <Archive className="h-3 w-3" /> Archived
+          </button>
+        </FastTooltip>
       </div>
       <div className="flex-1 overflow-y-auto p-3 space-y-1.5" onClick={() => setMenu(null)}>
         {filtered.length === 0 ? (
@@ -1884,11 +1907,13 @@ function ThreadsPanel({ channelId, channelName, threads, members, currentUserId,
                 )}
               </button>
               {/* Follow bell */}
-              <button onClick={e => { e.stopPropagation(); onSetFollow(t.root_id, !t.following) }}
-                className={cn('shrink-0 p-1 rounded-full', t.following ? 'text-blue-600 hover:bg-blue-50' : 'text-zinc-300 hover:text-zinc-500 hover:bg-zinc-100')}
-                title={t.following ? 'Following — click to unfollow' : 'Follow this thread'}>
-                {t.following ? <Bell className="h-3.5 w-3.5" /> : <BellOff className="h-3.5 w-3.5" />}
-              </button>
+              <FastTooltip label={t.following ? 'Following — click to unfollow' : 'Follow this thread'}>
+                <button onClick={e => { e.stopPropagation(); onSetFollow(t.root_id, !t.following) }}
+                  className={cn('shrink-0 p-1 rounded-full', t.following ? 'text-blue-600 hover:bg-blue-50' : 'text-zinc-300 hover:text-zinc-500 hover:bg-zinc-100')}
+                  aria-label={t.following ? 'Following — click to unfollow' : 'Follow this thread'}>
+                  {t.following ? <Bell className="h-3.5 w-3.5" /> : <BellOff className="h-3.5 w-3.5" />}
+                </button>
+              </FastTooltip>
               <div className="relative shrink-0" onClick={e => e.stopPropagation()}>
                 <button onClick={() => setMenu(menu === `${t.root_id}:a` ? null : `${t.root_id}:a`)} className="text-[10px] px-1.5 py-0.5 rounded-full border border-zinc-200 text-zinc-500 hover:bg-zinc-50">
                   {assignee ? assignee.split(' ')[0] : '+ Assign'}
@@ -1942,8 +1967,12 @@ function StatusDot({ status }: { status: TeamThread['work_status'] }) {
 function ViewToggle({ view, setView }: { view: 'list' | 'board'; setView: (v: 'list' | 'board') => void }) {
   return (
     <div className="flex items-center bg-zinc-100 rounded-lg p-0.5">
-      <button onClick={() => setView('list')} title="Chat list" className={cn('p-1 rounded-md', view === 'list' ? 'bg-white shadow-sm text-zinc-800' : 'text-zinc-400 hover:text-zinc-600')}><ListIcon className="h-3.5 w-3.5" /></button>
-      <button onClick={() => setView('board')} title="Kanban board" className={cn('p-1 rounded-md', view === 'board' ? 'bg-white shadow-sm text-zinc-800' : 'text-zinc-400 hover:text-zinc-600')}><LayoutGrid className="h-3.5 w-3.5" /></button>
+      <FastTooltip label="Chat list">
+        <button onClick={() => setView('list')} aria-label="Chat list" className={cn('p-1 rounded-md', view === 'list' ? 'bg-white shadow-sm text-zinc-800' : 'text-zinc-400 hover:text-zinc-600')}><ListIcon className="h-3.5 w-3.5" /></button>
+      </FastTooltip>
+      <FastTooltip label="Kanban board">
+        <button onClick={() => setView('board')} aria-label="Kanban board" className={cn('p-1 rounded-md', view === 'board' ? 'bg-white shadow-sm text-zinc-800' : 'text-zinc-400 hover:text-zinc-600')}><LayoutGrid className="h-3.5 w-3.5" /></button>
+      </FastTooltip>
     </div>
   )
 }
@@ -2189,12 +2218,30 @@ function MessageRow({ m, isMe, isClaude, canDelete, currentUserId, onReply, onEd
             <div className="flex items-center gap-0.5 relative">
               {/* Desktop hover row */}
               <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button onClick={() => setReactOpen(!reactOpen)} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="React"><Smile className="h-3.5 w-3.5" /></button>
-                <button onClick={onReply} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Reply"><CornerUpLeft className="h-3.5 w-3.5" /></button>
-                <button onClick={onPin} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title={m.pinned_at ? 'Unpin' : 'Pin'}>{m.pinned_at ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}</button>
-                {onMarkUnreadFromHere && <button onClick={onMarkUnreadFromHere} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Mark unread from here"><Mail className="h-3.5 w-3.5" /></button>}
-                {isMe && !isClaude && <button onClick={onEdit} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Edit"><Pencil className="h-3.5 w-3.5" /></button>}
-                {canDelete && <button onClick={() => setConfirmDelete(true)} className="p-1 rounded-full text-zinc-400 hover:text-red-500 hover:bg-zinc-100" title="Delete"><Trash2 className="h-3.5 w-3.5" /></button>}
+                <FastTooltip label="React">
+                  <button onClick={() => setReactOpen(!reactOpen)} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" aria-label="React"><Smile className="h-3.5 w-3.5" /></button>
+                </FastTooltip>
+                <FastTooltip label="Reply">
+                  <button onClick={onReply} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" aria-label="Reply"><CornerUpLeft className="h-3.5 w-3.5" /></button>
+                </FastTooltip>
+                <FastTooltip label={m.pinned_at ? 'Unpin' : 'Pin'}>
+                  <button onClick={onPin} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" aria-label={m.pinned_at ? 'Unpin' : 'Pin'}>{m.pinned_at ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}</button>
+                </FastTooltip>
+                {onMarkUnreadFromHere && (
+                  <FastTooltip label="Mark unread from here">
+                    <button onClick={onMarkUnreadFromHere} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" aria-label="Mark unread from here"><Mail className="h-3.5 w-3.5" /></button>
+                  </FastTooltip>
+                )}
+                {isMe && !isClaude && (
+                  <FastTooltip label="Edit">
+                    <button onClick={onEdit} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" aria-label="Edit"><Pencil className="h-3.5 w-3.5" /></button>
+                  </FastTooltip>
+                )}
+                {canDelete && (
+                  <FastTooltip label="Delete">
+                    <button onClick={() => setConfirmDelete(true)} className="p-1 rounded-full text-zinc-400 hover:text-red-500 hover:bg-zinc-100" aria-label="Delete"><Trash2 className="h-3.5 w-3.5" /></button>
+                  </FastTooltip>
+                )}
               </div>
 
               {/* Touch: always-visible ⋯ */}

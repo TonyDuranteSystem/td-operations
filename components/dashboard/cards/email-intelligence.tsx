@@ -14,6 +14,7 @@ import {
   Mail,
 } from 'lucide-react'
 import type { EmailIntelligenceItem } from '@/app/api/crm/email-intelligence/route'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const CATEGORY_CONFIG: Record<EmailIntelligenceItem['category'], {
   icon: React.ElementType
@@ -115,18 +116,20 @@ export function EmailIntelligenceCard() {
             </span>
           )}
         </div>
-        <button
-          onClick={() => fetchItems(true)}
-          disabled={refreshing}
-          className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600 transition-colors"
-          title="Re-analyze inbox"
-        >
-          {refreshing ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="h-3.5 w-3.5" />
-          )}
-        </button>
+        <FastTooltip label="Re-analyze inbox">
+          <button
+            onClick={() => fetchItems(true)}
+            disabled={refreshing}
+            className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600 transition-colors"
+            aria-label="Re-analyze inbox"
+          >
+            {refreshing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+          </button>
+        </FastTooltip>
       </div>
 
       <div className="space-y-3 max-h-[500px] overflow-y-auto">

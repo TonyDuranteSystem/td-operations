@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Plus, Pencil, Trash2, RotateCcw, Loader2, Mail, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface EmailTemplate {
   id: string
@@ -252,32 +253,38 @@ export default function EmailTemplatesPage() {
                         </td>
                         <td className="px-4 py-2 text-right">
                           <div className="inline-flex items-center gap-1">
-                            <button
-                              onClick={() => openEdit(t)}
-                              title="Edit"
-                              className="p-1.5 rounded hover:bg-zinc-100 text-zinc-600"
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </button>
-                            <button
-                              onClick={() => handleToggleActive(t.id, t.active)}
-                              title={t.active ? 'Deactivate' : 'Activate'}
-                              className="p-1.5 rounded hover:bg-zinc-100 text-zinc-600"
-                            >
-                              <RotateCcw className="h-3.5 w-3.5" />
-                            </button>
-                            <button
-                              onClick={() => handleDelete(t.id, t.template_name)}
-                              title="Delete"
-                              disabled={deletingId === t.id}
-                              className="p-1.5 rounded hover:bg-red-50 text-red-500 disabled:opacity-40"
-                            >
-                              {deletingId === t.id ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <Trash2 className="h-3.5 w-3.5" />
-                              )}
-                            </button>
+                            <FastTooltip label="Edit">
+                              <button
+                                onClick={() => openEdit(t)}
+                                aria-label="Edit"
+                                className="p-1.5 rounded hover:bg-zinc-100 text-zinc-600"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                            </FastTooltip>
+                            <FastTooltip label={t.active ? 'Deactivate' : 'Activate'}>
+                              <button
+                                onClick={() => handleToggleActive(t.id, t.active)}
+                                aria-label={t.active ? 'Deactivate' : 'Activate'}
+                                className="p-1.5 rounded hover:bg-zinc-100 text-zinc-600"
+                              >
+                                <RotateCcw className="h-3.5 w-3.5" />
+                              </button>
+                            </FastTooltip>
+                            <FastTooltip label="Delete">
+                              <button
+                                onClick={() => handleDelete(t.id, t.template_name)}
+                                aria-label="Delete"
+                                disabled={deletingId === t.id}
+                                className="p-1.5 rounded hover:bg-red-50 text-red-500 disabled:opacity-40"
+                              >
+                                {deletingId === t.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                            </FastTooltip>
                           </div>
                         </td>
                       </tr>

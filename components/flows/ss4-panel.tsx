@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { FileText, Loader2, CheckCircle2, AlertCircle, Clock, ExternalLink, RotateCcw } from 'lucide-react'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface Ss4PanelProps {
   serviceDeliveryId: string
@@ -332,15 +333,17 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
                 <ExternalLink className="h-4 w-4" /> Preview SS-4
               </a>
             )}
-            <button
-              onClick={regenerate}
-              disabled={busy}
-              title="Refresh the unsigned SS-4 from current account & member data — same client link. If the responsible party changes, the new signer is notified."
-              className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:opacity-50"
-            >
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-              Regenerate from account data
-            </button>
+            <FastTooltip label="Refresh the unsigned SS-4 from current account & member data — same client link. If the responsible party changes, the new signer is notified.">
+              <button
+                onClick={regenerate}
+                disabled={busy}
+                aria-label="Refresh the unsigned SS-4 from current account & member data — same client link. If the responsible party changes, the new signer is notified."
+                className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:opacity-50"
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                Regenerate from account data
+              </button>
+            </FastTooltip>
           </div>
         </div>
       ) : (
@@ -368,15 +371,17 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
               Send to Client for Signature
             </button>
-            <button
-              onClick={regenerate}
-              disabled={busy}
-              title="Refresh the draft SS-4 from current account & member data — entity type, members, signer, addresses."
-              className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50"
-            >
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-              Regenerate from account data
-            </button>
+            <FastTooltip label="Refresh the draft SS-4 from current account & member data — entity type, members, signer, addresses.">
+              <button
+                onClick={regenerate}
+                disabled={busy}
+                aria-label="Refresh the draft SS-4 from current account & member data — entity type, members, signer, addresses."
+                className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50"
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                Regenerate from account data
+              </button>
+            </FastTooltip>
           </div>
         </div>
       )}

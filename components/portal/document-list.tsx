@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import { useLocale } from '@/lib/portal/use-locale'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface Document {
   id: string
@@ -120,13 +121,15 @@ export function DocumentList({ documents, categoryLabels, newDocIds = [] }: Docu
             <div className="flex items-center justify-between px-5 py-3 border-b">
               <h3 className="font-medium text-sm text-zinc-900 truncate">{previewDoc.name}</h3>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => handleDownload(previewDoc.id, previewDoc.name)}
-                  className="p-2 rounded-lg hover:bg-zinc-100 text-zinc-500"
-                  title="Download"
-                >
-                  <Download className="h-4 w-4" />
-                </button>
+                <FastTooltip label="Download">
+                  <button
+                    onClick={() => handleDownload(previewDoc.id, previewDoc.name)}
+                    className="p-2 rounded-lg hover:bg-zinc-100 text-zinc-500"
+                    aria-label="Download"
+                  >
+                    <Download className="h-4 w-4" />
+                  </button>
+                </FastTooltip>
                 <button
                   onClick={() => { URL.revokeObjectURL(previewDoc.url); setPreviewDoc(null) }}
                   className="p-2 rounded-lg hover:bg-zinc-100 text-zinc-500"
@@ -241,24 +244,28 @@ export function DocumentList({ documents, categoryLabels, newDocIds = [] }: Docu
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 {doc.drive_file_id && isPreviewable(doc.file_name) && (
-                  <button
-                    onClick={() => handlePreview(doc.id, doc.file_name)}
-                    disabled={previewLoading}
-                    className="p-2.5 rounded-lg hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-colors disabled:opacity-50"
-                    title="Preview"
-                  >
-                    <Eye className="h-4 w-4" />
-                  </button>
+                  <FastTooltip label="Preview">
+                    <button
+                      onClick={() => handlePreview(doc.id, doc.file_name)}
+                      disabled={previewLoading}
+                      className="p-2.5 rounded-lg hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-colors disabled:opacity-50"
+                      aria-label="Preview"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </button>
+                  </FastTooltip>
                 )}
                 {doc.drive_file_id && (
-                  <button
-                    onClick={() => handleDownload(doc.id, doc.file_name)}
-                    disabled={downloading === doc.id}
-                    className="p-2.5 rounded-lg hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-colors disabled:opacity-50"
-                    title="Download"
-                  >
-                    <Download className="h-4 w-4" />
-                  </button>
+                  <FastTooltip label="Download">
+                    <button
+                      onClick={() => handleDownload(doc.id, doc.file_name)}
+                      disabled={downloading === doc.id}
+                      className="p-2.5 rounded-lg hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-colors disabled:opacity-50"
+                      aria-label="Download"
+                    >
+                      <Download className="h-4 w-4" />
+                    </button>
+                  </FastTooltip>
                 )}
               </div>
             </div>

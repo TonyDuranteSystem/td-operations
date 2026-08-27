@@ -8,6 +8,7 @@ import { useRouter } from 'next/navigation'
 import { callPartnerAction, type PartnerData, type ManagedAccount } from './partner-actions'
 import { AddClientDialog } from './add-client-dialog'
 import { CreateInvoiceDialog } from './create-invoice-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface ServiceInfo {
   account_id: string
@@ -93,14 +94,16 @@ export function ManagedClientsSection({ partner, accounts, servicesByAccount }: 
                 ))}
                 {acctServices.length === 0 && <span className="text-xs text-zinc-400">No active services</span>}
               </div>
-              <button
-                onClick={() => handleRemove(a.id, a.company_name)}
-                disabled={removing === a.id}
-                className="text-zinc-400 hover:text-red-500 p-1 rounded hover:bg-red-50 transition-colors disabled:opacity-50"
-                title="Remove from partner"
-              >
-                {removing === a.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <XIcon className="h-4 w-4" />}
-              </button>
+              <FastTooltip label="Remove from partner">
+                <button
+                  onClick={() => handleRemove(a.id, a.company_name)}
+                  disabled={removing === a.id}
+                  className="text-zinc-400 hover:text-red-500 p-1 rounded hover:bg-red-50 transition-colors disabled:opacity-50"
+                  aria-label="Remove from partner"
+                >
+                  {removing === a.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <XIcon className="h-4 w-4" />}
+                </button>
+              </FastTooltip>
             </div>
           )
         })}

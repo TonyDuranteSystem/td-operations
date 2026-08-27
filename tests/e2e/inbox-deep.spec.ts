@@ -101,7 +101,7 @@ test.describe.serial('Inbox Deep Tests', () => {
       await conversations.first().click()
       await page.waitForTimeout(3000)
       // Now check action buttons
-      const deleteBtn = page.locator('button[title="Delete"]')
+      const deleteBtn = page.getByRole('button', { name: 'Delete' })
       const hasDelete = await deleteBtn.isVisible({ timeout: 5000 }).catch(() => false)
       expect(hasDelete).toBeTruthy()
     }

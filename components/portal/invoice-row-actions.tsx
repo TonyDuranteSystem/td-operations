@@ -20,6 +20,7 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { MoreVertical, Eye, Download, Pencil, Send, Bell, Ban, Loader2, X } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { availableInvoiceActions } from '@/lib/portal/invoice-row-actions-policy'
 import { voidInvoice } from '@/app/portal/invoices/actions'
 
@@ -228,17 +229,18 @@ export function InvoiceRowActions({ invoice }: { invoice: InvoiceRowActionsInput
 
   return (
     <>
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMenuOpen(o => !o) }}
-        disabled={busy || isPending}
-        className="p-1.5 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 transition-colors disabled:opacity-50"
-        title={t('invoices.rowActions')}
-        aria-label={t('invoices.rowActions')}
-      >
-        {busy || isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
-      </button>
+      <FastTooltip label={t('invoices.rowActions')}>
+        <button
+          ref={buttonRef}
+          type="button"
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMenuOpen(o => !o) }}
+          disabled={busy || isPending}
+          className="p-1.5 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 transition-colors disabled:opacity-50"
+          aria-label={t('invoices.rowActions')}
+        >
+          {busy || isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
+        </button>
+      </FastTooltip>
       {menuPortal}
 
       {/* Void confirmation */}

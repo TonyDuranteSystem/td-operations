@@ -7,6 +7,7 @@ import { Plus, X, Search, Save, Loader2, ChevronRight, Download, LayoutGrid, Lis
 import { ENTITY_REGISTRY, unionFieldsAcrossEntities, type FieldConfig } from '@/lib/research/entity-registry'
 import { OPERATORS_BY_TYPE, type Operator, type Condition } from '@/lib/research/query-builder'
 import { emptyDraft, draftToCondition, type DraftCondition } from '@/lib/research/draft-condition'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const OPERATOR_LABELS: Record<Operator, string> = {
   contains: 'contains',
@@ -377,9 +378,9 @@ export function ResearchConsole() {
         <div className="flex items-center gap-2">
           {selectedEntities.length > 1 && (
             <div className="inline-flex rounded-md ring-1 ring-zinc-200 overflow-hidden">
-              <button onClick={() => setViewMode('table')} title="Table" className={`p-1.5 ${viewMode === 'table' ? 'bg-zinc-900 text-white' : 'bg-white text-zinc-500 hover:bg-zinc-50'}`}><List className="h-3.5 w-3.5" /></button>
-              <button onClick={() => setViewMode('cards')} title="Cards" className={`p-1.5 ${viewMode === 'cards' ? 'bg-zinc-900 text-white' : 'bg-white text-zinc-500 hover:bg-zinc-50'}`}><LayoutGrid className="h-3.5 w-3.5" /></button>
-              <button onClick={() => setViewMode('grouped')} title="Grouped by type" className={`p-1.5 ${viewMode === 'grouped' ? 'bg-zinc-900 text-white' : 'bg-white text-zinc-500 hover:bg-zinc-50'}`}><Rows3 className="h-3.5 w-3.5" /></button>
+              <FastTooltip label="Table"><button onClick={() => setViewMode('table')} aria-label="Table" className={`p-1.5 ${viewMode === 'table' ? 'bg-zinc-900 text-white' : 'bg-white text-zinc-500 hover:bg-zinc-50'}`}><List className="h-3.5 w-3.5" /></button></FastTooltip>
+              <FastTooltip label="Cards"><button onClick={() => setViewMode('cards')} aria-label="Cards" className={`p-1.5 ${viewMode === 'cards' ? 'bg-zinc-900 text-white' : 'bg-white text-zinc-500 hover:bg-zinc-50'}`}><LayoutGrid className="h-3.5 w-3.5" /></button></FastTooltip>
+              <FastTooltip label="Grouped by type"><button onClick={() => setViewMode('grouped')} aria-label="Grouped by type" className={`p-1.5 ${viewMode === 'grouped' ? 'bg-zinc-900 text-white' : 'bg-white text-zinc-500 hover:bg-zinc-50'}`}><Rows3 className="h-3.5 w-3.5" /></button></FastTooltip>
             </div>
           )}
           {selectedEntities.length > 0 && (

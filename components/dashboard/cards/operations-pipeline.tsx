@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { GitBranch, Loader2, RefreshCw, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface OfferItem {
   token: string
@@ -298,18 +299,20 @@ export function OperationsPipelineCard() {
           <h3 className="text-sm font-semibold text-zinc-800">Operations Pipeline</h3>
           <span className="text-xs text-zinc-400">{totalCount} active</span>
         </div>
-        <button
-          onClick={() => fetchData(true)}
-          disabled={refreshing}
-          className="text-zinc-400 hover:text-zinc-600 transition-colors disabled:opacity-50"
-          title="Refresh"
-        >
-          {refreshing ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="w-3.5 h-3.5" />
-          )}
-        </button>
+        <FastTooltip label="Refresh">
+          <button
+            onClick={() => fetchData(true)}
+            disabled={refreshing}
+            className="text-zinc-400 hover:text-zinc-600 transition-colors disabled:opacity-50"
+            aria-label="Refresh"
+          >
+            {refreshing ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="w-3.5 h-3.5" />
+            )}
+          </button>
+        </FastTooltip>
       </div>
 
       {allEmpty ? (

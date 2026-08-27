@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { X, Building2, FileText } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { Vendor } from '@/app/portal/invoices/vendor-actions'
 import type { Expense } from './expense-list'
 
@@ -64,13 +65,15 @@ export function VendorStatementModal({
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="text-zinc-400 hover:text-zinc-600 p-1 -m-1 shrink-0"
-            title={t('common.cancel')}
-          >
-            <X className="h-5 w-5" />
-          </button>
+          <FastTooltip label={t('common.cancel')}>
+            <button
+              onClick={onClose}
+              className="text-zinc-400 hover:text-zinc-600 p-1 -m-1 shrink-0"
+              aria-label={t('common.cancel')}
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </FastTooltip>
         </div>
 
         <div className="p-5 pb-0 grid grid-cols-3 gap-3">

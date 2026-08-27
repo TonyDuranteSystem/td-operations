@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Pencil, Check, X, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 function formatDisplayDate(val: string): string {
   if (!val) return '\u2014'
@@ -96,13 +97,15 @@ export function EditableField({
               : (value || '\u2014')}
         </span>
         {!readOnly && (
-          <button
-            onClick={() => setEditing(true)}
-            className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-zinc-100 transition-opacity"
-            title={`Edit ${label}`}
-          >
-            <Pencil className="h-3 w-3 text-muted-foreground" />
-          </button>
+          <FastTooltip label={`Edit ${label}`}>
+            <button
+              onClick={() => setEditing(true)}
+              className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-zinc-100 transition-opacity"
+              aria-label={`Edit ${label}`}
+            >
+              <Pencil className="h-3 w-3 text-muted-foreground" />
+            </button>
+          </FastTooltip>
         )}
       </div>
     )
@@ -146,22 +149,26 @@ export function EditableField({
               className="flex-1 px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           )}
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="p-1.5 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-600 disabled:opacity-50"
-            title="Save"
-          >
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-          </button>
-          <button
-            onClick={handleCancel}
-            disabled={saving}
-            className="p-1.5 rounded bg-zinc-50 hover:bg-zinc-100 text-zinc-600"
-            title="Cancel"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+          <FastTooltip label="Save">
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="p-1.5 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-600 disabled:opacity-50"
+              aria-label="Save"
+            >
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            </button>
+          </FastTooltip>
+          <FastTooltip label="Cancel">
+            <button
+              onClick={handleCancel}
+              disabled={saving}
+              className="p-1.5 rounded bg-zinc-50 hover:bg-zinc-100 text-zinc-600"
+              aria-label="Cancel"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </FastTooltip>
         </div>
         {error && (
           <p className="text-xs text-red-600">{error}</p>

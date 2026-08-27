@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils'
 import { differenceInDays, parseISO, format } from 'date-fns'
 import { toast } from 'sonner'
 import Link from 'next/link'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { markPaymentPaid } from '@/app/(dashboard)/payments/actions'
 import { EditPaymentDialog } from '@/components/payments/edit-payment-dialog'
 import { CreatePaymentDialog } from '@/components/payments/create-payment-dialog'
@@ -140,30 +141,32 @@ function MarkPaidButton({ paymentId, description }: { paymentId: string; descrip
   const [isPending, startTransition] = useTransition()
 
   return (
-    <button
-      disabled={isPending}
-      onClick={(e) => {
-        e.stopPropagation()
-        startTransition(async () => {
-          try {
-            await markPaymentPaid(paymentId)
-            toast.success('Payment marked as paid', { description })
-          } catch {
-            toast.error('Failed to mark payment as paid')
-          }
-        })
-      }}
-      className={cn(
-        'inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border transition-colors shrink-0',
-        isPending
-          ? 'bg-zinc-100 text-zinc-400 border-zinc-200 cursor-not-allowed'
-          : 'bg-white text-zinc-600 border-zinc-300 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300'
-      )}
-      title="Mark as paid"
-    >
-      {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-      <span className="hidden sm:inline">Mark Paid</span>
-    </button>
+    <FastTooltip label="Mark as paid">
+      <button
+        disabled={isPending}
+        onClick={(e) => {
+          e.stopPropagation()
+          startTransition(async () => {
+            try {
+              await markPaymentPaid(paymentId)
+              toast.success('Payment marked as paid', { description })
+            } catch {
+              toast.error('Failed to mark payment as paid')
+            }
+          })
+        }}
+        className={cn(
+          'inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border transition-colors shrink-0',
+          isPending
+            ? 'bg-zinc-100 text-zinc-400 border-zinc-200 cursor-not-allowed'
+            : 'bg-white text-zinc-600 border-zinc-300 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300'
+        )}
+        aria-label="Mark as paid"
+      >
+        {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+        <span className="hidden sm:inline">Mark Paid</span>
+      </button>
+    </FastTooltip>
   )
 }
 
@@ -226,27 +229,35 @@ function InvoiceActions({ payment }: { payment: PaymentItem }) {
 
   return (
     <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
-      <button onClick={handleDownload} className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600" title="Download PDF">
-        <Download className="h-3.5 w-3.5" />
-      </button>
-      {(status === 'Draft' || status === 'Overdue') && (
-        <button onClick={handleSend} disabled={isPending} className="p-1 rounded hover:bg-blue-50 text-blue-500 hover:text-blue-700 disabled:opacity-40" title="Send Invoice">
-          {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+      <FastTooltip label="Download PDF">
+        <button onClick={handleDownload} className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600" aria-label="Download PDF">
+          <Download className="h-3.5 w-3.5" />
         </button>
+      </FastTooltip>
+      {(status === 'Draft' || status === 'Overdue') && (
+        <FastTooltip label="Send Invoice">
+          <button onClick={handleSend} disabled={isPending} className="p-1 rounded hover:bg-blue-50 text-blue-500 hover:text-blue-700 disabled:opacity-40" aria-label="Send Invoice">
+            {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+          </button>
+        </FastTooltip>
       )}
       {(status === 'Sent' || status === 'Overdue') && (
-        <button onClick={handleRemind} disabled={isPending} className="p-1 rounded hover:bg-amber-50 text-amber-500 hover:text-amber-700 disabled:opacity-40" title="Send Reminder">
-          {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
-        </button>
+        <FastTooltip label="Send Reminder">
+          <button onClick={handleRemind} disabled={isPending} className="p-1 rounded hover:bg-amber-50 text-amber-500 hover:text-amber-700 disabled:opacity-40" aria-label="Send Reminder">
+            {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
+          </button>
+        </FastTooltip>
       )}
-      <button
-        onClick={handleSyncMirror}
-        disabled={isPending}
-        className="p-1 rounded hover:bg-indigo-50 text-zinc-400 hover:text-indigo-700 disabled:opacity-40"
-        title="Sync client-portal mirror — force client_expenses to match the current payment state (task 918fe55e)"
-      >
-        {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-      </button>
+      <FastTooltip label="Sync client-portal mirror — force client_expenses to match the current payment state (task 918fe55e)">
+        <button
+          onClick={handleSyncMirror}
+          disabled={isPending}
+          className="p-1 rounded hover:bg-indigo-50 text-zinc-400 hover:text-indigo-700 disabled:opacity-40"
+          aria-label="Sync client-portal mirror — force client_expenses to match the current payment state (task 918fe55e)"
+        >
+          {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+        </button>
+      </FastTooltip>
     </div>
   )
 }
@@ -295,31 +306,37 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
         )}
         {activeTab === 'invoices' ? (
           <div className="flex gap-2">
-            <button
-              onClick={() => setShowInvoice(true)}
-              className="bg-white rounded-lg border p-4 flex items-center gap-2 hover:bg-zinc-50 transition-colors"
-              title="New Invoice"
-            >
-              <FileText className="h-5 w-5 text-blue-600" />
-              <span className="text-sm font-medium hidden sm:inline">Invoice</span>
-            </button>
-            <button
-              onClick={() => setShowCredit(true)}
-              className="bg-white rounded-lg border p-4 flex items-center gap-2 hover:bg-zinc-50 transition-colors"
-              title="New Credit Note"
-            >
-              <FileText className="h-5 w-5 text-purple-600" />
-              <span className="text-sm font-medium hidden sm:inline">Credit</span>
-            </button>
+            <FastTooltip label="New Invoice">
+              <button
+                onClick={() => setShowInvoice(true)}
+                className="bg-white rounded-lg border p-4 flex items-center gap-2 hover:bg-zinc-50 transition-colors"
+                aria-label="New Invoice"
+              >
+                <FileText className="h-5 w-5 text-blue-600" />
+                <span className="text-sm font-medium hidden sm:inline">Invoice</span>
+              </button>
+            </FastTooltip>
+            <FastTooltip label="New Credit Note">
+              <button
+                onClick={() => setShowCredit(true)}
+                className="bg-white rounded-lg border p-4 flex items-center gap-2 hover:bg-zinc-50 transition-colors"
+                aria-label="New Credit Note"
+              >
+                <FileText className="h-5 w-5 text-purple-600" />
+                <span className="text-sm font-medium hidden sm:inline">Credit</span>
+              </button>
+            </FastTooltip>
           </div>
         ) : (
-          <button
-            onClick={() => setShowCreate(true)}
-            className="bg-white rounded-lg border p-4 min-w-[48px] flex items-center justify-center hover:bg-zinc-50 transition-colors"
-            title="New payment"
-          >
-            <Plus className="h-5 w-5 text-zinc-600" />
-          </button>
+          <FastTooltip label="New payment">
+            <button
+              onClick={() => setShowCreate(true)}
+              className="bg-white rounded-lg border p-4 min-w-[48px] flex items-center justify-center hover:bg-zinc-50 transition-colors"
+              aria-label="New payment"
+            >
+              <Plus className="h-5 w-5 text-zinc-600" />
+            </button>
+          </FastTooltip>
         )}
       </div>
 

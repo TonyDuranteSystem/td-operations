@@ -36,6 +36,7 @@ import {
   ChevronLeft,
 } from 'lucide-react'
 import { AccountCombobox } from '@/components/shared/account-combobox'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 // Loaded on demand: the emoji data is heavy and the window mounts on EVERY
 // dashboard page. ssr:false because the picker touches window on mount.
@@ -403,6 +404,7 @@ function FloatingChatInner() {
 
       {/* Launcher — desktop when closed/minimized, and always on mobile */}
       {(!windowOpen || minimized) && (
+        <FastTooltip label="Team chat">
         <button
           ref={launcher.ref}
           {...launcher.dragProps}
@@ -437,7 +439,6 @@ function FloatingChatInner() {
              page scroller instead of the button. */
           className="group fixed bottom-24 right-4 z-[46] flex h-14 w-14 touch-none items-center justify-center rounded-full bg-emerald-500 text-white shadow-xl ring-4 ring-emerald-500/20 transition-transform hover:scale-105 hover:bg-emerald-400 lg:bottom-6 lg:right-6"
           aria-label={unread > 0 ? `Team chat, ${unread} unread messages` : 'Team chat'}
-          title="Team chat"
         >
           <MessageSquare className="h-6 w-6" />
           {unread > 0 && (
@@ -446,6 +447,7 @@ function FloatingChatInner() {
             </span>
           )}
         </button>
+        </FastTooltip>
       )}
 
       {/* MOBILE sheet */}
@@ -579,30 +581,42 @@ function DesktopWindow(props: {
         {props.isList ? (
           <MessageSquare className="h-4 w-4 shrink-0" />
         ) : (
-          <button data-no-drag onClick={props.onBack} className="rounded p-0.5 hover:bg-white/20" title="All chats">
-            <ChevronLeft className="h-4 w-4" />
-          </button>
+          <FastTooltip label="All chats" align="left">
+            <button data-no-drag onClick={props.onBack} className="rounded p-0.5 hover:bg-white/20" aria-label="All chats">
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+          </FastTooltip>
         )}
         <span className="truncate text-sm font-semibold">{props.title}</span>
         <span className="ml-auto flex items-center gap-1">
           {props.isList && (
-            <button data-no-drag onClick={props.onNewChat} className="rounded p-1 hover:bg-white/20" title="New chat">
-              <Plus className="h-4 w-4" />
-            </button>
+            <FastTooltip label="New chat">
+              <button data-no-drag onClick={props.onNewChat} className="rounded p-1 hover:bg-white/20" aria-label="New chat">
+                <Plus className="h-4 w-4" />
+              </button>
+            </FastTooltip>
           )}
-          <button data-no-drag onClick={props.onToggleQuiet} className="rounded p-1 hover:bg-white/20"
-            title={props.quiet ? 'Pop-ups off — turn on' : 'Pop-ups on — turn off'}>
-            {props.quiet ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
-          </button>
-          <button data-no-drag onClick={resetPos} className="rounded p-1 hover:bg-white/20" title="Reset position">
-            <RotateCcw className="h-3.5 w-3.5" />
-          </button>
-          <button data-no-drag onClick={props.onMinimize} className="rounded p-1 hover:bg-white/20" title="Minimize">
-            <Minus className="h-4 w-4" />
-          </button>
-          <button data-no-drag onClick={props.onClose} className="rounded p-1 hover:bg-white/20" title="Close">
-            <X className="h-4 w-4" />
-          </button>
+          <FastTooltip label={props.quiet ? 'Pop-ups off — turn on' : 'Pop-ups on — turn off'}>
+            <button data-no-drag onClick={props.onToggleQuiet} className="rounded p-1 hover:bg-white/20"
+              aria-label={props.quiet ? 'Pop-ups off — turn on' : 'Pop-ups on — turn off'}>
+              {props.quiet ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+            </button>
+          </FastTooltip>
+          <FastTooltip label="Reset position">
+            <button data-no-drag onClick={resetPos} className="rounded p-1 hover:bg-white/20" aria-label="Reset position">
+              <RotateCcw className="h-3.5 w-3.5" />
+            </button>
+          </FastTooltip>
+          <FastTooltip label="Minimize">
+            <button data-no-drag onClick={props.onMinimize} className="rounded p-1 hover:bg-white/20" aria-label="Minimize">
+              <Minus className="h-4 w-4" />
+            </button>
+          </FastTooltip>
+          <FastTooltip label="Close">
+            <button data-no-drag onClick={props.onClose} className="rounded p-1 hover:bg-white/20" aria-label="Close">
+              <X className="h-4 w-4" />
+            </button>
+          </FastTooltip>
         </span>
       </div>
 
@@ -1259,14 +1273,15 @@ function Composer(props: {
         </>
       )}
       <div className="flex items-end gap-1">
-        <button
-          onClick={() => setEmojiOpen((o) => !o)}
-          className="flex h-[38px] w-[30px] shrink-0 items-center justify-center rounded text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600"
-          aria-label="Emoji"
-          title="Emoji"
-        >
-          <Smile className="h-4 w-4" />
-        </button>
+        <FastTooltip label="Emoji" align="left">
+          <button
+            onClick={() => setEmojiOpen((o) => !o)}
+            className="flex h-[38px] w-[30px] shrink-0 items-center justify-center rounded text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600"
+            aria-label="Emoji"
+          >
+            <Smile className="h-4 w-4" />
+          </button>
+        </FastTooltip>
         <textarea
           ref={boxRef}
           value={text}

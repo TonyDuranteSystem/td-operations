@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
 import { X, Send, Loader2, Sparkles, Paperclip, Link2, Eye, EyeOff, Settings } from 'lucide-react'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { useEmailAttachments } from './use-email-attachments'
 import { EmailAttachmentChips } from './email-attachment-chips'
@@ -519,16 +520,18 @@ export function ComposeDialog({
               canUsePersonalMailbox={canUsePersonalMailbox}
               disabled={sendMutation.isPending}
             />
-            <button
-              onClick={() => setTrackOpens(!trackOpens)}
-              className={`flex items-center gap-1.5 text-xs ${
-                trackOpens ? 'text-blue-600' : 'text-zinc-400'
-              } hover:text-blue-700 transition-colors`}
-              title={trackOpens ? 'Open tracking ON' : 'Open tracking OFF'}
-            >
-              {trackOpens ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-              {trackOpens ? 'Track' : 'No track'}
-            </button>
+            <FastTooltip label={trackOpens ? 'Open tracking ON' : 'Open tracking OFF'}>
+              <button
+                onClick={() => setTrackOpens(!trackOpens)}
+                className={`flex items-center gap-1.5 text-xs ${
+                  trackOpens ? 'text-blue-600' : 'text-zinc-400'
+                } hover:text-blue-700 transition-colors`}
+                aria-label={trackOpens ? 'Open tracking ON' : 'Open tracking OFF'}
+              >
+                {trackOpens ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                {trackOpens ? 'Track' : 'No track'}
+              </button>
+            </FastTooltip>
             {parsedDriveIds.length + attachments.files.filter((f) => !f.error).length > 0 && (
               <span className="text-xs text-zinc-500">
                 {parsedDriveIds.length + attachments.files.filter((f) => !f.error).length} file

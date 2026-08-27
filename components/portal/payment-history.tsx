@@ -5,6 +5,7 @@ import { Download, Loader2, CreditCard } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface Payment {
   id: string
@@ -100,14 +101,16 @@ export function PaymentHistory({ payments, title }: { payments: Payment[]; title
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {hasInvoice && (
-                    <button
-                      onClick={() => handleDownload(p)}
-                      disabled={isDownloading}
-                      className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 disabled:opacity-50"
-                      title={`Download ${p.invoice_number}`}
-                    >
-                      {isDownloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                    </button>
+                    <FastTooltip label={`Download ${p.invoice_number}`}>
+                      <button
+                        onClick={() => handleDownload(p)}
+                        disabled={isDownloading}
+                        className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 disabled:opacity-50"
+                        aria-label={`Download ${p.invoice_number}`}
+                      >
+                        {isDownloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                      </button>
+                    </FastTooltip>
                   )}
                   <span className={cn('text-xs px-2 py-0.5 rounded-full', STATUS_COLORS[p.status ?? ''] ?? 'bg-zinc-100')}>
                     {p.status}

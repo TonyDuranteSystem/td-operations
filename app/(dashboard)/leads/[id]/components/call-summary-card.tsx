@@ -5,6 +5,7 @@ import { Phone, Clock, Users, FileText, ListChecks, Search, Link2, Unlink, Loade
 import { findAndLinkCall, linkCallToLead, unlinkCallFromLead, searchCallsByName } from '../actions'
 import { toast } from 'sonner'
 import { CallNotesEditor } from './call-notes-editor'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface CallData {
   id: string
@@ -129,15 +130,17 @@ export function CallSummaryCard({ leadId, leadEmail, initialCall, callNotes }: C
             <Phone className="h-4 w-4" />
             Call Summary
           </h2>
-          <button
-            onClick={handleUnlink}
-            disabled={isPending}
-            className="text-xs text-zinc-400 hover:text-red-500 flex items-center gap-1 transition-colors"
-            title="Unlink this call"
-          >
-            {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unlink className="h-3 w-3" />}
-            Unlink
-          </button>
+          <FastTooltip label="Unlink this call">
+            <button
+              onClick={handleUnlink}
+              disabled={isPending}
+              className="text-xs text-zinc-400 hover:text-red-500 flex items-center gap-1 transition-colors"
+              aria-label="Unlink this call"
+            >
+              {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unlink className="h-3 w-3" />}
+              Unlink
+            </button>
+          </FastTooltip>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

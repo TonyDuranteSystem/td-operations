@@ -12,6 +12,7 @@ import { toast } from 'sonner'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 import { InvoiceNoteDot } from '@/components/payments/invoice-note-dot'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import {
   createUnifiedInvoiceDraft,
   sendNewInvoice,
@@ -368,15 +369,17 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                           <td className="px-4 py-2.5 font-medium">
                             <div className="flex items-center gap-1.5">
                               {inv.parent_invoice_id && <SplitSquareHorizontal className="w-3 h-3 text-purple-500" />}
-                              <a
-                                href={`/api/invoices/${id}/pdf`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-600 hover:underline font-mono"
-                                title="Open invoice PDF"
-                              >
-                                {inv.invoice_number as string}
-                              </a>
+                              <FastTooltip label="Open invoice PDF" align="left">
+                                <a
+                                  href={`/api/invoices/${id}/pdf`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-blue-600 hover:underline font-mono"
+                                  aria-label="Open invoice PDF"
+                                >
+                                  {inv.invoice_number as string}
+                                </a>
+                              </FastTooltip>
                             </div>
                           </td>
                           <td className="px-4 py-2.5 text-muted-foreground">{(inv.issue_date as string) ?? '—'}</td>
@@ -392,38 +395,52 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                           </td>
                           <td className="px-4 py-2.5">
                             <div className="flex items-center justify-end gap-1">
-                              <button onClick={() => invoiceAction('pdf', id)} title="Download PDF" className="p-1 rounded hover:bg-muted">
-                                <Download className="w-3.5 h-3.5" />
-                              </button>
-                              {['Draft', 'Sent'].includes(status) && (
-                                <button onClick={() => invoiceAction('send', id)} title="Send" className="p-1 rounded hover:bg-muted">
-                                  <Send className="w-3.5 h-3.5" />
+                              <FastTooltip label="Download PDF">
+                                <button onClick={() => invoiceAction('pdf', id)} aria-label="Download PDF" className="p-1 rounded hover:bg-muted">
+                                  <Download className="w-3.5 h-3.5" />
                                 </button>
+                              </FastTooltip>
+                              {['Draft', 'Sent'].includes(status) && (
+                                <FastTooltip label="Send">
+                                  <button onClick={() => invoiceAction('send', id)} aria-label="Send" className="p-1 rounded hover:bg-muted">
+                                    <Send className="w-3.5 h-3.5" />
+                                  </button>
+                                </FastTooltip>
                               )}
                               {['Sent', 'Overdue'].includes(status) && (
-                                <button onClick={() => invoiceAction('remind', id)} title="Remind" className="p-1 rounded hover:bg-muted">
-                                  <Bell className="w-3.5 h-3.5" />
-                                </button>
+                                <FastTooltip label="Remind">
+                                  <button onClick={() => invoiceAction('remind', id)} aria-label="Remind" className="p-1 rounded hover:bg-muted">
+                                    <Bell className="w-3.5 h-3.5" />
+                                  </button>
+                                </FastTooltip>
                               )}
                               {['Sent', 'Overdue', 'Partial'].includes(status) && (
-                                <button onClick={() => invoiceAction('markPaid', id)} title="Mark Paid" className="p-1 rounded hover:bg-blue-100 text-blue-600">
-                                  <CheckCircle className="w-3.5 h-3.5" />
-                                </button>
+                                <FastTooltip label="Mark Paid">
+                                  <button onClick={() => invoiceAction('markPaid', id)} aria-label="Mark Paid" className="p-1 rounded hover:bg-blue-100 text-blue-600">
+                                    <CheckCircle className="w-3.5 h-3.5" />
+                                  </button>
+                                </FastTooltip>
                               )}
                               {['Draft', 'Sent', 'Overdue', 'Partial'].includes(status) && (
-                                <button onClick={() => invoiceAction('regenerate', id)} title="Regenerate — show an applied credit as a line" className="p-1 rounded hover:bg-indigo-100 text-indigo-600">
-                                  <RefreshCw className="w-3.5 h-3.5" />
-                                </button>
+                                <FastTooltip label="Regenerate — show an applied credit as a line">
+                                  <button onClick={() => invoiceAction('regenerate', id)} aria-label="Regenerate — show an applied credit as a line" className="p-1 rounded hover:bg-indigo-100 text-indigo-600">
+                                    <RefreshCw className="w-3.5 h-3.5" />
+                                  </button>
+                                </FastTooltip>
                               )}
                               {['Draft', 'Sent', 'Overdue', 'Partial'].includes(status) && (
-                                <button onClick={() => setVoidTarget({ id, number: inv.invoice_number as string })} title="Void — cancel this invoice" className="p-1 rounded hover:bg-red-100 text-red-500">
-                                  <Ban className="w-3.5 h-3.5" />
-                                </button>
+                                <FastTooltip label="Void — cancel this invoice">
+                                  <button onClick={() => setVoidTarget({ id, number: inv.invoice_number as string })} aria-label="Void — cancel this invoice" className="p-1 rounded hover:bg-red-100 text-red-500">
+                                    <Ban className="w-3.5 h-3.5" />
+                                  </button>
+                                </FastTooltip>
                               )}
                               {status === 'Cancelled' && (
-                                <button onClick={() => setReactivateTarget({ id, number: inv.invoice_number as string })} title="Reactivate — bring this cancelled invoice back to life" className="p-1 rounded hover:bg-emerald-100 text-emerald-600">
-                                  <Undo2 className="w-3.5 h-3.5" />
-                                </button>
+                                <FastTooltip label="Reactivate — bring this cancelled invoice back to life">
+                                  <button onClick={() => setReactivateTarget({ id, number: inv.invoice_number as string })} aria-label="Reactivate — bring this cancelled invoice back to life" className="p-1 rounded hover:bg-emerald-100 text-emerald-600">
+                                    <Undo2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </FastTooltip>
                               )}
                             </div>
                           </td>
@@ -458,15 +475,17 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                         <td className="px-4 py-2.5">
                           <span>{e.desc}</span>{' '}
                           {e.ref && e.refId ? (
-                            <a
-                              href={`/api/invoices/${e.refId}/pdf`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-600 hover:underline font-mono"
-                              title="Open invoice PDF"
-                            >
-                              {e.ref}
-                            </a>
+                            <FastTooltip label="Open invoice PDF">
+                              <a
+                                href={`/api/invoices/${e.refId}/pdf`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:underline font-mono"
+                                aria-label="Open invoice PDF"
+                              >
+                                {e.ref}
+                              </a>
+                            </FastTooltip>
                           ) : e.ref ? (
                             <span className="font-mono">{e.ref}</span>
                           ) : null}
@@ -559,15 +578,17 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                       <tr key={p.id as string} className="border-b hover:bg-muted/30">
                         <td className="px-4 py-2.5 font-medium">
                           {p.invoice_number ? (
-                            <a
-                              href={`/api/invoices/${p.id as string}/pdf`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-600 hover:underline font-mono"
-                              title="Open invoice PDF"
-                            >
-                              {p.invoice_number as string}
-                            </a>
+                            <FastTooltip label="Open invoice PDF" align="left">
+                              <a
+                                href={`/api/invoices/${p.id as string}/pdf`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:underline font-mono"
+                                aria-label="Open invoice PDF"
+                              >
+                                {p.invoice_number as string}
+                              </a>
+                            </FastTooltip>
                           ) : '—'}
                         </td>
                         <td className="px-4 py-2.5 text-muted-foreground">{(p.paid_date as string) ?? '—'}</td>

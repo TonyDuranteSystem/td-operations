@@ -23,6 +23,7 @@ import dynamic from 'next/dynamic'
 import { ConversationChat } from './conversation-chat'
 import { DeliverablesSection } from './deliverables-section'
 import type { CommParticipant } from '@/lib/td-communication/types'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 // Cris's design tools (Phase 12). Lazy-loaded with no SSR: the Canvas / zip / SVG
 // code must not weigh down a normal brief-panel open.
@@ -617,19 +618,20 @@ export function ProjectBriefPanel({
                     {imageUploads.length > 0 && (
                       <div className="grid grid-cols-3 gap-2">
                         {imageUploads.map((u, i) => (
-                          <button
-                            key={`img-${u.name}-${i}`}
-                            type="button"
-                            onClick={() => setLightbox({ url: u.url, name: u.name })}
-                            title={u.name}
-                            className="group relative block aspect-square overflow-hidden rounded-md border border-zinc-200 bg-zinc-50 hover:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                          >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={u.url} alt={u.name} className="h-full w-full object-contain" />
-                            <span className="absolute bottom-0 inset-x-0 truncate bg-black/50 px-1.5 py-0.5 text-left text-[10px] text-white opacity-0 group-hover:opacity-100">
-                              {u.name}
-                            </span>
-                          </button>
+                          <FastTooltip key={`img-${u.name}-${i}`} label={u.name}>
+                            <button
+                              type="button"
+                              onClick={() => setLightbox({ url: u.url, name: u.name })}
+                              aria-label={u.name}
+                              className="group relative block aspect-square overflow-hidden rounded-md border border-zinc-200 bg-zinc-50 hover:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={u.url} alt={u.name} className="h-full w-full object-contain" />
+                              <span className="absolute bottom-0 inset-x-0 truncate bg-black/50 px-1.5 py-0.5 text-left text-[10px] text-white opacity-0 group-hover:opacity-100">
+                                {u.name}
+                              </span>
+                            </button>
+                          </FastTooltip>
                         ))}
                       </div>
                     )}

@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Plus, ExternalLink, Loader2, Trash2, Check, Pencil, ChevronUp, ChevronDown } from 'lucide-react'
 import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface BankReferral {
   slug: string
@@ -153,24 +154,28 @@ export function BankReferralsAdmin() {
           {referrals.map((r, i) => (
             <div key={r.slug} className="flex items-start gap-2 py-2.5">
               <div className="flex flex-col shrink-0 pt-0.5">
-                <button
-                  type="button"
-                  onClick={() => move(i, -1)}
-                  disabled={i === 0 || busySlug === r.slug}
-                  className="text-zinc-400 hover:text-zinc-700 disabled:opacity-30"
-                  title="Move up"
-                >
-                  <ChevronUp className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => move(i, 1)}
-                  disabled={i === referrals.length - 1 || busySlug === r.slug}
-                  className="text-zinc-400 hover:text-zinc-700 disabled:opacity-30"
-                  title="Move down"
-                >
-                  <ChevronDown className="h-3.5 w-3.5" />
-                </button>
+                <FastTooltip label="Move up" align="left">
+                  <button
+                    type="button"
+                    onClick={() => move(i, -1)}
+                    disabled={i === 0 || busySlug === r.slug}
+                    className="text-zinc-400 hover:text-zinc-700 disabled:opacity-30"
+                    aria-label="Move up"
+                  >
+                    <ChevronUp className="h-3.5 w-3.5" />
+                  </button>
+                </FastTooltip>
+                <FastTooltip label="Move down" align="left">
+                  <button
+                    type="button"
+                    onClick={() => move(i, 1)}
+                    disabled={i === referrals.length - 1 || busySlug === r.slug}
+                    className="text-zinc-400 hover:text-zinc-700 disabled:opacity-30"
+                    aria-label="Move down"
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </button>
+                </FastTooltip>
               </div>
 
               <div className="flex-1 min-w-0">
@@ -213,24 +218,28 @@ export function BankReferralsAdmin() {
                 >
                   {r.enabled ? <Check className="h-3 w-3" /> : 'Off'}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setDialogFor(r)}
-                  disabled={busySlug === r.slug}
-                  className="text-zinc-400 hover:text-blue-600 p-1"
-                  title="Edit"
-                >
-                  <Pencil className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => remove(r.slug, r.label)}
-                  disabled={busySlug === r.slug}
-                  className="text-zinc-400 hover:text-red-600 p-1"
-                  title="Remove"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                <FastTooltip label="Edit">
+                  <button
+                    type="button"
+                    onClick={() => setDialogFor(r)}
+                    disabled={busySlug === r.slug}
+                    className="text-zinc-400 hover:text-blue-600 p-1"
+                    aria-label="Edit"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                </FastTooltip>
+                <FastTooltip label="Remove">
+                  <button
+                    type="button"
+                    onClick={() => remove(r.slug, r.label)}
+                    disabled={busySlug === r.slug}
+                    className="text-zinc-400 hover:text-red-600 p-1"
+                    aria-label="Remove"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </FastTooltip>
               </div>
             </div>
           ))}

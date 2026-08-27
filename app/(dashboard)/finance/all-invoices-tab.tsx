@@ -14,6 +14,7 @@ import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 import { InvoiceNoteDot } from '@/components/payments/invoice-note-dot'
 import { isAccountReminderPaused } from '@/lib/billing/reminder-snooze'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const STATUS_COLORS: Record<string, string> = {
   Paid: 'bg-emerald-100 text-emerald-700',
@@ -329,16 +330,18 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
         <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/40 px-4 py-2.5 text-sm">
           <Bell className="w-4 h-4 text-amber-600" />
           <span className="font-medium text-foreground">Automatic reminders</span>
-          <button
-            onClick={toggleAutoSend}
-            disabled={autoSend === null || autoSaving}
-            className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-colors disabled:opacity-50 ${
-              autoSend ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-zinc-200 text-zinc-600 hover:bg-zinc-300'
-            }`}
-            title="Turn the daily automatic reminder schedule on or off"
-          >
-            {autoSend === null ? '…' : autoSend ? 'ON' : 'OFF'}
-          </button>
+          <FastTooltip label="Turn the daily automatic reminder schedule on or off">
+            <button
+              onClick={toggleAutoSend}
+              disabled={autoSend === null || autoSaving}
+              className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-colors disabled:opacity-50 ${
+                autoSend ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-zinc-200 text-zinc-600 hover:bg-zinc-300'
+              }`}
+              aria-label="Turn the daily automatic reminder schedule on or off"
+            >
+              {autoSend === null ? '…' : autoSend ? 'ON' : 'OFF'}
+            </button>
+          </FastTooltip>
           <span className="text-xs text-muted-foreground">Daily 9:00 · 1st at 7d overdue, 2nd at 14d · sends gradually in the background</span>
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground" title={`Max reminders queued per pass (1–${CAP_MAX}). The rest roll to the next pass; all send gradually in the background.`}>
             Max per run
@@ -352,15 +355,17 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
               className="w-16 px-2 py-1 border rounded-md text-xs text-foreground disabled:opacity-50"
             />
           </label>
-          <button
-            onClick={runDunningNow}
-            disabled={dunningRunning}
-            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white text-xs font-medium rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50"
-            title={`Run the reminder job right now (sends all that are due, up to ${cap})`}
-          >
-            {dunningRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-            Run reminders now
-          </button>
+          <FastTooltip label={`Run the reminder job right now (sends all that are due, up to ${cap})`}>
+            <button
+              onClick={runDunningNow}
+              disabled={dunningRunning}
+              className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white text-xs font-medium rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50"
+              aria-label={`Run the reminder job right now (sends all that are due, up to ${cap})`}
+            >
+              {dunningRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              Run reminders now
+            </button>
+          </FastTooltip>
         </div>
       )}
 
@@ -460,15 +465,17 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
                     onChange={() => toggleSelected(inv.id)}
                   />
                 )}
-                <a
-                  href={`/api/invoices/${inv.id}/pdf`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-mono text-blue-600 text-xs hover:underline"
-                  title="Open invoice PDF"
-                >
-                  {inv.invoice_number}
-                </a>
+                <FastTooltip label="Open invoice PDF" align="left">
+                  <a
+                    href={`/api/invoices/${inv.id}/pdf`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono text-blue-600 text-xs hover:underline"
+                    aria-label="Open invoice PDF"
+                  >
+                    {inv.invoice_number}
+                  </a>
+                </FastTooltip>
                 <span className={`ml-auto inline-block px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[inv.status] ?? 'bg-zinc-100 text-zinc-600'}`}>
                   {inv.status}
                 </span>
@@ -589,15 +596,17 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <a
-                      href={`/api/invoices/${inv.id}/pdf`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-mono text-blue-600 text-xs hover:underline"
-                      title="Open invoice PDF"
-                    >
-                      {inv.invoice_number}
-                    </a>
+                    <FastTooltip label="Open invoice PDF" align="left">
+                      <a
+                        href={`/api/invoices/${inv.id}/pdf`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-mono text-blue-600 text-xs hover:underline"
+                        aria-label="Open invoice PDF"
+                      >
+                        {inv.invoice_number}
+                      </a>
+                    </FastTooltip>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5">
