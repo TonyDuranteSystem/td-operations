@@ -151,7 +151,7 @@ export async function POST(req: NextRequest) {
     const escapedEmail = escapeLikePattern(fields.email)
     const { data: existingLeads } = await db
       .from("leads")
-      .select("id, status")
+      .select("id, status, existing_client_contact_id")
       .ilike("email", escapedEmail)
       .order("created_at", { ascending: true })
       .limit(1)
@@ -162,6 +162,30 @@ export async function POST(req: NextRequest) {
       .ilike("email", escapedEmail)
       .order("created_at", { ascending: true })
       .limit(1)
+
+    // Existing-client tagging (dev job 93580372, closed a gap found in review):
+    // computed once here so BOTH the "update an existing lead" branch and the
+    // "create a new lead" branch below can use it — a repeat booking from an
+    // established client is just as much a booking-with-an-existing-client as
+    // a first one is, and must not be silently untaggable just because it
+    // happens to match an OLD lead row instead of creating a fresh one.
+    let taggedContactId: string | null = null
+    if (existingContacts && existingContacts.length > 0) {
+      const contact = existingContacts[0] as { id: string; full_name: string; portal_tier: string | null }
+      const [accountLinkRes, serviceDeliveryRes] = await Promise.all([
+        db.from("account_contacts").select("account_id").eq("contact_id", contact.id).limit(1),
+        db.from("service_deliveries").select("id").eq("contact_id", contact.id).limit(1),
+      ])
+      if (
+        isEstablishedClientContact({
+          portal_tier: contact.portal_tier,
+          hasAccountLink: (accountLinkRes.data?.length ?? 0) > 0,
+          hasServiceDelivery: (serviceDeliveryRes.data?.length ?? 0) > 0,
+        })
+      ) {
+        taggedContactId = contact.id
+      }
+    }
 
     // ─── Mode selection ─────────────────────────────────────
     // Default: 'auto_create' — a booking immediately becomes a lead (+ referral
@@ -314,6 +338,13 @@ export async function POST(req: NextRequest) {
       }
       if (fields.callDate) updates.call_date = fields.callDate
       if (fields.phone && !lead.status) updates.phone = fields.phone
+      // A repeat booking from an established client is just as much an
+      // existing-client booking as a first one — tag it too if it wasn't
+      // already (a lead can predate this feature, or its first booking might
+      // not have matched an established contact yet at the time).
+      if (taggedContactId && !lead.existing_client_contact_id) {
+        updates.existing_client_contact_id = taggedContactId
+      }
 
       await db.from("leads").update(updates).eq("id", lead.id)
 
@@ -333,25 +364,8 @@ export async function POST(req: NextRequest) {
     // stay pointing at the real one) so diagnose-contact/diagnose-account's
     // "Lead status" check (and the Portal Chats Issues panel that reads it)
     // stops treating it as an open, unconverted sales opportunity.
-    let taggedContactId: string | null = null
-    if (existingContacts && existingContacts.length > 0) {
-      const contact = existingContacts[0] as { id: string; full_name: string; portal_tier: string | null }
-      console.warn(`[calendly-webhook] Existing contact found: ${contact.full_name} — creating lead, tagging to contact`)
-
-      const [accountLinkRes, serviceDeliveryRes] = await Promise.all([
-        db.from("account_contacts").select("account_id").eq("contact_id", contact.id).limit(1),
-        db.from("service_deliveries").select("id").eq("contact_id", contact.id).limit(1),
-      ])
-
-      if (
-        isEstablishedClientContact({
-          portal_tier: contact.portal_tier,
-          hasAccountLink: (accountLinkRes.data?.length ?? 0) > 0,
-          hasServiceDelivery: (serviceDeliveryRes.data?.length ?? 0) > 0,
-        })
-      ) {
-        taggedContactId = contact.id
-      }
+    if (taggedContactId) {
+      console.warn(`[calendly-webhook] Existing contact found — creating lead, tagging to contact ${taggedContactId}`)
     }
 
     const leadRecord: Record<string, unknown> = {

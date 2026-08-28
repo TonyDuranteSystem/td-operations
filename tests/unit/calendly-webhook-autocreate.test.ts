@@ -38,7 +38,7 @@ const fixtures: Fixtures = {
   accountLinks: [],
   serviceDeliveries: [],
 }
-const recorded: { leadInsert?: Record<string, unknown>; webhookInsert?: Record<string, unknown> } = {}
+const recorded: { leadInsert?: Record<string, unknown>; webhookInsert?: Record<string, unknown>; leadUpdate?: Record<string, unknown> } = {}
 
 function makeBuilder(table: string) {
   const state: { table: string; insertPayload?: Record<string, unknown>; ilikeCol?: string; eqCol?: string } = { table }
@@ -47,7 +47,6 @@ function makeBuilder(table: string) {
   builder.select = chain
   builder.order = chain
   builder.limit = chain
-  builder.update = chain
   builder.eq = (col: string) => {
     state.eqCol = col
     return builder
@@ -60,6 +59,10 @@ function makeBuilder(table: string) {
     state.insertPayload = payload
     if (table === "leads") recorded.leadInsert = payload
     if (table === "webhook_events") recorded.webhookInsert = payload
+    return builder
+  }
+  builder.update = (payload: Record<string, unknown>) => {
+    if (table === "leads") recorded.leadUpdate = payload
     return builder
   }
   const resolve = () => {
@@ -123,6 +126,7 @@ beforeEach(() => {
   fixtures.serviceDeliveries = []
   delete recorded.leadInsert
   delete recorded.webhookInsert
+  delete recorded.leadUpdate
   process.env.CALENDLY_INTAKE_MODE = "auto_create"
 })
 
@@ -240,5 +244,58 @@ describe("calendly webhook — existing contact match (no existing lead)", () =>
     expect(recorded.leadInsert?.existing_client_contact_id).toBe("contact-5")
     expect(recorded.leadInsert?.source).toBe("Referral")
     expect(createPendingReferralMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ── Repeat booking against an EXISTING lead (dev job 93580372, review gap) ──
+// A returning established client whose email already matches an old lead row
+// takes the "update in place" path, not the "create" path. That path must be
+// tagged too, or an established client's repeat booking would silently never
+// qualify for the existing-client recognition — the exact gap the Bug Hunter
+// found in council review of the Leads-page redesign.
+describe("calendly webhook — repeat booking against an existing lead row", () => {
+  it("tags an existing lead on update when the contact is established and it wasn't tagged yet", async () => {
+    fixtures.existingLeads = [{ id: "lead-old", status: "Lost", existing_client_contact_id: null }]
+    fixtures.existingContacts = [{ id: "contact-est", full_name: "Established Client", portal_tier: "active" }]
+
+    const res = await POST(makeReq(bookingPayload(null)))
+    const json = await res.json()
+
+    expect(json.action).toBe("updated")
+    expect(json.lead_id).toBe("lead-old")
+    expect(recorded.leadUpdate?.existing_client_contact_id).toBe("contact-est")
+  })
+
+  it("does not overwrite an already-tagged existing lead on update", async () => {
+    fixtures.existingLeads = [{ id: "lead-old", status: "Call Scheduled", existing_client_contact_id: "contact-already-set" }]
+    fixtures.existingContacts = [{ id: "contact-est", full_name: "Established Client", portal_tier: "active" }]
+
+    const res = await POST(makeReq(bookingPayload(null)))
+
+    expect(res.status).toBe(200)
+    expect(recorded.leadUpdate).toBeDefined()
+    expect("existing_client_contact_id" in (recorded.leadUpdate as Record<string, unknown>)).toBe(false)
+  })
+
+  it("does not tag an existing lead when the matched contact looks like a stub, not an established client", async () => {
+    fixtures.existingLeads = [{ id: "lead-old", status: "New", existing_client_contact_id: null }]
+    fixtures.existingContacts = [{ id: "contact-stub", full_name: "Stub Contact", portal_tier: "lead" }]
+
+    await POST(makeReq(bookingPayload(null)))
+
+    expect(recorded.leadUpdate).toBeDefined()
+    expect("existing_client_contact_id" in (recorded.leadUpdate as Record<string, unknown>)).toBe(false)
+  })
+
+  it("still just updates in place, untagged, when there's no contact match at all", async () => {
+    fixtures.existingLeads = [{ id: "lead-old", status: "New", existing_client_contact_id: null }]
+    fixtures.existingContacts = []
+
+    const res = await POST(makeReq(bookingPayload(null)))
+    const json = await res.json()
+
+    expect(json.action).toBe("updated")
+    expect(recorded.leadUpdate).toBeDefined()
+    expect("existing_client_contact_id" in (recorded.leadUpdate as Record<string, unknown>)).toBe(false)
   })
 })

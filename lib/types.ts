@@ -295,6 +295,12 @@ export interface LeadListItem {
   offer_year1_amount: number | null
   offer_year1_currency: string | null
   created_at: string
+  /** Set when this booking's email matched an already-established client —
+   *  it's a booking record, not an open sales lead (dev job 93580372). */
+  existing_client_contact_id: string | null
+  /** True when an actual call recording has come back for this lead (via
+   *  Circleback), computed server-side — never a guess from call_date. */
+  has_call_recording: boolean
 }
 
 export interface ContactListItem {
