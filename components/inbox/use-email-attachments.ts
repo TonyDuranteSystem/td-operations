@@ -156,6 +156,90 @@ export function useEmailAttachments() {
     setUploading(false)
   }, [writeFiles])
 
+  /**
+   * Offer files from ANOTHER email (Forward) as chips — same room/size rules
+   * as `add()`, but the bytes are copied server-side (POST /api/inbox/
+   * attachments/copy-from-message) instead of uploaded from the browser,
+   * since they already live on our servers. Shown as removable chips, never
+   * attached silently — a forward's files can be a client's real documents
+   * going to a new recipient (Antonio, 2026-08-28).
+   */
+  const addFromSource = useCallback(async (
+    incoming: Array<{
+      name: string
+      size: number
+      mimeType: string
+      source: { messageId: string; attachmentId: string; mailbox?: 'support' | 'antonio' }
+    }>,
+  ) => {
+    if (!incoming.length) return
+
+    const room = Math.max(0, MAX_EMAIL_FILES - filesRef.current.length)
+    const take = incoming.slice(0, room)
+    const overflow = incoming.length - take.length
+    const accepted = take.map((item) => ({
+      entry: {
+        localId: nextLocalId(),
+        name: item.name,
+        size: item.size,
+        mimeType: item.mimeType || 'application/octet-stream',
+      } satisfies StagedEmailFile,
+      item,
+    }))
+    writeFiles((prev) => [...prev, ...accepted.map((a) => a.entry)])
+
+    if (overflow > 0) {
+      setLimitNotice(`Only ${MAX_EMAIL_FILES} files per email — ${overflow} not added.`)
+    } else {
+      setLimitNotice(null)
+    }
+    if (!accepted.length) return
+
+    setUploading(true)
+    await Promise.all(
+      accepted.map(async ({ entry, item }) => {
+        const fail = (error: string) =>
+          writeFiles((prev) => prev.map((f) => (f.localId === entry.localId ? { ...f, error } : f)))
+
+        if (item.size > MAX_EMAIL_TOTAL_BYTES) {
+          return fail(
+            `Too large to email: ${(item.size / 1024 / 1024).toFixed(1)} MB (max ${MAX_EMAIL_TOTAL_MB} MB — Gmail's limit).`,
+          )
+        }
+        const otherBytes = filesRef.current
+          .filter((f) => f.localId !== entry.localId && !f.error)
+          .reduce((sum, f) => sum + f.size, 0)
+        if (otherBytes + item.size > MAX_EMAIL_TOTAL_BYTES) {
+          return fail(`Attachments exceed ${MAX_EMAIL_TOTAL_MB} MB combined (Gmail's limit). Remove a file first.`)
+        }
+
+        try {
+          const res = await fetch('/api/inbox/attachments/copy-from-message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              messageId: item.source.messageId,
+              attachmentId: item.source.attachmentId,
+              filename: item.name,
+              mimeType: item.mimeType,
+              mailbox: item.source.mailbox,
+            }),
+          })
+          if (!res.ok) {
+            const d = await res.json().catch(() => ({}))
+            return fail(d.error || 'Could not copy the original file. Please try again.')
+          }
+          const { path } = await res.json()
+          if (!path) return fail('Could not copy the original file. Please try again.')
+          writeFiles((prev) => prev.map((f) => (f.localId === entry.localId ? { ...f, path } : f)))
+        } catch (err) {
+          fail(err instanceof Error && err.message ? err.message : 'Could not copy the original file. Please try again.')
+        }
+      }),
+    )
+    setUploading(false)
+  }, [writeFiles])
+
   // Read at SEND time, not during render — consult the ref so an upload that
   // finished moments before the click counts, and a failed file is never
   // silently sent past its warning.
@@ -190,7 +274,7 @@ export function useEmailAttachments() {
     [add],
   )
 
-  return { files, uploading, limitNotice, add, remove, clear, uploaded, failed, pending, onPaste }
+  return { files, uploading, limitNotice, add, addFromSource, remove, clear, uploaded, failed, pending, onPaste }
 }
 
 /** The shape the composers hand down to the chips row. */

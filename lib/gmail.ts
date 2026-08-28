@@ -278,6 +278,7 @@ export interface GmailInlineImage {
   contentId: string
   attachmentId: string
   mimeType: string
+  size: number
 }
 
 /**
@@ -301,6 +302,7 @@ export function extractInlineImages(
           contentId: cid.trim().replace(/^</, "").replace(/>$/, ""),
           attachmentId: part.body.attachmentId,
           mimeType: part.mimeType,
+          size: part.body.size ?? 0,
         })
       }
       if (part.parts) walk(part.parts)

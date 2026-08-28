@@ -35,6 +35,23 @@ export function decodeHtmlEntities(text: string): string {
 }
 
 /**
+ * Convert block/line-break tags to real newlines BEFORE an HTML string is
+ * flattened to plain text via `Element.textContent` (or similar).
+ * `textContent` concatenates every text node with ZERO separator — it is
+ * completely blind to block-level layout, so "<div>A</div><div>B</div>"
+ * becomes "AB", not "A\nB". This broke the Inbox's Forward feature: a real
+ * client email's "Ciao Antonio, come stai?" ran straight into "ho
+ * controllato..." with no space at all (Antonio, 2026-08-27/28). Mirrors the
+ * equivalent server-side conversion already used for this exact reason
+ * (lib/mcp/tools/gmail.ts's stripHtml).
+ */
+export function insertLineBreaksForBlockTags(html: string): string {
+  return (html || "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(div|p|tr|li|h[1-6]|blockquote)>/gi, "\n")
+}
+
+/**
  * Human display name from a From/To header: strips the <email> part and the
  * RFC 2822 surrounding quotes ("Tamás Fazekas" <t@x.com> → Tamás Fazekas).
  */
