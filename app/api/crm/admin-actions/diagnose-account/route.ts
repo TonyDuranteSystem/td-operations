@@ -89,9 +89,17 @@ export async function GET(req: NextRequest) {
       deadlinesResult,
       portalAccessResult,
     ] = await Promise.all([
-      // Lead
+      // Lead candidates — every lead sharing this contact's email, newest
+      // first, WITH the account-linkage column so the resolution below can
+      // tell "genuinely this account's own lead" from "some other inquiry
+      // that happens to share an email." A bare, unordered, unscoped
+      // .limit(1) here (the old query) is exactly what produced a false
+      // "lead not converted" warning on Estro LLC — a fully healthy account
+      // — from a brand-new, unrelated lead for the same contact (2026-08-28,
+      // dev job c3efa6cb). See the resolution logic below for why this is
+      // only a fallback, not the primary path.
       contactEmail
-        ? supabaseAdmin.from("leads").select("id, full_name, status, email, offer_link, existing_client_contact_id")
+        ? supabaseAdmin.from("leads").select("id, full_name, status, email, offer_link, existing_client_contact_id, converted_to_account_id")
             .ilike("email", contactEmail).order("created_at", { ascending: false }).limit(5)
         : { data: [] },
       // Offers — this account's own offer first; only fall back to an email
@@ -175,14 +183,49 @@ export async function GET(req: NextRequest) {
       resolveAccountPortalAccess(accountId).then((r) => ({ data: r })),
     ])
 
-    const candidateLeads = (leadsResult.data ?? []) as Array<
-      { id: string; full_name: string; status: string; email: string; offer_link: string; existing_client_contact_id: string | null }
-    >
-    const lead =
-      candidateLeads.find(l => l.status === "Converted") ??
-      candidateLeads.find(l => l.existing_client_contact_id) ??
-      candidateLeads[0]
+    const leadCandidates = (leadsResult.data || []) as { id: string; full_name: string; status: string; email: string; offer_link: string; existing_client_contact_id: string | null; converted_to_account_id: string | null }[]
     const offer = (offersResult.data as unknown[])?.[0] as { token: string; status: string; payment_type: string; payment_links: unknown[]; bank_details: unknown; bundled_pipelines: string[]; contract_type: string; lead_id: string; account_id: string; services: Array<{ price: string; optional?: boolean }> } | undefined
+
+    // Lead resolution (2026-08-28, dev job c3efa6cb): prefer the account's
+    // own offer.lead_id — a real, definitive link, not a guess — over the
+    // email-match candidates. Confirmed live: only ~26% of production offers
+    // have lead_id populated, so the ordered, scoped email fallback below is
+    // still needed for most accounts — but a lead resolved that way is
+    // UNCERTAIN (this contact could have other, unrelated inquiries), and
+    // `leadIsDefinitive` lets the lead_status check below tell the
+    // difference instead of treating every fallback match as a real warning.
+    let lead: typeof leadCandidates[number] | undefined
+    let leadIsDefinitive = false
+    if (offer?.lead_id) {
+      const definitive = leadCandidates.find(l => l.id === offer.lead_id)
+      if (definitive) {
+        lead = definitive
+        leadIsDefinitive = true
+      } else {
+        // offer.lead_id points somewhere not in the email-match set (a
+        // different/updated contact email) — fetch it directly rather than
+        // silently falling through to a same-email guess.
+        const { data: linkedLead } = await supabaseAdmin
+          .from("leads")
+          .select("id, full_name, status, email, offer_link, existing_client_contact_id, converted_to_account_id")
+          .eq("id", offer.lead_id)
+          .maybeSingle()
+        if (linkedLead) {
+          lead = linkedLead
+          leadIsDefinitive = true
+        }
+      }
+    }
+    if (!lead) {
+      // Fallback (still a guess — this account's real lead may not be
+      // traceable at all, as on legacy accounts like Estro LLC — so
+      // leadIsDefinitive stays false): among same-email leads not already
+      // linked to a DIFFERENT account, prefer one already Converted, then
+      // one already tagged as an existing-client booking record (Calendly
+      // tag, PR #392), then the newest.
+      const scoped = leadCandidates.filter(l => !l.converted_to_account_id || l.converted_to_account_id === accountId)
+      lead = scoped.find(l => l.status === "Converted") ?? scoped.find(l => l.existing_client_contact_id) ?? scoped[0]
+    }
     const pending = (pendingResult.data as unknown[])?.[0] as { id: string; offer_token: string; status: string; activated_at: string | null; payment_confirmed_at: string | null; payment_method: string; prepared_steps: unknown[]; confirmation_mode: string } | undefined
     const payments = (paymentsResult.data || []) as { id: string; amount: number; amount_currency: string; status: string; payment_method: string; paid_date: string; invoice_status: string; description: string }[]
     const services = (servicesResult.data || []) as { id: string; service_type: string; status: string; stage: string; stage_order: number; assigned_to: string; updated_at: string }[]
@@ -296,19 +339,41 @@ export async function GET(req: NextRequest) {
     // CATEGORY: Lead & Offer
     // ═══════════════════════════════
     if (lead) {
+      // Primary signal: the shared Calendly-tag check (PR #392,
+      // existing_client_contact_id + isUnresolvedLeadWarning()) — a lead
+      // explicitly tagged as an existing client's own booking is never a
+      // warning, tagged or not.
       const unresolved = isUnresolvedLeadWarning(lead)
+      // Second, narrower layer on top (dev job c3efa6cb): an unresolved lead
+      // reached only via the uncertain email fallback (leadIsDefinitive
+      // false) is real signal on an account still becoming a client
+      // (new_formation, pending_ein, incomplete) — keep it a warning there.
+      // On an account already established (one_time/legacy_client/
+      // active_client), it's far more likely a different, unrelated inquiry
+      // from the same contact (confirmed live: Estro LLC/Francesco
+      // Puzzilli, resolved instead by the tag above where present) than a
+      // mistake in how THIS account was set up — downgrade to
+      // informational, and never offer the one-click "Set to Converted" fix
+      // for an uncertain match, since clicking it could convert the WRONG
+      // lead.
+      const isEstablished = ["one_time", "legacy_client", "active_client"].includes(classification.category)
+      const uncertainButQuiet = unresolved && !leadIsDefinitive && isEstablished
       checks.push({
         id: "lead_status",
         category: "Lead & Offer",
         label: "Lead status",
-        status: unresolved ? "warning" : "ok",
+        status: !unresolved ? "ok" : uncertainButQuiet ? "info" : "warning",
         detail: lead.existing_client_contact_id && lead.status !== "Converted"
           ? `${lead.full_name}: booking record for an existing client — not an open sales lead`
-          : `${lead.full_name}: ${lead.status}`,
-        // "Set to Converted" would falsely mark this lead as paid (R094) — only
-        // ever offered for a genuine unconverted lead, never for one that's
-        // just a tagged existing-client booking record.
-        fix: unresolved ? {
+          : uncertainButQuiet
+            ? `${lead.full_name}: ${lead.status} — not confirmed as this account's own lead; likely a separate, unrelated inquiry`
+            : `${lead.full_name}: ${lead.status}`,
+        // "Set to Converted" would falsely mark this lead as paid (R094) —
+        // only ever offered for a genuine, confident unconverted lead: never
+        // for a tagged existing-client booking record, and never for an
+        // uncertain match on an already-established account (clicking it
+        // could convert the WRONG lead).
+        fix: unresolved && !uncertainButQuiet ? {
           action: "set_lead_converted",
           label: "Set to Converted",
           params: { lead_id: lead.id },
