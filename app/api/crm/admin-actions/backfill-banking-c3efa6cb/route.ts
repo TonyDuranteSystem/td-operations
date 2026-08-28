@@ -66,8 +66,18 @@ function providerLabel(provider: "relay" | "payset"): string {
 }
 
 export async function POST(req: NextRequest) {
-  const denied = await requireStaffRoute()
-  if (denied) return denied
+  // One-off backfill: allow either a real staff session OR the same
+  // CRON_SECRET bearer token every scheduled job already authenticates
+  // with (app/api/cron/*/route.ts) — this route runs exactly once, right
+  // after this fix's own deploy, with no staff browser session available
+  // to invoke it. Mirrors the precedent already used for the Slack-archive
+  // one-off production run.
+  const authHeader = req.headers.get("authorization")
+  const hasCronSecret = !!process.env.CRON_SECRET && authHeader === `Bearer ${process.env.CRON_SECRET}`
+  if (!hasCronSecret) {
+    const denied = await requireStaffRoute()
+    if (denied) return denied
+  }
 
   const dryRun = req.nextUrl.searchParams.get("dry_run") === "true"
   const results: Array<Record<string, unknown>> = []
