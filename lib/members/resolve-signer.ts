@@ -112,7 +112,7 @@ function escapeLikePattern(value: string): string {
  * the ambiguity count) still happens in JS after normalizing both sides, so
  * this can only ever narrow correctly, never fuzzy-match a different email.
  */
-async function findContactByEmailScopedToAccount(
+export async function findContactByEmailScopedToAccount(
   accountId: string,
   email: string,
 ): Promise<{ contactId: string | null; ambiguous?: boolean }> {
