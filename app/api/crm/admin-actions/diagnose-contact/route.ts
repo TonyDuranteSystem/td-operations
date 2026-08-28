@@ -212,18 +212,31 @@ export async function GET(req: NextRequest) {
     // ═══════════════════════════════
     if (lead) {
       const unresolved = isUnresolvedLeadWarning(lead)
+      // Second, narrower layer on top of the shared tag check above (dev job
+      // c3efa6cb): a lead can be a genuinely different, untagged inquiry —
+      // not a Calendly existing-client booking, just a coincidence of a
+      // shared email — that the tag never had a reason to catch. A contact
+      // spans multiple accounts, so unlike the account-level diagnostic
+      // there is no single "is this established" account to check — "has at
+      // least one linked account at all" is the contact-page equivalent.
+      const alreadyHasAccount = linkedAccounts.length > 0
+      const uncertainButQuiet = unresolved && alreadyHasAccount
       checks.push({
         id: "lead_status",
         category: "Lead & Offer",
         label: "Lead status",
-        status: unresolved ? "warning" : "ok",
+        status: !unresolved ? "ok" : uncertainButQuiet ? "info" : "warning",
         detail: lead.existing_client_contact_id && lead.status !== "Converted"
           ? `${lead.full_name}: booking record for an existing client — not an open sales lead`
-          : `${lead.full_name}: ${lead.status}`,
+          : uncertainButQuiet
+            ? `${lead.full_name}: ${lead.status} — likely a separate, unrelated inquiry (already linked to ${linkedAccounts.length} account${linkedAccounts.length > 1 ? "s" : ""})`
+            : `${lead.full_name}: ${lead.status}`,
         // "Set to Converted" would falsely mark this lead as paid (R094) — only
-        // ever offered when it's a genuine unconverted lead, never for one
-        // that's just a tagged existing-client booking record.
-        fix: unresolved ? {
+        // ever offered for a genuine, confident unconverted lead: never for a
+        // tagged existing-client booking record, and never for an uncertain
+        // match on a contact who's already linked to a real account (clicking
+        // it could convert the WRONG lead).
+        fix: unresolved && !uncertainButQuiet ? {
           action: "set_lead_converted",
           label: "Set to Converted",
           params: { lead_id: lead.id },
