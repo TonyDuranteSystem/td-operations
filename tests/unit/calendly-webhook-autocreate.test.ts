@@ -27,18 +27,31 @@ interface Fixtures {
   existingContacts: unknown[]
   referrer: unknown | null
   newLeadId: string
+  accountLinks: unknown[]
+  serviceDeliveries: unknown[]
 }
-const fixtures: Fixtures = { existingLeads: [], existingContacts: [], referrer: null, newLeadId: "lead-new" }
+const fixtures: Fixtures = {
+  existingLeads: [],
+  existingContacts: [],
+  referrer: null,
+  newLeadId: "lead-new",
+  accountLinks: [],
+  serviceDeliveries: [],
+}
 const recorded: { leadInsert?: Record<string, unknown>; webhookInsert?: Record<string, unknown> } = {}
 
 function makeBuilder(table: string) {
-  const state: { table: string; insertPayload?: Record<string, unknown>; ilikeCol?: string } = { table }
+  const state: { table: string; insertPayload?: Record<string, unknown>; ilikeCol?: string; eqCol?: string } = { table }
   const builder: Record<string, unknown> = {}
   const chain = () => builder
   builder.select = chain
-  builder.eq = chain
+  builder.order = chain
   builder.limit = chain
   builder.update = chain
+  builder.eq = (col: string) => {
+    state.eqCol = col
+    return builder
+  }
   builder.ilike = (col: string) => {
     state.ilikeCol = col
     return builder
@@ -54,6 +67,8 @@ function makeBuilder(table: string) {
     if (table === "leads") return { data: fixtures.existingLeads, error: null }
     if (table === "contacts" && state.ilikeCol === "referral_code") return { data: fixtures.referrer, error: null }
     if (table === "contacts") return { data: fixtures.existingContacts, error: null }
+    if (table === "account_contacts") return { data: fixtures.accountLinks, error: null }
+    if (table === "service_deliveries") return { data: fixtures.serviceDeliveries, error: null }
     if (table === "webhook_events") return { data: null, error: null }
     return { data: null, error: null }
   }
@@ -104,6 +119,8 @@ beforeEach(() => {
   fixtures.existingContacts = []
   fixtures.referrer = null
   fixtures.newLeadId = "lead-new"
+  fixtures.accountLinks = []
+  fixtures.serviceDeliveries = []
   delete recorded.leadInsert
   delete recorded.webhookInsert
   process.env.CALENDLY_INTAKE_MODE = "auto_create"
@@ -157,5 +174,71 @@ describe("calendly webhook — auto_create without referral", () => {
     expect(json.action).toBe("created")
     expect(recorded.leadInsert?.source).toBe("Calendly")
     expect(createPendingReferralMock).not.toHaveBeenCalled()
+  })
+})
+
+// ── Existing-client tagging (dev job 93580372) ─────────────────────────────
+// The booking still ALWAYS creates a lead (referral attribution, paid-call
+// recording, Kanban visibility, and the Circleback-outage fallback all
+// depend on that never changing). The only new behavior: when the email
+// matches an established contact and there's no existing lead, the new lead
+// is tagged with existing_client_contact_id so diagnose-contact/
+// diagnose-account stop flagging it as an open, unconverted sales lead.
+describe("calendly webhook — existing contact match (no existing lead)", () => {
+  it("still creates the lead (never skips) and tags it when the contact is an active client", async () => {
+    fixtures.existingContacts = [{ id: "contact-1", full_name: "Established Client", portal_tier: "active" }]
+
+    const res = await POST(makeReq(bookingPayload(null)))
+    const json = await res.json()
+
+    expect(json.action).toBe("created")
+    expect(recorded.leadInsert?.full_name).toBe("Booker Person")
+    expect(recorded.leadInsert?.existing_client_contact_id).toBe("contact-1")
+  })
+
+  it("tags a contact-only client (null portal_tier) who has a service delivery — the ITIN case", async () => {
+    fixtures.existingContacts = [{ id: "contact-2", full_name: "ITIN Client", portal_tier: null }]
+    fixtures.serviceDeliveries = [{ id: "sd-1" }]
+
+    const res = await POST(makeReq(bookingPayload(null)))
+    const json = await res.json()
+
+    expect(json.action).toBe("created")
+    expect(recorded.leadInsert?.existing_client_contact_id).toBe("contact-2")
+  })
+
+  it("tags a co-member (null portal_tier) who has an account link", async () => {
+    fixtures.existingContacts = [{ id: "contact-3", full_name: "Co-Member", portal_tier: null }]
+    fixtures.accountLinks = [{ account_id: "acct-1" }]
+
+    const res = await POST(makeReq(bookingPayload(null)))
+    const json = await res.json()
+
+    expect(json.action).toBe("created")
+    expect(recorded.leadInsert?.existing_client_contact_id).toBe("contact-3")
+  })
+
+  it("still creates an UNTAGGED lead when the matched contact looks like a stub, not an established client", async () => {
+    fixtures.existingContacts = [{ id: "contact-4", full_name: "Stub Contact", portal_tier: "lead" }]
+    // no account link, no service delivery
+
+    const res = await POST(makeReq(bookingPayload(null)))
+    const json = await res.json()
+
+    expect(json.action).toBe("created")
+    expect(recorded.leadInsert?.existing_client_contact_id).toBeUndefined()
+  })
+
+  it("still runs referral attribution for an existing-contact booking that carries a referral code", async () => {
+    fixtures.existingContacts = [{ id: "contact-5", full_name: "Existing Client", portal_tier: "active" }]
+    fixtures.referrer = { id: "referrer-contact-9", full_name: "Some Referrer" }
+
+    const res = await POST(makeReq(bookingPayload("some-code")))
+    const json = await res.json()
+
+    expect(json.action).toBe("created")
+    expect(recorded.leadInsert?.existing_client_contact_id).toBe("contact-5")
+    expect(recorded.leadInsert?.source).toBe("Referral")
+    expect(createPendingReferralMock).toHaveBeenCalledTimes(1)
   })
 })

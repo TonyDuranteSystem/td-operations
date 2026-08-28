@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { createSD } from "@/lib/operations/service-delivery"
+import { isUnresolvedLeadWarning } from "@/lib/operations/lead-status-check"
 
 // ─── Types ───
 
@@ -86,9 +87,12 @@ export async function GET(req: NextRequest) {
       oaResult,
       leaseResult,
     ] = await Promise.all([
-      // Lead
+      // Lead — fetch a few (not just 1): a real duplicate-email lead can exist,
+      // and picking an arbitrary one could miss a Converted or already-tagged
+      // row sitting alongside a stale one. Resolved deterministically below.
       contactEmail
-        ? supabaseAdmin.from("leads").select("id, full_name, status, email").ilike("email", contactEmail).limit(1)
+        ? supabaseAdmin.from("leads").select("id, full_name, status, email, existing_client_contact_id")
+            .ilike("email", contactEmail).order("created_at", { ascending: false }).limit(5)
         : { data: [] },
       // Offers
       contactEmail
@@ -145,7 +149,16 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const lead = (leadsResult.data as unknown[])?.[0] as { id: string; full_name: string; status: string; email: string } | undefined
+    // Pick the most informative row when more than one lead shares this email:
+    // a Converted one wins, then one already tagged as an existing-client
+    // booking (see lib/operations/lead-status-check.ts), else the most recent.
+    const candidateLeads = (leadsResult.data ?? []) as Array<
+      { id: string; full_name: string; status: string; email: string; existing_client_contact_id: string | null }
+    >
+    const lead =
+      candidateLeads.find(l => l.status === "Converted") ??
+      candidateLeads.find(l => l.existing_client_contact_id) ??
+      candidateLeads[0]
     const offer = (offersResult.data as unknown[])?.[0] as { id: string; token: string; status: string; contract_type: string; services: Array<{ name?: string; price?: string; optional?: boolean }>; bundled_pipelines: string[] } | undefined
     const pending = (pendingResult.data as unknown[])?.[0] as { id: string; status: string; signed_at: string | null; payment_confirmed_at: string | null; activated_at: string | null; payment_method: string | null; amount: number | null; currency: string | null } | undefined
     const payments = (paymentsResult.data ?? []) as { id: string; amount: number; amount_currency: string; status: string; payment_method: string; paid_date: string; invoice_status: string; description: string; account_id: string | null; contact_id: string | null }[]
@@ -198,13 +211,19 @@ export async function GET(req: NextRequest) {
     // CATEGORY B: Lead & Offer
     // ═══════════════════════════════
     if (lead) {
+      const unresolved = isUnresolvedLeadWarning(lead)
       checks.push({
         id: "lead_status",
         category: "Lead & Offer",
         label: "Lead status",
-        status: lead.status === "Converted" ? "ok" : "warning",
-        detail: `${lead.full_name}: ${lead.status}`,
-        fix: lead.status !== "Converted" ? {
+        status: unresolved ? "warning" : "ok",
+        detail: lead.existing_client_contact_id && lead.status !== "Converted"
+          ? `${lead.full_name}: booking record for an existing client — not an open sales lead`
+          : `${lead.full_name}: ${lead.status}`,
+        // "Set to Converted" would falsely mark this lead as paid (R094) — only
+        // ever offered when it's a genuine unconverted lead, never for one
+        // that's just a tagged existing-client booking record.
+        fix: unresolved ? {
           action: "set_lead_converted",
           label: "Set to Converted",
           params: { lead_id: lead.id },

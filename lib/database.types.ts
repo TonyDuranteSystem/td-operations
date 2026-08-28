@@ -7351,6 +7351,7 @@ export type Database = {
           converted_to_contact_id: string | null
           created_at: string | null
           email: string | null
+          existing_client_contact_id: string | null
           first_name: string | null
           full_name: string
           gdrive_folder_url: string | null
@@ -7393,6 +7394,7 @@ export type Database = {
           converted_to_contact_id?: string | null
           created_at?: string | null
           email?: string | null
+          existing_client_contact_id?: string | null
           first_name?: string | null
           full_name: string
           gdrive_folder_url?: string | null
@@ -7435,6 +7437,7 @@ export type Database = {
           converted_to_contact_id?: string | null
           created_at?: string | null
           email?: string | null
+          existing_client_contact_id?: string | null
           first_name?: string | null
           full_name?: string
           gdrive_folder_url?: string | null
