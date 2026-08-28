@@ -4,6 +4,7 @@ import { useState, useTransition, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { FileText, Loader2, X, CheckCircle2, ExternalLink, RefreshCw, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
+import { openOaPreview } from './oa-preview-link'
 
 interface GenerateOADialogProps {
   open: boolean
@@ -14,6 +15,7 @@ interface GenerateOADialogProps {
   entityType: string | null
   formationDate: string | null
   ein: string | null
+  appBaseUrl: string
 }
 
 function todayISO() {
@@ -25,14 +27,14 @@ function minDateISO() {
 }
 
 export function GenerateOADialog({
-  open, onClose, accountId, companyName, state, entityType, formationDate, ein,
+  open, onClose, accountId, companyName, state, entityType, formationDate, ein, appBaseUrl,
 }: GenerateOADialogProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [result, setResult] = useState<{
     success: boolean
     token?: string
-    admin_preview?: string
+    access_code?: string
     error?: string
     entity_type?: string
   } | null>(null)
@@ -81,7 +83,7 @@ export function GenerateOADialog({
           return
         }
 
-        setResult({ success: true, token: data.token, admin_preview: data.admin_preview, entity_type: data.entity_type })
+        setResult({ success: true, token: data.token, access_code: data.access_code, entity_type: data.entity_type })
         toast.success(`OA created for ${companyName}`)
         router.refresh()
       } catch (err) {
@@ -111,7 +113,7 @@ export function GenerateOADialog({
         }
 
         setExistingOA(null)
-        setResult({ success: true, token: data.token, admin_preview: data.admin_preview, entity_type: data.entity_type })
+        setResult({ success: true, token: data.token, access_code: data.access_code, entity_type: data.entity_type })
         toast.success(`OA recreated for ${companyName}`)
         router.refresh()
       } catch (err) {
@@ -198,16 +200,15 @@ export function GenerateOADialog({
                   <p className="text-sm font-medium">
                     {result.error || `${result.entity_type} Operating Agreement created`}
                   </p>
-                  {result.admin_preview && (
-                    <a
-                      href={result.admin_preview}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                  {result.token && (
+                    <button
+                      type="button"
+                      onClick={() => openOaPreview(appBaseUrl, result.token as string, result.access_code)}
                       className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
                     >
                       <ExternalLink className="h-3.5 w-3.5" />
                       Preview OA
-                    </a>
+                    </button>
                   )}
                 </div>
               </div>

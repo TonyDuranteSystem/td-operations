@@ -9,6 +9,7 @@ import {
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { openOaPreview } from './oa-preview-link'
 
 interface DocStatus {
   id: string
@@ -146,25 +147,11 @@ export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, o
     return appBaseUrl
   })()
 
-  // Open the OA as the client sees it. The client-facing host has no staff
-  // session, and the bare ?preview=td flag no longer skips the email gate, so we
-  // mint a short-lived staff-preview pass here (on the CRM host, where the staff
-  // session exists) and carry it. The pass also suppresses view tracking, so a
-  // staff preview never registers as "client viewed". Falls back to the plain
-  // coded link if the mint fails — staff can then enter the client email.
-  const handleOaPreview = async (token: string, accessCode: string | null | undefined) => {
-    const base = accessCode
-      ? `${previewBase}/operating-agreement/${token}/${accessCode}?preview=td`
-      : `${previewBase}/operating-agreement/${token}?preview=td`
-    try {
-      const res = await fetch(`/api/crm/oa-preview-pass?token=${encodeURIComponent(token)}`)
-      const data = await res.json().catch(() => ({}))
-      const url = res.ok && data.pass ? `${base}&pass=${encodeURIComponent(data.pass)}` : base
-      window.open(url, '_blank', 'noopener,noreferrer')
-    } catch {
-      window.open(base, '_blank', 'noopener,noreferrer')
-    }
-  }
+  // Open the OA as the client sees it. See oa-preview-link.ts for why this can't
+  // be a plain coded link (client-facing host has no staff session, and the bare
+  // ?preview=td flag no longer skips the OA's email gate on its own).
+  const handleOaPreview = (token: string, accessCode: string | null | undefined) =>
+    openOaPreview(appBaseUrl, token, accessCode)
 
   const handleCancelDraft = async (token: string) => {
     if (!window.confirm('Cancel this draft lease? It will be permanently deleted — this cannot be undone. (Only drafts can be cancelled; a sent or signed lease is never touched.)')) return
