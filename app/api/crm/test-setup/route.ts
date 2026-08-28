@@ -67,7 +67,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ ok: true, message: 'No test data found. Nothing to clean.' })
       }
 
-      const deleted = await deleteTestRecords()
+      const { counts: deleted, errors } = await deleteTestRecords()
       const totalDeleted = Object.values(deleted).reduce((a, b) => a + b, 0)
       const message = [
         `Cleaned ${totalDeleted} test records:`,
@@ -75,9 +75,12 @@ export async function POST(request: Request) {
         ...Object.entries(deleted)
           .filter(([, c]) => c > 0)
           .map(([table, count]) => `  ${table}: ${count} deleted`),
+        ...(errors.length > 0
+          ? ['', `${errors.length} table(s) FAILED to clean up:`, ...errors.map((e) => `  ${e}`)]
+          : []),
       ].join('\n')
 
-      return NextResponse.json({ ok: true, message, deleted })
+      return NextResponse.json({ ok: true, message, deleted, errors })
 
     } else {
       return NextResponse.json({ error: 'Invalid action. Use "setup" or "cleanup".' }, { status: 400 })

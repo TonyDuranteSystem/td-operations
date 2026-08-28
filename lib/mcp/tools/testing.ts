@@ -534,93 +534,135 @@ export async function runScenario(scenario: Scenario): Promise<TestScenarioResul
 
 // ─── Cleanup ───────────────────────────────────────────────────
 
+// Standing QA fixtures that happen to carry is_test=true but are NOT
+// throwaway rows — CLAUDE.md's "QA Test Accounts — USE THESE, DO NOT
+// CREATE NEW ONES" documents Uxio Test LLC as the permanent client-portal
+// login every session/machine reuses. A blanket is_test=true sweep would
+// delete it. Found 2026-08-28 (full E2E QA pass) when a dry run showed
+// this account in the deletion set for the first time.
+const PROTECTED_TEST_ACCOUNT_IDS = ['30c2cd96-03e4-43cf-9536-81d961b18b1d'] // Uxio Test LLC
+
 interface CleanupCounts {
   [table: string]: number
 }
 
+interface CleanupResult {
+  counts: CleanupCounts
+  errors: string[]
+}
+
+async function nonProtectedTestIds(
+  table: 'accounts' | 'payments' | 'service_deliveries',
+): Promise<string[]> {
+  // 'accounts' has no account_id column — a row's own id IS the account id.
+  if (table === 'accounts') {
+    const { data } = await supabaseAdmin.from('accounts').select('id').eq('is_test', true)
+    return (data || [])
+      .filter((r) => !PROTECTED_TEST_ACCOUNT_IDS.includes(r.id))
+      .map((r) => r.id)
+  }
+  const { data } = await supabaseAdmin.from(table).select('id, account_id').eq('is_test', true)
+  return (data || [])
+    .filter((r) => !r.account_id || !PROTECTED_TEST_ACCOUNT_IDS.includes(r.account_id))
+    .map((r) => r.id)
+}
+
 export async function countTestRecords(): Promise<CleanupCounts> {
-  const tables = [
-    'leads', 'contacts', 'accounts', 'service_deliveries', 'payments',
-  ]
   const counts: CleanupCounts = {}
 
-  for (const table of tables) {
+  counts['accounts'] = (await nonProtectedTestIds('accounts')).length
+  counts['payments'] = (await nonProtectedTestIds('payments')).length
+  counts['service_deliveries'] = (await nonProtectedTestIds('service_deliveries')).length
+
+  for (const table of ['leads', 'contacts'] as const) {
     const { count } = await supabaseAdmin
-      .from(table as never)
+      .from(table)
       .select('id', { count: 'exact', head: true })
       .eq('is_test', true)
     counts[table] = count ?? 0
   }
 
-  // account_contacts: count links where either side is test
+  // account_contacts: count links where either side is test (protected accounts excluded)
+  const testAccountIds = await nonProtectedTestIds('accounts')
   const { count: acCount } = await supabaseAdmin
     .from('account_contacts')
     .select('account_id', { count: 'exact', head: true })
-    .in('account_id', (
-      await supabaseAdmin.from('accounts').select('id').eq('is_test', true)
-    ).data?.map(r => r.id) || ['00000000-0000-0000-0000-000000000000'])
+    .in('account_id', testAccountIds.length > 0 ? testAccountIds : ['00000000-0000-0000-0000-000000000000'])
   counts['account_contacts'] = acCount ?? 0
 
   return counts
 }
 
-export async function deleteTestRecords(): Promise<CleanupCounts> {
+/**
+ * Deletes each table's is_test=true rows (protected fixture accounts and
+ * anything belonging to them excluded throughout) and reports every
+ * genuine failure instead of the previous silent-0 behavior — a delete
+ * blocked by an unlisted foreign key (e.g. client_expenses/portal_messages,
+ * hit 2026-08-28 after a real e-sign+invoice test) used to report as if
+ * nothing had matched, with no indication anything went wrong.
+ */
+export async function deleteTestRecords(): Promise<CleanupResult> {
   const deleted: CleanupCounts = {}
+  const errors: string[] = []
 
-  // Get test account IDs for junction cleanup
-  const { data: testAccounts } = await supabaseAdmin
-    .from('accounts')
-    .select('id')
-    .eq('is_test', true)
-  const testAccountIds = testAccounts?.map(r => r.id) || []
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamic table name + chained filter, same dynamic-table pattern as the rest of this file
+  const del = async (label: string, table: string, build: (q: any) => any) => {
+    const { count, error } = await build(supabaseAdmin.from(table as never).delete({ count: 'exact' }))
+    if (error) {
+      errors.push(`${label}: ${error.message}`)
+    } else {
+      deleted[label] = count ?? 0
+    }
+  }
 
-  // Get test contact IDs for junction cleanup
-  const { data: testContacts } = await supabaseAdmin
-    .from('contacts')
-    .select('id')
-    .eq('is_test', true)
-  const _testContactIds = testContacts?.map(r => r.id) || []
+  const testAccountIds = await nonProtectedTestIds('accounts')
 
   // Delete in dependency order (children first)
 
   // 1. account_contacts (junction — no is_test column)
   if (testAccountIds.length > 0) {
-    const { count } = await supabaseAdmin
-      .from('account_contacts')
-      .delete({ count: 'exact' })
-      .in('account_id', testAccountIds)
-    deleted['account_contacts'] = count ?? 0
+    await del('account_contacts', 'account_contacts', (q) => q.in('account_id', testAccountIds))
   }
 
-  // 2. Tasks linked to test accounts/contacts
+  // 2. Tasks linked to test accounts
   if (testAccountIds.length > 0) {
-    const { count } = await supabaseAdmin
-      .from('tasks')
-      .delete({ count: 'exact' })
-      .in('account_id', testAccountIds)
-    deleted['tasks (by account)'] = count ?? 0
+    await del('tasks (by account)', 'tasks', (q) => q.in('account_id', testAccountIds))
   }
 
   // 3. Tax returns linked to test accounts
   if (testAccountIds.length > 0) {
-    const { count } = await supabaseAdmin
-      .from('tax_returns')
-      .delete({ count: 'exact' })
-      .in('account_id', testAccountIds)
-    deleted['tax_returns'] = count ?? 0
+    await del('tax_returns', 'tax_returns', (q) => q.in('account_id', testAccountIds))
   }
 
-  // 4. Tables with is_test column (reverse dependency order)
-  const testTables = ['payments', 'service_deliveries', 'accounts', 'contacts', 'leads']
-  for (const table of testTables) {
-    const { count } = await supabaseAdmin
-      .from(table as never)
-      .delete({ count: 'exact' })
-      .eq('is_test', true)
-    deleted[table] = count ?? 0
+  // 4. Auto-synced expense rows and portal chat-events referencing a test
+  // payment/contact — only reachable via a real sign+invoice flow, not the
+  // canned test_setup scenarios, but block payments/contacts deletion below
+  // when present (2026-08-28).
+  const { data: testPayments } = await supabaseAdmin.from('payments').select('id').eq('is_test', true)
+  const testPaymentIds = (testPayments || []).map((r) => r.id)
+  if (testPaymentIds.length > 0) {
+    await del('client_expenses', 'client_expenses', (q) => q.in('td_payment_id', testPaymentIds))
+  }
+  const { data: testContactsForMsgs } = await supabaseAdmin.from('contacts').select('id').eq('is_test', true)
+  const testContactIdsForMsgs = (testContactsForMsgs || []).map((r) => r.id)
+  if (testContactIdsForMsgs.length > 0) {
+    await del('portal_messages', 'portal_messages', (q) => q.in('contact_id', testContactIdsForMsgs))
   }
 
-  return deleted
+  // 5. Tables with an is_test column (reverse dependency order), protected
+  // fixtures excluded by id rather than a blanket is_test=true match.
+  const paymentIds = await nonProtectedTestIds('payments')
+  if (paymentIds.length > 0) await del('payments', 'payments', (q) => q.in('id', paymentIds))
+
+  const sdIds = await nonProtectedTestIds('service_deliveries')
+  if (sdIds.length > 0) await del('service_deliveries', 'service_deliveries', (q) => q.in('id', sdIds))
+
+  if (testAccountIds.length > 0) await del('accounts', 'accounts', (q) => q.in('id', testAccountIds))
+
+  await del('contacts', 'contacts', (q) => q.eq('is_test', true))
+  await del('leads', 'leads', (q) => q.eq('is_test', true))
+
+  return { counts: deleted, errors }
 }
 
 // ─── MCP Tool Registration ────────────────────────────────────
@@ -723,7 +765,7 @@ Available scenarios:
         }
 
         // Actually delete
-        const deleted = await deleteTestRecords()
+        const { counts: deleted, errors } = await deleteTestRecords()
         const totalDeleted = Object.values(deleted).reduce((a, b) => a + b, 0)
 
         const lines = [
@@ -732,6 +774,9 @@ Available scenarios:
           ...Object.entries(deleted)
             .filter(([, c]) => c > 0)
             .map(([table, count]) => `  ${table}: ${count} deleted`),
+          ...(errors.length > 0
+            ? ['', `⚠️ ${errors.length} table(s) FAILED to clean up — investigate before assuming these are gone:`, ...errors.map((e) => `  ${e}`)]
+            : []),
         ]
 
         return {

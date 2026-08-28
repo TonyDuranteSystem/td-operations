@@ -177,7 +177,7 @@ export async function POST(req: NextRequest) {
       if (!contactId && offer.lead_id) {
         const { data: lead } = await supabase
           .from("leads")
-          .select("full_name, email, phone, language")
+          .select("full_name, email, phone, language, is_test")
           .eq("id", offer.lead_id)
           .single()
 
@@ -191,6 +191,10 @@ export async function POST(req: NextRequest) {
               phone: lead.phone,
               language: lead.language === "Italian" ? "it" : "en",
               status: "active",
+              // is_test (full E2E QA, 2026-08-28): without this, a test lead's real
+              // signature silently produced a real, non-test contact + invoice —
+              // createTDInvoice resolves is_test from the contact/account, never the lead.
+              is_test: lead.is_test === true,
             })
             .select("id")
             .single()
