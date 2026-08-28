@@ -87,6 +87,25 @@ export async function POST(req: NextRequest) {
       results.push({ step: "email_notification", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
+    // ─── 1.5. WHAT'S NEW CHAT EVENT (dev job c3efa6cb) ───
+    // Found during a full audit of client-action notifications: signing the
+    // lease sent the email/task above but never surfaced in the per-client
+    // What's New panel — real, ongoing volume with zero staff alerts. Same
+    // treatment as SS-4 signing (lib/portal/chat-events.ts::emitSs4SignedEvent).
+    try {
+      const { emitLeaseSignedEvent } = await import("@/lib/portal/chat-events")
+      await emitLeaseSignedEvent({
+        lease_id: lease.id,
+        contact_id: lease.contact_id,
+        account_id: lease.account_id,
+        company_name: lease.tenant_company,
+        suite_number: lease.suite_number,
+      })
+      results.push({ step: "whats_new_event", status: "ok" })
+    } catch (e) {
+      results.push({ step: "whats_new_event", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    }
+
     // ─── 2. UPDATE SERVICE DELIVERY HISTORY ───
     if (lease.account_id) {
       try {

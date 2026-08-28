@@ -61,6 +61,7 @@ vi.mock("@/lib/supabase-admin", () => ({
 import {
   findAuthUserByEmail,
   findAuthUserById,
+  findAuthUsersByEmails,
   listAllAuthUsers,
 } from "@/lib/auth-admin-helpers"
 
@@ -188,6 +189,83 @@ describe("listAllAuthUsers", () => {
     mockPages = [{ users: [], nextPage: null }]
     const all = await listAllAuthUsers()
     expect(all).toEqual([])
+  })
+})
+
+// ─── findAuthUsersByEmails ─────────────────────────────
+// dev job bb48eba1: a Multi-Member LLC's "does anyone tied to this account
+// have a login" check needs to test several candidate emails at once,
+// without re-scanning every page once per candidate.
+
+describe("findAuthUsersByEmails", () => {
+  it("matches several candidates in a single pagination pass", async () => {
+    mockPages = [
+      {
+        users: [
+          { id: "u1", email: "alice@test.com" },
+          { id: "u2", email: "bob@test.com" },
+          { id: "u3", email: "carol@test.com" },
+        ],
+        nextPage: null,
+      },
+    ]
+    const result = await findAuthUsersByEmails([
+      "bob@test.com",
+      "carol@test.com",
+      "nobody@test.com",
+    ])
+    expect(result.size).toBe(2)
+    expect(result.get("bob@test.com")?.id).toBe("u2")
+    expect(result.get("carol@test.com")?.id).toBe("u3")
+    expect(result.has("nobody@test.com")).toBe(false)
+    // One pass regardless of candidate count — not one call per email.
+    expect(listUsersCalls).toHaveLength(1)
+  })
+
+  it("finds a match on a later page (pagination correctness, same as findAuthUserByEmail)", async () => {
+    const page1Users = Array.from({ length: 1000 }, (_, i) => ({
+      id: `u${i}`,
+      email: `user${i}@test.com`,
+    }))
+    mockPages = [
+      { users: page1Users, nextPage: 2 },
+      { users: [{ id: "u-target", email: "target@test.com" }], nextPage: null },
+    ]
+    const result = await findAuthUsersByEmails(["target@test.com"])
+    expect(result.get("target@test.com")?.id).toBe("u-target")
+  })
+
+  it("matches case-insensitively and trims whitespace on both sides", async () => {
+    mockPages = [
+      { users: [{ id: "u1", email: "MixedCase@Test.com" }], nextPage: null },
+    ]
+    const result = await findAuthUsersByEmails(["  mixedcase@test.com  "])
+    expect(result.get("mixedcase@test.com")?.id).toBe("u1")
+  })
+
+  it("returns an empty map and makes no calls for an empty candidate list", async () => {
+    const result = await findAuthUsersByEmails([])
+    expect(result.size).toBe(0)
+    expect(listUsersCalls).toHaveLength(0)
+  })
+
+  it("returns an empty map and makes no calls when every candidate is falsy", async () => {
+    const result = await findAuthUsersByEmails(["", null as unknown as string, undefined as unknown as string])
+    expect(result.size).toBe(0)
+    expect(listUsersCalls).toHaveLength(0)
+  })
+
+  it("dedupes overlapping/duplicate candidate emails without extra calls", async () => {
+    mockPages = [{ users: [{ id: "u1", email: "same@test.com" }], nextPage: null }]
+    const result = await findAuthUsersByEmails(["same@test.com", "SAME@test.com", "same@test.com"])
+    expect(result.size).toBe(1)
+    expect(listUsersCalls).toHaveLength(1)
+  })
+
+  it("returns an empty map when none of the candidates match any real login", async () => {
+    mockPages = [{ users: [{ id: "u1", email: "someone-else@test.com" }], nextPage: null }]
+    const result = await findAuthUsersByEmails(["nobody@test.com", "also-nobody@test.com"])
+    expect(result.size).toBe(0)
   })
 })
 
