@@ -13,6 +13,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { classifyAccount } from "@/lib/account-classification"
 import { createSD } from "@/lib/operations/service-delivery"
+import { resolvePrimaryContact } from "@/lib/members/resolve-primary-contact"
+import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 
 // ─── Types ───
 
@@ -57,28 +59,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Account not found" }, { status: 404 })
     }
 
-    const { data: accountContacts } = await supabaseAdmin
-      .from("account_contacts")
-      .select("contact_id, role, is_primary, contacts(id, full_name, email, portal_tier, portal_role)")
-      .eq("account_id", accountId)
-
-    // Deterministic primary pick — row order from PostgREST is unstable, and
-    // on MMLLCs the arbitrary [0] used to cascade wrong lead/payment/tier
-    // checks. Precedence: is_primary flag → owner-ish role (live data holds
-    // 'owner'/'Owner'/'Sole Member' free text) → stable contact_id order.
-    const ownerish = (r: string | null) => /owner|sole member/i.test(r || "")
-    const sortedContacts = [...(accountContacts || [])].sort((a, b) => {
-      const ap = a.is_primary ? 0 : 1
-      const bp = b.is_primary ? 0 : 1
-      if (ap !== bp) return ap - bp
-      const ao = ownerish(a.role) ? 0 : 1
-      const bo = ownerish(b.role) ? 0 : 1
-      if (ao !== bo) return ao - bo
-      return String(a.contact_id).localeCompare(String(b.contact_id))
-    })
-    const primaryContact = sortedContacts[0]?.contacts as unknown as {
-      id: string; full_name: string; email: string; portal_tier: string; portal_role: string
-    } | null
+    // Primary-contact resolution (2026-08-27, dev job bb48eba1): checks the
+    // Members panel's own is_primary flag first (the real, current answer
+    // for a Multi-Member LLC), falling back to the old account_contacts
+    // guess only for accounts with no members rows at all — see
+    // lib/members/resolve-primary-contact.ts for why this replaced a
+    // hand-rolled guess that cascaded wrong lead/payment/tier checks.
+    const primaryResolution = await resolvePrimaryContact(accountId)
+    const primaryContact = primaryResolution.outcome === "resolved" ? primaryResolution.contact : null
     const contactId = primaryContact?.id || null
     const contactEmail = primaryContact?.email || null
 
@@ -92,8 +80,6 @@ export async function GET(req: NextRequest) {
       formationResult,
       onboardingResult,
       taxFormResult,
-      oaResult,
-      leaseResult,
       ss4Result,
       bankingResult,
       authUsersResult,
@@ -154,12 +140,6 @@ export async function GET(req: NextRequest) {
       // Tax form
       supabaseAdmin.from("tax_return_submissions").select("id, token, status, completed_at")
         .eq("account_id", accountId).limit(1),
-      // OA
-      supabaseAdmin.from("oa_agreements").select("id, token, status, signed_at")
-        .eq("account_id", accountId).order("created_at", { ascending: false }).limit(1),
-      // Lease
-      supabaseAdmin.from("lease_agreements").select("id, token, status, signed_at, suite_number")
-        .eq("account_id", accountId).order("created_at", { ascending: false }).limit(1),
       // SS-4
       supabaseAdmin.from("ss4_applications").select("id, token, status")
         .eq("account_id", accountId).limit(1),
@@ -204,8 +184,6 @@ export async function GET(req: NextRequest) {
     }
     const onboardingSub = (onboardingResult.data as unknown[])?.[0] as { id: string; token: string; status: string; completed_at: string } | undefined
     const taxForm = (taxFormResult.data as unknown[])?.[0] as { id: string; token: string; status: string; completed_at: string } | undefined
-    const oa = (oaResult.data as unknown[])?.[0] as { id: string; token: string; status: string; signed_at: string } | undefined
-    const lease = (leaseResult.data as unknown[])?.[0] as { id: string; token: string; status: string; signed_at: string; suite_number: string } | undefined
     const ss4 = (ss4Result.data as unknown[])?.[0] as { id: string; token: string; status: string } | undefined
     const bankingForms = (bankingResult.data || []) as { id: string; token: string; status: string; provider: string; submitted_data: Record<string, unknown> }[]
     const authUsers = (authUsersResult.data || []) as { id: string; email: string }[]
@@ -271,6 +249,30 @@ export async function GET(req: NextRequest) {
         label: "Linked contact",
         status: "ok",
         detail: `${primaryContact.full_name} (${primaryContact.email})`,
+      })
+    }
+
+    // Missing primary member (2026-08-27, dev job bb48eba1): a Multi-Member
+    // LLC with no members row flagged is_primary means every downstream
+    // check that needs "the primary contact" (Portal tier here; also the
+    // Lead/Offer lookup above) falls back to a guess over account_contacts
+    // instead of the real, staff-maintained answer on the Members panel —
+    // confirmed live on Digital Fastlane LLC (Angelo Capalbo Ghelli flagged
+    // primary in Members, but the old code guessed his co-member instead).
+    // Scoped to active paying clients only, per Antonio: closed/cancelled
+    // accounts and One-Time engagements don't need this upkeep.
+    if (
+      account.status === "Active" &&
+      account.account_type === "Client" &&
+      isMultiMemberEntity(account.entity_type, account.member_structure) &&
+      !(primaryResolution.outcome === "resolved" && primaryResolution.source === "members")
+    ) {
+      checks.push({
+        id: "missing_primary_member",
+        category: "Contact",
+        label: "Primary member flag",
+        status: "warning",
+        detail: "Multi-Member LLC with no member flagged Primary in the Members panel — checks that rely on 'the primary contact' (Portal tier, Lead/Offer lookup) may pick the wrong person. Flag one member as Primary in the Members panel.",
       })
     }
 
@@ -647,32 +649,13 @@ export async function GET(req: NextRequest) {
     // ═══════════════════════════════
     // CATEGORY: Documents
     // ═══════════════════════════════
-    // OA is CLIENT-generated (portal self-service) — TD generates the lease,
-    // never the OA (docs/systems/lease-oa.md). Absence is informational, not a
-    // staff to-do; the old "Create OA (draft)" fix button was also dead (no
-    // POST handler) and contradicted the ownership model.
-    checks.push({
-      id: "oa_status",
-      category: "Documents",
-      label: "Operating Agreement",
-      status: oa
-        ? (oa.status === "signed" ? "ok" : oa.status === "sent" ? "info" : "warning")
-        : "info",
-      detail: oa
-        ? `${oa.status}${oa.signed_at ? ` (signed ${oa.signed_at.split("T")[0]})` : ""}`
-        : "Not created — the client self-generates the OA in their portal (Documents → Generate)",
-    })
-
-    checks.push({
-      id: "lease_status",
-      category: "Documents",
-      label: "Lease Agreement",
-      status: lease
-        ? (lease.status === "signed" ? "ok" : lease.status === "sent" ? "info" : "warning")
-        : "warning",
-      detail: lease ? `${lease.status} (Suite ${lease.suite_number || "N/A"})` : "Not created",
-      // (old "Create Lease (draft)" fix removed — dead button, no POST handler)
-    })
+    // Operating Agreement and Lease Agreement checks REMOVED (2026-08-27,
+    // Antonio's explicit instruction, dev job bb48eba1). Both were already
+    // informational-only (OA is client-generated portal self-service; TD
+    // generates the lease — see docs/systems/lease-oa.md) with dead "create"
+    // buttons — pure noise on this panel, never a real staff to-do. If a
+    // status check for either is ever needed again, query oa_agreements /
+    // lease_agreements by account_id fresh rather than restoring this.
 
     // EIN / SS-4 — uses classification to distinguish pending vs missing
     if (account.ein_number) {
