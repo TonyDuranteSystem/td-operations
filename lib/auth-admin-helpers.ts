@@ -135,3 +135,36 @@ export async function findAuthUsersByContactId(contactId: string): Promise<User[
     (u) => (u.app_metadata as { contact_id?: string } | undefined)?.contact_id === contactId,
   )
 }
+
+/**
+ * Match a set of candidate emails against every existing login in ONE
+ * paginated pass — for a check that needs "does ANY of these N people have
+ * a login" rather than one specific email. Built for dev job bb48eba1: a
+ * Multi-Member LLC's "does the client have portal access" check was testing
+ * one specific (and sometimes wrong) contact's email; fixing it correctly
+ * means checking every contact linked to the account, and calling
+ * findAuthUserByEmail() once per candidate would re-scan all pages once per
+ * email for no reason (3 candidates = 3x today's single-lookup cost).
+ * findAuthUserByEmail() itself is left untouched — it already short-circuits
+ * on the first matching page, which is the right behavior for its 25+
+ * existing single-email call sites; this is a separate function, not a
+ * shared refactor of it.
+ *
+ * Returns a Map keyed by lowercase-trimmed email, containing only the
+ * candidates that actually matched a real login.
+ */
+export async function findAuthUsersByEmails(
+  emails: string[],
+): Promise<Map<string, User>> {
+  const targets = new Set(
+    emails.filter(Boolean).map((e) => e.toLowerCase().trim()),
+  )
+  if (targets.size === 0) return new Map()
+  const all = await listAllAuthUsers()
+  const found = new Map<string, User>()
+  for (const u of all) {
+    const email = (u.email ?? "").toLowerCase().trim()
+    if (email && targets.has(email)) found.set(email, u)
+  }
+  return found
+}

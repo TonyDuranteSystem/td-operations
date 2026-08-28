@@ -48,6 +48,7 @@ export type ChatEventKind =
   | "recurring_invoice_generated" // the recurring-invoices cron auto-generated a Draft invoice — review + send it
   | "banking_wizard_submitted" // client submitted a Payset/Relay banking application via the portal wizard
   | "financials_attested" // client confirmed their generated P&L / Balance Sheet
+  | "lease_signed" // client signed their CMRA lease agreement
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */
@@ -375,6 +376,34 @@ export async function emitSs4SignedEvent(params: {
     message,
     source: { table: "ss4_applications", id: params.ss4_id },
     event_kind: "ss4_signed",
+  })
+}
+
+/**
+ * Emit a "lease signed" event (2026-08-28, dev job c3efa6cb). Found during a
+ * full audit of What's New trigger sites: signing the lease produced a
+ * client-facing email + a CRM task + an action_log row, but never a chat
+ * event — real, ongoing volume (10 lease signings in the trailing 90 days)
+ * with zero staff notifications, same class of event as ss4_signed (a
+ * client executing a legal document) which already gets this treatment.
+ */
+export async function emitLeaseSignedEvent(params: {
+  lease_id: string
+  contact_id?: string | null
+  account_id?: string | null
+  company_name: string
+  suite_number?: string | null
+}): Promise<EmitResult> {
+  const message = params.suite_number
+    ? `Client signed the lease for ${params.company_name} (Suite ${params.suite_number}).`
+    : `Client signed the lease for ${params.company_name}.`
+  return await emitClientChatEvent({
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    topic: "Lease",
+    message,
+    source: { table: "lease_agreements", id: params.lease_id },
+    event_kind: "lease_signed",
   })
 }
 

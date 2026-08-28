@@ -52,6 +52,7 @@ const EVENT_KEY_LABELS: Record<string, string> = {
   plan_referrer_ready_to_release: 'Referral',
   recurring_invoice_generated: 'Invoice',
   itin_data_collection: 'ITIN',
+  lease_signed: 'Lease',
 }
 
 /** Deep-link target for a note's source entity. Returns null when there's no
@@ -66,6 +67,7 @@ function deepLinkFor(src: string | null, accountId: string | null): string | nul
     case 'documents': return accountId ? `/accounts/${accountId}?tab=documents` : null
     // No dedicated "formation" tab — the signed SS-4 lives under Documents.
     case 'ss4_applications': return accountId ? `/accounts/${accountId}?tab=documents` : null
+    case 'lease_agreements': return accountId ? `/accounts/${accountId}?tab=documents` : null
     // Offers have no standalone page (viewed via the embedded panel on the
     // account/contact); a deep-link would 404, so omit it.
     case 'offers': return null

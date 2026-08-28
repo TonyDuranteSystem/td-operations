@@ -650,10 +650,25 @@ export async function POST(req: NextRequest) {
               .order('created_at', { ascending: false })
               .limit(1)
               .maybeSingle()
-            bankingSubmissionId = subRow?.id ?? null
-            bankingSubmissionWasAlreadyCompleted = subRow?.status === 'completed'
-            if (!bankingSubmissionId) {
-              console.error(`[wizard-submit] no banking_submissions row for account ${capturedAccountId} provider ${providerSlug} — staff notifications NOT sent (client confirmation above still sent)`)
+            if (subRow) {
+              bankingSubmissionId = subRow.id
+              bankingSubmissionWasAlreadyCompleted = subRow.status === 'completed'
+            } else {
+              // Safety net (dev job c3efa6cb): the row is normally pre-seeded
+              // when the EIN is recorded, but at least 3 distinct upstream
+              // causes can skip that — create it now via the SAME shared
+              // helper the seeding job uses (lib/operations/banking-submission.ts),
+              // rather than the notification code silently giving up. This
+              // never sends anything client-facing; it only creates the
+              // record the alerts below key off of.
+              const { getOrCreateBankingSubmission } = await import('@/lib/operations/banking-submission')
+              const created = await getOrCreateBankingSubmission({ accountId: capturedAccountId, provider: providerSlug, contactId: capturedContactId ?? null })
+              if (created.outcome === 'ok') {
+                bankingSubmissionId = created.record.id
+                bankingSubmissionWasAlreadyCompleted = created.record.status === 'completed'
+              } else {
+                console.error(`[wizard-submit] could not create banking_submissions row for account ${capturedAccountId} provider ${providerSlug}: ${created.message} — staff notifications NOT sent (client confirmation above still sent)`)
+              }
             }
           } catch (e) {
             console.error('[wizard-submit] banking_submissions lookup error (staff notifications):', e)

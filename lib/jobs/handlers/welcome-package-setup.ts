@@ -23,6 +23,7 @@ import { resolveSigningSet, describeSigningBlock, signerDisplayName, type Resolv
 import { reportSystemError } from "@/lib/system-errors"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { autoDocumentCreationEnabled } from "@/lib/jobs/auto-document-creation-switch"
+import { getOrCreateBankingSubmission } from "@/lib/operations/banking-submission"
 
 interface WelcomePackagePayload {
   account_id: string
@@ -405,81 +406,23 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   await updateJobProgress(job.id, result)
 
   // ─── 5. RELAY BANKING FORM ───
-  const relayToken = `relay-${companySlug.slice(0, 30)}-${year}`
-  const { data: existingRelay } = await supabaseAdmin
-    .from("banking_submissions")
-    .select("id, token, status")
-    .eq("token", relayToken)
-    .maybeSingle()
-
-  if (existingRelay) {
-    result.steps.push(step("relay", "skipped", `Already exists: ${existingRelay.token}`))
+  // 2026-08-28 (dev job c3efa6cb): routed through the shared
+  // getOrCreateBankingSubmission so the job, the welcome-package MCP tool,
+  // and the wizard-submit notification fallback all build this row exactly
+  // one way — see lib/operations/banking-submission.ts for why.
+  const relayResult = await getOrCreateBankingSubmission({ accountId: p.account_id, provider: "relay", contactId: contact.id })
+  if (relayResult.outcome === "error") {
+    result.steps.push(step("relay", "error", relayResult.message))
   } else {
-    const { data: relay, error: relayErr } = await supabaseAdmin
-      .from("banking_submissions")
-      .insert({
-        token: relayToken,
-        account_id: p.account_id,
-        contact_id: contact.id,
-        provider: "relay",
-        language: lang,
-        prefilled_data: {
-          business_name: account.company_name || "",
-          phone: contact.phone || "",
-          email: contact.email || "",
-          ein: account.ein_number || "",
-          first_name: contact.first_name || "",
-          last_name: contact.last_name || "",
-        },
-        status: "pending",
-      })
-      .select("id, token")
-      .single()
-
-    if (relayErr || !relay) {
-      result.steps.push(step("relay", "error", relayErr?.message || "insert failed"))
-    } else {
-      result.steps.push(step("relay", "ok", relay.token))
-    }
+    result.steps.push(step("relay", relayResult.record.created ? "ok" : "skipped", relayResult.record.created ? relayResult.record.token : `Already exists: ${relayResult.record.token}`))
   }
 
   // ─── 6. PAYSET BANKING FORM ───
-  const paysetToken = `bank-${companySlug.slice(0, 30)}-${year}`
-  const { data: existingPayset } = await supabaseAdmin
-    .from("banking_submissions")
-    .select("id, token, status")
-    .eq("token", paysetToken)
-    .maybeSingle()
-
-  if (existingPayset) {
-    result.steps.push(step("payset", "skipped", `Already exists: ${existingPayset.token}`))
+  const paysetResult = await getOrCreateBankingSubmission({ accountId: p.account_id, provider: "payset", contactId: contact.id })
+  if (paysetResult.outcome === "error") {
+    result.steps.push(step("payset", "error", paysetResult.message))
   } else {
-    const { data: payset, error: paysetErr } = await supabaseAdmin
-      .from("banking_submissions")
-      .insert({
-        token: paysetToken,
-        account_id: p.account_id,
-        contact_id: contact.id,
-        provider: "payset",
-        language: lang,
-        prefilled_data: {
-          first_name: contact.first_name || "",
-          last_name: contact.last_name || "",
-          personal_country: contact.citizenship || "",
-          business_name: account.company_name || "",
-          phone: contact.phone || "",
-          email: contact.email || "",
-        },
-        status: "pending",
-      })
-      .select("id, token")
-      .single()
-
-    if (paysetErr || !payset) {
-      result.steps.push(step("payset", "error", paysetErr?.message || "insert failed"))
-    } else {
-      result.steps.push(step("payset", "ok", payset.token))
-    }
+    result.steps.push(step("payset", paysetResult.record.created ? "ok" : "skipped", paysetResult.record.created ? paysetResult.record.token : `Already exists: ${paysetResult.record.token}`))
   }
 
   await updateJobProgress(job.id, result)

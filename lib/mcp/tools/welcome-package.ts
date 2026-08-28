@@ -19,6 +19,7 @@ import { getGreeting } from "@/lib/greeting"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
+import { getOrCreateBankingSubmission } from "@/lib/operations/banking-submission"
 
 const BASE_URL = APP_BASE_URL
 
@@ -238,91 +239,25 @@ Prerequisites:
         }
 
         // ─── 5. RELAY BANKING FORM ───
+        // 2026-08-28 (dev job c3efa6cb): routed through the shared
+        // getOrCreateBankingSubmission — see lib/operations/banking-submission.ts.
         let relayUrl = ""
-        const relayToken = `relay-${companySlug.slice(0, 30)}-${year}`
-        const { data: existingRelay } = await supabaseAdmin
-          .from("banking_submissions")
-          .select("id, token, status, access_code")
-          .eq("token", relayToken)
-          .maybeSingle()
-
-        if (existingRelay) {
-          relayUrl = `${BASE_URL}/banking-form/${existingRelay.token}/${existingRelay.access_code}`
-          steps.push({ step: "Relay form", status: "existing", detail: `${existingRelay.token} (${existingRelay.status})` })
+        const relayResult = await getOrCreateBankingSubmission({ accountId: account_id, provider: "relay", contactId: contact.id })
+        if (relayResult.outcome === "error") {
+          steps.push({ step: "Relay form", status: "error", detail: relayResult.message })
         } else {
-          const relayPrefilled = {
-            business_name: account.company_name || "",
-            phone: contact.phone || "",
-            email: contact.email || "",
-            ein: account.ein_number || "",
-            first_name: contact.first_name || "",
-            last_name: contact.last_name || "",
-            personal_phone: contact.phone || "",
-            personal_email: contact.email || "",
-          }
-          const { data: relay, error: relayErr } = await supabaseAdmin
-            .from("banking_submissions")
-            .insert({
-              token: relayToken,
-              account_id,
-              contact_id: contact.id,
-              provider: "relay",
-              language: lang,
-              prefilled_data: relayPrefilled,
-              status: "pending",
-            })
-            .select("id, token, access_code")
-            .single()
-
-          if (relayErr || !relay) {
-            steps.push({ step: "Relay form", status: "error", detail: relayErr?.message || "insert failed" })
-          } else {
-            relayUrl = `${BASE_URL}/banking-form/${relay.token}/${relay.access_code}`
-            steps.push({ step: "Relay form", status: "created", detail: relay.token })
-          }
+          relayUrl = `${BASE_URL}/banking-form/${relayResult.record.token}/${relayResult.record.access_code}`
+          steps.push({ step: "Relay form", status: relayResult.record.created ? "created" : "existing", detail: `${relayResult.record.token} (${relayResult.record.status})` })
         }
 
         // ─── 6. PAYSET BANKING FORM ───
         let paysetUrl = ""
-        const paysetToken = `bank-${companySlug.slice(0, 30)}-${year}`
-        const { data: existingPayset } = await supabaseAdmin
-          .from("banking_submissions")
-          .select("id, token, status, access_code")
-          .eq("token", paysetToken)
-          .maybeSingle()
-
-        if (existingPayset) {
-          paysetUrl = `${BASE_URL}/banking-form/${existingPayset.token}/${existingPayset.access_code}`
-          steps.push({ step: "Payset form", status: "existing", detail: `${existingPayset.token} (${existingPayset.status})` })
+        const paysetResult = await getOrCreateBankingSubmission({ accountId: account_id, provider: "payset", contactId: contact.id })
+        if (paysetResult.outcome === "error") {
+          steps.push({ step: "Payset form", status: "error", detail: paysetResult.message })
         } else {
-          const paysetPrefilled = {
-            first_name: contact.first_name || "",
-            last_name: contact.last_name || "",
-            personal_country: contact.citizenship || "",
-            business_name: account.company_name || "",
-            phone: contact.phone || "",
-            email: contact.email || "",
-          }
-          const { data: payset, error: paysetErr } = await supabaseAdmin
-            .from("banking_submissions")
-            .insert({
-              token: paysetToken,
-              account_id,
-              contact_id: contact.id,
-              provider: "payset",
-              language: lang,
-              prefilled_data: paysetPrefilled,
-              status: "pending",
-            })
-            .select("id, token, access_code")
-            .single()
-
-          if (paysetErr || !payset) {
-            steps.push({ step: "Payset form", status: "error", detail: paysetErr?.message || "insert failed" })
-          } else {
-            paysetUrl = `${BASE_URL}/banking-form/${payset.token}/${payset.access_code}`
-            steps.push({ step: "Payset form", status: "created", detail: payset.token })
-          }
+          paysetUrl = `${BASE_URL}/banking-form/${paysetResult.record.token}/${paysetResult.record.access_code}`
+          steps.push({ step: "Payset form", status: paysetResult.record.created ? "created" : "existing", detail: `${paysetResult.record.token} (${paysetResult.record.status})` })
         }
 
         // ─── 7. FIND DRIVE DOCUMENTS ───

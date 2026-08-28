@@ -103,6 +103,27 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ success: false, error: update.error || 'Could not save the EIN.' }, { status: 500 })
     }
 
+    // ── Re-enqueue the welcome-package setup (dev job c3efa6cb) ──
+    // This is the ONLY screen staff have actually used to record an EIN for
+    // the last 90 days (confirmed via action_log), but it never triggered
+    // this job — lib/operations/ein-received.ts's legacy path does, this one
+    // didn't. Without it, an account's banking-application record (and OA/
+    // Lease) never gets seeded, and the banking-wizard staff notification
+    // has nothing to key off of (silently skips — the BRIXEL LLC incident).
+    // Best-effort: a failure here must never block the EIN save itself.
+    try {
+      const { enqueueJob } = await import('@/lib/jobs/queue')
+      await enqueueJob({
+        job_type: 'welcome_package_prepare',
+        payload: { account_id: sd.account_id },
+        priority: 5,
+        account_id: sd.account_id,
+        created_by: 'flow-save-ein',
+      })
+    } catch (e) {
+      console.error('[save-ein] welcome_package_prepare enqueue failed:', e instanceof Error ? e.message : String(e))
+    }
+
     // ── Resolve the client contact (+ language) for the notification/chat ──
     let contactId: string | null = null
     let language: 'en' | 'it' = 'en'

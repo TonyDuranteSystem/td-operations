@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
+import { resolveAccountPortalAccess } from "@/lib/members/account-portal-access"
 import { classifyAccount } from "@/lib/account-classification"
 import { createSD } from "@/lib/operations/service-delivery"
 import { resolvePrimaryContact } from "@/lib/members/resolve-primary-contact"
@@ -85,6 +86,7 @@ export async function GET(req: NextRequest) {
       authUsersResult,
       taxReturnResult,
       deadlinesResult,
+      portalAccessResult,
     ] = await Promise.all([
       // Lead
       contactEmail
@@ -164,6 +166,11 @@ export async function GET(req: NextRequest) {
       // Deadlines
       supabaseAdmin.from("deadlines").select("id, deadline_type, due_date, status")
         .eq("account_id", accountId),
+      // Portal access — does ANYONE tied to this account have a working
+      // login, not just the resolved primary contact. See
+      // lib/members/account-portal-access.ts for why (Multi-Member LLC
+      // portal access is per-person; confirmed live on THW Global LLC).
+      resolveAccountPortalAccess(accountId).then((r) => ({ data: r })),
     ])
 
     const lead = (leadsResult.data as unknown[])?.[0] as { id: string; full_name: string; status: string; email: string; offer_link: string } | undefined
@@ -187,6 +194,7 @@ export async function GET(req: NextRequest) {
     const ss4 = (ss4Result.data as unknown[])?.[0] as { id: string; token: string; status: string } | undefined
     const bankingForms = (bankingResult.data || []) as { id: string; token: string; status: string; provider: string; submitted_data: Record<string, unknown> }[]
     const authUsers = (authUsersResult.data || []) as { id: string; email: string }[]
+    const anyPortalLogin = (portalAccessResult.data as { loginContact: { name: string | null; email: string } | null })?.loginContact ?? null
     const taxReturn = (taxReturnResult.data as unknown[])?.[0] as { id: string; tax_year: number; status: string; extension_filed: boolean; first_year_skip: boolean } | undefined
     const _deadlines = (deadlinesResult.data || []) as { id: string; deadline_type: string; due_date: string; status: string }[]
     void _deadlines // deadlines-table checks demoted (plan c2d97552 C2) — account date columns are the source of truth
@@ -703,15 +711,23 @@ export async function GET(req: NextRequest) {
 
     // Check if auth user exists but portal_account flag is missing (half-setup)
     const portalHalfSetup = authUser && !account.portal_account
+    // Someone tied to this account can get in — not necessarily the resolved
+    // primary contact. See portalAccessResult above for why both the Members
+    // panel and the older contact list are checked together.
+    const someoneCanLogIn = !!authUser || !!anyPortalLogin
     checks.push({
       id: "portal_user",
       category: "Portal",
       label: "Portal auth user",
-      status: authUser ? (portalHalfSetup ? "warning" : "ok") : "error",
-      detail: authUser
-        ? (portalHalfSetup ? `Auth user exists (${authUser.email}) but portal_account flag not set — portal may not work correctly` : `Exists (${authUser.email})`)
-        : "No portal login — client cannot access portal",
-      fix: (!authUser || portalHalfSetup) && contactEmail ? {
+      status: someoneCanLogIn ? (portalHalfSetup ? "warning" : "ok") : "error",
+      detail: portalHalfSetup
+        ? `Auth user exists (${authUser!.email}) but portal_account flag not set — portal may not work correctly`
+        : authUser
+          ? `Exists (${authUser.email})`
+          : anyPortalLogin
+            ? `Client can access the portal via ${anyPortalLogin.name || "a linked contact"} (${anyPortalLogin.email}) — the flagged Primary contact${contactEmail ? ` (${contactEmail})` : ""} does not have their own login`
+            : "No portal login — client cannot access portal",
+      fix: (!someoneCanLogIn || portalHalfSetup) && contactEmail ? {
         action: "create_portal_user",
         label: portalHalfSetup ? "Repair portal setup" : "Create portal login",
         params: { contact_id: contactId, email: contactEmail },
