@@ -125,6 +125,19 @@ describe("captureMessageContent", () => {
     expect(log).toContain("put:attachment")
     expect(content[0].capture_status).toBe("complete")
     expect(content[0].attachment_count).toBe(1)
+    // real MIME-derived flag persisted, not discarded (2026-08-27 fix)
+    expect(content[0].is_html).toBe(true)
+  })
+
+  it("persists is_html=false for a genuine plain-text message", async () => {
+    const { deps, content } = makeDeps({
+      gmailGet: async () => ({
+        id: "msg-2", threadId: "t-2", internalDate: "1",
+        payload: { headers: [], mimeType: "text/plain", body: { data: Buffer.from("hi there").toString("base64url") } },
+      }),
+    })
+    await captureMessageContent({ mailbox: "support", messageId: "msg-2", threadId: "t-2" }, deps)
+    expect(content[0].is_html).toBe(false)
   })
 
   it("is insert-once: a message already complete is skipped with no Gmail calls", async () => {

@@ -143,6 +143,9 @@ export interface CaptureDeps {
     mailbox: Mailbox; message_id: string; thread_id: string; body_path: string
     body_text: string; has_attachments: boolean; attachment_count: number
     capture_status: "complete" | "pending"; captured_at: string
+    /** Real MIME-derived HTML-vs-plain-text flag (extractBodyWithType) — persist
+     *  it here so read.ts never has to re-guess from content (2026-08-27 fix). */
+    is_html: boolean
   }) => Promise<void>
   markError: (mailbox: Mailbox, messageId: string, threadId: string, message: string) => Promise<void>
   gmailUser: string
@@ -178,7 +181,7 @@ export async function captureMessageContent(
     // Rendered HTML body → bucket. Storing an EMPTY body is valid (attachment-only
     // email); a FETCH failure would have thrown above, so reaching here + a
     // successful upload is a real "body stored" signal (not the old >=0 tautology).
-    const { body: bodyHtml } = extractBodyWithType(full.payload)
+    const { body: bodyHtml, isHtml } = extractBodyWithType(full.payload)
     const bodyPath = bodyStoragePath(mailbox, messageId)
     await deps.putObject(bodyPath, Buffer.from(bodyHtml ?? "", "utf-8"), "text/html; charset=utf-8")
 
@@ -204,7 +207,7 @@ export async function captureMessageContent(
     await deps.upsertContent({
       mailbox, message_id: messageId, thread_id: threadId, body_path: bodyPath,
       body_text: bodyText, has_attachments: specs.length > 0, attachment_count: specs.length,
-      capture_status: "complete", captured_at: deps.now(),
+      capture_status: "complete", captured_at: deps.now(), is_html: isHtml,
     })
     return { status: "complete", attachments: specs.length }
   } catch (err) {

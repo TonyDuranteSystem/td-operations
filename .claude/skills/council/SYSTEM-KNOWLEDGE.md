@@ -127,6 +127,7 @@ recurring annual services · one-time setup services · one-time-with-renewal (I
 10. Quoting a dated snapshot's counts as current.
 11. Citing a rule that has since been amended, or a doc since superseded — a citation is only as current as its source.
 12. Calling something "done" when it is only code pushed: not verified, not documented, board card not closed.
+13. Re-guessing a value by sniffing content when the real answer was already computed once and is just sitting unpersisted a few lines away. Confirmed to recur: Gmail message HTML-vs-plain-text detection was fixed to read the real MIME type on the live-fetch path (2026-07-08), then a newer local-cache read path (added three weeks later) reintroduced content-sniffing from scratch instead of persisting the value the capture step already had (fixed 2026-08-27). If a "real" answer is computed anywhere upstream, a new read path should be plumbed to it, not re-derive its own guess.
 
 ---
 
