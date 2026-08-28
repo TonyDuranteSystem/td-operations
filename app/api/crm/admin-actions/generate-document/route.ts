@@ -378,7 +378,7 @@ async function generateLease(accountId: string, params: Record<string, unknown>)
     success: true,
     token: lease.token,
     access_code: lease.access_code,
-    admin_preview: `${LEASE_BASE_URL}/${lease.token}?preview=td`,
+    admin_preview: `${LEASE_BASE_URL}/${lease.token}/${lease.access_code}?preview=td`,
     client_url: `${LEASE_BASE_URL}/${lease.token}/${lease.access_code}`,
     suite_number: lease.suite_number,
     company_name: account.company_name,
