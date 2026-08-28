@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useState, useTransition } from 'react'
-import { Search, ChevronRight, ChevronLeft, Phone, Mail } from 'lucide-react'
+import { Search, ChevronRight, ChevronLeft, Phone, Mail, UserCheck } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { LeadListItem } from '@/lib/types'
 import { LeadRowActions } from '@/components/leads/lead-row-actions'
@@ -156,11 +156,28 @@ export function LeadsTable({ items, query, statusFilter, stats, currentPage, tot
                 href={`/leads/${item.id}`}
                 className="grid grid-cols-1 md:grid-cols-[1fr,160px,100px,100px,120px,100px,32px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center cursor-pointer"
               >
-                {/* Name */}
+                {/* Name — badges here (not a hidden md:* column) so they're
+                    visible on the phone view, where every other column is hidden. */}
                 <div className="min-w-0">
                   <p className="font-medium text-sm truncate">{item.full_name}</p>
                   {item.referrer_name && (
                     <p className="text-xs text-muted-foreground truncate">Ref: {item.referrer_name}</p>
+                  )}
+                  {(item.existing_client_contact_id || item.has_call_recording) && (
+                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                      {item.existing_client_contact_id && (
+                        <span className="flex items-center gap-1 text-xs bg-zinc-100 text-zinc-600 px-1.5 py-0.5 rounded-md">
+                          <UserCheck className="h-3 w-3" />
+                          Existing client
+                        </span>
+                      )}
+                      {item.has_call_recording && (
+                        <span className="flex items-center gap-1 text-xs bg-violet-50 text-violet-700 px-1.5 py-0.5 rounded-md">
+                          <Phone className="h-3 w-3" />
+                          Call matched
+                        </span>
+                      )}
+                    </div>
                   )}
                 </div>
 

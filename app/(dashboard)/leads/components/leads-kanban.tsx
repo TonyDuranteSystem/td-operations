@@ -4,7 +4,7 @@ import { useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd'
-import { Mail, Clock, DollarSign } from 'lucide-react'
+import { Mail, Clock, DollarSign, Phone } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
@@ -19,6 +19,7 @@ interface LeadKanbanItem {
   offer_year1_amount: number | null
   offer_year1_currency: string | null
   created_at: string
+  has_call_recording?: boolean
 }
 
 interface LeadsKanbanProps {
@@ -155,6 +156,13 @@ export function LeadsKanban({ items }: LeadsKanbanProps) {
                                 <Mail className="h-3 w-3 shrink-0" />
                                 {item.email}
                               </p>
+                            )}
+
+                            {item.has_call_recording && (
+                              <span className="inline-flex items-center gap-1 text-xs bg-violet-50 text-violet-700 px-1.5 py-0.5 rounded-md mt-1">
+                                <Phone className="h-3 w-3" />
+                                Call matched
+                              </span>
                             )}
 
                             <div className="flex items-center justify-between mt-2">
