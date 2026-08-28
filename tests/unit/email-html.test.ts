@@ -6,6 +6,7 @@ import {
   htmlToPlainText,
   emailSnippet,
   safeEmailDate,
+  insertLineBreaksForBlockTags,
 } from '@/lib/inbox/email-html'
 import { extractInlineImages, type GmailAPIMessage } from '@/lib/gmail'
 
@@ -99,7 +100,7 @@ describe('extractInlineImages', () => {
       },
     ])
     expect(extractInlineImages(p)).toEqual([
-      { contentId: 'img001', attachmentId: 'att-123', mimeType: 'image/png' },
+      { contentId: 'img001', attachmentId: 'att-123', mimeType: 'image/png', size: 100 },
     ])
   })
 
@@ -117,7 +118,7 @@ describe('extractInlineImages', () => {
       },
     ])
     expect(extractInlineImages(p)).toEqual([
-      { contentId: 'photo@mail', attachmentId: 'att-9', mimeType: 'image/jpeg' },
+      { contentId: 'photo@mail', attachmentId: 'att-9', mimeType: 'image/jpeg', size: 0 },
     ])
   })
 
@@ -210,5 +211,43 @@ describe('safeEmailDate', () => {
     expect(safeEmailDate('', '1753700000000')).toBe(new Date(1753700000000).toISOString())
     expect(safeEmailDate('Never', 'garbage')).toBe(new Date(0).toISOString())
     expect(safeEmailDate(null, null)).toBe(new Date(0).toISOString())
+  })
+})
+
+describe('insertLineBreaksForBlockTags', () => {
+  // This is a PRE-PROCESSING step run before DOM-based tag stripping (see
+  // stripEmailHtml in components/inbox/inbox-shell.tsx) — it only needs to
+  // turn closing/self-closing block tags into newlines; opening tags are
+  // stripped afterward by innerHTML/textContent, not by this function.
+
+  it('turns adjacent divs into separate lines (the Forward bug, 2026-08-27/28)', () => {
+    const html = '<div>Ciao Antonio, come stai?</div><div>ho controllato lo stato...</div>'
+    expect(insertLineBreaksForBlockTags(html)).toBe(
+      '<div>Ciao Antonio, come stai?\n<div>ho controllato lo stato...\n'
+    )
+  })
+
+  it('converts <br> to a real newline', () => {
+    expect(insertLineBreaksForBlockTags('line one<br>line two')).toBe('line one\nline two')
+    expect(insertLineBreaksForBlockTags('line one<br/>line two')).toBe('line one\nline two')
+    expect(insertLineBreaksForBlockTags('line one<br />line two')).toBe('line one\nline two')
+  })
+
+  it('breaks on </p>, </tr>, </li>, </h1>-</h6>, </blockquote>', () => {
+    expect(insertLineBreaksForBlockTags('<p>A</p><p>B</p>')).toBe('<p>A\n<p>B\n')
+    expect(insertLineBreaksForBlockTags('<tr><td>A</td></tr><tr><td>B</td></tr>')).toBe(
+      '<tr><td>A</td>\n<tr><td>B</td>\n'
+    )
+    expect(insertLineBreaksForBlockTags('<li>A</li><li>B</li>')).toBe('<li>A\n<li>B\n')
+    expect(insertLineBreaksForBlockTags('<h1>Title</h1>body')).toBe('<h1>Title\nbody')
+    expect(insertLineBreaksForBlockTags('<blockquote>quoted</blockquote>')).toBe('<blockquote>quoted\n')
+  })
+
+  it('leaves inline tags alone (they are not line-break boundaries)', () => {
+    expect(insertLineBreaksForBlockTags('<span>A</span><b>B</b>')).toBe('<span>A</span><b>B</b>')
+  })
+
+  it('handles empty/undefined input without throwing', () => {
+    expect(insertLineBreaksForBlockTags('')).toBe('')
   })
 })

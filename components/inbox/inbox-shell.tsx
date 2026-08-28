@@ -12,7 +12,7 @@ import { SearchSuggestDropdown, type SearchSuggestion } from './search-suggest-d
 import { MessageThread } from './message-thread'
 import { WhatsappThread } from './whatsapp-thread'
 import { ComposeReply } from './compose-reply'
-import { ComposeDialog } from './compose-dialog'
+import { ComposeDialog, type PrefillAttachmentSource } from './compose-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
 import { WorkerChatPanel } from './worker-chat-panel'
 import { LinkClientDialog } from './link-client-dialog'
@@ -31,8 +31,9 @@ import {
 } from '@/lib/inbox/conversation-reconcile'
 import { ORIGIN_UNKNOWN, viewKey, isInstantSearchQuery, type RowAction, type ViewScope } from '@/lib/inbox/view-query'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
-import type { InboxConversation, InboxChannel } from '@/lib/types'
+import type { InboxConversation, InboxChannel, InboxAttachment } from '@/lib/types'
 import { openMarkReadSettled } from '@/lib/inbox/pending-mark-read'
+import { insertLineBreaksForBlockTags } from '@/lib/inbox/email-html'
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
   gmail: Mail,
@@ -46,13 +47,27 @@ const channelLabels: Record<InboxChannel, string> = {
   whatsapp: 'WhatsApp',
 }
 
-/** Strip an email's HTML to readable plain text (drops style/script, collapses
- *  blank runs). Browser-only (uses the DOM); mirrors the Forward flow's logic. */
+/**
+ * Strip an email's HTML to readable plain text, preserving line breaks.
+ * Browser-only (uses the DOM). Used by both Forward and Share-to-team-chat.
+ *
+ * `Element.textContent` concatenates every text node with ZERO separator,
+ * completely ignoring block-level boundaries (`<div>`, `<p>`) and `<br>` — so
+ * "<div>A</div><div>B</div>" becomes "AB", not "A\nB". That glued real emails
+ * into one run-on paragraph on Forward (Antonio, 2026-08-27/28: a client's
+ * "Ciao Antonio, come stai?" ran straight into "ho controllato..." with zero
+ * space). Fix: convert block/line-break tags to real newlines BEFORE reading
+ * textContent, mirroring the same conversion already used server-side for
+ * this exact reason (lib/mcp/tools/gmail.ts's stripHtml).
+ */
 function stripEmailHtml(html: string): string {
+  const withBreaks = insertLineBreaksForBlockTags(
+    (html || '')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+  )
   const tmp = document.createElement('div')
-  tmp.innerHTML = (html || '')
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+  tmp.innerHTML = withBreaks
   const raw = tmp.textContent || tmp.innerText || ''
   return raw.split('\n').map(l => l.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim()
 }
@@ -84,7 +99,12 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [selectedOrigin, setSelectedOrigin] = useState<string>(ORIGIN_UNKNOWN)
   const [composeOpen, setComposeOpen] = useState(false)
   const [composeMenuOpen, setComposeMenuOpen] = useState(false)
-  const [forwardData, setForwardData] = useState<{ subject: string; body: string; from: string } | null>(null)
+  const [forwardData, setForwardData] = useState<{
+    subject: string
+    body: string
+    from: string
+    attachmentSources?: PrefillAttachmentSource[]
+  } | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [createDialog, setCreateDialog] = useState<{ type: 'task' | 'service' | 'invoice'; conversation: InboxConversation } | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -1067,24 +1087,34 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       const messages = data?.messages || []
       const lastMsg = messages[messages.length - 1]
 
-      const htmlContent = lastMsg?.content || ''
-      const tempDiv = document.createElement('div')
-      tempDiv.innerHTML = htmlContent.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-      const rawText = tempDiv.textContent || tempDiv.innerText || ''
-      const plainText = rawText
-        .split('\n')
-        .map(line => line.trim())
-        .join('\n')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim() || selected.preview || ''
+      const plainText = stripEmailHtml(lastMsg?.content || '') || selected.preview || ''
 
       const fwdBody = lastMsg
         ? `\n\n---------- Forwarded message ----------\nFrom: ${lastMsg.sender || selected.name}\nDate: ${lastMsg.createdAt ? new Date(lastMsg.createdAt).toLocaleString() : ''}\nSubject: ${selected.subject || ''}\n\n${plainText}`
         : ''
+
+      // Offer the original's real attachments + inline images as removable
+      // chips — neither carried over at all before this (Antonio, 2026-08-28).
+      const originalFiles: InboxAttachment[] = [
+        ...(lastMsg?.attachments || []),
+        ...(lastMsg?.inlineImages || []),
+      ]
+      const attachmentSources: PrefillAttachmentSource[] = originalFiles.map((a) => ({
+        name: a.filename,
+        size: a.size,
+        mimeType: a.mimeType,
+        source: {
+          messageId: lastMsg.id,
+          attachmentId: a.attachmentId,
+          mailbox: activeMailbox,
+        },
+      }))
+
       setForwardData({
         subject: selected.subject || '',
         body: fwdBody,
         from: lastMsg?.sender || selected.name,
+        attachmentSources,
       })
       setComposeOpen(true)
     } catch {
@@ -1804,6 +1834,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         onClose={() => { setComposeOpen(false); setForwardData(null) }}
         prefillSubject={forwardData ? `Fwd: ${forwardData.subject}` : ''}
         prefillBody={forwardData?.body || ''}
+        prefillAttachmentSources={forwardData?.attachmentSources}
         canUsePersonalMailbox={canUsePersonalMailbox}
       />
 

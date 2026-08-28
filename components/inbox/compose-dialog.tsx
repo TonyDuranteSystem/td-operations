@@ -27,6 +27,15 @@ interface EmailTemplate {
   placeholders: string[] | null
 }
 
+/** A source file from another email (Forward) to offer as a removable chip
+ *  without the human re-downloading/re-uploading it — see use-email-attachments.ts. */
+export interface PrefillAttachmentSource {
+  name: string
+  size: number
+  mimeType: string
+  source: { messageId: string; attachmentId: string; mailbox?: 'support' | 'antonio' }
+}
+
 interface ComposeDialogProps {
   open: boolean
   onClose: () => void
@@ -38,6 +47,9 @@ interface ComposeDialogProps {
   prefillLeadId?: string
   prefillLinkLabel?: string
   prefillTag?: string
+  /** Files from the original email being forwarded — attachments + inline
+   *  images. Copied into the composer as removable chips, never sent silently. */
+  prefillAttachmentSources?: PrefillAttachmentSource[]
   /**
    * Offer the "send from Antonio" choice. Server-gated regardless
    * (lib/inbox/mailbox-access.ts); false just hides a control that would 403.
@@ -59,6 +71,7 @@ export function ComposeDialog({
   prefillLeadId = '',
   prefillLinkLabel = '',
   prefillTag = '',
+  prefillAttachmentSources,
   canUsePersonalMailbox = false,
 }: ComposeDialogProps) {
   const [to, setTo] = useState(prefillTo)
@@ -109,6 +122,23 @@ export function ComposeDialog({
       setSignatureVariant(DEFAULT_SIGNATURE_VARIANT)
     }
   }, [open, clearAttachments])
+
+  // Offer a Forward's original files as chips exactly once per open session —
+  // guarded by a ref (not just `open` in the deps) so a parent re-render that
+  // hands down a new array reference mid-session can't re-copy the same files.
+  const addFromSource = attachments.addFromSource
+  const prefillSourcesDoneRef = useRef(false)
+  useEffect(() => {
+    if (!open) {
+      prefillSourcesDoneRef.current = false
+      return
+    }
+    if (prefillSourcesDoneRef.current) return
+    prefillSourcesDoneRef.current = true
+    if (prefillAttachmentSources && prefillAttachmentSources.length > 0) {
+      void addFromSource(prefillAttachmentSources)
+    }
+  }, [open, prefillAttachmentSources, addFromSource])
 
   // While the dialog is open, a drop that MISSES the drop zone must not make
   // the browser navigate to the file and destroy the draft.

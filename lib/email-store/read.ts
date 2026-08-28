@@ -143,6 +143,16 @@ export async function loadStoredThread(
         attachmentId: a.gmail_attachment_id,
       }))
 
+    // Mirrors the live-fetch path's inlineImages field (app/api/inbox/messages/
+    // [id]/route.ts) so Forward behaves the same whether a thread is served
+    // locally or live (Antonio, 2026-08-28).
+    const inlineImagesForForward = inline.map((a, i) => ({
+      filename: a.filename || `inline-image-${i + 1}.${(a.mime_type || "image/png").split("/")[1] || "png"}`,
+      mimeType: a.mime_type || "image/png",
+      size: Number(a.size_bytes ?? 0),
+      attachmentId: a.gmail_attachment_id,
+    }))
+
     const fromAddr = raw.from_email || ""
     const isOutbound = OUR_ADDRESSES.some((a) => fromAddr.includes(a))
     const toLine = (raw.to_emails ?? []).join(", ")
@@ -157,6 +167,7 @@ export async function loadStoredThread(
       status: (raw.label_ids ?? []).includes("UNREAD") ? "new" : "read",
       createdAt: safeEmailDate(raw.internal_date ?? "", undefined),
       ...(visible.length > 0 ? { attachments: visible } : {}),
+      ...(inlineImagesForForward.length > 0 ? { inlineImages: inlineImagesForForward } : {}),
     })
   }
 

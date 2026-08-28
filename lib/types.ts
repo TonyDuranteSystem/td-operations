@@ -562,6 +562,10 @@ export interface InboxMessage {
   createdAt: string
   metadata?: Record<string, unknown>
   attachments?: InboxAttachment[]
+  /** Inline (cid:) images used in the body — excluded from `attachments` so the
+   *  normal thread view doesn't double-show them as chips, but Forward needs
+   *  them to offer the original's images too (Antonio, 2026-08-28). */
+  inlineImages?: InboxAttachment[]
 }
 
 export interface InboxStats {
