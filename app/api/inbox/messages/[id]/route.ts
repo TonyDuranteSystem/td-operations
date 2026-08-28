@@ -126,6 +126,18 @@ export async function GET(
           (a) => !usedInline.has(a.attachmentId)
         )
 
+        // Separately expose inline images (excluded from `attachments` above
+        // so the thread view doesn't double-show them) so Forward can offer
+        // the original's images too, not just real attachments (Antonio,
+        // 2026-08-28). Filenames are synthesized — Gmail doesn't give inline
+        // parts one.
+        const inlineImagesForForward = inlineImages.map((img, i) => ({
+          filename: `inline-image-${i + 1}.${img.mimeType.split("/")[1] || "png"}`,
+          mimeType: img.mimeType,
+          size: img.size,
+          attachmentId: img.attachmentId,
+        }))
+
         const isOutbound =
           from.includes("support@tonydurante.us") ||
           from.includes("antonio.durante@tonydurante.us")
@@ -142,6 +154,7 @@ export async function GET(
           // thread — safeEmailDate never throws.
           createdAt: safeEmailDate(date, msg.internalDate),
           ...(attachments.length > 0 ? { attachments } : {}),
+          ...(inlineImagesForForward.length > 0 ? { inlineImages: inlineImagesForForward } : {}),
         }
       })
 
