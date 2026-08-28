@@ -30,6 +30,25 @@ export interface StoredThread {
 }
 
 /**
+ * A captured row's `is_html` column, when present, IS the real Gmail MIME type
+ * (computed once by extractBodyWithType at capture time — lib/email-store/capture.ts).
+ * Only rows captured before that column existed have it NULL; for those we fall
+ * back to a content sniff, but a NARROW one: the same broad "any `<letter`" sniff
+ * that lived here before (2026-08-27 fix) misclassified ordinary plain text
+ * containing a bracketed link ("site.com <http://site.com/>") or a quoted
+ * address ("Name <a@b.com>") as HTML — the exact bug class already fixed for the
+ * live-Gmail path on 2026-07-08 (commit 88117e73) but never carried over here.
+ * This fallback requires an actual structural/formatting tag token immediately
+ * after `<` (or `</`), so a bracketed link or quoted address never matches.
+ */
+const STRUCTURAL_HTML_TAG =
+  /<\/?\s*(html|body|div|table|span|img|font|strong|blockquote|ul|li|hr|br|em|h[1-6]|p|a|b|i|u)(?=[\s/>])/i
+
+export function resolveMessageIsHtml(storedIsHtml: boolean | null | undefined, body: string): boolean {
+  return storedIsHtml ?? STRUCTURAL_HTML_TAG.test(body)
+}
+
+/**
  * The whole thread from our store, or null if it isn't fully captured yet
  * (caller then falls back to live Gmail).
  */
@@ -52,13 +71,16 @@ export async function loadStoredThread(
 
   const { data: contentRows, error: cErr } = await db
     .from("email_message_content")
-    .select("message_id, body_path, capture_status")
+    .select("message_id, body_path, capture_status, is_html")
     .eq("mailbox", mailbox)
     .in("message_id", messageIds)
   if (cErr) return null
 
   const content = new Map(
-    ((contentRows ?? []) as Array<{ message_id: string; body_path: string | null; capture_status: string }>)
+    ((contentRows ?? []) as Array<{
+      message_id: string; body_path: string | null; capture_status: string
+      is_html: boolean | null
+    }>)
       .map((r) => [r.message_id, r]),
   )
   // EVERY message must be complete — no partial threads.
@@ -130,9 +152,7 @@ export async function loadStoredThread(
       direction: isOutbound ? "outbound" : "inbound",
       sender: isOutbound ? toLine : (raw.from_name ? `${raw.from_name} <${fromAddr}>` : fromAddr),
       content: body,
-      // Captured bodies come from the HTML part when one exists; the renderer's
-      // sandboxed iframe handles both, and plain text survives as-is.
-      isHtml: /<[a-z][\s\S]*>/i.test(body),
+      isHtml: resolveMessageIsHtml(c.is_html, body),
       type: "email",
       status: (raw.label_ids ?? []).includes("UNREAD") ? "new" : "read",
       createdAt: safeEmailDate(raw.internal_date ?? "", undefined),

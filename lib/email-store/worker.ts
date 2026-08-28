@@ -126,6 +126,7 @@ export function buildCaptureDeps(mailbox: Mailbox): CaptureDeps {
           body_path: row.body_path, body_text: row.body_text, has_attachments: row.has_attachments,
           attachment_count: row.attachment_count, capture_status: row.capture_status,
           captured_at: row.captured_at, capture_error: null, updated_at: new Date().toISOString(),
+          is_html: row.is_html,
         },
         { onConflict: "mailbox,message_id" },
       )
