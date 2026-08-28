@@ -209,6 +209,7 @@ HOW TO WRITE:
 - Only touch the section(s) his instruction is about; leave every other section exactly as it is (don't return it), so his other edits are preserved.
 - Write in ${lang}. Address the client by the CLIENT name given (never a name from the notes). Don't include pricing/amounts.
 - Don't invent specific facts he didn't give you; otherwise follow his instruction.
+- If a RELEVANT EMAIL block is given, it was found specifically for this instruction — ground your answer in what it actually says. If no such block is given, answer from the instruction and current narrative alone; don't claim to have checked an email you weren't shown.
 
 ${reference}`
 }
@@ -222,8 +223,16 @@ export function buildRefineUserPrompt(opts: {
   serviceLines: string[]
   current: { intro_en?: string; intro_it?: string; strategy?: string; next_steps?: string; future_developments?: string; immediate_actions?: string }
   instruction: string
+  // The relevant email thread text, when the instruction referenced one and a
+  // matching thread was actually found — see findRelevantEmailContext() in
+  // the route. Absent (not just empty) whenever no lookup was attempted or
+  // nothing matched, so the prompt never implies a lookup happened when it didn't.
+  emailContext?: string
 }): string {
   const c = opts.current
+  const emailBlock = opts.emailContext
+    ? `\nRELEVANT EMAIL (found for this instruction — use it, don't invent beyond it):\n${opts.emailContext}\n`
+    : ''
   return `CLIENT: ${opts.clientName}
 CONTRACT TYPE: ${opts.contractType}
 ENTITY TYPE: ${opts.entityType || 'Not specified — keep tax wording generic'}
@@ -237,7 +246,7 @@ CURRENT NARRATIVE (refine from exactly this — leave any section you are not as
 [next_steps]: ${c.next_steps || '(empty)'}
 [future_developments]: ${c.future_developments || '(empty)'}
 [immediate_actions]: ${c.immediate_actions || '(empty)'}
-
+${emailBlock}
 INSTRUCTION FROM STAFF: ${opts.instruction}
 
 Return the JSON now.`

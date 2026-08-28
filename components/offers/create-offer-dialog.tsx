@@ -579,6 +579,12 @@ export function CreateOfferDialog({
             future_developments: futureDevJson, immediate_actions: immediateActionsJson,
           },
           instruction,
+          // Lets the server look up an email when the instruction asks for one
+          // (e.g. "read the email from Francesco") — scoped to whichever of
+          // these identifies who this offer is actually for.
+          lead_id: leadId || null,
+          account_id: accountId || null,
+          contact_id: contactId || null,
         }),
       })
       if (!res.ok) {

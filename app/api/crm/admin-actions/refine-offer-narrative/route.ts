@@ -12,6 +12,7 @@ import { loadOfferBusinessRules } from '@/lib/offers/load-business-rules'
 import { getAllSellableServices } from '@/lib/services'
 import { callAI } from '@/lib/portal/ai-provider'
 import { reportSystemError } from '@/lib/system-errors'
+import { resolveSubjectEmail, findRelevantEmailContext } from '@/lib/offers/narrative-email-context'
 
 /**
  * The full menu of services Tony Durante actually offers, so the refine model
@@ -34,7 +35,10 @@ async function loadServiceMenu(): Promise<string> {
   }
 }
 
-export const maxDuration = 120
+// Bumped from 120 (the plain-refine budget) to fit the optional email lookup
+// ahead of the refine call itself — classify + search + read-thread, each
+// bounded on its own but sequential.
+export const maxDuration = 180
 
 /**
  * Conversational REFINE of an offer narrative. The staff member sends the CURRENT
@@ -43,6 +47,11 @@ export const maxDuration = 120
  * editable business rules + scope + language as generation, so a refined offer
  * can't drift or over-promise. Draft-only: this returns the changed sections to
  * the dialog — it never writes to an offer or sends anything.
+ *
+ * When the instruction references an email (and the offer is linked to a
+ * lead/contact/account), a read-only lookup runs first — see
+ * findRelevantEmailContext(). Best-effort: any failure there just means the
+ * refine proceeds without it, exactly as it did before this existed.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -53,7 +62,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json()
-    const { client_name, language, services, contract_type, entity_type, current, instruction } = body
+    const { client_name, language, services, contract_type, entity_type, current, instruction, lead_id, account_id, contact_id } = body
 
     if (!instruction || typeof instruction !== 'string' || !instruction.trim()) {
       return NextResponse.json({ error: 'instruction is required' }, { status: 400 })
@@ -73,9 +82,16 @@ export async function POST(req: NextRequest) {
     const lang: 'en' | 'it' = language === 'it' ? 'it' : 'en'
     const contractType = contract_type || 'formation'
 
-    const [businessRules, serviceMenu] = await Promise.all([
+    const subjectEmail = await resolveSubjectEmail({
+      contactId: typeof contact_id === 'string' ? contact_id : null,
+      leadId: typeof lead_id === 'string' ? lead_id : null,
+      accountId: typeof account_id === 'string' ? account_id : null,
+    })
+
+    const [businessRules, serviceMenu, emailContext] = await Promise.all([
       loadOfferBusinessRules({ route: '/api/crm/admin-actions/refine-offer-narrative', userEmail: user?.email }),
       loadServiceMenu(),
+      findRelevantEmailContext(instruction.trim(), subjectEmail),
     ])
 
     const systemPrompt = buildRefineSystemPrompt(lang, businessRules, serviceMenu)
@@ -93,6 +109,7 @@ export async function POST(req: NextRequest) {
         immediate_actions: typeof current.immediate_actions === 'string' ? current.immediate_actions : '',
       },
       instruction: instruction.trim(),
+      emailContext,
     })
 
     let rawText: string
