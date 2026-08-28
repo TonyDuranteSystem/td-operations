@@ -16,6 +16,7 @@ import { classifyAccount } from "@/lib/account-classification"
 import { createSD } from "@/lib/operations/service-delivery"
 import { resolvePrimaryContact } from "@/lib/members/resolve-primary-contact"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
+import { isUnresolvedLeadWarning } from "@/lib/operations/lead-status-check"
 
 // ─── Types ───
 
@@ -90,7 +91,8 @@ export async function GET(req: NextRequest) {
     ] = await Promise.all([
       // Lead
       contactEmail
-        ? supabaseAdmin.from("leads").select("id, full_name, status, email, offer_link").ilike("email", contactEmail).limit(1)
+        ? supabaseAdmin.from("leads").select("id, full_name, status, email, offer_link, existing_client_contact_id")
+            .ilike("email", contactEmail).order("created_at", { ascending: false }).limit(5)
         : { data: [] },
       // Offers — this account's own offer first; only fall back to an email
       // match when the offer is genuinely UNLINKED (account_id IS NULL), never
@@ -173,7 +175,13 @@ export async function GET(req: NextRequest) {
       resolveAccountPortalAccess(accountId).then((r) => ({ data: r })),
     ])
 
-    const lead = (leadsResult.data as unknown[])?.[0] as { id: string; full_name: string; status: string; email: string; offer_link: string } | undefined
+    const candidateLeads = (leadsResult.data ?? []) as Array<
+      { id: string; full_name: string; status: string; email: string; offer_link: string; existing_client_contact_id: string | null }
+    >
+    const lead =
+      candidateLeads.find(l => l.status === "Converted") ??
+      candidateLeads.find(l => l.existing_client_contact_id) ??
+      candidateLeads[0]
     const offer = (offersResult.data as unknown[])?.[0] as { token: string; status: string; payment_type: string; payment_links: unknown[]; bank_details: unknown; bundled_pipelines: string[]; contract_type: string; lead_id: string; account_id: string; services: Array<{ price: string; optional?: boolean }> } | undefined
     const pending = (pendingResult.data as unknown[])?.[0] as { id: string; offer_token: string; status: string; activated_at: string | null; payment_confirmed_at: string | null; payment_method: string; prepared_steps: unknown[]; confirmation_mode: string } | undefined
     const payments = (paymentsResult.data || []) as { id: string; amount: number; amount_currency: string; status: string; payment_method: string; paid_date: string; invoice_status: string; description: string }[]
@@ -288,13 +296,19 @@ export async function GET(req: NextRequest) {
     // CATEGORY: Lead & Offer
     // ═══════════════════════════════
     if (lead) {
+      const unresolved = isUnresolvedLeadWarning(lead)
       checks.push({
         id: "lead_status",
         category: "Lead & Offer",
         label: "Lead status",
-        status: lead.status === "Converted" ? "ok" : "warning",
-        detail: `${lead.full_name}: ${lead.status}`,
-        fix: lead.status !== "Converted" ? {
+        status: unresolved ? "warning" : "ok",
+        detail: lead.existing_client_contact_id && lead.status !== "Converted"
+          ? `${lead.full_name}: booking record for an existing client — not an open sales lead`
+          : `${lead.full_name}: ${lead.status}`,
+        // "Set to Converted" would falsely mark this lead as paid (R094) — only
+        // ever offered for a genuine unconverted lead, never for one that's
+        // just a tagged existing-client booking record.
+        fix: unresolved ? {
           action: "set_lead_converted",
           label: "Set to Converted",
           params: { lead_id: lead.id },

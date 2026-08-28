@@ -163,12 +163,12 @@ export async function GET(req: NextRequest) {
     ] = await Promise.all([
       // Leads linked by converted_to_contact_id
       supabaseAdmin.from("leads")
-        .select("id, full_name, email, phone, status, converted_to_contact_id, converted_to_account_id, converted_at, offer_status, offer_link, reason")
+        .select("id, full_name, email, phone, status, converted_to_contact_id, converted_to_account_id, converted_at, offer_status, offer_link, reason, existing_client_contact_id")
         .eq("converted_to_contact_id", contactId),
       // Leads by email (may not be linked yet)
       allEmails.length > 0
         ? supabaseAdmin.from("leads")
-            .select("id, full_name, email, phone, status, converted_to_contact_id, converted_to_account_id, converted_at, offer_status, offer_link, reason")
+            .select("id, full_name, email, phone, status, converted_to_contact_id, converted_to_account_id, converted_at, offer_status, offer_link, reason, existing_client_contact_id")
             .or(allEmails.map(e => `email.ilike.${e}`).join(","))
         : { data: [] },
       // Offers by email
@@ -246,6 +246,7 @@ export async function GET(req: NextRequest) {
       id: string; full_name: string; email: string; phone: string | null; status: string
       converted_to_contact_id: string | null; converted_to_account_id: string | null
       converted_at: string | null; offer_status: string | null; offer_link: string | null; reason: string | null
+      existing_client_contact_id: string | null
     }>
     const emailLeads = (allLeadsForContactResult.data ?? []) as typeof linkedLeads
     // Merge: linked + email-matched (deduplicate by id)
@@ -350,6 +351,17 @@ export async function GET(req: NextRequest) {
             label: `Lead: ${lead.full_name}`,
             status: "ok",
             detail: `Linked (${lead.status})${lead.converted_at ? ` on ${lead.converted_at.split("T")[0]}` : ""}`,
+          })
+        } else if (lead.existing_client_contact_id === contactId) {
+          // Tagged by the Calendly webhook as a booking record for this
+          // already-established contact — not a real conversion in waiting.
+          // Linking it here would falsely mark a never-paid lead Converted (R094).
+          globalChecks.push({
+            id: `lead_link_${lead.id.slice(0, 8)}`,
+            category: "Lead → Contact",
+            label: `Lead: ${lead.full_name} (${lead.email})`,
+            status: "ok",
+            detail: `Booking record for this existing client (${lead.status}) — not an open sales lead, no link needed`,
           })
         } else {
           // Lead found by email but not linked

@@ -27,6 +27,13 @@ import { createPendingReferral } from "@/lib/operations/referral"
 import { notifyReferrerLinked } from "@/lib/operations/referral-notify"
 import { extractPaidBooking } from "@/lib/calendly/paid-booking"
 import { recordPaidCall } from "@/lib/operations/paid-call-credit"
+import { isEstablishedClientContact } from "@/lib/calendly/existing-client-tag"
+
+// Escape ILIKE metacharacters so a real email containing `_`/`%` can't
+// pattern-match an unrelated row (same pattern as app/api/webhooks/circleback/route.ts).
+function escapeLikePattern(value: string): string {
+  return value.replace(/([%_])/g, "\\$1")
+}
 
 let _supabase: SupabaseClient | null = null
 function getSupabase() {
@@ -137,17 +144,23 @@ export async function POST(req: NextRequest) {
 
     const db = getSupabase()
 
-    // Check for existing lead/contact (used by both modes)
+    // Check for existing lead/contact (used by both modes). Escaped +
+    // deterministically ordered (oldest first) so a real email containing a
+    // wildcard character, or a legacy duplicate row, can't flip which row
+    // this booking is matched against on different deliveries.
+    const escapedEmail = escapeLikePattern(fields.email)
     const { data: existingLeads } = await db
       .from("leads")
       .select("id, status")
-      .ilike("email", fields.email)
+      .ilike("email", escapedEmail)
+      .order("created_at", { ascending: true })
       .limit(1)
 
     const { data: existingContacts } = await db
       .from("contacts")
-      .select("id, full_name")
-      .ilike("email", fields.email)
+      .select("id, full_name, portal_tier")
+      .ilike("email", escapedEmail)
+      .order("created_at", { ascending: true })
       .limit(1)
 
     // ─── Mode selection ─────────────────────────────────────
@@ -308,8 +321,37 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ lead_id: lead.id, action: "updated" })
     }
 
+    // Existing contact, no existing lead: this booking is very likely a call
+    // with someone who is already a client, not a fresh prospect. The lead
+    // is still created — nothing here is skipped, so referral attribution,
+    // paid-call recording, Kanban visibility, and the Circleback linking
+    // fallback all keep working exactly as they do for anyone else. The only
+    // change: if the matched contact looks like an established relationship
+    // (not just a stub row), the new lead is tagged (leads.existing_client_contact_id
+    // — deliberately NOT converted_to_contact_id, which several other flows
+    // treat as "the lead that actually converted into this contact" and must
+    // stay pointing at the real one) so diagnose-contact/diagnose-account's
+    // "Lead status" check (and the Portal Chats Issues panel that reads it)
+    // stops treating it as an open, unconverted sales opportunity.
+    let taggedContactId: string | null = null
     if (existingContacts && existingContacts.length > 0) {
-      console.warn(`[calendly-webhook] [legacy] Existing contact found: ${existingContacts[0].full_name} — creating lead anyway`)
+      const contact = existingContacts[0] as { id: string; full_name: string; portal_tier: string | null }
+      console.warn(`[calendly-webhook] Existing contact found: ${contact.full_name} — creating lead, tagging to contact`)
+
+      const [accountLinkRes, serviceDeliveryRes] = await Promise.all([
+        db.from("account_contacts").select("account_id").eq("contact_id", contact.id).limit(1),
+        db.from("service_deliveries").select("id").eq("contact_id", contact.id).limit(1),
+      ])
+
+      if (
+        isEstablishedClientContact({
+          portal_tier: contact.portal_tier,
+          hasAccountLink: (accountLinkRes.data?.length ?? 0) > 0,
+          hasServiceDelivery: (serviceDeliveryRes.data?.length ?? 0) > 0,
+        })
+      ) {
+        taggedContactId = contact.id
+      }
     }
 
     const leadRecord: Record<string, unknown> = {
@@ -319,6 +361,7 @@ export async function POST(req: NextRequest) {
       channel: "Calendly",
       status: "Call Scheduled",
       notes: buildLeadNotes(fields),
+      ...(taggedContactId ? { existing_client_contact_id: taggedContactId } : {}),
     }
     if (fields.firstName) leadRecord.first_name = fields.firstName
     if (fields.lastName) leadRecord.last_name = fields.lastName
