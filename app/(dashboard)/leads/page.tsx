@@ -1,8 +1,8 @@
-import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { LeadsTable } from '@/components/leads/leads-table'
 import { LeadsKanban } from './components/leads-kanban'
 import { LeadsViewToggle } from './components/leads-view-toggle'
+import { LeadsClientFilterToggle } from './components/leads-client-filter-toggle'
 import { CreateLeadButton } from './components/create-lead-button'
 import type { LeadListItem } from '@/lib/types'
 
@@ -18,11 +18,16 @@ export default async function LeadsPage({
   const statusFilter = searchParams.status ?? 'all'
   const currentPage = Math.max(1, parseInt(searchParams.page ?? '1', 10) || 1)
   const viewMode = searchParams.view === 'kanban' ? 'kanban' : 'table'
-  // Existing-client bookings (dev job 93580372) are hidden from the default
-  // view — they're not open sales leads. ?client=all reveals them. Applied to
-  // BOTH table and kanban queries so a tagged booking can't silently keep
-  // piling up in the pipeline board just because the table got filtered.
-  const clientFilter = searchParams.client === 'all' ? 'all' : 'hide'
+  // A real 3-way switch (dev job 93580372) — not "reveal on top of", but "show
+  // exactly one group" — between the open sales pipeline, bookings from
+  // people who are already clients, and leads that actually converted.
+  // Mutually exclusive: Converted status wins the split first (a definitive,
+  // final state), then the existing-client tag, then everything else is a
+  // real open lead. Applied to BOTH table and kanban queries so a row can't
+  // silently pile up in the pipeline board just because the table switched.
+  const rawClientFilter = searchParams.client
+  const clientFilter: 'leads' | 'clients' | 'converted' =
+    rawClientFilter === 'clients' ? 'clients' : rawClientFilter === 'converted' ? 'converted' : 'leads'
 
   // For kanban view, fetch all non-converted/non-lost leads (up to 200)
   // For table view, use pagination as before
@@ -33,8 +38,12 @@ export default async function LeadsPage({
     .select('id, full_name, email, phone, status, source, channel, language, referrer_name, call_date, offer_status, offer_year1_amount, offer_year1_currency, created_at, existing_client_contact_id, offers(status, superseded_by, created_at)', { count: 'exact' })
     .order('created_at', { ascending: false })
 
-  if (clientFilter === 'hide') {
-    dbQuery = dbQuery.is('existing_client_contact_id', null)
+  if (clientFilter === 'converted') {
+    dbQuery = dbQuery.eq('status', 'Converted')
+  } else if (clientFilter === 'clients') {
+    dbQuery = dbQuery.not('existing_client_contact_id', 'is', null).neq('status', 'Converted')
+  } else {
+    dbQuery = dbQuery.is('existing_client_contact_id', null).neq('status', 'Converted')
   }
 
   if (!isKanban) {
@@ -57,15 +66,13 @@ export default async function LeadsPage({
   const { data: leads, count: totalCount } = await dbQuery
   const totalPages = Math.ceil((totalCount ?? 0) / PAGE_SIZE)
 
-  // How many are hidden right now, so the toggle is never a silent omission.
-  let hiddenCount = 0
-  if (clientFilter === 'hide') {
-    const { count } = await supabase
-      .from('leads')
-      .select('id', { count: 'exact', head: true })
-      .not('existing_client_contact_id', 'is', null)
-    hiddenCount = count ?? 0
-  }
+  // Real counts for all three switch buttons, not just the active one — so
+  // clicking over is never a guess at what's on the other side.
+  const [leadsCountRes, clientsCountRes, convertedCountRes] = await Promise.all([
+    supabase.from('leads').select('id', { count: 'exact', head: true }).is('existing_client_contact_id', null).neq('status', 'Converted'),
+    supabase.from('leads').select('id', { count: 'exact', head: true }).not('existing_client_contact_id', 'is', null).neq('status', 'Converted'),
+    supabase.from('leads').select('id', { count: 'exact', head: true }).eq('status', 'Converted'),
+  ])
 
   // "Has this call actually happened" — a fact (a recording came back), never
   // a guess from call_date. Batched: one query for the whole visible page,
@@ -134,14 +141,6 @@ export default async function LeadsPage({
     lost: items.filter(l => l.status === 'Lost').length,
   }
 
-  const toggleParams = new URLSearchParams()
-  if (query) toggleParams.set('q', query)
-  if (statusFilter !== 'all') toggleParams.set('status', statusFilter)
-  if (viewMode === 'kanban') toggleParams.set('view', 'kanban')
-  if (clientFilter === 'hide') toggleParams.set('client', 'all')
-  // page intentionally dropped on toggle — a different row count means the
-  // current page number may no longer exist (matches the table/kanban toggle).
-
   return (
     <div className="p-6 lg:p-8">
       <div className="flex items-center justify-between mb-6">
@@ -157,22 +156,14 @@ export default async function LeadsPage({
         </div>
       </div>
 
-      {clientFilter === 'hide' && hiddenCount > 0 && (
-        <Link
-          href={`/leads?${toggleParams.toString()}`}
-          className="inline-block mb-4 text-xs text-muted-foreground hover:text-zinc-700 underline"
-        >
-          {hiddenCount} existing-client booking{hiddenCount === 1 ? '' : 's'} hidden — show
-        </Link>
-      )}
-      {clientFilter === 'all' && (
-        <Link
-          href={`/leads?${toggleParams.toString()}`}
-          className="inline-block mb-4 text-xs text-muted-foreground hover:text-zinc-700 underline"
-        >
-          Showing existing-client bookings — hide
-        </Link>
-      )}
+      <div className="mb-4">
+        <LeadsClientFilterToggle
+          currentFilter={clientFilter}
+          leadsCount={leadsCountRes.count ?? 0}
+          clientsCount={clientsCountRes.count ?? 0}
+          convertedCount={convertedCountRes.count ?? 0}
+        />
+      </div>
 
       {isKanban ? (
         <LeadsKanban items={items} />
