@@ -14,7 +14,34 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { matchContactByName, normalizeEmail, escapeLikePattern } from '@/lib/members/member-identity'
+import { logAction } from '@/lib/mcp/action-log'
+import { matchContactByName, normalizeEmail, normalizePersonName, escapeLikePattern } from '@/lib/members/member-identity'
+
+/**
+ * Human-readable summary of which accounts a contact is already linked to
+ * (and in what role), for a possible-duplicate warning. A lookup failure
+ * must never read as "no company yet" — that would understate a real
+ * collision to the human this warning exists to inform (Bug Hunter review,
+ * 2026-08-19, dev_task 693273fd). Shared with lib/operations/account.ts's
+ * manual-dashboard warning, which has the identical need.
+ */
+export async function describeContactRoles(contactId: string): Promise<string> {
+  const { data: links, error } = await supabaseAdmin
+    .from('account_contacts')
+    .select('role, accounts(company_name)')
+    .eq('contact_id', contactId)
+  if (error) {
+    console.error(`[describeContactRoles] lookup failed for ${contactId}:`, error.message)
+    return 'unable to verify — lookup failed'
+  }
+  const roles = (links || [])
+    .map((l) => {
+      const companyName = (l as unknown as { accounts: { company_name: string } | null }).accounts?.company_name
+      return companyName ? `${companyName} (${l.role || 'linked'})` : null
+    })
+    .filter((s): s is string => !!s)
+  return roles.length > 0 ? roles.join(', ') : 'no company yet'
+}
 
 export interface ResolveMemberContactInput {
   /** The member's email (individual member's email, or a company rep's email). */
@@ -102,6 +129,30 @@ export async function resolveMemberContactId(input: ResolveMemberContactInput): 
     return matchedId
   }
 
+  // No name match on this email. Before creating, check for an exact name
+  // match under a DIFFERENT email — the Damiano Mocellin case: same real
+  // person, different email per company role. Never auto-link (two
+  // different real people can share a name, e.g. a common Italian or
+  // Hungarian name in this client base) — this only leaves a durable flag
+  // for staff to review later. It must be durable rather than a UI toast:
+  // two of this function's three callers (the client-facing member-info
+  // wizard, the automated onboarding-setup job) run with nobody watching a
+  // screen. Mirrors the identical, already-safe check in
+  // lib/operations/account.ts's manual "Add Contact" path.
+  const normalizedName = normalizePersonName(name)
+  let possibleDuplicate: { id: string; full_name: string | null; email: string | null } | undefined
+  if (normalizedName) {
+    const searchName = name.replace(/\s+/g, ' ')
+    const { data: sameNameContacts } = await supabaseAdmin
+      .from('contacts')
+      .select('id, full_name, email')
+      .ilike('full_name', `%${escapeLikePattern(searchName)}%`)
+      .is('merged_into', null)
+    possibleDuplicate = (sameNameContacts || []).find(
+      (c) => normalizePersonName(c.full_name) === normalizedName && normalizeEmail(c.email) !== email
+    )
+  }
+
   // No name match on this email → create a distinct new contact.
   // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- shared member provisioning; deferred migration per dev_task 7ebb1e0c
   const { data: created, error: createErr } = await supabaseAdmin
@@ -122,5 +173,23 @@ export async function resolveMemberContactId(input: ResolveMemberContactInput): 
     console.error(`[resolveMemberContactId] contact create failed for ${email}:`, createErr?.message)
     return null
   }
+
+  if (possibleDuplicate) {
+    logAction({
+      actor: 'system',
+      action_type: 'flag',
+      table_name: 'contacts',
+      record_id: created.id,
+      summary: `Possible duplicate: new contact "${name}" (${email}) created, but a contact with this exact name already exists under a different email`,
+      details: {
+        new_contact_id: created.id,
+        new_email: email,
+        existing_contact_id: possibleDuplicate.id,
+        existing_email: possibleDuplicate.email,
+        existing_roles: await describeContactRoles(possibleDuplicate.id),
+      },
+    })
+  }
+
   return created.id
 }
