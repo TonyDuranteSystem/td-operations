@@ -57,9 +57,19 @@ const nameIsCalls: Array<[string, unknown]> = []
 
 const resolveMemberContactIdMock = vi.fn<[Record<string, unknown>], Promise<string | null>>()
 
-vi.mock("@/lib/members/resolve-member-contact", () => ({
-  resolveMemberContactId: (input: Record<string, unknown>) => resolveMemberContactIdMock(input),
-}))
+vi.mock("@/lib/members/resolve-member-contact", async () => {
+  // describeContactRoles moved here from lib/operations/account.ts (now a
+  // shared export) — keep the REAL implementation so this file's existing
+  // account_contacts mock (contactRolesByContactId / contactRolesError,
+  // below) still exercises it; only resolveMemberContactId is faked.
+  const actual = await vi.importActual<typeof import("@/lib/members/resolve-member-contact")>(
+    "@/lib/members/resolve-member-contact"
+  )
+  return {
+    ...actual,
+    resolveMemberContactId: (input: Record<string, unknown>) => resolveMemberContactIdMock(input),
+  }
+})
 
 vi.mock("@/lib/mcp/action-log", () => ({
   logAction: vi.fn((params: Record<string, unknown>) => {

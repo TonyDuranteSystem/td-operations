@@ -18,7 +18,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
-import { resolveMemberContactId } from "@/lib/members/resolve-member-contact"
+import { resolveMemberContactId, describeContactRoles } from "@/lib/members/resolve-member-contact"
 import { normalizeEmail, normalizePersonName, escapeLikePattern } from "@/lib/members/member-identity"
 import { normalizeEIN } from "@/lib/jobs/validation"
 import type { Database } from "@/lib/database.types"
@@ -473,29 +473,6 @@ export interface CreateAndLinkContactResult {
    * email under a different name, or the same name under a different
    * email). The write already happened; this is only for staff review. */
   warning?: string
-}
-
-/** This contact's companies and roles, for a human-readable warning
- * ("already linked to: Orizzonti LLC (owner), Oh My Creatives LLC (Member)"). */
-async function describeContactRoles(contactId: string): Promise<string> {
-  const { data: links, error } = await supabaseAdmin
-    .from("account_contacts")
-    .select("role, accounts(company_name)")
-    .eq("contact_id", contactId)
-  if (error) {
-    // A transient failure here must never read as "no company yet" — that
-    // would understate a real collision to the human this warning exists
-    // to inform (Bug Hunter review, 2026-08-19, dev_task 693273fd).
-    console.error(`[createAndLinkContact] describeContactRoles failed for ${contactId}:`, error.message)
-    return "unable to verify — lookup failed"
-  }
-  const roles = (links || [])
-    .map((l) => {
-      const companyName = (l as { accounts: { company_name: string } | null }).accounts?.company_name
-      return companyName ? `${companyName} (${l.role || "linked"})` : null
-    })
-    .filter((s): s is string => !!s)
-  return roles.length > 0 ? roles.join(", ") : "no company yet"
 }
 
 /** Only fill a field that's currently blank on the existing contact — never
