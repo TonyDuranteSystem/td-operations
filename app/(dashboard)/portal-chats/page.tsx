@@ -442,6 +442,69 @@ export default function PortalChatsPage() {
     }
   }, [])
 
+  // Per-conversation draft memory (dev job c3bb4abc). Without this, replyText/
+  // replyToMsg/pendingAdminFiles are one shared piece of state for the whole
+  // panel — switching to a different client left whatever was mid-draft for
+  // the PREVIOUS client sitting in the box, addressed to the new one. Each
+  // conversation's in-progress reply is now saved when you switch away and
+  // restored if you come back; kept only in memory for this open tab, not
+  // persisted to the server or browser storage.
+  const clientDraftsRef = useRef(new Map<string, { replyText: string; replyToMsg: typeof replyToMsg; pendingAdminFiles: PendingAdminFile[] }>())
+  const clientDraftSnapshotRef = useRef({ replyText, replyToMsg, pendingAdminFiles })
+  useEffect(() => {
+    clientDraftSnapshotRef.current = { replyText, replyToMsg, pendingAdminFiles }
+  })
+  // Live-reading mirror for async completion guards (handleSuggest, handlePolish,
+  // sendInternalMessage). A plain closure over selectedAccountId/selectedContactId/
+  // selectedThreadId inside a .then()/catch callback is FROZEN at the moment that
+  // specific function instance was invoked — it never sees a later switch, so
+  // comparing it against itself always "matches" and silently defeats the guard.
+  // Reading liveSelectionRef.current instead always reflects the actual, current
+  // selection at the moment the async work completes. Caught by E2E QA, dev job
+  // c3bb4abc — the first version of this fix had this exact bug in three places.
+  const liveSelectionRef = useRef({ accountId: selectedAccountId, contactId: selectedContactId, threadId: selectedThreadId })
+  useEffect(() => {
+    liveSelectionRef.current = { accountId: selectedAccountId, contactId: selectedContactId, threadId: selectedThreadId }
+  })
+  const clientThreadKey = selectedAccountId || selectedContactId || null
+  useEffect(() => {
+    const draftsMap = clientDraftsRef.current
+    const saved = clientThreadKey ? draftsMap.get(clientThreadKey) : undefined
+    setReplyText(saved?.replyText ?? '')
+    setReplyToMsg(saved?.replyToMsg ?? null)
+    setPendingAdminFiles(saved?.pendingAdminFiles ?? [])
+    // AI output is regenerable, not user-authored — never carry a stale
+    // suggestion (or a stale "still generating" spinner) into a different
+    // client's box. handleSuggest/handlePolish additionally guard their own
+    // async completions against a switch that happens mid-request.
+    setAiSuggestion('')
+    setCrossBorderNotes([])
+    setAiLoading(false)
+    return () => {
+      if (clientThreadKey) {
+        draftsMap.set(clientThreadKey, { ...clientDraftSnapshotRef.current })
+      }
+    }
+  }, [clientThreadKey])
+
+  // Same fix for the internal/team-thread composer.
+  const internalDraftsRef = useRef(new Map<string, { internalReplyText: string; internalPendingFile: PendingAdminFile | null }>())
+  const internalDraftSnapshotRef = useRef({ internalReplyText, internalPendingFile })
+  useEffect(() => {
+    internalDraftSnapshotRef.current = { internalReplyText, internalPendingFile }
+  })
+  useEffect(() => {
+    const draftsMap = internalDraftsRef.current
+    const saved = selectedThreadId ? draftsMap.get(selectedThreadId) : undefined
+    setInternalReplyText(saved?.internalReplyText ?? '')
+    setInternalPendingFile(saved?.internalPendingFile ?? null)
+    return () => {
+      if (selectedThreadId) {
+        draftsMap.set(selectedThreadId, { ...internalDraftSnapshotRef.current })
+      }
+    }
+  }, [selectedThreadId])
+
   const enableNotifications = async () => {
     if (typeof Notification === 'undefined') return
     const permission = await Notification.requestPermission()
@@ -1153,12 +1216,14 @@ export default function PortalChatsPage() {
     }
   }
 
-  // Mark messages as read when admin opens a thread (general tab only)
+  // Mark messages as read when admin opens a thread (general tab only).
+  // Does NOT touch replyText/replyToMsg/pendingAdminFiles/aiSuggestion —
+  // the per-conversation draft-memory effect above owns those exclusively.
+  // (This effect used to also null replyToMsg here, which ran AFTER that
+  // effect's restore on every switch and silently cancelled it — the
+  // "replying to" quote pill could never survive a switch. Dev job c3bb4abc.)
   useEffect(() => {
     if (!selectedAccountId && !selectedContactId) return
-    setAiSuggestion('')
-    setCrossBorderNotes([])
-    setReplyToMsg(null)
     const readBody = selectedAccountId
       ? { account_id: selectedAccountId, topic: null }
       : { contact_id: selectedContactId, topic: null }
@@ -1190,6 +1255,13 @@ export default function PortalChatsPage() {
   // On-demand AI reply suggestion — triggered by the AI Suggest button (no longer auto-fires)
   const handleSuggest = () => {
     if ((!selectedAccountId && !selectedContactId) || aiLoading) return
+    // Captured now, at click time — compared against liveSelectionRef (NOT a
+    // closure read of selectedAccountId/selectedContactId, which would be
+    // frozen at THIS invocation and always "match" itself) when the response
+    // arrives, so a suggestion generated from one client's private
+    // conversation can never render (or be sendable) under a different
+    // client the staff has since switched to. Dev job c3bb4abc.
+    const targetKey = selectedAccountId || selectedContactId || null
     setAiLoading(true)
     setAiSuggestion('')
     setCrossBorderNotes([])
@@ -1208,11 +1280,16 @@ export default function PortalChatsPage() {
     })
       .then(r => r.json())
       .then(data => {
+        const liveKey = liveSelectionRef.current.accountId || liveSelectionRef.current.contactId || null
+        if (liveKey !== targetKey) return
         if (data.suggestion) setAiSuggestion(data.suggestion)
         setCrossBorderNotes(Array.isArray(data.crossBorderNotes) ? data.crossBorderNotes : [])
       })
       .catch(() => {})
-      .finally(() => setAiLoading(false))
+      .finally(() => {
+        const liveKey = liveSelectionRef.current.accountId || liveSelectionRef.current.contactId || null
+        if (liveKey === targetKey) setAiLoading(false)
+      })
   }
 
   // Internal team threads
@@ -1315,6 +1392,12 @@ export default function PortalChatsPage() {
   const sendInternalMessage = async () => {
     if (!internalReplyText.trim() && !internalPendingFile) return
     if (!selectedThreadId) return
+    // Captured now, at click time — the thread this send is actually FOR.
+    // Staff can switch to a different internal thread while the upload/send
+    // is still in flight; recovery on failure must land back in THIS
+    // thread's own draft, never into whatever's currently on screen.
+    // Dev job c3bb4abc.
+    const targetThreadId = selectedThreadId
     const text = internalReplyText.trim()
     setInternalReplyText('')
 
@@ -1326,7 +1409,7 @@ export default function PortalChatsPage() {
       try {
         const formData = new FormData()
         formData.append('file', internalPendingFile.file)
-        const uploadRes = await fetch(`/api/internal/threads/${selectedThreadId}/upload`, {
+        const uploadRes = await fetch(`/api/internal/threads/${targetThreadId}/upload`, {
           method: 'POST',
           body: formData,
         })
@@ -1345,17 +1428,28 @@ export default function PortalChatsPage() {
     }
 
     try {
-      const res = await fetch(`/api/internal/threads/${selectedThreadId}/messages`, {
+      const res = await fetch(`/api/internal/threads/${targetThreadId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text, attachment_url: attachmentUrl, attachment_name: attachmentName }),
       })
       if (!res.ok) throw new Error('Failed to send')
-      queryClient.invalidateQueries({ queryKey: ['internal-thread-messages', selectedThreadId] })
+      queryClient.invalidateQueries({ queryKey: ['internal-thread-messages', targetThreadId] })
       queryClient.invalidateQueries({ queryKey: ['internal-threads'] })
     } catch {
       toast.error('Failed to send message')
-      setInternalReplyText(text)
+      // liveSelectionRef.current.threadId, NOT the closure-read selectedThreadId
+      // — a plain closure read here is frozen at THIS invocation and always
+      // equals targetKey, silently defeating the guard. Caught by E2E QA.
+      if (liveSelectionRef.current.threadId === targetThreadId) {
+        setInternalReplyText(text)
+      } else {
+        // Staff has moved to a different internal thread — don't overwrite
+        // what they're typing there. The failed text goes back into the
+        // ORIGINAL thread's own remembered draft so it's there next time
+        // staff opens it, instead of being lost or landing somewhere else.
+        internalDraftsRef.current.set(targetThreadId, { internalReplyText: text, internalPendingFile: null })
+      }
     }
   }
 
@@ -1479,7 +1573,7 @@ export default function PortalChatsPage() {
 
   // Send reply
   const sendMutation = useMutation({
-    mutationFn: async ({ message, reply_to_id, attachments }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[] }) => {
+    mutationFn: async ({ message, reply_to_id, attachments }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null }) => {
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1504,13 +1598,27 @@ export default function PortalChatsPage() {
       if (!res.ok) throw new Error('Failed to send')
       return res.json()
     },
-    onSuccess: async () => {
-      setReplyText('')
-      setReplyToMsg(null)
-      setPendingAdminFiles([])
-      const readBody = selectedAccountId
-        ? { account_id: selectedAccountId }
-        : { contact_id: selectedContactId }
+    onSuccess: async (_data, variables) => {
+      // Use the conversation this send was actually FOR (captured at click
+      // time in handleSend), not whatever is live-selected when the network
+      // round trip completes — staff may have already switched to a
+      // different client. Dev job c3bb4abc.
+      const targetKey = variables.targetAccountId || variables.targetContactId || null
+      const currentKey = selectedAccountId || selectedContactId || null
+      if (targetKey && targetKey === currentKey) {
+        setReplyText('')
+        setReplyToMsg(null)
+        setPendingAdminFiles([])
+      } else if (targetKey) {
+        // Staff has moved on. Don't touch what's on screen now — instead
+        // make sure the conversation we just sent to doesn't have this
+        // already-sent message resurface as an apparent unsent draft next
+        // time staff opens it (risking an accidental duplicate resend).
+        clientDraftsRef.current.set(targetKey, { replyText: '', replyToMsg: null, pendingAdminFiles: [] })
+      }
+      const readBody = variables.targetAccountId
+        ? { account_id: variables.targetAccountId }
+        : { contact_id: variables.targetContactId }
       try {
         await fetch('/api/portal/chat/read', {
           method: 'POST',
@@ -1518,7 +1626,7 @@ export default function PortalChatsPage() {
           body: JSON.stringify(readBody),
         })
       } catch { /* non-fatal */ }
-      queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId] })
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', targetKey] })
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
     },
   })
@@ -1657,16 +1765,22 @@ export default function PortalChatsPage() {
     if (isRecording) stopRecording()
     if (inputRef.current) inputRef.current.style.height = 'auto'
 
+    // Captured now, at click time, before any upload/network await — this is
+    // the conversation the send is actually FOR, regardless of where staff
+    // is looking by the time it completes. Dev job c3bb4abc.
+    const targetAccountId = selectedAccountId
+    const targetContactId = selectedContactId
+
     if (pendingAdminFiles.length > 0) {
       setUploadingAdminFile(true)
       try {
         const uploaded = await Promise.all(pendingAdminFiles.map((pf) =>
           uploadChatAttachment(pf.file, {
-            accountId: selectedAccountId || undefined,
-            contactId: selectedAccountId ? undefined : selectedContactId,
+            accountId: targetAccountId || undefined,
+            contactId: targetAccountId ? undefined : targetContactId,
           })
         ))
-        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded })
+        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded, targetAccountId, targetContactId })
       } catch (err) {
         toast.error(err instanceof Error && err.message ? err.message : 'Failed to upload file')
       } finally {
@@ -1674,7 +1788,7 @@ export default function PortalChatsPage() {
         if (adminFileRef.current) adminFileRef.current.value = ''
       }
     } else {
-      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id })
+      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, targetAccountId, targetContactId })
     }
   }
 
@@ -1685,6 +1799,10 @@ export default function PortalChatsPage() {
 
   const handlePolish = async (explicitLanguage?: string) => {
     if (!replyText.trim() || polishing) return
+    // Same guard as handleSuggest — a polish started for one client must
+    // never overwrite the box of a different client the staff has since
+    // switched to. Dev job c3bb4abc.
+    const targetKey = selectedAccountId || selectedContactId || null
     setPolishing(true)
     try {
       const polishIds: { account_id?: string; contact_id?: string } = {}
@@ -1704,6 +1822,15 @@ export default function PortalChatsPage() {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Failed to polish message')
+      // liveSelectionRef, not a closure read — see handleSuggest for why.
+      const liveKeyAfterFetch = liveSelectionRef.current.accountId || liveSelectionRef.current.contactId || null
+      if (liveKeyAfterFetch !== targetKey) {
+        // Staff moved to a different conversation while this was polishing.
+        // The original draft is already safe in that conversation's own
+        // remembered draft — discard the stale result rather than risk it
+        // landing in the wrong client's box.
+        return
+      }
       if (data.needs_language_choice) {
         setPolishAskLanguage(true)
         return
@@ -1716,7 +1843,10 @@ export default function PortalChatsPage() {
     } catch (err) {
       toast.error(err instanceof Error && err.message ? err.message : 'AI polish failed — please try again.')
     }
-    finally { setPolishing(false) }
+    finally {
+      const liveKey = liveSelectionRef.current.accountId || liveSelectionRef.current.contactId || null
+      if (liveKey === targetKey) setPolishing(false)
+    }
   }
 
   const markAsUnread = async (thread: { account_id: string | null; contact_id: string | null }) => {
