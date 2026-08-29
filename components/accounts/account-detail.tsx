@@ -814,6 +814,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
         entityType={account.entity_type}
         formationDate={account.formation_date}
         ein={account.ein_number}
+        appBaseUrl={appBaseUrl}
       />
       <GenerateLeaseDialog
         open={showLeaseDialog}
