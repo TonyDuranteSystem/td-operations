@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import { isAdmin } from '@/lib/auth'
+import { isOwnerOnly } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { OwnerDashboard } from './owner-dashboard'
 import {
@@ -18,7 +18,7 @@ export default async function OwnerPage({
 }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) redirect('/')
+  if (!user || !isOwnerOnly(user)) redirect('/')
 
   const year = parseInt(searchParams.year ?? String(new Date().getFullYear()), 10)
   const activeTab = searchParams.tab ?? 'dashboard'

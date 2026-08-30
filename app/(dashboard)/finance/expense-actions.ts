@@ -2,6 +2,18 @@
 
 import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
+import { createClient } from '@/lib/supabase/server'
+import { isOwnerOnly } from '@/lib/auth'
+
+// These write actions carry Antonio's own outgoing-money records (td_expenses) —
+// same privacy rule as the rest of My Finances. The page only hides the tab from
+// non-admins; without this check any dashboard account could still call these
+// actions directly. isOwnerOnly (not isAdmin) because these are security-sensitive.
+async function requireAdmin(): Promise<void> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!isOwnerOnly(user)) throw new Error('Forbidden')
+}
 
 export async function createTDExpense(input: {
   vendor_name: string
@@ -18,6 +30,7 @@ export async function createTDExpense(input: {
   mark_as_paid?: boolean
 }): Promise<ActionResult<{ id: string }>> {
   return safeAction(async () => {
+    await requireAdmin()
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
 
     const today = new Date().toISOString().split('T')[0]
@@ -56,6 +69,7 @@ export async function markTDExpensePaid(
   paymentMethod?: string
 ): Promise<ActionResult> {
   return safeAction(async () => {
+    await requireAdmin()
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
     await supabaseAdmin
       .from('td_expenses')
@@ -75,6 +89,7 @@ export async function markTDExpensePaid(
 
 export async function voidTDExpense(expenseId: string): Promise<ActionResult> {
   return safeAction(async () => {
+    await requireAdmin()
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
     await supabaseAdmin
       .from('td_expenses')
@@ -101,6 +116,7 @@ export async function updateTDExpense(
   }
 ): Promise<ActionResult> {
   return safeAction(async () => {
+    await requireAdmin()
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
     const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() }
     if (updates.vendor_name !== undefined) updateData.vendor_name = updates.vendor_name
@@ -123,6 +139,7 @@ export async function updateTDExpense(
 
 export async function deleteTDExpense(expenseId: string): Promise<ActionResult> {
   return safeAction(async () => {
+    await requireAdmin()
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
     const { error } = await supabaseAdmin.from('td_expenses').delete().eq('id', expenseId)
     if (error) throw new Error(error.message)

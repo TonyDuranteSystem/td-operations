@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isAdmin } from '@/lib/auth'
+import { isOwnerOnly } from '@/lib/auth'
 import { NextResponse } from 'next/server'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic'
 export async function GET(req: Request) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) {
+  if (!user || !isOwnerOnly(user)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
@@ -53,7 +53,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) {
+  if (!user || !isOwnerOnly(user)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
