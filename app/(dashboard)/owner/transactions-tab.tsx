@@ -356,7 +356,15 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
     const list = Array.from(files)
     setUploading({ done: 0, total: list.length })
     let totalImported = 0
+    let totalAlreadyBooked = 0
     const problems: string[] = []
+    // Parser warnings are NOT cosmetic and must never be swallowed. The reader
+    // raises "Ambiguous date format — assumed M/D/Y (US)" when a statement gives it
+    // no way to tell 05/03 apart; guess wrong on a European statement and every
+    // date shifts, and near a year boundary rows land in the WRONG TAX YEAR, since
+    // the year is derived from that same date. This warning existed, was returned
+    // by the server, and was being dropped on the floor here.
+    const warnings: string[] = []
 
     for (let i = 0; i < list.length; i++) {
       const file = list[i]
@@ -369,9 +377,18 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
           problems.push(`${file.name}: ${d.error || 'upload failed'}`)
         } else if (typeof d.imported === 'number') {
           totalImported += d.imported
+          totalAlreadyBooked += d.skipped_already_booked ?? 0
           if (d.imported === 0 && d.parsed_count > 0) {
             problems.push(`${file.name}: found ${d.parsed_count} transaction(s), all already in your books`)
           }
+        }
+        if (Array.isArray(d.warnings)) {
+          for (const w of d.warnings) warnings.push(`${file.name}: ${w}`)
+        }
+        if (Array.isArray(d.duplicate_samples) && d.duplicate_samples.length > 0) {
+          warnings.push(
+            `${file.name}: ${d.skipped_already_booked} transaction(s) were already in your books from another source — e.g. ${d.duplicate_samples[0]}`
+          )
         }
       } catch {
         problems.push(`${file.name}: upload failed`)
@@ -380,11 +397,22 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
     }
 
     setUploading(null)
-    if (totalImported > 0) toast.success(`Imported ${totalImported} new transaction(s) from ${list.length} file(s)`)
+    if (totalImported > 0) {
+      const dupNote = totalAlreadyBooked > 0 ? ` · ${totalAlreadyBooked} skipped as already booked` : ''
+      toast.success(`Imported ${totalImported} new transaction(s) from ${list.length} file(s)${dupNote}`)
+    }
     if (problems.length > 0) {
       toast.error(problems.length === 1 ? problems[0] : `${problems.length} file(s) need attention: ${problems.join(' | ')}`)
     } else if (totalImported === 0) {
       toast.error('Nothing new to import from those file(s)')
+    }
+    // Shown separately and persistently — a warning buried behind a green success
+    // toast is a warning nobody reads, and these can mean money in the wrong year.
+    for (const w of warnings.slice(0, 5)) {
+      toast.warning(w, { duration: 15000 })
+    }
+    if (warnings.length > 5) {
+      toast.warning(`…and ${warnings.length - 5} more parse warning(s).`, { duration: 15000 })
     }
     load(offset)
   }

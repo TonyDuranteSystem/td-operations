@@ -80,6 +80,9 @@ export async function POST(req: NextRequest) {
     bank_name: t.bank_name || parsed.bank_name || undefined,
     account_type: t.account_type || undefined,
     transaction_ref: t.transaction_ref,
+    // Carried so the Cash Position can be built from real statements — the parsers
+    // always produced this and the import path used to drop it on the floor.
+    balance_after: t.balance_after ?? null,
     // tax_year comes from the transaction's OWN date, not the file/upload
     // date or a single assumed year — a statement can span a year boundary.
     tax_year: Number(t.transaction_date.slice(0, 4)),
@@ -91,7 +94,13 @@ export async function POST(req: NextRequest) {
       file: file.name,
       imported: result.imported,
       parsed_count: parsed.transactions.length,
-      skipped_duplicates: parsed.transactions.length - result.imported,
+      // Split, because the two mean very different things to the operator:
+      // "you already uploaded this exact file" vs "this money is already in your
+      // books under another source (the bank feed, or the same statement in a
+      // different format)". The second is the one worth looking at.
+      skipped_same_source: result.skipped_same_source,
+      skipped_already_booked: result.skipped_already_booked,
+      duplicate_samples: result.duplicate_samples.length > 0 ? result.duplicate_samples : undefined,
       warnings: parsed.errors.length > 0 ? parsed.errors : undefined,
     })
   } catch (error) {

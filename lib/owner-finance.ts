@@ -176,18 +176,40 @@ export async function getOwnerTransactions(
   year: number,
   category?: OwnerCategory
 ): Promise<OwnerTransaction[]> {
-  let q = supabaseAdmin
-    .from('td_books_transactions')
-    .select('*')
-    .eq('entity_id', TD_ENTITY_ID)
-    .eq('tax_year', year)
-    .order('transaction_date', { ascending: false })
+  // PAGED. An un-ranged select is silently capped at 1000 rows by PostgREST with NO
+  // error — the same trap already documented and paged around for getInvoiceIncome
+  // below (INCOME_FETCH_PAGE). This function feeds getOwnerPnL, and through it the
+  // P&L tab, the dashboard KPIs, the Tax tab and the cash-flow chart, so the cap
+  // would silently compute every headline figure from only the newest 1000 rows
+  // while the Transactions tab — which is correctly ranged and uses count:'exact' —
+  // reported the true total. Two surfaces disagreeing on the same year, no error.
+  // A single real year of statements clears 1000 rows comfortably.
+  // Ordered by (date, id) so paging is deterministic: date alone has ties on any
+  // real statement, and an unstable sort would repeat some rows across pages and
+  // skip others entirely.
+  const PAGE = 1000
+  const all: OwnerTransaction[] = []
 
-  if (category) q = q.eq('category', category)
+  for (let offset = 0; ; offset += PAGE) {
+    let q = supabaseAdmin
+      .from('td_books_transactions')
+      .select('*')
+      .eq('entity_id', TD_ENTITY_ID)
+      .eq('tax_year', year)
+      .order('transaction_date', { ascending: false })
+      .order('id', { ascending: false })
+      .range(offset, offset + PAGE - 1)
 
-  const { data, error } = await q
-  if (error) throw new Error(`getOwnerTransactions: ${error.message}`)
-  return (data ?? []) as OwnerTransaction[]
+    if (category) q = q.eq('category', category)
+
+    const { data, error } = await q
+    if (error) throw new Error(`getOwnerTransactions: ${error.message}`)
+    const page = (data ?? []) as OwnerTransaction[]
+    all.push(...page)
+    if (page.length < PAGE) break
+  }
+
+  return all
 }
 
 export async function getOwnerTransactionsPaginated(
@@ -207,7 +229,13 @@ export async function getOwnerTransactionsPaginated(
     .select('*', { count: 'exact' })
     .eq('entity_id', TD_ENTITY_ID)
     .eq('tax_year', year)
+    // (date, id) — a tie-break is required, not cosmetic. Many rows share a date on
+    // a real statement, and Postgres gives no stable order for ties across separate
+    // queries, so date-only paging shows some rows on two pages and NEVER shows an
+    // equal number of others — rows that would then sit uncategorized forever while
+    // the "Showing 51–100 of N" counter claims otherwise.
     .order('transaction_date', { ascending: false })
+    .order('id', { ascending: false })
     .range(offset, offset + limit - 1)
 
   if (category) q = q.eq('category', category)
