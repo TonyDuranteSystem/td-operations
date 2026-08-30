@@ -93,7 +93,7 @@ async function main() {
     byBucket.set(k, v)
   }
   console.log(`\nwould categorize ${planned.length}, leaving ${unmatched.length} unmatched\n`)
-  for (const [k, v] of [...byBucket].sort((a, b) => a[1].total - b[1].total)) {
+  for (const [k, v] of Array.from(byBucket).sort((a, b) => a[1].total - b[1].total)) {
     console.log(`  ${String(v.n).padStart(4)}  ${v.total.toFixed(2).padStart(12)}  ${k}`)
   }
 
@@ -106,7 +106,7 @@ async function main() {
       agg.set(k, v)
     }
     console.log(`\n--- UNMATCHED (stay uncategorized, by |total|) ---`)
-    for (const [k, v] of [...agg].sort((a, b) => Math.abs(b[1].total) - Math.abs(a[1].total)).slice(0, 60)) {
+    for (const [k, v] of Array.from(agg).sort((a, b) => Math.abs(b[1].total) - Math.abs(a[1].total)).slice(0, 60)) {
       console.log(`  ${String(v.n).padStart(4)}  ${v.total.toFixed(2).padStart(12)}  ${k}`)
     }
   }
