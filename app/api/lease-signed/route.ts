@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
     // Fetch lease record
     const { data: lease, error: leaseErr } = await supabaseAdmin
       .from("lease_agreements")
-      .select("id, token, tenant_company, account_id, contact_id, suite_number, status, pdf_storage_path, access_code")
+      .select("id, token, tenant_company, account_id, contact_id, suite_number, status, pdf_storage_path, access_code, premises_address")
       .eq("id", lease_id)
       .eq("token", token)
       .single()
@@ -174,6 +174,24 @@ export async function POST(req: NextRequest) {
         }
       } catch (e) {
         results.push({ step: "cmra_sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+
+      // ─── 3.5. SYNC ACCOUNT MAILING ADDRESS TO THE LEASE ───
+      // Signing a CMRA lease means the client now uses this TD building as
+      // their official mailing address. Nothing else in the lease lifecycle
+      // sets accounts.business_mailing_address_id — createLease only syncs
+      // the free-text physical_address (for OA generation). Without this,
+      // the normalized address the portal/invoices/Issues-panel actually
+      // read from is left wrong or unset until a staff member fixes it by
+      // hand (found live on Nexo Agency LLC, dev job 525e0e67, 2026-08-30).
+      try {
+        const { linkAccountToLeaseMailingAddress } = await import("@/lib/operations/lease")
+        const { linked, addressId } = await linkAccountToLeaseMailingAddress(lease.account_id, lease.premises_address)
+        results.push(linked
+          ? { step: "mailing_address_sync", status: "ok", detail: `Linked account to address ${addressId}` }
+          : { step: "mailing_address_sync", status: "skipped", detail: "No matching TD-provided address found for this lease's premises" })
+      } catch (e) {
+        results.push({ step: "mailing_address_sync", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
 
       // ─── 4. CREATE TASK: PREPARE USPS FORM 1583 ───
