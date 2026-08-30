@@ -83,7 +83,6 @@ export async function GET(req: NextRequest) {
       onboardingResult,
       taxFormResult,
       ss4Result,
-      bankingResult,
       authUsersResult,
       taxReturnResult,
       deadlinesResult,
@@ -155,11 +154,6 @@ export async function GET(req: NextRequest) {
       // SS-4
       supabaseAdmin.from("ss4_applications").select("id, token, status")
         .eq("account_id", accountId).limit(1),
-      // Banking forms
-      contactId
-        ? supabaseAdmin.from("banking_submissions").select("id, token, status, provider, submitted_data")
-          .eq("contact_id", contactId)
-        : { data: [] },
       // Auth user — paginated lookup via findAuthUserByEmail (P1.9)
       Promise.resolve().then(async () => {
         if (!contactEmail) return { data: [] as { id: string; email: string }[] }
@@ -243,7 +237,6 @@ export async function GET(req: NextRequest) {
     const onboardingSub = (onboardingResult.data as unknown[])?.[0] as { id: string; token: string; status: string; completed_at: string } | undefined
     const taxForm = (taxFormResult.data as unknown[])?.[0] as { id: string; token: string; status: string; completed_at: string } | undefined
     const ss4 = (ss4Result.data as unknown[])?.[0] as { id: string; token: string; status: string } | undefined
-    const bankingForms = (bankingResult.data || []) as { id: string; token: string; status: string; provider: string; submitted_data: Record<string, unknown> }[]
     const authUsers = (authUsersResult.data || []) as { id: string; email: string }[]
     const anyPortalLogin = (portalAccessResult.data as { loginContact: { name: string | null; email: string } | null })?.loginContact ?? null
     const taxReturn = (taxReturnResult.data as unknown[])?.[0] as { id: string; tax_year: number; status: string; extension_filed: boolean; first_year_skip: boolean } | undefined
@@ -705,33 +698,21 @@ export async function GET(req: NextRequest) {
       })
     }
 
-    // Banking forms
-    const relayForm = bankingForms.find(b => b.provider === "relay")
-    const paysetForm = bankingForms.find(b => b.provider === "payset")
-
-    if (relayForm) {
-      const hasData = relayForm.submitted_data && Object.keys(relayForm.submitted_data).length > 0
-      checks.push({
-        id: "banking_relay",
-        category: "Forms",
-        label: "Banking: Relay",
-        status: relayForm.status === "completed" || relayForm.status === "reviewed" ? "ok"
-          : hasData ? "info" : "warning",
-        detail: `Status: ${relayForm.status}${!hasData ? " (empty — not filled by client)" : ""}`,
-      })
-    }
-
-    if (paysetForm) {
-      const hasData = paysetForm.submitted_data && Object.keys(paysetForm.submitted_data).length > 0
-      checks.push({
-        id: "banking_payset",
-        category: "Forms",
-        label: "Banking: Payset",
-        status: paysetForm.status === "completed" || paysetForm.status === "reviewed" ? "ok"
-          : hasData ? "info" : "warning",
-        detail: `Status: ${paysetForm.status}${!hasData ? " (empty — not filled by client)" : ""}`,
-      })
-    }
+    // Banking application status checks (Relay/Payset) REMOVED (2026-08-30,
+    // Antonio's explicit instruction, dev job 525e0e67). Whether a client has
+    // finished their own bank application is the client's own pace and
+    // choice, not a system defect — this panel is for real system problems
+    // staff must fix, not client-side progress (that belongs in What's New,
+    // a separate, already-shipped mechanism — see whats-new.md). Confirmed
+    // most of what this fired on was noise: of 29 flagged instances across
+    // production, only 3 were ever actually opened by the client — the rest
+    // were empty placeholders auto-seeded alongside a currency the client
+    // never asked for, seeded together by getOrCreateBankingSubmission (see
+    // app/api/cron/backfill-banking-c3efa6cb/route.ts) and flagged as an
+    // "unfinished" issue regardless of whether the client's other currency
+    // was already fully completed. If a status signal is ever needed again,
+    // query banking_submissions by account_id fresh rather than restoring
+    // this — and route it to What's New, not this panel.
 
     // ═══════════════════════════════
     // CATEGORY: Documents
