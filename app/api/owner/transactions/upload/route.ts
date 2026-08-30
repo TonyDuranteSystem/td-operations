@@ -110,7 +110,18 @@ export async function POST(req: NextRequest) {
     // accounting treatment, not just display. NOTE: the parser used to put the
     // CURRENCY here; currency has its own column and is unaffected.
     account_type: account.value!.accountType,
-    transaction_ref: t.transaction_ref,
+    // ACCOUNT-SCOPED IDENTITY. The parsers hash (date, amount, description,
+    // balance) with NO notion of which account the row came from, so two
+    // genuinely separate transactions in two different accounts can produce the
+    // SAME ref — and the ref check runs before the content check, so the second
+    // one is discarded as "already imported" and a real transaction is lost.
+    // OBSERVED, not theoretical: Antonio opened First Citizens checking 5812 and
+    // 5820 on the same day, each with a $100 "Customer Deposit" leaving a $100
+    // balance. Identical hash; the 5820 deposit vanished and 93 of 94 rows landed.
+    // Prefixing with the account number makes identity per-account, which is what
+    // it always should have been. (The content-level check already includes the
+    // account, so this closes the one path that bypassed it.)
+    transaction_ref: `${account.value!.accountNumber}:${t.transaction_ref}`,
     // Carried so the Cash Position can be built from real statements — the parsers
     // always produced this and the import path used to drop it on the floor.
     balance_after: t.balance_after ?? null,
