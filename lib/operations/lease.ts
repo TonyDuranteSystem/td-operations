@@ -576,3 +576,52 @@ export async function cancelLeaseDraft(token: string): Promise<CancelLeaseDraftR
 
   return { success: true, message: "Draft lease cancelled." }
 }
+
+/**
+ * Resolve the TD-provided mailing address (a shared `addresses` row) that a
+ * signed lease's premises correspond to. Matches by prefix against
+ * `address_line1` rather than a hardcoded ID so this keeps working if a
+ * second TD building is ever wired into lease creation. Returns null if no
+ * TD-provided business_mailing address matches — caller should skip, not
+ * guess (dev job 525e0e67, CMRA Issues-panel investigation, 2026-08-30).
+ */
+export async function resolveTdMailingAddressForLease(
+  premisesAddress: string | null,
+): Promise<string | null> {
+  if (!premisesAddress) return null
+
+  const { data: candidates } = await supabaseAdmin
+    .from("addresses")
+    .select("id, address_line1")
+    .eq("kind", "business_mailing")
+    .eq("is_td_provided", true)
+    .eq("active", true)
+
+  const match = (candidates || []).find((a) =>
+    premisesAddress.toLowerCase().startsWith((a.address_line1 || "").toLowerCase()),
+  )
+  return match?.id ?? null
+}
+
+/**
+ * Point an account's official mailing address at the TD building its signed
+ * lease's premises correspond to. The single write path for
+ * accounts.business_mailing_address_id from a lease event — lives here
+ * (lib/operations/**) rather than inline in the calling routes so both the
+ * live lease-signed webhook and the one-off backfill (dev job 525e0e67) go
+ * through the same resolution + write logic (P2.4 rule 1).
+ */
+export async function linkAccountToLeaseMailingAddress(
+  accountId: string,
+  premisesAddress: string | null,
+): Promise<{ linked: boolean; addressId: string | null }> {
+  const addressId = await resolveTdMailingAddressForLease(premisesAddress)
+  if (!addressId) return { linked: false, addressId: null }
+
+  await supabaseAdmin
+    .from("accounts")
+    .update({ business_mailing_address_id: addressId })
+    .eq("id", accountId)
+
+  return { linked: true, addressId }
+}
