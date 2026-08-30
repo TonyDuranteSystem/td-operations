@@ -371,6 +371,10 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
       try {
         const body = new FormData()
         body.append('file', file)
+        // The year currently being viewed IS the year being loaded. Rows outside
+        // it are skipped server-side and reported — a loan export carrying 2026
+        // activity previously leaked 17 rows into an off-limits year.
+        body.append('tax_year', String(year))
         const res = await fetch('/api/owner/transactions/upload', { method: 'POST', body })
         const d = await res.json().catch(() => ({}))
         if (!res.ok || d.error) {
@@ -378,6 +382,9 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
         } else if (typeof d.imported === 'number') {
           totalImported += d.imported
           totalAlreadyBooked += d.skipped_already_booked ?? 0
+          if (d.skipped_out_of_year > 0) {
+            warnings.push(`${file.name}: ${d.skipped_out_of_year} transaction(s) dated outside ${year} were skipped — load those with that year selected.`)
+          }
           if (d.imported === 0 && d.parsed_count > 0) {
             problems.push(`${file.name}: found ${d.parsed_count} transaction(s), all already in your books`)
           }

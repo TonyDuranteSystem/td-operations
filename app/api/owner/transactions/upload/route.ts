@@ -3,6 +3,7 @@ import { isOwnerOnly } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
 import { parseBankStatement, type ParsedTransaction } from '@/lib/bank-statement-parser'
 import { insertOwnerTransactionRows } from '@/lib/owner-transactions-import'
+import { parseStatementFilename } from '@/lib/owner-statement-filename'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -35,6 +36,30 @@ export async function POST(req: NextRequest) {
   if (!file) {
     return NextResponse.json({ error: 'file is required' }, { status: 400 })
   }
+
+  // ── Account identity, from the filename ────────────────────────────────────
+  // REFUSE rather than guess. The account TYPE decides the accounting (a card and
+  // a loan are debts, not cash) and the NUMBER decides identity — three First
+  // Citizens accounts pass the same $1,068.30 between them. Landing rows under a
+  // guessed or blank account silently mis-states money, and it already did: an
+  // "unknown" bank payment to Amex and the card's own record of it were merged as
+  // duplicates because neither carried an account.
+  const account = parseStatementFilename(file.name)
+  if (!account.ok) {
+    return NextResponse.json({
+      file: file.name,
+      needs_rename: true,
+      error: `${account.error?.problem} ${account.error?.suggestion}`,
+    }, { status: 400 })
+  }
+
+  // The year being loaded. Rows outside it are SKIPPED and reported, never
+  // written: a loan export carrying 2026 activity previously leaked 17 rows into
+  // a year that was explicitly off limits.
+  const targetYearRaw = formData.get('tax_year')
+  const targetYear = typeof targetYearRaw === 'string' && /^\d{4}$/.test(targetYearRaw)
+    ? Number(targetYearRaw)
+    : null
 
   const buffer = Buffer.from(await file.arrayBuffer())
   const mimeType = file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'text/csv')
@@ -71,14 +96,20 @@ export async function POST(req: NextRequest) {
     }, { status: 200 })
   }
 
-  const rows = parsed.transactions.map((t: ParsedTransaction) => ({
+  const allRows = parsed.transactions.map((t: ParsedTransaction) => ({
     transaction_date: t.transaction_date,
     description: t.description,
     counterparty: t.counterparty || undefined,
     amount: t.amount,
     currency: t.currency || undefined,
-    bank_name: t.bank_name || parsed.bank_name || undefined,
-    account_type: t.account_type || undefined,
+    // The filename is AUTHORITATIVE for the account, not the parser's guess. The
+    // parser labels almost everything "unknown" (only Relay is recognised), and
+    // an account label is what Cash Position groups balances by.
+    bank_name: account.value!.label,
+    // checking / savings / credit_card / loan / processor — this drives the
+    // accounting treatment, not just display. NOTE: the parser used to put the
+    // CURRENCY here; currency has its own column and is unaffected.
+    account_type: account.value!.accountType,
     transaction_ref: t.transaction_ref,
     // Carried so the Cash Position can be built from real statements — the parsers
     // always produced this and the import path used to drop it on the floor.
@@ -88,12 +119,30 @@ export async function POST(req: NextRequest) {
     tax_year: Number(t.transaction_date.slice(0, 4)),
   }))
 
+  const rows = targetYear === null ? allRows : allRows.filter(r => r.tax_year === targetYear)
+  const outOfYear = allRows.length - rows.length
+
+  if (rows.length === 0) {
+    return NextResponse.json({
+      file: file.name,
+      imported: 0,
+      parsed_count: parsed.transactions.length,
+      skipped_out_of_year: outOfYear,
+      error: outOfYear > 0
+        ? `All ${outOfYear} transaction(s) in this file are outside ${targetYear}. Nothing was imported.`
+        : 'No transactions found in this file.',
+    }, { status: 200 })
+  }
+
   try {
     const result = await insertOwnerTransactionRows(rows)
     return NextResponse.json({
       file: file.name,
+      account: account.value!.label,
+      account_type: account.value!.accountType,
       imported: result.imported,
       parsed_count: parsed.transactions.length,
+      skipped_out_of_year: outOfYear,
       // Split, because the two mean very different things to the operator:
       // "you already uploaded this exact file" vs "this money is already in your
       // books under another source (the bank feed, or the same statement in a
