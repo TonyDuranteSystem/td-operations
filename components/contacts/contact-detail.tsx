@@ -42,7 +42,9 @@ import { EntityActivitySummary } from '@/components/dashboard/entity-activity-su
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
-import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
+import { updateAccountContactRole, toggleDocumentPortalVisibility, disableAccountAutopay, sendAutopayEnrollmentLink } from '@/app/(dashboard)/accounts/actions'
+import { FinanceSummaryCard } from '@/components/shared/finance-summary-card'
+import { summarizeInvoicesForFinanceCard } from '@/lib/billing/finance-summary'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { format, parseISO } from 'date-fns'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry, ChatAttachment } from '@/lib/types'
@@ -282,6 +284,7 @@ export function ContactDetail({
   invoices = [],
   lead,
   portalAuth,
+  today,
   offers = [],
   pendingActivations = [],
   wizardProgress = [],
@@ -487,6 +490,8 @@ export function ContactDetail({
           offers={offers}
           pendingActivations={pendingActivations}
           wizardProgress={wizardProgress}
+          invoices={invoices}
+          today={today}
         />
       )}
       {activeTab === 'services' && (
@@ -581,6 +586,8 @@ function OverviewTab({
   offers,
   pendingActivations,
   wizardProgress,
+  invoices,
+  today,
 }: {
   contact: ContactRecord
   accounts: LinkedAccount[]
@@ -589,7 +596,21 @@ function OverviewTab({
   offers: OfferRecord[]
   pendingActivations: PendingActivationRecord[]
   wizardProgress: WizardProgressRecord[]
+  invoices: ContactInvoice[]
+  today: string
 }) {
+  const invoicesByAccount = new Map<string, ContactInvoice[]>()
+  const personalInvoices: ContactInvoice[] = []
+  for (const inv of invoices) {
+    if (inv.account_id) {
+      const list = invoicesByAccount.get(inv.account_id) ?? []
+      list.push(inv)
+      invoicesByAccount.set(inv.account_id, list)
+    } else if (inv.contact_id) {
+      personalInvoices.push(inv)
+    }
+  }
+  const personalSummary = personalInvoices.length > 0 ? summarizeInvoicesForFinanceCard(personalInvoices, today) : null
   const [note, setNote] = useState('')
   const [addingNote, setAddingNote] = useState(false)
 
@@ -711,6 +732,34 @@ function OverviewTab({
           </div>
         )}
       </div>
+
+      {/* Finance — invoice summary + autopay status, one card per linked company
+          plus a "Personal" card for invoices with no company (contact-direct payments).
+          Autopay is account-scoped only, so the personal card hides that row. */}
+      {(accounts.length > 0 || personalSummary) && (
+        <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+          {accounts.map(acc => (
+            <FinanceSummaryCard
+              key={acc.id}
+              accountId={acc.id}
+              companyName={acc.company_name}
+              summary={summarizeInvoicesForFinanceCard(invoicesByAccount.get(acc.id) ?? [], today)}
+              autopayEnabled={!!acc.autopay_card_enabled}
+              autopayLast4={acc.autopay_card_last4}
+              isAdmin={true}
+              onDisable={disableAccountAutopay}
+              onSendLink={sendAutopayEnrollmentLink}
+            />
+          ))}
+          {personalSummary && (
+            <FinanceSummaryCard
+              companyName="Personal (no company)"
+              summary={personalSummary}
+              showAutopay={false}
+            />
+          )}
+        </div>
+      )}
 
       {/* Notes + Lead Origin */}
       <div className="space-y-6">

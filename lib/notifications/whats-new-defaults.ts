@@ -23,6 +23,7 @@ export const WHATS_NEW_DEFAULT_STEPS: Record<string, string> = {
   contact_updated: 'Review the contact details the client submitted',
   plan_referrer_ready_to_release: 'Open the account page and click "Release commission"',
   recurring_invoice_generated: 'Review the Draft invoice in Finance and send it to the client',
+  card_autopay_enabled: 'No action needed — future invoices for this account will charge automatically',
 }
 
 /** Resolve the suggested next step for an event: catalog override → code default → ''. */

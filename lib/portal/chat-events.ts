@@ -49,6 +49,7 @@ export type ChatEventKind =
   | "banking_wizard_submitted" // client submitted a Payset/Relay banking application via the portal wizard
   | "financials_attested" // client confirmed their generated P&L / Balance Sheet
   | "lease_signed" // client signed their CMRA lease agreement
+  | "card_autopay_enabled" // client turned on card autopay (dev job 10995181)
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */
@@ -514,6 +515,90 @@ export async function emitRecurringInvoiceGeneratedEvent(params: {
     source: { table: "payments", id: params.payment_id },
     event_kind: "recurring_invoice_generated",
   })
+}
+
+/**
+ * Emit a "client turned on card autopay" event (dev job 10995181). Fired from
+ * saveAutopayCard() — the only place accounts.autopay_card_enabled ever
+ * flips to true (webhook-driven, or a staff-sent enrollment link the client
+ * completed themselves). Account-scoped, since autopay belongs to the
+ * company, not any one person on it — `source.table` is "accounts" itself
+ * (no dedicated child row exists for this event, unlike every sibling
+ * emitter here). Idempotent on the account id: a Stripe webhook retry for
+ * the same enrollment never double-posts. A client who later turns autopay
+ * off and back on again WILL get a fresh note — but only if the disable path
+ * calls `retireCardAutopayEnabledNote` first; see that function.
+ */
+export async function emitCardAutopayEnabledEvent(params: {
+  accountId: string
+  last4?: string | null
+}): Promise<EmitResult> {
+  try {
+    const { data: account } = await supabaseAdmin
+      .from("accounts")
+      .select("company_name")
+      .eq("id", params.accountId)
+      .maybeSingle()
+    const company = (account?.company_name as string | null) ?? "The client"
+    const cardSuffix = params.last4 ? ` (card ending ${params.last4})` : ""
+    const message = `${company} turned on card autopay${cardSuffix} — future invoices will be charged automatically, no card fee.`
+    return await emitClientChatEvent({
+      account_id: params.accountId,
+      topic: "Billing",
+      message,
+      source: { table: "accounts", id: params.accountId },
+      event_kind: "card_autopay_enabled",
+    })
+  } catch (err) {
+    console.warn(
+      `[emitCardAutopayEnabledEvent] non-fatal for account ${params.accountId}:`,
+      err instanceof Error ? err.message : String(err),
+    )
+    return { emitted: false, reason: "insert_failed", error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * Retire the "card autopay enabled" note for an account so a genuine
+ * re-enrollment (client turned it off, then back on with a new card) can
+ * produce a fresh notification. Same soft-delete rationale as
+ * `retireBankingWizardSubmittedNote`. Call this from `disableAutopayCard`
+ * every time autopay is turned off, unconditionally — unlike the
+ * resubmission-only callers of its siblings, there's no "first time" case to
+ * skip here: a disable always means "clear the way for the next enable."
+ */
+export async function retireCardAutopayEnabledNote(params: {
+  accountId: string
+  deletedBy?: string | null
+}): Promise<{ retired: number }> {
+  const marker = buildMarker({ table: "accounts", id: params.accountId }, "card_autopay_enabled")
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("portal_messages")
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: params.deletedBy ?? SYSTEM_ACTOR_ID,
+      })
+      .eq("sender_type", "system")
+      .like("message", `%${marker}%`)
+      .is("deleted_at", null)
+      .select("id")
+
+    if (error) {
+      console.error(
+        `[retireCardAutopayEnabledNote] could not retire the note for account ${params.accountId}:`,
+        error.message,
+      )
+      return { retired: 0 }
+    }
+    return { retired: (data ?? []).length }
+  } catch (err) {
+    console.error(
+      `[retireCardAutopayEnabledNote] non-fatal for ${params.accountId}:`,
+      err instanceof Error ? err.message : String(err),
+    )
+    return { retired: 0 }
+  }
 }
 
 /**

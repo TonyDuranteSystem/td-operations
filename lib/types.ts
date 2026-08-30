@@ -331,6 +331,8 @@ export interface LinkedAccount {
   ein: string | null
   role: string | null
   ownership_pct: number | null
+  autopay_card_enabled: boolean | null
+  autopay_card_last4: string | null
 }
 
 export interface ServiceDelivery {

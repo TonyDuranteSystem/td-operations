@@ -53,6 +53,7 @@ const EVENT_KEY_LABELS: Record<string, string> = {
   recurring_invoice_generated: 'Invoice',
   itin_data_collection: 'ITIN',
   lease_signed: 'Lease',
+  card_autopay_enabled: 'Autopay',
 }
 
 /** Deep-link target for a note's source entity. Returns null when there's no
@@ -68,6 +69,9 @@ function deepLinkFor(src: string | null, accountId: string | null): string | nul
     // No dedicated "formation" tab — the signed SS-4 lives under Documents.
     case 'ss4_applications': return accountId ? `/accounts/${accountId}?tab=documents` : null
     case 'lease_agreements': return accountId ? `/accounts/${accountId}?tab=documents` : null
+    // card_autopay_enabled's source id IS the account id — the new Finance
+    // card lives on Overview (the page's default tab, no ?tab= needed).
+    case 'accounts': return `/accounts/${id}`
     // Offers have no standalone page (viewed via the embedded panel on the
     // account/contact); a deep-link would 404, so omit it.
     case 'offers': return null

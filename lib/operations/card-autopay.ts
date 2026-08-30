@@ -156,10 +156,19 @@ export async function saveAutopayCard(params: {
       details: { payment_method_id: params.paymentMethodId, last4: params.last4 },
     })
   } catch { /* audit is best-effort */ }
+
+  try {
+    const { emitCardAutopayEnabledEvent } = await import("@/lib/portal/chat-events")
+    await emitCardAutopayEnabledEvent({ accountId: params.accountId, last4: params.last4 })
+  } catch { /* staff notification is best-effort — never blocks enrollment */ }
 }
 
-/** Self-service "Turn off Autopay" — detaches the saved card from Stripe too. */
-export async function disableAutopayCard(accountId: string): Promise<{ ok: boolean; error?: string }> {
+/**
+ * Turn off autopay — detaches the saved card from Stripe too. Used by both
+ * the client's own self-service toggle (actor defaults to "client") and the
+ * new staff action on the account's Finance card (actor is "dashboard:<name>").
+ */
+export async function disableAutopayCard(accountId: string, actor: string = "client"): Promise<{ ok: boolean; error?: string }> {
   const stripe = getStripe()
 
   const { data: account, error: fetchErr } = await supabaseAdmin
@@ -198,14 +207,22 @@ export async function disableAutopayCard(accountId: string): Promise<{ ok: boole
 
   try {
     await supabaseAdmin.from("action_log").insert({
-      actor: "system",
+      actor,
       action_type: "card_autopay_disabled",
       table_name: "accounts",
       record_id: accountId,
       account_id: accountId,
-      summary: "Card autopay turned off by the client",
+      summary: actor === "client" ? "Card autopay turned off by the client" : `Card autopay turned off from the CRM (${actor})`,
     })
   } catch { /* audit is best-effort */ }
+
+  // Clear the way for a future re-enrollment to notify staff again — a
+  // disable always means "the next enable is a fresh event," never a
+  // resubmission-only case like this pattern's siblings elsewhere.
+  try {
+    const { retireCardAutopayEnabledNote } = await import("@/lib/portal/chat-events")
+    await retireCardAutopayEnabledNote({ accountId })
+  } catch { /* best-effort */ }
 
   return { ok: true }
 }

@@ -43,7 +43,9 @@ import { AccountOfferPanel, type OfferData } from '@/components/offers/account-o
 import { AccountJourney } from './account-journey'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive, createDBA, updateDBADetails } from '@/app/(dashboard)/accounts/actions'
+import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive, createDBA, updateDBADetails, disableAccountAutopay, sendAutopayEnrollmentLink } from '@/app/(dashboard)/accounts/actions'
+import { FinanceSummaryCard } from '@/components/shared/finance-summary-card'
+import { summarizeInvoicesForFinanceCard } from '@/lib/billing/finance-summary'
 import { StatusChangeDialog } from './status-change-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
@@ -919,7 +921,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
       {/* Tab content */}
       {activeTab === 'overview' && (
         <>
-          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} />
+          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} today={today} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} />
           {/* Recent emails (auto-matched + linked) — visible without hunting
               for the Emails tab (Antonio 2026-07-08) */}
           <div className="px-4 pb-4">
@@ -2356,7 +2358,9 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {} }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
+function PanoramicaTab({ account, contacts, deals, payments, isAdmin, today, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {} }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; today: string; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
+  const accountAutopay = account as unknown as { autopay_card_enabled?: boolean | null; autopay_card_last4?: string | null }
+  const financeSummary = summarizeInvoicesForFinanceCard(payments, today)
   const router = useRouter()
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -2506,6 +2510,18 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
 
       {/* Referrals GIVEN by this client (company or its people) — renders only when there are any */}
       <ReferralsGivenCard accountId={account.id} />
+
+      {/* Finance summary — invoices + card autopay status, staff can toggle from here */}
+      <FinanceSummaryCard
+        accountId={account.id}
+        companyName={account.company_name}
+        summary={financeSummary}
+        autopayEnabled={!!accountAutopay.autopay_card_enabled}
+        autopayLast4={accountAutopay.autopay_card_last4 ?? null}
+        isAdmin={isAdmin}
+        onDisable={disableAccountAutopay}
+        onSendLink={sendAutopayEnrollmentLink}
+      />
 
       {/* Billing — only for Client-type accounts (vendors/tenants/leads do not have annual installments) */}
       {account.account_type === 'Client' && (

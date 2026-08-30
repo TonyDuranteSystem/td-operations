@@ -1129,3 +1129,85 @@ export async function updateDBADetails(
     details: sanitized,
   })
 }
+
+// ── Card autopay — staff actions from the account's Finance card ──────────
+// (dev job 10995181 follow-up). Turning autopay OFF is a real, immediate
+// flip — the same thing the client's own self-service toggle does. Turning
+// it ON has no staff-side equivalent: we deliberately never see or store a
+// client's card, so the only honest "enable" action from here is sending the
+// client the same on-session Stripe enrollment link they'd use themselves.
+
+export async function disableAccountAutopay(accountId: string): Promise<ActionResult> {
+  const actor = await getDashboardActor()
+  return safeAction(async () => {
+    const { disableAutopayCard } = await import('@/lib/operations/card-autopay')
+    const result = await disableAutopayCard(accountId, actor)
+    if (!result.ok) throw new Error(result.error || 'Failed to turn off autopay')
+    revalidatePath(`/accounts/${accountId}`)
+  }, {
+    action_type: 'update',
+    table_name: 'accounts',
+    record_id: accountId,
+    account_id: accountId,
+    summary: 'Turned off card autopay from the CRM',
+  })
+}
+
+export async function sendAutopayEnrollmentLink(accountId: string): Promise<ActionResult> {
+  return safeAction(async () => {
+    const { getOrCreateStripeCustomerForAccount, createAutopaySetupCheckoutSession } = await import('@/lib/operations/card-autopay')
+    const { PORTAL_BASE_URL } = await import('@/lib/config')
+    const { resolveAdminReplyContact } = await import('@/lib/portal/admin-send-scope')
+    const { createPortalNotification, notifyClientOfAdminMessage } = await import('@/lib/portal/notifications')
+
+    const customerResult = await getOrCreateStripeCustomerForAccount(accountId)
+    if ('error' in customerResult) throw new Error(customerResult.error)
+
+    const sessionResult = await createAutopaySetupCheckoutSession({
+      accountId,
+      customerId: customerResult.customerId,
+      returnUrl: `${PORTAL_BASE_URL}/portal/invoices?tab=expenses`,
+    })
+    if ('error' in sessionResult) throw new Error(sessionResult.error)
+
+    const resolvedContactId = await resolveAdminReplyContact(accountId, null)
+    // portal_messages.sender_id is a UUID FK to the dashboard auth user — NOT
+    // getDashboardActor()'s "dashboard:name" audit-log string (matches
+    // app/api/portal/chat/route.ts's own admin-send sender_id: user.id).
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error('Not signed in')
+    const messageText = `You can now save a card for automatic billing — no more manual clicks, and no 5% card fee. Activate it here: ${sessionResult.url}`
+
+    const { error: insertErr } = await supabaseAdmin
+      .from('portal_messages')
+      .insert({
+        account_id: accountId,
+        contact_id: resolvedContactId,
+        sender_type: 'admin',
+        sender_id: user.id,
+        message: messageText,
+      })
+    if (insertErr) throw new Error(insertErr.message)
+
+    createPortalNotification({
+      account_id: accountId,
+      contact_id: resolvedContactId ?? undefined,
+      type: 'chat',
+      title: 'New message from Tony Durante Team',
+      body: messageText.slice(0, 100),
+      link: '/portal/chat',
+    }).catch(() => {})
+    notifyClientOfAdminMessage({
+      account_id: accountId,
+      contact_id: resolvedContactId,
+      messagePreview: messageText,
+    }).catch(() => {})
+  }, {
+    action_type: 'send',
+    table_name: 'accounts',
+    record_id: accountId,
+    account_id: accountId,
+    summary: 'Sent card autopay enrollment link to the client',
+  })
+}

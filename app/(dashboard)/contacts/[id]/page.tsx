@@ -32,7 +32,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     // Linked accounts via junction
     supabase
       .from('account_contacts')
-      .select('role, ownership_pct, account:accounts(id, company_name, entity_type, member_structure, status, state_of_formation, ein_number)')
+      .select('role, ownership_pct, account:accounts(id, company_name, entity_type, member_structure, status, state_of_formation, ein_number, autopay_card_enabled, autopay_card_last4)')
       .eq('contact_id', params.id),
     // Service deliveries (by contact_id directly OR by linked account_ids — we'll merge below)
     supabase
@@ -85,7 +85,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
 
   // Map linked accounts
   const accounts: LinkedAccount[] = (accountsResult.data ?? []).map(ac => {
-    const a = ac.account as unknown as { id: string; company_name: string; entity_type: string | null; member_structure: 'single_member' | 'multi_member' | null; status: string | null; state_of_formation: string | null; ein_number: string | null }
+    const a = ac.account as unknown as { id: string; company_name: string; entity_type: string | null; member_structure: 'single_member' | 'multi_member' | null; status: string | null; state_of_formation: string | null; ein_number: string | null; autopay_card_enabled: boolean | null; autopay_card_last4: string | null }
     return {
       id: a.id,
       company_name: a.company_name,
@@ -96,6 +96,8 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
       ein: a.ein_number,
       role: ac.role,
       ownership_pct: ac.ownership_pct,
+      autopay_card_enabled: a.autopay_card_enabled,
+      autopay_card_last4: a.autopay_card_last4,
     }
   })
 
