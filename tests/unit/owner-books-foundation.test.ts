@@ -54,12 +54,12 @@ describe("statement balances survive the import", () => {
   })
 
   it("the upload route passes it through from the parser", () => {
-    expect(read("app/api/owner/transactions/upload/route.ts")).toMatch(/balance_after: t\.balance_after \?\? null/)
+    expect(read("lib/owner-statement-import.ts")).toMatch(/balance_after: t\.balance_after \?\? null/)
   })
 })
 
 describe("parse warnings reach the operator", () => {
-  const route = read("app/api/owner/transactions/upload/route.ts")
+  const route = read("lib/owner-statement-import.ts")
   const ui = read("app/(dashboard)/owner/transactions-tab.tsx")
 
   it("the server still returns them", () => {
@@ -84,7 +84,7 @@ describe("parse warnings reach the operator", () => {
 })
 
 describe("duplicate reporting is split by meaning", () => {
-  const route = read("app/api/owner/transactions/upload/route.ts")
+  const route = read("lib/owner-statement-import.ts")
 
   it("distinguishes a re-uploaded file from money already booked elsewhere", () => {
     expect(route).toContain("skipped_same_source")

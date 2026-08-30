@@ -17,8 +17,11 @@ import { describe, it, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 
+// These read lib/owner-statement-import.ts, NOT the HTTP route: the import
+// decisions moved there so the browser upload and the command-line loader run one
+// copy of them. The route is now only auth, multipart and status codes.
 const route = readFileSync(
-  join(process.cwd(), "app/api/owner/transactions/upload/route.ts"),
+  join(process.cwd(), "lib/owner-statement-import.ts"),
   "utf-8"
 )
 
