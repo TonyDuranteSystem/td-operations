@@ -378,13 +378,23 @@ export async function GET(req: NextRequest) {
     }
 
     if (offer) {
+      // Only "signed, not yet confirmed paid" is a real system/staff to-do —
+      // staff owe the client a completion step once they've signed. Every
+      // earlier stage (draft/sent/viewed/accepted, most of these accounts'
+      // "offer" being their annual renewal contract, e.g. token
+      // renewal-<company>-2026) and "expired"/"superseded" is just the
+      // client's own pace, not a defect, and is no longer flagged as an
+      // Issue — same principle as the banking-status removal on this panel:
+      // this tab is for real system problems, not client-side progress
+      // (Antonio's ruling, 2026-08-30, dev job 525e0e67).
+      const isSignedNotPaid = offer.status === "signed"
       checks.push({
         id: "offer_status",
         category: "Lead & Offer",
         label: "Offer status",
-        status: offer.status === "completed" ? "ok" : offer.status === "signed" ? "warning" : "error",
+        status: offer.status === "completed" ? "ok" : isSignedNotPaid ? "warning" : "info",
         detail: `${offer.token}: ${offer.status}`,
-        fix: offer.status === "signed" ? {
+        fix: isSignedNotPaid ? {
           action: "set_offer_completed",
           label: "Set to completed (payment received)",
           params: { offer_token: offer.token },
