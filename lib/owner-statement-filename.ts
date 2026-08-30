@@ -111,10 +111,65 @@ function looksLikeYear(digits: string): boolean {
   return digits.length === 4 && Number(digits) >= 2000 && Number(digits) <= 2099
 }
 
+/** Levenshtein distance — how many single-character edits separate two words. */
+function editDistance(a: string, b: string): number {
+  const prev: number[] = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = prev[0]
+    prev[0] = i
+    for (let j = 1; j <= b.length; j++) {
+      const carry = prev[j]
+      prev[j] = Math.min(
+        prev[j] + 1,            // deletion
+        prev[j - 1] + 1,        // insertion
+        diagonal + (a[i - 1] === b[j - 1] ? 0 : 1), // substitution
+      )
+      diagonal = carry
+    }
+  }
+  return prev[b.length]
+}
+
+/**
+ * Keywords matched TOLERANTLY, because a human reading "Credi_card" knows exactly
+ * what it means and so should this (Antonio, 2026-08-30: "if in credit a 't' is
+ * missing, it's obvious that is credit card, don't be hardcoded but flexible").
+ *
+ * Only keywords of 6+ characters accept a near-miss. Short ones like "loan" must
+ * match exactly — at four characters a single edit reaches ordinary words ("load",
+ * "lean"), and a filename mentioning one of those would silently become a LOAN,
+ * which changes the accounting. Length is what makes a near-miss safe: at six-plus
+ * characters an accidental collision is vanishingly unlikely, while the typos that
+ * actually happen — a dropped or doubled letter — are all one or two edits away.
+ */
+const FUZZY_TYPE_WORDS: [string, OwnerAccountType][] = [
+  ["credit", "credit_card"],
+  ["checking", "checking"],
+  ["chequing", "checking"],
+  ["savings", "savings"],
+  ["saving", "savings"],
+  ["processor", "processor"],
+  ["merchant", "processor"],
+]
+
 export function detectAccountType(fileName: string): OwnerAccountType | null {
   const base = forWordMatch(fileName)
+
+  // Exact patterns first — they carry phrase forms ("credit card") that a
+  // word-by-word comparison cannot see.
   for (const [re, type] of TYPE_PATTERNS) {
     if (re.test(base)) return type
+  }
+
+  // Then tolerate a typo. Tokens shorter than 4 characters are skipped entirely so
+  // stray fragments can never reach a keyword.
+  const tokens = base.split(/[^A-Za-z]+/).filter(t => t.length >= 4).map(t => t.toLowerCase())
+  for (const [word, type] of FUZZY_TYPE_WORDS) {
+    const allowed = word.length >= 8 ? 2 : 1
+    for (const t of tokens) {
+      if (Math.abs(t.length - word.length) > allowed) continue
+      if (editDistance(t, word) <= allowed) return type
+    }
   }
   return null
 }
@@ -218,9 +273,24 @@ export function detectInstitution(fileName: string): string | null {
     const w = raw.trim()
     if (w.length < 3) continue
     if (STOP.has(w.toLowerCase())) continue
+    // A MISSPELLED type word is not the bank's name. Without this, "Credi_card_Chase"
+    // labels the account "Credi credit card 9279" instead of "Chase credit card 9279"
+    // — the tolerant type matching would otherwise leak the typo into the identity.
+    if (looksLikeTypeWord(w)) continue
     return w
   }
   return null
+}
+
+/** True when a word is, or is nearly, one of the account-type keywords. */
+function looksLikeTypeWord(word: string): boolean {
+  const w = word.toLowerCase()
+  if (w === "loan" || w === "loans" || w === "card" || w === "cards") return true
+  for (const [kw] of FUZZY_TYPE_WORDS) {
+    const allowed = kw.length >= 8 ? 2 : 1
+    if (Math.abs(w.length - kw.length) <= allowed && editDistance(w, kw) <= allowed) return true
+  }
+  return false
 }
 
 const TYPE_LABEL: Record<OwnerAccountType, string> = {

@@ -65,10 +65,14 @@ describe("refuses rather than guessing", () => {
     expect(refused("Relay 2025-01-01 #6770.csv").problem).toContain("account type")
   })
 
-  it("refuses a misspelled type instead of fuzzy-matching it", () => {
-    // "Credi_card" — a typo. Guessing here risks classifying a checking export
-    // as a credit card, which inverts the accounting.
-    expect(refused("Credi_card_Chase9279_Activity_20260829.csv").problem).toContain("account type")
+  // Antonio overruled the original strict behaviour on 2026-08-30: a human reads
+  // "Credi_card" as a credit card, so this must too. The earlier version of this
+  // test asserted a refusal — kept here inverted so the change of mind is visible.
+  it("READS a misspelled type rather than refusing it", () => {
+    const r = parseStatementFilename("Credi_card_Chase9279_Activity_20260829.csv")
+    expect(r.ok).toBe(true)
+    expect(r.value!.accountType).toBe("credit_card")
+    expect(r.value!.institution).toBe("Chase")
   })
 
   it("refuses when the account number has a date fused onto it", () => {
@@ -144,5 +148,40 @@ describe("multi-currency wallets identified by currency", () => {
   it("only RECOGNISED currency codes count, not any three-letter word", () => {
     // Otherwise "Ally_checking_new.csv" would silently pass with account "NEW".
     expect(parseStatementFilename("Ally_checking_new.csv").ok).toBe(false)
+  })
+})
+
+describe("tolerates the typos that actually happen", () => {
+  it("reads 'Credi_card' as a credit card", () => {
+    // Antonio, 2026-08-30: "if in credit a 't' is missing, it's obvious that is
+    // credit card, don't be hardcoded but flexible."
+    const r = parseStatementFilename("Credi_card_Chase_#9279.csv")
+    expect(r.ok).toBe(true)
+    expect(r.value!.accountType).toBe("credit_card")
+    expect(r.value!.accountNumber).toBe("9279")
+  })
+
+  it("handles other realistic near-misses", () => {
+    expect(detectAccountType("Chase_chekcing_1234.csv")).toBe("checking")   // transposed
+    expect(detectAccountType("Chase_creditt_card_1234.csv")).toBe("credit_card") // doubled
+    expect(detectAccountType("Ally_savngs_4411.csv")).toBe("savings")       // dropped
+  })
+
+  it("a bare # is enough to mark an account number", () => {
+    // "#6094" without an "acc" prefix is obviously the account.
+    expect(parseStatementFilename("Credit_Card_Chase_#6094.csv").value!.accountNumber).toBe("6094")
+  })
+
+  it("SHORT keywords stay exact — 'load' must never become a loan", () => {
+    // At four characters one edit reaches ordinary words, and a wrong type changes
+    // the accounting (a loan is debt, not cash).
+    expect(detectAccountType("Chase_load_1234.csv")).toBeNull()
+    expect(detectAccountType("Chase_lean_1234.csv")).toBeNull()
+    expect(detectAccountType("Chase_loan_1234.csv")).toBe("loan")
+  })
+
+  it("does not invent a type from an unrelated word", () => {
+    expect(detectAccountType("Chase_current_1234.csv")).toBeNull()
+    expect(detectAccountType("Chase_2025_summary_1234.csv")).toBeNull()
   })
 })
