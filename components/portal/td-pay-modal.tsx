@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { CreditCard, Building2, Copy, Check, X, Loader2, ExternalLink, ChevronDown } from 'lucide-react'
+import { CreditCard, Building2, Copy, Check, X, Loader2, ExternalLink, ChevronDown, Zap } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
@@ -70,6 +70,8 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
   const [bankError, setBankError] = useState<string | null>(null)
   const [stripeLoading, setStripeLoading] = useState(false)
   const [wireExpanded, setWireExpanded] = useState(false)
+  const [autopayAccountId, setAutopayAccountId] = useState<string | null>(null)
+  const [autopayLoading, setAutopayLoading] = useState(false)
 
   // Fetch bank details on mount
   useEffect(() => {
@@ -92,6 +94,40 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
       })
     return () => { cancelled = true }
   }, [])
+
+  // Should we nudge this client to activate autopay? Only when the feature
+  // is live and this invoice's account isn't already enrolled.
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/portal/autopay/eligibility?payment_id=${encodeURIComponent(paymentId)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (cancelled) return
+        if (data.showPrompt && data.accountId) setAutopayAccountId(data.accountId)
+      })
+      .catch(() => { /* nudge is a nice-to-have — a lookup failure just hides it */ })
+    return () => { cancelled = true }
+  }, [paymentId])
+
+  const handleActivateAutopay = async () => {
+    if (autopayLoading || !autopayAccountId) return
+    setAutopayLoading(true)
+    try {
+      const res = await fetch('/api/portal/autopay/setup-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: autopayAccountId }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.checkoutUrl) {
+        throw new Error(data.error || t('autopay.startFailed'))
+      }
+      window.location.href = data.checkoutUrl
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('autopay.startFailed'))
+      setAutopayLoading(false)
+    }
+  }
 
   const handlePayByCard = async () => {
     if (stripeLoading) return
@@ -144,6 +180,21 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
             </button>
           </FastTooltip>
         </div>
+
+        {autopayAccountId && (
+          <div className="mx-5 mt-4 flex items-start gap-2.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
+            <Zap className="h-4 w-4 text-blue-600 shrink-0 mt-0.5" />
+            <p className="text-xs text-blue-900 leading-snug flex-1">{t('autopay.payModalNudge')}</p>
+            <button
+              type="button"
+              onClick={handleActivateAutopay}
+              disabled={autopayLoading}
+              className="shrink-0 flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-60"
+            >
+              {autopayLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : t('autopay.payModalCta')}
+            </button>
+          </div>
+        )}
 
         <div className="divide-y">
           {/* Card payment — Stripe */}

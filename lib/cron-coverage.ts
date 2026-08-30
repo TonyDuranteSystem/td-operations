@@ -75,6 +75,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   // don't need finer granularity. Council review 2026-08-27: the safe
   // alternative to full unattended card auto-charging.
   "/api/cron/plan-part-auto-raise": "0 9 * * *",
+  "/api/cron/card-autopay-charge": "0 11 * * *",
   "/api/cron/forms-archive-sweep": "*/15 * * * *",
   "/api/cron/airwallex-sync": "*/15 * * * *",
   "/api/cron/stripe-sync": "0 */6 * * *",

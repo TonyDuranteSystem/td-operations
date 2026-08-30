@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js"
 import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
 import { computeCardTotal } from "@/lib/payments/card-fee"
 import { resolveChargeRate } from "@/lib/payments/card-fee-config"
+import { claimPaymentForCharge, releasePaymentClaim, recordCheckoutSessionId, CLIENT_CLAIM_TTL_MS } from "@/lib/operations/autopay-claim"
 
 export const dynamic = "force-dynamic"
 
@@ -21,6 +22,7 @@ export const dynamic = "force-dynamic"
  * functioning as the shared secret. No Authorization header check.
  */
 export async function POST(req: NextRequest) {
+  let claimedPaymentId: string | null = null
   try {
     const body = await req.json()
     const { payment_id } = body as { payment_id?: string }
@@ -56,14 +58,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Payment already paid" }, { status: 400 })
     }
 
+    // Claim this payment before touching Stripe — the card-autopay cron can be
+    // mid-charge on the same invoice right now. Whichever side wins may act;
+    // the other must not (see lib/offers/autopay-claim.ts).
+    const claimed = await claimPaymentForCharge(payment.id, CLIENT_CLAIM_TTL_MS)
+    if (!claimed) {
+      return NextResponse.json(
+        { error: "This invoice is being processed right now. Please try again in a minute." },
+        { status: 409 }
+      )
+    }
+    claimedPaymentId = payment.id
+
     const amount = Number(payment.amount)
     if (!amount || amount <= 0) {
+      await releasePaymentClaim(claimedPaymentId)
       return NextResponse.json({ error: "Invalid payment amount" }, { status: 400 })
     }
 
     // Validate currency (createStripeCheckoutSession only accepts usd|eur)
     const rawCurrency = (payment.amount_currency || "USD").toString().toLowerCase()
     if (rawCurrency !== "usd" && rawCurrency !== "eur") {
+      await releasePaymentClaim(claimedPaymentId)
       return NextResponse.json(
         { error: `Unsupported currency: ${payment.amount_currency}` },
         { status: 400 }
@@ -73,6 +89,7 @@ export async function POST(req: NextRequest) {
 
     const recipient = await resolvePaymentRecipient(payment, supabase)
     if (!recipient) {
+      await releasePaymentClaim(claimedPaymentId)
       return NextResponse.json(
         { error: "Could not resolve client email from payment" },
         { status: 400 }
@@ -101,11 +118,21 @@ export async function POST(req: NextRequest) {
     })
 
     if (!result.success || !result.checkoutUrl) {
+      await releasePaymentClaim(claimedPaymentId)
       return NextResponse.json(
         { error: result.error || "Stripe session creation failed" },
         { status: 500 }
       )
     }
+
+    // Record the live session so the card-autopay cron can actively expire it
+    // before charging (a Checkout Session can't be told to expire in under 30
+    // minutes on its own). The claim itself is released now — it only needed
+    // to cover creating this one Stripe object, not the session's lifetime.
+    if (result.sessionId) {
+      await recordCheckoutSessionId(payment.id, result.sessionId)
+    }
+    await releasePaymentClaim(claimedPaymentId)
 
     return NextResponse.json({
       checkoutUrl: result.checkoutUrl,
@@ -119,6 +146,9 @@ export async function POST(req: NextRequest) {
     })
   } catch (err) {
     console.error("[create-invoice-checkout] Error:", err)
+    if (claimedPaymentId) {
+      await releasePaymentClaim(claimedPaymentId)
+    }
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Internal error" },
       { status: 500 }

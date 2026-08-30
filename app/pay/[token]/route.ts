@@ -33,6 +33,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { APP_BASE_URL } from "@/lib/config"
 import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
+import { claimPaymentForCharge, releasePaymentClaim, recordCheckoutSessionId, CLIENT_CLAIM_TTL_MS } from "@/lib/operations/autopay-claim"
 
 export const dynamic = "force-dynamic"
 
@@ -84,8 +85,22 @@ export async function GET(
   }
   const currency = rawCurrency as "usd" | "eur"
 
+  // Claim this payment before touching Stripe — the card-autopay cron
+  // (dev job 10995181) can independently act on any payments row, including
+  // one reached through this older email-link route, not just the portal
+  // Pay button. Whichever side wins may act; the other must not (see
+  // lib/operations/autopay-claim.ts).
+  const claimed = await claimPaymentForCharge(payment.id, CLIENT_CLAIM_TTL_MS)
+  if (!claimed) {
+    return new NextResponse(
+      "This invoice is being processed right now. Please try again in a minute.",
+      { status: 409 }
+    )
+  }
+
   const recipient = await resolvePaymentRecipient(payment, supabase)
   if (!recipient) {
+    await releasePaymentClaim(payment.id)
     return new NextResponse(
       "Could not determine your email for payment. Please contact support.",
       { status: 500 }
@@ -107,11 +122,20 @@ export async function GET(
 
   if (!result.success || !result.checkoutUrl) {
     console.error("[pay-redirect] Stripe session creation failed:", result.error)
+    await releasePaymentClaim(payment.id)
     return new NextResponse(
       "Could not start card payment right now. Please try again in a moment or contact support.",
       { status: 502 }
     )
   }
+
+  // Record the live session so the card-autopay cron can actively expire it
+  // before charging, then release the claim — it only needed to cover
+  // creating this one Stripe object, not the session's lifetime.
+  if (result.sessionId) {
+    await recordCheckoutSessionId(payment.id, result.sessionId)
+  }
+  await releasePaymentClaim(payment.id)
 
   return NextResponse.redirect(result.checkoutUrl, 303)
 }

@@ -877,6 +877,21 @@ const translations: Record<Locale, Record<string, string>> = {
     'tdPayModal.checkoutFailed': 'Failed to create checkout session',
     'tdPayModal.cardPaymentFailed': 'Failed to start card payment',
 
+    // Autopay card
+    'autopay.title': 'Autopay',
+    'autopay.notEnabledDesc': 'Save a card to avoid the 5% card fee on future invoices — they’ll be charged automatically when due.',
+    'autopay.enabledDesc': 'Card ending {last4} is on file. Future invoices are charged automatically — no card fee.',
+    'autopay.enableButton': 'Enable Autopay',
+    'autopay.disableButton': 'Turn off Autopay',
+    'autopay.startFailed': 'Failed to start autopay setup',
+    'autopay.disableFailed': 'Failed to turn off autopay',
+    'autopay.disableConfirm': 'Turn off autopay? Future invoices will need to be paid manually and the card fee will apply again.',
+    'autopay.setupSuccess': 'Autopay enabled — your card is now on file.',
+    'autopay.setupCancelled': 'Autopay setup was cancelled.',
+    'autopay.disabledSuccess': 'Autopay turned off.',
+    'autopay.payModalNudge': 'Skip the 5% card fee and skip the wait — activate Autopay and future invoices are paid (and your service moves forward) automatically, the moment they’re due.',
+    'autopay.payModalCta': 'Activate',
+
     // My Company page
     'company.title': 'My Company',
     'company.subtitle': 'Company information, services, and upcoming deadlines.',
@@ -2195,6 +2210,21 @@ const translations: Record<Locale, Record<string, string>> = {
     'tdPayModal.bankDetailsFailed': 'Impossibile caricare i dettagli bancari',
     'tdPayModal.checkoutFailed': 'Impossibile creare la sessione di pagamento',
     'tdPayModal.cardPaymentFailed': 'Impossibile avviare il pagamento con carta',
+
+    // Autopay card
+    'autopay.title': 'Pagamento Automatico',
+    'autopay.notEnabledDesc': 'Salva una carta per evitare la commissione del 5% sulle future fatture — verranno addebitate automaticamente alla scadenza.',
+    'autopay.enabledDesc': 'Carta terminante con {last4} salvata. Le future fatture vengono addebitate automaticamente — nessuna commissione.',
+    'autopay.enableButton': 'Attiva Pagamento Automatico',
+    'autopay.disableButton': 'Disattiva Pagamento Automatico',
+    'autopay.startFailed': 'Impossibile avviare la configurazione del pagamento automatico',
+    'autopay.disableFailed': 'Impossibile disattivare il pagamento automatico',
+    'autopay.disableConfirm': 'Disattivare il pagamento automatico? Le future fatture dovranno essere pagate manualmente e la commissione tornerà ad applicarsi.',
+    'autopay.setupSuccess': 'Pagamento automatico attivato — la tua carta è ora salvata.',
+    'autopay.setupCancelled': 'Configurazione del pagamento automatico annullata.',
+    'autopay.disabledSuccess': 'Pagamento automatico disattivato.',
+    'autopay.payModalNudge': 'Evita la commissione del 5% e l\'attesa — attiva il Pagamento Automatico e le future fatture vengono pagate (e il tuo servizio procede) automaticamente, appena scadono.',
+    'autopay.payModalCta': 'Attiva',
 
     // My Company page
     'company.title': 'La Mia Azienda',

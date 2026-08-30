@@ -12,6 +12,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { DEFAULT_CARD_FEE_RATE, normalizeRate } from './card-fee'
+import { isAccountAutopayEnabled } from '@/lib/operations/card-autopay'
 
 const SETTINGS_KEY = 'payment_fee_config'
 
@@ -156,6 +157,25 @@ export function pinnedRateForInheritance(
   const n = typeof stored === 'string' ? Number(stored) : stored
   if (typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1) return n
   return undefined
+}
+
+/**
+ * What rate a NEW invoice should be pinned at, at createTDInvoice's creation
+ * time (dev job 10995181). An explicit caller-passed rate always wins (an
+ * offer's own pin, a manual override). Otherwise, an account enrolled in
+ * card autopay gets this invoice fee-waived automatically — evaluated fresh
+ * per invoice, for every TD invoice, not just a specific installment.
+ */
+export async function resolveCreationCardFeeRate(
+  explicitRate: number | string | null | undefined,
+  accountId: string | null | undefined,
+): Promise<number> {
+  const n = typeof explicitRate === 'string' ? Number(explicitRate) : explicitRate
+  if (typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1) return n
+
+  if (await isAccountAutopayEnabled(accountId)) return 0
+
+  return getConfiguredCardFeeRate()
 }
 
 export function __resetCardFeeConfigCache(): void {

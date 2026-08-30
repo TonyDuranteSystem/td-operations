@@ -17,7 +17,7 @@ import { generateInvoiceNumber, generateCreditNoteNumber, isUniqueViolation } fr
 import { computeCreditApplication, consumeCredits, releaseStaleCreditClaims, claimCredits, confirmCreditClaims, unwindCreditClaims } from '@/lib/operations/credit-netting'
 import { categoryFromInstallmentLabel } from '@/lib/billing/payment-classification'
 import { DEAD_INVOICE_STATUSES } from '@/lib/offers/payment-plan-state'
-import { getConfiguredCardFeeRate } from '@/lib/payments/card-fee-config'
+import { resolveCreationCardFeeRate } from '@/lib/payments/card-fee-config'
 import { getOfficeDateString } from '@/lib/portal/office-hours'
 
 // ─── Types ──────────────────────────────────────────
@@ -166,15 +166,13 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   } = input
 
   // Pin the card fee rate onto this invoice — the source offer's pin when created
-  // from an offer, else the current configured rate. Never re-read at charge; this
-  // pin IS the authority. (dev_task 6ec6872a)
+  // from an offer, else an autopay waiver, else the current configured rate. Never
+  // re-read at charge; this pin IS the authority. (dev_task 6ec6872a, 10995181)
   // WS-A: the claim token identifies THIS creation attempt's claims so an unwind
   // releases only our own (never a concurrent winner's).
   const claimToken = crypto.randomUUID()
 
-  const pinnedCardFeeRate = typeof card_fee_rate === 'number'
-    ? card_fee_rate
-    : await getConfiguredCardFeeRate()
+  const pinnedCardFeeRate = await resolveCreationCardFeeRate(card_fee_rate, account_id)
 
   // Structured category: explicit param wins, else derive from the installment
   // label. The free-text description is never consulted.

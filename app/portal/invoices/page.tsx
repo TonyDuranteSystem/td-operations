@@ -12,12 +12,14 @@ import { ExpenseList } from '@/components/portal/expense-list'
 import { TemplateList } from '@/components/portal/template-list'
 import { VendorList } from '@/components/portal/vendor-list'
 import { ExpensesHeader } from '@/components/portal/expenses-header'
+import { AutopayCard } from '@/components/portal/autopay-card'
 import { Receipt, Plus, ArrowDownLeft, ArrowUpRight, Building2 } from 'lucide-react'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import Link from 'next/link'
 import { listTemplates } from './actions'
 import { listVendors } from './vendor-actions'
+import { isCardAutopayEnabled } from '@/lib/payments/card-autopay-config'
 
 export default async function PortalInvoicesPage({
   searchParams,
@@ -94,7 +96,7 @@ export default async function PortalInvoicesPage({
 
   // Fetch data for all tabs in parallel. When no account, only personal
   // expenses are queried; sales/templates/vendors are empty.
-  const [salesResult, accountExpenses, personalExpenses, templates, vendors] = await Promise.all([
+  const [salesResult, accountExpenses, personalExpenses, templates, vendors, autopayResult] = await Promise.all([
     selectedAccountId
       ? supabaseAdmin
           .from('client_invoices')
@@ -108,7 +110,20 @@ export default async function PortalInvoicesPage({
     contactId ? getPortalExpensesByContact(contactId) : Promise.resolve([]),
     selectedAccountId ? listTemplates(selectedAccountId) : Promise.resolve([]),
     selectedAccountId ? listVendors(selectedAccountId) : Promise.resolve([]),
+    selectedAccountId
+      ? supabaseAdmin
+          .from('accounts')
+          .select('autopay_card_enabled, autopay_card_last4' as never)
+          .eq('id', selectedAccountId)
+          .single()
+      : Promise.resolve({ data: null }),
   ])
+  const autopay = autopayResult.data as unknown as { autopay_card_enabled: boolean; autopay_card_last4: string | null } | null
+  // Hide the whole card while the pilot kill switch is off, UNLESS this
+  // account is already enrolled (so an existing enrollee can still see/turn
+  // off their own autopay even after the switch is later flipped off for
+  // new signups).
+  const showAutopayCard = Boolean(autopay?.autopay_card_enabled) || (await isCardAutopayEnabled())
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const invoices: any[] = salesResult.data ?? []
@@ -264,6 +279,14 @@ export default async function PortalInvoicesPage({
       {/* ── Expenses Tab ── */}
       {activeTab === 'expenses' && (
         <>
+          {selectedAccountId && showAutopayCard && (
+            <AutopayCard
+              accountId={selectedAccountId}
+              enabled={autopay?.autopay_card_enabled ?? false}
+              last4={autopay?.autopay_card_last4 ?? null}
+            />
+          )}
+
           {/* Stats */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="bg-white rounded-xl border shadow-sm p-4">

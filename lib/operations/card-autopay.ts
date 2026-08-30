@@ -1,0 +1,211 @@
+/**
+ * Card-autopay enrollment operations — the saved card itself, separate from
+ * the charge-time race fix in lib/operations/autopay-claim.ts.
+ *
+ * Enrollment is on-session by design (Stripe's own recommended pattern): the
+ * client is present, sees a real Stripe Checkout page in "setup" mode, and
+ * enters their card there. We never see or touch raw card data.
+ */
+import StripeConstructor from "stripe"
+import { supabaseAdmin } from "@/lib/supabase-admin"
+
+type StripeClient = ReturnType<typeof StripeConstructor>
+
+let _stripe: StripeClient | null = null
+function getStripe(): StripeClient | null {
+  if (!_stripe) {
+    const key = process.env.STRIPE_SECRET_KEY
+    if (!key) return null
+    try {
+      _stripe = StripeConstructor(key)
+    } catch {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      _stripe = new (StripeConstructor as any)(key)
+    }
+  }
+  return _stripe
+}
+
+interface AccountAutopayRow {
+  autopay_stripe_customer_id: string | null
+}
+
+/**
+ * Is this account enrolled in card autopay? The single check every invoice
+ * creator uses to decide whether to waive the card fee on a NEW invoice —
+ * see createTDInvoice's card_fee_rate default in lib/portal/td-invoice.ts.
+ * Fails closed (false) on a lookup error or a missing account_id: a config
+ * miss must never accidentally waive a fee that should have been charged.
+ */
+export async function isAccountAutopayEnabled(accountId: string | null | undefined): Promise<boolean> {
+  if (!accountId) return false
+  const { data, error } = await supabaseAdmin
+    .from("accounts")
+    .select("autopay_card_enabled" as never)
+    .eq("id", accountId)
+    .maybeSingle()
+  if (error || !data) return false
+  return (data as unknown as { autopay_card_enabled: boolean | null }).autopay_card_enabled === true
+}
+
+/**
+ * Returns the account's existing Stripe Customer id, or creates one.
+ * Reuses lib/portal/resolve-payment-recipient's account-level fallback
+ * (owner-role contact → any contact → account.communication_email) so the
+ * Customer carries the same email an invoice would go to.
+ */
+export async function getOrCreateStripeCustomerForAccount(accountId: string): Promise<
+  { customerId: string } | { error: string }
+> {
+  const { data: account, error: accountErr } = await supabaseAdmin
+    .from("accounts")
+    .select("autopay_stripe_customer_id, company_name" as never)
+    .eq("id", accountId)
+    .single()
+
+  if (accountErr || !account) return { error: "Account not found" }
+
+  const existing = (account as unknown as AccountAutopayRow).autopay_stripe_customer_id
+  if (existing) return { customerId: existing }
+
+  // Only require a working Stripe key once we actually need to CREATE a
+  // customer — an account with one already saved never needs it.
+  const stripe = getStripe()
+  if (!stripe) return { error: "STRIPE_SECRET_KEY not set" }
+
+  const { resolvePaymentRecipient } = await import("@/lib/portal/resolve-payment-recipient")
+  const recipient = await resolvePaymentRecipient({ contact_id: null, account_id: accountId }, supabaseAdmin)
+
+  const customer = await stripe.customers.create({
+    email: recipient?.email || undefined,
+    name: recipient?.name || (account as unknown as { company_name?: string }).company_name || undefined,
+    metadata: { account_id: accountId, source: "td-operations-card-autopay" },
+  })
+
+  const { error: saveErr } = await supabaseAdmin
+    .from("accounts")
+    .update({ autopay_stripe_customer_id: customer.id } as never)
+    .eq("id", accountId)
+
+  if (saveErr) {
+    console.error(`[card-autopay] failed to save stripe customer id for account ${accountId}:`, saveErr.message)
+  }
+
+  return { customerId: customer.id }
+}
+
+export async function createAutopaySetupCheckoutSession(params: {
+  accountId: string
+  customerId: string
+  returnUrl: string
+}): Promise<{ url: string } | { error: string }> {
+  const stripe = getStripe()
+  if (!stripe) return { error: "STRIPE_SECRET_KEY not set" }
+
+  // returnUrl may already carry a query string (e.g. ?tab=expenses) — join
+  // with & in that case, never a second literal ?.
+  const joiner = params.returnUrl.includes("?") ? "&" : "?"
+
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: "setup",
+      customer: params.customerId,
+      payment_method_types: ["card"],
+      metadata: { account_id: params.accountId, source: "td-operations-card-autopay" },
+      success_url: `${params.returnUrl}${joiner}autopay=success`,
+      cancel_url: `${params.returnUrl}${joiner}autopay=cancelled`,
+    })
+    if (!session.url) return { error: "Stripe did not return a checkout URL" }
+    return { url: session.url }
+  } catch (err) {
+    console.error("[card-autopay] setup checkout session creation failed:", err)
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** Called from the Stripe webhook once the client finishes the on-session setup. */
+export async function saveAutopayCard(params: {
+  accountId: string
+  stripeCustomerId: string
+  paymentMethodId: string
+  last4: string | null
+}): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("accounts")
+    .update({
+      autopay_stripe_customer_id: params.stripeCustomerId,
+      autopay_stripe_payment_method_id: params.paymentMethodId,
+      autopay_card_last4: params.last4,
+      autopay_card_enabled: true,
+    } as never)
+    .eq("id", params.accountId)
+
+  if (error) {
+    console.error(`[card-autopay] saveAutopayCard failed for account ${params.accountId}:`, error.message)
+    return
+  }
+
+  try {
+    await supabaseAdmin.from("action_log").insert({
+      actor: "system",
+      action_type: "card_autopay_enrolled",
+      table_name: "accounts",
+      record_id: params.accountId,
+      account_id: params.accountId,
+      summary: `Card autopay enrolled — card ending ${params.last4 || "????"}`,
+      details: { payment_method_id: params.paymentMethodId, last4: params.last4 },
+    })
+  } catch { /* audit is best-effort */ }
+}
+
+/** Self-service "Turn off Autopay" — detaches the saved card from Stripe too. */
+export async function disableAutopayCard(accountId: string): Promise<{ ok: boolean; error?: string }> {
+  const stripe = getStripe()
+
+  const { data: account, error: fetchErr } = await supabaseAdmin
+    .from("accounts")
+    .select("autopay_stripe_payment_method_id" as never)
+    .eq("id", accountId)
+    .single()
+
+  if (fetchErr) return { ok: false, error: fetchErr.message }
+
+  const paymentMethodId = (account as unknown as { autopay_stripe_payment_method_id: string | null } | null)
+    ?.autopay_stripe_payment_method_id
+
+  if (stripe && paymentMethodId) {
+    try {
+      await stripe.paymentMethods.detach(paymentMethodId)
+    } catch (err) {
+      // Non-fatal — the card may already be detached (e.g. a prior partial
+      // failure). We still turn off autopay on our side either way; a stale
+      // Stripe-side attachment with autopay_card_enabled=false can never be
+      // charged by our own code, which only ever checks the DB flag.
+      console.warn(`[card-autopay] detach failed for account ${accountId} (continuing):`, err)
+    }
+  }
+
+  const { error: updateErr } = await supabaseAdmin
+    .from("accounts")
+    .update({
+      autopay_card_enabled: false,
+      autopay_stripe_payment_method_id: null,
+      autopay_card_last4: null,
+    } as never)
+    .eq("id", accountId)
+
+  if (updateErr) return { ok: false, error: updateErr.message }
+
+  try {
+    await supabaseAdmin.from("action_log").insert({
+      actor: "system",
+      action_type: "card_autopay_disabled",
+      table_name: "accounts",
+      record_id: accountId,
+      account_id: accountId,
+      summary: "Card autopay turned off by the client",
+    })
+  } catch { /* audit is best-effort */ }
+
+  return { ok: true }
+}
