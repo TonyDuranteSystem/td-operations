@@ -74,7 +74,14 @@ async function main() {
     process.exit(1)
   }
 
-  const rows = await fetchUncategorized(year, account)
+  const rows = (await fetchUncategorized(year, account)).filter(r => {
+    // The office purchase and its loan are PARKED at Antonio's instruction until he
+    // shares the closing documents, so the loan account must not be categorized in
+    // passing. Without this, a whole-year run quietly books its seven interest
+    // charges and reads as though the loan had been dealt with.
+    if (r.account_type === 'loan') return false
+    return true
+  })
   console.log(`uncategorized rows in ${year}${account ? ` for ${account}` : ''}: ${rows.length}`)
 
   const planned: Array<{ row: Row; category: string; subcategory: string }> = []
