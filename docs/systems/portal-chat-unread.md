@@ -1,5 +1,5 @@
 # Portal Chat — Read/Unread State
-_Last verified against code: 2026-08-27 — Claude (dev job cdd33e0b)_
+_Last verified against code: 2026-08-30 — Claude (portal-chats topic-scoped read fix)_
 
 ## What it is
 Tracks, per message in `portal_messages`, whether staff has "seen" it — drives
@@ -10,8 +10,10 @@ using the same column with roles reversed — not covered here.
 
 ## Business rules
 - A client message is "unread" (for staff) until a staff member opens that
-  thread/topic, or replies to it (a reply implies the whole conversation up to
-  that point was seen — see `lib/portal/mark-thread-read.ts`).
+  thread/topic, or replies **in that same topic** (see
+  `lib/portal/mark-thread-read.ts`). **A reply only clears its own topic —
+  NOT the whole conversation** (changed 2026-08-30; see Gotchas below for why
+  the earlier behavior was wrong).
 - A **plain system notice** (the out-of-office auto-reply, a bank-statement
   processing note, etc.) behaves the same way — it must be acknowledged by
   opening/replying, otherwise it stays "unread" forever.
@@ -41,8 +43,15 @@ using the same column with roles reversed — not covered here.
     account/contact + optional topic.
   - `lib/portal/mark-thread-read.ts` — fires automatically inside the message
     send route whenever staff sends a reply (`senderType==='admin'`). Same
-    inclusion rule as above, but clears the WHOLE conversation across every
-    topic (a reply means everything up to now was seen).
+    inclusion rule as above, and (since 2026-08-30) scoped to the SAME topic
+    the reply was sent in — `markClientMessagesReadForStaffReply` takes a
+    required `topic: string | null` param (`null` = General), applied as
+    `.is('topic', null)` or `.eq('topic', topic)` on every query branch. All
+    three callers must pass it: the dashboard reply route (computes `topic`
+    once and reuses it for both the insert and the read-clear, so the two can
+    never drift), the MCP portal-message-send tool, and the AI worker's
+    portal-message-send path — the latter two always pass `null` because
+    neither ever tags its own insert with a topic.
   - `app/(dashboard)/portal-chats/page.tsx` — `adminUnreadByTopic` (topic-pill
     badges) and the sidebar `threads` query (`get_portal_chat_threads_v2`,
     filters `sender_type='client'` only) are two SEPARATE counters computed
@@ -51,6 +60,22 @@ using the same column with roles reversed — not covered here.
     filters `sender_type='client'` only.
 
 ## Gotchas, invariants & past bugs
+- **2026-08-30 bug (decision reversed from 2026-08-27's "clear the whole
+  conversation" design):** a staff reply was clearing the unread flag on
+  EVERY topic-tagged sub-thread of a client conversation, not just the one it
+  was sent in — confirmed live on production, 18 real cases where a
+  named-topic client message got silently marked read the instant staff
+  replied in a different topic (most recent case one day before the fix
+  shipped). The earlier design ("a reply means the whole conversation was
+  seen") made sense back when topics were barely used; with real per-topic
+  conversations it actively hid unanswered questions. Fixed by making
+  `topic` a required parameter on `markClientMessagesReadForStaffReply` so a
+  future caller can't silently regress this — see "How it's built" above.
+  Same push also made the topic tabs sort unread-first/recency-second (was
+  alphabetical) with a stronger pulsing highlight, and added a
+  "Replying in: [topic]" label above the compose box on both the staff
+  dashboard and the client portal, so which topic a reply lands in is always
+  visible — this is now operationally load-bearing, not cosmetic.
 - **2026-08-27 bug (this doc's origin):** the topic-pill badge counted ALL
   non-admin, non-read messages — including `system` rows — but no mark-as-read
   path ever touched `sender_type='system'`, so any topic that ever got a
@@ -78,4 +103,22 @@ where sender_type='system' and read_at is null
 select count(*) from portal_messages
 where sender_type='system' and message ilike '%<!-- chat-event:%'
   and handled_at is null;
+
+-- Cross-topic clears (should be ~0 for anything AFTER 2026-08-30 — a nonzero
+-- count on recent rows means the topic-scoping fix has regressed):
+select count(*) from portal_messages c
+join portal_messages a
+  on a.sender_type='admin'
+ and coalesce(a.account_id::text,a.contact_id::text) = coalesce(c.account_id::text,c.contact_id::text)
+ and a.created_at between c.read_at - interval '4 seconds' and c.read_at + interval '4 seconds'
+where c.sender_type in ('client','system') and c.read_at is not null
+  and coalesce(c.topic,'') is distinct from coalesce(a.topic,'')
+  and c.read_at > '2026-08-30';
 ```
+
+Historical note: 18 messages were found wrongly marked read by the old
+behavior, spanning multiple client accounts and topics (Amex, ITIN 2026, Tax
+Return 2026, dichirazioni estro, and others) — the fix does not retroactively
+correct existing `read_at` values, only future writes. Whether/when those 18
+get manually corrected is a separate operational decision, not part of this
+code change.

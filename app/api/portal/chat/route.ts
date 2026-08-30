@@ -409,6 +409,7 @@ export async function POST(request: NextRequest) {
     await markClientMessagesReadForStaffReply({
       account_id: account_id || null,
       contact_id: resolvedContactId || null,
+      topic,
     }).catch(() => 0)
   }
 

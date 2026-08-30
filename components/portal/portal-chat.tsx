@@ -366,6 +366,13 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     const msg = input
     const replyId = replyTo?.id
     const filesToSend = pendingFiles
+    // Captured now, before the upload await — an upload is a real
+    // multi-second network call, and nothing stops switching topic tabs
+    // while it's in flight. Reading activeTopic live after the await (as
+    // this used to) could tag the send to whatever topic tab is open when
+    // the upload finishes, not the one shown when send was pressed (council
+    // review, Bug Hunter, 2026-08-30).
+    const sendTopic = activeTopic
     setInput('')
     setReplyTo(null)
     setPendingFiles([])
@@ -378,12 +385,12 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
           const uploaded = await Promise.all(filesToSend.map((pf) =>
             uploadChatAttachment(pf.file, { accountId: tagAccountId ?? undefined, contactId })
           ))
-          await sendMessage(msg || '', uploaded, replyId, senderContext, tagAccountId, activeTopic)
+          await sendMessage(msg || '', uploaded, replyId, senderContext, tagAccountId, sendTopic)
         } finally {
           setUploading(false)
         }
       } else {
-        await sendMessage(msg, undefined, replyId, senderContext, tagAccountId, activeTopic)
+        await sendMessage(msg, undefined, replyId, senderContext, tagAccountId, sendTopic)
       }
     } catch (err) {
       const errMsg = err instanceof Error && err.message ? err.message : t('portalChat.sendFailed')
@@ -496,6 +503,22 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     return acc
   }, {})
 
+  // Tab order (2026-08-30, Antonio): unread topics first — General included,
+  // not pinned — then most-recently-active first within each group. Mirrors
+  // the same ordering on the staff dashboard's topic tabs.
+  const topicLastActivity: Record<string, number> = {}
+  for (const m of messages) {
+    const key = m.topic ?? ''
+    const t = new Date(m.created_at).getTime()
+    if (!(key in topicLastActivity) || t > topicLastActivity[key]) topicLastActivity[key] = t
+  }
+  const topicOrder = Array.from(new Set(['', ...topics])).sort((a, b) => {
+    const unreadA = (unreadByTopic[a] ?? 0) > 0 ? 1 : 0
+    const unreadB = (unreadByTopic[b] ?? 0) > 0 ? 1 : 0
+    if (unreadA !== unreadB) return unreadB - unreadA
+    return (topicLastActivity[b] ?? -Infinity) - (topicLastActivity[a] ?? -Infinity)
+  })
+
   // Group messages by date
   let lastDate = ''
 
@@ -564,47 +587,38 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
       })()}
       {/* Topic tabs — always visible. General = untagged messages. Named tabs = thread per topic. */}
       <div className="px-3 pt-2 pb-1 border-b border-zinc-100 flex items-center gap-1.5 overflow-x-auto">
-        <button
-          onClick={() => setActiveTopic(null)}
-          className={cn(
-            'shrink-0 flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
-            activeTopic === null
-              ? 'bg-zinc-900 text-white border-zinc-900'
-              : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
-          )}
-        >
-          {t('portalChat.topic')}
-          {(unreadByTopic[''] ?? 0) > 0 && (
-            <span className={cn(
-              'inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold',
-              activeTopic === null ? 'bg-white text-zinc-900' : 'bg-red-500 text-white'
-            )}>
-              {unreadByTopic['']}
-            </span>
-          )}
-        </button>
-        {topics.map(tp => (
-          <button
-            key={tp}
-            onClick={() => setActiveTopic(tp === activeTopic ? null : tp)}
-            className={cn(
-              'shrink-0 flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
-              activeTopic === tp
-                ? 'bg-blue-600 text-white border-blue-600'
-                : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
-            )}
-          >
-            {tp}
-            {(unreadByTopic[tp] ?? 0) > 0 && (
-              <span className={cn(
-                'inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold',
-                activeTopic === tp ? 'bg-white text-blue-600' : 'bg-red-500 text-white'
-              )}>
-                {unreadByTopic[tp]}
-              </span>
-            )}
-          </button>
-        ))}
+        {topicOrder.map(key => {
+          const isGeneral = key === ''
+          const isActive = isGeneral ? activeTopic === null : activeTopic === key
+          const unread = unreadByTopic[key] ?? 0
+          // Pulsing highlight (2026-08-30, Antonio: more visible than a dot):
+          // only when unread AND not the tab already open.
+          const drawAttention = unread > 0 && !isActive
+          return (
+            <button
+              key={key || '__general__'}
+              onClick={() => setActiveTopic(isGeneral ? null : (isActive ? null : key))}
+              className={cn(
+                'shrink-0 flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
+                isActive
+                  ? (isGeneral ? 'bg-zinc-900 text-white border-zinc-900' : 'bg-blue-600 text-white border-blue-600')
+                  : drawAttention
+                    ? 'text-red-700 bg-red-100/70 border-red-300 animate-pulse'
+                    : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
+              )}
+            >
+              {isGeneral ? t('portalChat.topic') : key}
+              {unread > 0 && (
+                <span className={cn(
+                  'inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold',
+                  isActive ? (isGeneral ? 'bg-white text-zinc-900' : 'bg-white text-blue-600') : 'bg-red-500 text-white'
+                )}>
+                  {unread}
+                </span>
+              )}
+            </button>
+          )
+        })}
         {creatingTopic ? (
           <input
             autoFocus
@@ -983,6 +997,17 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
           )}
         </div>
       )}
+
+      {/* "Replying in: [topic]" — always visible above the composer (2026-08-30,
+          Antonio): the reader must always see which topic their message is
+          about to land in, so they don't answer a named topic while actually
+          sitting in General (or vice versa). */}
+      <div className={cn(
+        'px-4 py-1 border-t text-[11px] font-medium flex items-center gap-1.5',
+        activeTopic ? 'bg-blue-50 text-blue-700' : 'bg-zinc-50 text-zinc-500'
+      )}>
+        {t('portalChat.replyingIn')} <span className="font-semibold">{activeTopic || t('portalChat.general')}</span>
+      </div>
 
       {/* Reply preview */}
       {replyTo && (

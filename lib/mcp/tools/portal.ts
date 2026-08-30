@@ -2096,6 +2096,9 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
         await markClientMessagesReadForStaffReply({
           account_id: account_id || null,
           contact_id: resolvedContactId || null,
+          // This tool never tags its own insert with a topic — the message
+          // always lands in General, so the read-clear must match (2026-08-30).
+          topic: null,
         }).catch(() => 0)
 
         // In-app notification + email to client (fire-and-forget)
