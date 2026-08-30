@@ -11,26 +11,39 @@
  *
  * For every account below:
  *   1. Skip if a CMRA Mailing Address SD already exists (idempotent).
- *   2. createSD() — the same shared, validated-stage helper the live code
+ *   2. Skip if no signed lease is actually found for the account — never
+ *      advance a stage implying a signed lease exists without confirming
+ *      one, even though this list was hand-verified live moments before
+ *      writing this route (bug-hunter review, dev job 525e0e67).
+ *   3. linkAccountToLeaseMailingAddress() (lib/operations/lease.ts) — the
+ *      same helper the live webhook fix now uses. It never overwrites an
+ *      already-set address. One of these 10 (E-commerce Empire New York
+ *      LLC) already has business_mailing_address_id set to a DIFFERENT TD
+ *      address ("TD Mailing Address" / Seminole) — its own signed lease's
+ *      premises_address is actually the same Largo string as everyone
+ *      else's, so this is NOT a lease-data difference, and council review
+ *      (system-counselor, live production check) found no record anywhere
+ *      confirming Seminole is a deliberate assignment for this account (15
+ *      accounts share it, most with zero CMRA progress, row stamped
+ *      created_by='system'). Left untouched here regardless — the guard
+ *      protects it whether the value is correct or stale — but this is an
+ *      OPEN QUESTION for Antonio, not a confirmed fact (dev job 525e0e67).
+ *   4. createSD() — the same shared, validated-stage helper the live code
  *      uses — at stage "Lease Signed" (not stage 1: the lease really is
  *      already signed, and there's no evidence in the task history of any
  *      of these 10 progressing further than that, e.g. no Form 1583 task).
- *   3. Only for accounts whose business_mailing_address_id is unset, also
- *      link it to the TD address matching their own signed lease (same
- *      resolveTdMailingAddressForLease() helper the live webhook fix now
- *      uses) — never overwrite an address that's already set, since one of
- *      these 10 (E-commerce Empire New York LLC) is deliberately on a
- *      different TD building than the rest.
  *
  * Staff-only. Supports ?dry_run=true to preview without writing anything.
  * Safe to run more than once — step 1's existence check makes the SD
- * creation idempotent, and step 3 only ever touches a NULL address field.
+ * creation idempotent, and linkAccountToLeaseMailingAddress's own guard
+ * makes step 3 idempotent (concurrent double-invocation is not addressed —
+ * this route is meant to be triggered once, manually, not left running).
  */
 import { NextRequest, NextResponse } from "next/server"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createSD } from "@/lib/operations/service-delivery"
-import { linkAccountToLeaseMailingAddress } from "@/lib/operations/lease"
+import { linkAccountToLeaseMailingAddress, resolveTdMailingAddressForLease } from "@/lib/operations/lease"
 
 const ACCOUNT_IDS: { accountId: string; companyName: string }[] = [
   { accountId: "af514c76-d374-45f5-9c94-cc649fee31be", companyName: "Clearview Global LLC" },
@@ -64,6 +77,7 @@ export async function POST(req: NextRequest) {
         .select("id")
         .eq("account_id", accountId)
         .eq("service_type", "CMRA Mailing Address")
+        .eq("status", "active")
         .maybeSingle()
 
       if (existingSd) {
@@ -72,37 +86,54 @@ export async function POST(req: NextRequest) {
         continue
       }
 
-      const { data: account } = await supabaseAdmin
-        .from("accounts")
-        .select("business_mailing_address_id")
-        .eq("id", accountId)
-        .single()
-
+      // nullsFirst: false — Postgres's default DESC order is NULLS FIRST, which
+      // would put a legacy row with no signed_at ahead of a real, dated one.
+      // This population is explicitly legacy/manually-onboarded, exactly where
+      // a missing signed_at is most likely (bug-hunter review, dev job 525e0e67).
       const { data: lease } = await supabaseAdmin
         .from("lease_agreements")
         .select("premises_address")
         .eq("account_id", accountId)
         .eq("status", "signed")
-        .order("signed_at", { ascending: false })
+        .order("signed_at", { ascending: false, nullsFirst: false })
         .limit(1)
         .maybeSingle()
 
-      let addressAction = "not_needed_already_set"
-      if (!account?.business_mailing_address_id) {
-        if (dryRun) {
-          addressAction = "would_link_td_address"
-        } else {
-          const { linked, addressId } = await linkAccountToLeaseMailingAddress(accountId, lease?.premises_address ?? null)
-          addressAction = linked ? `linked_to_${addressId}` : "skipped_no_matching_address"
-        }
-      }
-      step.address_action = addressAction
-
-      if (dryRun) {
-        step.action = "would_create_sd_at_Lease_Signed"
+      if (!lease) {
+        // Defense in depth: this list was hand-verified live moments before
+        // writing this route, but never advance a stage implying a signed
+        // lease exists without actually finding one (bug-hunter review,
+        // dev job 525e0e67).
+        step.action = "skipped_no_signed_lease_found"
         results.push(step)
         continue
       }
+
+      if (dryRun) {
+        // Read-only, no writes: reproduces exactly what the real run would
+        // decide, instead of asserting a match without checking (bug-hunter
+        // review, dev job 525e0e67 — an unreliable dry-run preview on a
+        // batch touching 10 real client accounts is its own defect).
+        const { data: account } = await supabaseAdmin
+          .from("accounts")
+          .select("business_mailing_address_id")
+          .eq("id", accountId)
+          .single()
+        const wouldMatch = account?.business_mailing_address_id
+          ? null
+          : await resolveTdMailingAddressForLease(lease.premises_address)
+        step.action = "would_create_sd_at_Lease_Signed"
+        step.address_action = account?.business_mailing_address_id
+          ? "not_linked_already_set"
+          : wouldMatch
+            ? `would_link_to_${wouldMatch}`
+            : "would_skip_no_matching_address"
+        results.push(step)
+        continue
+      }
+
+      const { linked, addressId } = await linkAccountToLeaseMailingAddress(accountId, lease.premises_address)
+      step.address_action = linked ? `linked_to_${addressId}` : "not_linked_already_set_or_no_match"
 
       const created = await createSD({
         service_type: "CMRA Mailing Address",

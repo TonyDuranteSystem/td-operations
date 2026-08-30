@@ -26,6 +26,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
+import { dbWrite } from "@/lib/db"
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -597,7 +598,13 @@ export async function resolveTdMailingAddressForLease(
     .eq("is_td_provided", true)
     .eq("active", true)
 
-  const match = (candidates || []).find((a) =>
+  // Longest-prefix-first: a deterministic tie-break if a future second TD
+  // building's address_line1 ever prefix-collides with another's (no DB
+  // uniqueness constraint on address_line1 to rely on instead).
+  const sorted = [...(candidates || [])].sort(
+    (a, b) => (b.address_line1?.length ?? 0) - (a.address_line1?.length ?? 0),
+  )
+  const match = sorted.find((a) =>
     premisesAddress.toLowerCase().startsWith((a.address_line1 || "").toLowerCase()),
   )
   return match?.id ?? null
@@ -610,18 +617,46 @@ export async function resolveTdMailingAddressForLease(
  * (lib/operations/**) rather than inline in the calling routes so both the
  * live lease-signed webhook and the one-off backfill (dev job 525e0e67) go
  * through the same resolution + write logic (P2.4 rule 1).
+ *
+ * Never overwrites an already-set address. Every new lease's premises
+ * currently resolves to the same default building (createLease() hardcodes
+ * it — see above), so an unconditional overwrite would silently reset any
+ * account already linked to a DIFFERENT TD address back to the default the
+ * next time that lease renews and gets signed (caught by council review
+ * before shipping — dev job 525e0e67, 2026-08-30; the reference case is
+ * E-commerce Empire New York LLC — its business_mailing_address_id already
+ * points elsewhere, though whether that's a deliberate assignment or stale
+ * data is UNCONFIRMED, flagged to Antonio, not something this function
+ * should guess at either way). If a genuine relocation between TD buildings
+ * is ever built, that feature should call this with an explicit force path
+ * — silently reinterpreting "unset" as "safe to overwrite" is not that
+ * feature.
  */
 export async function linkAccountToLeaseMailingAddress(
   accountId: string,
   premisesAddress: string | null,
 ): Promise<{ linked: boolean; addressId: string | null }> {
+  const { data: account } = await supabaseAdmin
+    .from("accounts")
+    .select("business_mailing_address_id")
+    .eq("id", accountId)
+    .single()
+  if (account?.business_mailing_address_id) return { linked: false, addressId: null }
+
   const addressId = await resolveTdMailingAddressForLease(premisesAddress)
   if (!addressId) return { linked: false, addressId: null }
 
-  await supabaseAdmin
-    .from("accounts")
-    .update({ business_mailing_address_id: addressId })
-    .eq("id", accountId)
+  // dbWrite (not a raw await) so a failed write throws and surfaces to the
+  // caller's try/catch as a real error, instead of this function reporting
+  // `linked: true` on a write that never actually landed (Supabase errors
+  // are returned, not thrown — bug-hunter review, dev job 525e0e67).
+  const updated = await dbWrite(
+    supabaseAdmin.from("accounts").update({ business_mailing_address_id: addressId }).eq("id", accountId).select("id"),
+    "accounts.business_mailing_address_id_from_lease",
+  )
+  if (!updated || (Array.isArray(updated) && updated.length === 0)) {
+    throw new Error(`linkAccountToLeaseMailingAddress: update matched no row for account ${accountId}`)
+  }
 
   return { linked: true, addressId }
 }
