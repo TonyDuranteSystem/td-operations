@@ -26,10 +26,15 @@ export type OwnerCategory =
   | 'refund'
   /** Owner money INTO the company — equity, never income (the S-corp roll-forward needs it). */
   | 'contribution'
-  /** Money moving BETWEEN TD's own accounts — Stripe payouts (Stripe = clearing account,
-   * the CPA's own Schedule L practice) and bank-to-bank moves. NEVER in the P&L: the
-   * income behind a Stripe payout is recognized from the INVOICE ledger, so counting the
-   * payout too would double-count. */
+  /** Money moving BETWEEN accounts the company already owns: bank-to-bank moves, and
+   * payouts from ANY payment processor (the processor is a clearing account — the CPA's
+   * own Schedule L practice). Also covers paying down a credit card or a loan from a bank
+   * account: that is settling a liability, not spending.
+   * NEVER in the P&L. The income behind a processor payout is recognized from the INVOICE
+   * ledger, so counting the payout too would double-count it; and a card payment is
+   * already represented by the individual charges on the card.
+   * Deliberately NOT named after a provider (Antonio, 2026-08-30) — the accounting is
+   * identical whichever processor is in use, and a vendor name here ages badly. */
   | 'transfer'
   | 'uncategorized'
 
@@ -338,10 +343,12 @@ export async function getInvoiceIncome(year: number): Promise<InvoiceIncome> {
   return computeInvoiceIncome(rows, year)
 }
 
-/** Categories that never enter the P&L: transfers between TD's own accounts (incl. Stripe
- * payouts — income is recognized from the invoice ledger, so the payout landing in the
- * bank is the SAME money), FX conversions, refund pass-throughs, and equity movements
- * (distribution/contribution — shown separately, never in profit). */
+/** Categories that never enter the P&L: transfers between accounts the company already
+ * owns (including payouts from any payment processor — income is recognized from the
+ * invoice ledger, so the payout landing in the bank is the SAME money, and including
+ * card/loan repayments, which settle a liability rather than spend), FX conversions,
+ * refund pass-throughs, and equity movements (distribution/contribution — shown
+ * separately, never in profit). */
 const NON_PNL_CATEGORIES: ReadonlySet<string> = new Set([
   'transfer', 'conversion', 'refund', 'distribution', 'contribution',
 ])

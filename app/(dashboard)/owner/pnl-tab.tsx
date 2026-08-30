@@ -115,7 +115,7 @@ export function PnLTab({ year, pnl }: PnLTabProps) {
         Each currency is reported separately — amounts are never converted or mixed.
         Income comes from paid client invoices; bank transactions cover expenses and other income.
         Stripe&apos;s own processing fees are not booked yet (planned for a later phase).
-        Transfers between TD&apos;s own accounts (including Stripe payouts) are excluded — that money is already counted when the invoice was paid.
+        Transfers between your own accounts — including payouts from a payment processor — are excluded, because that money is already counted when the invoice was paid.
       </p>
     </div>
   )

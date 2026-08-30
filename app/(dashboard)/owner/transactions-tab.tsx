@@ -14,7 +14,12 @@ const CATEGORY_LABELS: Record<string, string> = {
   expense: 'Operating Expense',
   distribution: 'Owner Distribution',
   contribution: 'Owner Contribution',
-  transfer: 'Transfer (own accounts / Stripe payout)',
+  // Vendor-NEUTRAL on purpose (Antonio, 2026-08-30): this used to read
+  // "Stripe payout". A payout from ANY processor into a bank account is the same
+  // accounting event — money moving between accounts the company already owns —
+  // so naming one provider in the label ages badly the day the processor changes.
+  // The stored value has always been the generic 'transfer'; only wording changed.
+  transfer: 'Transfer (between your own accounts, incl. processor payouts)',
   fee: 'Bank / Processing Fee',
   conversion: 'Currency Conversion',
   refund: 'Refund',
