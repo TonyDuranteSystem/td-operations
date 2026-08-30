@@ -343,12 +343,19 @@ export async function getInvoiceIncome(year: number): Promise<InvoiceIncome> {
   return computeInvoiceIncome(rows, year)
 }
 
-/** Categories that never enter the P&L: transfers between accounts the company already
- * owns (including payouts from any payment processor — income is recognized from the
- * invoice ledger, so the payout landing in the bank is the SAME money, and including
- * card/loan repayments, which settle a liability rather than spend), FX conversions,
- * refund pass-throughs, and equity movements (distribution/contribution — shown
- * separately, never in profit). */
+/** Categories kept OUT OF THE SUBCATEGORY BREAKDOWN ("Expenses by Subcategory").
+ *
+ * NOTE the name is now narrower than it reads: this set is used ONLY for that
+ * breakdown. The P&L itself is driven by the switch in computeOwnerPnL, and since
+ * 2026-08-30 `refund` DOES affect the P&L there (it reverses whatever it refunds).
+ * It stays listed here because a refund is not a spending category and would render
+ * as one — the breakdown takes the absolute value of everything.
+ *
+ * The rest genuinely never touch profit: transfers between accounts the company
+ * already owns (including payouts from any payment processor — income is recognized
+ * from the invoice ledger, so the payout landing in the bank is the SAME money, and
+ * including card/loan repayments, which settle a liability rather than spend), FX
+ * conversions, and equity movements (distribution/contribution — shown separately). */
 const NON_PNL_CATEGORIES: ReadonlySet<string> = new Set([
   'transfer', 'conversion', 'refund', 'distribution', 'contribution',
 ])
@@ -423,6 +430,27 @@ export function computeOwnerPnL(
       case 'contribution':
         b.contributions += Math.abs(amt)
         break
+      case 'refund':
+        // A refund REVERSES something that already hit the P&L, so it must reduce
+        // that thing — not vanish. Previously it fell through with no effect at all,
+        // which OVERSTATED whatever it reversed.
+        //
+        // Direction decides which side it reverses, and it is unambiguous:
+        //   money coming IN  reverses a payment we made      -> reduce expenses
+        //   money going OUT  reverses money we received      -> reduce income
+        //
+        // Found on real data (2026-08-30): two Airwallex payouts to a provider were
+        // reversed and the money came back, but the books still showed the full
+        // €2,155 of professional services instead of the €2,020 actually spent.
+        // Refunds are rare here today and will be common on the card statements.
+        if (amt > 0) {
+          b.expenses -= amt
+          b.monthly[month].expenses -= amt
+        } else {
+          b.other_income -= Math.abs(amt)
+          b.monthly[month].income -= Math.abs(amt)
+        }
+        break
       case 'uncategorized':
         // Uncategorized cash reaches BOTH the annual net and the monthly series — the
         // chart's monthly nets must sum to the Net Profit KPI (they diverged before).
@@ -434,7 +462,7 @@ export function computeOwnerPnL(
           b.monthly[month].expenses += Math.abs(amt)
         }
         break
-      // 'transfer' / 'conversion' / 'refund': deliberately no P&L effect
+      // 'transfer' / 'conversion': deliberately no P&L effect — own money moving.
     }
 
     if (!NON_PNL_CATEGORIES.has(tx.category)) {
