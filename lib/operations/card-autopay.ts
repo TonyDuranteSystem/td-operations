@@ -130,6 +130,16 @@ export async function saveAutopayCard(params: {
   paymentMethodId: string
   last4: string | null
 }): Promise<void> {
+  // Backstop against a session created while the global switch was off (e.g.
+  // a staff enrollment link sent before the switch was flipped off) — the
+  // webhook must not arm an account the moment it completes if the feature
+  // is supposed to be dark system-wide (council review, 2026-08-30).
+  const { isCardAutopayEnabled } = await import("@/lib/payments/card-autopay-config")
+  if (!(await isCardAutopayEnabled())) {
+    console.warn(`[card-autopay] saveAutopayCard refused for account ${params.accountId} — kill switch is off`)
+    return
+  }
+
   const { error } = await supabaseAdmin
     .from("accounts")
     .update({
@@ -168,7 +178,7 @@ export async function saveAutopayCard(params: {
  * the client's own self-service toggle (actor defaults to "client") and the
  * new staff action on the account's Finance card (actor is "dashboard:<name>").
  */
-export async function disableAutopayCard(accountId: string, actor: string = "client"): Promise<{ ok: boolean; error?: string }> {
+export async function disableAutopayCard(accountId: string, actor: string = "client", deletedByUserId?: string): Promise<{ ok: boolean; error?: string }> {
   const stripe = getStripe()
 
   const { data: account, error: fetchErr } = await supabaseAdmin
@@ -221,7 +231,11 @@ export async function disableAutopayCard(accountId: string, actor: string = "cli
   // resubmission-only case like this pattern's siblings elsewhere.
   try {
     const { retireCardAutopayEnabledNote } = await import("@/lib/portal/chat-events")
-    await retireCardAutopayEnabledNote({ accountId })
+    // deletedBy is a uuid column — pass the real dashboard user's id when a
+    // staff member did this, never the "dashboard:<name>" actor label (same
+    // class of bug as the portal_messages.sender_id fix). Falls back to the
+    // system actor for the client's own self-service disable.
+    await retireCardAutopayEnabledNote({ accountId, deletedBy: deletedByUserId })
   } catch { /* best-effort */ }
 
   return { ok: true }

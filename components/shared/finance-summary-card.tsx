@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { CreditCard, Receipt, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { FinanceSummary } from '@/lib/billing/finance-summary'
@@ -19,8 +20,11 @@ interface FinanceSummaryCardProps {
   companyName?: string | null
   summary: FinanceSummary
   /** Autopay is account-scoped only — no contact-level concept exists.
-   *  Set false for a contact-only ("Personal, no company") invoice summary
-   *  to hide the whole autopay row instead of showing a misleading "Off". */
+   *  Set false for a contact-only ("Personal, no company") invoice summary,
+   *  or for a non-Client account type, to hide the whole autopay row instead
+   *  of showing a misleading "Off" / offering enrollment where it doesn't
+   *  belong (council review, 2026-08-30: this card was rendering the
+   *  autopay row on Vendor/Partner/One-Time accounts). */
   showAutopay?: boolean
   autopayEnabled?: boolean
   autopayLast4?: string | null
@@ -43,6 +47,7 @@ export function FinanceSummaryCard({
   onDisable,
   onSendLink,
 }: FinanceSummaryCardProps) {
+  const router = useRouter()
   const [loading, setLoading] = useState(false)
 
   const handleDisable = async () => {
@@ -51,16 +56,17 @@ export function FinanceSummaryCard({
     setLoading(true)
     const result = await onDisable(accountId)
     setLoading(false)
-    if (result.success) toast.success('Autopay turned off')
+    if (result.success) { toast.success('Autopay turned off'); router.refresh() }
     else toast.error(result.error || 'Failed to turn off autopay')
   }
 
   const handleSendLink = async () => {
     if (loading || !accountId || !onSendLink) return
+    if (!window.confirm(`Send ${companyName || 'this account'} a card-autopay enrollment link in their portal chat? This is a real, immediate message to the client.`)) return
     setLoading(true)
     const result = await onSendLink(accountId)
     setLoading(false)
-    if (result.success) toast.success('Enrollment link sent to the client')
+    if (result.success) { toast.success('Enrollment link sent to the client'); router.refresh() }
     else toast.error(result.error || 'Failed to send the enrollment link')
   }
 
@@ -71,24 +77,36 @@ export function FinanceSummaryCard({
         Finance{companyName ? ` — ${companyName}` : ''}
       </h3>
 
-      <div className="grid grid-cols-2 gap-3 text-sm">
-        <div>
-          <p className="text-xs text-muted-foreground">Outstanding</p>
-          <p className="font-medium">
-            {formatCurrency(summary.outstandingTotal, summary.currency)}
-            <span className="text-muted-foreground font-normal"> · {summary.outstandingCount} invoice{summary.outstandingCount === 1 ? '' : 's'}</span>
-          </p>
-          {summary.overdueCount > 0 && (
-            <p className="text-xs text-red-600 mt-0.5">{summary.overdueCount} overdue</p>
-          )}
-        </div>
-        <div>
-          <p className="text-xs text-muted-foreground">Paid</p>
-          <p className="font-medium">
-            {formatCurrency(summary.paidTotal, summary.currency)}
-            <span className="text-muted-foreground font-normal"> · {summary.paidCount} invoice{summary.paidCount === 1 ? '' : 's'}</span>
-          </p>
-        </div>
+      {summary.byCurrency.length === 0 && (
+        <p className="text-sm text-muted-foreground">No invoices</p>
+      )}
+
+      <div className="space-y-3">
+        {summary.byCurrency.map((cur) => (
+          <div key={cur.currency} className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <p className="text-xs text-muted-foreground">
+                Outstanding{summary.byCurrency.length > 1 ? ` (${cur.currency})` : ''}
+              </p>
+              <p className="font-medium">
+                {formatCurrency(cur.outstandingTotal, cur.currency)}
+                <span className="text-muted-foreground font-normal"> · {cur.outstandingCount} invoice{cur.outstandingCount === 1 ? '' : 's'}</span>
+              </p>
+              {cur.overdueCount > 0 && (
+                <p className="text-xs text-red-600 mt-0.5">{cur.overdueCount} overdue</p>
+              )}
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">
+                Paid{summary.byCurrency.length > 1 ? ` (${cur.currency})` : ''}
+              </p>
+              <p className="font-medium">
+                {formatCurrency(cur.paidTotal, cur.currency)}
+                <span className="text-muted-foreground font-normal"> · {cur.paidCount} invoice{cur.paidCount === 1 ? '' : 's'}</span>
+              </p>
+            </div>
+          </div>
+        ))}
       </div>
 
       {showAutopay && (

@@ -2511,11 +2511,14 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin, today, par
       {/* Referrals GIVEN by this client (company or its people) — renders only when there are any */}
       <ReferralsGivenCard accountId={account.id} />
 
-      {/* Finance summary — invoices + card autopay status, staff can toggle from here */}
+      {/* Finance summary — invoices + card autopay status, staff can toggle from here.
+          Autopay only makes sense for a paying Client account, not a Vendor/Partner/
+          One-Time row — matches the sibling Billing block's own gate below. */}
       <FinanceSummaryCard
         accountId={account.id}
         companyName={account.company_name}
         summary={financeSummary}
+        showAutopay={account.account_type === 'Client'}
         autopayEnabled={!!accountAutopay.autopay_card_enabled}
         autopayLast4={accountAutopay.autopay_card_last4 ?? null}
         isAdmin={isAdmin}

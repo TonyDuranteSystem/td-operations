@@ -501,7 +501,7 @@ export function ContactDetail({
         </div>
       )}
       {activeTab === 'invoices' && (
-        <InvoicesTab invoices={invoices} accounts={accounts} />
+        <InvoicesTab invoices={invoices} accounts={accounts} today={today} />
       )}
       {activeTab === 'documents' && (
         <ContactDocumentsTab documents={documents} accounts={accounts} contactId={contact.id} driveFolderUrl={contact.gdrive_folder_url} driveFolderId={contact.drive_folder_id} />
@@ -599,14 +599,20 @@ function OverviewTab({
   invoices: ContactInvoice[]
   today: string
 }) {
+  const linkedAccountIds = new Set(accounts.map(a => a.id))
   const invoicesByAccount = new Map<string, ContactInvoice[]>()
   const personalInvoices: ContactInvoice[] = []
   for (const inv of invoices) {
-    if (inv.account_id) {
+    if (inv.account_id && linkedAccountIds.has(inv.account_id)) {
       const list = invoicesByAccount.get(inv.account_id) ?? []
       list.push(inv)
       invoicesByAccount.set(inv.account_id, list)
-    } else if (inv.contact_id) {
+    } else {
+      // Either genuinely contact-direct (no account_id), OR the invoice's
+      // account_id points at a company this contact is no longer linked to
+      // (a stale/removed account_contacts row) — no card would ever read
+      // that account_id, so it falls here instead of silently vanishing
+      // from every Finance card on the page (council review, 2026-08-30).
       personalInvoices.push(inv)
     }
   }
@@ -735,31 +741,40 @@ function OverviewTab({
 
       {/* Finance — invoice summary + autopay status, one card per linked company
           plus a "Personal" card for invoices with no company (contact-direct payments).
-          Autopay is account-scoped only, so the personal card hides that row. */}
-      {(accounts.length > 0 || personalSummary) && (
-        <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
-          {accounts.map(acc => (
-            <FinanceSummaryCard
-              key={acc.id}
-              accountId={acc.id}
-              companyName={acc.company_name}
-              summary={summarizeInvoicesForFinanceCard(invoicesByAccount.get(acc.id) ?? [], today)}
-              autopayEnabled={!!acc.autopay_card_enabled}
-              autopayLast4={acc.autopay_card_last4}
-              isAdmin={true}
-              onDisable={disableAccountAutopay}
-              onSendLink={sendAutopayEnrollmentLink}
-            />
-          ))}
-          {personalSummary && (
-            <FinanceSummaryCard
-              companyName="Personal (no company)"
-              summary={personalSummary}
-              showAutopay={false}
-            />
-          )}
-        </div>
-      )}
+          Autopay is account-scoped only (hidden on the personal card) and only
+          offered for Client-type companies, not Vendor/Partner/One-Time. A
+          company with nothing to show (no invoices, autopay off) is skipped —
+          a multi-company contact was otherwise a wall of empty cards on a
+          phone screen (council review, 2026-08-30). */}
+      {(() => {
+        const companiesWithContent = accounts.filter(acc => (invoicesByAccount.get(acc.id)?.length ?? 0) > 0 || acc.autopay_card_enabled)
+        if (companiesWithContent.length === 0 && !personalSummary) return null
+        return (
+          <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+            {companiesWithContent.map(acc => (
+              <FinanceSummaryCard
+                key={acc.id}
+                accountId={acc.id}
+                companyName={acc.company_name}
+                summary={summarizeInvoicesForFinanceCard(invoicesByAccount.get(acc.id) ?? [], today)}
+                showAutopay={acc.account_type === 'Client'}
+                autopayEnabled={!!acc.autopay_card_enabled}
+                autopayLast4={acc.autopay_card_last4}
+                isAdmin={true}
+                onDisable={disableAccountAutopay}
+                onSendLink={sendAutopayEnrollmentLink}
+              />
+            ))}
+            {personalSummary && (
+              <FinanceSummaryCard
+                companyName="Personal (no company)"
+                summary={personalSummary}
+                showAutopay={false}
+              />
+            )}
+          </div>
+        )
+      })()}
 
       {/* Notes + Lead Origin */}
       <div className="space-y-6">
@@ -3723,7 +3738,7 @@ const INVOICE_STATUS_COLORS: Record<string, string> = {
   Pending: 'bg-amber-100 text-amber-700',
 }
 
-function InvoicesTab({ invoices, accounts }: { invoices: ContactInvoice[]; accounts: LinkedAccount[] }) {
+function InvoicesTab({ invoices, accounts, today }: { invoices: ContactInvoice[]; accounts: LinkedAccount[]; today: string }) {
   const [dialogOpen, setDialogOpen] = useState(false)
 
   // Primary linked account for pre-filling invoice dialog
@@ -3790,9 +3805,15 @@ function InvoicesTab({ invoices, accounts }: { invoices: ContactInvoice[]; accou
     )
   }
 
-  const overdue = real.filter(i => (i.invoice_status ?? i.status) === 'Overdue')
-  const pending = real.filter(i => ['Sent', 'Draft', 'Partial'].includes(i.invoice_status ?? i.status ?? ''))
-  const paid = real.filter(i => (i.invoice_status ?? i.status) === 'Paid')
+  // Due-date-aware, matching PagamentiTab (account page) and the Finance
+  // summary card — a Sent invoice past its due date is overdue here too now,
+  // instead of silently reading "Pending" on this tab while the Overview
+  // card on the SAME page called the identical invoice overdue (council
+  // review, 2026-08-30).
+  const invStatus = (i: ContactInvoice) => i.invoice_status ?? i.status ?? ''
+  const overdue = real.filter(i => invStatus(i) === 'Overdue' || (invStatus(i) === 'Sent' && !!i.due_date && i.due_date < today))
+  const pending = real.filter(i => ['Sent', 'Draft', 'Partial'].includes(invStatus(i)) && !(i.due_date && i.due_date < today))
+  const paid = real.filter(i => invStatus(i) === 'Paid')
   const other = real.filter(i => !overdue.includes(i) && !pending.includes(i) && !paid.includes(i))
 
   return (

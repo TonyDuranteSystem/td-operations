@@ -1141,7 +1141,11 @@ export async function disableAccountAutopay(accountId: string): Promise<ActionRe
   const actor = await getDashboardActor()
   return safeAction(async () => {
     const { disableAutopayCard } = await import('@/lib/operations/card-autopay')
-    const result = await disableAutopayCard(accountId, actor)
+    // Real auth user id (uuid) for the retired note's deleted_by — separate
+    // from `actor`, which is the "dashboard:<name>" audit-log label.
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    const result = await disableAutopayCard(accountId, actor, user?.id)
     if (!result.ok) throw new Error(result.error || 'Failed to turn off autopay')
     revalidatePath(`/accounts/${accountId}`)
   }, {
@@ -1156,9 +1160,50 @@ export async function disableAccountAutopay(accountId: string): Promise<ActionRe
 export async function sendAutopayEnrollmentLink(accountId: string): Promise<ActionResult> {
   return safeAction(async () => {
     const { getOrCreateStripeCustomerForAccount, createAutopaySetupCheckoutSession } = await import('@/lib/operations/card-autopay')
+    const { isCardAutopayEnabled } = await import('@/lib/payments/card-autopay-config')
     const { PORTAL_BASE_URL } = await import('@/lib/config')
     const { resolveAdminReplyContact } = await import('@/lib/portal/admin-send-scope')
     const { createPortalNotification, notifyClientOfAdminMessage } = await import('@/lib/portal/notifications')
+    const { isItalian } = await import('@/lib/locale')
+
+    // Never let a staff-initiated enrollment arm an account while the global
+    // autopay switch is off — the client-facing route already refuses this;
+    // this is the ONLY autopay-enrollment surface that previously didn't
+    // (council review, 2026-08-30).
+    if (!(await isCardAutopayEnabled())) throw new Error('Card autopay is currently switched off system-wide — turn it back on before enrolling any account.')
+
+    const { data: account, error: accountErr } = await supabaseAdmin
+      .from('accounts')
+      .select('autopay_card_enabled, account_type')
+      .eq('id', accountId)
+      .single()
+    if (accountErr || !account) throw new Error('Account not found')
+    if ((account as unknown as { autopay_card_enabled: boolean | null }).autopay_card_enabled) {
+      throw new Error('This account already has autopay enabled — nothing to send.')
+    }
+
+    const resolvedContactId = await resolveAdminReplyContact(accountId, null)
+    if (!resolvedContactId) throw new Error('This account has no linked contact to send the enrollment link to.')
+
+    // Duplicate-send guard: a Stripe checkout link is the one stable marker
+    // that survives future wording/language changes to the message itself.
+    const { data: recentSend } = await supabaseAdmin
+      .from('portal_messages')
+      .select('id')
+      .eq('account_id', accountId)
+      .eq('sender_type', 'admin')
+      .ilike('message', '%checkout.stripe.com%')
+      .is('deleted_at', null)
+      .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+      .limit(1)
+      .maybeSingle()
+    if (recentSend) throw new Error('An enrollment link was already sent to this client in the last 24 hours.')
+
+    const { data: contact } = await supabaseAdmin
+      .from('contacts')
+      .select('language')
+      .eq('id', resolvedContactId)
+      .maybeSingle()
 
     const customerResult = await getOrCreateStripeCustomerForAccount(accountId)
     if ('error' in customerResult) throw new Error(customerResult.error)
@@ -1170,14 +1215,20 @@ export async function sendAutopayEnrollmentLink(accountId: string): Promise<Acti
     })
     if ('error' in sessionResult) throw new Error(sessionResult.error)
 
-    const resolvedContactId = await resolveAdminReplyContact(accountId, null)
     // portal_messages.sender_id is a UUID FK to the dashboard auth user — NOT
     // getDashboardActor()'s "dashboard:name" audit-log string (matches
     // app/api/portal/chat/route.ts's own admin-send sender_id: user.id).
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error('Not signed in')
-    const messageText = `You can now save a card for automatic billing — no more manual clicks, and no 5% card fee. Activate it here: ${sessionResult.url}`
+
+    // "Future invoices" ONLY — the fee waiver and the auto-charge cron both
+    // apply forward from enrollment, never to an invoice already created
+    // (its fee rate is pinned at creation and does not change retroactively;
+    // council review, 2026-08-30 — the earlier wording implied otherwise).
+    const messageText = isItalian(contact?.language)
+      ? `Ora puoi salvare una carta per l'addebito automatico sulle future fatture — niente più clic manuali, e nessuna commissione del 5% sulle fatture create dopo l'iscrizione. Attivalo qui: ${sessionResult.url}`
+      : `You can now save a card for automatic billing on future invoices — no more manual clicks, and no 5% card fee on invoices created after you enroll. Activate it here: ${sessionResult.url}`
 
     const { error: insertErr } = await supabaseAdmin
       .from('portal_messages')

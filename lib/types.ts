@@ -331,6 +331,7 @@ export interface LinkedAccount {
   ein: string | null
   role: string | null
   ownership_pct: number | null
+  account_type: string | null
   autopay_card_enabled: boolean | null
   autopay_card_last4: string | null
 }

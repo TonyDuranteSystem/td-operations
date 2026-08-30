@@ -26,8 +26,13 @@ interface Row {
 
 let accountRow: Row | null = null
 let accountFetchError: { message: string } | null = null
+let killSwitchEnabled = true
 const updateCalls: Array<{ table: string; payload: Record<string, unknown> }> = []
 const insertCalls: Array<{ table: string; payload: Record<string, unknown> }> = []
+
+vi.mock("@/lib/payments/card-autopay-config", () => ({
+  isCardAutopayEnabled: () => Promise.resolve(killSwitchEnabled),
+}))
 
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
@@ -61,6 +66,7 @@ beforeEach(() => {
   delete process.env.STRIPE_SECRET_KEY
   accountRow = null
   accountFetchError = null
+  killSwitchEnabled = true
   updateCalls.length = 0
   insertCalls.length = 0
 })
@@ -105,6 +111,17 @@ describe("saveAutopayCard", () => {
 
     const logInsert = insertCalls.find((i) => i.table === "action_log")
     expect(logInsert?.payload).toMatchObject({ action_type: "card_autopay_enrolled", account_id: "acc-1" })
+  })
+
+  it("refuses to enable the account while the global kill switch is off — a session created before the switch flipped off must not arm on completion", async () => {
+    killSwitchEnabled = false
+    await saveAutopayCard({
+      accountId: "acc-1",
+      stripeCustomerId: "cus_1",
+      paymentMethodId: "pm_1",
+      last4: "4242",
+    })
+    expect(updateCalls.find((u) => u.table === "accounts")).toBeUndefined()
   })
 })
 
