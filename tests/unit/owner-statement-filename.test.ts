@@ -120,3 +120,29 @@ describe("type keywords", () => {
     expect(detectAccountType("Stripe_processor_0001.csv")).toBe("processor")
   })
 })
+
+describe("multi-currency wallets identified by currency", () => {
+  it("accepts a currency code when the provider gives no account number", () => {
+    // Airwallex's own export has 20 columns and none is an account id — the wallet
+    // IS the currency. Refusing it would mean refusing a real account for lacking
+    // something it does not have.
+    const r = parseStatementFilename("Airwallex_checking_USD.csv")
+    expect(r.ok).toBe(true)
+    expect(r.value!.accountNumber).toBe("USD")
+    expect(r.value!.label).toBe("Airwallex checking USD")
+  })
+
+  it("keeps the two wallets as separate accounts", () => {
+    expect(parseStatementFilename("Airwallex_checking_USD.csv").value!.label)
+      .not.toBe(parseStatementFilename("Airwallex_checking_EUR.csv").value!.label)
+  })
+
+  it("a real account number still wins over a currency in the name", () => {
+    expect(parseStatementFilename("Chase_checking_3920_USD.csv").value!.accountNumber).toBe("3920")
+  })
+
+  it("only RECOGNISED currency codes count, not any three-letter word", () => {
+    // Otherwise "Ally_checking_new.csv" would silently pass with account "NEW".
+    expect(parseStatementFilename("Ally_checking_new.csv").ok).toBe(false)
+  })
+})

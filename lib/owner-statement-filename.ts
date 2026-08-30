@@ -143,6 +143,30 @@ function allCaptures(source: string, re: RegExp): string[] {
   return out
 }
 
+/**
+ * Currency codes accepted as an ACCOUNT IDENTIFIER.
+ *
+ * A multi-currency provider (Airwallex, Wise) does not give each wallet an account
+ * number — the currency IS the identity, and its own export carries no number
+ * anywhere (verified against Antonio's 2025 Airwallex activity report: 20 columns,
+ * none of them an account id). Refusing those files would mean refusing a real
+ * account for lacking something it does not have, so a currency code is a valid
+ * identifier — but ONLY a recognised one, so a random three-letter word in a
+ * filename can never be mistaken for an account.
+ */
+const CURRENCY_IDENTIFIERS = new Set([
+  "USD", "EUR", "GBP", "CHF", "DKK", "SEK", "NOK", "PLN", "CZK",
+  "CAD", "AUD", "NZD", "JPY", "CNY", "HKD", "SGD", "AED", "MXN", "BRL", "INR",
+])
+
+export function detectCurrencyIdentifier(fileName: string): string | null {
+  for (const raw of forWordMatch(fileName).split(/[^A-Za-z]+/)) {
+    const up = raw.trim().toUpperCase()
+    if (up.length === 3 && CURRENCY_IDENTIFIERS.has(up)) return up
+  }
+  return null
+}
+
 export function detectAccountNumber(fileName: string): { value?: string; ambiguous?: string } | null {
   const base = baseName(fileName)
 
@@ -212,10 +236,14 @@ export function parseStatementFilename(fileName: string): StatementNameResult {
   const accountType = detectAccountType(fileName)
   const number = detectAccountNumber(fileName)
 
+  // A recognised currency code stands in for an account number, but ONLY when there
+  // is no number — a real number always wins, so a file naming both is unaffected.
+  const currency = number ? null : detectCurrencyIdentifier(fileName)
+
   const missing: string[] = []
   if (!institution) missing.push("the bank or provider name")
   if (!accountType) missing.push("the account type (checking, savings, credit card, loan or processor)")
-  if (!number) missing.push("the account or card number")
+  if (!number && !currency) missing.push("the account or card number (or a currency code for a multi-currency wallet)")
 
   if (number && number.ambiguous) {
     return {
@@ -227,7 +255,7 @@ export function parseStatementFilename(fileName: string): StatementNameResult {
     }
   }
 
-  if (missing.length > 0 || !institution || !accountType || !number) {
+  if (missing.length > 0 || !institution || !accountType || (!number && !currency)) {
     return {
       ok: false,
       error: {
@@ -242,8 +270,8 @@ export function parseStatementFilename(fileName: string): StatementNameResult {
     value: {
       institution,
       accountType,
-      accountNumber: number.value,
-      label: `${institution} ${TYPE_LABEL[accountType]} ${number.value}`,
+      accountNumber: number ? number.value! : currency!,
+      label: `${institution} ${TYPE_LABEL[accountType]} ${number ? number.value : currency}`,
     },
   }
 }
