@@ -36,6 +36,13 @@ vi.mock("@/lib/payments/card-autopay-config", () => ({
   isCardAutopayEnabled: () => Promise.resolve(killSwitchEnabled),
 }))
 
+let cardFeeEnabled = true
+let cardFeeRate = 0.05
+vi.mock("@/lib/payments/card-fee-config", () => ({
+  isCardFeeEnabled: () => Promise.resolve(cardFeeEnabled),
+  getConfiguredCardFeeRate: () => Promise.resolve(cardFeeRate),
+}))
+
 const resolveAdminReplyContactMock = vi.fn()
 vi.mock("@/lib/portal/admin-send-scope", () => ({
   resolveAdminReplyContact: (accountId: string, replyToId: string | null) => resolveAdminReplyContactMock(accountId, replyToId),
@@ -99,6 +106,8 @@ beforeEach(() => {
   createPortalNotificationMock.mockReset()
   notifyClientOfAdminMessageMock.mockReset()
   killSwitchEnabled = true
+  cardFeeEnabled = true
+  cardFeeRate = 0.05
   accountRow = { autopay_card_enabled: false, account_type: "Client" }
   contactRow = { language: null }
   recentSendRow = null
@@ -149,6 +158,8 @@ describe("sendAutopayEnrollmentLink", () => {
     expect(String(portalMessagesInsertCalls[0].message)).toContain("https://checkout.stripe.com/session-abc")
     // The fee waiver only ever applies going forward — the message must say so.
     expect(String(portalMessagesInsertCalls[0].message)).toContain("future invoices")
+    // The default configured rate (5%) is quoted, not hardcoded — see the next tests.
+    expect(String(portalMessagesInsertCalls[0].message)).toContain("5% card fee")
     expect(createPortalNotificationMock).toHaveBeenCalledTimes(1)
     expect(notifyClientOfAdminMessageMock).toHaveBeenCalledTimes(1)
   })
@@ -159,6 +170,22 @@ describe("sendAutopayEnrollmentLink", () => {
     const result = await sendAutopayEnrollmentLink("acct-1")
     expect(result.success).toBe(true)
     expect(String(portalMessagesInsertCalls[0].message)).toContain("future fatture")
+  })
+
+  it("quotes the LIVE configured fee rate, not a hardcoded 5% — Antonio can change this rate without the message going stale", async () => {
+    cardFeeRate = 0.07
+    const { sendAutopayEnrollmentLink } = await import("@/app/(dashboard)/accounts/actions")
+    await sendAutopayEnrollmentLink("acct-1")
+    expect(String(portalMessagesInsertCalls[0].message)).toContain("7% card fee")
+    expect(String(portalMessagesInsertCalls[0].message)).not.toContain("5%")
+  })
+
+  it("omits the fee clause entirely when the card fee is switched off globally, instead of promising a waiver on a fee that was never charged", async () => {
+    cardFeeEnabled = false
+    const { sendAutopayEnrollmentLink } = await import("@/app/(dashboard)/accounts/actions")
+    await sendAutopayEnrollmentLink("acct-1")
+    expect(String(portalMessagesInsertCalls[0].message)).not.toContain("%")
+    expect(String(portalMessagesInsertCalls[0].message)).toContain("future invoices")
   })
 
   it("refuses when the global autopay kill switch is off — the one enrollment path that must never bypass it", async () => {

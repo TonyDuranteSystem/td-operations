@@ -116,7 +116,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   const accountIds = accounts.map(a => a.id)
 
   // Fetch invoices: contact-direct + via linked accounts
-  const invoiceFields = 'id, description, amount, total, amount_currency, status, invoice_status, invoice_number, payment_method, paid_date, due_date, installment, amount_paid, amount_due, account_id, contact_id, portal_invoice_id, accounts:account_id(company_name)'
+  const invoiceFields = 'id, description, amount, total, amount_currency, status, invoice_status, invoice_number, payment_method, paid_date, due_date, installment, amount_paid, amount_due, account_id, contact_id, portal_invoice_id, is_test, accounts:account_id(company_name)'
   const { data: contactInvoices } = await supabase
     .from('payments')
     .select(invoiceFields)

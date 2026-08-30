@@ -1161,6 +1161,7 @@ export async function sendAutopayEnrollmentLink(accountId: string): Promise<Acti
   return safeAction(async () => {
     const { getOrCreateStripeCustomerForAccount, createAutopaySetupCheckoutSession } = await import('@/lib/operations/card-autopay')
     const { isCardAutopayEnabled } = await import('@/lib/payments/card-autopay-config')
+    const { isCardFeeEnabled, getConfiguredCardFeeRate } = await import('@/lib/payments/card-fee-config')
     const { PORTAL_BASE_URL } = await import('@/lib/config')
     const { resolveAdminReplyContact } = await import('@/lib/portal/admin-send-scope')
     const { createPortalNotification, notifyClientOfAdminMessage } = await import('@/lib/portal/notifications')
@@ -1226,9 +1227,20 @@ export async function sendAutopayEnrollmentLink(accountId: string): Promise<Acti
     // apply forward from enrollment, never to an invoice already created
     // (its fee rate is pinned at creation and does not change retroactively;
     // council review, 2026-08-30 — the earlier wording implied otherwise).
+    // The percentage is READ LIVE, not hardcoded — the fee rate is a config
+    // value Antonio can change from Finance → Overview at any time, and a
+    // hardcoded "5%" would keep quoting a stale number after that (council
+    // review, Business-Analyst finding).
+    const feeEnabled = await isCardFeeEnabled()
+    const feeClause = { en: '', it: '' }
+    if (feeEnabled) {
+      const pct = Math.round((await getConfiguredCardFeeRate()) * 100)
+      feeClause.en = ` and no ${pct}% card fee on invoices created after you enroll`
+      feeClause.it = ` e nessuna commissione del ${pct}% sulle fatture create dopo l'iscrizione`
+    }
     const messageText = isItalian(contact?.language)
-      ? `Ora puoi salvare una carta per l'addebito automatico sulle future fatture — niente più clic manuali, e nessuna commissione del 5% sulle fatture create dopo l'iscrizione. Attivalo qui: ${sessionResult.url}`
-      : `You can now save a card for automatic billing on future invoices — no more manual clicks, and no 5% card fee on invoices created after you enroll. Activate it here: ${sessionResult.url}`
+      ? `Ora puoi salvare una carta per l'addebito automatico sulle future fatture — niente più clic manuali${feeClause.it}. Attivalo qui: ${sessionResult.url}`
+      : `You can now save a card for automatic billing on future invoices — no more manual clicks${feeClause.en}. Activate it here: ${sessionResult.url}`
 
     const { error: insertErr } = await supabaseAdmin
       .from('portal_messages')

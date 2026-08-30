@@ -78,7 +78,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     // Payments
     supabase
       .from('payments')
-      .select('id, description, amount, amount_currency, period, year, due_date, paid_date, status, payment_method, invoice_number, installment, amount_paid, amount_due, followup_stage, notes, updated_at, invoice_status, portal_invoice_id, total')
+      .select('id, description, amount, amount_currency, period, year, due_date, paid_date, status, payment_method, invoice_number, installment, amount_paid, amount_due, followup_stage, notes, updated_at, invoice_status, portal_invoice_id, total, is_test')
       .eq('account_id', params.id)
       .order('due_date', { ascending: false }),
     // Deals

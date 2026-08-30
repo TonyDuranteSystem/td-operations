@@ -27,6 +27,11 @@ interface Row {
 let accountRow: Row | null = null
 let accountFetchError: { message: string } | null = null
 let killSwitchEnabled = true
+// Terminal resolution for a chain ending in .select() (the disable-autopay
+// concurrency-guarded update) — defaults to "one row matched", the normal
+// case. Override per-test to simulate the optimistic-concurrency race (0
+// rows matched because the value changed underneath the WHERE clause).
+let updateSelectResult: { data: { id: string }[] | null; error: { message: string } | null } = { data: [{ id: "acc-1" }], error: null }
 const updateCalls: Array<{ table: string; payload: Record<string, unknown> }> = []
 const insertCalls: Array<{ table: string; payload: Record<string, unknown> }> = []
 
@@ -38,8 +43,15 @@ vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
     from: (table: string) => {
       const chain = {
+        // select() has two shapes here: mid-chain (accounts read, followed by
+        // .eq().single()) where callers need further chaining, vs. terminal
+        // (the disable-autopay concurrency-guarded update, followed by
+        // nothing — awaited directly). Returning `chain` itself covers both:
+        // it's still chainable AND thenable (below), so `await x.select("id")`
+        // resolves via updateSelectResult.
         select: vi.fn(() => chain),
         eq: vi.fn(() => chain),
+        is: vi.fn(() => chain),
         single: vi.fn(() => Promise.resolve({ data: accountRow, error: accountFetchError })),
         update: vi.fn((payload: Record<string, unknown>) => {
           updateCalls.push({ table, payload })
@@ -49,7 +61,7 @@ vi.mock("@/lib/supabase-admin", () => ({
           insertCalls.push({ table, payload })
           return Promise.resolve({ data: null, error: null })
         }),
-        then: (resolve: (v: { data: null; error: null }) => void) => resolve({ data: null, error: null }),
+        then: (resolve: (v: { data: unknown; error: unknown }) => void) => resolve(updateSelectResult),
       }
       return chain
     },
@@ -67,6 +79,7 @@ beforeEach(() => {
   accountRow = null
   accountFetchError = null
   killSwitchEnabled = true
+  updateSelectResult = { data: [{ id: "acc-1" }], error: null }
   updateCalls.length = 0
   insertCalls.length = 0
 })
@@ -143,5 +156,13 @@ describe("disableAutopayCard", () => {
     accountFetchError = { message: "connection reset" }
     const result = await disableAutopayCard("acc-1")
     expect(result).toEqual({ ok: false, error: "connection reset" })
+  })
+
+  it("refuses instead of silently wiping a brand-new card when the payment method changed concurrently (a re-enrollment mid-flight)", async () => {
+    accountRow = { autopay_stripe_payment_method_id: "pm_1" }
+    updateSelectResult = { data: [], error: null }
+    const result = await disableAutopayCard("acc-1")
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain("changed at the same moment")
   })
 })

@@ -170,7 +170,12 @@ export async function saveAutopayCard(params: {
   try {
     const { emitCardAutopayEnabledEvent } = await import("@/lib/portal/chat-events")
     await emitCardAutopayEnabledEvent({ accountId: params.accountId, last4: params.last4 })
-  } catch { /* staff notification is best-effort — never blocks enrollment */ }
+  } catch (err) {
+    // Best-effort — never blocks enrollment — but a swallowed exception here
+    // means staff silently never learn a client enrolled, the headline thing
+    // this feature exists for (QA-Tester finding, council review 2026-08-30).
+    console.warn(`[card-autopay] emitCardAutopayEnabledEvent failed for account ${params.accountId}:`, err instanceof Error ? err.message : String(err))
+  }
 }
 
 /**
@@ -204,16 +209,34 @@ export async function disableAutopayCard(accountId: string, actor: string = "cli
     }
   }
 
-  const { error: updateErr } = await supabaseAdmin
-    .from("accounts")
-    .update({
-      autopay_card_enabled: false,
-      autopay_stripe_payment_method_id: null,
-      autopay_card_last4: null,
-    } as never)
-    .eq("id", accountId)
+  // Conditional on the payment-method id still matching what we just read —
+  // an optimistic-concurrency guard so a disable racing a fresh re-enrollment
+  // (a client's webhook completing at the same moment) can't silently wipe
+  // the brand-new card, or silently report success while the account is
+  // actually still enrolled (bug-hunter finding, council review 2026-08-30).
+  const clearFields = {
+    autopay_card_enabled: false,
+    autopay_stripe_payment_method_id: null,
+    autopay_card_last4: null,
+  }
+  // Type-erased to a minimal interface — chaining a second .eq()/.is() onto
+  // the full generated `accounts` update builder hits TS's recursion limit
+  // (TS2589) on this table's type surface; the runtime call is unaffected.
+  interface MinimalUpdateChain {
+    eq: (col: string, val: string) => MinimalUpdateChain
+    is: (col: string, val: null) => MinimalUpdateChain
+    select: (cols: string) => Promise<{ data: { id: string }[] | null; error: { message: string } | null }>
+  }
+  const updateChain = (supabaseAdmin.from("accounts").update(clearFields as never) as unknown as { eq: (col: string, val: string) => MinimalUpdateChain }).eq("id", accountId)
+  const { data: updatedRows, error: updateErr } = paymentMethodId
+    ? await updateChain.eq("autopay_stripe_payment_method_id", paymentMethodId).select("id")
+    : await updateChain.is("autopay_stripe_payment_method_id", null).select("id")
 
   if (updateErr) return { ok: false, error: updateErr.message }
+  if (!updatedRows || updatedRows.length === 0) {
+    console.warn(`[card-autopay] disable skipped for account ${accountId} — the card on file changed concurrently (likely a re-enrollment mid-flight)`)
+    return { ok: false, error: "Autopay's card on file changed at the same moment — please check the current status and try again." }
+  }
 
   try {
     await supabaseAdmin.from("action_log").insert({
@@ -236,7 +259,12 @@ export async function disableAutopayCard(accountId: string, actor: string = "cli
     // class of bug as the portal_messages.sender_id fix). Falls back to the
     // system actor for the client's own self-service disable.
     await retireCardAutopayEnabledNote({ accountId, deletedBy: deletedByUserId })
-  } catch { /* best-effort */ }
+  } catch (err) {
+    // Best-effort, but silent here means a future re-enrollment can dedupe
+    // against a note that was never actually retired (QA-Tester finding,
+    // council review 2026-08-30).
+    console.warn(`[card-autopay] retireCardAutopayEnabledNote failed for account ${accountId}:`, err instanceof Error ? err.message : String(err))
+  }
 
   return { ok: true }
 }

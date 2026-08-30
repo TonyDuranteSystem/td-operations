@@ -46,6 +46,7 @@ import { toast } from 'sonner'
 import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive, createDBA, updateDBADetails, disableAccountAutopay, sendAutopayEnrollmentLink } from '@/app/(dashboard)/accounts/actions'
 import { FinanceSummaryCard } from '@/components/shared/finance-summary-card'
 import { summarizeInvoicesForFinanceCard } from '@/lib/billing/finance-summary'
+import { isInvoiceOverdue } from '@/lib/billing/invoice-status'
 import { StatusChangeDialog } from './status-change-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
@@ -3082,9 +3083,12 @@ function PagamentiTab({ payments, today, account }: {
   const invoiced = payments.filter(p => p.invoice_number && p.invoice_number !== '1.0' && p.invoice_number !== '2.0')
   const legacy = payments.filter(p => !p.invoice_number || p.invoice_number === '1.0' || p.invoice_number === '2.0')
 
-  // Group invoiced by status
+  // Group invoiced by status. Overdue uses the SAME shared rule as the
+  // Finance summary card above (lib/billing/invoice-status.ts) — they used
+  // to disagree on a Sent-and-past-due invoice on this very page (council
+  // review, 2026-08-30).
   const invoiceStatus = (p: Payment) => p.invoice_status ?? p.status ?? ''
-  const overdue = invoiced.filter(p => invoiceStatus(p) === 'Overdue' || (invoiceStatus(p) === 'Sent' && p.due_date && p.due_date < today))
+  const overdue = invoiced.filter(p => isInvoiceOverdue(p, today))
   const pending = invoiced.filter(p => ['Sent', 'Draft', 'Partial'].includes(invoiceStatus(p)) && !(p.due_date && p.due_date < today))
   const paid = invoiced.filter(p => invoiceStatus(p) === 'Paid')
   const otherInvoiced = invoiced.filter(p => !overdue.includes(p) && !pending.includes(p) && !paid.includes(p))

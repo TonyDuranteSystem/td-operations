@@ -17,8 +17,13 @@
  * credit notes for a split/installment-plan invoice are not necessarily
  * issued right away (Antonio, 2026-08-30) — excluding by the CN- number
  * prefix (assigned at creation) rather than by invoice_status='Credit'
- * (assigned in a later, separate step) closes that gap too.
+ * (assigned in a later, separate step) closes that gap too. (4) The overdue/
+ * settled classification now comes from the SAME shared helper the account
+ * Payments tab and contact Invoices tab use (lib/billing/invoice-status.ts)
+ * instead of a fourth independently-typed copy of the same rule. (5) Test
+ * fixture invoices (`is_test`) no longer inflate a real client's totals.
  */
+import { invoiceStatusOf, isInvoiceOverdue, isInvoiceSettled } from "./invoice-status"
 
 /**
  * Structural subset of the fields the classification actually reads — matches
@@ -35,6 +40,7 @@ export interface InvoiceLike {
   amount_paid: number | null
   amount: number
   amount_currency: string | null
+  is_test?: boolean | null
 }
 
 export interface CurrencyFinanceSummary {
@@ -53,24 +59,13 @@ export interface FinanceSummary {
   byCurrency: CurrencyFinanceSummary[]
 }
 
-// Statuses that mean "nothing left to collect" — anything invoiced that is
-// NOT one of these (and not a credit note) counts as outstanding. Positive
-// list of "active" statuses (Sent/Draft/Partial) is deliberately NOT used:
-// it silently drops any status it doesn't enumerate (the vanishing-invoice
-// bug this rewrite fixes).
-const SETTLED_STATUSES = new Set(["Paid", "Cancelled", "Voided", "Split"])
-
-function invoiceStatus(p: InvoiceLike): string {
-  return p.invoice_status ?? p.status ?? ""
-}
-
 // A credit note is money TD owes the client, never a receivable. Checked by
 // number prefix (assigned at creation, before any status transition) rather
 // than solely by invoice_status='Credit' (assigned in a separate, sometimes
 // delayed, follow-up step) so a not-yet-retagged credit note is still
 // excluded — see the file header note on split/installment-plan credits.
 function isCreditNote(p: InvoiceLike): boolean {
-  return !!p.invoice_number?.startsWith("CN-") || invoiceStatus(p) === "Credit" || Number(p.total) < 0
+  return !!p.invoice_number?.startsWith("CN-") || invoiceStatusOf(p) === "Credit" || Number(p.total) < 0
 }
 
 // Remaining balance — NOT the original face amount. `amount_due` is
@@ -90,7 +85,7 @@ function paidAmount(p: InvoiceLike): number {
 
 export function summarizeInvoicesForFinanceCard(payments: InvoiceLike[], today: string): FinanceSummary {
   const invoiced = payments.filter(
-    (p) => p.invoice_number && p.invoice_number !== "1.0" && p.invoice_number !== "2.0" && !isCreditNote(p),
+    (p) => p.invoice_number && p.invoice_number !== "1.0" && p.invoice_number !== "2.0" && !p.is_test && !isCreditNote(p),
   )
 
   const byCurrencyMap = new Map<string, InvoiceLike[]>()
@@ -104,15 +99,13 @@ export function summarizeInvoicesForFinanceCard(payments: InvoiceLike[], today: 
   const byCurrency = Array.from(byCurrencyMap.entries())
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([currency, rows]) => {
-      const paid = rows.filter((p) => invoiceStatus(p) === "Paid")
-      const overdue = rows.filter(
-        (p) => invoiceStatus(p) === "Overdue" || (invoiceStatus(p) === "Sent" && !!p.due_date && p.due_date < today),
-      )
-      // Outstanding = everything invoiced that isn't Paid and isn't a known
-      // settled/void/split-parent status — a Draft or Partial row past due
-      // (or any future status this list doesn't yet know about) still counts,
-      // rather than silently disappearing.
-      const outstanding = rows.filter((p) => invoiceStatus(p) !== "Paid" && !SETTLED_STATUSES.has(invoiceStatus(p)))
+      const paid = rows.filter((p) => invoiceStatusOf(p) === "Paid")
+      const overdue = rows.filter((p) => isInvoiceOverdue(p, today))
+      // Outstanding = everything invoiced that isn't settled (Paid/Cancelled/
+      // Voided/Split) — a Draft or Partial row past due (or any future status
+      // this list doesn't yet know about) still counts, rather than silently
+      // disappearing.
+      const outstanding = rows.filter((p) => !isInvoiceSettled(p))
 
       return {
         currency,

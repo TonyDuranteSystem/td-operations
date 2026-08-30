@@ -45,6 +45,7 @@ import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[
 import { updateAccountContactRole, toggleDocumentPortalVisibility, disableAccountAutopay, sendAutopayEnrollmentLink } from '@/app/(dashboard)/accounts/actions'
 import { FinanceSummaryCard } from '@/components/shared/finance-summary-card'
 import { summarizeInvoicesForFinanceCard } from '@/lib/billing/finance-summary'
+import { isInvoiceOverdue } from '@/lib/billing/invoice-status'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { format, parseISO } from 'date-fns'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry, ChatAttachment } from '@/lib/types'
@@ -207,6 +208,7 @@ interface ContactInvoice {
   account_id: string | null
   contact_id: string | null
   portal_invoice_id: string | null
+  is_test: boolean | null
   accounts: { company_name: string } | null
 }
 
@@ -3805,13 +3807,13 @@ function InvoicesTab({ invoices, accounts, today }: { invoices: ContactInvoice[]
     )
   }
 
-  // Due-date-aware, matching PagamentiTab (account page) and the Finance
-  // summary card — a Sent invoice past its due date is overdue here too now,
-  // instead of silently reading "Pending" on this tab while the Overview
-  // card on the SAME page called the identical invoice overdue (council
-  // review, 2026-08-30).
+  // Overdue uses the SAME shared rule as PagamentiTab (account page) and the
+  // Finance summary card (lib/billing/invoice-status.ts) — a Sent invoice
+  // past its due date used to read "Pending" here while the Overview card on
+  // the SAME page called the identical invoice overdue (council review,
+  // 2026-08-30).
   const invStatus = (i: ContactInvoice) => i.invoice_status ?? i.status ?? ''
-  const overdue = real.filter(i => invStatus(i) === 'Overdue' || (invStatus(i) === 'Sent' && !!i.due_date && i.due_date < today))
+  const overdue = real.filter(i => isInvoiceOverdue(i, today))
   const pending = real.filter(i => ['Sent', 'Draft', 'Partial'].includes(invStatus(i)) && !(i.due_date && i.due_date < today))
   const paid = real.filter(i => invStatus(i) === 'Paid')
   const other = real.filter(i => !overdue.includes(i) && !pending.includes(i) && !paid.includes(i))
