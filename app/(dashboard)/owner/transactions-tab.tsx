@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { applyVendorRulesTo, normalizeVendorKey, type VendorRule } from '@/lib/owner-vendor-match'
 import type { OwnerTransaction, OwnerCategory } from '@/lib/owner-finance'
@@ -200,6 +200,40 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
       setLoading(false)
     }
   }, [year, filterCategory, search])
+
+  /**
+   * Re-fetch when the YEAR changes.
+   *
+   * The year <select> does a router.push, which re-renders the server component
+   * and delivers fresh props — but this tab is NOT remounted, and `rows` was
+   * seeded with useState(initialRows), which React does not re-initialise on a
+   * prop change. Without this effect the previous year's rows stay on screen
+   * under the new year's heading. Observed 2026-08-30: switching to 2025 kept all
+   * 78 rows of 2026 data visible while the header read 2025.
+   *
+   * That is not merely cosmetic here. The modal, the bulk bar and "apply to all
+   * like this" all act on the rows currently in state, so categorizing from a
+   * stale list writes to the OTHER year's records while the page says otherwise —
+   * which would break the hard rule that 2025 and 2026 stay separate.
+   *
+   * Deliberately calls load() rather than re-seeding from initialRows: the server
+   * always fetches category='uncategorized', while this tab owns the live filter.
+   * Re-seeding would silently drop the operator's chosen filter and show an
+   * uncategorized-only list under a filter chip claiming something else.
+   *
+   * The ref skips the first run — on mount the server props ARE the current year,
+   * and firing here would duplicate the initial fetch on every page load.
+   */
+  const seenYearRef = useRef(year)
+  useEffect(() => {
+    if (seenYearRef.current === year) return
+    seenYearRef.current = year
+    // Nothing from the previous year may survive into an action on this one.
+    setSelected(new Set())
+    setModal(null)
+    setOffset(0)
+    load(0)
+  }, [year, load])
 
   function openModal(tx: OwnerTransaction) {
     setModal({ tx, category: tx.category, subcategory: tx.subcategory ?? '', notes: tx.notes ?? '', similar: null, applyToAll: false, saveRule: false })

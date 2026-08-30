@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { OwnerPnL, PnLBlock } from '@/lib/owner-finance'
 
 const fmtIn = (currency: string) => (n: number) =>
@@ -15,6 +15,21 @@ export function PnLTab({ year, pnl }: PnLTabProps) {
   const [compare, setCompare] = useState(false)
   const [priorPnl, setPriorPnl] = useState<OwnerPnL | null>(null)
   const [loading, setLoading] = useState(false)
+
+  /**
+   * Drop the comparison when the YEAR changes.
+   *
+   * priorPnl is fetched against the year at click time, and this tab is not
+   * remounted when the year <select> navigates. Leaving it in place shows the
+   * PREVIOUS request's figures beside the new year — and the toggle relabels
+   * itself from the new `year`, so a 2025 comparison would sit under a button
+   * reading "Hide 2024 comparison". Wrong year, wrong label, on money.
+   * Turning it off is the honest reset: one click re-fetches for the new year.
+   */
+  useEffect(() => {
+    setCompare(false)
+    setPriorPnl(null)
+  }, [year])
 
   async function toggleCompare() {
     if (compare) { setCompare(false); return }
