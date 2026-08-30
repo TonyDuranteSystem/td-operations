@@ -41,6 +41,11 @@ export interface OwnerBooksRule {
    * direction alone must say which kind of account it is talking about.
    */
   accountTypes?: string[]
+  /**
+   * A rule that is right EXCEPT for a known family of exceptions. Cheaper and far
+   * more readable than a negative lookahead inside an already-long pattern.
+   */
+  exclude?: RegExp
 }
 
 export interface OwnerBooksMatch {
@@ -61,6 +66,50 @@ export const OWNER_BOOKS_RULES: OwnerBooksRule[] = [
     match: /PAYMENT THANK YOU|AUTOPAY PAYMENT|ONLINE PAYMENT THANK/i,
     category: 'transfer', subcategory: 'card_payment', direction: 'in',
     why: 'Own money paying down the card — the paying account records the other side.',
+  },
+
+  // ── Antonio's money moving between Antonio's own accounts ─────────────────
+  // THE MOST EXPENSIVE MISTAKE AVAILABLE IN THIS DATASET. Chase checking receives
+  // large ACH credits that are Antonio's OTHER business accounts sweeping into
+  // Chase — Airwallex ("NTE*ZZZ*Airwallex") and Mercury ("From Tony Durante LLC via
+  // mercury.com"). Each of those accounts is, or is being, loaded into these books
+  // with its own rows, so counting the arrival as income reports the same client
+  // money twice: about $150,000 from Airwallex and $210,000 from Mercury.
+  //
+  // The tell is the originator — Tony Durante LLC paying Tony Durante LLC.
+  {
+    // ORIG ID:1371913769 is Airwallex's own ACH originator id. It is the reliable
+    // tell: one sweep in April carries the entry description "Chase" rather than
+    // "Airwallex", and matching on the words alone missed $12,400 of it.
+    match: /CO ENTRY DESCR:\s*airwallex|NTE\*ZZZ\*airwallex|ORIG CO NAME:AIRWALLEX|ORIG ID:1371913769|MercuryACH|via mercury\.c|ORIG CO NAME:RELAY|RELAY FINANCIAL|ZELLE PAYMENT TO FIRSTCITIZENBANK/i,
+    category: 'transfer', subcategory: 'own_account',
+    why: "Own money swept in from another of Antonio's accounts, which is itself in these books.",
+  },
+  // Paying a card from the bank — the other side of the card statements' own
+  // "PAYMENT THANK YOU" rows. Both sides must be transfers or the payment is
+  // counted as an expense on top of the purchases it settled.
+  {
+    match: /PAYMENT TO CHASE CARD|ORIG CO NAME:AMERICAN EXPRESS|APPLECARD GSBANK|ORIG CO NAME:BEST BUY|CITI(CTP|AUTFDR)/i,
+    category: 'transfer', subcategory: 'card_payment',
+    why: 'Paying a credit card from the bank account.',
+  },
+
+  // Antonio moving money out to another of his own accounts: he is both the
+  // originator and the beneficiary, with a bare "TRANSFER" description.
+  {
+    match: /ORIG CO NAME:TONY DURANTE LLC[\s\S]*CO ENTRY DESCR:TRANSFER/i,
+    category: 'transfer', subcategory: 'own_account',
+    why: 'Own-account transfer — Tony Durante LLC on both sides.',
+  },
+
+  // Money arriving from Antonio himself. PROVEN, not inferred: First Citizens 5820
+  // shows "Zelle TONY DURANTE L" for $1,000 on 4 June and $2,000 on 27 June, and
+  // Chase checking shows "Zelle payment to FirstCitizenBank" for the same amounts on
+  // the same two days. Both sides are the same money.
+  {
+    match: /ZELLE (PAYMENT )?(FROM )?TONY DURANTE|ZELLE (PAYMENT )?(FROM )?ANTONIO DURANTE/i,
+    category: 'transfer', subcategory: 'own_account', direction: 'in',
+    why: "Own money arriving from another of Antonio's accounts.",
   },
 
   // ── A merchant giving money BACK ───────────────────────────────────────────
@@ -102,6 +151,40 @@ export const OWNER_BOOKS_RULES: OwnerBooksRule[] = [
     why: 'Mail redirection set up for a client address.',
   },
 
+  // ── Payroll ────────────────────────────────────────────────────────────────
+  // Gusto debits the total of wages, withheld taxes and its own fee as one ACH, so
+  // this is deliberately ONE line rather than a split invented from a lump sum.
+  // Antonio is the only person on payroll, which makes this officer compensation on
+  // the S-corp return.
+  {
+    match: /ORIG CO NAME:GUSTO|\bGUSTO\b/i,
+    category: 'expense', subcategory: 'payroll',
+    why: 'Payroll run — wages, withheld tax and the provider fee in one debit.',
+  },
+
+  // ── People who do the client work ─────────────────────────────────────────
+  {
+    match: /ZELLE PAYMENT TO LUCA/i,
+    category: 'cogs', subcategory: 'contractor',
+    why: 'Paid to Luca for client work — a direct cost of delivering the service.',
+  },
+
+  // ── Money out to the members ──────────────────────────────────────────────
+  // Jodi holds half the company. Money sent to her is a distribution, never an
+  // expense — it is the profit being split, not a cost of earning it.
+  {
+    match: /ZELLE PAYMENT TO JODI/i,
+    category: 'distribution', subcategory: 'member_distribution',
+    why: 'Distribution to the other 50% member.',
+  },
+
+  // ── The house, the car and the family ─────────────────────────────────────
+  {
+    match: /HOUSECHASE|ORIG CO NAME:ALLY\b|SUNCOAST CU LOAN|SUNCOASTCU|ZELLE PAYMENT TO JANET/i,
+    category: 'distribution', subcategory: 'owner_personal',
+    why: 'Personal: mortgage, car loan or family transfer paid from the company account.',
+  },
+
   // ── Advertising ────────────────────────────────────────────────────────────
   // The bank files these under "Professional Services". They are Meta ad spend.
   {
@@ -130,7 +213,7 @@ export const OWNER_BOOKS_RULES: OwnerBooksRule[] = [
 
   // ── Communications ─────────────────────────────────────────────────────────
   {
-    match: /TELLO|SPECTRUM|VERIZON|AT&T|T-MOBILE/i,
+    match: /TELLO|SPECTRUM|VERIZON|AT&T|T-?MOBILE/i,
     category: 'expense', subcategory: 'telephone_internet',
     why: 'Phone or internet service.',
   },
@@ -161,6 +244,35 @@ export const OWNER_BOOKS_RULES: OwnerBooksRule[] = [
     match: /IRS PTIN|PTIN FEE|LICENSE RENEWAL/i,
     category: 'expense', subcategory: 'licenses_permits',
     why: 'Professional licence required to prepare returns.',
+  },
+
+  // ── Client money arriving ─────────────────────────────────────────────────
+  // 2025 income is measured from money actually received: the invoice ledger holds
+  // nothing before 2026, and Relay, Mercury and Airwallex receipts were never
+  // invoiced at all. The processor settlements below are the ONLY record of that
+  // money, which is what makes them income rather than a transfer — unlike Airwallex
+  // above, whose own account is in these books.
+  {
+    match: /ZOHO PAYMENTS|ORIG CO NAME:PAYONEER/i,
+    category: 'income', subcategory: 'client_payment', direction: 'in',
+    why: 'Client payment settled by the payment processor into the bank.',
+  },
+  {
+    // Clients paying by international transfer, which arrives naming the sender and
+    // often the invoice: "FROM: BNF-MC Digital Solutions LLC Via WISE REF: ...INV-00069".
+    match: /REAL TIME TRANSFER RECD[\s\S]*BNF-/i,
+    exclude: /BNF-\s*TONY DURANTE|BNF-\s*ANTONIO DURANTE/i,
+    category: 'income', subcategory: 'client_payment', direction: 'in',
+    why: 'Client paying by international transfer.',
+  },
+  {
+    // An incoming Zelle from a named person or company is a client paying. The
+    // exclusion is what keeps it honest: Antonio moving his OWN money in would
+    // otherwise be booked as revenue.
+    match: /ZELLE PAYMENT FROM/i,
+    exclude: /TONY DURANTE|ANTONIO DURANTE|FIRSTCITIZEN|\bJODI\b/i,
+    category: 'income', subcategory: 'client_payment', direction: 'in',
+    why: 'Client paying by Zelle.',
   },
 
   // ── What the card itself charges ───────────────────────────────────────────
@@ -203,13 +315,13 @@ export const OWNER_PERSONAL_RULES: OwnerBooksRule[] = [
   {
     // Vehicle, fuel and repairs. TD's work is done from a desk; a car charge on the
     // company card is personal unless Antonio says a trip was for a client.
-    match: /BERT SMITH|SHELL OIL|BURT'S GAS|\bEXXON\b|\bCHEVRON\b|AUTOZONE|OLDSMOBILE/i,
+    match: /BERT SMITH|SHELL OIL|BURT'S GAS|\bEXXON\b|\bCHEVRON\b|AUTOZONE|OLDSMOBILE|SETOYOTA|TOYOTA FIN/i,
     category: 'distribution', subcategory: 'owner_personal',
     why: 'Vehicle or fuel — defaults to a distribution unless it was a client trip.',
   },
   {
     // Groceries, pharmacy, clothing, personal care.
-    match: /PUBLIX|WALGREENS|\bCVS\b|BURLINGTON|PRIMO WATER|SP RA OPTICS|SP HIZOO|ENGINEEREDNUTRITION|DOC FORDS|WALMART|TARGET\b/i,
+    match: /PUBLIX|WINN-?DIXIE|WALGREENS|\bCVS\b|BURLINGTON|PRIMO WATER|SP RA OPTICS|SP HIZOO|ENGINEEREDNUTRITION|DOC FORDS|WALMART|TARGET\b/i,
     category: 'distribution', subcategory: 'owner_personal',
     why: 'Household or personal retail purchase.',
   },
@@ -258,6 +370,7 @@ export function classifyOwnerTransaction(
     if (direction === 'in' && amount <= 0) continue
     if (direction === 'out' && amount >= 0) continue
     if (rule.accountTypes && !rule.accountTypes.includes(accountType || '')) continue
+    if (rule.exclude && rule.exclude.test(text)) continue
     if (rule.match.test(text)) {
       return { category: rule.category, subcategory: rule.subcategory, why: rule.why }
     }

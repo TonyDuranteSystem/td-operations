@@ -14,6 +14,23 @@ import { classifyOwnerTransaction, OWNER_BOOKS_RULES } from "@/lib/owner-books-r
 const card = (d: string, a: number) => classifyOwnerTransaction(d, a, "credit_card")
 const checking = (d: string, a: number) => classifyOwnerTransaction(d, a, "checking")
 
+/**
+ * Turn a rule's pattern back into a description that should match it — the first
+ * alternative, with the regex syntax rendered as the literal text it stands for.
+ * Used by the reachability test below to prove every rule is still reachable after
+ * a new rule is added above it.
+ */
+function probeFor(re: RegExp): string {
+  return re.source
+    .split("|")[0]
+    .replace(/\(([^)|]*)(\|[^)]*)?\)/g, "$1")  // (CTP|AUTFDR) -> CTP
+    .replace(/\\s\*|\\s\+|\\s/g, " ")
+    .replace(/(.)\?/g, "$1")                    // T-?MOBILE -> T-MOBILE
+    .replace(/\\b/g, "")
+    .replace(/\\(.)/g, "$1")                    // \. -> .   \* -> *
+    .trim()
+}
+
 describe("cost of delivering the service is not overhead", () => {
   it("state filing fees are COGS", () => {
     // 141 of these in one year is client volume, not TD's own annual report.
@@ -90,8 +107,14 @@ describe("order — a general rule must not swallow a specific one", () => {
     const seen = new Set<string>()
     for (const rule of OWNER_BOOKS_RULES) {
       if (rule.match.source === ".*") continue // the deliberate card-refund catch-all
-      const word = rule.match.source.split("|")[0].replace(/\\[bs*.]|\\/g, "").trim()
-      const hit = classifyOwnerTransaction(word, rule.direction === "in" ? 100 : -100, "credit_card")
+      const word = probeFor(rule.match)
+      // A rule can legitimately exclude its own first alternative (the Zelle income
+      // rule excludes Antonio's own name); skip those rather than fail them.
+      if (rule.exclude?.test(word)) continue
+      // Probe against a bank account unless the rule is card-only: the card
+      // catch-all refund rule would otherwise answer for every inbound rule.
+      const on = rule.accountTypes?.includes("credit_card") ? "credit_card" : "checking"
+      const hit = classifyOwnerTransaction(word, rule.direction === "in" ? 100 : -100, on)
       expect(hit, `"${word}" should reach its own rule`).toBeTruthy()
       expect(`${hit!.category}/${hit!.subcategory}`).toBe(`${rule.category}/${rule.subcategory}`)
       seen.add(word)
