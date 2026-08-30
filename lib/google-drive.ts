@@ -20,7 +20,8 @@ interface SACredentials {
   token_uri: string
 }
 
-let cachedToken: { token: string; expiresAt: number } | null = null
+/** Access tokens keyed by impersonated subject — see getAccessToken(). */
+const tokenCache = new Map<string, { token: string; expiresAt: number }>()
 
 function getCredentials(): SACredentials {
   const b64 = process.env.GOOGLE_SA_KEY
@@ -35,6 +36,24 @@ const IMPERSONATE_EMAIL = () =>
   process.env.GOOGLE_IMPERSONATE_EMAIL || "support@tonydurante.us"
 const SHARED_DRIVE_ID = () =>
   process.env.GOOGLE_SHARED_DRIVE_ID || "0AOLZHXSfKUMHUk9PVA"
+
+/**
+ * The OWNER's own Google identity and the single folder tree in his personal
+ * My Drive that owner-scoped search is allowed to reach.
+ *
+ * Deliberately NOT the operational identity: the owner's accounting folder is
+ * not shared with support@, and must not be. Impersonating him directly means
+ * nothing has to be shared with the company identity to make search work, so
+ * the privacy boundary that exists in Drive today stays exactly where it is.
+ *
+ * Scoping to a ROOT FOLDER (not his whole Drive) is the second half of that:
+ * owner search reaches his accounting records and nothing else he happens to
+ * keep in My Drive.
+ */
+const OWNER_IMPERSONATE_EMAIL = () =>
+  process.env.GOOGLE_OWNER_IMPERSONATE_EMAIL || "antonio.durante@tonydurante.us"
+const OWNER_DRIVE_ROOT_FOLDER_ID = () =>
+  process.env.GOOGLE_OWNER_DRIVE_FOLDER_ID || "1FK9o4ipElMUJ3zhd7vgQr3uvBte_azok"
 
 /**
  * Whether Drive writes/reads should be MOCKED. Historically this was a bare
@@ -57,10 +76,25 @@ function driveMocked(): boolean {
 
 // ─── Token Management ───────────────────────────────────────
 
-async function getAccessToken(): Promise<string> {
+/**
+ * Get an access token for a specific impersonated user.
+ *
+ * `subject` defaults to the operational identity (support@) that every existing
+ * caller uses. The owner-Drive path passes Antonio's own address instead — the
+ * two identities see DIFFERENT files, which is the whole point: verified
+ * 2026-08-30, support@ CANNOT see "My Drive > TD Accounting" at all, so the
+ * owner's private financial documents are not reachable on the default path.
+ *
+ * The cache is therefore keyed BY SUBJECT. A single shared slot would hand one
+ * identity's token to the other on the next call — silently leaking the owner's
+ * Drive to every support@ caller, or breaking owner reads at random depending on
+ * which identity warmed the cache first.
+ */
+async function getAccessToken(subject: string = IMPERSONATE_EMAIL()): Promise<string> {
   // Return cached token if still valid (5 min buffer)
-  if (cachedToken && Date.now() < cachedToken.expiresAt - 5 * 60 * 1000) {
-    return cachedToken.token
+  const cached = tokenCache.get(subject)
+  if (cached && Date.now() < cached.expiresAt - 5 * 60 * 1000) {
+    return cached.token
   }
 
   const creds = getCredentials()
@@ -70,7 +104,7 @@ async function getAccessToken(): Promise<string> {
   const privateKey = await importPKCS8(creds.private_key, "RS256")
   const assertion = await new SignJWT({
     scope: SCOPES,
-    sub: IMPERSONATE_EMAIL(),
+    sub: subject,
   })
     .setProtectedHeader({ alg: "RS256", typ: "JWT" })
     .setIssuer(creds.client_email)
@@ -95,10 +129,10 @@ async function getAccessToken(): Promise<string> {
   }
 
   const data = (await res.json()) as { access_token: string; expires_in: number }
-  cachedToken = {
+  tokenCache.set(subject, {
     token: data.access_token,
     expiresAt: Date.now() + data.expires_in * 1000,
-  }
+  })
 
   return data.access_token
 }
@@ -183,6 +217,36 @@ async function driveUpload(
   return res.json()
 }
 
+/**
+ * Drive GET performed as the OWNER rather than the operational identity.
+ *
+ * No driveId/corpora is set: this targets his personal My Drive, not the client
+ * Shared Drive. Kept separate from driveGet() so the two identities can never be
+ * mixed up by an accidental parameter default.
+ */
+async function ownerDriveGet(endpoint: string, params?: Record<string, string>) {
+  const token = await getAccessToken(OWNER_IMPERSONATE_EMAIL())
+  const url = new URL(`${DRIVE_API}${endpoint}`)
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      url.searchParams.set(k, v)
+    }
+  }
+
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(
+      `Drive API ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`
+    )
+  }
+
+  return res.json()
+}
+
 // ─── Public API ─────────────────────────────────────────────
 
 /**
@@ -206,6 +270,80 @@ export async function searchFiles(
   })
 
   return result
+}
+
+/**
+ * Escape a value for embedding in a Drive `q` string literal.
+ * Drive uses backslash escaping inside single-quoted literals; a raw apostrophe
+ * (or backslash) would otherwise terminate the literal and change the query's
+ * meaning. Backslash MUST be replaced first or it would double-escape the
+ * apostrophes this same call just inserted.
+ */
+function escapeDriveQueryValue(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")
+}
+
+/**
+ * Collect the owner root folder plus its descendant folder IDs (breadth-first).
+ *
+ * Drive has no "search this subtree" operator — `'X' in parents` matches DIRECT
+ * children only. Without this walk, an owner search would silently miss every
+ * file that sits in a SUBFOLDER of the accounting folder, which is where the
+ * statements actually live. Bounded by depth and count so a deep or wide tree
+ * can never turn one search into unbounded API traffic.
+ */
+async function collectOwnerFolderIds(maxFolders = 100, maxDepth = 5): Promise<string[]> {
+  const root = OWNER_DRIVE_ROOT_FOLDER_ID()
+  const collected = [root]
+  let frontier = [root]
+  let depth = 0
+
+  while (frontier.length > 0 && depth < maxDepth && collected.length < maxFolders) {
+    const parentClause = frontier.map((id) => `'${escapeDriveQueryValue(id)}' in parents`).join(" or ")
+    const result = (await ownerDriveGet("/files", {
+      q: `(${parentClause}) and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+      fields: "files(id)",
+      pageSize: "100",
+    })) as { files?: { id: string }[] }
+
+    const next = (result.files || []).map((f) => f.id).filter((id) => !collected.includes(id))
+    for (const id of next) {
+      if (collected.length >= maxFolders) break
+      collected.push(id)
+    }
+    frontier = next
+    depth++
+  }
+
+  return collected
+}
+
+/**
+ * Search the OWNER's private accounting folder tree, as the owner.
+ *
+ * Runs under his own Google identity, so it sees files that the operational
+ * support@ identity provably cannot (verified 2026-08-30). Callers MUST gate
+ * this on the requester actually being the owner — see callerIsOwner() in
+ * lib/mcp/auth-context.ts. It is a separate function rather than a flag on
+ * searchFiles() precisely so an ungated call site is visible in review.
+ */
+export async function searchOwnerDriveFiles(
+  query: string,
+  mimeType?: string,
+  maxResults = 25,
+) {
+  const folderIds = await collectOwnerFolderIds()
+  const parentClause = folderIds.map((id) => `'${escapeDriveQueryValue(id)}' in parents`).join(" or ")
+
+  let q = `name contains '${escapeDriveQueryValue(query)}' and (${parentClause})`
+  if (mimeType) q += ` and mimeType = '${escapeDriveQueryValue(mimeType)}'`
+  q += " and trashed = false"
+
+  return ownerDriveGet("/files", {
+    q,
+    fields: "files(id,name,mimeType,size,createdTime,modifiedTime,parents,webViewLink)",
+    pageSize: String(Math.min(maxResults, 100)),
+  })
 }
 
 /**

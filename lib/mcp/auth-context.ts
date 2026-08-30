@@ -51,3 +51,34 @@ export function actingEmailForTeamChat(): string | null {
   }
   return ctx.email?.trim() || null
 }
+
+/** The owner — the only identity allowed to reach his own private Drive folder. */
+const OWNER_EMAIL = 'antonio.durante@tonydurante.us'
+
+/**
+ * Whether THIS request may reach the owner's private accounting Drive folder.
+ *
+ * FAILS CLOSED — unlike actingEmailForTeamChat(), which resolves "unknown" to
+ * null and then notifies everyone, an unknown caller here must get NOTHING.
+ * The downside of guessing wrong is exposing Antonio's personal financial
+ * documents, so absent context is a denial, never a default.
+ *
+ *   static key → allowed. The shared TD_MCP_API_KEY is a server-side secret whose
+ *     holder ALREADY has execute_sql against production and can read the owner's
+ *     books directly, so this grants no new reach — and Claude Code, the surface
+ *     Antonio actually works in, authenticates this way. Rotate the assumed
+ *     operator with MCP_TEAM_CHAT_ACTOR_EMAIL if the key ever stops being his.
+ *   oauth      → allowed ONLY when the token's user IS the owner. support@ is a
+ *     registered oauth user and must NOT pass: it is the shared operational
+ *     identity, and in Drive it provably cannot see the folder anyway.
+ *   no context → denied.
+ */
+export function callerIsOwner(): boolean {
+  const ctx = getMcpAuthContext()
+  if (!ctx) return false
+  if (ctx.method === 'static') {
+    const operator = process.env.MCP_TEAM_CHAT_ACTOR_EMAIL || OWNER_EMAIL
+    return operator.trim().toLowerCase() === OWNER_EMAIL
+  }
+  return (ctx.email?.trim().toLowerCase() ?? '') === OWNER_EMAIL
+}
