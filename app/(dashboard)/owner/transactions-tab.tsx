@@ -137,6 +137,7 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
   const [bulkCategory, setBulkCategory] = useState<OwnerCategory>('expense')
   const [bulkSubcategory, setBulkSubcategory] = useState('')
   const [rules, setRules] = useState<VendorRule[]>([])
+  const [uploading, setUploading] = useState<{ done: number; total: number } | null>(null)
   const LIMIT = 50
 
   const loadRules = useCallback(() => {
@@ -309,6 +310,51 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
     }
   }
 
+  /**
+   * Statement upload — ONE FILE PER REQUEST (see the route's own comment for
+   * why), sent sequentially so a slow PDF doesn't block the others and each
+   * file's real outcome (imported / quarantined / no transactions found /
+   * error) is reported honestly rather than collapsed into one pass/fail.
+   * Nothing gets categorized here — every row lands uncategorized, same rule
+   * as everywhere else in this table.
+   */
+  async function uploadFiles(files: FileList) {
+    const list = Array.from(files)
+    setUploading({ done: 0, total: list.length })
+    let totalImported = 0
+    const problems: string[] = []
+
+    for (let i = 0; i < list.length; i++) {
+      const file = list[i]
+      try {
+        const body = new FormData()
+        body.append('file', file)
+        const res = await fetch('/api/owner/transactions/upload', { method: 'POST', body })
+        const d = await res.json().catch(() => ({}))
+        if (!res.ok || d.error) {
+          problems.push(`${file.name}: ${d.error || 'upload failed'}`)
+        } else if (typeof d.imported === 'number') {
+          totalImported += d.imported
+          if (d.imported === 0 && d.parsed_count > 0) {
+            problems.push(`${file.name}: found ${d.parsed_count} transaction(s), all already in your books`)
+          }
+        }
+      } catch {
+        problems.push(`${file.name}: upload failed`)
+      }
+      setUploading({ done: i + 1, total: list.length })
+    }
+
+    setUploading(null)
+    if (totalImported > 0) toast.success(`Imported ${totalImported} new transaction(s) from ${list.length} file(s)`)
+    if (problems.length > 0) {
+      toast.error(problems.length === 1 ? problems[0] : `${problems.length} file(s) need attention: ${problems.join(' | ')}`)
+    } else if (totalImported === 0) {
+      toast.error('Nothing new to import from those file(s)')
+    }
+    load(offset)
+  }
+
   const uncategorizedCount = rows.filter(r => r.category === 'uncategorized').length
 
   return (
@@ -444,6 +490,22 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
           </div>
         </div>
       )}
+
+      {/* Statement upload */}
+      <div className="flex items-center gap-3">
+        <label className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-50 ${uploading ? 'pointer-events-none opacity-60' : ''}`}>
+          {uploading ? `Uploading ${uploading.done}/${uploading.total}…` : 'Upload statements'}
+          <input
+            type="file"
+            multiple
+            accept=".csv,.pdf"
+            className="hidden"
+            disabled={!!uploading}
+            onChange={e => { if (e.target.files && e.target.files.length > 0) uploadFiles(e.target.files); e.target.value = '' }}
+          />
+        </label>
+        <span className="text-xs text-zinc-500">CSV or PDF, any bank — lands uncategorized, nothing is guessed</span>
+      </div>
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
