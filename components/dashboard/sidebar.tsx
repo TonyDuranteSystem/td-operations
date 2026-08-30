@@ -79,6 +79,14 @@ interface NavItem {
   /** Secondary purple badge — used for the Portal Chats "What's New" unhandled count. */
   purpleBadge?: number
   adminOnly?: boolean
+  /**
+   * Visible ONLY to the code-level owner account. Stricter than adminOnly, and
+   * needed wherever the destination's own guard is isOwnerOnly: an item shown to
+   * a wider audience than the page admits is a silent dead link — the visitor is
+   * redirected home with no explanation, which is exactly what "My Finances" did
+   * to every admin between 2026-08-29 and 2026-08-30.
+   */
+  ownerOnly?: boolean
   featureFlag?: string
   tooltip?: string
 }
@@ -119,7 +127,7 @@ const defaultNavigation: NavItem[] = [
   // DO NOT REMOVE - Tools sidebar entry. Operator tools hub lives here.
   { id: 'tools', name: 'Tools', href: '/tools', icon: Wrench, tooltip: 'Operator tools hub — fax, e-sign, system health, exceptions, client health, config, dev tools, portal launch.' },
   { id: 'finance', name: 'Finance', href: '/finance', icon: Wallet, tooltip: 'Invoices, payments, bank feed reconciliation, and financial overview. Includes the bank-feed review queue for uncertain auto-matches and crashed activations.' },
-  { id: 'owner', name: 'My Finances', href: '/owner', icon: TrendingUp, adminOnly: true, tooltip: 'Tony Durante LLC — P&L, cash position, transaction categorization, tax estimates. Admin only.' },
+  { id: 'owner', name: 'My Finances', href: '/owner', icon: TrendingUp, ownerOnly: true, tooltip: 'Tony Durante LLC — P&L, cash position, transaction categorization, tax estimates. Owner only.' },
   { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText, tooltip: 'Tax return filing tracker — status, deadlines, and accountant assignments.' },
   { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar, tooltip: 'Upcoming deadlines, meetings, and scheduled events.' },
   { id: 'partners', name: 'Partners', href: '/partners', icon: Users, tooltip: 'Client-bringing partners — Maxscale, Fiscalot, Fresh Legal Group. View managed clients and invoices.' },
@@ -550,6 +558,7 @@ export function Sidebar({
     .filter((item): item is NavItem => {
       if (!item) return false
       if (item.adminOnly && !isAdmin) return false
+      if (item.ownerOnly && !isOwner) return false
       if (item.featureFlag && !enabledFeatures.includes(item.featureFlag)) return false
       return true
     })

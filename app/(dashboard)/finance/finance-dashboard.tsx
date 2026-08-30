@@ -41,24 +41,32 @@ interface Props {
   allInvoicesFlat: InvoiceRecord[]
   tdExpenses: TDExpenseRecord[]
   isAdmin: boolean
+  /**
+   * True only for the code-level owner account. The Expenses tab holds TD's own
+   * outgoing money, which is owner-private like the rest of My Finances — and the
+   * write actions behind it already refuse anyone else (expense-actions.ts). Before
+   * this, the tab was merely `adminOnly`, so a non-owner admin could READ the
+   * vendor bills and then hit a raw "Forbidden" on any edit.
+   */
+  isOwner: boolean
   /** Card-fee master switch state — null for non-admins (hides the card). */
   cardFee?: { enabled: boolean; ratePercent: number } | null
   recurringTemplates: RecurringTemplateListRow[]
 }
 
 const allTabs = [
-  { id: 'clients', label: 'Clients & Invoices', icon: Users, tooltip: 'Create and manage invoices for each client. Track payments, credits, and balances.', adminOnly: false },
-  { id: 'recurring', label: 'Recurring', icon: Repeat, tooltip: 'Every recurring invoice schedule — turn one on or off.', adminOnly: false },
-  { id: 'expenses', label: 'Expenses', icon: Receipt, tooltip: 'TD operating expenses — vendor bills, filing fees, software, services.', adminOnly: true },
-  { id: 'bank', label: 'Bank Feed', icon: Landmark, tooltip: 'Match incoming bank transactions to open invoices. Auto-reconcile payments.', adminOnly: false },
-  { id: 'overview', label: 'Overview', icon: BarChart3, tooltip: 'Financial summary — aging buckets, outstanding totals, and recent activity.', adminOnly: false },
+  { id: 'clients', label: 'Clients & Invoices', icon: Users, tooltip: 'Create and manage invoices for each client. Track payments, credits, and balances.', adminOnly: false, ownerOnly: false },
+  { id: 'recurring', label: 'Recurring', icon: Repeat, tooltip: 'Every recurring invoice schedule — turn one on or off.', adminOnly: false, ownerOnly: false },
+  { id: 'expenses', label: 'Expenses', icon: Receipt, tooltip: 'TD operating expenses — vendor bills, filing fees, software, services.', adminOnly: false, ownerOnly: true },
+  { id: 'bank', label: 'Bank Feed', icon: Landmark, tooltip: 'Match incoming bank transactions to open invoices. Auto-reconcile payments.', adminOnly: false, ownerOnly: false },
+  { id: 'overview', label: 'Overview', icon: BarChart3, tooltip: 'Financial summary — aging buckets, outstanding totals, and recent activity.', adminOnly: false, ownerOnly: false },
 ]
 
 export function FinanceDashboard({
   activeTab, clientList, selectedClientId,
   clientInvoices, clientCreditNotes, clientAuditLog, clientPaymentHistory,
   stats, agingBuckets, recentAuditLog, bankFeeds, bankOpenInvoices, bankFeedTotalCount,
-  allInvoicesFlat, tdExpenses, isAdmin, cardFee, recurringTemplates,
+  allInvoicesFlat, tdExpenses, isAdmin, isOwner, cardFee, recurringTemplates,
 }: Props) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -91,7 +99,7 @@ export function FinanceDashboard({
 
         {/* Tabs — horizontally scrollable on mobile so all tabs stay reachable */}
         <div className="flex gap-1 overflow-x-auto -mx-1 px-1">
-          {allTabs.filter(t => !t.adminOnly || isAdmin).map(t => (
+          {allTabs.filter(t => (!t.adminOnly || isAdmin) && (!t.ownerOnly || isOwner)).map(t => (
             <FastTooltip key={t.id} label={t.tooltip}>
               <button
                 onClick={() => switchTab(t.id)}
@@ -155,7 +163,11 @@ export function FinanceDashboard({
         {tab === 'recurring' && (
           <RecurringTab templates={recurringTemplates} />
         )}
-        {tab === 'expenses' && (
+        {/* isOwner re-checked here, not just on the tab strip: `tab` seeds from the
+            URL (?tab=expenses), so hiding the button alone would still render this
+            for a non-owner who types the address. The server sends them an empty
+            list regardless — this stops the bare panel showing at all. */}
+        {tab === 'expenses' && isOwner && (
           <ExpensesTab expenses={tdExpenses} />
         )}
         {tab === 'bank' && (
