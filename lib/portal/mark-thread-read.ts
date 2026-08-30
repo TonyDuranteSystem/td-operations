@@ -13,9 +13,11 @@
  *
  * Moving it server-side into the reply WRITE itself makes it fire every time,
  * on every surface. The read scope mirrors the thread the reply lands in —
- * identical to POST /api/portal/chat/read for a staff (dashboard) caller, minus
- * the topic filter (a reply means the whole conversation was seen, so all
- * topics clear — this also fixes named-topic messages that used to linger).
+ * identical to POST /api/portal/chat/read for a staff (dashboard) caller,
+ * INCLUDING the topic filter: a reply only clears the topic it was sent in,
+ * never the whole conversation (2026-08-30 — a reply used to clear every
+ * topic at once, silently marking unrelated unread topics as seen the moment
+ * staff answered something else; caught via 18 confirmed production cases).
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { multiMemberAccountIds } from "@/lib/portal/thread-scope"
@@ -69,8 +71,16 @@ export function buildStaffReplyReadPlan(params: {
 export async function markClientMessagesReadForStaffReply(params: {
   account_id: string | null
   contact_id: string | null
+  /**
+   * The reply's own topic (null = General). REQUIRED, not optional — every
+   * caller must decide it explicitly so this can't silently regress back to
+   * clearing every topic. Callers that never set a topic on their own
+   * message (the MCP send tool, the AI worker) pass null, which is correct:
+   * their message always lands in General.
+   */
+  topic: string | null
 }): Promise<number> {
-  const { account_id, contact_id } = params
+  const { account_id, contact_id, topic } = params
   if (!account_id && !contact_id) return 0
 
   let linkedAccountIds: string[] = []
@@ -102,6 +112,9 @@ export async function markClientMessagesReadForStaffReply(params: {
   // read_at — see lib/portal/chat-events.ts.
   const NOT_CHAT_EVENT = '%<!-- chat-event:%'
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- chained Supabase query builder, shape varies per branch below
+  const applyTopicFilter = (q: any) => (topic === null ? q.is("topic", null) : q.eq("topic", topic))
+
   for (const step of plan) {
     if (step.kind === "account") {
       let q = supabaseAdmin
@@ -111,6 +124,7 @@ export async function markClientMessagesReadForStaffReply(params: {
         .in("sender_type", ["client", "system"])
         .not("message", "ilike", NOT_CHAT_EVENT)
         .is("read_at", null)
+      q = applyTopicFilter(q)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
       q = (q as any).eq("client_kept_unread", false)
       const { count } = await q
@@ -123,6 +137,7 @@ export async function markClientMessagesReadForStaffReply(params: {
         .in("sender_type", ["client", "system"])
         .not("message", "ilike", NOT_CHAT_EVENT)
         .is("read_at", null)
+      q = applyTopicFilter(q)
       if (step.excludeAccountIds.length > 0) {
         q = q.or(`account_id.is.null,account_id.not.in.(${step.excludeAccountIds.join(",")})`)
       }
@@ -139,6 +154,7 @@ export async function markClientMessagesReadForStaffReply(params: {
         .in("sender_type", ["client", "system"])
         .not("message", "ilike", NOT_CHAT_EVENT)
         .is("read_at", null)
+      q = applyTopicFilter(q)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
       q = (q as any).eq("client_kept_unread", false)
       const { count } = await q

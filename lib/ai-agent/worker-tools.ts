@@ -1757,6 +1757,9 @@ export async function sendPortalMessageFromWorker(input: {
   await markClientMessagesReadForStaffReply({
     account_id: accountId ?? null,
     contact_id: resolvedContactId ?? null,
+    // The AI worker never tags its own insert with a topic — the message
+    // always lands in General, so the read-clear must match (2026-08-30).
+    topic: null,
   }).catch(() => 0)
 
   // Resolve the recipient's display name for the confirmation, so staff always

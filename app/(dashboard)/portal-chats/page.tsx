@@ -192,6 +192,64 @@ interface PendingAdminFile {
   previewUrl?: string
 }
 
+// Draft persistence (2026-08-30) — survives leaving the Portal Chats page
+// entirely and coming back, not just switching between clients. See the
+// clientDraftsRef comment below for the full story.
+//
+// ONE localStorage key PER CONVERSATION, not one shared blob (redesigned
+// after council review, 2026-08-30 — AI Architect + Bug Hunter). The first
+// version stored every conversation's draft in a single object and rewrote
+// the whole thing on every save; two Portal Chats tabs open on DIFFERENT
+// clients could then silently wipe each other's saved draft, because
+// whichever tab saved last overwrote the entire blob, not just its own
+// conversation. Per-key storage makes that impossible — two tabs on
+// different clients write different keys. Two tabs on the SAME conversation
+// are still last-write-wins on that one key, which is an accepted,
+// unavoidable tradeoff, not a bug.
+//
+// pendingAdminFiles is never included — a File object can't survive a round
+// trip through localStorage.
+const PORTAL_CHAT_DRAFT_KEY_PREFIX = 'td_portal_chat_draft_v1_'
+const PORTAL_CHAT_DRAFT_TTL_MS = 7 * 24 * 3600_000
+
+interface PersistedChatDraftEntry {
+  replyText: string
+  replyToMsg: { id: string; message: string; sender_type: string } | null
+  savedAt: number
+}
+
+function portalChatDraftStorageKey(threadKey: string): string {
+  return PORTAL_CHAT_DRAFT_KEY_PREFIX + threadKey
+}
+
+function loadPersistedChatDraft(threadKey: string): PersistedChatDraftEntry | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(portalChatDraftStorageKey(threadKey))
+    if (!raw) return null
+    const entry = JSON.parse(raw) as PersistedChatDraftEntry
+    const cutoff = Date.now() - PORTAL_CHAT_DRAFT_TTL_MS
+    if (entry && typeof entry.savedAt === 'number' && entry.savedAt >= cutoff && entry.replyText) return entry
+    return null
+  } catch { /* private browsing, disabled storage, or corrupt JSON — treat as no saved draft */
+    return null
+  }
+}
+
+/** Writes exactly one conversation's draft, or removes it when there's no
+ *  real unsent text left — never touches any other conversation's key. */
+function savePersistedChatDraft(threadKey: string, entry: { replyText: string; replyToMsg: PersistedChatDraftEntry['replyToMsg'] } | null) {
+  if (typeof window === 'undefined') return
+  try {
+    const key = portalChatDraftStorageKey(threadKey)
+    if (!entry || !entry.replyText.trim()) {
+      window.localStorage.removeItem(key)
+    } else {
+      window.localStorage.setItem(key, JSON.stringify({ replyText: entry.replyText, replyToMsg: entry.replyToMsg, savedAt: Date.now() }))
+    }
+  } catch { /* private browsing / storage quota — draft just won't survive a reload */ }
+}
+
 export default function PortalChatsPage() {
   const urlParams = useSearchParams()
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(urlParams.get('account'))
@@ -447,9 +505,25 @@ export default function PortalChatsPage() {
   // panel — switching to a different client left whatever was mid-draft for
   // the PREVIOUS client sitting in the box, addressed to the new one. Each
   // conversation's in-progress reply is now saved when you switch away and
-  // restored if you come back; kept only in memory for this open tab, not
-  // persisted to the server or browser storage.
-  const clientDraftsRef = useRef(new Map<string, { replyText: string; replyToMsg: typeof replyToMsg; pendingAdminFiles: PendingAdminFile[] }>())
+  // restored if you come back.
+  //
+  // Backed by localStorage since 2026-08-30 (Antonio: text was disappearing
+  // whenever he left the Portal Chats page entirely and came back — the map
+  // below used to live ONLY in this component's memory, so a full unmount
+  // (navigating elsewhere in the CRM) discarded it same as closing the tab).
+  // pendingAdminFiles is deliberately NOT persisted — a File object can't
+  // survive being written to localStorage, so an attached-but-unsent file is
+  // still lost on a real reload; only the typed text and which message you
+  // were replying to survive.
+  const clientDraftsRef = useRef<Map<string, { replyText: string; replyToMsg: typeof replyToMsg; pendingAdminFiles: PendingAdminFile[] }> | null>(null)
+  if (clientDraftsRef.current === null) {
+    // Starts empty — each conversation's persisted draft, if any, is loaded
+    // from its own localStorage key lazily, the first time that conversation
+    // is opened this tab-session (see the restore effect below). Loading
+    // every saved draft up front isn't needed now that each lives under its
+    // own key, and avoids paying for every never-opened conversation's read.
+    clientDraftsRef.current = new Map()
+  }
   const clientDraftSnapshotRef = useRef({ replyText, replyToMsg, pendingAdminFiles })
   useEffect(() => {
     clientDraftSnapshotRef.current = { replyText, replyToMsg, pendingAdminFiles }
@@ -468,8 +542,17 @@ export default function PortalChatsPage() {
   })
   const clientThreadKey = selectedAccountId || selectedContactId || null
   useEffect(() => {
-    const draftsMap = clientDraftsRef.current
-    const saved = clientThreadKey ? draftsMap.get(clientThreadKey) : undefined
+    const draftsMap = clientDraftsRef.current!
+    let saved = clientThreadKey ? draftsMap.get(clientThreadKey) : undefined
+    // Not yet touched this tab-session — check this ONE conversation's own
+    // localStorage key (per-conversation storage, 2026-08-30 redesign).
+    if (!saved && clientThreadKey) {
+      const persisted = loadPersistedChatDraft(clientThreadKey)
+      if (persisted) {
+        saved = { replyText: persisted.replyText, replyToMsg: persisted.replyToMsg, pendingAdminFiles: [] }
+        draftsMap.set(clientThreadKey, saved)
+      }
+    }
     setReplyText(saved?.replyText ?? '')
     setReplyToMsg(saved?.replyToMsg ?? null)
     setPendingAdminFiles(saved?.pendingAdminFiles ?? [])
@@ -480,10 +563,21 @@ export default function PortalChatsPage() {
     setAiSuggestion('')
     setCrossBorderNotes([])
     setAiLoading(false)
+    // Real tab close / hard refresh doesn't reliably run a React cleanup in
+    // every browser — this is the same safety net the client portal's own
+    // chat composer already uses (components/portal/portal-chat.tsx) for the
+    // identical problem, so a true unload is still caught even when the
+    // switch-away cleanup below doesn't get to run in time.
+    const persistCurrentDraft = () => {
+      if (!clientThreadKey) return
+      const snapshot = { ...clientDraftSnapshotRef.current }
+      draftsMap.set(clientThreadKey, snapshot)
+      savePersistedChatDraft(clientThreadKey, { replyText: snapshot.replyText, replyToMsg: snapshot.replyToMsg })
+    }
+    window.addEventListener('beforeunload', persistCurrentDraft)
     return () => {
-      if (clientThreadKey) {
-        draftsMap.set(clientThreadKey, { ...clientDraftSnapshotRef.current })
-      }
+      window.removeEventListener('beforeunload', persistCurrentDraft)
+      persistCurrentDraft()
     }
   }, [clientThreadKey])
 
@@ -806,6 +900,24 @@ export default function PortalChatsPage() {
     acc[key] = (acc[key] ?? 0) + 1
     return acc
   }, {})
+
+  // Tab order (2026-08-30, Antonio): unread topics first — General included,
+  // not pinned — so an unread topic is never buried behind a read one just
+  // because it's alphabetically later. Within each group (unread / read),
+  // most-recently-active first. Plain-const recompute-per-render, matching
+  // the style of adminTopics/adminUnreadByTopic above (no memoization here).
+  const adminTopicLastActivity: Record<string, number> = {}
+  for (const m of combinedMessages) {
+    const key = m.topic ?? ''
+    const t = new Date(m.created_at).getTime()
+    if (!(key in adminTopicLastActivity) || t > adminTopicLastActivity[key]) adminTopicLastActivity[key] = t
+  }
+  const adminTopicOrder = Array.from(new Set(['', ...adminTopics])).sort((a, b) => {
+    const unreadA = (adminUnreadByTopic[a] ?? 0) > 0 ? 1 : 0
+    const unreadB = (adminUnreadByTopic[b] ?? 0) > 0 ? 1 : 0
+    if (unreadA !== unreadB) return unreadB - unreadA
+    return (adminTopicLastActivity[b] ?? -Infinity) - (adminTopicLastActivity[a] ?? -Infinity)
+  })
 
   // Account ids that have their OWN account-level thread (multi-member LLCs).
   // Kept in a ref so the realtime handlers below can consult it without
@@ -1573,26 +1685,30 @@ export default function PortalChatsPage() {
 
   // Send reply
   const sendMutation = useMutation({
-    mutationFn: async ({ message, reply_to_id, attachments }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null }) => {
+    // Every field the request body needs comes from the ARGUMENTS, never
+    // from live component state — see the capture comment in handleSend for
+    // why (an attachment upload is a real await; live state can point at a
+    // different client/company/topic by the time this actually runs).
+    mutationFn: async ({ message, reply_to_id, attachments, targetAccountId, targetContactId, targetCompanyId, targetTopic }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null; targetCompanyId: string | null; targetTopic: string | null }) => {
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...(selectedAccountId
-            ? { account_id: selectedAccountId }
+          ...(targetAccountId
+            ? { account_id: targetAccountId }
             : {
-                contact_id: selectedContactId,
+                contact_id: targetContactId,
                 // Person-thread sends declare their scope explicitly (2026-08-07
                 // leak fix): 'company' ONLY when staff clicked a chip — the server
                 // rejects an undeclared contact+account pair and verifies the
                 // membership. 'person' otherwise, so the reply stays private.
-                ...(selectedCompanyId
-                  ? { account_id: selectedCompanyId, sender_context: 'company' }
+                ...(targetCompanyId
+                  ? { account_id: targetCompanyId, sender_context: 'company' }
                   : { sender_context: 'person' }),
               }
           ),
           message, reply_to_id, attachments,
-          topic: adminActiveTopic || undefined,
+          topic: targetTopic || undefined,
         }),
       })
       if (!res.ok) throw new Error('Failed to send')
@@ -1605,20 +1721,31 @@ export default function PortalChatsPage() {
       // different client. Dev job c3bb4abc.
       const targetKey = variables.targetAccountId || variables.targetContactId || null
       const currentKey = selectedAccountId || selectedContactId || null
+      // Always clear the conversation we just sent to — in memory AND in its
+      // own localStorage key — whether or not it's still the one on screen.
+      // Council review (Senior Engineer, 2026-08-30) caught that this used
+      // to only clear the LIVE state when still viewing the same
+      // conversation; the map/storage entry stayed stale, so reopening that
+      // conversation later (without ever switching away first) could
+      // restore the already-sent text as an apparent unsent draft — risking
+      // an accidental duplicate resend.
+      if (targetKey) {
+        clientDraftsRef.current!.set(targetKey, { replyText: '', replyToMsg: null, pendingAdminFiles: [] })
+        savePersistedChatDraft(targetKey, null)
+      }
       if (targetKey && targetKey === currentKey) {
         setReplyText('')
         setReplyToMsg(null)
         setPendingAdminFiles([])
-      } else if (targetKey) {
-        // Staff has moved on. Don't touch what's on screen now — instead
-        // make sure the conversation we just sent to doesn't have this
-        // already-sent message resurface as an apparent unsent draft next
-        // time staff opens it (risking an accidental duplicate resend).
-        clientDraftsRef.current.set(targetKey, { replyText: '', replyToMsg: null, pendingAdminFiles: [] })
       }
+      // Belt-and-braces duplicate of the server-side reply-read clear (which
+      // already ran inside the send WRITE) — scoped to the SAME topic the
+      // message was actually sent in (2026-08-30). Previously this omitted
+      // topic entirely, which unscoped it and cleared every topic's unread,
+      // undoing the server-side fix's own scoping the moment this ran.
       const readBody = variables.targetAccountId
-        ? { account_id: variables.targetAccountId }
-        : { contact_id: variables.targetContactId }
+        ? { account_id: variables.targetAccountId, topic: variables.targetTopic }
+        : { contact_id: variables.targetContactId, topic: variables.targetTopic }
       try {
         await fetch('/api/portal/chat/read', {
           method: 'POST',
@@ -1768,8 +1895,20 @@ export default function PortalChatsPage() {
     // Captured now, at click time, before any upload/network await — this is
     // the conversation the send is actually FOR, regardless of where staff
     // is looking by the time it completes. Dev job c3bb4abc.
+    //
+    // ALL FOUR of these must be captured here, not read live inside
+    // mutationFn — an attachment upload is a real multi-second await, and
+    // nothing disables the sidebar or the topic tabs while it's in flight.
+    // Council review (Bug Hunter, 2026-08-30) found that reading live state
+    // after the await let a staff member who switched to a DIFFERENT CLIENT
+    // (or a different topic, or toggled the company chip) mid-upload send
+    // the message — attachment included — to the wrong conversation
+    // entirely, with no server-side guard able to detect it (a transmitted
+    // account/contact pair is internally valid either way).
     const targetAccountId = selectedAccountId
     const targetContactId = selectedContactId
+    const targetCompanyId = selectedCompanyId
+    const targetTopic = adminActiveTopic
 
     if (pendingAdminFiles.length > 0) {
       setUploadingAdminFile(true)
@@ -1780,7 +1919,7 @@ export default function PortalChatsPage() {
             contactId: targetAccountId ? undefined : targetContactId,
           })
         ))
-        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded, targetAccountId, targetContactId })
+        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded, targetAccountId, targetContactId, targetCompanyId, targetTopic })
       } catch (err) {
         toast.error(err instanceof Error && err.message ? err.message : 'Failed to upload file')
       } finally {
@@ -1788,7 +1927,7 @@ export default function PortalChatsPage() {
         if (adminFileRef.current) adminFileRef.current.value = ''
       }
     } else {
-      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, targetAccountId, targetContactId })
+      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, targetAccountId, targetContactId, targetCompanyId, targetTopic })
     }
   }
 
@@ -2973,47 +3112,40 @@ export default function PortalChatsPage() {
             {chatViewMode === 'messages' && (selectedAccountId || selectedContactId) && (
               <div className="px-3 py-1.5 border-b bg-white flex items-center gap-1.5 overflow-x-auto shrink-0">
                 <HelpDot helpKey="chat.topics" className="shrink-0" />
-                <button
-                  onClick={() => setAdminActiveTopic(null)}
-                  className={cn(
-                    'shrink-0 flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
-                    adminActiveTopic === null
-                      ? 'bg-zinc-900 text-white border-zinc-900'
-                      : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
-                  )}
-                >
-                  Topic
-                  {(adminUnreadByTopic[''] ?? 0) > 0 && (
-                    <span className={cn(
-                      'inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold',
-                      adminActiveTopic === null ? 'bg-white text-zinc-900' : 'bg-red-500 text-white'
-                    )}>
-                      {adminUnreadByTopic['']}
-                    </span>
-                  )}
-                </button>
-                {adminTopics.map(tp => (
-                  <button
-                    key={tp}
-                    onClick={() => setAdminActiveTopic(tp === adminActiveTopic ? null : tp)}
-                    className={cn(
-                      'shrink-0 flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
-                      adminActiveTopic === tp
-                        ? 'bg-blue-600 text-white border-blue-600'
-                        : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
-                    )}
-                  >
-                    {tp}
-                    {(adminUnreadByTopic[tp] ?? 0) > 0 && (
-                      <span className={cn(
-                        'inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold',
-                        adminActiveTopic === tp ? 'bg-white text-blue-600' : 'bg-red-500 text-white'
-                      )}>
-                        {adminUnreadByTopic[tp]}
-                      </span>
-                    )}
-                  </button>
-                ))}
+                {adminTopicOrder.map(key => {
+                  const isGeneral = key === ''
+                  const isActive = isGeneral ? adminActiveTopic === null : adminActiveTopic === key
+                  const unread = adminUnreadByTopic[key] ?? 0
+                  // Pulsing highlight (2026-08-30, Antonio: more visible than a
+                  // dot): only when unread AND not the tab you're already on —
+                  // same "draw the eye, don't nag once you're looking" pattern
+                  // as the What's New tab's amber pulse elsewhere on this page.
+                  const drawAttention = unread > 0 && !isActive
+                  return (
+                    <button
+                      key={key || '__general__'}
+                      onClick={() => setAdminActiveTopic(isGeneral ? null : (isActive ? null : key))}
+                      className={cn(
+                        'shrink-0 flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
+                        isActive
+                          ? (isGeneral ? 'bg-zinc-900 text-white border-zinc-900' : 'bg-blue-600 text-white border-blue-600')
+                          : drawAttention
+                            ? 'text-red-700 bg-red-100/70 border-red-300 animate-pulse'
+                            : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
+                      )}
+                    >
+                      {isGeneral ? 'Topic' : key}
+                      {unread > 0 && (
+                        <span className={cn(
+                          'inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold',
+                          isActive ? (isGeneral ? 'bg-white text-zinc-900' : 'bg-white text-blue-600') : 'bg-red-500 text-white'
+                        )}>
+                          {unread}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
                 {adminCreatingTopic ? (
                   <input
                     autoFocus
@@ -3979,6 +4111,20 @@ export default function PortalChatsPage() {
                     ? 'This conversation is archived.'
                     : 'Pick an active company above, or “Personal”, to reach the client.'}
                 </p>
+              </div>
+            )}
+
+            {/* "Replying in: [topic]" — always visible right above the composer
+                (2026-08-30, Antonio): now that a reply only clears its OWN
+                topic's unread, staff must always see which topic they're
+                about to post into, or a reply meant to answer a named topic
+                can land in General (or vice versa) without anyone noticing. */}
+            {chatViewMode === 'messages' && (selectedAccountId || selectedContactId) && !sendingToClosedAccount && (
+              <div className={cn(
+                'px-3 py-1 border-t text-[11px] font-medium flex items-center gap-1.5 shrink-0',
+                adminActiveTopic ? 'bg-blue-50 text-blue-700' : 'bg-zinc-50 text-zinc-500'
+              )}>
+                Replying in: <span className="font-semibold">{adminActiveTopic || 'General'}</span>
               </div>
             )}
 
