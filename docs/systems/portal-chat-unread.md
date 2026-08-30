@@ -118,7 +118,11 @@ where c.sender_type in ('client','system') and c.read_at is not null
 
 Historical note: 18 messages were found wrongly marked read by the old
 behavior, spanning multiple client accounts and topics (Amex, ITIN 2026, Tax
-Return 2026, dichirazioni estro, and others) — the fix does not retroactively
-correct existing `read_at` values, only future writes. Whether/when those 18
-get manually corrected is a separate operational decision, not part of this
-code change.
+Return 2026, dichirazioni estro, and others). The code fix does not
+retroactively correct existing `read_at` values on its own, only future
+writes — that's a separate manual step. **Done, 2026-08-30, after the fix
+shipped to production:** Antonio approved correcting the 18 once the code
+fix was safely live (correcting first would have let the still-live bug
+immediately re-clear them). All 18 confirmed reset to unread and verified —
+both the direct row check and the cross-topic-clear query above returned 0
+remaining immediately after.
