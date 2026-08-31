@@ -66,19 +66,81 @@ export function prepareChatFiles(
 }
 
 /**
+ * Best-effort telemetry for an upload that failed after retries (2026-08-31,
+ * dev job — Luca's td-bug "Failed to fetch" report). Mirrors
+ * components/offers/create-offer-dialog.tsx's reportDialogError — same
+ * fire-and-forget POST to /api/system-errors/report, never throws, never
+ * blocks the send. This is the ONLY way this class of failure (a raw
+ * browser-level network error on the direct-to-Storage PUT) becomes visible
+ * to us at all — it happens entirely client-side and never reaches our own
+ * server, so without this it leaves no trace anywhere.
+ */
+function reportTeamAttachmentError(payload: { route: string; message: string; thread_id: string; file_name: string }) {
+  try {
+    void fetch('/api/system-errors/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        route: payload.route,
+        message: payload.message,
+        page_path: window.location.pathname,
+        context: { thread_id: payload.thread_id, file_name: payload.file_name },
+      }),
+    }).catch(() => {})
+  } catch {
+    // ignore — reporting is best-effort
+  }
+}
+
+/**
+ * A network-level fetch failure (the browser's own TypeError — connection
+ * dropped, DNS blip, momentary offline) is usually gone a second later.
+ * Retries ONLY that case — a completed response with a bad status (413, a
+ * JSON error body, etc.) is a real answer from the server and is NOT retried
+ * here; the caller still handles those exactly as before.
+ */
+async function fetchWithNetworkRetry(input: string, init: RequestInit, attempts = 3, delayMs = 800): Promise<Response> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await fetch(input, init)
+    } catch (err) {
+      if (attempt === attempts) throw err
+      await new Promise(resolve => setTimeout(resolve, delayMs * attempt))
+    }
+  }
+  // Unreachable — the loop above always returns or throws on its last attempt.
+  throw new Error('Upload failed. Please check your connection and try again.')
+}
+
+/**
  * Upload a single file to team-chat storage via a signed URL.
  * Throws Error(<user-friendly message>) on any failure (R099 — callers surface
- * err.message directly instead of a generic toast).
+ * err.message directly instead of a generic toast). A network-level failure
+ * (as opposed to a completed error response) is quietly retried a couple of
+ * times first — most such failures are a passing blip, and the composer
+ * already keeps the typed text + staged files for the user, so a transparent
+ * retry means most people never see an error at all.
  */
 export async function uploadTeamAttachment(file: File, threadId: string): Promise<ChatAttachment> {
   const validationError = validateChatAttachment(file.name, file.size, file.type)
   if (validationError) throw new Error(validationError)
 
-  const urlRes = await fetch('/api/team/upload-url', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ thread_id: threadId, file_name: file.name }),
-  })
+  let urlRes: Response
+  try {
+    urlRes = await fetchWithNetworkRetry('/api/team/upload-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ thread_id: threadId, file_name: file.name }),
+    })
+  } catch (err) {
+    reportTeamAttachmentError({
+      route: 'team-chat:upload-url',
+      message: err instanceof Error ? err.message : String(err),
+      thread_id: threadId,
+      file_name: file.name,
+    })
+    throw new Error("Couldn't reach the server to start the upload. Your message and files are still here — check your connection and press Send to try again.")
+  }
   if (!urlRes.ok) {
     const d = await urlRes.json().catch(() => ({}))
     throw new Error(d.error || 'Could not start the upload. Please try again.')
@@ -88,11 +150,22 @@ export async function uploadTeamAttachment(file: File, threadId: string): Promis
     throw new Error('Could not start the upload. Please try again.')
   }
 
-  const putRes = await fetch(signedUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': file.type || 'application/octet-stream' },
-    body: file,
-  })
+  let putRes: Response
+  try {
+    putRes = await fetchWithNetworkRetry(signedUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    })
+  } catch (err) {
+    reportTeamAttachmentError({
+      route: 'team-chat:upload-put',
+      message: err instanceof Error ? err.message : String(err),
+      thread_id: threadId,
+      file_name: file.name,
+    })
+    throw new Error("Couldn't upload the file — the connection was interrupted. Your message and files are still here — press Send to try again.")
+  }
   if (!putRes.ok) {
     if (putRes.status === 413) {
       throw new Error(`File too large. Maximum allowed: ${CHAT_ATTACHMENT_MAX_MB} MB.`)
