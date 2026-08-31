@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
+import { reportSystemError } from '@/lib/system-errors'
 import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
 
@@ -41,6 +42,18 @@ export async function POST(request: NextRequest) {
     .createSignedUploadUrl(storagePath)
   if (error || !data) {
     console.error('Team chat signed-URL error:', error)
+    // Previously console.error only — invisible on /system-health. This is
+    // the server-side half of a failed team-chat attachment upload; the
+    // client-side half (a network-level failure on the PUT itself) reports
+    // via POST /api/system-errors/report from lib/team/attachment.ts.
+    await reportSystemError({
+      source: 'server',
+      route: 'team/upload-url',
+      method: 'POST',
+      http_status: 500,
+      message: error?.message || 'createSignedUploadUrl returned no data',
+      context: { thread_id: threadId },
+    })
     return NextResponse.json({ error: 'Could not start the upload. Please try again.' }, { status: 500 })
   }
 
