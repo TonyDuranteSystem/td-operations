@@ -372,6 +372,28 @@ export default function TeamWorkspacePage() {
     return () => { clearInterval(msgTimer); clearInterval(listTimer) }
   }, [loadMessages, loadThreads])
 
+  // Re-sync the moment the tab wakes or the network returns (2026-08-31, the
+  // Luca "Failed to fetch" attachment report) — realtime replays nothing for
+  // whatever happened while backgrounded/suspended, and the poll above can be
+  // up to 8-20s stale right when someone comes back. Without this, a person
+  // returning to a phone-backgrounded tab could see stale state or reply
+  // against it before the poll catches up. Mirrors floating-chat.tsx's
+  // identical wake-resync (same reasoning, same fix, applied here too since
+  // this is the surface that was actually missing it).
+  useEffect(() => {
+    const resync = () => {
+      loadThreads()
+      if (selectedIdRef.current) loadMessages(selectedIdRef.current, { silent: true })
+    }
+    const onVisible = () => { if (document.visibilityState === 'visible') resync() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', resync)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', resync)
+    }
+  }, [loadThreads, loadMessages])
+
   // Auto-grow textarea
   useEffect(() => {
     const el = inputRef.current
