@@ -666,3 +666,121 @@ export function applyVendorRules(
 // arithmetic and WRONG for this S-corp (filed 1120-S: cash method, W-2 officer comp,
 // distributions, AAA roll-forward — no SE tax on flow-through profit). Do NOT re-add a
 // flat-rate estimate; owner-level tax comes from the CPA via K-1 + W-2 withholding.
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * THE FILING SUMMARY — the books, with tax treatment applied on top.
+ *
+ * WHY THIS IS A SEPARATE LAYER AND NOT AN EDIT TO THE BOOKS (Antonio, 2026-08-31).
+ * The three adjustments below are real and must reach the return. The tempting move is
+ * to change the rows — halve the meals, convert the euro income, strike the property.
+ * That would be wrong, and expensively so:
+ *
+ *   - The books were just proven, row by row, against every bank's own running balance
+ *     (818 rows, no unexplained steps). Halving a meal breaks that tie-out permanently,
+ *     and the tie-out is the whole evidence base for saying these numbers are real.
+ *   - The company genuinely spent $2,927.51 on meals and genuinely earned €144,770.90.
+ *     Those are facts about the year. "Only half a meal is deductible" is a fact about
+ *     the tax code, and the two do not belong in the same column.
+ *   - Prior bookkeeping failed in exactly this direction — tax treatment baked into the
+ *     ledger until nobody could tell what had actually happened from what someone had
+ *     decided about it.
+ *
+ * So: books stay as recorded, this computes what the return needs, and every adjustment
+ * is named and reversible.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export interface FilingAdjustment {
+  label: string
+  amount: number
+  /** Plain-English reason, written for whoever files — not for us. */
+  why: string
+}
+
+export interface FilingSummary {
+  year: number
+  /** Profit as the books report it, USD block only. */
+  books_net_usd: number
+  /** Foreign-currency profit converted at the rate the company actually achieved. */
+  foreign: Array<{ currency: string; net: number; rate: number | null; net_usd: number | null }>
+  adjustments: FilingAdjustment[]
+  /** What the return should show. */
+  taxable_income: number
+  /** Property bought this year — already OUT of profit, needs depreciation set up. */
+  capitalized: Array<{ label: string; amount: number }>
+  /** Anything that could not be converted honestly and must be handled by hand. */
+  warnings: string[]
+}
+
+/** The share of a business meal that is NOT deductible. 50% since the 2021-22 restaurant
+ *  exception lapsed. A named constant so the day it changes there is one place to change. */
+export const MEALS_NONDEDUCTIBLE_SHARE = 0.5
+
+export function computeFilingSummary(
+  txs: OwnerTransaction[],
+  pnl: OwnerPnL,
+): FilingSummary {
+  const usdBlock = pnl.blocks.find(b => b.currency === 'USD')
+  const books_net_usd = usdBlock?.net_profit ?? 0
+  const warnings: string[] = []
+
+  const foreign = pnl.blocks.filter(b => b.currency !== 'USD').map(b => {
+    if (b.usd_rate === null) {
+      warnings.push(
+        `${b.currency} activity could not be converted: no single achieved rate exists for it. ` +
+        `Its net of ${b.net_profit.toFixed(2)} ${b.currency} must be converted by hand before filing.`,
+      )
+      return { currency: b.currency, net: b.net_profit, rate: null, net_usd: null }
+    }
+    return { currency: b.currency, net: b.net_profit, rate: b.usd_rate, net_usd: b.net_profit * b.usd_rate }
+  })
+
+  const adjustments: FilingAdjustment[] = []
+
+  // MEALS. The books hold what was spent; the return may deduct only half, so the other
+  // half is added back to profit. Counted across every currency, converted where needed.
+  let mealsAddBack = 0
+  for (const b of pnl.blocks) {
+    const meals = b.by_subcategory['expense/meals'] ?? 0
+    if (meals === 0) continue
+    const rate = b.currency === 'USD' ? 1 : b.usd_rate
+    if (rate === null) {
+      warnings.push(`${b.currency} meals of ${meals.toFixed(2)} could not be converted — add back half by hand.`)
+      continue
+    }
+    mealsAddBack += meals * MEALS_NONDEDUCTIBLE_SHARE * rate
+  }
+  if (mealsAddBack > 0) {
+    adjustments.push({
+      label: 'Half of business meals added back',
+      amount: mealsAddBack,
+      why: 'A business meal is only 50% deductible. The books record the full amount actually spent; this adds the non-deductible half back to profit.',
+    })
+  }
+
+  // PROPERTY. Already parked outside profit when the books were built, so there is
+  // nothing to adjust — but it must be VISIBLE, or the depreciation it is owed is
+  // simply forgotten and the deduction is lost every year thereafter.
+  const capitalized = Object.entries(
+    txs.filter(t => t.subcategory === 'fixed_asset_office_purchase')
+       .reduce<Record<string, number>>((acc, t) => {
+         acc['Office property purchased'] = (acc['Office property purchased'] ?? 0) + Math.abs(Number(t.amount))
+         return acc
+       }, {}),
+  ).map(([label, amount]) => ({ label, amount }))
+
+  const taxable_income =
+    books_net_usd
+    + foreign.reduce((s, f) => s + (f.net_usd ?? 0), 0)
+    + adjustments.reduce((s, a) => s + a.amount, 0)
+
+  return { year: pnl.year, books_net_usd, foreign, adjustments, taxable_income, capitalized, warnings }
+}
+
+/** Server helper: the filing summary for a year, straight from the books.
+ *  Reads the FULL year (getOwnerTransactions pages, so no 1000-row cap) because the
+ *  adjustments are whole-year facts — a summary computed from one page of transactions
+ *  would understate the return and look perfectly reasonable doing it. */
+export async function getFilingSummary(year: number): Promise<FilingSummary> {
+  const [txs, pnl] = await Promise.all([getOwnerTransactions(year), getOwnerPnL(year)])
+  return computeFilingSummary(txs, pnl)
+}

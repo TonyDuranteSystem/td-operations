@@ -7,6 +7,7 @@ import {
   getCashPosition,
   getUncategorizedCount,
   getOwnerTransactionsPaginated,
+  getFilingSummary,
 } from '@/lib/owner-finance'
 
 export const dynamic = 'force-dynamic'
@@ -23,11 +24,12 @@ export default async function OwnerPage({
   const year = parseInt(searchParams.year ?? String(new Date().getFullYear()), 10)
   const activeTab = searchParams.tab ?? 'dashboard'
 
-  const [pnl, cash, uncategorized, txResult] = await Promise.all([
+  const [pnl, cash, uncategorized, txResult, filing] = await Promise.all([
     getOwnerPnL(year),
     getCashPosition(),
     getUncategorizedCount(year),
     getOwnerTransactionsPaginated(year, { category: 'uncategorized', limit: 50 }),
+    getFilingSummary(year),
   ])
 
   return (
@@ -40,6 +42,7 @@ export default async function OwnerPage({
         uncategorizedCount={uncategorized}
         initialTransactions={txResult.rows}
         initialTransactionTotal={txResult.total}
+        filing={filing}
       />
     </div>
   )

@@ -9,7 +9,7 @@ import { PnLTab } from './pnl-tab'
 import { CashFlowTab } from './cashflow-tab'
 import { TaxTab } from './tax-tab'
 import { BookkeeperTab } from './bookkeeper-tab'
-import type { OwnerTransaction, OwnerPnL, CashPosition } from '@/lib/owner-finance'
+import type { OwnerTransaction, OwnerPnL, CashPosition , FilingSummary } from '@/lib/owner-finance'
 
 const TABS = [
   { id: 'dashboard', label: 'Overview' },
@@ -28,6 +28,7 @@ interface OwnerDashboardProps {
   uncategorizedCount: number
   initialTransactions: OwnerTransaction[]
   initialTransactionTotal: number
+  filing: FilingSummary
 }
 
 export function OwnerDashboard({
@@ -38,6 +39,7 @@ export function OwnerDashboard({
   uncategorizedCount,
   initialTransactions,
   initialTransactionTotal,
+  filing,
 }: OwnerDashboardProps) {
   const usd = pnl.blocks.find(b => b.currency === 'USD')
   const router = useRouter()
@@ -122,7 +124,7 @@ export function OwnerDashboard({
         <CashFlowTab year={year} monthly={usd?.monthly ?? []} cash={cash} />
       )}
       {currentTab === 'tax' && (
-        <TaxTab year={year} pnl={pnl} />
+        <TaxTab year={year} pnl={pnl} filing={filing} />
       )}
       {currentTab === 'bookkeeper' && (
         <BookkeeperTab year={year} />

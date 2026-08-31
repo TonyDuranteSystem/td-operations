@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   applyVendorRules,
   computeInvoiceIncome,
+  computeFilingSummary,
   computeOwnerPnL,
   isSimilarVendor,
   normalizeVendorKey,
@@ -499,5 +500,60 @@ describe('computeOwnerPnL — the expense breakdown can be linked to its transac
     const b = pnl.blocks[0].by_subcategory
     expect(b['expense/professional_services']).toBeCloseTo(900, 2)
     expect(b['cogs/professional_services']).toBeCloseTo(100, 2)
+  })
+})
+
+/* The filing summary (2026-08-31). Antonio asked for the euro income converted, the office
+   treated as property, and the meals halved. All three are TAX treatment, applied on top of
+   the books — never edits to the rows, which were proven against the banks' own balances and
+   must keep tying. These tests exist to stop that boundary being crossed later. */
+describe('computeFilingSummary', () => {
+  const pnlOf = (txs: OwnerTransaction[]) => computeOwnerPnL(txs, computeInvoiceIncome([], 2025), 2025)
+
+  it('adds back half of business meals, because only half is deductible', () => {
+    const txs = [
+      makeTx({ category: 'income', subcategory: 'client_payment', amount: 10000 }),
+      makeTx({ category: 'expense', subcategory: 'meals', amount: -2927.51 }),
+    ]
+    const f = computeFilingSummary(txs, pnlOf(txs))
+    expect(f.books_net_usd).toBeCloseTo(10000 - 2927.51, 2)
+    expect(f.adjustments).toHaveLength(1)
+    expect(f.adjustments[0].amount).toBeCloseTo(1463.755, 2)
+    expect(f.taxable_income).toBeCloseTo(10000 - 2927.51 + 1463.755, 2)
+  })
+
+  it('converts foreign profit at the rate the company actually achieved', () => {
+    const txs = [
+      makeTx({ currency: 'EUR', category: 'income', subcategory: 'client_payment', amount: 144770.9 }),
+      makeTx({ currency: 'EUR', category: 'conversion', subcategory: 'fx', amount: -147100 }),
+      makeTx({ category: 'conversion', subcategory: 'fx', amount: 164895.95 }),
+    ]
+    const f = computeFilingSummary(txs, pnlOf(txs))
+    const eur = f.foreign.find(x => x.currency === 'EUR')!
+    expect(eur.rate).toBeCloseTo(164895.95 / 147100, 6)
+    expect(eur.net_usd).toBeCloseTo(144770.9 * (164895.95 / 147100), 2)
+    expect(f.taxable_income).toBeCloseTo(eur.net_usd!, 2)
+  })
+
+  it('WARNS instead of guessing when a currency has no achieved rate', () => {
+    // Silently dropping unconvertible foreign profit would understate income on a return.
+    const txs = [makeTx({ currency: 'GBP', category: 'income', subcategory: 'client_payment', amount: 5000 })]
+    const f = computeFilingSummary(txs, pnlOf(txs))
+    expect(f.foreign[0].net_usd).toBeNull()
+    expect(f.warnings.join(' ')).toContain('GBP')
+    expect(f.taxable_income).toBeCloseTo(0, 2)
+  })
+
+  it('surfaces capitalized property WITHOUT deducting it', () => {
+    const txs = [
+      makeTx({ category: 'income', subcategory: 'client_payment', amount: 50000 }),
+      makeTx({ category: 'transfer', subcategory: 'fixed_asset_office_purchase', amount: -29032.53 }),
+      makeTx({ category: 'transfer', subcategory: 'fixed_asset_office_purchase', amount: -3000 }),
+      makeTx({ category: 'transfer', subcategory: 'fixed_asset_office_purchase', amount: -3000 }),
+    ]
+    const f = computeFilingSummary(txs, pnlOf(txs))
+    expect(f.capitalized[0].amount).toBeCloseTo(35032.53, 2)
+    // A building is not a cost of this year — profit must be untouched by it.
+    expect(f.taxable_income).toBeCloseTo(50000, 2)
   })
 })
