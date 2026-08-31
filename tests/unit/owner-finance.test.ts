@@ -415,11 +415,12 @@ describe('computeOwnerPnL — the expenses breakdown is expenses only', () => {
     const b = pnl.blocks[0]
     // The whole point: revenue must not appear as a cost. Under the old rule
     // client_payment was the LARGEST line in a panel headed "Expenses".
-    expect(b.by_subcategory).not.toHaveProperty('client_payment')
-    expect(b.by_subcategory).not.toHaveProperty('bank_rewards')
-    expect(b.by_subcategory.payroll).toBeCloseTo(180088.6, 2)
-    expect(b.by_subcategory.state_filing_fees).toBeCloseTo(29291.82, 2)
-    expect(b.by_subcategory.card_fee).toBeCloseTo(695, 2)
+    // Keys are "category/subcategory" so the UI can link each line to its rows.
+    expect(Object.keys(b.by_subcategory).some(k => k.endsWith('/client_payment'))).toBe(false)
+    expect(Object.keys(b.by_subcategory).some(k => k.endsWith('/bank_rewards'))).toBe(false)
+    expect(b.by_subcategory['expense/payroll']).toBeCloseTo(180088.6, 2)
+    expect(b.by_subcategory['cogs/state_filing_fees']).toBeCloseTo(29291.82, 2)
+    expect(b.by_subcategory['fee/card_fee']).toBeCloseTo(695, 2)
   })
 
   it('still keeps equity and own-money movement out of it', () => {
@@ -428,7 +429,7 @@ describe('computeOwnerPnL — the expenses breakdown is expenses only', () => {
       makeTx({ category: 'transfer', subcategory: 'own_account', amount: -275000 }),
       makeTx({ category: 'expense', subcategory: 'rent', amount: -24188.42 }),
     ], computeInvoiceIncome(income, 2025), 2025)
-    expect(Object.keys(pnl.blocks[0].by_subcategory)).toEqual(['rent'])
+    expect(Object.keys(pnl.blocks[0].by_subcategory)).toEqual(['expense/rent'])
   })
 })
 
@@ -471,5 +472,32 @@ describe('computeOwnerPnL — the achieved FX rate', () => {
       conv('EUR', -1000), conv('USD', 1120),
     ], computeInvoiceIncome(income, 2025), 2025)
     expect(pnl.blocks.find(b => b.currency === 'USD')!.usd_rate).toBeNull()
+  })
+})
+
+/* The drill-down contract (2026-08-31): Antonio could read a P&L total but never open it,
+   so every figure had to be taken on trust. Each line is now a link, and these guard the
+   two things that would make the link show the WRONG rows. */
+describe('computeOwnerPnL — the expense breakdown can be linked to its transactions', () => {
+  const income: InvoiceIncomeRow[] = []
+
+  it('keys every line with its category, so a click can filter on both', () => {
+    const pnl = computeOwnerPnL([
+      makeTx({ category: 'expense', subcategory: 'payroll', amount: -1000 }),
+      makeTx({ category: 'cogs', subcategory: 'contractor', amount: -500 }),
+    ], computeInvoiceIncome(income, 2025), 2025)
+    expect(Object.keys(pnl.blocks[0].by_subcategory).sort()).toEqual(['cogs/contractor', 'expense/payroll'])
+  })
+
+  it('does NOT merge the same subcategory name used under two categories', () => {
+    // The real hazard: filtering on the bare name would pull rows from the other line and
+    // show a list that cannot add up to the total the reader just clicked.
+    const pnl = computeOwnerPnL([
+      makeTx({ category: 'expense', subcategory: 'professional_services', amount: -900 }),
+      makeTx({ category: 'cogs', subcategory: 'professional_services', amount: -100 }),
+    ], computeInvoiceIncome(income, 2025), 2025)
+    const b = pnl.blocks[0].by_subcategory
+    expect(b['expense/professional_services']).toBeCloseTo(900, 2)
+    expect(b['cogs/professional_services']).toBeCloseTo(100, 2)
   })
 })

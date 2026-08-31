@@ -9,9 +9,11 @@ const fmtIn = (currency: string) => (n: number) =>
 interface PnLTabProps {
   year: number
   pnl: OwnerPnL
+  /** Open the Transactions tab filtered to one line of this report. */
+  onDrillDown?: (category: string, subcategory: string) => void
 }
 
-export function PnLTab({ year, pnl }: PnLTabProps) {
+export function PnLTab({ year, pnl, onDrillDown }: PnLTabProps) {
   const [compare, setCompare] = useState(false)
   const [priorPnl, setPriorPnl] = useState<OwnerPnL | null>(null)
   const [loading, setLoading] = useState(false)
@@ -94,6 +96,7 @@ export function PnLTab({ year, pnl }: PnLTabProps) {
           block={block}
           prior={compare ? priorPnl?.blocks.find(b => b.currency === block.currency) ?? null : null}
           primary={block === pnl.blocks[0]}
+          onDrillDown={onDrillDown}
         />
       ))}
 
@@ -108,6 +111,7 @@ export function PnLTab({ year, pnl }: PnLTabProps) {
             block={emptyBlockFor(pb.currency)}
             prior={pb}
             primary={false}
+            onDrillDown={onDrillDown}
           />
         ))}
 
@@ -131,11 +135,12 @@ function emptyBlockFor(currency: string): PnLBlock {
   }
 }
 
-function PnLCurrencyTable({ year, block, prior, primary }: {
+function PnLCurrencyTable({ year, block, prior, primary, onDrillDown }: {
   year: number
   block: PnLBlock
   prior: PnLBlock | null
   primary: boolean
+  onDrillDown?: (category: string, subcategory: string) => void
 }) {
   const fmt = fmtIn(block.currency)
   const hasUncategorized = block.uncategorized_income > 0 || block.uncategorized_expense > 0
@@ -236,14 +241,32 @@ function PnLCurrencyTable({ year, block, prior, primary }: {
         <div className="rounded-lg border border-zinc-200 bg-white p-4">
           <h3 className="mb-3 text-sm font-medium text-zinc-700">Expenses by Subcategory</h3>
           <div className="grid grid-cols-2 gap-x-8 gap-y-1.5 lg:grid-cols-3">
+            {/* Every line opens the transactions inside it. Before this the panel was
+                plain text: a total could be read but never checked, so each figure had to
+                be taken on trust. The category is carried alongside the subcategory
+                because a subcategory name is not unique across categories. */}
             {Object.entries(block.by_subcategory)
               .sort((a, b) => b[1] - a[1])
-              .map(([name, amount]) => (
-                <div key={name} className="flex justify-between text-sm">
-                  <span className="capitalize text-zinc-600">{name.replace(/_/g, ' ')}</span>
-                  <span className="tabular-nums text-zinc-800">{fmt(amount)}</span>
-                </div>
-              ))}
+              .map(([key, amount]) => {
+                const [category, subcategory] = key.includes('/') ? key.split('/') : ['', key]
+                const clickable = Boolean(onDrillDown && subcategory)
+                return (
+                  <div
+                    key={key}
+                    className={`flex justify-between text-sm ${clickable ? 'cursor-pointer rounded px-1 -mx-1 hover:bg-zinc-50' : ''}`}
+                    onClick={clickable ? () => onDrillDown!(category, subcategory) : undefined}
+                    role={clickable ? 'button' : undefined}
+                    tabIndex={clickable ? 0 : undefined}
+                    onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onDrillDown!(category, subcategory) } } : undefined}
+                    title={clickable ? 'Open these transactions' : undefined}
+                  >
+                    <span className={`capitalize ${clickable ? 'text-blue-600 hover:underline' : 'text-zinc-600'}`}>
+                      {subcategory.replace(/_/g, ' ')}
+                    </span>
+                    <span className="tabular-nums text-zinc-800">{fmt(amount)}</span>
+                  </div>
+                )
+              })}
           </div>
         </div>
       )}

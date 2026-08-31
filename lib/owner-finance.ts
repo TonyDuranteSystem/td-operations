@@ -239,13 +239,20 @@ export async function getOwnerTransactionsPaginated(
   year: number,
   options: {
     category?: OwnerCategory
+    /** The P&L's own line names (payroll, rent, state_filing_fees…). Added 2026-08-31 so
+     * every figure on the P&L can be opened and the rows behind it read — without it the
+     * only way to check a number was to trust it. Deliberately paired with `category`
+     * rather than replacing it: two categories can carry the same subcategory name
+     * (income/client_payment and cogs/client_service_cost both being "client"-ish), so a
+     * subcategory alone is not a unique line on the report. */
+    subcategory?: string
     search?: string
     bank?: string
     limit?: number
     offset?: number
   } = {}
 ): Promise<{ rows: OwnerTransaction[]; total: number }> {
-  const { category, search, bank, limit = 50, offset = 0 } = options
+  const { category, subcategory, search, bank, limit = 50, offset = 0 } = options
 
   let q = supabaseAdmin
     .from('td_books_transactions')
@@ -262,6 +269,7 @@ export async function getOwnerTransactionsPaginated(
     .range(offset, offset + limit - 1)
 
   if (category) q = q.eq('category', category)
+  if (subcategory) q = q.eq('subcategory', subcategory)
   if (bank) q = q.eq('bank_name', bank)
   if (search) {
     q = q.or(`description.ilike.%${search}%,counterparty.ilike.%${search}%`)
@@ -487,7 +495,12 @@ export function computeOwnerPnL(
     // Spending categories ONLY — see EXPENSE_BREAKDOWN_CATEGORIES. Using the
     // NON_PNL exclusion here let income into a panel headed "Expenses".
     if (EXPENSE_BREAKDOWN_CATEGORIES.has(tx.category)) {
-      b.by_subcategory[sub] = (b.by_subcategory[sub] ?? 0) + Math.abs(amt)
+      // Keyed "category/subcategory", not the bare name: the UI turns each line into a
+      // link to the transactions behind it, and a subcategory name is NOT unique across
+      // categories — filtering on the name alone would show rows from a different line
+      // of the report and quietly contradict the total the reader just clicked.
+      const key = `${tx.category}/${sub}`
+      b.by_subcategory[key] = (b.by_subcategory[key] ?? 0) + Math.abs(amt)
     }
   }
 

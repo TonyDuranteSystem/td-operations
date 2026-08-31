@@ -16,6 +16,7 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const year = parseInt(searchParams.get('year') ?? String(new Date().getFullYear()), 10)
   const category = searchParams.get('category') as OwnerCategory | null
+  const subcategory = searchParams.get('subcategory') ?? undefined
   const search = searchParams.get('search') ?? undefined
   const bank = searchParams.get('bank') ?? undefined
   const limit = parseInt(searchParams.get('limit') ?? '50', 10)
@@ -23,6 +24,7 @@ export async function GET(req: Request) {
 
   const result = await getOwnerTransactionsPaginated(year, {
     category: category ?? undefined,
+    subcategory,
     search,
     bank,
     limit,

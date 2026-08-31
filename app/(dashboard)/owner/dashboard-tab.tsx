@@ -162,7 +162,8 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
             <div className="space-y-2">
               {topSubcategories.map(([name, amount]) => (
                 <div key={name} className="flex items-center justify-between text-sm">
-                  <span className="capitalize text-zinc-600">{name.replace(/_/g, ' ')}</span>
+                  {/* keys are "category/subcategory" — show only the name */}
+                  <span className="capitalize text-zinc-600">{name.split('/').pop()!.replace(/_/g, ' ')}</span>
                   <span className="font-medium tabular-nums text-zinc-800">{fmt(amount)}</span>
                 </div>
               ))}

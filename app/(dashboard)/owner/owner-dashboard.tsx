@@ -44,8 +44,16 @@ export function OwnerDashboard({
   const pathname = usePathname()
   const [currentTab, setCurrentTab] = useState(activeTab)
 
-  function switchTab(id: string) {
+  /** A line on the P&L that the Transactions tab should open pre-filtered.
+   *  Antonio could read a total but never the rows inside it, which meant every figure
+   *  had to be taken on trust. Held in state rather than the URL: it is a transient
+   *  "show me this", and putting it in the URL would make a filtered view the thing that
+   *  gets bookmarked and later mistaken for the whole year. */
+  const [focus, setFocus] = useState<{ category: string; subcategory: string } | null>(null)
+
+  function switchTab(id: string, nextFocus?: { category: string; subcategory: string }) {
     setCurrentTab(id)
+    setFocus(nextFocus ?? null)
     router.push(`${pathname}?tab=${id}&year=${year}`, { scroll: false })
   }
 
@@ -105,10 +113,10 @@ export function OwnerDashboard({
         <DashboardTab pnl={pnl} cash={cash} uncategorizedCount={uncategorizedCount} year={year} onTabSwitch={switchTab} />
       )}
       {currentTab === 'transactions' && (
-        <TransactionsTab year={year} initialRows={initialTransactions} initialTotal={initialTransactionTotal} />
+        <TransactionsTab year={year} initialRows={initialTransactions} initialTotal={initialTransactionTotal} focus={focus} />
       )}
       {currentTab === 'pnl' && (
-        <PnLTab year={year} pnl={pnl} />
+        <PnLTab year={year} pnl={pnl} onDrillDown={(category, subcategory) => switchTab('transactions', { category, subcategory })} />
       )}
       {currentTab === 'cashflow' && (
         <CashFlowTab year={year} monthly={usd?.monthly ?? []} cash={cash} />

@@ -106,6 +106,8 @@ interface TransactionsTabProps {
   year: number
   initialRows: OwnerTransaction[]
   initialTotal: number
+  /** A P&L line the user clicked: open showing exactly the rows behind that figure. */
+  focus?: { category: string; subcategory: string } | null
 }
 
 interface ModalState {
@@ -127,12 +129,15 @@ interface ModalState {
   saveRule: boolean
 }
 
-export function TransactionsTab({ year, initialRows, initialTotal }: TransactionsTabProps) {
+export function TransactionsTab({ year, initialRows, initialTotal, focus }: TransactionsTabProps) {
   const [rows, setRows] = useState<OwnerTransaction[]>(initialRows)
   const [total, setTotal] = useState(initialTotal)
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [filterCategory, setFilterCategory] = useState<OwnerCategory | ''>('uncategorized')
+  /** Set only by a click on the P&L. Cleared the moment the operator touches the category
+   *  filter or the search box, so a narrowed view can never be mistaken for the full list. */
+  const [filterSubcategory, setFilterSubcategory] = useState('')
   const [offset, setOffset] = useState(0)
   const [modal, setModal] = useState<ModalState | null>(null)
   const [saving, setSaving] = useState(false)
@@ -187,11 +192,12 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
     }
   }
 
-  const load = useCallback(async (newOffset = 0, cat = filterCategory, q = search) => {
+  const load = useCallback(async (newOffset = 0, cat = filterCategory, q = search, sub = filterSubcategory) => {
     setLoading(true)
     try {
       const params = new URLSearchParams({ year: String(year), limit: String(LIMIT), offset: String(newOffset) })
       if (cat) params.set('category', cat)
+      if (sub) params.set('subcategory', sub)
       if (q) params.set('search', q)
       const res = await fetch(`/api/owner/transactions?${params}`)
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Load failed') }
@@ -204,7 +210,7 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
     } finally {
       setLoading(false)
     }
-  }, [year, filterCategory, search])
+  }, [year, filterCategory, search, filterSubcategory])
 
   /**
    * Re-fetch when the YEAR changes.
@@ -229,6 +235,24 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
    * The ref skips the first run — on mount the server props ARE the current year,
    * and firing here would duplicate the initial fetch on every page load.
    */
+  /* A P&L line was clicked. Set BOTH filters and fetch: the category alone is too broad
+     (all expenses), the subcategory alone is not unique across categories. Passing them
+     into load() rather than relying on the state we just set — setState is async, and
+     reading it here would fetch with the PREVIOUS filter and show the wrong rows under
+     the right heading. */
+  const seenFocusRef = useRef<string | null>(null)
+  useEffect(() => {
+    const key = focus ? `${focus.category}/${focus.subcategory}` : null
+    if (key === seenFocusRef.current) return
+    seenFocusRef.current = key
+    if (!focus) return
+    const cat = focus.category as OwnerCategory | ''
+    setFilterCategory(cat)
+    setFilterSubcategory(focus.subcategory)
+    setSearch('')
+    load(0, cat, '', focus.subcategory)
+  }, [focus, load])
+
   const seenYearRef = useRef(year)
   useEffect(() => {
     if (seenYearRef.current === year) return
@@ -613,13 +637,29 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
         />
         <select
           value={filterCategory}
-          onChange={e => { setFilterCategory(e.target.value as OwnerCategory | ''); load(0, e.target.value as OwnerCategory | '', search) }}
+          onChange={e => {
+            const next = e.target.value as OwnerCategory | ''
+            setFilterCategory(next); setFilterSubcategory('')
+            load(0, next, search, '')
+          }}
           className="rounded-md border border-zinc-200 px-2 py-1.5 text-sm"
         >
           <option value="">All categories</option>
           {CATEGORIES.map(c => <option key={c} value={c}>{CATEGORY_LABELS[c] ?? c}</option>)}
         </select>
         <span className="text-xs text-zinc-500">{total} transactions</span>
+        {filterSubcategory && (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+            showing only <span className="capitalize">{filterSubcategory.replace(/_/g, ' ')}</span>
+            <FastTooltip label="Show everything again">
+              <button
+                onClick={() => { setFilterSubcategory(''); load(0, filterCategory, search, '') }}
+                className="ml-0.5 rounded-full px-1 text-blue-500 hover:bg-blue-100"
+                aria-label="Show everything again"
+              >×</button>
+            </FastTooltip>
+          </span>
+        )}
         {filterCategory === 'uncategorized' && uncategorizedCount > 0 && (
           <span className="rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-medium text-orange-700">
             {uncategorizedCount} need review
