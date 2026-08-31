@@ -39,13 +39,16 @@ interface AccountFacts { sign_convention: string }
  * exactly as before. A missing registry row must never silently reverse a file.
  */
 async function accountFacts(bankName: string): Promise<AccountFacts | null> {
+  // `as never` on the table name is this codebase's existing pattern for a table
+  // that is not yet in the generated types (see server-action.ts, activate-service.ts).
+  // Without it the typed client recurses into "type instantiation is excessively deep".
   const { data, error } = await supabaseAdmin
-    .from('td_books_accounts')
+    .from('td_books_accounts' as never)
     .select('sign_convention')
     .eq('bank_name', bankName)
     .maybeSingle()
   if (error || !data) return null
-  return data as AccountFacts
+  return data as unknown as AccountFacts
 }
 
 /**

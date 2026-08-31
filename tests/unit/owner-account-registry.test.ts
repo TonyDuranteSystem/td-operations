@@ -17,7 +17,7 @@ const migration = readFileSync(
 
 describe("the sign convention is a fact about the ACCOUNT, not the file", () => {
   it("the importer reads it from the registry before mapping rows", () => {
-    expect(importer).toMatch(/from\('td_books_accounts'\)/)
+    expect(importer).toContain("from('td_books_accounts'")
     expect(importer).toMatch(/sign_convention/)
     // Read BEFORE the row map, or the flip cannot be applied.
     expect(importer.indexOf("const flip")).toBeLessThan(importer.indexOf("allRows: OwnerImportRow[]"))
