@@ -2,7 +2,7 @@
 
 _Living plan. **Update this file in the same change as the work it describes.** Its job is that nothing learned in a session is lost when that session ends — Antonio, 2026-08-31: "We can't lose information along the way, this is very important."_
 
-_Status: **REWRITTEN 2026-08-31 after a full council pass (8 reviewers, ~30 blockers, verdict FIX-FIRST).** The previous version of this plan was written without a council review and without asking about the filing deadline. Both were shortcuts. Dev job `81fb5a05`. Companion: `td-books.md` (how the books work TODAY)._
+_Status: **LIVE — Track A in progress. Updated continuously as work lands; see §13 for the running log.** Rewritten 2026-08-31 after a full council pass (8 reviewers, ~30 blockers, verdict FIX-FIRST).** The previous version of this plan was written without a council review and without asking about the filing deadline. Both were shortcuts. Dev job `81fb5a05`. Companion: `td-books.md` (how the books work TODAY)._
 
 ---
 
@@ -209,6 +209,18 @@ Chase checking 3920 (492) · Chase card 9279 (437) · Chase card 6094 (152, open
 | **A7** | Run invariants 1–11. **Explain every variance against the filed 2024 return and against the prepared 2025 P&L.** | Variance report |
 | **A8** | Two K-1s at 50/50. Reasonable-compensation record for the year. Hand to the preparer. | Filed |
 
+### Why the account registry and the checks are INSIDE Track A, not deferred
+
+Antonio, 2026-08-31, asking whether to build the smart system now or finish 2025 first. The answer is that two of the three "agent features" are **not a detour — they are how 2025 is done correctly**:
+
+- **The account registry is required either way.** A balance sheet cannot be produced without knowing which accounts are liabilities, which invert their signs, which is a clearing account. That knowledge currently exists ONLY in this session's head and in two scripts. **Proof it is not yet in the system: upload a January 2026 Amex file tomorrow and it lands inverted again** — the 809-row repair was data, not a rule. Writing it down costs ~2–3h and is simultaneously the agent's foundation.
+- **The checks are required either way.** Proving 2025 is right IS the tie-out. The same checks are what later let an agent prove rather than assert.
+- **Rules-as-data is a genuine choice, and it is taken.** Filing 1,267 transactions is ~200 real decisions. If each writes a RULE rather than only a label, next year is nearly free. Same work, different destination. Cost ~4–5h.
+
+**What still waits until after the 15th:** the agent itself, the double-entry journal, and the challenger. None change what the return says — and **building the agent now would be worse than useless, because the knowledge it needs is exactly what is still being discovered.** Two days before this entry nobody knew Amex inverts or that a fifth of the Stripe income never happened; an agent built on that understanding would have confidently reproduced those errors.
+
+**The named weakness:** this adds ~6–8h to a ~15h job inside a 14-day window. If the estimate is wrong, the filing slips. Mitigation and honest read: **the deadline risk is the DOCUMENTS, not the hours.** If A2 takes a week, drop rules-as-data and keep only the registry and the checks.
+
 **Stated tolerance — a filing deadline means disclosed-and-good-enough beats perfect-and-late.** Any account that cannot be tied by 12 September is **disclosed to the preparer with the amount and the reason**, not quietly plugged. That decision is Antonio's and the preparer's, not this project's.
 
 **Honest estimate:** ~15 hours mine, ~4–6 hours Antonio's, **conditional on A2 arriving fast**. The old "16–20 hours" figure covered a different, larger scope and was not credible.
@@ -240,7 +252,27 @@ Needs only the payee list. **Does not wait for the ledger.**
 
 **B4 — The learning loop.** Port `learned-rules.ts` to the owner scope: **a correction writes a deterministic RULE, not a weight**; the model only proposes the rule text a human accepts. Eviction on reversal is mandatory — without it one wrong learned rule silently re-books every future year.
 
+**B4a — The CHALLENGER, built FIRST of the agent pieces.** Half the corrections in the session that produced this plan came from an independent verifier rejecting a claim and forcing a re-check — including several that were flatly wrong and would otherwise have reached Antonio as fact. An agent without one states a wrong number with complete confidence. This is the most important part and the one nobody builds.
+
 **B5 — The agent.** Connect the existing agent to the ledger. **It may post only into a draft batch, in an open period, on lines no human has decided, every line stamped with agent and prompt version, and the invariants run as a precondition of leaving draft.** That turns "a human reads every proposal" into "a machine proves every proposal, a human reads the exceptions" — the only version that scales. Never in a closed period. **The bank-format mapping write is an agent write and is governed by the same rail.**
+
+### What actually makes an agent reason like a person — derived 2026-08-31, not assumed
+
+Antonio: *"How can I have a smart agent that can do this kind of reasoning in the system?"* The honest finding is that **very little of today's value was cleverness**:
+
+- The Stripe error was not deduced. Two numbers that should have matched did not: the loaded file said $124,536, Stripe's own report said $103,947.
+- The Amex error was spotted by ANTONIO ("+$25 on a credit card"), then confirmed.
+- The sign fix was arithmetic — does the balance chain still add up.
+
+**The pattern is always an independent source plus the discipline to check against it.** So:
+
+1. **REACH, not intelligence, is the gap.** The agent has **82 distinct tools** and **not one can see the books** (the only finance-shaped name is a calendar booking search). It reads email, searches clients, runs a query, fetches a page. It cannot open a statement, reconcile an account or check a balance. Working Stripe credentials and the statements already exist; nothing connects them.
+2. **Checks that fail loudly**, run in milliseconds on everything — the agent then works only on what they flag.
+3. **A challenger** (B4a).
+4. **The business written down** — the registry and the knowledge base.
+5. **Permission to refuse.** The Stripe rebuild refuses to write unless it reproduces Stripe's own five figures. An agent that says "these do not match, I am stopping" is worth more than one that always answers.
+
+**The economics that decide the design:** a session like this one is minutes of reasoning per question. Running that over 3,000 transactions monthly is neither affordable nor necessary. So: **cheap deterministic checks on everything always; the model's attention only on the exceptions.** That is also how the Big Four platforms are built, and why the existing client categoriser runs only on what the rules could not handle.
 
 **B6 — 2024 and the amendment.** From Zoho, opening from the 2023 return, with a line-by-line bridge from filed to corrected.
 
@@ -281,3 +313,64 @@ None of this is Track A. All of it is real money and belongs in the system.
 - **A2 document retrieval** — the long pole. Nothing else can finish without it.
 - **Go on Track C** (1099s) as a parallel workstream.
 - The four reclassifications (rent $39,642.18 · Janet Durant $8,650 · meals+travel $1,733.01 · vehicle $1,517.86) — still unapplied, and the rent and vehicle both now carry open questions per §5.
+
+---
+
+## 13. Running log — findings and work, newest first
+
+**Append here as work lands. Antonio, 2026-08-31: "while we work on the 2025 books, update it with new findings and implementation and features." Each entry states what was found, what was verified against, and what changed.**
+
+### 2026-08-31 — Stripe rebuilt as a clearing account; it now ties to Stripe's own balance
+
+**Reconciled the loaded data against Stripe's own 2025 balance summary. Three defects, none visible from the code:**
+
+1. **29 FAILED charges booked as income — $20,589 of money that never arrived.** The export lists a declined card with an amount and a "Failed" status; the importer read the amount and ignored the status.
+2. **EUR charges loaded at their EURO face value labelled as dollars.** "Amount" is the charge's own currency; "Converted Amount" is the settlement figure. Converted sums to **103,946.64** — Stripe's gross to the cent. Raw gives 103,057.60.
+3. **Fees never booked in the rebuild at all** — Stripe charged **3,594.39**. (The prepared accounts DO carry them, at **3,451.57** — short by 142.82. Both figures recorded; the source of truth is Stripe.)
+
+**The double-count is closed.** 158 captured charges are the income; the **94 payouts, $95,970.15, went to MERCURY** (not Relay — the dashboard was showing 2026) and are now marked as transfers on **both** legs, mirrored from the Mercury rows themselves so dates and amounts match by construction rather than by a heuristic.
+
+**The proof:** 103,946.64 − 3,594.39 − 1,500.00 − 95,970.15 = **2,882.10**, exactly Stripe's stated ending balance. The rebuild script **refuses to write** unless it reproduces all five figures, and backs up the prior rows to disk before deleting. 412 rows written; 187 replaced.
+
+### 2026-08-31 — closing balances retrieved from Antonio's own Drive
+
+| Account | Closing balance | Source |
+|---|---|---|
+| Mercury 4517 | **$15,044.08** | December statement (opened 13,751.14 · +21,292.94 · −20,000.00) |
+| Chase card 9279 | **$170.72** owed | December statement, cycle **23 Nov – 22 Dec** — the last nine days of the year fall outside it |
+| Stripe | **$2,882.10** | Stripe balance summary |
+
+**Still missing: Amex 51007 has NO December statement in the Drive** (searched; four December files present, none Amex). Chase 6094's statement IS there, unread as of this entry.
+
+**Access note that cost real time:** the owner-Drive search failed with "GOOGLE_SA_KEY not configured" because a scratch script loaded the wrong env file. The credentials were present the whole time. Do not conclude "no access" from one failed script.
+
+**Also learned:** four accounts seen in the CPA portal (Truly Financial, Verto, Ally 2167, Jeep Compass) are **2024**, not missing 2025 accounts. Folders were seen; the year inside was never checked. **Do not go to the CPA portal without Antonio's explicit word** — his instruction, 2026-08-31.
+
+### 2026-08-31 — Amex and loan signs flipped; the rule that would have hidden it fixed first
+
+**Order mattered.** The card-payment rule matched Chase's *"PAYMENT THANK YOU-MOBILE"* but NOT Amex's *"MOBILE PAYMENT - THANK YOU"* — the words are not adjacent. Flipping signs first would have dropped Amex's 24 payments (**$81,124.41**) through the card catch-all and booked them as refunds, **reducing expenses by that amount**. The existing test used Chase's wording, which is why it passed. Pattern now tolerates separators; the catch-all refuses any row naming a payment; both wordings tested.
+
+**Then the flip: 809 rows** (790 Amex + 19 loan), none categorised, so no human decision was disturbed.
+
+**The script does NOT negate the stated balance — checked with arithmetic, not assumed.** A first version did. A loan statement prints the balance OWED while the amounts are the CHANGE in it. Proven on the real June rows: amounts flipped and balance left positive gives 144,500 − 284.39 = **144,215.61**, exactly what the statement says. Negating it would have broken the very chain the fix exists to make true.
+
+**Verified after:** charges negative, payments positive; the loan reconstructs from 144,500 drawn plus 5,361 interest less 8,546 repaid to **140,246.52**. **Caveat:** three rows share 22 December with no tie-break, so ordering by date alone gives **141,314.82**. The true closing balance needs First Citizens' own statement.
+
+### 2026-08-31 — Cash stopped counting debt as cash
+
+`getCashPosition` had **no account-type filter**, so roughly **$140,000** of loan principal and three card balances inflated the headline cash number — against a rule this codebase already states. Now cash means checking and savings; an unknown type is reported as a liability rather than assumed to be cash. Also **paged** (an un-ranged read is silently capped at 1000 and would have dropped the QUIET accounts entirely, not merely staled them) and given an **id tie-break** so "the latest balance" stops depending on which row Postgres returned first.
+
+Filtering them out without showing them would have made the debts vanish, so the dashboard now reports **Owed by Account** separately. **Known gap:** five accounts (Mercury, three cards, Stripe) carry no `balance_after` at all in their exports, so they cannot appear in either block until their closing balances are entered from statements.
+
+### 2026-08-31 — the transactions screen was unusable for the one job it exists for
+
+**Measured, not assumed:** of 2,768 rows, **241 descriptions exceed 200 characters** (longest 358) against a column fitting roughly 30. Three different Airwallex sweeps all read `ORIG CO NAME:AIRWALLEX ORIG ID…` and stopped; what distinguished them was in the hidden part.
+
+Fixed: the whole ROW opens the transaction; the panel shows the FULL description wrapped and selectable plus the running balance (it was truncated even there); the Categorize button is gone (a second, smaller target for what the row now does, and off-screen on a phone); list descriptions wrap to two lines. Interactive children stop propagation. **Verified live in the browser:** row opens, a 200-character line renders complete, and the checkbox selects WITHOUT opening the panel.
+
+### Still open at the time of this entry
+
+- **1,267 of 2,993 rows uncategorised.**
+- **Amex 51007 December statement missing**; Chase 6094 statement unread.
+- The four §5 open questions (rent composition, vehicle contradiction, gross-vs-net receipts) unresolved.
+- Track C (1099s) not started.
