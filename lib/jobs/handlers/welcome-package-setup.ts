@@ -489,14 +489,16 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
       : (isIt
           ? `Ottima notizia! Il codice fiscale americano (EIN) per ${account.company_name} è stato emesso: ${account.ein_number}.`
           : `Great news! The EIN for ${account.company_name} has been issued: ${account.ein_number}.`)
-    const body = isOnboarding
-      ? (isIt
-          ? `I tuoi moduli bancari (Relay e Payset), il tuo Accordo Operativo e il contratto di domiciliazione sono pronti per essere firmati nel portale.`
-          : `Your banking forms (Relay and Payset), your Operating Agreement and your lease are ready to sign in the portal.`)
-      : (isIt
-          ? `Puoi ora avviare la procedura per aprire il conto bancario aziendale. Accedi al portale per iniziare il processo di apertura del conto e, se applicabile, per firmare il tuo Accordo Operativo e il contratto di domiciliazione.`
-          : `You can now start the process to open your business bank account. Log in to your portal to begin the banking wizard and, where applicable, sign your Operating Agreement and lease.`)
-    const message = `${greeting}\n\n${body}`
+    // OA/Lease are self-serve (client generates them from the portal whenever
+    // they want) — this notice must never proactively push them. Banking is
+    // guided (not pushed as "ready to sign"): point to the real self-serve
+    // Bank Applications page, where Relay/Payset are staff-submitted on the
+    // client's behalf per the Banking Rules KB (incl. free EUR IBAN via Nium
+    // if they don't have one). Antonio's ruling, 2026-08-31 (dev job 62a64f2b).
+    const bankingGuide = isIt
+      ? `Ora puoi aprire il conto bancario aziendale — vai su Apertura Conto Bancario nel menu del tuo portale. Per Relay e Payset ti basta compilare il modulo breve: pensiamo noi a completare la richiesta, incluso aprirti l'IBAN in euro gratuitamente, se ti serve.`
+      : `Now you can open your business bank account — go to Bank Applications in your portal menu. For Relay and Payset, just fill in the short form there and we'll handle the actual application for you, including opening your EUR IBAN at no extra charge if you need one.`
+    const message = `${greeting}\n\n${bankingGuide}`
 
     await supabaseAdmin.from("portal_messages").insert({
       account_id: p.account_id,
@@ -513,11 +515,9 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
       type: isOnboarding ? "service" : "ein_received",
       title: isOnboarding
         ? (isIt ? "Onboarding in elaborazione" : "Onboarding in progress")
-        : (isIt ? "EIN emesso — banking disponibile" : "EIN issued — banking available"),
-      body: isOnboarding
-        ? (isIt ? "Moduli bancari, OA e lease pronti da firmare." : "Banking forms, OA and lease ready to sign.")
-        : (isIt ? `EIN: ${account.ein_number}` : `EIN: ${account.ein_number}`),
-      link: isOnboarding ? "/portal" : "/portal/banking",
+        : (isIt ? "EIN emesso" : "EIN issued"),
+      body: isOnboarding ? undefined : `EIN: ${account.ein_number}`,
+      link: "/portal/banks",
     })
 
     result.steps.push(step("notify_client", "ok", `Portal message sent to ${contact.email}${isOnboarding ? " (onboarding context)" : " (formation context)"}`))
