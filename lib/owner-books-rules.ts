@@ -63,7 +63,13 @@ export const OWNER_BOOKS_RULES: OwnerBooksRule[] = [
   // income, and the checking account records the same movement as an outflow —
   // booking either side to the P&L would invent revenue or double an expense.
   {
-    match: /PAYMENT THANK YOU|AUTOPAY PAYMENT|ONLINE PAYMENT THANK/i,
+    // SEPARATOR-TOLERANT ON PURPOSE. Chase writes "PAYMENT THANK YOU-MOBILE";
+    // Amex writes "MOBILE PAYMENT - THANK YOU". The original pattern required the
+    // words to be adjacent and so matched Chase and MISSED Amex — and the test that
+    // "proved" it used Chase's wording. Consequence, measured: once the Amex signs
+    // are flipped, its 24 payments (81,124.41) fall through to the card catch-all
+    // below and are booked as REFUNDS, reducing expenses by that amount.
+    match: /PAYMENT[\s-]*THANK\s*YOU|AUTOPAY PAYMENT|ONLINE PAYMENT THANK/i,
     category: 'transfer', subcategory: 'card_payment', direction: 'in',
     why: 'Own money paying down the card — the paying account records the other side.',
   },
@@ -125,6 +131,10 @@ export const OWNER_BOOKS_RULES: OwnerBooksRule[] = [
   // never actually paid.
   {
     match: /.*/,
+    // A row that calls itself a payment is NOT a refund, whatever wording the issuer
+    // uses. Without this the catch-all silently absorbs any card payment a future
+    // issuer words differently — the same failure as the Amex hyphen, one layer down.
+    exclude: /PAYMENT/i,
     category: 'refund', subcategory: 'merchant_refund', direction: 'in',
     accountTypes: ['credit_card'],
     why: 'Money back on a card — a reversed or refunded charge.',

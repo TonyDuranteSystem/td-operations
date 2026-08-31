@@ -101,6 +101,26 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
         </div>
       )}
 
+      {/* Cards and loans — shown SEPARATELY as money owed.
+          These used to be added into the Cash total, which reported roughly $140,000
+          of loan principal and three credit-card balances as though they were cash.
+          Filtering them out of cash without showing them here would be the opposite
+          mistake — the debts would simply disappear from the screen. */}
+      {cash.liabilities.length > 0 && (
+        <div className="rounded-lg border border-zinc-200 bg-white p-4">
+          <h3 className="mb-1 text-sm font-medium text-zinc-700">Owed by Account</h3>
+          <p className="mb-3 text-xs text-zinc-400">Cards and loans — money owed, never counted as cash.</p>
+          <div className="space-y-2">
+            {cash.liabilities.map(a => (
+              <div key={`${a.bank_name}|${a.currency}`} className="flex items-center justify-between text-sm">
+                <span className="text-zinc-600">{a.bank_name}{a.currency !== 'USD' ? ` (${a.currency})` : ''}</span>
+                <span className="font-medium tabular-nums text-red-600">{fmtIn(a.currency)(a.balance)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Monthly chart */}
       <div className="rounded-lg border border-zinc-200 bg-white p-4">
         <h3 className="mb-4 text-sm font-medium text-zinc-700">Monthly Income vs Expenses ({year}, USD)</h3>

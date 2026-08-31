@@ -24,6 +24,7 @@ function probeFor(re: RegExp): string {
   return re.source
     .split("|")[0]
     .replace(/\(([^)|]*)(\|[^)]*)?\)/g, "$1")  // (CTP|AUTFDR) -> CTP
+    .replace(/\[[^\]]*\][*+?]/g, " ")           // PAYMENT[\s-]*THANK -> PAYMENT THANK
     .replace(/\\s\*|\\s\+|\\s/g, " ")
     .replace(/(.)\?/g, "$1")                    // T-?MOBILE -> T-MOBILE
     .replace(/\\b/g, "")
@@ -176,5 +177,38 @@ describe("a spending rule can never fire on money coming IN", () => {
       const r = checking(desc, amount)
       expect(r === null || !["expense", "cogs", "fee", "distribution"].includes(r.category)).toBe(true)
     }
+  })
+})
+
+describe("a card payment is recognised whatever the issuer calls it", () => {
+  it("matches BOTH Chase's and Amex's wording", () => {
+    // THE BUG: the pattern required PAYMENT and THANK YOU to be adjacent. Chase
+    // writes "PAYMENT THANK YOU-MOBILE" and matched; Amex writes
+    // "MOBILE PAYMENT - THANK YOU" and did not. The test that passed used Chase's
+    // wording only. Once Amex's signs are flipped, its 24 payments — $81,124.41 —
+    // would have fallen to the card catch-all and been booked as refunds,
+    // REDUCING expenses by that amount.
+    for (const wording of [
+      "PAYMENT THANK YOU-MOBILE",        // Chase
+      "MOBILE PAYMENT - THANK YOU",      // Amex
+      "ONLINE PAYMENT THANK YOU",
+      "AUTOPAY PAYMENT",
+    ]) {
+      expect(card(wording, 1000), `"${wording}" must be a card payment`).toMatchObject({
+        category: "transfer", subcategory: "card_payment",
+      })
+    }
+  })
+
+  it("the card catch-all never claims a row that calls itself a payment", () => {
+    // Belt and braces for an issuer whose wording nobody has seen yet: a payment
+    // must never be silently absorbed as a merchant refund.
+    expect(card("SOME UNSEEN ISSUER PAYMENT RECEIVED", 500)?.subcategory).not.toBe("merchant_refund")
+  })
+
+  it("a genuine merchant credit is still a refund", () => {
+    expect(card("ROOT INSURANCE", 1076)).toMatchObject({
+      category: "refund", subcategory: "merchant_refund",
+    })
   })
 })

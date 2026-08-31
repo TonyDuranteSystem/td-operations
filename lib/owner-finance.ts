@@ -163,8 +163,12 @@ export interface CashAccountBalance {
 
 /** Per-currency cash totals — NEVER a single cross-currency number (council rule). */
 export interface CashPosition {
+  /** CASH ONLY — checking and savings. Cards and loans are debts, never cash. */
   totals: Record<string, number>
   accounts: CashAccountBalance[]
+  /** Cards and loans, reported SEPARATELY as what they are: money owed. */
+  liabilities: CashAccountBalance[]
+  liabilityTotals: Record<string, number>
 }
 
 export interface VendorRule {
@@ -506,39 +510,69 @@ export async function getOwnerPnL(year: number): Promise<OwnerPnL> {
   return computeOwnerPnL(txs, invoiceIncome, year)
 }
 
-export async function getCashPosition(): Promise<CashPosition> {
-  const { data, error } = await supabaseAdmin
-    .from('td_books_transactions')
-    .select('bank_name, currency, balance_after, transaction_date')
-    .eq('entity_id', TD_ENTITY_ID)
-    .not('balance_after', 'is', null)
-    .not('bank_name', 'is', null)
-    .order('transaction_date', { ascending: false })
+/** Account types that hold CASH. A card or a loan balance is money OWED — adding it
+ *  into cash reports debt as an asset. Measured: the First Citizens loan alone would
+ *  have inflated cash by roughly $140,000, and three credit cards sit beside it. */
+const CASH_PAGE = 1000
 
-  if (error) throw new Error(`getCashPosition: ${error.message}`)
+const CASH_ACCOUNT_TYPES = ['checking', 'savings']
+
+export async function getCashPosition(): Promise<CashPosition> {
+  // PAGED. An un-ranged select is silently capped at 1000 rows by PostgREST with no
+  // error — and because this orders newest-first, the rows that fall off the end are
+  // the QUIET accounts, which would disappear from the report entirely rather than
+  // merely be stale. This file documents that trap twice and pages around it in three
+  // other queries; this was the one that was missed.
+  const rows: Array<{ bank_name: string; currency: string | null; balance_after: number | null; transaction_date: string; account_type: string | null }> = []
+  for (let from = 0; ; from += CASH_PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from('td_books_transactions')
+      .select('bank_name, currency, balance_after, transaction_date, account_type')
+      .eq('entity_id', TD_ENTITY_ID)
+      .not('balance_after', 'is', null)
+      .not('bank_name', 'is', null)
+      // id is the TIE-BREAK, not decoration: several rows commonly share the closing
+      // date, Postgres gives no stable order among ties, and without it "the latest
+      // balance" is whichever row happened to come back first — a different answer on
+      // a refresh with no data change. The same fix was already applied to two other
+      // queries here and missed on this one.
+      .order('transaction_date', { ascending: false })
+      .order('id', { ascending: false })
+      .range(from, from + CASH_PAGE - 1)
+    if (error) throw new Error(`getCashPosition: ${error.message}`)
+    rows.push(...(data ?? []))
+    if ((data?.length ?? 0) < CASH_PAGE) break
+  }
 
   // Latest balance per (bank, currency) — a bank holding USD and EUR is two balances,
   // and the totals stay per-currency (never a $-labeled EUR+USD sum).
   const seen = new Set<string>()
   const accounts: CashAccountBalance[] = []
+  const liabilities: CashAccountBalance[] = []
 
-  for (const row of data ?? []) {
+  for (const row of rows) {
     const currency = row.currency || 'USD'
     const key = `${row.bank_name}|${currency}`
-    if (!seen.has(key)) {
-      seen.add(key)
-      accounts.push({
-        bank_name: row.bank_name,
-        currency,
-        balance: Number(row.balance_after),
-        as_of: row.transaction_date,
-      })
+    if (seen.has(key)) continue
+    seen.add(key)
+    const entry: CashAccountBalance = {
+      bank_name: row.bank_name,
+      currency,
+      balance: Number(row.balance_after),
+      as_of: row.transaction_date,
     }
+    // An account whose type is unknown is NOT assumed to be cash — it is reported as
+    // a liability so it is visible and questioned, rather than silently inflating the
+    // headline number.
+    if (row.account_type && CASH_ACCOUNT_TYPES.includes(row.account_type)) accounts.push(entry)
+    else liabilities.push(entry)
   }
 
   const totals: Record<string, number> = {}
   for (const a of accounts) totals[a.currency] = (totals[a.currency] ?? 0) + a.balance
-  return { totals, accounts }
+  const liabilityTotals: Record<string, number> = {}
+  for (const a of liabilities) liabilityTotals[a.currency] = (liabilityTotals[a.currency] ?? 0) + a.balance
+  return { totals, accounts, liabilities, liabilityTotals }
 }
 
 export async function getUncategorizedCount(year: number): Promise<number> {
