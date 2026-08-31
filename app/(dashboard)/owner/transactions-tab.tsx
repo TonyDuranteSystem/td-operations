@@ -436,15 +436,36 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
       {/* Categorize modal */}
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
-          <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-xl">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-zinc-200 bg-white p-6 shadow-xl">
             <h3 className="mb-1 text-base font-semibold text-zinc-900">Categorize Transaction</h3>
-            <p className="mb-4 text-sm text-zinc-500 truncate">{modal.tx.counterparty ?? modal.tx.description}</p>
+            {modal.tx.counterparty && (
+              <p className="mb-2 text-sm font-medium text-zinc-700">{modal.tx.counterparty}</p>
+            )}
 
             <div className="mb-3 flex items-center justify-between rounded-lg bg-zinc-50 px-3 py-2">
-              <span className="text-sm text-zinc-500">{modal.tx.transaction_date} · {modal.tx.bank_name}</span>
+              <span className="text-sm text-zinc-500">
+                {modal.tx.transaction_date} · {modal.tx.bank_name}
+                {modal.tx.balance_after !== null && modal.tx.balance_after !== undefined && (
+                  <> · balance {fmtRow(modal.tx.balance_after, modal.tx.currency)}</>
+                )}
+              </span>
               <span className={`text-sm font-semibold tabular-nums ${modal.tx.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
                 {modal.tx.amount < 0 ? '-' : '+'}{fmtRow(modal.tx.amount, modal.tx.currency)}
               </span>
+            </div>
+
+            {/* THE FULL BANK LINE, never truncated.
+                241 of the 2025 rows run past 200 characters and the longest is 358, while
+                the list column fits roughly 30 — so three different Airwallex sweeps look
+                identical there. What tells them apart (the originator id, the entry
+                description, the trace number) lives in the hidden part, which made this
+                screen unusable for the one decision it exists for. Selectable on purpose:
+                a trace number is worth copying. */}
+            <div className="mb-3">
+              <label className="mb-1 block text-xs font-medium text-zinc-600">Full bank description</label>
+              <p className="max-h-40 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-white px-3 py-2 font-mono text-xs leading-relaxed text-zinc-700">
+                {modal.tx.description}
+              </p>
             </div>
 
             <div className="space-y-3">
@@ -663,8 +684,20 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
           </thead>
           <tbody>
             {rows.map(tx => (
-              <tr key={tx.id} className="border-b border-zinc-50 hover:bg-zinc-50">
-                <td className="px-3 py-2.5">
+              /* The whole row opens the transaction. The old design put the only way in
+                 on a small button at the far right, which on a phone meant scrolling a
+                 wide table sideways to reach it. Interactive children below stop the
+                 click from bubbling — that is the classic bug in this pattern, where
+                 ticking a checkbox also opens the panel. */
+              <tr
+                key={tx.id}
+                onClick={() => openModal(tx)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openModal(tx) } }}
+                className="cursor-pointer border-b border-zinc-50 hover:bg-zinc-50 focus:bg-zinc-50 focus:outline-none"
+              >
+                <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
                   <input
                     type="checkbox"
                     checked={selected.has(tx.id)}
@@ -677,9 +710,12 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                 </td>
                 <td className="px-3 py-2.5 text-xs text-zinc-500 whitespace-nowrap">{tx.transaction_date}</td>
                 <td className="px-3 py-2.5 text-xs text-zinc-400">{tx.bank_name}</td>
-                <td className="px-3 py-2.5 max-w-[200px]">
+                {/* Two lines, wrapped at word boundaries, instead of one hard-cut line.
+                    It still will not show a 358-character bank line in full — that is what
+                    opening the row is for — but it shows enough to recognise one. */}
+                <td className="min-w-[280px] max-w-[460px] px-3 py-2.5">
                   <div className="truncate font-medium text-zinc-800">{tx.counterparty ?? '—'}</div>
-                  <div className="truncate text-xs text-zinc-400">{tx.description}</div>
+                  <div className="line-clamp-2 break-words text-xs leading-snug text-zinc-400">{tx.description}</div>
                 </td>
                 <td className={`px-3 py-2.5 text-right font-mono text-xs font-medium tabular-nums ${tx.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
                   {tx.amount < 0 ? '-' : '+'}{fmtRow(tx.amount, tx.currency)}
@@ -693,7 +729,7 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                     return s ? (
                       <FastTooltip label="Suggested by your saved rule — click to apply">
                         <button
-                          onClick={() => acceptSuggestion(tx)}
+                          onClick={e => { e.stopPropagation(); acceptSuggestion(tx) }}
                           aria-label="Suggested by your saved rule — click to apply"
                           className="ml-1.5 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
                         >
@@ -705,18 +741,12 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                 </td>
                 <td className="px-3 py-2.5 text-xs text-zinc-500">{tx.subcategory?.replace(/_/g, ' ') ?? '—'}</td>
                 <td className="px-3 py-2.5 text-xs text-zinc-400 max-w-[120px] truncate">{tx.notes ?? ''}</td>
-                <td className="px-3 py-2.5">
+                {/* No Categorize button any more — the ROW opens the transaction, so a
+                    button beside it was a second, smaller target for the same action, and
+                    on a phone it sat off the right edge of a wide table. What stays here is
+                    the bank-feed escape hatch, which does something different. */}
+                <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
                   <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={() => openModal(tx)}
-                      className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
-                        tx.category === 'uncategorized'
-                          ? 'bg-orange-50 text-orange-700 hover:bg-orange-100 border border-orange-200'
-                          : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-100'
-                      }`}
-                    >
-                      {tx.category === 'uncategorized' ? 'Categorize ↗' : 'Edit'}
-                    </button>
                     {/* Only a row that CAME from the bank feed can go back to it. This is the
                         escape hatch: anything the system could not identify as a client
                         payment lands here, and one click returns it to the Bank Feed. */}
