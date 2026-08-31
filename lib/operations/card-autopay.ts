@@ -188,27 +188,22 @@ export async function disableAutopayCard(accountId: string, actor: string = "cli
 
   const { data: account, error: fetchErr } = await supabaseAdmin
     .from("accounts")
-    .select("autopay_stripe_payment_method_id" as never)
+    .select("autopay_card_enabled, autopay_stripe_payment_method_id" as never)
     .eq("id", accountId)
     .single()
 
   if (fetchErr) return { ok: false, error: fetchErr.message }
 
-  const paymentMethodId = (account as unknown as { autopay_stripe_payment_method_id: string | null } | null)
-    ?.autopay_stripe_payment_method_id
+  const accountRow = account as unknown as { autopay_card_enabled: boolean | null; autopay_stripe_payment_method_id: string | null } | null
+  const paymentMethodId = accountRow?.autopay_stripe_payment_method_id
 
-  if (stripe && paymentMethodId) {
-    try {
-      await stripe.paymentMethods.detach(paymentMethodId)
-    } catch (err) {
-      // Non-fatal — the card may already be detached (e.g. a prior partial
-      // failure). We still turn off autopay on our side either way; a stale
-      // Stripe-side attachment with autopay_card_enabled=false can never be
-      // charged by our own code, which only ever checks the DB flag.
-      console.warn(`[card-autopay] detach failed for account ${accountId} (continuing):`, err)
-    }
-  }
-
+  // The DB write happens BEFORE the Stripe detach (2026-08-31 reorder,
+  // ai-architect + senior-engineer finding). autopay_card_enabled is the
+  // ONLY field any charging code trusts — committing it first means a
+  // detach failure can never leave "enabled=true with a dead payment
+  // method" (the old order could: detach, then a DB write failure left the
+  // stale pm id enabled and chargeable-but-broken every cron run).
+  //
   // Conditional on the payment-method id still matching what we just read —
   // an optimistic-concurrency guard so a disable racing a fresh re-enrollment
   // (a client's webhook completing at the same moment) can't silently wipe
@@ -234,8 +229,37 @@ export async function disableAutopayCard(accountId: string, actor: string = "cli
 
   if (updateErr) return { ok: false, error: updateErr.message }
   if (!updatedRows || updatedRows.length === 0) {
+    // 0 rows matched means the card on file changed since we read it — but
+    // that includes the completely benign case of a genuine double-disable
+    // (two clicks, or the account and contact page both open): the FIRST
+    // call already cleared the row, so re-checking finds autopay already
+    // off and reports success instead of a false "changed concurrently"
+    // error (senior-engineer finding, council review 2026-08-31). Only a
+    // row that's still enabled with a DIFFERENT payment method (a real
+    // re-enrollment raced us) is the genuine conflict.
+    const { data: current } = await supabaseAdmin
+      .from("accounts")
+      .select("autopay_card_enabled, autopay_stripe_payment_method_id" as never)
+      .eq("id", accountId)
+      .single()
+    const currentRow = current as unknown as { autopay_card_enabled: boolean | null; autopay_stripe_payment_method_id: string | null } | null
+    if (currentRow && !currentRow.autopay_card_enabled && !currentRow.autopay_stripe_payment_method_id) {
+      return { ok: true }
+    }
     console.warn(`[card-autopay] disable skipped for account ${accountId} — the card on file changed concurrently (likely a re-enrollment mid-flight)`)
     return { ok: false, error: "Autopay's card on file changed at the same moment — please check the current status and try again." }
+  }
+
+  if (stripe && paymentMethodId) {
+    try {
+      await stripe.paymentMethods.detach(paymentMethodId)
+    } catch (err) {
+      // Non-fatal — the card may already be detached (e.g. a prior partial
+      // failure). The DB flag is already off either way; a stale
+      // Stripe-side attachment with autopay_card_enabled=false can never be
+      // charged by our own code, which only ever checks the DB flag.
+      console.warn(`[card-autopay] detach failed for account ${accountId} (continuing):`, err)
+    }
   }
 
   try {

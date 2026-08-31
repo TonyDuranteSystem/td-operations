@@ -21,6 +21,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 interface Row {
   autopay_stripe_customer_id?: string | null
   autopay_stripe_payment_method_id?: string | null
+  autopay_card_enabled?: boolean | null
   company_name?: string
 }
 
@@ -164,5 +165,16 @@ describe("disableAutopayCard", () => {
     const result = await disableAutopayCard("acc-1")
     expect(result.ok).toBe(false)
     expect(result.error).toContain("changed at the same moment")
+  })
+
+  it("2026-08-31: treats a 0-rows-matched update as a benign double-disable when the account is already in the disabled target state — reports success instead of a false conflict (senior-engineer finding, council review round 2)", async () => {
+    // Simulates the FIRST disable call having already cleared the row (the
+    // read-back the guard does after 0 rows match sees the already-cleared
+    // state) — a second click, or the account and contact page both open,
+    // is not a real conflict.
+    accountRow = { autopay_card_enabled: false, autopay_stripe_payment_method_id: null }
+    updateSelectResult = { data: [], error: null }
+    const result = await disableAutopayCard("acc-1")
+    expect(result).toEqual({ ok: true })
   })
 })

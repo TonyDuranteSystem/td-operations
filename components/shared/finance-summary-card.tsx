@@ -28,9 +28,11 @@ interface FinanceSummaryCardProps {
   showAutopay?: boolean
   autopayEnabled?: boolean
   autopayLast4?: string | null
-  /** Staff actions (turn off / send enrollment link) only render when true —
-   *  matches this codebase's convention of gating money-affecting actions to
-   *  admins (see the account Payments tab's own adminOnly flag). */
+  /** Staff actions (turn off / send enrollment link) only render when true.
+   *  Currently sourced as "any dashboard/staff session" on both host pages —
+   *  NOT Antonio-only — matching how every other staff user of this CRM
+   *  already reaches this account (council review, 2026-08-31: this prop's
+   *  name previously implied a stricter gate than what actually fed it). */
   isAdmin?: boolean
   onDisable?: (accountId: string) => Promise<ActionResult>
   onSendLink?: (accountId: string) => Promise<ActionResult>
@@ -52,7 +54,12 @@ export function FinanceSummaryCard({
 
   const handleDisable = async () => {
     if (loading || !accountId || !onDisable) return
-    if (!window.confirm(`Turn off autopay for ${companyName || 'this account'}? Future invoices will need to be paid manually and the 5% card fee will apply again.`)) return
+    // Deliberately does NOT quote a fee percentage — that rate is a live
+    // config value Antonio can change at any time, and a number baked into
+    // this dialog's text goes stale the moment he does (council review,
+    // 2026-08-31 — this was the second of two places round 2 fixed the
+    // client-facing wording but missed this staff-facing one).
+    if (!window.confirm(`Turn off autopay for ${companyName || 'this account'}? Future invoices will need to be paid manually and the card fee will apply again.`)) return
     setLoading(true)
     const result = await onDisable(accountId)
     setLoading(false)
@@ -62,12 +69,12 @@ export function FinanceSummaryCard({
 
   const handleSendLink = async () => {
     if (loading || !accountId || !onSendLink) return
-    if (!window.confirm(`Send ${companyName || 'this account'} a card-autopay enrollment link in their portal chat? This is a real, immediate message to the client.`)) return
+    if (!window.confirm(`Send ${companyName || 'this account'} a message pointing them to the autopay button in their own portal?`)) return
     setLoading(true)
     const result = await onSendLink(accountId)
     setLoading(false)
-    if (result.success) { toast.success('Enrollment link sent to the client'); router.refresh() }
-    else toast.error(result.error || 'Failed to send the enrollment link')
+    if (result.success) { toast.success('Message sent to the client'); router.refresh() }
+    else toast.error(result.error || 'Failed to send the message')
   }
 
   return (
@@ -143,7 +150,7 @@ export function FinanceSummaryCard({
                 className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
               >
                 {loading && <Loader2 className="h-3 w-3 animate-spin" />}
-                Send enrollment link
+                Send activation link
               </button>
             )
           )}

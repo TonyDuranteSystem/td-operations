@@ -12,13 +12,10 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { createClient, SupabaseClient } from "@supabase/supabase-js"
-import StripeConstructor from "stripe"
 import { runActivation } from "@/lib/operations/activate-service"
 import { resolveExternalValue } from "@/lib/catalog/framework"
 import { handleChargeReversal } from "@/lib/operations/credit-reversal"
-import { saveAutopayCard } from "@/lib/operations/card-autopay"
-
-type StripeClient = ReturnType<typeof StripeConstructor>
+import { handleAutopaySetupCompleted, type StripeSetupSession } from "@/lib/operations/autopay-webhook-completion"
 
 // Lightweight types for Stripe objects (v22 has different namespace pattern)
 interface StripeEvent {
@@ -37,14 +34,6 @@ interface StripeSession {
   metadata: Record<string, string> | null
 }
 
-interface StripeSetupSession {
-  id: string
-  mode?: string
-  setup_intent: string | null
-  customer: string | null
-  metadata: Record<string, string> | null
-}
-
 let _supabase: SupabaseClient | null = null
 function getSupabase() {
   if (!_supabase) {
@@ -54,24 +43,6 @@ function getSupabase() {
     )
   }
   return _supabase
-}
-
-// Only needed for the card-autopay setup-mode branch below, which must call
-// back into Stripe (retrieve the SetupIntent) rather than just reading the
-// webhook payload — unlike every other handler in this file.
-let _stripe: StripeClient | null = null
-function getStripeSdk(): StripeClient | null {
-  if (!_stripe) {
-    const key = process.env.STRIPE_SECRET_KEY
-    if (!key) return null
-    try {
-      _stripe = StripeConstructor(key)
-    } catch {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      _stripe = new (StripeConstructor as any)(key)
-    }
-  }
-  return _stripe
 }
 
 // ─── Signature Verification ──────────────────────────────────────
@@ -515,50 +486,9 @@ async function handleCheckoutCompleted(session: StripeSession) {
 // it must be branched on session.mode BEFORE handleCheckoutCompleted, which
 // assumes a payment session and would otherwise try to process a $0 "payment"
 // and could even match it against an unrelated pending_activation by email.
-async function handleAutopaySetupCompleted(session: StripeSetupSession) {
-  const accountId = session.metadata?.account_id || null
-  if (!accountId) {
-    console.error(`[stripe-webhook] autopay setup session ${session.id} missing account_id metadata`)
-    return
-  }
-  if (!session.setup_intent || !session.customer) {
-    console.error(`[stripe-webhook] autopay setup session ${session.id} missing setup_intent/customer`)
-    return
-  }
-
-  const stripe = getStripeSdk()
-  if (!stripe) {
-    console.error("[stripe-webhook] STRIPE_SECRET_KEY not set — cannot finish autopay enrollment")
-    return
-  }
-
-  try {
-    const setupIntent = await stripe.setupIntents.retrieve(session.setup_intent)
-    const paymentMethodId =
-      typeof setupIntent.payment_method === "string"
-        ? setupIntent.payment_method
-        : setupIntent.payment_method?.id
-
-    if (!paymentMethodId) {
-      console.error(`[stripe-webhook] setup_intent ${session.setup_intent} has no payment_method`)
-      return
-    }
-
-    const pm = await stripe.paymentMethods.retrieve(paymentMethodId)
-    const last4 = pm.card?.last4 || null
-
-    await saveAutopayCard({
-      accountId,
-      stripeCustomerId: session.customer,
-      paymentMethodId,
-      last4,
-    })
-
-    console.warn(`[stripe-webhook] card autopay enrolled for account ${accountId} — card ending ${last4}`)
-  } catch (err) {
-    console.error(`[stripe-webhook] autopay setup completion failed for session ${session.id}:`, err)
-  }
-}
+// The handler itself lives in lib/operations/autopay-webhook-completion.ts —
+// a route.ts file can only export HTTP method handlers, so it was extracted
+// there to be directly unit-testable (2026-08-31, council review).
 
 // ─── Main Handler ──────────────────────────────────────────────
 

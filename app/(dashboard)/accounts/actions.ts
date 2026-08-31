@@ -1139,12 +1139,16 @@ export async function updateDBADetails(
 
 export async function disableAccountAutopay(accountId: string): Promise<ActionResult> {
   const actor = await getDashboardActor()
+  // Real auth user id (uuid) for the retired note's deleted_by — separate
+  // from `actor`, which is the "dashboard:<name>" audit-log label. Checked
+  // explicitly (matching the sibling pattern in app/(dashboard)/accounts/[id]/actions.ts)
+  // rather than degrading to "dashboard:unknown" and proceeding — security
+  // review, council pass 2026-08-31.
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
   return safeAction(async () => {
+    if (!user) throw new Error('Not signed in')
     const { disableAutopayCard } = await import('@/lib/operations/card-autopay')
-    // Real auth user id (uuid) for the retired note's deleted_by — separate
-    // from `actor`, which is the "dashboard:<name>" audit-log label.
-    const supabase = createClient()
-    const { data: { user } } = await supabase.auth.getUser()
     const result = await disableAutopayCard(accountId, actor, user?.id)
     if (!result.ok) throw new Error(result.error || 'Failed to turn off autopay')
     revalidatePath(`/accounts/${accountId}`)
@@ -1157,25 +1161,38 @@ export async function disableAccountAutopay(accountId: string): Promise<ActionRe
   })
 }
 
+// Simplified 2026-08-31 (council review, on Antonio's own description of the
+// real flow: "the client decides to activate autopay" themselves — staff
+// don't push it). The old version minted a live, one-time Stripe payment
+// link from the CRM and posted it into the shared company chat — a bearer
+// URL outside the portal's own capability gate, expiring in 24h with no
+// warning, needing its own kill-switch check, its own duplicate-send guard,
+// its own live fee-rate lookup, and still ended up wrong in more ways than
+// it was fixed (see docs/systems/billing-invoicing.md, 2026-08-31 entries).
+// It also duplicated a button the client already has, self-service, in
+// their own portal (components/portal/autopay-card.tsx) — the ONE enrollment
+// path this system needs, already correctly gated, already correctly
+// localized, already live-tested. This action now just points the client
+// there — no Stripe object is created from the CRM at all.
 export async function sendAutopayEnrollmentLink(accountId: string): Promise<ActionResult> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
   return safeAction(async () => {
-    const { getOrCreateStripeCustomerForAccount, createAutopaySetupCheckoutSession } = await import('@/lib/operations/card-autopay')
+    if (!user) throw new Error('Not signed in')
+
     const { isCardAutopayEnabled } = await import('@/lib/payments/card-autopay-config')
-    const { isCardFeeEnabled, getConfiguredCardFeeRate } = await import('@/lib/payments/card-fee-config')
     const { PORTAL_BASE_URL } = await import('@/lib/config')
     const { resolveAdminReplyContact } = await import('@/lib/portal/admin-send-scope')
     const { createPortalNotification, notifyClientOfAdminMessage } = await import('@/lib/portal/notifications')
     const { isItalian } = await import('@/lib/locale')
 
-    // Never let a staff-initiated enrollment arm an account while the global
-    // autopay switch is off — the client-facing route already refuses this;
-    // this is the ONLY autopay-enrollment surface that previously didn't
-    // (council review, 2026-08-30).
-    if (!(await isCardAutopayEnabled())) throw new Error('Card autopay is currently switched off system-wide — turn it back on before enrolling any account.')
+    // Not a security gate anymore (nothing here can arm an account) — just
+    // avoids sending a client to a portal button that won't work today.
+    if (!(await isCardAutopayEnabled())) throw new Error('Card autopay is currently switched off system-wide.')
 
     const { data: account, error: accountErr } = await supabaseAdmin
       .from('accounts')
-      .select('autopay_card_enabled, account_type')
+      .select('autopay_card_enabled')
       .eq('id', accountId)
       .single()
     if (accountErr || !account) throw new Error('Account not found')
@@ -1186,62 +1203,23 @@ export async function sendAutopayEnrollmentLink(accountId: string): Promise<Acti
     const resolvedContactId = await resolveAdminReplyContact(accountId, null)
     if (!resolvedContactId) throw new Error('This account has no linked contact to send the enrollment link to.')
 
-    // Duplicate-send guard: a Stripe checkout link is the one stable marker
-    // that survives future wording/language changes to the message itself.
-    const { data: recentSend } = await supabaseAdmin
-      .from('portal_messages')
-      .select('id')
-      .eq('account_id', accountId)
-      .eq('sender_type', 'admin')
-      .ilike('message', '%checkout.stripe.com%')
-      .is('deleted_at', null)
-      .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
-      .limit(1)
-      .maybeSingle()
-    if (recentSend) throw new Error('An enrollment link was already sent to this client in the last 24 hours.')
-
     const { data: contact } = await supabaseAdmin
       .from('contacts')
       .select('language')
       .eq('id', resolvedContactId)
       .maybeSingle()
 
-    const customerResult = await getOrCreateStripeCustomerForAccount(accountId)
-    if ('error' in customerResult) throw new Error(customerResult.error)
-
-    const sessionResult = await createAutopaySetupCheckoutSession({
-      accountId,
-      customerId: customerResult.customerId,
-      returnUrl: `${PORTAL_BASE_URL}/portal/invoices?tab=expenses`,
-    })
-    if ('error' in sessionResult) throw new Error(sessionResult.error)
+    // A stable portal path, not a one-time payment credential — no expiry,
+    // no fee-rate claim to keep in sync (the portal card there already
+    // explains the live fee correctly, in the client's language).
+    const portalUrl = `${PORTAL_BASE_URL}/portal/invoices?tab=expenses`
+    const messageText = isItalian(contact?.language)
+      ? `Puoi attivare l'addebito automatico della carta per le tue fatture in qualsiasi momento dal tuo portale: ${portalUrl}`
+      : `You can turn on automatic card billing for your invoices any time from your portal: ${portalUrl}`
 
     // portal_messages.sender_id is a UUID FK to the dashboard auth user — NOT
     // getDashboardActor()'s "dashboard:name" audit-log string (matches
     // app/api/portal/chat/route.ts's own admin-send sender_id: user.id).
-    const supabase = createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) throw new Error('Not signed in')
-
-    // "Future invoices" ONLY — the fee waiver and the auto-charge cron both
-    // apply forward from enrollment, never to an invoice already created
-    // (its fee rate is pinned at creation and does not change retroactively;
-    // council review, 2026-08-30 — the earlier wording implied otherwise).
-    // The percentage is READ LIVE, not hardcoded — the fee rate is a config
-    // value Antonio can change from Finance → Overview at any time, and a
-    // hardcoded "5%" would keep quoting a stale number after that (council
-    // review, Business-Analyst finding).
-    const feeEnabled = await isCardFeeEnabled()
-    const feeClause = { en: '', it: '' }
-    if (feeEnabled) {
-      const pct = Math.round((await getConfiguredCardFeeRate()) * 100)
-      feeClause.en = ` and no ${pct}% card fee on invoices created after you enroll`
-      feeClause.it = ` e nessuna commissione del ${pct}% sulle fatture create dopo l'iscrizione`
-    }
-    const messageText = isItalian(contact?.language)
-      ? `Ora puoi salvare una carta per l'addebito automatico sulle future fatture — niente più clic manuali${feeClause.it}. Attivalo qui: ${sessionResult.url}`
-      : `You can now save a card for automatic billing on future invoices — no more manual clicks${feeClause.en}. Activate it here: ${sessionResult.url}`
-
     const { error: insertErr } = await supabaseAdmin
       .from('portal_messages')
       .insert({
@@ -1260,12 +1238,17 @@ export async function sendAutopayEnrollmentLink(accountId: string): Promise<Acti
       title: 'New message from Tony Durante Team',
       body: messageText.slice(0, 100),
       link: '/portal/chat',
-    }).catch(() => {})
+    }).catch((err) => console.warn('[sendAutopayEnrollmentLink] createPortalNotification failed:', err))
+    // A dedicated topic gives this its own 2h notification window — without
+    // one, an unrelated chat message sent minutes earlier silently ate this
+    // client's email under the shared account-wide throttle (bug-hunter
+    // finding, council review 2026-08-31).
     notifyClientOfAdminMessage({
       account_id: accountId,
       contact_id: resolvedContactId,
+      topic: 'autopay-enrollment',
       messagePreview: messageText,
-    }).catch(() => {})
+    }).catch((err) => console.warn('[sendAutopayEnrollmentLink] notifyClientOfAdminMessage failed:', err))
   }, {
     action_type: 'send',
     table_name: 'accounts',

@@ -45,7 +45,7 @@ import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[
 import { updateAccountContactRole, toggleDocumentPortalVisibility, disableAccountAutopay, sendAutopayEnrollmentLink } from '@/app/(dashboard)/accounts/actions'
 import { FinanceSummaryCard } from '@/components/shared/finance-summary-card'
 import { summarizeInvoicesForFinanceCard } from '@/lib/billing/finance-summary'
-import { isInvoiceOverdue } from '@/lib/billing/invoice-status'
+import { isInvoiceOverdue, isInvoiceSettled } from '@/lib/billing/invoice-status'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { format, parseISO } from 'date-fns'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry, ChatAttachment } from '@/lib/types'
@@ -266,6 +266,11 @@ interface ContactDetailProps {
   lead: LeadOrigin | null
   portalAuth: PortalAuth
   today: string
+  /** Real staff/dashboard-session flag (matches the account page's own
+   *  isDashboardUser gate) — NOT the "always true" hardcode the Finance
+   *  card's money-affecting buttons rendered behind before (council
+   *  review, 2026-08-31). */
+  isDashboardUser: boolean
   offers: OfferRecord[]
   pendingActivations: PendingActivationRecord[]
   wizardProgress: WizardProgressRecord[]
@@ -287,6 +292,7 @@ export function ContactDetail({
   lead,
   portalAuth,
   today,
+  isDashboardUser,
   offers = [],
   pendingActivations = [],
   wizardProgress = [],
@@ -494,6 +500,7 @@ export function ContactDetail({
           wizardProgress={wizardProgress}
           invoices={invoices}
           today={today}
+          isDashboardUser={isDashboardUser}
         />
       )}
       {activeTab === 'services' && (
@@ -590,6 +597,7 @@ function OverviewTab({
   wizardProgress,
   invoices,
   today,
+  isDashboardUser,
 }: {
   contact: ContactRecord
   accounts: LinkedAccount[]
@@ -600,6 +608,7 @@ function OverviewTab({
   wizardProgress: WizardProgressRecord[]
   invoices: ContactInvoice[]
   today: string
+  isDashboardUser: boolean
 }) {
   const linkedAccountIds = new Set(accounts.map(a => a.id))
   const invoicesByAccount = new Map<string, ContactInvoice[]>()
@@ -749,20 +758,30 @@ function OverviewTab({
           a multi-company contact was otherwise a wall of empty cards on a
           phone screen (council review, 2026-08-30). */}
       {(() => {
-        const companiesWithContent = accounts.filter(acc => (invoicesByAccount.get(acc.id)?.length ?? 0) > 0 || acc.autopay_card_enabled)
+        // Decide "has content" from the SAME filtered summary that renders —
+        // not the raw invoice count. A company whose only rows are legacy/
+        // credit-note/test-fixture invoices used to pass the raw-count check
+        // and then render "No invoices" anyway (council review, 2026-08-31).
+        const companiesWithSummary = accounts.map(acc => ({
+          acc,
+          summary: summarizeInvoicesForFinanceCard(invoicesByAccount.get(acc.id) ?? [], today),
+        }))
+        const companiesWithContent = companiesWithSummary.filter(
+          ({ summary, acc }) => summary.byCurrency.length > 0 || acc.autopay_card_enabled,
+        )
         if (companiesWithContent.length === 0 && !personalSummary) return null
         return (
           <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
-            {companiesWithContent.map(acc => (
+            {companiesWithContent.map(({ acc, summary }) => (
               <FinanceSummaryCard
                 key={acc.id}
                 accountId={acc.id}
                 companyName={acc.company_name}
-                summary={summarizeInvoicesForFinanceCard(invoicesByAccount.get(acc.id) ?? [], today)}
+                summary={summary}
                 showAutopay={acc.account_type === 'Client'}
                 autopayEnabled={!!acc.autopay_card_enabled}
                 autopayLast4={acc.autopay_card_last4}
-                isAdmin={true}
+                isAdmin={isDashboardUser}
                 onDisable={disableAccountAutopay}
                 onSendLink={sendAutopayEnrollmentLink}
               />
@@ -3763,7 +3782,9 @@ function InvoicesTab({ invoices, accounts, today }: { invoices: ContactInvoice[]
     }
   }
 
-  const real = invoices.filter(i => i.invoice_number && i.invoice_number !== '1.0' && i.invoice_number !== '2.0')
+  // Excludes is_test so this tab agrees with the Finance summary card on the
+  // same page (council review, 2026-08-31).
+  const real = invoices.filter(i => i.invoice_number && i.invoice_number !== '1.0' && i.invoice_number !== '2.0' && !i.is_test)
   const legacy = invoices.filter(i => !i.invoice_number || i.invoice_number === '1.0' || i.invoice_number === '2.0')
 
   const getCompany = (inv: ContactInvoice) =>
@@ -3813,7 +3834,12 @@ function InvoicesTab({ invoices, accounts, today }: { invoices: ContactInvoice[]
   // the SAME page called the identical invoice overdue (council review,
   // 2026-08-30).
   const invStatus = (i: ContactInvoice) => i.invoice_status ?? i.status ?? ''
-  const overdue = real.filter(i => isInvoiceOverdue(i, today))
+  // isInvoiceOverdue only reads invoice_status/due_date — it has no idea a
+  // `status` column value like Refunded/Waived already settled the invoice,
+  // so a settled-but-technically-past-due row must be excluded here too
+  // (2026-08-31, same bug fixed in the Finance summary card — see
+  // lib/billing/finance-summary.ts's header note).
+  const overdue = real.filter(i => !isInvoiceSettled(i) && isInvoiceOverdue(i, today))
   const pending = real.filter(i => ['Sent', 'Draft', 'Partial'].includes(invStatus(i)) && !(i.due_date && i.due_date < today))
   const paid = real.filter(i => invStatus(i) === 'Paid')
   const other = real.filter(i => !overdue.includes(i) && !pending.includes(i) && !paid.includes(i))

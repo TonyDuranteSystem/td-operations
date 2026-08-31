@@ -13,11 +13,20 @@
  * ENUM — Pending/Overdue/Delinquent/...) because it must also cover rows
  * that were never formally invoiced at all. These three surfaces only ever
  * look at real invoiced rows and need the richer `invoice_status` vocabulary
- * (Draft/Sent/Partial/...), which the ENUM does not carry. Merging the two
- * would mean rewiring a live, already-correct production badge for a
- * consolidation this pass has no concrete evidence it needs — flagged as a
- * known, bounded gap, not silently ignored.
+ * (Draft/Sent/Partial/...), which the ENUM does not carry. A full 9-reviewer
+ * pass (2026-08-31) confirmed this boundary is harmless against every real
+ * production invoiced row today (zero disagreements found) — the deferral is
+ * justified by evidence, not just asserted.
+ *
+ * "Settled" is delegated to lib/finance/invoice-matchability.ts::isTerminalInvoice
+ * (2026-08-31 fix) — NOT a private status set. That module is this codebase's
+ * one existing answer to "is anything still owed", built after four divergent
+ * terminal-status sets caused a real double-credit incident; this file's own
+ * first cut was on track to become a fifth. It correctly treats Refunded/
+ * Waived/Credit as settled via the `status` column too, which a plain
+ * `invoice_status`-only set cannot.
  */
+import { isTerminalInvoice } from "@/lib/finance/invoice-matchability"
 
 export interface InvoiceStatusRow {
   invoice_status: string | null
@@ -25,21 +34,26 @@ export interface InvoiceStatusRow {
   due_date: string | null
 }
 
-/** Statuses that mean "nothing left to collect" — a Split parent (its child
- *  installments carry the real balances) counts as settled here too. */
-export const SETTLED_INVOICE_STATUSES = new Set(["Paid", "Cancelled", "Voided", "Split"])
-
 export function invoiceStatusOf(row: InvoiceStatusRow): string {
   return row.invoice_status ?? row.status ?? ""
 }
 
-/** A Sent invoice past its due date is overdue even though its own status
- *  string never changes to "Overdue" until the nightly dunning pass runs. */
+/**
+ * A Sent invoice past its due date is overdue even though its own status
+ * string never changes to "Overdue" until the nightly dunning pass runs.
+ * A Partial invoice past due is overdue too (2026-08-31 fix, bug-hunter
+ * finding) — a partially-paid invoice was, by definition, sent, and a
+ * partly-paid balance sitting past due is exactly what "overdue" means; the
+ * first cut of this function only recognized Sent, so a partially-paid,
+ * months-late invoice showed "0 overdue" everywhere.
+ */
 export function isInvoiceOverdue(row: InvoiceStatusRow, today: string): boolean {
   const s = invoiceStatusOf(row)
-  return s === "Overdue" || (s === "Sent" && !!row.due_date && row.due_date < today)
+  if (s === "Overdue") return true
+  if ((s === "Sent" || s === "Partial") && !!row.due_date && row.due_date < today) return true
+  return false
 }
 
 export function isInvoiceSettled(row: InvoiceStatusRow): boolean {
-  return SETTLED_INVOICE_STATUSES.has(invoiceStatusOf(row))
+  return isTerminalInvoice(row)
 }

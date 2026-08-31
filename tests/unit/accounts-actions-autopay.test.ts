@@ -3,44 +3,32 @@
  * sendAutopayEnrollmentLink() (dev job 10995181 follow-up, Finance summary
  * card). Covers: the staff "Turn off" action calling disableAutopayCard with
  * the dashboard actor (not "client") plus the real auth user id for the
- * retired note's attribution, and "Send enrollment link"'s full happy path
- * plus every guard added in the 2026-08-30 council-review fix pass: the
- * global kill switch, the already-enrolled short-circuit, the
- * no-linked-contact refusal, the 24h duplicate-send guard, and the
- * Italian-language branch.
+ * retired note's attribution, both actions' explicit "not signed in" guard,
+ * and the SIMPLIFIED "Send enrollment link" (2026-08-31 council review — no
+ * longer creates a live Stripe object from the CRM at all; just points the
+ * client to their own portal's self-service autopay button).
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }))
 
+let sessionUser: { id: string; email: string } | null = { id: "user-luca-uuid", email: "luca@tonydurante.us" }
 vi.mock("@/lib/supabase/server", () => ({
   createClient: () => ({
-    auth: { getUser: () => Promise.resolve({ data: { user: { id: "user-luca-uuid", email: "luca@tonydurante.us" } } }) },
+    auth: { getUser: () => Promise.resolve({ data: { user: sessionUser } }) },
     from: () => ({ insert: () => Promise.resolve({ error: null }) }),
   }),
 }))
 
 const disableAutopayCardMock = vi.fn()
-const getOrCreateStripeCustomerForAccountMock = vi.fn()
-const createAutopaySetupCheckoutSessionMock = vi.fn()
-
 vi.mock("@/lib/operations/card-autopay", () => ({
   disableAutopayCard: (accountId: string, actor: string, deletedByUserId?: string) => disableAutopayCardMock(accountId, actor, deletedByUserId),
-  getOrCreateStripeCustomerForAccount: (accountId: string) => getOrCreateStripeCustomerForAccountMock(accountId),
-  createAutopaySetupCheckoutSession: (params: unknown) => createAutopaySetupCheckoutSessionMock(params),
 }))
 
 let killSwitchEnabled = true
 vi.mock("@/lib/payments/card-autopay-config", () => ({
   isCardAutopayEnabled: () => Promise.resolve(killSwitchEnabled),
-}))
-
-let cardFeeEnabled = true
-let cardFeeRate = 0.05
-vi.mock("@/lib/payments/card-fee-config", () => ({
-  isCardFeeEnabled: () => Promise.resolve(cardFeeEnabled),
-  getConfiguredCardFeeRate: () => Promise.resolve(cardFeeRate),
 }))
 
 const resolveAdminReplyContactMock = vi.fn()
@@ -55,9 +43,8 @@ vi.mock("@/lib/portal/notifications", () => ({
   notifyClientOfAdminMessage: (params: unknown) => { notifyClientOfAdminMessageMock(params); return Promise.resolve() },
 }))
 
-let accountRow: { autopay_card_enabled: boolean; account_type: string } | null = { autopay_card_enabled: false, account_type: "Client" }
+let accountRow: { autopay_card_enabled: boolean } | null = { autopay_card_enabled: false }
 let contactRow: { language: string | null } | null = { language: null }
-let recentSendRow: { id: string } | null = null
 let portalMessagesInsertCalls: Array<Record<string, unknown>> = []
 let portalMessagesInsertError: { message: string } | null = null
 
@@ -72,21 +59,6 @@ vi.mock("@/lib/supabase-admin", () => ({
       }
       if (table === "portal_messages") {
         return {
-          select: () => ({
-            eq: () => ({
-              eq: () => ({
-                ilike: () => ({
-                  is: () => ({
-                    gte: () => ({
-                      limit: () => ({
-                        maybeSingle: () => Promise.resolve({ data: recentSendRow, error: null }),
-                      }),
-                    }),
-                  }),
-                }),
-              }),
-            }),
-          }),
           insert: (payload: Record<string, unknown>) => {
             portalMessagesInsertCalls.push(payload)
             return Promise.resolve({ error: portalMessagesInsertError })
@@ -100,23 +72,17 @@ vi.mock("@/lib/supabase-admin", () => ({
 
 beforeEach(() => {
   disableAutopayCardMock.mockReset()
-  getOrCreateStripeCustomerForAccountMock.mockReset()
-  createAutopaySetupCheckoutSessionMock.mockReset()
   resolveAdminReplyContactMock.mockReset()
   createPortalNotificationMock.mockReset()
   notifyClientOfAdminMessageMock.mockReset()
   killSwitchEnabled = true
-  cardFeeEnabled = true
-  cardFeeRate = 0.05
-  accountRow = { autopay_card_enabled: false, account_type: "Client" }
+  sessionUser = { id: "user-luca-uuid", email: "luca@tonydurante.us" }
+  accountRow = { autopay_card_enabled: false }
   contactRow = { language: null }
-  recentSendRow = null
   portalMessagesInsertCalls = []
   portalMessagesInsertError = null
 
   disableAutopayCardMock.mockResolvedValue({ ok: true })
-  getOrCreateStripeCustomerForAccountMock.mockResolvedValue({ customerId: "cus_123" })
-  createAutopaySetupCheckoutSessionMock.mockResolvedValue({ url: "https://checkout.stripe.com/session-abc" })
   resolveAdminReplyContactMock.mockResolvedValue("contact-1")
 })
 
@@ -135,17 +101,22 @@ describe("disableAccountAutopay", () => {
     expect(result.success).toBe(false)
     expect(result.error).toContain("Stripe detach failed")
   })
+
+  it("refuses when there is no signed-in session, instead of proceeding as an unknown actor", async () => {
+    sessionUser = null
+    const { disableAccountAutopay } = await import("@/app/(dashboard)/accounts/actions")
+    const result = await disableAccountAutopay("acct-1")
+    expect(result.success).toBe(false)
+    expect(result.error).toContain("signed in")
+    expect(disableAutopayCardMock).not.toHaveBeenCalled()
+  })
 })
 
-describe("sendAutopayEnrollmentLink", () => {
-  it("creates a Stripe customer + setup session and posts the enrollment link as an admin portal message", async () => {
+describe("sendAutopayEnrollmentLink (simplified 2026-08-31 — no Stripe object created from the CRM)", () => {
+  it("posts a portal-link message as an admin portal message, no Stripe customer/session involved", async () => {
     const { sendAutopayEnrollmentLink } = await import("@/app/(dashboard)/accounts/actions")
     const result = await sendAutopayEnrollmentLink("acct-1")
     expect(result.success).toBe(true)
-    expect(getOrCreateStripeCustomerForAccountMock).toHaveBeenCalledWith("acct-1")
-    expect(createAutopaySetupCheckoutSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({ accountId: "acct-1", customerId: "cus_123" }),
-    )
     expect(portalMessagesInsertCalls).toHaveLength(1)
     expect(portalMessagesInsertCalls[0]).toMatchObject({
       account_id: "acct-1",
@@ -155,13 +126,15 @@ describe("sendAutopayEnrollmentLink", () => {
       // never getDashboardActor()'s "dashboard:name" audit-log string.
       sender_id: "user-luca-uuid",
     })
-    expect(String(portalMessagesInsertCalls[0].message)).toContain("https://checkout.stripe.com/session-abc")
-    // The fee waiver only ever applies going forward — the message must say so.
-    expect(String(portalMessagesInsertCalls[0].message)).toContain("future invoices")
-    // The default configured rate (5%) is quoted, not hardcoded — see the next tests.
-    expect(String(portalMessagesInsertCalls[0].message)).toContain("5% card fee")
+    // Points to the client's own portal — no live payment credential minted.
+    expect(String(portalMessagesInsertCalls[0].message)).toContain("/portal/invoices?tab=expenses")
+    expect(String(portalMessagesInsertCalls[0].message)).not.toContain("checkout.stripe.com")
     expect(createPortalNotificationMock).toHaveBeenCalledTimes(1)
-    expect(notifyClientOfAdminMessageMock).toHaveBeenCalledTimes(1)
+    // A dedicated topic so this doesn't share (and lose to) an unrelated
+    // chat message's throttle window on the same account.
+    expect(notifyClientOfAdminMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({ topic: "autopay-enrollment" }),
+    )
   })
 
   it("sends the Italian variant when the resolved contact's language is Italian", async () => {
@@ -169,42 +142,33 @@ describe("sendAutopayEnrollmentLink", () => {
     const { sendAutopayEnrollmentLink } = await import("@/app/(dashboard)/accounts/actions")
     const result = await sendAutopayEnrollmentLink("acct-1")
     expect(result.success).toBe(true)
-    expect(String(portalMessagesInsertCalls[0].message)).toContain("future fatture")
+    expect(String(portalMessagesInsertCalls[0].message)).toContain("portale")
   })
 
-  it("quotes the LIVE configured fee rate, not a hardcoded 5% — Antonio can change this rate without the message going stale", async () => {
-    cardFeeRate = 0.07
+  it("refuses when there is no signed-in session, before any write", async () => {
+    sessionUser = null
     const { sendAutopayEnrollmentLink } = await import("@/app/(dashboard)/accounts/actions")
-    await sendAutopayEnrollmentLink("acct-1")
-    expect(String(portalMessagesInsertCalls[0].message)).toContain("7% card fee")
-    expect(String(portalMessagesInsertCalls[0].message)).not.toContain("5%")
+    const result = await sendAutopayEnrollmentLink("acct-1")
+    expect(result.success).toBe(false)
+    expect(result.error).toContain("signed in")
+    expect(portalMessagesInsertCalls).toHaveLength(0)
   })
 
-  it("omits the fee clause entirely when the card fee is switched off globally, instead of promising a waiver on a fee that was never charged", async () => {
-    cardFeeEnabled = false
-    const { sendAutopayEnrollmentLink } = await import("@/app/(dashboard)/accounts/actions")
-    await sendAutopayEnrollmentLink("acct-1")
-    expect(String(portalMessagesInsertCalls[0].message)).not.toContain("%")
-    expect(String(portalMessagesInsertCalls[0].message)).toContain("future invoices")
-  })
-
-  it("refuses when the global autopay kill switch is off — the one enrollment path that must never bypass it", async () => {
+  it("refuses when the global autopay kill switch is off — avoids pointing the client to a dead-end portal button", async () => {
     killSwitchEnabled = false
     const { sendAutopayEnrollmentLink } = await import("@/app/(dashboard)/accounts/actions")
     const result = await sendAutopayEnrollmentLink("acct-1")
     expect(result.success).toBe(false)
     expect(result.error).toContain("switched off")
-    expect(getOrCreateStripeCustomerForAccountMock).not.toHaveBeenCalled()
     expect(portalMessagesInsertCalls).toHaveLength(0)
   })
 
   it("refuses when the account is already enrolled", async () => {
-    accountRow = { autopay_card_enabled: true, account_type: "Client" }
+    accountRow = { autopay_card_enabled: true }
     const { sendAutopayEnrollmentLink } = await import("@/app/(dashboard)/accounts/actions")
     const result = await sendAutopayEnrollmentLink("acct-1")
     expect(result.success).toBe(false)
     expect(result.error).toContain("already")
-    expect(getOrCreateStripeCustomerForAccountMock).not.toHaveBeenCalled()
   })
 
   it("refuses when the account has no linked contact to send to, instead of reporting a false success", async () => {
@@ -213,35 +177,6 @@ describe("sendAutopayEnrollmentLink", () => {
     const result = await sendAutopayEnrollmentLink("acct-1")
     expect(result.success).toBe(false)
     expect(result.error).toContain("no linked contact")
-    expect(getOrCreateStripeCustomerForAccountMock).not.toHaveBeenCalled()
-  })
-
-  it("refuses a repeat send within 24 hours instead of creating a duplicate Stripe session and message", async () => {
-    recentSendRow = { id: "existing-msg" }
-    const { sendAutopayEnrollmentLink } = await import("@/app/(dashboard)/accounts/actions")
-    const result = await sendAutopayEnrollmentLink("acct-1")
-    expect(result.success).toBe(false)
-    expect(result.error).toContain("already sent")
-    expect(getOrCreateStripeCustomerForAccountMock).not.toHaveBeenCalled()
-  })
-
-  it("fails without sending anything when the Stripe customer can't be created", async () => {
-    getOrCreateStripeCustomerForAccountMock.mockResolvedValue({ error: "Account not found" })
-    const { sendAutopayEnrollmentLink } = await import("@/app/(dashboard)/accounts/actions")
-    const result = await sendAutopayEnrollmentLink("acct-1")
-    expect(result.success).toBe(false)
-    expect(result.error).toContain("Account not found")
-    expect(createAutopaySetupCheckoutSessionMock).not.toHaveBeenCalled()
-    expect(portalMessagesInsertCalls).toHaveLength(0)
-  })
-
-  it("fails without sending anything when the checkout session can't be created", async () => {
-    createAutopaySetupCheckoutSessionMock.mockResolvedValue({ error: "STRIPE_SECRET_KEY not set" })
-    const { sendAutopayEnrollmentLink } = await import("@/app/(dashboard)/accounts/actions")
-    const result = await sendAutopayEnrollmentLink("acct-1")
-    expect(result.success).toBe(false)
-    expect(result.error).toContain("STRIPE_SECRET_KEY not set")
-    expect(portalMessagesInsertCalls).toHaveLength(0)
   })
 
   it("fails when the portal_messages insert errors", async () => {

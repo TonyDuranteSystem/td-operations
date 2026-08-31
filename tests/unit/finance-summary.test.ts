@@ -153,6 +153,23 @@ describe("summarizeInvoicesForFinanceCard", () => {
       expect(r.outstandingCount).toBe(0)
     })
 
+    it("2026-08-31: a Paid invoice with a $0 total (fully discounted/credit-covered) reports what was actually collected (amount_paid), not a stale pre-discount amount", () => {
+      const r = one([pmt({ invoice_status: "Paid", total: 0, amount_paid: 0, amount: 1000 })])
+      expect(r.paidTotal).toBe(0)
+    })
+
+    it("2026-08-31: a partly-paid, past-due invoice now counts as overdue (not just outstanding)", () => {
+      const r = one([pmt({ invoice_status: "Partial", due_date: "2026-01-01", total: 2000, amount_due: 1200 })])
+      expect(r.overdueCount).toBe(1)
+      expect(r.outstandingTotal).toBe(1200)
+    })
+
+    it("2026-08-31: a Refunded invoice (via status, invoice_status still Sent) is excluded from outstanding — money already returned isn't owed", () => {
+      const r = one([pmt({ invoice_status: "Sent", status: "Refunded", due_date: "2026-01-01", total: 500 })])
+      expect(r.outstandingCount).toBe(0)
+      expect(r.overdueCount).toBe(0)
+    })
+
     it("excludes Cancelled, Voided, and Split (a split-invoice parent is not itself a receivable)", () => {
       const r = one([
         pmt({ invoice_status: "Cancelled", total: 100 }),

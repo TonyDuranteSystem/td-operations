@@ -46,7 +46,7 @@ import { toast } from 'sonner'
 import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive, createDBA, updateDBADetails, disableAccountAutopay, sendAutopayEnrollmentLink } from '@/app/(dashboard)/accounts/actions'
 import { FinanceSummaryCard } from '@/components/shared/finance-summary-card'
 import { summarizeInvoicesForFinanceCard } from '@/lib/billing/finance-summary'
-import { isInvoiceOverdue } from '@/lib/billing/invoice-status'
+import { isInvoiceOverdue, isInvoiceSettled } from '@/lib/billing/invoice-status'
 import { StatusChangeDialog } from './status-change-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
@@ -3079,8 +3079,11 @@ function PagamentiTab({ payments, today, account }: {
   today: string
   account: { id: string; updated_at: string; dunning_reminder_1_days?: number | null; dunning_reminder_2_days?: number | null; dunning_pause?: boolean | null; dunning_pause_until?: string | null; dunning_pause_reason?: string | null }
 }) {
-  // Split into invoiced (unified system) vs legacy tracking records
-  const invoiced = payments.filter(p => p.invoice_number && p.invoice_number !== '1.0' && p.invoice_number !== '2.0')
+  // Split into invoiced (unified system) vs legacy tracking records. Excludes
+  // is_test so this tab agrees with the Finance summary card on the same
+  // page — a test-fixture account used to show a different invoice count in
+  // each place (council review, 2026-08-31).
+  const invoiced = payments.filter(p => p.invoice_number && p.invoice_number !== '1.0' && p.invoice_number !== '2.0' && !p.is_test)
   const legacy = payments.filter(p => !p.invoice_number || p.invoice_number === '1.0' || p.invoice_number === '2.0')
 
   // Group invoiced by status. Overdue uses the SAME shared rule as the
@@ -3088,7 +3091,12 @@ function PagamentiTab({ payments, today, account }: {
   // to disagree on a Sent-and-past-due invoice on this very page (council
   // review, 2026-08-30).
   const invoiceStatus = (p: Payment) => p.invoice_status ?? p.status ?? ''
-  const overdue = invoiced.filter(p => isInvoiceOverdue(p, today))
+  // isInvoiceOverdue only reads invoice_status/due_date — it has no idea a
+  // `status` column value like Refunded/Waived already settled the invoice,
+  // so a settled-but-technically-past-due row must be excluded here too
+  // (2026-08-31, same bug fixed in the Finance summary card — see
+  // lib/billing/finance-summary.ts's header note).
+  const overdue = invoiced.filter(p => !isInvoiceSettled(p) && isInvoiceOverdue(p, today))
   const pending = invoiced.filter(p => ['Sent', 'Draft', 'Partial'].includes(invoiceStatus(p)) && !(p.due_date && p.due_date < today))
   const paid = invoiced.filter(p => invoiceStatus(p) === 'Paid')
   const otherInvoiced = invoiced.filter(p => !overdue.includes(p) && !pending.includes(p) && !paid.includes(p))

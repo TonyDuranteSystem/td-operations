@@ -299,6 +299,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
         lead={leadResult.data}
         portalAuth={portalAuth}
         today={today}
+        isDashboardUser={isDashboardUser(user)}
         offers={offers}
         pendingActivations={pendingActivations}
         wizardProgress={wizardProgress}

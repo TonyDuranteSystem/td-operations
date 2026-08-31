@@ -541,7 +541,12 @@ export async function emitCardAutopayEnabledEvent(params: {
       .maybeSingle()
     const company = (account?.company_name as string | null) ?? "The client"
     const cardSuffix = params.last4 ? ` (card ending ${params.last4})` : ""
-    const message = `${company} turned on card autopay${cardSuffix} — future invoices will be charged automatically, no card fee.`
+    // No blanket "no card fee" claim — a new invoice's fee rate is pinned at
+    // creation and isn't always waived by autopay (a live gap the fee-waiver
+    // logic still has, flagged separately — council review, 2026-08-31).
+    // This note is staff-only (never client-visible — chat-event markers are
+    // filtered out of every client read).
+    const message = `${company} turned on card autopay${cardSuffix} — eligible future invoices may now be charged automatically.`
     return await emitClientChatEvent({
       account_id: params.accountId,
       topic: "Billing",

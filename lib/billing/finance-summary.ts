@@ -79,7 +79,12 @@ function remainingBalance(p: InvoiceLike): number {
   return total - paid
 }
 
+// Money actually collected — `amount_paid` is authoritative when present
+// (matches remainingBalance's `??` reasoning: a $0 total from a fully
+// discounted/credit-covered invoice must not fall through to a stale
+// pre-discount `amount` and overstate what was collected).
 function paidAmount(p: InvoiceLike): number {
+  if (p.amount_paid != null) return Number(p.amount_paid)
   return Number(p.total) || Number(p.amount) || 0
 }
 
@@ -100,12 +105,19 @@ export function summarizeInvoicesForFinanceCard(payments: InvoiceLike[], today: 
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([currency, rows]) => {
       const paid = rows.filter((p) => invoiceStatusOf(p) === "Paid")
-      const overdue = rows.filter((p) => isInvoiceOverdue(p, today))
       // Outstanding = everything invoiced that isn't settled (Paid/Cancelled/
-      // Voided/Split) — a Draft or Partial row past due (or any future status
-      // this list doesn't yet know about) still counts, rather than silently
-      // disappearing.
+      // Voided/Split/Refunded/Waived) — a Draft or Partial row past due (or
+      // any future status this list doesn't yet know about) still counts,
+      // rather than silently disappearing.
       const outstanding = rows.filter((p) => !isInvoiceSettled(p))
+      // Overdue is a SUBSET of outstanding, not an independent filter over
+      // all rows — isInvoiceOverdue only reads invoice_status/due_date and
+      // has no idea a `status` column value like Refunded/Waived already
+      // settled the invoice, so a settled-but-technically-past-due row must
+      // be excluded here too (2026-08-31, regression found while extending
+      // this test suite — a Refunded Sent invoice past due was still
+      // counted as overdue).
+      const overdue = outstanding.filter((p) => isInvoiceOverdue(p, today))
 
       return {
         currency,
