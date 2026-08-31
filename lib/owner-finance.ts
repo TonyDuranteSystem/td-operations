@@ -91,6 +91,20 @@ export interface PnLBlock {
   uncategorized_expense: number
   by_subcategory: Record<string, number>
   monthly: MonthlyBreakdown[]
+  /** For a NON-USD block: the rate the company ACTUALLY ACHIEVED converting this currency
+   * during the year, derived from its own conversion rows (dollars bought ÷ currency sold).
+   *
+   * WHY DERIVED RATHER THAN LOOKED UP (2026-08-31). A US return must be filed in dollars,
+   * and this screen deliberately never mixes currencies — correct, but it left the euro
+   * block with no dollar figure at all, so the P&L on screen was not the whole company and
+   * could not be handed to anyone. A published table rate would be a guess; the rate the
+   * company genuinely got is in the books already, in the conversion rows.
+   *
+   * NULL when it cannot be derived honestly: no conversions, or MORE THAN ONE non-USD
+   * currency converting, because the dollars bought cannot then be attributed to one
+   * source currency. A wrong rate silently misstates revenue, so no rate is the safer
+   * failure. The UI must show the block unconverted in that case, not a fabricated total. */
+  usd_rate: number | null
 }
 
 export interface OwnerPnL {
@@ -347,21 +361,21 @@ export async function getInvoiceIncome(year: number): Promise<InvoiceIncome> {
   return computeInvoiceIncome(rows, year)
 }
 
-/** Categories kept OUT OF THE SUBCATEGORY BREAKDOWN ("Expenses by Subcategory").
+/** The ONLY categories that belong in a panel headed "Expenses by Subcategory".
  *
- * NOTE the name is now narrower than it reads: this set is used ONLY for that
- * breakdown. The P&L itself is driven by the switch in computeOwnerPnL, and since
- * 2026-08-30 `refund` DOES affect the P&L there (it reverses whatever it refunds).
- * It stays listed here because a refund is not a spending category and would render
- * as one — the breakdown takes the absolute value of everything.
+ * WHY THIS EXISTS (2026-08-31). The breakdown used to be built by EXCLUDING the non-P&L
+ * categories (transfer/conversion/refund/distribution/contribution), which let `income`
+ * through — so the panel listed client_payment alongside payroll and rent, as a cost. On
+ * the real 2025 books that renders $426,946.58 of client revenue and $22,951.05 of bank
+ * rewards under the word "Expenses". Because the panel takes the absolute value of every
+ * row, the mistake is invisible: revenue looks exactly like a very large expense, and the
+ * largest line on the screen is the one that is not an expense at all.
  *
- * The rest genuinely never touch profit: transfers between accounts the company
- * already owns (including payouts from any payment processor — income is recognized
- * from the invoice ledger, so the payout landing in the bank is the SAME money, and
- * including card/loan repayments, which settle a liability rather than spend), FX
- * conversions, and equity movements (distribution/contribution — shown separately). */
-const NON_PNL_CATEGORIES: ReadonlySet<string> = new Set([
-  'transfer', 'conversion', 'refund', 'distribution', 'contribution',
+ * An allowlist rather than another exclusion: a new SPENDING category must be added here
+ * deliberately, whereas a new income-like category added to the enum would silently leak
+ * back in under a denylist. */
+const EXPENSE_BREAKDOWN_CATEGORIES: ReadonlySet<string> = new Set([
+  'cogs', 'expense', 'fee',
 ])
 
 /**
@@ -390,6 +404,7 @@ export function computeOwnerPnL(
         uncategorized_income: 0,
         uncategorized_expense: 0,
         by_subcategory: {},
+        usd_rate: null,
         monthly: Array.from({ length: 12 }, (_, i) => ({
           month: i + 1, income: 0, cogs: 0, expenses: 0, net: 0,
         })),
@@ -469,7 +484,9 @@ export function computeOwnerPnL(
       // 'transfer' / 'conversion': deliberately no P&L effect — own money moving.
     }
 
-    if (!NON_PNL_CATEGORIES.has(tx.category)) {
+    // Spending categories ONLY — see EXPENSE_BREAKDOWN_CATEGORIES. Using the
+    // NON_PNL exclusion here let income into a panel headed "Expenses".
+    if (EXPENSE_BREAKDOWN_CATEGORIES.has(tx.category)) {
       b.by_subcategory[sub] = (b.by_subcategory[sub] ?? 0) + Math.abs(amt)
     }
   }
@@ -478,6 +495,28 @@ export function computeOwnerPnL(
     b.gross_profit = b.invoice_income + b.other_income - b.cogs
     b.net_profit = b.gross_profit - b.expenses + b.uncategorized_income - b.uncategorized_expense
     for (const mb of b.monthly) mb.net = mb.income - mb.cogs - mb.expenses
+  }
+
+  // THE ACHIEVED FX RATE. Every conversion has two legs in the books: the foreign
+  // currency leaving (negative, in that currency) and the dollars arriving (positive,
+  // in USD). Dividing one by the other gives the rate the company actually got, which
+  // is a fact about the year rather than a table lookup. See PnLBlock.usd_rate.
+  const soldByCurrency: Record<string, number> = {}
+  let dollarsBought = 0
+  for (const tx of txs) {
+    if (tx.category !== 'conversion') continue
+    const amt = Number(tx.amount)
+    const cur = tx.currency || 'USD'
+    if (cur === 'USD') { if (amt > 0) dollarsBought += amt; continue }
+    if (amt < 0) soldByCurrency[cur] = (soldByCurrency[cur] ?? 0) + Math.abs(amt)
+  }
+  // Only attributable when a SINGLE non-USD currency was converted. With two, the
+  // dollars bought cannot be split between them without inventing a split.
+  const sources = Object.keys(soldByCurrency).filter(c => soldByCurrency[c] > 0)
+  if (sources.length === 1 && dollarsBought > 0) {
+    const only = sources[0]
+    const block = blocks[only]
+    if (block) block.usd_rate = dollarsBought / soldByCurrency[only]
   }
 
   // A currency whose only rows are non-P&L (transfers/conversions/refunds) would render

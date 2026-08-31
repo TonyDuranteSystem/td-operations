@@ -397,3 +397,79 @@ describe('computeOwnerPnL', () => {
     expect(usd.monthly[1].expenses).toBe(0)
   })
 })
+
+/* Two faults found on the real 2025 books, 2026-08-31, when Antonio opened the P&L and
+   the figures did not match the ledger. Both are silent — nothing errors, the screen
+   just misleads — so each gets a test that fails if the fault returns. */
+describe('computeOwnerPnL — the expenses breakdown is expenses only', () => {
+  const income: InvoiceIncomeRow[] = []
+
+  it('keeps income OUT of "Expenses by Subcategory"', () => {
+    const pnl = computeOwnerPnL([
+      makeTx({ category: 'income', subcategory: 'client_payment', amount: 426946.58 }),
+      makeTx({ category: 'income', subcategory: 'bank_rewards', amount: 22951.05 }),
+      makeTx({ category: 'expense', subcategory: 'payroll', amount: -180088.6 }),
+      makeTx({ category: 'cogs', subcategory: 'state_filing_fees', amount: -29291.82 }),
+      makeTx({ category: 'fee', subcategory: 'card_fee', amount: -695 }),
+    ], computeInvoiceIncome(income, 2025), 2025)
+    const b = pnl.blocks[0]
+    // The whole point: revenue must not appear as a cost. Under the old rule
+    // client_payment was the LARGEST line in a panel headed "Expenses".
+    expect(b.by_subcategory).not.toHaveProperty('client_payment')
+    expect(b.by_subcategory).not.toHaveProperty('bank_rewards')
+    expect(b.by_subcategory.payroll).toBeCloseTo(180088.6, 2)
+    expect(b.by_subcategory.state_filing_fees).toBeCloseTo(29291.82, 2)
+    expect(b.by_subcategory.card_fee).toBeCloseTo(695, 2)
+  })
+
+  it('still keeps equity and own-money movement out of it', () => {
+    const pnl = computeOwnerPnL([
+      makeTx({ category: 'distribution', subcategory: 'owner_personal', amount: -75826.93 }),
+      makeTx({ category: 'transfer', subcategory: 'own_account', amount: -275000 }),
+      makeTx({ category: 'expense', subcategory: 'rent', amount: -24188.42 }),
+    ], computeInvoiceIncome(income, 2025), 2025)
+    expect(Object.keys(pnl.blocks[0].by_subcategory)).toEqual(['rent'])
+  })
+})
+
+describe('computeOwnerPnL — the achieved FX rate', () => {
+  const income: InvoiceIncomeRow[] = []
+  const conv = (cur: string, amt: number) =>
+    makeTx({ category: 'conversion', subcategory: 'fx', currency: cur, amount: amt })
+
+  it('derives the rate the company actually got, from its own conversions', () => {
+    const pnl = computeOwnerPnL([
+      makeTx({ currency: 'EUR', category: 'income', subcategory: 'client_payment', amount: 144770.9 }),
+      conv('EUR', -147100), conv('USD', 164895.95),
+    ], computeInvoiceIncome(income, 2025), 2025)
+    const eur = pnl.blocks.find(b => b.currency === 'EUR')!
+    expect(eur.usd_rate).toBeCloseTo(164895.95 / 147100, 6)
+  })
+
+  it('refuses a rate when TWO currencies were converted — the dollars cannot be split', () => {
+    const pnl = computeOwnerPnL([
+      makeTx({ currency: 'EUR', category: 'income', subcategory: 'client_payment', amount: 1000 }),
+      makeTx({ currency: 'GBP', category: 'income', subcategory: 'client_payment', amount: 1000 }),
+      conv('EUR', -1000), conv('GBP', -1000), conv('USD', 2400),
+    ], computeInvoiceIncome(income, 2025), 2025)
+    // A guessed split would silently misstate revenue on a tax return.
+    expect(pnl.blocks.find(b => b.currency === 'EUR')!.usd_rate).toBeNull()
+    expect(pnl.blocks.find(b => b.currency === 'GBP')!.usd_rate).toBeNull()
+  })
+
+  it('leaves the rate null when nothing was converted', () => {
+    const pnl = computeOwnerPnL([
+      makeTx({ currency: 'EUR', category: 'income', subcategory: 'client_payment', amount: 500 }),
+    ], computeInvoiceIncome(income, 2025), 2025)
+    expect(pnl.blocks.find(b => b.currency === 'EUR')!.usd_rate).toBeNull()
+  })
+
+  it('never sets a rate on the USD block itself', () => {
+    const pnl = computeOwnerPnL([
+      makeTx({ category: 'income', subcategory: 'client_payment', amount: 1000 }),
+      makeTx({ currency: 'EUR', category: 'income', subcategory: 'client_payment', amount: 1000 }),
+      conv('EUR', -1000), conv('USD', 1120),
+    ], computeInvoiceIncome(income, 2025), 2025)
+    expect(pnl.blocks.find(b => b.currency === 'USD')!.usd_rate).toBeNull()
+  })
+})

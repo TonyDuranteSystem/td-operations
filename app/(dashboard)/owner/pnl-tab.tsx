@@ -126,6 +126,7 @@ function emptyBlockFor(currency: string): PnLBlock {
     currency, invoice_income: 0, other_income: 0, cogs: 0, gross_profit: 0,
     expenses: 0, net_profit: 0, distributions: 0, contributions: 0,
     uncategorized_income: 0, uncategorized_expense: 0, by_subcategory: {},
+    usd_rate: null,
     monthly: Array.from({ length: 12 }, (_, i) => ({ month: i + 1, income: 0, cogs: 0, expenses: 0, net: 0 })),
   }
 }
@@ -146,6 +147,34 @@ function PnLCurrencyTable({ year, block, prior, primary }: {
     <div className="space-y-3">
       {!primary && (
         <h3 className="text-sm font-medium text-zinc-700">{block.currency} activity (unconverted)</h3>
+      )}
+
+      {/* THE DOLLAR VALUE OF A FOREIGN-CURRENCY YEAR.
+          This screen never mixes currencies, which is right — but it left the euro block
+          with no dollar figure at all, so the P&L shown was not the whole company and
+          could not be handed to whoever files. The rate here is not a lookup: it is the
+          rate the company ACTUALLY ACHIEVED converting this currency, taken from its own
+          conversion rows. Shown as a separate, clearly-labelled panel rather than merged
+          into the table, so the source figures stay in their own currency and the reader
+          can always see which number is converted and at what rate. */}
+      {!primary && block.usd_rate !== null && (
+        <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+            <span className="text-zinc-600">
+              In dollars, at the rate you actually achieved this year
+              {' '}({block.usd_rate.toFixed(4)} USD per {block.currency})
+            </span>
+            <span className="font-medium tabular-nums text-zinc-900">
+              income {fmtIn('USD')((block.invoice_income + block.other_income) * block.usd_rate)}
+              {' · '}
+              net {fmtIn('USD')(block.net_profit * block.usd_rate)}
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-zinc-400">
+            Derived from this year&apos;s own conversions, not a published table. A US return must be
+            filed in dollars, so this is the figure that carries across — the amounts above stay in {block.currency}.
+          </p>
+        </div>
       )}
 
       {hasUncategorized && (
