@@ -13,6 +13,7 @@ const EMPTY_BLOCK: PnLBlock = {
   currency: 'USD', invoice_income: 0, other_income: 0, cogs: 0, gross_profit: 0,
   expenses: 0, net_profit: 0, distributions: 0, contributions: 0,
   uncategorized_income: 0, uncategorized_expense: 0, by_subcategory: {},
+  usd_rate: null,
   monthly: Array.from({ length: 12 }, (_, i) => ({ month: i + 1, income: 0, cogs: 0, expenses: 0, net: 0 })),
 }
 
