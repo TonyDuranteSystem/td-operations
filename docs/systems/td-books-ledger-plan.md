@@ -1,176 +1,283 @@
-# TD Books — the real ledger programme (2025 rebuild → 2024 amendment → expert agent)
+# TD Books — 2025 filing, then the ledger, then the agent
 
 _Living plan. **Update this file in the same change as the work it describes.** Its job is that nothing learned in a session is lost when that session ends — Antonio, 2026-08-31: "We can't lose information along the way, this is very important."_
 
-_Status: **PLAN — awaiting Antonio's go.** Dev job `81fb5a05`. Companion doc: `td-books.md` (how the books work TODAY; this file is what replaces that model)._
+_Status: **REWRITTEN 2026-08-31 after a full council pass (8 reviewers, ~30 blockers, verdict FIX-FIRST).** The previous version of this plan was written without a council review and without asking about the filing deadline. Both were shortcuts. Dev job `81fb5a05`. Companion: `td-books.md` (how the books work TODAY)._
+
+---
+
+## 0. THE DEADLINE — everything is sequenced from this
+
+**The 2025 return is on extension. It is due 15 September 2026.** Today is 31 August. **Fifteen days.**
+
+The previous plan had six phases finishing long after that date and never mentioned a deadline anywhere. That single omission invalidated its whole sequence.
+
+**There are TWO deliverables, and they were being conflated:**
+
+| | What it is | When |
+|---|---|---|
+| **Track A** | Numbers the preparer can file. A correct P&L, a balance sheet, two K-1s. **No system required.** | **By 15 Sept** |
+| **Track B** | The real double-entry ledger, the auditor, the expert agent. | After. No deadline. |
+| **Track C** | 1099s and payroll obligations. **~7 months overdue.** Needs only a payee list. | **Immediately, in parallel** |
+
+The categorisation work feeds A and B both, so none of it is wasted. **Track A is not a shortcut that gets redone — it is the input to Track B.**
 
 ---
 
 ## 1. Why this exists
 
-Antonio's own 2025 books are being rebuilt from real bank statements, because the numbers his bookkeeper (Tasha Batts) produced are not trusted. The same errors are believed to be in 2024, and **the 2024 return will be amended** once 2025 is finished.
-
-The first attempt used a flat list of ten fixed categories with a hardcoded sub-list. Antonio rejected it, correctly:
+Antonio's 2025 books are being rebuilt from real bank statements because the bookkeeping he was given is not trusted. He rejected a flat ten-category list:
 
 > *"My own accounting system is not hard-coded with only that fucking list... if I want to know how much I spent on electricity, I want to know. If I want to know how much I spent for the state, I want to know."*
 
-A fixed enum cannot answer those questions and cannot produce a balance sheet. The replacement is a real double-entry ledger with a chart of accounts Antonio owns.
+**The bookkeeping is now demonstrably wrong, not just distrusted.** Read from the prepared 2025 P&L on 2026-08-31:
 
-**The agent is the destination, not an afterthought.** Antonio wants a CPA / IRS / tax-strategist expert living inside the system. Verified 2026-08-31 that this is standard in the market, not aspirational: EY runs 150 agents for 80,000 tax staff; KPMG's Workbench is multi-agent; PwC's GL.ai reviews journal entries; Digits ships an Autonomous General Ledger; Intuit's Accounting Agent auto-categorises (Anthropic partnership, Feb 2026); Basis raised $100M at $1.15B building agents for accounting firms. **An earlier answer in this project implied such an agent did not exist. That was wrong and was corrected.**
+| What it says | Why it is wrong |
+|---|---|
+| Operating income **$868,573.53** (Sales $856,643.56) | We have identified **$392,334** arriving in Chase that is Antonio's own money sweeping in from Airwallex and Mercury. If counted as sales it is ~45% of reported revenue. Stripe compounds it — the charges *or* the payouts, never both. |
+| **"Basis: Accrual"** | The 2024 return was filed **cash basis**. A basis change requires IRS consent on Form 3115. |
+| **"Closing cost $40,032.53"** as an operating expense | Costs of buying the office. They capitalise into the building and depreciate; they are not a one-year deduction. **No depreciation appears anywhere in the statement.** |
+| **"Estimated Tax $40,605.26"** as a business expense | Federal estimated tax is not a company deduction — it is money taken out. |
+
+Checked and clean: payroll. Her $179,899.60 matches the Gusto bank total almost exactly.
+
+**Antonio informed the preparer on 2026-08-31** that double-counted income and these three other issues were found and that corrected figures are coming.
 
 ---
 
-## 2. The order, and why it cannot change
+## 2. Ownership — SETTLED, with documents
 
-**Ledger → invariants → agent.** Every platform above sits on a general ledger that ties. Nothing intelligent can reason about books that don't balance, and a beautiful screen over a wrong ledger shows wrong numbers convincingly.
+Previously recorded on Antonio's word alone, which was not sufficient for a fact that drives K-1s. Now read from the documents:
 
-**2025 completely, then 2024.** Antonio, verbatim: *"we have to continue in 2025 in order to finish it and make the system that works, and then we'll think also about 2024. Otherwise we'll start mixing everything and then it will be just a mess."*
+- **The operating agreement lists Antonio Durante 50% and Jodi Marie Ziegler Durante 50%**, allocates profits, losses and distributions **"in proportion to their respective Membership Interests"**, and requires a Schedule K-1 for each member.
+- **The CP261 is addressed to "JODI MARIE ZIEGLER SR MBR"** — the IRS entity record carries her. S election effective **1 January 2023**.
+- **The 2024 return reported ONE shareholder** taking all $174,383 of income and all $135,965 of distributions.
 
-**Opening balances go in as a normal dated journal entry, never a hardcoded constant.** This single decision is what makes "2025 now, 2024 later" safe: when 2024 is rebuilt, we replace that one entry and 2025 is not redone.
+**This resolves the single-class-of-stock alarm favourably.** That test looks at what the *governing document* confers, not at what was actually paid. The agreement confers identical proportional rights. What remains is narrow: the 2024 return contradicts the agreement — a preparer error.
+
+**Open:** the copy read has a **blank effective date**, suggesting it was never executed. Worth fixing going forward. It does not change 2024 or 2025 — ownership in a filed or filing year is a fact, not a drafting choice.
+
+**Consequence for Track A: 2025 files with TWO K-1s at 50/50.**
 
 ---
 
-## 3. Architecture — three layers
+## 3. Architecture — three layers, and REUSE
 
-| Layer | What it is | Rule |
+| Layer | Rule |
+|---|---|
+| **Ledger** | Deterministic. Never a model. Same input → same output, or the books are not signable. |
+| **Auditor** | Machine-checkable invariants after every change. Where "the system knows what money in means" lives. |
+| **Agent** | Proposes with reasoning. A human accepts. |
+
+**The central design lesson, which the council confirmed and sharpened:** a smarter categoriser would not have caught the Amex sign bug — nothing was miscategorised, the rows had no category. Only an invariant catches that. **But my invariants did not catch it either — see §6.**
+
+### 3a. WHAT ALREADY EXISTS — verified, environment-stamped, DO NOT REBUILD
+
+**The previous plan's biggest error: it named four things and missed an entire shipped accounting engine, then proposed to rebuild it.**
+
+Built for CLIENTS, running against tens of thousands of production rows. **The owner books import ZERO of it** (verified: no `lib/tax/` import in any `owner-*` file):
+
+| Track A / B need | Already built | Size |
 |---|---|---|
-| **Ledger** | Chart of accounts, journal entries, journal lines. Every transaction posts both sides. | **Deterministic. Never a model.** Same input → same output, every run. A model that files a row differently on two runs cannot produce accounts anyone would sign. |
-| **Auditor** | Machine-checkable invariants, run after every change. | This is where "the system knows what money in means" actually lives. See §7. |
-| **Agent** | Judgement on what is genuinely ambiguous; reads unknown bank formats; answers questions against the real ledger. | **Proposes, never posts.** Every proposal carries its reasoning and is accepted by a human. |
+| Per-account tie-out (opening + movement = closing, per bank, with a tie verdict and provenance) | `lib/tax/bank-balances.ts` | 152 lines |
+| Own-account transfer pairing — outflow at A + inflow at B, distinguishing two accounts at one bank | `lib/tax/transfer-matcher.ts` | 291 |
+| Independent re-derivation of every total; balance sheet must tie to $0.00 | `lib/tax/validation-breakdown.ts` | 359 |
+| Cash-basis balance sheet, per-member capital roll-forward, beginning cash from the prior return | `lib/tax/financials-engine.ts` | 495 |
+| Ordered, direction-gated, DB-backed rules — **992 live production rules, editable without a deploy** | `lib/tax/categorization-engine.ts` | 723 |
+| The learning loop: derive a rule from a correction, scope it, deactivate conflicts, **evict on reversal** | `lib/tax/learned-rules.ts` | 325 |
+| FX — **house standard is IRS yearly-average**, not per-transaction-date | `lib/tax/fx.ts` + `irs_exchange_rates` | 38 |
+| Bank/account identity from a filename | `lib/tax/bank-identity.ts` | 243 |
+| **Verification gates 3/4/5** — balance-sheet identity with a named FX equity line; M-2 roll-forward per member; **Σ K-1 shares = net income AND Σ ownership % = 100** | `lib/tax/verification-gates.ts` | — |
 
-**A smarter categoriser would not have caught the Amex sign bug** — nothing was miscategorised, the rows had no category at all. Only an invariant catches that. This is the central design lesson of the project.
+**Gate 5 is exactly the check that would have caught the one-shareholder problem.** It was added after a real client attested a return at 60%/60%. **The owner's own books were being built to a weaker standard than TD applies to paying clients.**
 
-### What already exists (verified 2026-08-31, do not rebuild)
+`lib/owner-books-rules.ts` is a hand-written re-implementation of the rules engine; `lib/owner-statement-filename.ts` is a re-implementation of bank identity. **The rule CONTENT stays TD-specific** (nothing inherited from Zoho or a bank's category column — that instruction stands). **The ENGINE is reused.**
 
-- **`journal_entries` / `journal_lines`** — designed correctly, **0 rows**, no code touches them. Debits/credits in whole cents (`debit_minor`/`credit_minor`), per-line currency + `fx_rate` + `base_*_minor`, and `status`/`posted_at`/`reversal_of` so entries reverse rather than delete.
-- **`chart_of_accounts`** — `code, name, type, subtype, parent_id, normal_balance, currency, tax_line, is_postable, is_system, is_contra`. **68 rows across two non-owner entities. Tony Durante LLC has none.**
-- **The agent loop** — reached from six entry points (dashboard sidebar, Inbox worker chat, portal chat suggest, Team Chat trigger, Team Chat approval, Hermes bridge cron), with tools, extended thinking, guards, approval discipline.
-- **`lib/tax/ai-categorizer.ts`** — an accounting AI categoriser whose own guarantees are: runs only AFTER deterministic rules, only on what they left, applies only HIGH-confidence suggestions, tags them `ai:` so they are always distinguishable, and categorises **nothing** on API failure. Used by five modules, all client-tax-books. **Nothing in the owner books imports it.**
-- **Statement parsing** — hand-written readers for Relay, Mercury, Revolut, Slash, Wise. AI extraction exists but only as a **parse-failure fallback**.
+**The boundary:** shared pure engine, per-owner storage. Do NOT unify the storage — that was tried and reverted as "the single biggest corruption risk". The client engine is partnership-shaped; Antonio is an 1120-S. `pnl_workspaces.entity_type` already exists as an engine selector with only MMLLC registered. **The work is "register an S-corp engine behind the existing selector", not "build a second books stack".**
+
+### 3b. WHAT DOES NOT EXIST — corrected
+
+**The previous plan claimed the ledger tables "already exist — do not rebuild". That was a SANDBOX fact presented as general.**
+
+**Verified on PRODUCTION: `chart_of_accounts`, `journal_entries`, `journal_lines` and `bookkeeper_review_items` do not exist at all.** Only `bank_categorization_rules`, `owner_vendor_rules` and `td_books_transactions` are there. **No migration file in the repo creates them.** The sandbox copies are orphans with no code and no committed DDL.
+
+**Every figure in this plan is stamped with its environment. Track B needs a Phase 0 that authors real migrations and promotes them.**
 
 ---
 
 ## 4. Facts established — do not re-derive
 
-### Antonio's decisions (binding)
+**Environment: SANDBOX unless stated. Production figures are marked [PROD].**
+
+### Antonio's binding decisions
 
 | Decision | Detail |
 |---|---|
-| **Ownership** | 50/50 with his wife **Jodi**. Antonio is the **only** one on payroll. Equity must be built as two members from the start. |
-| **The 2024 return is wrong on ownership** | It records **one shareholder** taking all $174,383 of profit and all $135,965 of distributions. A bigger reason to amend than the categories. |
-| **Office rent** | GC Portobello (bank transfer, Jan–Jul, ~$2,600/mo) **and all 14 cheques** (ten monthly $575 = Indian Shores office, the rest Portobello from October). **$39,642.18 across 25 payments.** |
-| **Janet Durant** | **Marketing.** $8,650 across 9 payments. Name is **Durant, not Durante** — not family. |
-| **Vehicle service & fuel** | **Business.** $1,517.86 across 6 charges. |
-| **Meals & travel** | **Business.** $1,733.01 across 20 charges (11 travel $1,363.68, 9 meals $369.33). |
-| **Car LOAN payments** | NOT reclassified. A loan payment is not deductible — only the interest, plus depreciation. $11,266 to Ally/Suncoast/Toyota stays as drawings pending the vehicle-on-books decision. |
-| **2024 scope correction** | Chase 6094 did **not exist** in 2024 and the office was bought in **2025** — their absence from the 2024 CPA file is correct, **not a gap**. An earlier "incomplete data" claim was wrong on both counts. |
-| **2024 is PARKED** | Untouched until 2025 is closed and locked. |
+| **Ownership** | 50/50 with Jodi, per the operating agreement. Antonio the only one on payroll. **Two K-1s for 2025.** |
+| **Office rent** | $39,642.18 across 25 payments — 11 Portobello (7 monthly −18,175.51 + 4 small −262.91) + 14 cheques (−21,203.76). **OPEN QUESTION, see §5.** |
+| **Janet Durant** | Marketing. $8,650.00 across 9 payments. Durant, not Durante — not family. |
+| **Vehicle service & fuel** | Business. $1,517.86 across 6 charges. **Conditional — see §5.** |
+| **Meals & travel** | Business. $1,733.01 across 20 charges (11 travel $1,363.68, 9 meals $369.33). |
+| **Car LOAN payments** | NOT deducted. Only interest is, plus depreciation. $11,266 stays as drawings pending the vehicle-on-books decision. |
+| **2024** | **PARKED** until 2025 is filed. It lives in Zoho. James Baker amends it when 2025 is right. |
+| **Build, not buy** | Basis/Digits are mature but the books would live in their system — the Zoho problem again — and would never serve clients' books inside TD's own CRM. |
 
 ### Verified numbers
 
-- **2025 books: 2,768 rows across 13 accounts.** Reconciles exactly (category totals = sum of all rows). 2026 holds 78 live bank-feed rows and is **off limits**. 2024 holds **0**.
-- **2025 opening balances**, from the filed 2024 return's balance sheet: cash **$46,765**, receivables **$887**, other current assets **$5,815**, total assets **$53,467**, notes payable **$6,456**, retained earnings **$47,011**.
-- **2024 as filed:** receipts $488,348 · COGS $15,333 · officer comp $92,000 · taxes & licences $36,951 · other deductions $169,880 · profit $174,383 · distributions $135,965. **Cash basis.** Prepared by James Baker CPA. EIN 83-4299021.
-- **$392,334 arriving in Chase is Antonio's own money** sweeping in from Airwallex and Mercury — both in these books. As income it double-counts the same client money. The reliable tell is Airwallex's ACH originator id `1371913769`, **not** the wording: one April sweep of $12,400 is described as "Chase".
-- **Amex 9245 is a SAVINGS account**, not a card. Pays interest, closes at **$602.73**.
-- **First Citizens loan 7363**: drawn **$144,500 on 2025-05-22**, closes about **$140,246.52**. Opens *inside* 2025 — no 2024 opening balance needed for it.
+- **2025: 2,768 rows across 13 accounts, 1,220 categorised, 1,548 outstanding.** Reconciles. **[PROD: `td_books_transactions` holds 109 rows, ALL tax_year 2026 — no 2025, no 2024.]**
+- **2025 opening balances**, from the filed 2024 return: cash $46,765 · receivables $887 · other current assets $5,815 · **total assets $53,467** · notes payable $6,456 · retained earnings $47,011. Ties exactly.
+- **2024 as filed** (re-verified line by line — **it ties; a reviewer's claimed $199 gap was the reviewer omitting the other-income line**): receipts $488,348 · COGS $15,333 · other income $199 · officer comp $92,000 · taxes & licences $36,951 · other deductions $169,880 · **profit $174,383** · distributions $135,965. Cash basis. James Baker CPA. EIN 83-4299021.
+- **$392,334 of own-money sweeps into Chase.** The reliable tell is Airwallex's ACH originator id `1371913769`, **not the wording** — one April sweep of $12,400 is described as "Chase".
+- **Amex 9245 is a SAVINGS account**, not a card. Closes $602.73. Interest is taxable income against a 1099-INT.
+- **First Citizens loan 7363**: drawn **$144,500 on 2025-05-22**, closes **$140,246.52** → **$4,253.48 of principal repaid**. Opens inside 2025.
 
 ### The accounts
 
-| Account | Rows | Notes |
+Chase checking 3920 (492) · Chase card 9279 (437) · Chase card 6094 (152, opened 2025) · **Amex card 51007 (790 — signs inverted)** · Amex savings 9245 (37) · Mercury checking 4517 (365) · Relay checking 6770 (39) · Stripe processor (187 charges — clearing) · Airwallex EUR (104) / USD (38) · First Citizens checking 5812 (14) / 5820 (94) · **First Citizens loan 7363 (19 — signs inverted)**
+
+**No statements held: Truly Financial, Verto, Ally 2167, Jeep Compass 1244** — all have folders in the CPA's TaxDome portal. **Ally and Jeep are vehicle loans; their 12/31 balances are absent from liabilities**, potentially a large fraction of a $53,467 balance sheet. Transfers *to* Truly/Verto currently read as expenses. **Fetching these is a Track A entry gate, not a footnote.**
+
+---
+
+## 5. Open defects and open questions
+
+### Live defects in shipped code — all verified directly
+
+1. **Amex 51007 signs inverted.** Amex writes a charge positive, a payment negative. Books currently say $80,457 was *earned* from Corporate Filings, Home Depot, Geico and Zoho. Proof: of 48 negative rows totalling −$83,883, **24 are "MOBILE PAYMENT - THANK YOU" (−$81,124)**; the rest are merchant refunds. 790 rows, none categorised.
+2. **First Citizens loan 7363 signs inverted.** Drawdown as money out, repayments as money in. 19 rows, none categorised.
+3. **THE CARD-PAYMENT RULE DOES NOT MATCH AMEX.** It matches Chase's *"PAYMENT THANK YOU-MOBILE"*; Amex writes *"MOBILE PAYMENT - THANK YOU"* — the hyphen breaks it. **Verified by running the regex.** After the sign flip, 24 payments totalling **$81,124** fall to the card catch-all refund rule and **reduce expenses by $81,124**. Before the flip it is worse: all 766 charges hit the catch-all and drive expenses **negative by $80,457**. The existing test used Chase's wording, which is why it passed.
+4. **`getCashPosition` adds card and loan balances INTO cash** — no account-type filter, so the $140,246 loan and every card balance inflate the cash total. Also un-ranged (silent 1000-row cap drops whole accounts) and no id tie-break (the closing balance is nondeterministic on a busy day).
+5. **`Math.abs` on expense/cogs/fee/distribution** means a money-IN row miscategorised as an expense **increases** expenses; `by_subcategory` absolute-values so the largest income renders as the largest expense.
+6. **The match panel** shows 8 of N with no deselection; renders every matched row in the *opened* row's currency (reachable today — 1,532 USD + 16 EUR uncategorized); and the saved rule's pattern is computed from rows the user unticked.
+7. **The bulk bar** keeps its selection across filter/page changes and does not restrict to uncategorized rows.
+8. **THE SIGN FIX IS NOT DURABLE.** The owner import passes no mapping store, so it skips the learned-mapping + verify + quarantine layer and falls to the generic column mapper. Flip 809 rows by hand and the **next** Amex upload lands inverted again. **"Learn once, replay forever" already exists** — it is simply not wired to the owner books.
+9. **The 6-hourly sweep has no year guard** — `tax_year` is taken straight from the row's date. A feed row dated 2025 lands in 2025 automatically, unattended, into a year Track A intends to finalise. **A year a cron can write to is not closed.**
+
+### Open questions that change the numbers
+
+- **The rent.** The count and total verify, but the large cheques (**$3,717.92 on 7 Oct, $8,217.92 on 31 Oct, $3,217.92 on 9 Dec**) are far above the ~$2,600 Portobello monthly rate **and begin five months after the office loan was drawn**. Three possibilities: mortgage payments mislabelled as rent (**principal is not deductible**), related-party rent needing arm's-length support, or a genuine third location. **Get the per-payment listing before posting.**
+- **The vehicle decisions contradict each other.** Deducting fuel and service as business is only right if the car is a company asset — but the loan is parked as drawings, i.e. not one. And standard mileage vs actual cost is **either/or**; booking fuel now and claiming mileage later is a double deduction.
+- **Gross vs net receipts.** The 2024 return shows Stripe fees of $694 against $488,348 of receipts — implausibly low, the signature of **net** receipts being reported. **Gross receipts are matched automatically against 1099-Ks.** Establish whether state filing fees are re-billed to clients and whether revenue is reported gross.
+
+---
+
+## 6. The invariants — REPLACED, because mine did not work
+
+**The previous plan claimed in bold: "Any one of these catches the Amex bug." That was false for at least four of seven.**
+
+| Old | Why it failed |
+|---|---|
+| Card polarity — "opposite signs, payments the minority" | **Invariant under global negation.** True before and after the flip. It cannot tell which side is spending. |
+| Balance chain — "previous + amount = next settles the convention" | **Certifies the WRONG sign.** A card's running balance is the amount *owed* and rises with a charge, so the inverted data reconciles and the corrected data would fail. Also unrunnable on Mercury, which carries no balance at all. |
+| Direction fences category | Cannot fire on 790 **un**categorised rows. |
+| Debits = credits | Passes perfectly on a flipped sign — and on a perfect double-post. |
+
+**The replacements. Reuse the client engine's gates rather than writing new ones.**
+
+1. **Absolute card anchor** — rows matching a payment token must carry the sign that REDUCES the liability; a card's net over a statement period must equal the change in the stated balance.
+2. **Per-period tie-out, not annual** — opening of month N = closing of month N−1, every account, no gaps. An annual test passes on offsetting errors (a missing March rent plus a duplicated July one ties at 12/31 while the P&L is wrong by $5,200). *(reuse `bank-balances.ts`)*
+3. **Statement-coverage register** — account × month × opening/closing/row-count/source-file, gaps flagged. **The only real completeness control.**
+4. **Own-account money is never income — AND money leaving toward an account in these books is never an expense.** The old rule had no mirror, leaving every outbound transfer leg unprotected: Amex card payments alone are **$81,124** of phantom expense. *(reuse `transfer-matcher.ts`)*
+5. **Transfer legs are PAIRED before posting.** One $12,400 movement must produce one entry, not four legs. Unpaired legs go to suspense and are reported.
+6. **P&L variance against the filed prior year** — line by line, with a threshold. The cheapest detector of a dropped or doubled category, and the only control that tests *classification* rather than cash.
+7. **Zero in suspense and zero uncategorized before close.**
+8. **A = L + E standalone**, and ledger-wide total debits = total credits. *(reuse `validation-breakdown.ts`)*
+9. **M-2 / equity roll-forward per member**, and **Σ K-1 shares = net income, Σ ownership % = 100**. *(reuse `verification-gates.ts` gates 4 and 5)*
+10. **Payroll reconciliation** — officer comp = W-2 Box 1; employer tax = the 941 totals. Payroll **cannot** be rebuilt from bank rows: a statement shows net pay, not gross wages, employer tax and withholding.
+11. **Gross receipts ≥ Σ 1099-K received.**
+12. **FX** — closing balances remeasured at the closing rate, difference to a named FX account; rate **frozen at import** or re-running changes prior periods.
+13. **Duplicate-import** and **12/31 cut-off**.
+14. **Stripe clearing must tie to Stripe's own year-end balance (expected ≈ 0)** — the old plan exempted it, which switched off the only detector of the largest silent double-count.
+
+**"Category totals = sum of all rows" is NOT a control.** It is a tautology, true of any partition including a wholly miscategorised one. It was cited as evidence in the previous plan.
+
+---
+
+## 7. TRACK A — the 2025 filing. Fifteen days.
+
+**Goal: figures the preparer can file. Not a system.**
+
+| Step | What | Exit |
 |---|---|---|
-| Chase checking 3920 | 492 | main operating account |
-| Chase credit card 9279 | 437 | where client state filing fees are paid |
-| Chase credit card 6094 | 152 | opened 2025 |
-| Amex credit card 51007 | 790 | **signs inverted — see §5** |
-| Amex savings 9245 | 37 | interest income |
-| Mercury checking 4517 | 365 | second-biggest account |
-| Relay checking 6770 | 39 | low activity |
-| Stripe processor | 187 | **charges export** — gross + per-charge fee, no payout rows ⇒ clearing account |
-| Airwallex EUR / USD | 104 / 38 | multi-currency |
-| First Citizens checking 5812 / 5820 | 14 / 94 | |
-| First Citizens loan 7363 | 19 | office loan — **signs inverted**, and PARKED |
+| **A0** | Fix the money bugs in the reporting path: cash position (account-type filter, paging, tie-break), the `Math.abs` sign handling, the match panel and bulk bar. **Track A's numbers come out of these surfaces — they must be right first.** | Reports compute correctly on known inputs |
+| **A1** | Flip the Amex and loan signs (809 rows, none categorised). **Fix the card-payment rule FIRST** or the flip books $81,124 as refunds. Publish a before/after control total. | Card reads like a card; loan runs $144,500 → $140,246.52 |
+| **A2** | Retrieve: **office closing statement · First Citizens 2025 year-end loan statement · 2025 payroll reports · December 2024 statements for every account · the four TaxDome folders (Truly Financial, Verto, Ally, Jeep).** *Antonio — start now, this is the long pole.* | All in hand |
+| **A3** | Categorise the 1,548 outstanding rows. **Group-first: ~200 merchants, not 1,548 decisions.** Inside a group show *variants*, not 210 checkboxes. | Zero uncategorized |
+| **A4** | Pair transfer legs and collapse them. Suspense for unpaired. | Zero in suspense |
+| **A5** | The office: land/building split from the closing statement and the assessor ratio, in-service date, depreciation. The loan: interest split from principal against the lender's statement. Cards as liabilities. Per-account opening balances reconciled to $46,765. | Balance sheet balances |
+| **A6** | Build the P&L and balance sheet **through the existing client engine behind a registered S-corp entity type** — not a new reporting layer. | Statements produced |
+| **A7** | Run invariants 1–11. **Explain every variance against the filed 2024 return and against the prepared 2025 P&L.** | Variance report |
+| **A8** | Two K-1s at 50/50. Reasonable-compensation record for the year. Hand to the preparer. | Filed |
 
-**No statements held for:** Truly Financial, Verto, Ally 2167, Jeep Compass 1244 — all have folders in the CPA's TaxDome portal.
+**Stated tolerance — a filing deadline means disclosed-and-good-enough beats perfect-and-late.** Any account that cannot be tied by 12 September is **disclosed to the preparer with the amount and the reason**, not quietly plugged. That decision is Antonio's and the preparer's, not this project's.
 
----
-
-## 5. Open defects — must be fixed before or during Phase 2
-
-1. **Amex 51007 signs are inverted.** Amex writes a charge as **positive** and a card payment as **negative** — the reverse of every other account here. Left alone the books report $80,457 *earned* from Corporate Filings, Home Depot, Geico and Zoho, and $83,883 *spent* paying the card. Proof: of 48 negative rows totalling −$83,883, **24 are "MOBILE PAYMENT - THANK YOU" (−$81,124)**; the rest are merchant refunds. **790 rows, none categorised** — flipping disturbs nothing filed.
-2. **First Citizens loan 7363 signs are inverted.** Drawdown recorded as money out, repayments as money in. **19 rows, none categorised.**
-3. **Root cause of both:** Amex and Chase have no hand-written reader, so they fall to the generic column mapper — find a date column, find an amount column, **copy the number exactly as written**. It forms no belief about what the account is, so it cannot notice a contradiction. The AI in the importer is a *parse-failure* fallback and was never consulted, because the file parsed "successfully".
-4. **The match panel shows 8 of N with no way to deselect.** Antonio, on the 210 Corporate Filings rows: *"I want to expand them and check that there are no other transactions mixed up. If there are I want to unselect what don't go there."* Needs: full list with date/description/amount, per-row ticks, live count on the button, **and a warning that a saved rule matches on wording and will re-match anything unticked**.
+**Honest estimate:** ~15 hours mine, ~4–6 hours Antonio's, **conditional on A2 arriving fast**. The old "16–20 hours" figure covered a different, larger scope and was not credible.
 
 ---
 
-## 6. The phases
+## 8. TRACK C — 1099s and payroll. Immediate, parallel.
 
-Each phase is a **child dev job** under `81fb5a05`, so the board shows real state. The seven-stage lifecycle (requested → investigated → plan approved → building → QA passed → shipped → verified) applies to each child.
+**2025 Forms 1099-NEC were due 31 January 2026. Roughly seven months late. Penalties are per form and escalate.**
 
-### Phase 1 — Chart of accounts + opening balances
-Draft Tony Durante LLC's chart from the complete 2025 year: every account he named (Electricity, State Filings, Rent — Portobello, Rent — Indian Shores) plus everything the data shows. Each bank account and card becomes an account. Equity as **two members**. Then the 2025 opening entry from the 2024 return.
-**Antonio's time:** 30–45 min reviewing. **Focus his review on the SHAPE** — what is cost of sale vs overhead vs money taken out — not the wording. Renaming later is cheap; restructuring is not.
-**Exit:** Antonio has approved the account list.
+- **Luca DeG — $47,448.88 across 22 payments.** **Zelle is bank-to-bank and files no 1099-K**, so TD's own obligation is undiminished. **Also: Luca is referred to as STAFF in this system while being paid as a contractor for core delivery work — a worker-classification question for the CPA.**
+- **Janet Durant — $8,650.00 across 9 payments.** Same analysis.
+- **Rent $39,642.18** — 1099-MISC box 1 if the landlords are not corporations.
+- **W-9s** — check they exist. Without a TIN, backup withholding applies and **the payer** becomes liable.
 
-### Phase 2 — Post 2025
-Fix the Amex and loan signs. Post all 2,768 rows as journal entries, both sides. Map the 25 existing subcategory labels onto real accounts.
-**Exit:** **every account's computed balance equals its bank statement closing balance.** Binary. It will fail on the first pass — that is what it is for, and where it fails is real missing or misfiled money.
-
-### Phase 3 — The screens
-Chart-of-accounts editor (add / rename / deactivate / sub-accounts). Account picker replacing the fixed dropdown. P&L and balance sheet generated from accounts. Rules editor. The match panel from §5.4.
-**Exit:** Antonio can add an account and re-file a transaction without a developer.
-
-### Phase 4 — Close 2025
-Review, adjustments, lock the year.
-**Exit:** a P&L and balance sheet he would hand to a CPA.
-
-### Phase 5 — 2024 and the amendment
-Only after 2025 is locked. From the TaxDome documents, opening from the 2023 return.
-**Exit:** corrected 2024 figures ready for the amended return, including the two-member ownership correction.
-
-### Phase 6 — The expert agent
-Connect the existing agent to the ledger with accounting tools and grounded tax knowledge. Unknown bank formats get read once and stored as a permanent deterministic mapping — **learn once, replay forever**. Year-end review: reasonable compensation, personal charges, missing 1099s.
-**Exit:** it proposes with reasoning against real numbers, and Antonio accepts with one click.
+Needs only the payee list. **Does not wait for the ledger.**
 
 ---
 
-## 7. Invariants — the auditor layer
+## 9. TRACK B — the system. After the 15th.
 
-Cheap, deterministic, run after every change. **Any one of these catches the Amex bug.**
+**B0 — Promotion.** Author real migrations for the chart of accounts and journal tables and promote them. Re-measure every figure against production. **Nothing here exists on production today.**
 
-1. **Card polarity.** On a credit card, spending and payments have opposite signs, and payments are the minority.
-2. **Balance chain.** Where a statement carries a running balance, previous + amount = next. Arithmetic — it settles a sign convention outright.
-3. **Own-account money is a transfer.** Money arriving from an account already in these books is never income.
-4. **Direction fences category.** A spending category cannot apply to money coming in. *(Already live in the rules — added after Zoho client money nearly became a software expense.)*
-5. **Debits equal credits** on every entry.
-6. **Cash ties.** Each account's computed balance equals its statement closing balance.
-7. **Processor exception.** A clearing account (Stripe) will not tie to a bank balance — it isn't one. Expected, not a failure.
+**B1 — Chart of accounts.** Per-entity, seeded from a shared catalog of templates. Must include from day one, because restructuring later is the expensive kind: **AAA and OAA (AAA is NOT retained earnings — they diverge the moment there are non-deductible items, and there are)** · per-shareholder capital and stock/debt basis (**distributions above basis are capital gain and nothing tracks basis today**) · fixed assets and accumulated depreciation · **meals / travel / entertainment as three accounts** with a non-deductible section · payroll split into wages, employer tax and liabilities · FX gain/loss · suspense. **Populate `tax_line` — free now, a migration later.**
 
----
+**B2 — Post the ledger**, with the account picker built FIRST (Track A already did the categorising, so this is a mapping exercise). One system of record, declared in writing. Idempotent: unique on (entity, source transaction).
 
-## 8. Known risks — stated, not hidden
+**B3 — Screens.** Group-first review, cards on mobile, a permanent tie-out status strip on the money screens, chart editor in plain language (never *type*, *normal balance*, *contra*). Retire the old P&L in the same change that ships the new one.
 
-1. **Nothing visible for the first stretch.** Phases 1–2 produce no screen. Building the visible part first would put a convincing face on a wrong ledger.
-2. **A model with write access will eventually make a confident wrong entry that balances** — the hardest kind to find. Hence propose-only, forever.
-3. **A model's recall of tax rules drifts.** The agent must answer from the actual return, the actual ledger and a maintained rules library, and say which.
-4. **Antonio is the professional.** The agent drafts for his review and never speaks to a client directly. Tax strategy acted on unreviewed is his licence at risk.
-5. **Don't run the model on everything.** Most rows are obvious. Deterministic first, model on the remainder — what the existing categoriser already does.
-6. **A chart drafted from 2025 alone will miss 2024-only accounts.** It stays editable and we accept adding accounts during Phase 5.
-7. **Multi-currency.** Airwallex EUR needs a conversion rule for a dollar balance sheet. Proposed: each transaction's own date (standard for cash basis). The 2024 return carried a $313 exchange gain, so the previous preparer did something comparable.
-8. **Repeated arithmetic errors in this project** came from adding figures mentally. **Compute every total with a query or a script; never sum by hand.**
+**B4 — The learning loop.** Port `learned-rules.ts` to the owner scope: **a correction writes a deterministic RULE, not a weight**; the model only proposes the rule text a human accepts. Eviction on reversal is mandatory — without it one wrong learned rule silently re-books every future year.
+
+**B5 — The agent.** Connect the existing agent to the ledger. **It may post only into a draft batch, in an open period, on lines no human has decided, every line stamped with agent and prompt version, and the invariants run as a precondition of leaving draft.** That turns "a human reads every proposal" into "a machine proves every proposal, a human reads the exceptions" — the only version that scales. Never in a closed period. **The bank-format mapping write is an agent write and is governed by the same rail.**
+
+**B6 — 2024 and the amendment.** From Zoho, opening from the 2023 return, with a line-by-line bridge from filed to corrected.
 
 ---
 
-## 9. Time
+## 10. Tax strategy — Antonio asked for a strategist and the old plan gave one vague line
 
-~16–20 hours to complete 2025 through Phase 4; ~2 hours of Antonio's across the reviews. Phase 5 a further 6–8 hours once 2025 is locked. Phase 6 sized after Phase 4.
+None of this is Track A. All of it is real money and belongs in the system.
+
+- **§199A / QBI is the biggest unknown and decides the direction of everything else.** Is TD an SSTB? If yes and income is above the phase-out, QBI is lost entirely — which flips the optimisation.
+- **A retirement plan is the largest legitimate deduction available** and it **inverts** the minimise-compensation reflex: employer contributions are a percentage of W-2 wages, so *raising* comp *raises* the ceiling.
+- **Putting Jodi on payroll solves three problems at once** — the zero-comp shareholder-employee exposure, the disproportionate-distribution pattern, and retirement capacity.
+- **Comp + QBI + retirement is a THREE-WAY optimisation.** Deciding them separately, which the old plan's "year-end review of three unrelated items" would have done, gets the wrong answer.
+- **The office may be in the wrong entity, and this is time-sensitive.** The standard structure is a separate LLC holding the property and leasing to the operating company. **Appreciated real property cannot leave an S-corp without triggering gain as if sold** — easy in, very expensive out. Bought 22 May 2025, return not yet filed. **Ask counsel now; the answer degrades with time and appreciation.**
+- **Screen the ~$55,657 personal bucket item by item.** >2% shareholder health, dental and vision premiums **must be in W-2 wages** to be deductible above the line — buried in a distribution bucket that deduction is simply **lost**. Same for HSA, personal vehicle use, life insurance. Anything landing in wages triggers a W-2c and a 941-X.
+- **An accountable plan** — cheapest, highest-return document available. Without a written one, every reimbursement is taxable wages, and it **gates** the vehicle and home-office treatments.
+- **Quarterly estimates.** The flat 25%+SE estimate was correctly deleted and replaced with nothing. Underpayment penalties are computed quarterly.
+- **State and local:** Florida corporate return and annual report, real property tax, **tangible personal property tax** (its own deadline, routinely missed by new property owners), local business tax receipts, and Florida sales tax on commercial rent.
 
 ---
 
-## 10. Still pending Antonio's word
+## 11. Risks — stated, not hidden
 
-- The four reclassifications (rent $39,642.18 · Janet Durant $8,650 · meals+travel $1,733.01 · vehicle $1,517.86) — **not applied**, deliberately: better posted straight into the ledger than into the old buckets first.
-- Flipping the Amex and loan signs (809 rows).
-- Rebuilding the match panel.
-- Starting Phase 1.
+1. **Track A produces numbers without the ledger.** Accepted deliberately: the deadline is real and the categorisation carries over. The risk is that the reporting surfaces have known bugs — which is why A0 comes first.
+2. **The tie-out will fail on the first pass** and surface unsized work. In fifteen days there may not be time to chase everything. Hence the stated tolerance in §7.
+3. **A model with write access will eventually make a confident wrong entry that balances** — the hardest kind to find. Draft-batch only, invariants as a precondition.
+4. **A model's recall of tax rules drifts.** It answers from the return, the ledger and a maintained rules library, and says which.
+5. **Antonio is the professional.** The agent drafts for his review, never speaks to a client. Tax strategy acted on unreviewed is his licence.
+6. **Antonio is the sole reviewer with no fallback.** A2 must start immediately and run in parallel with everything else.
+7. **Every "verified" figure needs an environment stamp.** The previous plan's foundation was sandbox facts presented as general.
+8. **COMPUTE EVERY TOTAL WITH A QUERY.** Repeated arithmetic errors in this project came from adding figures mentally — including in the previous version of this document.
+
+---
+
+## 12. Awaiting Antonio
+
+- **Go on Track A**, starting with A0 and A1.
+- **A2 document retrieval** — the long pole. Nothing else can finish without it.
+- **Go on Track C** (1099s) as a parallel workstream.
+- The four reclassifications (rent $39,642.18 · Janet Durant $8,650 · meals+travel $1,733.01 · vehicle $1,517.86) — still unapplied, and the rent and vehicle both now carry open questions per §5.
