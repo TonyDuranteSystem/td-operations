@@ -61,36 +61,23 @@ async function main() {
     const buffer = fs.readFileSync(file)
     const fileName = path.basename(file)
 
-    if (dryRun) {
-      // Mirror the real path as far as it goes without writing: the filename rule
-      // and the parser, but no insert.
-      const { parseStatementFilename } = await import('../lib/owner-statement-filename')
-      const { parseBankStatement } = await import('../lib/bank-statement-parser')
-      const account = parseStatementFilename(fileName)
-      if (!account.ok) {
-        console.log(`\n✗ ${fileName}\n  ${account.error?.problem} ${account.error?.suggestion}`)
-        continue
-      }
-      const parsed = await parseBankStatement(
-        buffer, fileName,
-        fileName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'text/csv',
-      )
-      const inYear = parsed.transactions.filter(t => Number(t.transaction_date.slice(0, 4)) === year)
-      const inflow = inYear.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0)
-      const outflow = inYear.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0)
-      console.log(`\n· ${fileName}  [DRY RUN — nothing written]`)
-      console.log(`  account : ${account.value!.label} (${account.value!.accountType})`)
-      console.log(`  parsed  : ${parsed.transactions.length}, in ${year}: ${inYear.length}`)
-      console.log(`  in  +${inflow.toFixed(2)}   out ${outflow.toFixed(2)}   net ${(inflow + outflow).toFixed(2)}`)
-      if (parsed.errors.length) console.log(`  warnings: ${parsed.errors.join(' | ')}`)
-      continue
-    }
-
-    const r = await importOwnerStatement({ fileName, buffer, targetYear: year })
+    const r = await importOwnerStatement({ fileName, buffer, targetYear: year, dryRun })
     if (r.status !== 'imported') {
       console.log(`\n✗ ${fileName}  [${r.status}]\n  ${r.error}`)
       continue
     }
+    if (dryRun) {
+      const rs = r.preview_rows ?? []
+      const inflow = rs.filter(x => x.amount > 0).reduce((s, x) => s + x.amount, 0)
+      const outflow = rs.filter(x => x.amount < 0).reduce((s, x) => s + x.amount, 0)
+      console.log(`\n· ${fileName}  [DRY RUN — nothing written]`)
+      console.log(`  account : ${r.account} (${r.account_type})${r.sign_flipped ? '   SIGNS FLIPPED per the account registry' : ''}`)
+      console.log(`  parsed  : ${r.parsed_count}, in ${year}: ${rs.length}`)
+      console.log(`  in  +${inflow.toFixed(2)}   out ${outflow.toFixed(2)}   net ${(inflow + outflow).toFixed(2)}`)
+      if (r.warnings?.length) console.log(`  warnings: ${r.warnings.join(' | ')}`)
+      continue
+    }
+
     console.log(`\n✓ ${fileName}`)
     console.log(`  account : ${r.account} (${r.account_type})`)
     console.log(`  imported: ${r.imported} of ${r.parsed_count} parsed`)

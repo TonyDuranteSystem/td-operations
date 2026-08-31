@@ -15,6 +15,38 @@
 import { parseBankStatement, type ParsedTransaction } from '@/lib/bank-statement-parser'
 import { insertOwnerTransactionRows, type OwnerImportRow } from '@/lib/owner-transactions-import'
 import { parseStatementFilename } from '@/lib/owner-statement-filename'
+import { supabaseAdmin } from '@/lib/supabase-admin'
+
+/**
+ * What the system knows about an account, read from the registry rather than
+ * re-derived from whatever a file happens to say.
+ */
+interface AccountFacts { sign_convention: string }
+
+/**
+ * THE SIGN CONVENTION IS A FACT ABOUT THE ACCOUNT, NOT ABOUT THE FILE.
+ *
+ * Amex writes a purchase POSITIVE and a card payment NEGATIVE — the reverse of
+ * Chase and of everything else here. The importer has no reader for Amex, so the
+ * file falls to a generic column mapper that copies the number exactly as written.
+ * That put roughly $80,457 of spending into the books as INCOME.
+ *
+ * Those 809 rows were repaired by hand on 2026-08-31. This lookup is what stops
+ * the next Amex file undoing that repair: the convention now lives on the account,
+ * so it applies to every import forever, including ones nobody is watching.
+ *
+ * Fails OPEN, deliberately: an account with no registry row imports as-written,
+ * exactly as before. A missing registry row must never silently reverse a file.
+ */
+async function accountFacts(bankName: string): Promise<AccountFacts | null> {
+  const { data, error } = await supabaseAdmin
+    .from('td_books_accounts')
+    .select('sign_convention')
+    .eq('bank_name', bankName)
+    .maybeSingle()
+  if (error || !data) return null
+  return data as AccountFacts
+}
 
 /**
  * Why the outcomes are flat optional fields rather than a discriminated union:
@@ -41,9 +73,13 @@ export interface OwnerStatementImportOutcome {
   imported?: number
   parsed_count?: number
   skipped_out_of_year?: number
+  /** True when the registry recorded this account's export as sign-inverted. */
+  sign_flipped?: boolean
   skipped_same_source?: number
   skipped_already_booked?: number
   duplicate_samples?: string[]
+  /** dryRun only: the rows that WOULD be written, after every decision is applied. */
+  preview_rows?: OwnerImportRow[]
   warnings?: string[]
 }
 
@@ -54,6 +90,16 @@ export interface OwnerStatementImportInput {
   mimeType?: string
   /** Rows dated outside this year are SKIPPED, never written. Null imports every year present. */
   targetYear: number | null
+  /**
+   * Compute everything and report, but write nothing.
+   *
+   * It runs the SAME function rather than a preview that re-implements it. The
+   * command-line preview used to re-derive the pipeline itself and so did not know
+   * about the account's sign convention — it showed an Amex file landing the wrong
+   * way round while the real import would have landed it correctly. A dry run that
+   * disagrees with the run it previews is worse than no dry run.
+   */
+  dryRun?: boolean
 }
 
 export async function importOwnerStatement(
@@ -116,11 +162,19 @@ export async function importOwnerStatement(
     }
   }
 
+  // Read the account's own convention BEFORE mapping any row.
+  const facts = await accountFacts(account.value!.label)
+  const flip = facts?.sign_convention === 'inverted'
+
   const allRows: OwnerImportRow[] = parsed.transactions.map((t: ParsedTransaction) => ({
     transaction_date: t.transaction_date,
     description: t.description,
     counterparty: t.counterparty || undefined,
-    amount: t.amount,
+    // Flipped when the registry says this account's export inverts the sign. The
+    // STATED balance is deliberately NOT flipped — on a liability statement it is
+    // the amount owed, and the flipped amounts then chain to it correctly. Proven
+    // on the loan's June rows: 144,500 + (-284.39) = 144,215.61, as stated.
+    amount: flip ? -t.amount : t.amount,
     currency: t.currency || undefined,
     // The filename is AUTHORITATIVE for the account, not the parser's guess. The
     // parser labels almost everything "unknown" (only Relay is recognised), and
@@ -157,9 +211,21 @@ export async function importOwnerStatement(
       imported: 0,
       parsed_count: parsed.transactions.length,
       skipped_out_of_year: outOfYear,
+    sign_flipped: flip,
       error: outOfYear > 0
         ? `All ${outOfYear} transaction(s) in this file are outside ${targetYear}. Nothing was imported.`
         : 'No transactions found in this file.',
+    }
+  }
+
+  if (input.dryRun) {
+    return {
+      status: 'imported', file: fileName,
+      account: account.value!.label, account_type: account.value!.accountType,
+      imported: 0, parsed_count: parsed.transactions.length,
+      skipped_out_of_year: outOfYear, sign_flipped: flip,
+      preview_rows: rows,
+      warnings: parsed.errors.length > 0 ? parsed.errors : undefined,
     }
   }
 
