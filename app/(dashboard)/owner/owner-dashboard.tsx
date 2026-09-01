@@ -115,7 +115,15 @@ export function OwnerDashboard({
         </div>
         <select
           value={year}
-          onChange={e => router.push(`${pathname}?tab=${currentTab}&year=${e.target.value}`)}
+          /* The drill-down travels with the year. Dropping it here left the URL saying
+             "no filter" while the list still showed "showing only Rent" and nothing in
+             it — the filter was in the tab's own state and the year change did not
+             clear it, so an empty screen had no explanation on it. Switching year while
+             reading rent asks for rent in that year, which is also the honest reading. */
+          onChange={e => router.push(
+            `${pathname}?tab=${currentTab}&year=${e.target.value}` +
+            (focus ? `&focus=${encodeURIComponent(`${focus.category}:${focus.subcategory}`)}` : ''),
+          )}
           className="rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-sm text-zinc-700"
         >
           {[2026, 2025, 2024, 2023].map(y => (
