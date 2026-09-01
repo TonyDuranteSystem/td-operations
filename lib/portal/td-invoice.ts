@@ -231,12 +231,15 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   // category, a year, and an account) — a caller that omits these (most manual/generic
   // invoices) gets no check, same as before.
   //
-  // Excludes $0 / no-invoice-number rows on top of isInstallment's own live check — production
-  // has a legitimate pattern (Partner Alliance LLC + Morgan & Taylor International LLC,
-  // consolidated first-installment billing) of a $0 companion record stamped on the
-  // non-billed account so cron eligibility still recognizes "installment paid". isInstallment
-  // must keep counting that for the cron; it is not a second REAL invoice and must never
-  // trigger this warning.
+  // Excludes $0 / no-invoice-number rows, and a Voided/Credit invoice, on top of isInstallment's
+  // own live check (which only treats Cancelled as dead). Production has a legitimate pattern
+  // (Partner Alliance LLC + Morgan & Taylor International LLC, consolidated first-installment
+  // billing) of a $0 companion record stamped on the non-billed account so cron eligibility still
+  // recognizes "installment paid" — isInstallment must keep counting that for the cron; it is not
+  // a second REAL invoice. And re-issuing after voiding is exactly what the database-level
+  // duplicate guard (uq_payments_installment_per_account_year) is built to allow, so this warning
+  // must agree — verified live in sandbox (2026-09-01) that a Voided row was still triggering a
+  // false "duplicate" here until this exclusion was added.
   let duplicateWarning: string | undefined
   if (account_id && year != null && (resolvedCategory === 'installment_1' || resolvedCategory === 'installment_2')) {
     const n = resolvedCategory === 'installment_1' ? 1 : 2
@@ -249,7 +252,9 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
       (Number(p.total) || 0) > 0 &&
       !!p.invoice_number &&
       p.invoice_number !== '1.0' &&
-      p.invoice_number !== '2.0'
+      p.invoice_number !== '2.0' &&
+      p.invoice_status !== 'Voided' &&
+      p.invoice_status !== 'Credit'
     )
     duplicateWarning = buildDuplicateInstallmentWarning(liveMatches, n, year)
   }

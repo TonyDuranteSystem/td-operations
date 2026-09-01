@@ -1351,23 +1351,36 @@ function InstallmentsSection({ account, payments, makeAccountSaver }: { account:
  * forward, and the shape ShoppyVerse was already in), silently picking the
  * first one would hide the duplicate from staff instead of surfacing it.
  *
- * "Real" excludes a $0 / no-invoice-number row on top of isInstallment's own
- * live check. Production has a legitimate pattern (Partner Alliance LLC +
- * Morgan & Taylor International LLC, consolidated first-installment billing,
- * 2026-08-31 investigation) of a $0 companion record on the non-billed
- * account so cron eligibility still sees "installment paid" — isInstallment
- * must keep counting that (the cron's job), but it is not a second REAL
- * invoice and must never trigger the duplicate warning here.
+ * "Real" excludes a $0 / no-invoice-number row, and a Voided/Credit invoice,
+ * on top of isInstallment's own live check (which only treats Cancelled as
+ * dead — deliberately left alone here, since the cron's own eligibility
+ * reading of isInstallment is out of scope for this fix). Two verified
+ * production cases:
+ *  - Partner Alliance LLC + Morgan & Taylor International LLC (consolidated
+ *    first-installment billing): a $0 companion record on the non-billed
+ *    account so cron eligibility still sees "installment paid" — not a
+ *    second REAL invoice, must never trigger the duplicate warning here.
+ *  - A Voided invoice, verified live in sandbox while QA-checking this very
+ *    fix (2026-09-01): re-issuing after voiding is the exact case the
+ *    database-level duplicate guard (uq_payments_installment_per_account_year)
+ *    is built to allow, so the badge must agree and stop counting it too —
+ *    otherwise a legitimate void-and-reissue reads as an unresolved
+ *    duplicate forever.
  * `payments` is already scoped to this account by the caller's query.
  */
 function findInstallmentInvoice(payments: Payment[], n: 1 | 2, year: number): Payment[] {
-  return payments.filter(p =>
-    isInstallment(p, n, { year }) &&
-    (Number(p.total) || 0) > 0 &&
-    !!p.invoice_number &&
-    p.invoice_number !== '1.0' &&
-    p.invoice_number !== '2.0'
-  )
+  return payments.filter(p => {
+    const invStatus = p.invoice_status ?? ''
+    return (
+      isInstallment(p, n, { year }) &&
+      (Number(p.total) || 0) > 0 &&
+      !!p.invoice_number &&
+      p.invoice_number !== '1.0' &&
+      p.invoice_number !== '2.0' &&
+      invStatus !== 'Voided' &&
+      invStatus !== 'Credit'
+    )
+  })
 }
 
 function InstallmentBadge({ matches, onInvoice }: { matches: Payment[]; onInvoice?: () => void }) {
