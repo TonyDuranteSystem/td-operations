@@ -385,17 +385,32 @@ export default async function PortalDashboardPage() {
       wizardSubmitted = !!wp
       // FALLBACK (dev job 9a9c5cf5): a wizard_progress write can fail
       // silently (2026-08-27 missing-column incident), leaving a client who
-      // genuinely submitted stuck on "Complete Setup" forever. Check both
-      // submission tables directly as independent proof.
+      // genuinely submitted stuck on "Complete Setup" forever.
       if (!wizardSubmitted) {
-        const [{ data: fs }, { data: os }] = await Promise.all([
+        const [{ data: sd }, { data: os }] = await Promise.all([
+          // Scoped by the company's OWN pipeline stage, not a bare
+          // contact_id submission-table lookup (bug-hunter finding on this
+          // PR: ~11% of contacts own more than one company — an OLD
+          // company's completed submission must never satisfy the check
+          // for a DIFFERENT, genuinely unsubmitted new one). The Company
+          // Formation SD is pre-created at "Payment Confirmed" the moment
+          // payment clears and can only advance past it once ITS OWN
+          // wizard was actually processed — so the most recent active
+          // one's stage is authoritative proof for whatever company this
+          // contact is currently forming.
           supabaseAdmin
-            .from('formation_submissions')
-            .select('id')
+            .from('service_deliveries')
+            .select('stage')
             .eq('contact_id', contactId)
-            .in('status', ['completed', 'reviewed'])
+            .eq('service_type', 'Company Formation')
+            .eq('status', 'active')
+            .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle(),
+          // No equivalent early SD exists for onboarding (account/SD
+          // creation is deferred to wizard submit), so there is no
+          // per-company signal available yet — still contact-scoped, a
+          // narrower pre-existing limitation, not a new one.
           supabaseAdmin
             .from('onboarding_submissions')
             .select('id')
@@ -404,7 +419,7 @@ export default async function PortalDashboardPage() {
             .limit(1)
             .maybeSingle(),
         ])
-        wizardSubmitted = !!fs || !!os
+        wizardSubmitted = (!!sd && sd.stage !== 'Payment Confirmed') || !!os
       }
     }
 
@@ -611,17 +626,32 @@ export default async function PortalDashboardPage() {
       wizardSubmitted = !!wp
       // FALLBACK (dev job 9a9c5cf5): a wizard_progress write can fail
       // silently (2026-08-27 missing-column incident), leaving a client who
-      // genuinely submitted stuck on "Complete Setup" forever. Check both
-      // submission tables directly as independent proof.
+      // genuinely submitted stuck on "Complete Setup" forever.
       if (!wizardSubmitted) {
-        const [{ data: fs }, { data: os }] = await Promise.all([
+        const [{ data: sd }, { data: os }] = await Promise.all([
+          // Scoped by the company's OWN pipeline stage, not a bare
+          // contact_id submission-table lookup (bug-hunter finding on this
+          // PR: ~11% of contacts own more than one company — an OLD
+          // company's completed submission must never satisfy the check
+          // for a DIFFERENT, genuinely unsubmitted new one). The Company
+          // Formation SD is pre-created at "Payment Confirmed" the moment
+          // payment clears and can only advance past it once ITS OWN
+          // wizard was actually processed — so the most recent active
+          // one's stage is authoritative proof for whatever company this
+          // contact is currently forming.
           supabaseAdmin
-            .from('formation_submissions')
-            .select('id')
+            .from('service_deliveries')
+            .select('stage')
             .eq('contact_id', contactId)
-            .in('status', ['completed', 'reviewed'])
+            .eq('service_type', 'Company Formation')
+            .eq('status', 'active')
+            .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle(),
+          // No equivalent early SD exists for onboarding (account/SD
+          // creation is deferred to wizard submit), so there is no
+          // per-company signal available yet — still contact-scoped, a
+          // narrower pre-existing limitation, not a new one.
           supabaseAdmin
             .from('onboarding_submissions')
             .select('id')
@@ -630,7 +660,7 @@ export default async function PortalDashboardPage() {
             .limit(1)
             .maybeSingle(),
         ])
-        wizardSubmitted = !!fs || !!os
+        wizardSubmitted = (!!sd && sd.stage !== 'Payment Confirmed') || !!os
       }
     }
 
