@@ -43,6 +43,10 @@ vi.mock('@/lib/drive-folder-utils', () => ({
 }))
 vi.mock('@/lib/gmail', () => ({ gmailPost: vi.fn(async () => ({ id: 'MSG-1' })) }))
 vi.mock('@/lib/portal/notifications', () => ({ createPortalNotification: vi.fn(async () => undefined) }))
+vi.mock('@/lib/portal/chat-events', () => ({
+  emitFormationWizardSubmittedEvent: vi.fn(async () => ({ emitted: true, message_id: 'NOTE-1' })),
+  retireFormationWizardSubmittedNote: vi.fn(async () => ({ retired: 1 })),
+}))
 vi.mock('@/lib/operations/itin-from-wizard', () => ({
   createItinDeliveriesFromWizard: vi.fn(async () => ({ created: 0, skipped: 0, people: [] })),
 }))
@@ -53,6 +57,7 @@ import { createSD } from '@/lib/operations/service-delivery'
 import { advanceServiceDelivery } from '@/lib/service-delivery'
 import { createPortalNotification } from '@/lib/portal/notifications'
 import { gmailPost } from '@/lib/gmail'
+import { emitFormationWizardSubmittedEvent, retireFormationWizardSubmittedNote } from '@/lib/portal/chat-events'
 
 /** The submission token the payload actually carries — NOT an offer token. */
 const SUBMISSION_TOKEN = 'portal-dionisie-turcanu-2026-b3e39fbc'
@@ -88,6 +93,8 @@ function install(cfg: {
   submittedWizard?: boolean
   /** formation_submissions fallback row (dev job 9a9c5cf5), keyed by this job's own submission_id. */
   fallbackSubmission?: Record<string, unknown> | false
+  /** formation_submissions.status BEFORE this pass's own write (round 5 notification gate). Defaults to 'completed' (first pass, never reviewed yet). Pass null for "row not found". */
+  priorSubmissionStatus?: string | null
 }): Recorded {
   const rec: Recorded = { contactUpdates: [], submissionUpdates: [], taskInserts: [], sdSelectFilters: [] }
   const formations = cfg.formations ?? []
@@ -152,19 +159,34 @@ function install(cfg: {
     }
 
     if (table === 'formation_submissions') {
+      let lastSelect = ''
       const chain: Record<string, unknown> = {
         update: (row: Record<string, unknown>) => {
           rec.submissionUpdates.push(row)
           return { eq: () => Promise.resolve({ error: null }) }
         },
-        select: () => chain,
+        select: (cols: string) => {
+          lastSelect = cols
+          return chain
+        },
         eq: () => chain,
         in: () => chain,
-        maybeSingle: () =>
-          Promise.resolve({
+        maybeSingle: () => {
+          // .select('status') = the prior-status read before form_reviewed
+          // (dev job 9a9c5cf5, round 5) — distinct from .select('id, status'),
+          // the stage-advance fallback read (round 3). Same table, two
+          // different callers; distinguish by the columns actually asked for.
+          if (lastSelect === 'status') {
+            return Promise.resolve({
+              data: cfg.priorSubmissionStatus === undefined ? { status: 'completed' } : (cfg.priorSubmissionStatus === null ? null : { status: cfg.priorSubmissionStatus }),
+              error: null,
+            })
+          }
+          return Promise.resolve({
             data: cfg.fallbackSubmission === false ? null : (cfg.fallbackSubmission ?? null),
             error: null,
-          }),
+          })
+        },
       }
       return chain
     }
@@ -400,6 +422,43 @@ describe('stage-advance fallback when wizard_progress silently failed to write (
     expect(advanceServiceDelivery).toHaveBeenCalledWith(
       expect.objectContaining({ delivery_id: 'SD-UNFINISHED', target_stage: 'Wizard Submitted' }),
     )
+  })
+})
+
+describe('staff What\'s New alert on wizard submission (dev job 9a9c5cf5, round 5)', () => {
+  it('fires the alert on a genuine first submission', async () => {
+    install({
+      formations: [UNFINISHED_FORMATION],
+      offer: { token: OFFER_TOKEN },
+      priorSubmissionStatus: 'completed', // never reviewed before this pass
+    })
+    await handleFormationSetup(job())
+    expect(emitFormationWizardSubmittedEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ formation_submission_id: SUBMISSION_ID, is_resubmission: false }),
+    )
+    expect(retireFormationWizardSubmittedNote).not.toHaveBeenCalled()
+  })
+
+  it('retires the old note and marks it a resubmission when the row was already reviewed', async () => {
+    install({
+      formations: [UNFINISHED_FORMATION],
+      offer: { token: OFFER_TOKEN },
+      priorSubmissionStatus: 'reviewed',
+    })
+    await handleFormationSetup(job())
+    expect(retireFormationWizardSubmittedNote).toHaveBeenCalledWith(
+      expect.objectContaining({ formationSubmissionId: SUBMISSION_ID }),
+    )
+    expect(emitFormationWizardSubmittedEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ is_resubmission: true }),
+    )
+  })
+
+  it('does NOT fire for a refused re-submit against a FINISHED formation (deliberately silent, dev job ca788354)', async () => {
+    install({ formations: [FINISHED_FORMATION], offer: { token: OFFER_TOKEN } })
+    await handleFormationSetup(job())
+    expect(emitFormationWizardSubmittedEvent).not.toHaveBeenCalled()
+    expect(retireFormationWizardSubmittedNote).not.toHaveBeenCalled()
   })
 })
 

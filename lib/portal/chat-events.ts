@@ -49,6 +49,7 @@ export type ChatEventKind =
   | "banking_wizard_submitted" // client submitted a Payset/Relay banking application via the portal wizard
   | "financials_attested" // client confirmed their generated P&L / Balance Sheet
   | "lease_signed" // client signed their CMRA lease agreement
+  | "formation_wizard_submitted" // client submitted the Company Formation wizard via the portal
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */
@@ -547,6 +548,89 @@ export async function emitBankingWizardSubmittedEvent(params: {
     source: { table: "banking_submissions", id: params.banking_submission_id },
     event_kind: "banking_wizard_submitted",
   })
+}
+
+/**
+ * Emit a "formation wizard submitted" event when a client submits the Company
+ * Formation wizard through the portal (dev job 9a9c5cf5, round 5). Staff-only
+ * — like the banking wizard event, this is a SEPARATE write from any
+ * client-visible confirmation the wizard route posts; nothing client-facing
+ * is touched here. Before this fix, formation had NO dedicated event at all
+ * — staff relied entirely on the unconditional "Formation Form Completed"
+ * email, and What's New only ever showed the payment-time note (real
+ * incident: Francesco Lussignoli, staff dismissed the payment-time note
+ * before he submitted the wizard, and nothing re-alerted them).
+ *
+ * Pass `is_resubmission: true` when the caller has confirmed (by checking
+ * the `formation_submissions` row's prior status) that this is a
+ * second-or-later genuine submission for the same row — the message
+ * wording reflects that, and the caller must call
+ * `retireFormationWizardSubmittedNote` first so the dedup marker below
+ * doesn't swallow this new note. Never call this for a refused/ambiguous
+ * re-submit (`decision.allow.formStatusWrite === false`) — those are
+ * deliberately silent to the client and staff-only-via-email by Antonio's
+ * ruling (dev job ca788354).
+ */
+export async function emitFormationWizardSubmittedEvent(params: {
+  formation_submission_id: string
+  contact_id?: string | null
+  account_id?: string | null
+  is_resubmission?: boolean
+}): Promise<EmitResult> {
+  const message = params.is_resubmission
+    ? "Client resubmitted the Company Formation wizard via the portal."
+    : "Client submitted the Company Formation wizard via the portal."
+  return await emitClientChatEvent({
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    topic: "Formation",
+    message,
+    source: { table: "formation_submissions", id: params.formation_submission_id },
+    event_kind: "formation_wizard_submitted",
+  })
+}
+
+/**
+ * Retire the "formation wizard submitted" note for a `formation_submissions`
+ * row so a genuine resubmission (client corrects data and resubmits) can
+ * produce a fresh notification. Same soft-delete rationale as
+ * `retireBankingWizardSubmittedNote`. Call this BEFORE
+ * `emitFormationWizardSubmittedEvent` whenever the caller has confirmed the
+ * `formation_submissions` row's status was already non-null (reviewed or
+ * completed) prior to this write — i.e. this pass is submission #2+, not #1.
+ */
+export async function retireFormationWizardSubmittedNote(params: {
+  formationSubmissionId: string
+  deletedBy?: string | null
+}): Promise<{ retired: number }> {
+  const marker = buildMarker({ table: "formation_submissions", id: params.formationSubmissionId }, "formation_wizard_submitted")
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("portal_messages")
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: params.deletedBy ?? SYSTEM_ACTOR_ID,
+      })
+      .eq("sender_type", "system")
+      .like("message", `%${marker}%`)
+      .is("deleted_at", null)
+      .select("id")
+
+    if (error) {
+      console.error(
+        `[retireFormationWizardSubmittedNote] could not retire the note for formation_submissions ${params.formationSubmissionId}:`,
+        error.message,
+      )
+      return { retired: 0 }
+    }
+    return { retired: (data ?? []).length }
+  } catch (err) {
+    console.error(
+      `[retireFormationWizardSubmittedNote] non-fatal for ${params.formationSubmissionId}:`,
+      err instanceof Error ? err.message : String(err),
+    )
+    return { retired: 0 }
+  }
 }
 
 /**
