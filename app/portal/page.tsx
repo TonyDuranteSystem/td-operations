@@ -374,52 +374,44 @@ export default async function PortalDashboardPage() {
     // into a passive "Data submitted — we're reviewing" state (Tier Model B).
     let wizardSubmitted = false
     if (contactId) {
+      // NOTE (dev job 9a9c5cf5, round 3): this code path is only ever
+      // reached for a contact WITHOUT an in-progress or materialized
+      // formation — a formation-tier or active-formation contact returns
+      // earlier from this function (see the `authTier === 'formation' ||
+      // hasActiveFormation` branch above) via its own, separately and
+      // correctly scoped FormationDashboard wizard-status lookup. So
+      // checking `wizard_type='formation'` here can only ever match an
+      // OLD, unrelated, already-formed company's permanent submitted row —
+      // never the contact's actual current situation. Round 2 of this fix
+      // added a Company-Formation SD-stage fallback here that was
+      // structurally dead code for that exact reason (bug-hunter finding,
+      // round 3) — removed. Scoped to 'onboarding' only.
       const { data: wp } = await supabaseAdmin
         .from('wizard_progress')
         .select('id')
         .eq('contact_id', contactId)
-        .in('wizard_type', ['onboarding', 'formation'])
+        .eq('wizard_type', 'onboarding')
         .eq('status', 'submitted')
         .limit(1)
         .maybeSingle()
       wizardSubmitted = !!wp
       // FALLBACK (dev job 9a9c5cf5): a wizard_progress write can fail
       // silently (2026-08-27 missing-column incident), leaving a client who
-      // genuinely submitted stuck on "Complete Setup" forever.
+      // genuinely submitted stuck on "Complete Setup" forever. No
+      // equivalent early SD exists for onboarding to key on instead
+      // (account/SD creation is deferred to wizard submit), so this stays
+      // contact-scoped, not company-scoped — a narrower, documented,
+      // pre-existing limitation, not currently exercised by any real
+      // client (verified live during this investigation).
       if (!wizardSubmitted) {
-        const [{ data: sd }, { data: os }] = await Promise.all([
-          // Scoped by the company's OWN pipeline stage, not a bare
-          // contact_id submission-table lookup (bug-hunter finding on this
-          // PR: ~11% of contacts own more than one company — an OLD
-          // company's completed submission must never satisfy the check
-          // for a DIFFERENT, genuinely unsubmitted new one). The Company
-          // Formation SD is pre-created at "Payment Confirmed" the moment
-          // payment clears and can only advance past it once ITS OWN
-          // wizard was actually processed — so the most recent active
-          // one's stage is authoritative proof for whatever company this
-          // contact is currently forming.
-          supabaseAdmin
-            .from('service_deliveries')
-            .select('stage')
-            .eq('contact_id', contactId)
-            .eq('service_type', 'Company Formation')
-            .eq('status', 'active')
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle(),
-          // No equivalent early SD exists for onboarding (account/SD
-          // creation is deferred to wizard submit), so there is no
-          // per-company signal available yet — still contact-scoped, a
-          // narrower pre-existing limitation, not a new one.
-          supabaseAdmin
-            .from('onboarding_submissions')
-            .select('id')
-            .eq('contact_id', contactId)
-            .in('status', ['completed', 'reviewed'])
-            .limit(1)
-            .maybeSingle(),
-        ])
-        wizardSubmitted = (!!sd && sd.stage !== 'Payment Confirmed') || !!os
+        const { data: os } = await supabaseAdmin
+          .from('onboarding_submissions')
+          .select('id')
+          .eq('contact_id', contactId)
+          .in('status', ['completed', 'reviewed'])
+          .limit(1)
+          .maybeSingle()
+        wizardSubmitted = !!os
       }
     }
 
@@ -615,52 +607,44 @@ export default async function PortalDashboardPage() {
     // Gallacci 2026-04-18 case) and post-promote rows still keep contact_id.
     let wizardSubmitted = false
     if (contactId) {
+      // NOTE (dev job 9a9c5cf5, round 3): this code path is only ever
+      // reached for a contact WITHOUT an in-progress or materialized
+      // formation — a formation-tier or active-formation contact returns
+      // earlier from this function (see the `authTier === 'formation' ||
+      // hasActiveFormation` branch above) via its own, separately and
+      // correctly scoped FormationDashboard wizard-status lookup. So
+      // checking `wizard_type='formation'` here can only ever match an
+      // OLD, unrelated, already-formed company's permanent submitted row —
+      // never the contact's actual current situation. Round 2 of this fix
+      // added a Company-Formation SD-stage fallback here that was
+      // structurally dead code for that exact reason (bug-hunter finding,
+      // round 3) — removed. Scoped to 'onboarding' only.
       const { data: wp } = await supabaseAdmin
         .from('wizard_progress')
         .select('id')
         .eq('contact_id', contactId)
-        .in('wizard_type', ['onboarding', 'formation'])
+        .eq('wizard_type', 'onboarding')
         .eq('status', 'submitted')
         .limit(1)
         .maybeSingle()
       wizardSubmitted = !!wp
       // FALLBACK (dev job 9a9c5cf5): a wizard_progress write can fail
       // silently (2026-08-27 missing-column incident), leaving a client who
-      // genuinely submitted stuck on "Complete Setup" forever.
+      // genuinely submitted stuck on "Complete Setup" forever. No
+      // equivalent early SD exists for onboarding to key on instead
+      // (account/SD creation is deferred to wizard submit), so this stays
+      // contact-scoped, not company-scoped — a narrower, documented,
+      // pre-existing limitation, not currently exercised by any real
+      // client (verified live during this investigation).
       if (!wizardSubmitted) {
-        const [{ data: sd }, { data: os }] = await Promise.all([
-          // Scoped by the company's OWN pipeline stage, not a bare
-          // contact_id submission-table lookup (bug-hunter finding on this
-          // PR: ~11% of contacts own more than one company — an OLD
-          // company's completed submission must never satisfy the check
-          // for a DIFFERENT, genuinely unsubmitted new one). The Company
-          // Formation SD is pre-created at "Payment Confirmed" the moment
-          // payment clears and can only advance past it once ITS OWN
-          // wizard was actually processed — so the most recent active
-          // one's stage is authoritative proof for whatever company this
-          // contact is currently forming.
-          supabaseAdmin
-            .from('service_deliveries')
-            .select('stage')
-            .eq('contact_id', contactId)
-            .eq('service_type', 'Company Formation')
-            .eq('status', 'active')
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle(),
-          // No equivalent early SD exists for onboarding (account/SD
-          // creation is deferred to wizard submit), so there is no
-          // per-company signal available yet — still contact-scoped, a
-          // narrower pre-existing limitation, not a new one.
-          supabaseAdmin
-            .from('onboarding_submissions')
-            .select('id')
-            .eq('contact_id', contactId)
-            .in('status', ['completed', 'reviewed'])
-            .limit(1)
-            .maybeSingle(),
-        ])
-        wizardSubmitted = (!!sd && sd.stage !== 'Payment Confirmed') || !!os
+        const { data: os } = await supabaseAdmin
+          .from('onboarding_submissions')
+          .select('id')
+          .eq('contact_id', contactId)
+          .in('status', ['completed', 'reviewed'])
+          .limit(1)
+          .maybeSingle()
+        wizardSubmitted = !!os
       }
     }
 

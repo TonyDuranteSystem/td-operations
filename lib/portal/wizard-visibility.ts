@@ -127,45 +127,53 @@ export async function computeHasWizardPending(
     }
   }
 
-  if (contactId && (portalTier === "onboarding" || portalTier === "formation")) {
+  if (contactId && portalTier === "formation") {
+    // FORMATION: the shared wizard_progress row (bug-hunter finding, round
+    // 2 of dev job 9a9c5cf5) is NOT scoped to a company at all — it is
+    // permanent once set and matches ANY formation this contact ever
+    // submitted, so a returning client's OLD, already-formed company would
+    // satisfy this check for a BRAND NEW, genuinely unsubmitted one (~11%
+    // of contacts own more than one company). Use ONLY the company's own
+    // pipeline stage as the signal — never wizard_progress here at all.
+    // The Company Formation SD is pre-created at "Payment Confirmed" the
+    // moment payment clears (before any wizard involvement) and can only
+    // advance past it once THAT SPECIFIC company's wizard was actually
+    // processed (lib/jobs/handlers/formation-setup.ts) — so the most
+    // recent active one's stage is authoritative per-company proof,
+    // immune to cross-linking an unrelated earlier formation, and immune
+    // to a wizard_progress write ever failing to record (the original
+    // dev job 9a9c5cf5 incident) since it never reads that table.
+    const { data: sd } = await supabaseAdmin
+      .from("service_deliveries")
+      .select("stage")
+      .eq("contact_id", contactId)
+      .eq("service_type", "Company Formation")
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
+    const alreadySubmitted = !!sd?.[0] && sd[0].stage !== "Payment Confirmed"
+    if (!alreadySubmitted) return true
+  } else if (contactId && portalTier === "onboarding") {
+    // ONBOARDING: no equivalent early SD exists (account/SD creation is
+    // deferred to wizard submit — see file header), so there is no
+    // per-company signal available. Scoped to wizard_type='onboarding' at
+    // least (a formation submission must never satisfy an onboarding
+    // check or vice versa) — still contact-wide, not company-wide, a
+    // narrower pre-existing limitation this fix does not attempt to
+    // close, not currently exercised by any real client (verified live
+    // during this investigation).
     const { data: submitted } = await supabaseAdmin
       .from("wizard_progress")
       .select("id")
       .eq("contact_id", contactId)
+      .eq("wizard_type", "onboarding")
       .eq("status", "submitted")
       .limit(1)
     let alreadySubmitted = !!submitted?.length
-    // FALLBACK (dev job 9a9c5cf5): same missing-write hazard as above — a
-    // formation/onboarding client who genuinely submitted must not see this
-    // nag forever just because their tracking row failed to write.
-    if (!alreadySubmitted && portalTier === "formation") {
-      // Scoped by the company's OWN pipeline stage, not a bare contact_id
-      // submission-table lookup (bug-hunter finding on this PR: ~11% of
-      // contacts own more than one company — an OLD company's completed
-      // submission must never satisfy the check for a DIFFERENT, genuinely
-      // unsubmitted new one). The Company Formation SD is pre-created at
-      // "Payment Confirmed" the moment payment clears (before any wizard
-      // involvement), and can only advance past it once ITS OWN wizard was
-      // actually processed (lib/jobs/handlers/formation-setup.ts) — so the
-      // most recent active one's stage is authoritative proof for whatever
-      // company this contact is currently forming, immune to cross-linking
-      // an unrelated earlier formation.
-      const { data: sd } = await supabaseAdmin
-        .from("service_deliveries")
-        .select("stage")
-        .eq("contact_id", contactId)
-        .eq("service_type", "Company Formation")
-        .eq("status", "active")
-        .order("created_at", { ascending: false })
-        .limit(1)
-      alreadySubmitted = !!sd?.[0] && sd[0].stage !== "Payment Confirmed"
-    } else if (!alreadySubmitted && portalTier === "onboarding") {
-      // No equivalent early SD exists for onboarding (account/SD creation is
-      // deferred to wizard submit — see file header), so there is no
-      // per-company signal available here yet, same as before this fix.
-      // Still contact-scoped (not company-scoped) — a narrower, pre-existing
-      // limitation, not a new one, and not currently exercised by any real
-      // client (verified live during this investigation).
+    // FALLBACK (dev job 9a9c5cf5): same missing-write hazard — a client
+    // who genuinely submitted must not see this nag forever just because
+    // their tracking row failed to write.
+    if (!alreadySubmitted) {
       const { data: sub } = await supabaseAdmin
         .from("onboarding_submissions")
         .select("id")

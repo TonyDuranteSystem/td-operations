@@ -182,16 +182,33 @@ describe("computeHasWizardPending — tier-based onboarding fallback (Commit C)"
     expect(result).toBe(true)
   })
 
-  it("returns false when tier='formation' but contact has already submitted a wizard", async () => {
+  it("returns false when tier='formation' and the company's own SD has advanced past Payment Confirmed", async () => {
     sdAccountFixture = []
     sdContactFixture = []
-    wizardProgressFixture = [{ id: "wp-1" }]
+    sdFormationStageFixture = [{ stage: "Wizard Submitted" }]
     const result = await computeHasWizardPending({
       contactId: "contact-1",
       selectedAccountId: "",
       portalTier: "formation",
     })
     expect(result).toBe(false)
+  })
+
+  it("round 3 regression guard (dev job 9a9c5cf5): a bare wizard_progress row must NOT satisfy the formation check on its own — it is never scoped to a company, so an OLD company's permanent submitted row must not silence a genuinely unsubmitted NEW one", async () => {
+    sdAccountFixture = []
+    sdContactFixture = []
+    // Simulates an old, unrelated, already-formed company's PERMANENT
+    // wizard_progress row — the exact false-negative a code-diff Bug Hunter
+    // pass caught: the formation branch used to check this table directly
+    // and short-circuit before ever consulting the company's own SD stage.
+    wizardProgressFixture = [{ id: "wp-old-company" }]
+    sdFormationStageFixture = [] // the CURRENT company has no active SD yet at all
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "",
+      portalTier: "formation",
+    })
+    expect(result).toBe(true)
   })
 
   it("does NOT trigger tier fallback when tier is 'active'", async () => {
