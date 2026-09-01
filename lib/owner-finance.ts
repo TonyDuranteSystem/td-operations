@@ -577,6 +577,45 @@ const CASH_PAGE = 1000
  *  a new type is added. */
 export const CASH_ACCOUNT_TYPES = ['checking', 'savings', 'processor']
 
+/** Account names compared case- and spacing-insensitively — that much IS the same account
+ *  written carelessly ("Firstcitizenbank" vs "firstcitizenbank"). MODULE-LEVEL on purpose:
+ *  `computeBalanceSheet`'s coverage and staleness checks and `getCashPosition`'s claimed-set
+ *  test all answer the same question — does this books row belong to a known account — and
+ *  a balance was once certified as unmoved because two of them used different keys. One
+ *  function, everywhere the question is asked, so it cannot happen a third time. */
+const normBankName = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
+
+/** Every name a books row can arrive under that this registry already accounts for — a
+ *  PURE function so the rule is unit-testable without a database.
+ *
+ *  The registry names an account by itself ("Mercury checking 4517"); the bank feed
+ *  labels its own rows by bare institution ("Mercury"). Case/whitespace matching alone
+ *  cannot see those as the same account, so without the institution pass below, a feed
+ *  row would fall through `getCashPosition`'s fallback and be added a SECOND time —
+ *  doubling the cash figure the moment a feed row starts publishing its own running
+ *  balance (verified live: none does today, so this was not yet firing when found).
+ *
+ *  Claimed by institution ONLY where the institution names exactly ONE active account —
+ *  Mercury and Relay both do, today. Chase and Airwallex do NOT (three and two accounts
+ *  respectively), and a bare label there genuinely cannot say which one it belongs to.
+ *  That is a real ambiguity, not a bug to paper over — `computeBalanceSheet` refuses the
+ *  year outright for the identical reason. */
+export function claimedAccountNames(registry: OwnerAccount[]): Set<string> {
+  const claimed = new Set<string>()
+  for (const a of registry) claimed.add(normBankName(a.bank_name))
+
+  const byInstitution = new Map<string, number>()
+  for (const a of registry) {
+    if (a.is_active === false) continue
+    const institution = normBankName(a.bank_name).split(' ')[0]
+    byInstitution.set(institution, (byInstitution.get(institution) ?? 0) + 1)
+  }
+  for (const [institution, count] of Array.from(byInstitution)) {
+    if (count === 1) claimed.add(institution)
+  }
+  return claimed
+}
+
 export async function getCashPosition(): Promise<CashPosition> {
   /* THE REGISTRY IS THE SOURCE OF TRUTH, not the statement rows (2026-08-31).
    *
@@ -605,12 +644,10 @@ export async function getCashPosition(): Promise<CashPosition> {
 
   const accounts: CashAccountBalance[] = []
   const liabilities: CashAccountBalance[] = []
-  const claimed = new Set<string>()
-
+  const claimed = claimedAccountNames(registry)
   for (const a of registry) {
-    if (a.is_active === false) { claimed.add(a.bank_name); continue }
+    if (a.is_active === false) continue
     if (a.closing_balance === null || a.closing_balance === undefined) continue
-    claimed.add(a.bank_name)
     const entry: CashAccountBalance = {
       bank_name: a.bank_name,
       currency: a.currency || 'USD',
@@ -642,7 +679,7 @@ export async function getCashPosition(): Promise<CashPosition> {
 
   const seen = new Set<string>()
   for (const row of rows) {
-    if (claimed.has(row.bank_name)) continue
+    if (claimed.has(normBankName(row.bank_name))) continue  // already reported from the registry above
     const currency = row.currency || 'USD'
     const key = `${row.bank_name}|${currency}`
     if (seen.has(key)) continue
@@ -970,11 +1007,7 @@ export function computeBalanceSheet(
   allAccounts: OwnerAccount[] = registry,
 ): BalanceSheet {
   const REPORTING = 'USD'
-  /** Account names compared case- and spacing-insensitively — that much IS the same account
-   *  written carelessly ("Firstcitizenbank" vs "firstcitizenbank"). Declared here because
-   *  BOTH the staleness loop and the coverage test below must use this one function: when
-   *  they used different keys, a balance was certified as unmoved by a join matching nothing. */
-  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
+  const norm = normBankName
   const cash: BalanceSheetLine[] = []
   const liabilities: BalanceSheetLine[] = []
   const foreign: BalanceSheet['foreign'] = []

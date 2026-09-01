@@ -10,6 +10,7 @@ import {
   TD_ENTITY_ID,
   type InvoiceIncomeRow,
   computeBalanceSheet,
+  claimedAccountNames,
   type OwnerAccount,
   type OwnerTransaction,
   type VendorRule,
@@ -888,5 +889,80 @@ describe('computeBalanceSheet', () => {
     const bs = computeBalanceSheet([makeAccount({ closing_source: 'provider_report' })], [], 2025)
     expect(bs.cash[0].source).toBe('provider_report')
     expect(bs.cash[0].as_of).toBe('2025-12-31')
+  })
+})
+
+/** `getCashPosition` hits the database and cannot be unit-tested directly, so the rule
+ *  that decides which books rows it must NOT double-count is pulled out as this pure
+ *  function — the fix for a bug-hunter finding: the registry names an account by itself
+ *  ("Mercury checking 4517"), the bank feed labels its own rows by bare institution
+ *  ("Mercury"), and a raw-string claim set could not see those as the same account — a
+ *  feed row that started publishing its own balance would have been added a second time,
+ *  doubling the cash figure the moment that started happening (not live when found, but a
+ *  real shape, not a hypothetical one — the same namespace split already broke the
+ *  balance sheet twice in this file's history). */
+describe('claimedAccountNames', () => {
+  it('claims the full account name, case- and spacing-insensitively', () => {
+    const claimed = claimedAccountNames([makeAccount({ bank_name: 'Firstcitizenbank checking 5820' })])
+    expect(claimed.has('firstcitizenbank checking 5820')).toBe(true)
+  })
+
+  it('claims a bare institution label when it names exactly ONE active account', () => {
+    // The live shape: Mercury has one account in the registry, so the bank feed's bare
+    // "Mercury" rows must be recognised as that account, not counted as a new one.
+    const claimed = claimedAccountNames([makeAccount({ bank_name: 'Mercury checking 4517' })])
+    expect(claimed.has('mercury')).toBe(true)
+  })
+
+  it('does NOT claim a bare institution label that names SEVERAL accounts', () => {
+    // Chase has a checking account and two credit cards in the real registry. A bare
+    // "Chase" row cannot say which one it belongs to — claiming it anyway would silently
+    // attribute it to whichever the fallback happens to prefer, hiding the ambiguity
+    // rather than surfacing it. Unclaimed here means the fallback still sees the row
+    // (as a new, separately-visible entry) rather than the registry balance absorbing it.
+    const claimed = claimedAccountNames([
+      makeAccount({ bank_name: 'Chase checking 3920' }),
+      makeAccount({ bank_name: 'Chase credit card 6094', account_type: 'credit_card' }),
+    ])
+    expect(claimed.has('chase')).toBe(false)
+    expect(claimed.has('chase checking 3920')).toBe(true)
+    expect(claimed.has('chase credit card 6094')).toBe(true)
+  })
+
+  it('claims a CLOSED account too, so it cannot be resurrected via the fallback', () => {
+    const claimed = claimedAccountNames([makeAccount({ bank_name: 'Old Bank', is_active: false })])
+    expect(claimed.has('old bank')).toBe(true)
+  })
+
+  it('an inactive account does not count toward institution ambiguity', () => {
+    // Only ACTIVE accounts compete for a bare institution label — a closed sibling should
+    // not block the live account from being recognised under its institution's short name.
+    const claimed = claimedAccountNames([
+      makeAccount({ bank_name: 'Mercury checking 4517' }),
+      makeAccount({ bank_name: 'Mercury checking 9999', is_active: false }),
+    ])
+    expect(claimed.has('mercury')).toBe(true)
+  })
+})
+
+/** `computeBalanceSheet`'s two account-matching questions — "is this a described
+ *  account" and "did money move after its balance was struck" — answer with the SAME
+ *  comparison for a reason: they used to use different ones, and that let a stale balance
+ *  certify itself as unmoved (a bug-hunter finding, fixed by sharing one function). This
+ *  test does not just check outcomes on cases where both checks happen to fail for
+ *  unrelated reasons — it isolates a pair that differs ONLY by something normalisation
+ *  handles, so a future edit that re-splits the two checks onto different comparisons
+ *  would fail it even if each half still "worked" on its own. */
+describe('coverage and staleness stay on one shared comparison', () => {
+  it('a same-account pair differing ONLY by case/spacing matches on BOTH checks at once', () => {
+    const bs = computeBalanceSheet(
+      [makeAccount({ bank_name: '  CHASE   Checking 3920  ', closing_balance: 17832.23, closing_date: '2025-06-30' })],
+      [makeTx({ bank_name: 'chase checking 3920', transaction_date: '2025-05-01' })],
+      2025,
+    )
+    // Covered (no "does not match" note) AND the staleness check found the row and
+    // passed it — if either half used a different key, one of these would flip.
+    expect(bs.can_state).toBe(true)
+    expect(bs.as_of).toBe('2025-12-31')
   })
 })
