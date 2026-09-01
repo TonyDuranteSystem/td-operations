@@ -35,6 +35,8 @@ interface OwnerDashboardProps {
   filing: FilingSummary
   accounts: OwnerAccount[]
   balanceSheet: BalanceSheet
+  /** A drill-down carried in the address bar, so the browser's back gesture can restore it. */
+  initialFocus: { category: string; subcategory: string } | null
 }
 
 export function OwnerDashboard({
@@ -48,18 +50,24 @@ export function OwnerDashboard({
   filing,
   accounts,
   balanceSheet,
+  initialFocus,
 }: OwnerDashboardProps) {
   const usd = pnl.blocks.find(b => b.currency === 'USD')
   const router = useRouter()
   const pathname = usePathname()
   const [currentTab, setCurrentTab] = useState(activeTab)
 
-  /** A line on the P&L that the Transactions tab should open pre-filtered.
-   *  Antonio could read a total but never the rows inside it, which meant every figure
-   *  had to be taken on trust. Held in state rather than the URL: it is a transient
-   *  "show me this", and putting it in the URL would make a filtered view the thing that
-   *  gets bookmarked and later mistaken for the whole year. */
-  const [focus, setFocus] = useState<{ category: string; subcategory: string } | null>(null)
+  /** A line on the P&L that the Transactions tab opens pre-filtered — Antonio could read a
+   *  total but never the rows inside it, so every figure had to be taken on trust.
+   *
+   *  IT LIVES IN THE URL. It was deliberately kept out, on the reasoning that a filtered
+   *  view would get bookmarked and later mistaken for the whole year. The cost of that was
+   *  worse and showed up the first time the back gesture was tried: drill into Rent, press
+   *  back, and the address bar returns to the Transactions tab while the filter — which was
+   *  only ever in React state — is gone. What lands is the tab's default view, uncategorised,
+   *  which for a finished year is EMPTY. Twenty-one rent payments read as none. The
+   *  bookmarking worry is already answered on screen by the "showing only Rent ×" chip. */
+  const [focus, setFocus] = useState(initialFocus)
 
   /** The phone's back gesture changes the URL but does NOT remount this component, so the
    *  tab state has to follow the address bar or the page renders one tab while the URL
@@ -67,10 +75,23 @@ export function OwnerDashboard({
    *  first instinct on a PWA is the system back gesture; it used to do visibly nothing. */
   useEffect(() => { setCurrentTab(activeTab) }, [activeTab])
 
+  /* Adjusted DURING render, not in an effect: the server hands down a brand-new object on
+   * every render, so an effect keyed on it would fire every time and race the optimistic
+   * set in switchTab. Compare the value, not the identity. */
+  const focusKey = initialFocus ? `${initialFocus.category}:${initialFocus.subcategory}` : ''
+  const [seenFocusKey, setSeenFocusKey] = useState(focusKey)
+  if (focusKey !== seenFocusKey) {
+    setSeenFocusKey(focusKey)
+    setFocus(initialFocus)
+  }
+
   function switchTab(id: string, nextFocus?: { category: string; subcategory: string }) {
     setCurrentTab(id)
     setFocus(nextFocus ?? null)
-    router.push(`${pathname}?tab=${id}&year=${year}`, { scroll: false })
+    const q = nextFocus
+      ? `?tab=${id}&year=${year}&focus=${encodeURIComponent(`${nextFocus.category}:${nextFocus.subcategory}`)}`
+      : `?tab=${id}&year=${year}`
+    router.push(`${pathname}${q}`, { scroll: false })
     // Opening a drill-down kept the P&L's scroll position, which dropped the reader into
     // the middle of the transaction list with the way back off-screen ABOVE them.
     /* The dashboard shell is height-locked (`h-screen`) and <main> is what scrolls, so the

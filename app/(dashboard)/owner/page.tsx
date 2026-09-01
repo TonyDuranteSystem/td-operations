@@ -10,6 +10,7 @@ import {
   getFilingSummary,
   getAccountRegistry,
   getBalanceSheet,
+  isOwnerCategory,
 } from '@/lib/owner-finance'
 
 export const dynamic = 'force-dynamic'
@@ -17,7 +18,7 @@ export const dynamic = 'force-dynamic'
 export default async function OwnerPage({
   searchParams,
 }: {
-  searchParams: { tab?: string; year?: string }
+  searchParams: { tab?: string; year?: string; focus?: string }
 }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -30,6 +31,14 @@ export default async function OwnerPage({
   const year = Number.isInteger(parsedYear) && parsedYear >= 2000 && parsedYear <= 2100
     ? parsedYear
     : new Date().getFullYear()
+
+  /* The drill-down the P&L handed to the Transactions tab, e.g. "expense:rent". In the URL
+   * so the back gesture restores it; validated here because a URL is user input and the
+   * value goes straight into a database filter. */
+  const [fCat, fSub] = (searchParams.focus ?? '').split(':')
+  const initialFocus = isOwnerCategory(fCat) && /^[a-z0-9_]{1,64}$/.test(fSub ?? '')
+    ? { category: fCat, subcategory: fSub }
+    : null
 
   const TABS = ['dashboard', 'pnl', 'balance', 'accounts', 'cashflow', 'transactions', 'bookkeeper', 'tax']
   const activeTab = TABS.includes(searchParams.tab ?? '') ? (searchParams.tab as string) : 'dashboard'
@@ -57,6 +66,7 @@ export default async function OwnerPage({
         filing={filing}
         accounts={accounts}
         balanceSheet={balanceSheet}
+        initialFocus={initialFocus}
       />
     </div>
   )
