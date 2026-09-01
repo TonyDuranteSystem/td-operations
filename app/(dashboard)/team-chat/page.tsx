@@ -76,6 +76,11 @@ export default function TeamWorkspacePage() {
   const [editing, setEditing] = useState<TeamMsg | null>(null)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
+  // Attachments that already finished uploading on a prior attempt but whose
+  // send didn't complete (another file failed, or the final POST itself
+  // failed) — kept out of pendingFiles so a retry never re-uploads them and
+  // orphans a duplicate storage object (2026-09-01, dev job 62a64f2b child).
+  const [cachedAttachments, setCachedAttachments] = useState<ChatAttachment[]>([])
   const [showEmoji, setShowEmoji] = useState(false)
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
   const [commandQuery, setCommandQuery] = useState<string | null>(null)
@@ -509,7 +514,7 @@ export default function TeamWorkspacePage() {
       setShowNewConversation(true)
       return
     }
-    if ((!msg && pendingFiles.length === 0) || !selectedId || sending || uploading) return
+    if ((!msg && pendingFiles.length === 0 && cachedAttachments.length === 0) || !selectedId || sending || uploading) return
     if (isRecording) stopRecording()
 
     // Edit mode
@@ -532,24 +537,57 @@ export default function TeamWorkspacePage() {
     setSending(true)
     const sentText = msg
     const sentReply = replyTo
-    const files = [...pendingFiles]
-    setText(''); setReplyTo(null); setPendingFiles([]); setMentionQuery(null)
+    const filesToUpload = [...pendingFiles]
+    setText(''); setReplyTo(null); setMentionQuery(null)
     try {
-      let attachments: ChatAttachment[] | null = null
-      if (files.length) {
+      // Start from whatever already uploaded successfully on a prior failed
+      // attempt (final-POST failure, or a partial multi-file failure) — never
+      // re-upload those, or the same file lands twice as an orphaned Storage
+      // object (2026-09-01, dev job 62a64f2b child).
+      const attachments: ChatAttachment[] = [...cachedAttachments]
+      if (filesToUpload.length) {
         setUploading(true)
         try {
-          attachments = await Promise.all(files.map(f => uploadTeamAttachment(f, selectedId)))
+          const results = await Promise.allSettled(filesToUpload.map(f => uploadTeamAttachment(f, selectedId)))
+          const stillFailed: File[] = []
+          results.forEach((res, i) => {
+            if (res.status === 'fulfilled') attachments.push(res.value)
+            else stillFailed.push(filesToUpload[i])
+          })
+          if (stillFailed.length > 0) {
+            // Hold the whole send: cache what succeeded so a retry doesn't
+            // redo it, re-stage only what actually failed, restore the typed
+            // text so nothing the user wrote is lost.
+            setCachedAttachments(attachments)
+            setPendingFiles(prev => [...stillFailed, ...prev].slice(0, CHAT_ATTACHMENT_MAX_COUNT))
+            setText(sentText); setReplyTo(sentReply)
+            const firstFailure = results.find((res): res is PromiseRejectedResult => res.status === 'rejected')
+            const detail = firstFailure?.reason instanceof Error && firstFailure.reason.message
+              ? firstFailure.reason.message
+              : 'Upload failed. Please check your connection and try again.'
+            toast.error(stillFailed.length < filesToUpload.length
+              ? `${stillFailed.length} of ${filesToUpload.length} files couldn't upload. ${detail}`
+              : detail)
+            return
+          }
         } finally { setUploading(false) }
       }
+      // Every attachment (newly uploaded + previously cached) is now safely
+      // on Storage. Cache them and clear the staged list BEFORE attempting
+      // the send itself, so a failure on the send step still has them ready
+      // for a bare retry with no re-upload.
+      setCachedAttachments(attachments)
+      setPendingFiles([])
       // Reply target: a quoted message, else the open thread's root, else a
       // top-level channel post. The server flattens to the correct thread root.
       const replyTargetId = sentReply?.id ?? openRootId ?? null
       const r = await fetch(`/api/team/threads/${selectedId}/messages`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: sentText, reply_to_id: replyTargetId, attachments }),
+        body: JSON.stringify({ message: sentText, reply_to_id: replyTargetId, attachments: attachments.length ? attachments : null }),
       })
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Failed to send') }
+      // The send itself succeeded — nothing left to protect against a retry.
+      setCachedAttachments([])
       // Optimistically render the sender's own message immediately, instead of
       // waiting for the realtime round-trip (which can lag or drop). The realtime
       // INSERT handler dedups by id, so no double render. If @claude was pinged,
@@ -577,14 +615,15 @@ export default function TeamWorkspacePage() {
         }
       }
     } catch (e) {
+      // Reached only when the final send POST itself fails — any attachments
+      // were already uploaded and cached above (setCachedAttachments), so a
+      // bare retry sends them as-is. Do NOT re-stage filesToUpload here: they
+      // already succeeded and are no longer pending — redoing them would
+      // upload the same bytes a second time and orphan a duplicate object.
       toast.error(e instanceof Error && e.message ? e.message : 'Failed to send')
       setText(sentText); setReplyTo(sentReply)
-      // Keep the staged files so the send can be retried. Merge (not overwrite)
-      // in case the user staged another file during the in-flight upload; the
-      // slice keeps the per-message cap intact.
-      if (files.length) setPendingFiles(prev => [...files, ...prev].slice(0, CHAT_ATTACHMENT_MAX_COUNT))
     } finally { setSending(false); inputRef.current?.focus() }
-  }, [text, pendingFiles, selectedId, sending, uploading, replyTo, editing, openRootId, isRecording, stopRecording])
+  }, [text, pendingFiles, cachedAttachments, selectedId, sending, uploading, replyTo, editing, openRootId, isRecording, stopRecording])
 
   // Open a Slack thread pane on a root message: mark it read (per-thread), clear
   // its local unread dot, and default the composer to reply to the root.
@@ -1713,6 +1752,7 @@ export default function TeamWorkspacePage() {
                   </button>
                   <input ref={fileRef} type="file" multiple onChange={e => { addPendingFiles(Array.from(e.target.files ?? [])); e.target.value = '' }} className="hidden" />
                   <textarea ref={inputRef} value={text} onChange={e => onTextChange(e.target.value)}
+                    disabled={sending || uploading}
                     onPaste={handlePaste}
                     onKeyDown={e => {
                       if (e.key === 'Enter' && !e.shiftKey) {
@@ -1726,7 +1766,7 @@ export default function TeamWorkspacePage() {
                 </div>
                 {sending || uploading ? (
                   <button disabled className="w-12 h-12 rounded-full bg-zinc-800 text-white flex items-center justify-center shrink-0"><Loader2 className="h-5 w-5 animate-spin" /></button>
-                ) : (text.trim() || pendingFiles.length) ? (
+                ) : (text.trim() || pendingFiles.length || cachedAttachments.length) ? (
                   <button onClick={handleSend} className="w-12 h-12 rounded-full bg-zinc-800 text-white hover:bg-zinc-700 flex items-center justify-center shrink-0">{editing ? <Check className="h-5 w-5" /> : <Send className="h-5 w-5" />}</button>
                 ) : voiceSupported ? (
                   <button onPointerDown={startRecording} onPointerUp={stopRecording} className={cn('w-12 h-12 rounded-full flex items-center justify-center shrink-0', isRecording ? 'bg-red-500 text-white animate-pulse' : isTranscribing ? 'bg-violet-500 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200')}>
