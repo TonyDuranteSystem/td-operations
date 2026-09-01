@@ -585,35 +585,42 @@ export const CASH_ACCOUNT_TYPES = ['checking', 'savings', 'processor']
  *  function, everywhere the question is asked, so it cannot happen a third time. */
 const normBankName = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
 
-/** Every name a books row can arrive under that this registry already accounts for — a
- *  PURE function so the rule is unit-testable without a database.
+/** Does this books row already belong to an account the registry describes — a PURE
+ *  function so the rule is unit-testable without a database.
  *
  *  The registry names an account by itself ("Mercury checking 4517"); the bank feed
- *  labels its own rows by bare institution ("Mercury"). Case/whitespace matching alone
- *  cannot see those as the same account, so without the institution pass below, a feed
- *  row would fall through `getCashPosition`'s fallback and be added a SECOND time —
- *  doubling the cash figure the moment a feed row starts publishing its own running
- *  balance (verified live: none does today, so this was not yet firing when found).
+ *  labels its own rows by bare institution ("Mercury", or "Banking Circle" — the one
+ *  multi-word institution this file writes). Case/whitespace matching alone cannot see
+ *  those as the same account, so a feed row would fall through `getCashPosition`'s
+ *  fallback and be added a SECOND time — doubling the cash figure the moment a feed row
+ *  starts publishing its own running balance (verified live: none does today, so this
+ *  was not yet firing when found).
  *
- *  Claimed by institution ONLY where the institution names exactly ONE active account —
- *  Mercury and Relay both do, today. Chase and Airwallex do NOT (three and two accounts
+ *  A FIRST VERSION guessed "the institution" by splitting an account name on its first
+ *  space, which is wrong for any institution whose own name has more than one word —
+ *  "Banking Circle checking 001" split to "banking", not "banking circle", so a bare
+ *  "Banking Circle" feed row never matched it. No such account exists in the registry
+ *  yet, so it never fired — but the webhook that would feed it is live production
+ *  infrastructure, not a hypothetical. Splitting on a fixed number of words is the wrong
+ *  shape for a name of unknown length.
+ *
+ *  So this asks the question directly instead of guessing: is `bankName` a PREFIX of
+ *  exactly one active account's name? Any number of words, no institution list to keep
+ *  in sync. Claimed by prefix ONLY when it is unambiguous — Mercury and Relay resolve to
+ *  one account each today; Chase and Airwallex do not (three and two accounts
  *  respectively), and a bare label there genuinely cannot say which one it belongs to.
  *  That is a real ambiguity, not a bug to paper over — `computeBalanceSheet` refuses the
  *  year outright for the identical reason. */
-export function claimedAccountNames(registry: OwnerAccount[]): Set<string> {
-  const claimed = new Set<string>()
-  for (const a of registry) claimed.add(normBankName(a.bank_name))
-
-  const byInstitution = new Map<string, number>()
-  for (const a of registry) {
-    if (a.is_active === false) continue
-    const institution = normBankName(a.bank_name).split(' ')[0]
-    byInstitution.set(institution, (byInstitution.get(institution) ?? 0) + 1)
-  }
-  for (const [institution, count] of Array.from(byInstitution)) {
-    if (count === 1) claimed.add(institution)
-  }
-  return claimed
+export function isAccountCovered(registry: OwnerAccount[], bankName: string): boolean {
+  const target = normBankName(bankName)
+  if (!target) return false
+  // The exact account, active OR closed — a closed account must still be recognised so
+  // the fallback below cannot resurrect it into Cash Position forever.
+  if (registry.some(a => normBankName(a.bank_name) === target)) return true
+  // A bare institution label. Only an ACTIVE account counts toward the ambiguity check —
+  // a closed sibling must not block a live account from being recognised by its short name.
+  const matches = registry.filter(a => a.is_active !== false && normBankName(a.bank_name).startsWith(`${target} `))
+  return matches.length === 1
 }
 
 export async function getCashPosition(): Promise<CashPosition> {
@@ -644,7 +651,6 @@ export async function getCashPosition(): Promise<CashPosition> {
 
   const accounts: CashAccountBalance[] = []
   const liabilities: CashAccountBalance[] = []
-  const claimed = claimedAccountNames(registry)
   for (const a of registry) {
     if (a.is_active === false) continue
     if (a.closing_balance === null || a.closing_balance === undefined) continue
@@ -679,7 +685,7 @@ export async function getCashPosition(): Promise<CashPosition> {
 
   const seen = new Set<string>()
   for (const row of rows) {
-    if (claimed.has(normBankName(row.bank_name))) continue  // already reported from the registry above
+    if (isAccountCovered(registry, row.bank_name)) continue  // already reported from the registry above
     const currency = row.currency || 'USD'
     const key = `${row.bank_name}|${currency}`
     if (seen.has(key)) continue

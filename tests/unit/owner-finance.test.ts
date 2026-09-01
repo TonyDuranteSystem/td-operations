@@ -10,7 +10,7 @@ import {
   TD_ENTITY_ID,
   type InvoiceIncomeRow,
   computeBalanceSheet,
-  claimedAccountNames,
+  isAccountCovered,
   type OwnerAccount,
   type OwnerTransaction,
   type VendorRule,
@@ -901,47 +901,62 @@ describe('computeBalanceSheet', () => {
  *  doubling the cash figure the moment that started happening (not live when found, but a
  *  real shape, not a hypothetical one — the same namespace split already broke the
  *  balance sheet twice in this file's history). */
-describe('claimedAccountNames', () => {
-  it('claims the full account name, case- and spacing-insensitively', () => {
-    const claimed = claimedAccountNames([makeAccount({ bank_name: 'Firstcitizenbank checking 5820' })])
-    expect(claimed.has('firstcitizenbank checking 5820')).toBe(true)
+describe('isAccountCovered', () => {
+  it('covers the full account name, case- and spacing-insensitively', () => {
+    const registry = [makeAccount({ bank_name: 'Firstcitizenbank checking 5820' })]
+    expect(isAccountCovered(registry, 'firstcitizenbank checking 5820')).toBe(true)
   })
 
-  it('claims a bare institution label when it names exactly ONE active account', () => {
+  it('covers a bare institution label when it prefixes exactly ONE active account', () => {
     // The live shape: Mercury has one account in the registry, so the bank feed's bare
     // "Mercury" rows must be recognised as that account, not counted as a new one.
-    const claimed = claimedAccountNames([makeAccount({ bank_name: 'Mercury checking 4517' })])
-    expect(claimed.has('mercury')).toBe(true)
+    const registry = [makeAccount({ bank_name: 'Mercury checking 4517' })]
+    expect(isAccountCovered(registry, 'Mercury')).toBe(true)
   })
 
-  it('does NOT claim a bare institution label that names SEVERAL accounts', () => {
+  it('covers a MULTI-WORD bare institution label the same way', () => {
+    // A first version guessed "the institution" by splitting on the first space, which
+    // is wrong for any institution whose own name has more than one word. Banking Circle
+    // is exactly that case in the real bank-label list, and has no account in the
+    // registry today only by chance — this pins the general rule, not that one bank.
+    const registry = [makeAccount({ bank_name: 'Banking Circle checking 001' })]
+    expect(isAccountCovered(registry, 'Banking Circle')).toBe(true)
+  })
+
+  it('does NOT cover a bare institution label that prefixes SEVERAL accounts', () => {
     // Chase has a checking account and two credit cards in the real registry. A bare
-    // "Chase" row cannot say which one it belongs to — claiming it anyway would silently
+    // "Chase" row cannot say which one it belongs to — covering it anyway would silently
     // attribute it to whichever the fallback happens to prefer, hiding the ambiguity
-    // rather than surfacing it. Unclaimed here means the fallback still sees the row
+    // rather than surfacing it. Uncovered here means the fallback still sees the row
     // (as a new, separately-visible entry) rather than the registry balance absorbing it.
-    const claimed = claimedAccountNames([
+    const registry = [
       makeAccount({ bank_name: 'Chase checking 3920' }),
       makeAccount({ bank_name: 'Chase credit card 6094', account_type: 'credit_card' }),
-    ])
-    expect(claimed.has('chase')).toBe(false)
-    expect(claimed.has('chase checking 3920')).toBe(true)
-    expect(claimed.has('chase credit card 6094')).toBe(true)
+    ]
+    expect(isAccountCovered(registry, 'Chase')).toBe(false)
+    expect(isAccountCovered(registry, 'Chase checking 3920')).toBe(true)
+    expect(isAccountCovered(registry, 'Chase credit card 6094')).toBe(true)
   })
 
-  it('claims a CLOSED account too, so it cannot be resurrected via the fallback', () => {
-    const claimed = claimedAccountNames([makeAccount({ bank_name: 'Old Bank', is_active: false })])
-    expect(claimed.has('old bank')).toBe(true)
+  it('covers a CLOSED account too, so it cannot be resurrected via the fallback', () => {
+    const registry = [makeAccount({ bank_name: 'Old Bank', is_active: false })]
+    expect(isAccountCovered(registry, 'Old Bank')).toBe(true)
   })
 
-  it('an inactive account does not count toward institution ambiguity', () => {
-    // Only ACTIVE accounts compete for a bare institution label — a closed sibling should
-    // not block the live account from being recognised under its institution's short name.
-    const claimed = claimedAccountNames([
+  it('a closed sibling does not count toward institution ambiguity', () => {
+    // Only ACTIVE accounts compete for a bare institution label — a closed sibling must
+    // not block a live account from being recognised under its institution's short name.
+    const registry = [
       makeAccount({ bank_name: 'Mercury checking 4517' }),
       makeAccount({ bank_name: 'Mercury checking 9999', is_active: false }),
-    ])
-    expect(claimed.has('mercury')).toBe(true)
+    ]
+    expect(isAccountCovered(registry, 'Mercury')).toBe(true)
+  })
+
+  it('does not throw and does not cover an empty or blank name', () => {
+    const registry = [makeAccount({ bank_name: 'Mercury checking 4517' })]
+    expect(isAccountCovered(registry, '')).toBe(false)
+    expect(isAccountCovered(registry, '   ')).toBe(false)
   })
 })
 
