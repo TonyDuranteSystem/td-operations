@@ -970,6 +970,11 @@ export function computeBalanceSheet(
   allAccounts: OwnerAccount[] = registry,
 ): BalanceSheet {
   const REPORTING = 'USD'
+  /** Account names compared case- and spacing-insensitively — that much IS the same account
+   *  written carelessly ("Firstcitizenbank" vs "firstcitizenbank"). Declared here because
+   *  BOTH the staleness loop and the coverage test below must use this one function: when
+   *  they used different keys, a balance was certified as unmoved by a join matching nothing. */
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
   const cash: BalanceSheetLine[] = []
   const liabilities: BalanceSheetLine[] = []
   const foreign: BalanceSheet['foreign'] = []
@@ -1010,7 +1015,11 @@ export function computeBalanceSheet(
      * transactions. Comparing dates alone would cry wolf over every one of those six;
      * comparing against actual later activity catches the case that is genuinely wrong. */
     const movedAfter = txs.filter(
-      t => t.bank_name === a.bank_name && t.transaction_date > (a.closing_date as string),
+      // SAME key as the coverage test above, deliberately. When these two disagreed, a
+      // balance could be certified as "nothing moved afterwards" by a join that matched
+      // nothing at all.
+      t => !!t.bank_name && norm(t.bank_name) === norm(a.bank_name)
+        && t.transaction_date > (a.closing_date as string),
     ).length
     if (movedAfter > 0) staleBalance.push({ name: a.bank_name, date: a.closing_date as string, rows: movedAfter })
 
@@ -1046,29 +1055,36 @@ export function computeBalanceSheet(
    * is_active being switched off — which has no time dimension, so closing the loan in
    * 2026 would otherwise erase 140,246.52 from the 2025 statement retroactively and move
    * equity by the same amount, in silence. */
-  /* THE BOOKS NAME ACCOUNTS TWO DIFFERENT WAYS, and an exact-string test cannot see it.
-   * The bank feed labels a row by its INSTITUTION — `BANK_LABELS[feed.source]` gives
-   * "Mercury", "Relay", "Airwallex" — while the registry and the statement importer use a
-   * per-account label, "Mercury checking 4517". Verified in sandbox: every one of the 78
-   * rows in 2026 carries a bare label, and none of the 2,993 rows in 2025 does.
+  /* THE BOOKS NAME ACCOUNTS TWO DIFFERENT WAYS, and no string test can bridge it safely.
+   * The bank feed labels a row by its INSTITUTION — "Mercury", "Relay", "Airwallex",
+   * "Chase", and "Other" for a manual entry — while the registry and the statement importer
+   * use a per-account label, "Mercury checking 4517". Verified live: every one of the 78
+   * rows in 2026 carries a bare label, none of the 2,993 rows in 2025 does.
    *
-   * An exact test therefore reported all three 2026 accounts as undescribed, which is not
-   * true — they ARE described, under a longer name — and refused the year with no way for
-   * Antonio to clear it from any screen. Worse, the note told him to add a registry row
-   * matching the name exactly, and a row literally called "Mercury" would then be claimed
-   * ALONGSIDE "Mercury checking 4517" and double-count the cash. Advice that breaks the
-   * thing it is trying to fix is worse than no advice.
+   * A PREVIOUS ATTEMPT TREATED AN INSTITUTION LABEL AS COVERING ANY ACCOUNT THAT STARTS
+   * WITH IT. That was wrong in three ways, and the first turned a refusal into a confident
+   * wrong statement:
+   *  - Coverage went fuzzy while the "did money move after this balance" test three lines
+   *    below stayed exact. So entering a mid-2026 balance for "Mercury checking 4517" while
+   *    the feed kept writing "Mercury" rows after it produced NO movement, NO refusal, a
+   *    complete statement six months stale, and a note affirmatively stating the books
+   *    record no movement afterwards. Two checks on one question must share one key.
+   *  - Four of the six institutions here have SEVERAL accounts — Chase has a checking and
+   *    two credit cards. A bare "Chase" is satisfied by any one of them, so closing the
+   *    card would leave its debt out of a year it was live in with nothing said.
+   *  - It answers the wrong question. "Does some registry name begin with this word" is not
+   *    "is this money in an account whose balance I hold". Only attribution — each row
+   *    resolved to exactly one account — answers that, and the rows do not carry it yet.
    *
-   * So coverage is asked as a question about the ACCOUNT, not the string: an institution
-   * label covers the registry accounts that begin with it. A name that merely resembles
-   * another — "FirstCitizens loan 7363" against "Firstcitizenbank loan 7363" — is still
-   * NOT covered, and must not be: that is a genuine second account as far as every join
-   * here is concerned, and quietly accepting it would hide the double-count it causes. */
-  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
-  const covers = (pool: OwnerAccount[], bookName: string) => {
-    const n = norm(bookName)
-    return pool.some(a => { const r = norm(a.bank_name); return r === n || r.startsWith(`${n} `) })
-  }
+   * So the key is strict, and it is the SAME key the staleness test uses. Case and spacing
+   * are normalised because those are the same account written carelessly; nothing else is.
+   * A year whose rows are institution-labelled therefore cannot have a balance sheet, which
+   * is the truth: the books cannot say which of the two Airwallex accounts a row belongs to.
+   * The note says that plainly and does NOT tell anyone to add a matching registry row —
+   * a row literally named "Mercury" would be claimed alongside "Mercury checking 4517" and
+   * double-count the cash. */
+  const covers = (pool: OwnerAccount[], bookName: string) =>
+    pool.some(a => norm(a.bank_name) === norm(bookName))
 
   const bookNames = Array.from(new Set(txs.map(t => t.bank_name).filter((n): n is string => !!n && !!n.trim())))
   /* Named separately from "not in the registry at all", because a CLOSED account is
@@ -1147,10 +1163,13 @@ export function computeBalanceSheet(
   }
   if (unregistered.length > 0) {
     notes.push(
-      `The books hold money under ${unregistered.length} account name${unregistered.length === 1 ? '' : 's'} the ` +
-      `registry does not cover — ${unregistered.join(', ')}. Either ${unregistered.length === 1 ? 'that account is' : 'those accounts are'} ` +
-      `genuinely missing from the registry, or the name differs from the one already on file, ` +
-      `in which case the same account is being counted twice.`,
+      `${unregistered.length} account name${unregistered.length === 1 ? '' : 's'} in the books ` +
+      `${unregistered.length === 1 ? 'does' : 'do'} not match any account on file — ${unregistered.join(', ')}. ` +
+      `Bank-feed rows are labelled by the bank rather than by the account, so a row can say ` +
+      `"Airwallex" while the company holds two Airwallex accounts, and the books cannot say ` +
+      `which balance it belongs to. Do NOT add an account under the short name to clear this: ` +
+      `it would sit alongside the real one and count the same money twice. The rows need to ` +
+      `carry their account, which is a change to how they are recorded.`,
     )
   }
   if (closedAccount.length > 0) {
@@ -1221,10 +1240,15 @@ export function computeBalanceSheet(
 
 /** Server helper: the balance sheet for a year. */
 export async function getBalanceSheet(year: number): Promise<BalanceSheet> {
-  const [registry, allAccounts, txs] = await Promise.all([
-    getAccountRegistry(),
+  /* ONE read, split in code. Two independent reads of the same table can fail
+   * independently: if the active-only read failed and the other succeeded, every account
+   * was reported as "marked closed" AND as "no account records exist" in the same panel —
+   * two contradictory statements, both false, from a transient timeout, and the advice
+   * pointed at a destructive fix. */
+  const [allAccounts, txs] = await Promise.all([
     getAccountRegistry({ includeInactive: true }),
     getOwnerTransactions(year),
   ])
+  const registry = allAccounts.filter(a => a.is_active !== false)
   return computeBalanceSheet(registry, txs, year, allAccounts)
 }

@@ -692,22 +692,56 @@ describe('computeBalanceSheet', () => {
       2025,
     )
     expect(bs.can_state).toBe(false)
-    expect(bs.notes.some(n => n.includes('Mercury') && n.includes('registry does not cover'))).toBe(true)
+    expect(bs.notes.some(n => n.includes('Mercury') && n.includes('not match any account on file'))).toBe(true)
   })
 
-  it('an institution-only label from the bank feed IS covered by its registry account', () => {
+  it('REFUSES an institution-only label from the bank feed — it cannot say WHICH account', () => {
     // The two writers name accounts differently: the bank feed labels a row by its
     // INSTITUTION ("Mercury"), the registry and the statement importer by the account
-    // ("Mercury checking 4517"). Verified in sandbox: all 78 rows in 2026 carry the bare
-    // label. Treating that as an undescribed account refused the year — the DEFAULT year
-    // on page load — with no screen anywhere that could clear it.
+    // ("Mercury checking 4517"). An earlier version treated the institution label as
+    // COVERING any account starting with it — which let a stale balance certify itself:
+    // entering a mid-year figure for "Mercury checking 4517" while the feed kept writing
+    // bare "Mercury" rows after it produced NO staleness match (different strings) and a
+    // note swearing nothing moved afterwards, which was false. And an institution with
+    // MULTIPLE accounts (Chase has three) would be "covered" by any one of them, so
+    // closing a card could vanish from a year it was live in with nothing said.
+    // The books cannot say which of two Airwallex accounts a bare row belongs to, so the
+    // honest answer is refusal, not a guess dressed as coverage.
     const bs = computeBalanceSheet(
       [makeAccount({ bank_name: 'Mercury checking 4517', closing_balance: 15044.08 })],
       [makeTx({ bank_name: 'Mercury' })],
       2025,
     )
-    expect(bs.can_state).toBe(true)
-    expect(bs.notes.some(n => n.includes('does not cover'))).toBe(false)
+    expect(bs.can_state).toBe(false)
+    expect(bs.notes.some(n => n.includes('Mercury') && n.includes('not match any account on file'))).toBe(true)
+  })
+
+  it('REFUSES rather than certify a balance as unmoved when staleness is checked against the WRONG name', () => {
+    // The bug this pins: coverage and staleness must share the SAME join key. Entering a
+    // "Mercury checking 4517" closing balance while the feed keeps posting bare "Mercury"
+    // rows after it must not let the mismatch itself stand in for "nothing moved" — that
+    // reads the ABSENCE of a matching name as proof of no activity, which is backwards.
+    const bs = computeBalanceSheet(
+      [makeAccount({ bank_name: 'Mercury checking 4517', closing_balance: 15044.08, closing_date: '2025-06-30' })],
+      [makeTx({ bank_name: 'Mercury', transaction_date: '2025-11-02' })],
+      2025,
+    )
+    expect(bs.can_state).toBe(false)
+    expect(bs.notes.some(n => n.includes('no movement in them afterwards'))).toBe(false)
+  })
+
+  it('REFUSES when one account at a multi-account institution is closed and a sibling stays open', () => {
+    // Chase has a checking account and two credit cards. A bare feed row "Chase" is not
+    // allowed to be satisfied by whichever of the three happens to still be active — that
+    // would let a closed card's debt disappear from a year it was live in, unnamed,
+    // because ITS institution still has an open account.
+    const bs = computeBalanceSheet(
+      [makeAccount({ bank_name: 'Chase checking 3920', closing_balance: 17832.23 })],
+      [makeTx({ bank_name: 'Chase' })],
+      2025,
+    )
+    expect(bs.can_state).toBe(false)
+    expect(bs.notes.some(n => n.includes('Chase') && n.includes('not match any account on file'))).toBe(true)
   })
 
   it('REFUSES when a registry name DRIFTS from the name the books use', () => {
@@ -729,14 +763,19 @@ describe('computeBalanceSheet', () => {
     // is_active has no time dimension, so switching the loan off when it is renegotiated
     // in 2026 would drop 140,246.52 out of the 2025 statement retroactively and move
     // equity by the same amount, silently. The books still carry its 2025 rows.
-    const registryWithoutTheLoan = [makeAccount({ bank_name: 'Chase checking 3920', closing_balance: 17832.23 })]
-    const bs = computeBalanceSheet(registryWithoutTheLoan, [
+    // The 4th argument is the point of this test: getBalanceSheet reads the FULL registry
+    // (active + inactive) so a closed account can be told apart from one the registry
+    // never held — an earlier version of this test omitted that argument, which meant it
+    // asserted a true thing without exercising the branch it was named for.
+    const loan = makeAccount({ bank_name: 'Firstcitizenbank loan 7363', account_type: 'loan', closing_balance: 140246.52, is_active: false })
+    const active = makeAccount({ bank_name: 'Chase checking 3920', closing_balance: 17832.23 })
+    const bs = computeBalanceSheet([active], [
       makeTx({ bank_name: 'Chase checking 3920' }),
       makeTx({ bank_name: 'Firstcitizenbank loan 7363', amount: -1200 }),
-    ], 2025)
+    ], 2025, [active, loan])
 
     expect(bs.can_state).toBe(false)
-    expect(bs.notes.some(n => n.includes('Firstcitizenbank loan 7363'))).toBe(true)
+    expect(bs.notes.some(n => n.includes('Firstcitizenbank loan 7363') && n.includes('marked closed'))).toBe(true)
     // The engine still ARRIVES at a number — a clean positive 17,832.23 for a company
     // that owes a mortgage. can_state is the only thing standing between that number and
     // the screen, which is exactly why it is asserted first and why the tab must never

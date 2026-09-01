@@ -685,10 +685,21 @@ export function TransactionsTab({ year, initialRows, initialTotal, focus, onBack
             showing only <span className="capitalize">{filterSubcategory.replace(/_/g, ' ')}</span>
             <FastTooltip label="Show everything again">
               <button
-                /* Also drops it from the address bar. Clearing it only in local state left
-                   the URL still carrying the drill-down, so a reload, a back gesture or a
-                   year change silently re-applied the filter the reader had just dismissed. */
-                onClick={() => { setFilterSubcategory(''); load(0, filterCategory, search, ''); onClearFocus?.() }}
+                /* Reports the change upward and stops — do not ALSO reset and reload here.
+                 * Telling the parent fires focus back down as null, and the effect above
+                 * already does the full, correct reset on that transition. Doing it twice
+                 * meant two requests in flight at once — one asking for this line, one
+                 * asking for everything — and whichever answered last decided what the
+                 * reader saw, sometimes leaving the category selector reading
+                 * "Uncategorized" over rows that were not, with the total from the other
+                 * request still showing on the page. One instruction, one place that
+                 * carries it out. Falls back to the old local reset only if there is
+                 * nowhere to report to (arrival was never a drill-down). */
+                onClick={() => {
+                  if (onClearFocus) { onClearFocus(); return }
+                  setFilterSubcategory('')
+                  load(0, filterCategory, search, '')
+                }}
                 className="ml-0.5 rounded-full px-1 text-blue-500 hover:bg-blue-100"
                 aria-label="Show everything again"
               >×</button>
