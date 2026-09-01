@@ -896,7 +896,18 @@ export async function getAccountRegistry(
   // Cash held and in equity forever with no way to remove it.
   if (!opts.includeInactive) q = q.eq('is_active', true)
   const { data, error } = await q
-  if (error) return []
+  if (error) {
+    /* A MISSING TABLE and a FAILED READ need opposite handling, and returning [] for both
+     * made them indistinguishable. The table genuinely does not exist in production yet,
+     * so that case must degrade quietly. Any other error — RLS, timeout, a renamed column
+     * — silently drops the whole registry, which makes the balance sheet announce "no
+     * account records exist" (a false statement about the data) and sends the cash figure
+     * back to deriving from running balances, understating it by about 18,000 and hiding
+     * three cards. Loud in the log rather than a quiet wrong number on screen. */
+    const missingTable = error.code === '42P01' || error.code === 'PGRST205'
+    if (!missingTable) console.error('getAccountRegistry: registry read FAILED, reporting no accounts —', error.code, error.message)
+    return []
+  }
   return (data ?? []) as unknown as OwnerAccount[]
 }
 
@@ -1008,6 +1019,27 @@ export function computeBalanceSheet(
     else liabilities.push(line)
   }
 
+  /* ...AND "ALL THE ACCOUNTS" MEANS THE BOOKS' ACCOUNTS, NOT THE REGISTRY'S (2026-09-01).
+   *
+   * The completeness check above walks the registry, so it can only ever be complete over
+   * the accounts the registry already knows. An account with money in the books and no
+   * registry row lands in none of the buckets, cannot make the statement refuse, and
+   * cannot be named in a note — it is simply not there. That is live today, not
+   * hypothetical: the 2026 books carry Mercury, Relay and Airwallex rows under names the
+   * registry has never held, because nothing in the app writes a registry row and an
+   * uploaded statement invents its account label from the file name.
+   *
+   * It also catches the two ways an account can leave: a name that drifts (the app tells
+   * the operator to save the loan as "FirstCitizens…" while the registry says
+   * "Firstcitizenbank…", and a drifted name silently becomes a second account), and
+   * is_active being switched off — which has no time dimension, so closing the loan in
+   * 2026 would otherwise erase 140,246.52 from the 2025 statement retroactively and move
+   * equity by the same amount, in silence. */
+  const registered = new Set(registry.map(a => a.bank_name))
+  const unregistered = Array.from(
+    new Set(txs.map(t => t.bank_name).filter((n): n is string => !!n && !registered.has(n))),
+  ).sort()
+
   /* A STATEMENT IS ALL THE ACCOUNTS OR IT IS NOTHING (2026-09-01).
    *
    * The first version of this guard asked only "did ANY account match the year". One
@@ -1024,7 +1056,7 @@ export function computeBalanceSheet(
    * every one of those balances must be dated in the year asked for. Anything less is
    * refused and the reason is named account by account. */
   const can_state = matchedDates.length > 0 && unknownBalance.length === 0
-    && otherYear.length === 0 && staleBalance.length === 0
+    && otherYear.length === 0 && staleBalance.length === 0 && unregistered.length === 0
 
   // Property the company bought. Parked out of profit when the books were built, which
   // is right — and means this is the ONLY place it appears. Signed sum THEN abs: a
@@ -1065,6 +1097,14 @@ export function computeBalanceSheet(
           `${otherYear.length === 1 ? 'carries a balance' : 'carry balances'} from ${years} rather than ${year} — ` +
           `${otherYear.map(a => a.name).join(', ')}. Until ${otherYear.length === 1 ? 'it is' : 'they are'} closed ` +
           `off for ${year}, only part of the company would be on the page.`,
+    )
+  }
+  if (unregistered.length > 0) {
+    notes.push(
+      `The books hold money in ${unregistered.length} account${unregistered.length === 1 ? '' : 's'} the ` +
+      `registry does not describe — ${unregistered.join(', ')}. ${unregistered.length === 1 ? 'It has' : 'They have'} ` +
+      `no verified closing balance, so ${unregistered.length === 1 ? 'it' : 'they'} would be missing from any ` +
+      `position stated here. Check the name matches the registry exactly before adding ${unregistered.length === 1 ? 'it' : 'them'}.`,
     )
   }
   if (unknownBalance.length > 0) {

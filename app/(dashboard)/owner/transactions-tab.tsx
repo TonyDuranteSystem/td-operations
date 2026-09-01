@@ -246,8 +246,23 @@ export function TransactionsTab({ year, initialRows, initialTotal, focus, onBack
   useEffect(() => {
     const key = focus ? `${focus.category}/${focus.subcategory}` : null
     if (key === seenFocusRef.current) return
+    const hadFocus = seenFocusRef.current !== null
     seenFocusRef.current = key
-    if (!focus) return
+    if (!focus) {
+      /* A drill-down being TAKEN AWAY has to clear the filter it put there. Returning
+       * early left the rows filtered to the old line while the parent had already
+       * dropped the focus — so "N uncategorized — click to review" changed nothing
+       * except removing the way back, and changing the year showed an empty list under
+       * a chip nobody could explain. Only on a real transition: a tab that simply never
+       * had a drill-down must not have the reader's own filter wiped. */
+      if (hadFocus) {
+        setFilterCategory('uncategorized')
+        setFilterSubcategory('')
+        setSearch('')
+        load(0, 'uncategorized', '', '')
+      }
+      return
+    }
     const cat = focus.category as OwnerCategory | ''
     setFilterCategory(cat)
     setFilterSubcategory(focus.subcategory)

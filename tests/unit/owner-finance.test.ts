@@ -585,14 +585,16 @@ const makeAccount = (overrides: Partial<OwnerAccount> = {}): OwnerAccount => ({
   institution: 'Test Bank',
   account_number: '0001',
   account_type: 'checking',
-  sign_convention: 'natural',
+  // These must be values the table's CHECK constraints allow, or every positive test
+  // below runs on an account shape the database cannot produce.
+  sign_convention: 'normal',
   is_clearing: false,
   currency: 'USD',
   opening_balance: null,
   opening_date: null,
   closing_balance: 1000,
   closing_date: '2025-12-31',
-  closing_source: 'December statement',
+  closing_source: 'statement',
   notes: null,
   is_active: true,
   ...overrides,
@@ -623,7 +625,12 @@ describe('computeBalanceSheet', () => {
       makeAccount({ bank_name: 'Stripe', account_type: 'processor', closing_balance: 2882.10 }),
       makeAccount({ bank_name: 'Amex card', account_type: 'credit_card', closing_balance: 1991.63 }),
       makeAccount({ bank_name: 'FCB loan', account_type: 'loan', closing_balance: 140246.52 }),
-    ], [], 2025)
+    ], [
+      // NOT an empty ledger: with no transactions the post-date-activity check passes
+      // vacuously, and it is the only thing justifying a year-end statement date.
+      makeTx({ bank_name: 'Chase', transaction_date: '2025-11-02' }),
+      makeTx({ bank_name: 'FCB loan', transaction_date: '2025-12-31' }),
+    ], 2025)
 
     expect(bs.can_state).toBe(true)
     expect(bs.cash.map(l => l.label)).toEqual(['Chase', 'Stripe', 'Amex savings'])
@@ -668,6 +675,54 @@ describe('computeBalanceSheet', () => {
     )
     expect(bs.can_state).toBe(false)
     expect(bs.notes.some(n => n.includes('Chase') && n.includes('AFTER'))).toBe(true)
+  })
+
+  it('REFUSES when the BOOKS hold an account the registry has never heard of', () => {
+    // Live today, not hypothetical: the 2026 books carry Mercury / Relay / Airwallex rows
+    // under names no registry row holds, because nothing in the app writes a registry row
+    // and an uploaded statement invents its account label from the file name. Walking only
+    // the registry, the completeness check could never see them.
+    const bs = computeBalanceSheet(
+      [makeAccount({ bank_name: 'Chase checking 3920', closing_balance: 1000 })],
+      [makeTx({ bank_name: 'Mercury' })],
+      2025,
+    )
+    expect(bs.can_state).toBe(false)
+    expect(bs.notes.some(n => n.includes('Mercury') && n.includes('registry does not describe'))).toBe(true)
+  })
+
+  it('REFUSES when a registry name DRIFTS from the name the books use', () => {
+    // The app tells the operator to save the loan export as "FirstCitizens_loan_7363.csv",
+    // which writes bank_name "FirstCitizens loan 7363" while the registry says
+    // "Firstcitizenbank loan 7363". Every join here is an exact string, so a drifted name
+    // is a second account: the cash position lists the loan twice, and the "no movement
+    // afterwards" check silently matches nothing while the note still claims it ran.
+    const bs = computeBalanceSheet(
+      [makeAccount({ bank_name: 'Firstcitizenbank loan 7363', account_type: 'loan', closing_balance: 140246.52 })],
+      [makeTx({ bank_name: 'FirstCitizens loan 7363' })],
+      2025,
+    )
+    expect(bs.can_state).toBe(false)
+    expect(bs.notes.some(n => n.includes('FirstCitizens loan 7363'))).toBe(true)
+  })
+
+  it('REFUSES rather than let a closed account erase a PRIOR year\'s liability', () => {
+    // is_active has no time dimension, so switching the loan off when it is renegotiated
+    // in 2026 would drop 140,246.52 out of the 2025 statement retroactively and move
+    // equity by the same amount, silently. The books still carry its 2025 rows.
+    const registryWithoutTheLoan = [makeAccount({ bank_name: 'Chase checking 3920', closing_balance: 17832.23 })]
+    const bs = computeBalanceSheet(registryWithoutTheLoan, [
+      makeTx({ bank_name: 'Chase checking 3920' }),
+      makeTx({ bank_name: 'Firstcitizenbank loan 7363', amount: -1200 }),
+    ], 2025)
+
+    expect(bs.can_state).toBe(false)
+    expect(bs.notes.some(n => n.includes('Firstcitizenbank loan 7363'))).toBe(true)
+    // The engine still ARRIVES at a number — a clean positive 17,832.23 for a company
+    // that owes a mortgage. can_state is the only thing standing between that number and
+    // the screen, which is exactly why it is asserted first and why the tab must never
+    // render a total without checking it.
+    expect(bs.equity).toBe(17832.23)
   })
 
   it('REFUSES a partial statement — one account in the year is not the company', () => {

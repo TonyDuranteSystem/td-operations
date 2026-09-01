@@ -57,6 +57,9 @@ export function BalanceSheetTab({ bs }: BalanceSheetTabProps) {
     /* Deliberately listed WITHOUT any total. These are the parts of the year that are
      * known; a subtotal over them would be the partial statement this screen refuses. */
     const known = [...bs.cash, ...bs.liabilities, ...bs.other_assets]
+    /* Foreign balances are a separate shape and were dropped from this list entirely, so
+     * a EUR balance that IS known for the year appeared under "Known for {year}" nowhere. */
+    const knownForeign = bs.foreign
     return (
       <div className="space-y-4">
         <div className="rounded-lg border border-orange-200 bg-orange-50 p-5">
@@ -73,7 +76,7 @@ export function BalanceSheetTab({ bs }: BalanceSheetTabProps) {
           </p>
         </div>
 
-        {known.length > 0 && (
+        {(known.length > 0 || knownForeign.length > 0) && (
           <div className="rounded-lg border border-zinc-200 bg-white p-4">
             <h3 className="text-sm font-medium text-zinc-700">Known for {bs.year}, on its own</h3>
             <p className="mb-2 mt-0.5 text-xs text-zinc-500">
@@ -86,6 +89,12 @@ export function BalanceSheetTab({ bs }: BalanceSheetTabProps) {
                   {l.as_of && <span className="block text-xs text-zinc-400">at {asDate(l.as_of)}</span>}
                 </span>
                 <span className="shrink-0 tabular-nums text-zinc-800">{money(l.amount)}</span>
+              </div>
+            ))}
+            {knownForeign.map(f => (
+              <div key={`${f.label}-${f.currency}`} className="flex items-baseline justify-between gap-3 py-1 text-sm">
+                <span className="min-w-0 break-words text-zinc-600">{f.label}</span>
+                <span className="shrink-0 tabular-nums text-zinc-800">{money(f.amount, f.currency)}</span>
               </div>
             ))}
           </div>
