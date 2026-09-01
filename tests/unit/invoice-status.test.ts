@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { invoiceStatusOf, isInvoiceOverdue, isInvoiceSettled } from "@/lib/billing/invoice-status"
+import { invoiceStatusOf, isInvoiceOverdue, isInvoiceSettled, isCreditNote } from "@/lib/billing/invoice-status"
 
 const today = "2026-08-30"
 
@@ -54,5 +54,35 @@ describe("isInvoiceSettled", () => {
     it("does NOT treat status='Cancelled' as settled when invoice_status is a genuinely open value (the Fiscalot case — a real open receivable with a stale status column)", () => {
       expect(isInvoiceSettled({ invoice_status: "Partial", status: "Cancelled", due_date: null })).toBe(false)
     })
+  })
+
+  describe("regression: a display-only amount_due=0 backstop (2026-08-31, Finance-Auditor finding, third council review)", () => {
+    it("treats a Partial invoice as settled when its own remaining balance is exactly 0, even though status was never flipped to Paid", () => {
+      expect(isInvoiceSettled({ invoice_status: "Partial", status: "Pending", due_date: "2026-01-01", amount_due: 0 })).toBe(true)
+    })
+    it("does NOT treat a Partial invoice as settled when amount_due is still positive", () => {
+      expect(isInvoiceSettled({ invoice_status: "Partial", status: "Pending", due_date: "2026-01-01", amount_due: 250 })).toBe(false)
+    })
+    it("does NOT treat a Partial invoice as settled when amount_due is absent (never backfilled) — no false positive from a missing field", () => {
+      expect(isInvoiceSettled({ invoice_status: "Partial", status: "Pending", due_date: "2026-01-01" })).toBe(false)
+    })
+    it("still respects the Fiscalot case even with amount_due present and positive — an open invoice_status with real money still owed", () => {
+      expect(isInvoiceSettled({ invoice_status: "Partial", status: "Cancelled", due_date: null, amount_due: 500 })).toBe(false)
+    })
+  })
+})
+
+describe("isCreditNote", () => {
+  it("treats a CN- prefixed invoice number as a credit note regardless of status", () => {
+    expect(isCreditNote({ invoice_number: "CN-000123", invoice_status: "Draft", total: -150 })).toBe(true)
+  })
+  it("treats invoice_status='Credit' as a credit note even without the CN- prefix", () => {
+    expect(isCreditNote({ invoice_number: "INV-000999", invoice_status: "Credit", total: -300 })).toBe(true)
+  })
+  it("treats a negative total as a credit note as a last-resort signal", () => {
+    expect(isCreditNote({ invoice_number: "INV-001000", invoice_status: "Draft", total: -50 })).toBe(true)
+  })
+  it("does not flag an ordinary positive-total invoice as a credit note", () => {
+    expect(isCreditNote({ invoice_number: "INV-001001", invoice_status: "Sent", total: 500 })).toBe(false)
   })
 })

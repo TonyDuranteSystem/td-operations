@@ -45,7 +45,7 @@ import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[
 import { updateAccountContactRole, toggleDocumentPortalVisibility, disableAccountAutopay, sendAutopayEnrollmentLink } from '@/app/(dashboard)/accounts/actions'
 import { FinanceSummaryCard } from '@/components/shared/finance-summary-card'
 import { summarizeInvoicesForFinanceCard } from '@/lib/billing/finance-summary'
-import { isInvoiceOverdue, isInvoiceSettled } from '@/lib/billing/invoice-status'
+import { isInvoiceOverdue, isInvoiceSettled, isCreditNote } from '@/lib/billing/invoice-status'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { format, parseISO } from 'date-fns'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry, ChatAttachment } from '@/lib/types'
@@ -3783,8 +3783,10 @@ function InvoicesTab({ invoices, accounts, today }: { invoices: ContactInvoice[]
   }
 
   // Excludes is_test so this tab agrees with the Finance summary card on the
-  // same page (council review, 2026-08-31).
-  const real = invoices.filter(i => i.invoice_number && i.invoice_number !== '1.0' && i.invoice_number !== '2.0' && !i.is_test)
+  // same page (council review, 2026-08-31). Also excludes credit notes
+  // (2026-08-31, QA-Tester finding, third council review) — see the matching
+  // comment in components/accounts/account-detail.tsx's PagamentiTab.
+  const real = invoices.filter(i => i.invoice_number && i.invoice_number !== '1.0' && i.invoice_number !== '2.0' && !i.is_test && !isCreditNote(i))
   const legacy = invoices.filter(i => !i.invoice_number || i.invoice_number === '1.0' || i.invoice_number === '2.0')
 
   const getCompany = (inv: ContactInvoice) =>
@@ -3840,7 +3842,10 @@ function InvoicesTab({ invoices, accounts, today }: { invoices: ContactInvoice[]
   // (2026-08-31, same bug fixed in the Finance summary card — see
   // lib/billing/finance-summary.ts's header note).
   const overdue = real.filter(i => !isInvoiceSettled(i) && isInvoiceOverdue(i, today))
-  const pending = real.filter(i => ['Sent', 'Draft', 'Partial'].includes(invStatus(i)) && !(i.due_date && i.due_date < today))
+  // The "Pending" bucket never checked isInvoiceSettled (2026-08-31, Senior
+  // Engineer finding, third council review) — only the overdue bucket above
+  // got that fix. Matching fix applied to PagamentiTab (account page).
+  const pending = real.filter(i => !isInvoiceSettled(i) && ['Sent', 'Draft', 'Partial'].includes(invStatus(i)) && !(i.due_date && i.due_date < today))
   const paid = real.filter(i => invStatus(i) === 'Paid')
   const other = real.filter(i => !overdue.includes(i) && !pending.includes(i) && !paid.includes(i))
 

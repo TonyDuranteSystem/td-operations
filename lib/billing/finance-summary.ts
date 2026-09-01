@@ -23,7 +23,7 @@
  * instead of a fourth independently-typed copy of the same rule. (5) Test
  * fixture invoices (`is_test`) no longer inflate a real client's totals.
  */
-import { invoiceStatusOf, isInvoiceOverdue, isInvoiceSettled } from "./invoice-status"
+import { invoiceStatusOf, isInvoiceOverdue, isInvoiceSettled, isCreditNote } from "./invoice-status"
 
 /**
  * Structural subset of the fields the classification actually reads — matches
@@ -59,15 +59,6 @@ export interface FinanceSummary {
   byCurrency: CurrencyFinanceSummary[]
 }
 
-// A credit note is money TD owes the client, never a receivable. Checked by
-// number prefix (assigned at creation, before any status transition) rather
-// than solely by invoice_status='Credit' (assigned in a separate, sometimes
-// delayed, follow-up step) so a not-yet-retagged credit note is still
-// excluded — see the file header note on split/installment-plan credits.
-function isCreditNote(p: InvoiceLike): boolean {
-  return !!p.invoice_number?.startsWith("CN-") || invoiceStatusOf(p) === "Credit" || Number(p.total) < 0
-}
-
 // Remaining balance — NOT the original face amount. `amount_due` is
 // authoritative when present (a partial payment or a partial credit
 // application both reduce it while leaving `total` at face value); `?? `
@@ -83,9 +74,16 @@ function remainingBalance(p: InvoiceLike): number {
 // (matches remainingBalance's `??` reasoning: a $0 total from a fully
 // discounted/credit-covered invoice must not fall through to a stale
 // pre-discount `amount` and overstate what was collected).
+// MUST use `??`, not `||` — a genuine `total: 0` (fully discounted/credit-
+// covered, `amount_paid` never backfilled on the row) is falsy under `||`
+// and fell through to a stale, larger pre-discount `amount`, silently
+// overstating what was collected. This exact class of bug was already
+// supposedly fixed once (see the comment above) but only on this
+// function's own null-check branch — the fallback chain below it kept the
+// old `||` (2026-08-31, Finance-Auditor finding, third council review).
 function paidAmount(p: InvoiceLike): number {
   if (p.amount_paid != null) return Number(p.amount_paid)
-  return Number(p.total) || Number(p.amount) || 0
+  return Number(p.total ?? p.amount ?? 0)
 }
 
 export function summarizeInvoicesForFinanceCard(payments: InvoiceLike[], today: string): FinanceSummary {

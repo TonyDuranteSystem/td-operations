@@ -158,6 +158,11 @@ describe("summarizeInvoicesForFinanceCard", () => {
       expect(r.paidTotal).toBe(0)
     })
 
+    it("2026-08-31: a Paid invoice with a $0 total AND amount_paid never backfilled (null) still reports $0, not a stale pre-discount amount — the ?? fix must apply to the fallback chain too, not just the amount_paid!=null branch", () => {
+      const r = one([pmt({ invoice_status: "Paid", total: 0, amount_paid: null, amount: 750 })])
+      expect(r.paidTotal).toBe(0)
+    })
+
     it("2026-08-31: a partly-paid, past-due invoice now counts as overdue (not just outstanding)", () => {
       const r = one([pmt({ invoice_status: "Partial", due_date: "2026-01-01", total: 2000, amount_due: 1200 })])
       expect(r.overdueCount).toBe(1)

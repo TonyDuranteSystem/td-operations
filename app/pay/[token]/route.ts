@@ -34,6 +34,8 @@ import { createClient } from "@supabase/supabase-js"
 import { APP_BASE_URL } from "@/lib/config"
 import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
 import { claimPaymentForCharge, releasePaymentClaim, recordCheckoutSessionId, CLIENT_CLAIM_TTL_MS } from "@/lib/operations/autopay-claim"
+import { computeCardTotal } from "@/lib/payments/card-fee"
+import { resolveChargeRate } from "@/lib/payments/card-fee-config"
 
 export const dynamic = "force-dynamic"
 
@@ -60,7 +62,7 @@ export async function GET(
   // rather than throwing.
   const { data: payment, error: pErr } = await supabase
     .from("payments")
-    .select("id, account_id, contact_id, amount, amount_currency, status, description, invoice_number, pay_token")
+    .select("id, account_id, contact_id, amount, amount_currency, status, description, invoice_number, pay_token, card_fee_rate")
     .eq("pay_token", token)
     .maybeSingle()
 
@@ -108,11 +110,22 @@ export async function GET(
   }
   const { email: clientEmail, name: clientName } = recipient
 
+  // Charge base + card fee, same as the portal Pay button
+  // (app/api/workflows/create-invoice-checkout/route.ts) — this older
+  // email-link route was never wired to the fee at all, so a client using
+  // this link instead of the portal skipped the fee entirely, on every
+  // invoice, with nothing to catch it (2026-08-31, Bug Hunter finding,
+  // third council review). Card fee uses the rate PINNED on this invoice.
+  const cardFeeRate = await resolveChargeRate(
+    (payment as { card_fee_rate?: number | string | null }).card_fee_rate,
+  )
+  const { cardTotal } = computeCardTotal(amount, cardFeeRate)
+
   // Create Stripe Checkout session via shared helper
   const { createStripeCheckoutSession } = await import("@/lib/stripe-checkout")
   const result = await createStripeCheckoutSession({
     clientName,
-    amount,
+    amount: cardTotal,
     currency,
     contractType: "annual_renewal",
     serviceName: payment.description || "Invoice Payment",

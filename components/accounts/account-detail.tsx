@@ -46,7 +46,7 @@ import { toast } from 'sonner'
 import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive, createDBA, updateDBADetails, disableAccountAutopay, sendAutopayEnrollmentLink } from '@/app/(dashboard)/accounts/actions'
 import { FinanceSummaryCard } from '@/components/shared/finance-summary-card'
 import { summarizeInvoicesForFinanceCard } from '@/lib/billing/finance-summary'
-import { isInvoiceOverdue, isInvoiceSettled } from '@/lib/billing/invoice-status'
+import { isInvoiceOverdue, isInvoiceSettled, isCreditNote } from '@/lib/billing/invoice-status'
 import { StatusChangeDialog } from './status-change-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
@@ -3082,8 +3082,15 @@ function PagamentiTab({ payments, today, account }: {
   // Split into invoiced (unified system) vs legacy tracking records. Excludes
   // is_test so this tab agrees with the Finance summary card on the same
   // page — a test-fixture account used to show a different invoice count in
-  // each place (council review, 2026-08-31).
-  const invoiced = payments.filter(p => p.invoice_number && p.invoice_number !== '1.0' && p.invoice_number !== '2.0' && !p.is_test)
+  // each place (council review, 2026-08-31). Also excludes credit notes
+  // (2026-08-31, QA-Tester finding, third council review) — the Finance card
+  // above already excludes them (isCreditNote), but this tab never did, so a
+  // Draft-status credit note (not yet retagged invoice_status='Credit' — see
+  // lib/billing/invoice-status.ts's isCreditNote doc) fell into "Pending" and
+  // its negative total silently distorted that bucket's sum, while the
+  // Finance card on the SAME page showed it nowhere. Same exclusion, same
+  // point in the pipeline, as finance-summary.ts's own `invoiced` filter.
+  const invoiced = payments.filter(p => p.invoice_number && p.invoice_number !== '1.0' && p.invoice_number !== '2.0' && !p.is_test && !isCreditNote(p))
   const legacy = payments.filter(p => !p.invoice_number || p.invoice_number === '1.0' || p.invoice_number === '2.0')
 
   // Group invoiced by status. Overdue uses the SAME shared rule as the
@@ -3097,7 +3104,13 @@ function PagamentiTab({ payments, today, account }: {
   // (2026-08-31, same bug fixed in the Finance summary card — see
   // lib/billing/finance-summary.ts's header note).
   const overdue = invoiced.filter(p => !isInvoiceSettled(p) && isInvoiceOverdue(p, today))
-  const pending = invoiced.filter(p => ['Sent', 'Draft', 'Partial'].includes(invoiceStatus(p)) && !(p.due_date && p.due_date < today))
+  // The "Pending" bucket never checked isInvoiceSettled (2026-08-31,
+  // Senior Engineer finding, third council review) — only the overdue
+  // bucket above got that fix. A row settled via `status` (Refunded/Waived/
+  // amount_due=0) but still reading an open invoice_status and not yet past
+  // due fell through to here, showing "Pending" on this tab while the
+  // Finance card on the same page correctly showed it as settled.
+  const pending = invoiced.filter(p => !isInvoiceSettled(p) && ['Sent', 'Draft', 'Partial'].includes(invoiceStatus(p)) && !(p.due_date && p.due_date < today))
   const paid = invoiced.filter(p => invoiceStatus(p) === 'Paid')
   const otherInvoiced = invoiced.filter(p => !overdue.includes(p) && !pending.includes(p) && !paid.includes(p))
 
