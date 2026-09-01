@@ -509,6 +509,10 @@ describe('computeOwnerPnL — the expense breakdown can be linked to its transac
    must keep tying. These tests exist to stop that boundary being crossed later. */
 describe('computeFilingSummary', () => {
   const pnlOf = (txs: OwnerTransaction[]) => computeOwnerPnL(txs, computeInvoiceIncome([], 2025), 2025)
+  /* Every 2025 summary also carries the deductible part of the office closing. It is a real
+     adjustment, not noise — these tests state it rather than absorb it, so that if the figure
+     ever changes the failure names the reason. */
+  const CLOSING = -1001.90
 
   it('adds back half of business meals, because only half is deductible', () => {
     const txs = [
@@ -517,9 +521,9 @@ describe('computeFilingSummary', () => {
     ]
     const f = computeFilingSummary(txs, pnlOf(txs))
     expect(f.books_net_usd).toBeCloseTo(10000 - 2927.51, 2)
-    expect(f.adjustments).toHaveLength(1)
-    expect(f.adjustments[0].amount).toBeCloseTo(1463.755, 2)
-    expect(f.taxable_income).toBeCloseTo(10000 - 2927.51 + 1463.755, 2)
+    const meals = f.adjustments.find(a => a.label.includes('meals'))!
+    expect(meals.amount).toBeCloseTo(1463.755, 2)
+    expect(f.taxable_income).toBeCloseTo(10000 - 2927.51 + 1463.755 + CLOSING, 2)
   })
 
   it('converts foreign profit at the rate the company actually achieved', () => {
@@ -532,7 +536,7 @@ describe('computeFilingSummary', () => {
     const eur = f.foreign.find(x => x.currency === 'EUR')!
     expect(eur.rate).toBeCloseTo(164895.95 / 147100, 6)
     expect(eur.net_usd).toBeCloseTo(144770.9 * (164895.95 / 147100), 2)
-    expect(f.taxable_income).toBeCloseTo(eur.net_usd!, 2)
+    expect(f.taxable_income).toBeCloseTo(eur.net_usd! + CLOSING, 2)
   })
 
   it('WARNS instead of guessing when a currency has no achieved rate', () => {
@@ -541,7 +545,7 @@ describe('computeFilingSummary', () => {
     const f = computeFilingSummary(txs, pnlOf(txs))
     expect(f.foreign[0].net_usd).toBeNull()
     expect(f.warnings.join(' ')).toContain('GBP')
-    expect(f.taxable_income).toBeCloseTo(0, 2)
+    expect(f.taxable_income).toBeCloseTo(0 + CLOSING, 2)
   })
 
   it('surfaces capitalized property WITHOUT deducting it', () => {
@@ -553,7 +557,23 @@ describe('computeFilingSummary', () => {
     ]
     const f = computeFilingSummary(txs, pnlOf(txs))
     expect(f.capitalized[0].amount).toBeCloseTo(35032.53, 2)
-    // A building is not a cost of this year — profit must be untouched by it.
-    expect(f.taxable_income).toBeCloseTo(50000, 2)
+    // A building is not a cost of this year — profit must be untouched by the purchase itself.
+    expect(f.taxable_income).toBeCloseTo(50000 + CLOSING, 2)
+  })
+})
+
+describe('computeFilingSummary — deductible closing costs', () => {
+  it('claims the deductible part of the 2025 closing and lowers taxable income', () => {
+    const txs = [makeTx({ category: 'income', subcategory: 'client_payment', amount: 100000 })]
+    const f = computeFilingSummary(txs, computeOwnerPnL(txs, computeInvoiceIncome([], 2025), 2025))
+    const line = f.adjustments.find(a => a.label.includes('closing costs'))!
+    expect(line.amount).toBeCloseTo(-1001.90, 2)
+    expect(f.taxable_income).toBeCloseTo(100000 - 1001.90, 2)
+  })
+
+  it('does NOT apply it to another year — it is one transaction in one year', () => {
+    const txs = [makeTx({ tax_year: 2026, category: 'income', subcategory: 'client_payment', amount: 100000 })]
+    const f = computeFilingSummary(txs, computeOwnerPnL(txs, computeInvoiceIncome([], 2026), 2026))
+    expect(f.adjustments.some(a => a.label.includes('closing costs'))).toBe(false)
   })
 })

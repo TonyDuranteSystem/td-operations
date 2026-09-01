@@ -567,14 +567,50 @@ export async function getOwnerPnL(year: number): Promise<OwnerPnL> {
  *  have inflated cash by roughly $140,000, and three credit cards sit beside it. */
 const CASH_PAGE = 1000
 
-const CASH_ACCOUNT_TYPES = ['checking', 'savings']
+/* What counts as MONEY THE COMPANY HAS. A processor balance belongs here: the 2,882.10
+ * sitting at Stripe is the company's money, held by someone else — an asset, not a debt.
+ * Excluding it once pushed it into the "Owed" list, which reads as though the company
+ * owed Stripe money. Cards and loans are the only genuine liabilities. */
+const CASH_ACCOUNT_TYPES = ['checking', 'savings', 'processor']
 
 export async function getCashPosition(): Promise<CashPosition> {
-  // PAGED. An un-ranged select is silently capped at 1000 rows by PostgREST with no
-  // error — and because this orders newest-first, the rows that fall off the end are
-  // the QUIET accounts, which would disappear from the report entirely rather than
-  // merely be stale. This file documents that trap twice and pages around it in three
-  // other queries; this was the one that was missed.
+  /* THE REGISTRY IS THE SOURCE OF TRUTH, not the statement rows (2026-08-31).
+   *
+   * This used to build every balance from `balance_after` on the newest transaction. That
+   * silently DROPS any account whose export carries no running-balance column — and five
+   * of Antonio's nine cash-and-card accounts do not publish one. The screen showed
+   * 23,212.46 of cash while 41,138.64 was actually held: Mercury (15,044.08) and Stripe
+   * (2,882.10) were simply absent, and "Owed" listed the loan alone while three cards
+   * worth 6,250.16 were missing. Nothing errored. An account you do not have a statement
+   * column for just ceased to exist.
+   *
+   * `td_books_accounts` holds a reconciled closing balance for every account, each with
+   * its provenance (statement / derived / provider report). Those figures were proven
+   * against the banks themselves. Read them.
+   *
+   * The old derivation stays as a FALLBACK for an account with no registry row, and the
+   * whole registry read is wrapped: the table does not exist in production yet, and a
+   * missing table must degrade to the old behaviour rather than take the page down. */
+  const registry = await getAccountRegistry()
+
+  const accounts: CashAccountBalance[] = []
+  const liabilities: CashAccountBalance[] = []
+  const claimed = new Set<string>()
+
+  for (const a of registry) {
+    if (a.closing_balance === null || a.closing_balance === undefined) continue
+    claimed.add(a.bank_name)
+    const entry: CashAccountBalance = {
+      bank_name: a.bank_name,
+      currency: a.currency || 'USD',
+      balance: Number(a.closing_balance),
+      as_of: a.closing_date ?? '',
+    }
+    if (CASH_ACCOUNT_TYPES.includes(a.account_type)) accounts.push(entry)
+    else liabilities.push(entry)
+  }
+
+  // Fallback for anything the registry does not describe: the previous behaviour.
   const rows: Array<{ bank_name: string; currency: string | null; balance_after: number | null; transaction_date: string; account_type: string | null }> = []
   for (let from = 0; ; from += CASH_PAGE) {
     const { data, error } = await supabaseAdmin
@@ -584,10 +620,7 @@ export async function getCashPosition(): Promise<CashPosition> {
       .not('balance_after', 'is', null)
       .not('bank_name', 'is', null)
       // id is the TIE-BREAK, not decoration: several rows commonly share the closing
-      // date, Postgres gives no stable order among ties, and without it "the latest
-      // balance" is whichever row happened to come back first — a different answer on
-      // a refresh with no data change. The same fix was already applied to two other
-      // queries here and missed on this one.
+      // date and Postgres gives no stable order among ties.
       .order('transaction_date', { ascending: false })
       .order('id', { ascending: false })
       .range(from, from + CASH_PAGE - 1)
@@ -596,13 +629,9 @@ export async function getCashPosition(): Promise<CashPosition> {
     if ((data?.length ?? 0) < CASH_PAGE) break
   }
 
-  // Latest balance per (bank, currency) — a bank holding USD and EUR is two balances,
-  // and the totals stay per-currency (never a $-labeled EUR+USD sum).
   const seen = new Set<string>()
-  const accounts: CashAccountBalance[] = []
-  const liabilities: CashAccountBalance[] = []
-
   for (const row of rows) {
+    if (claimed.has(row.bank_name)) continue
     const currency = row.currency || 'USD'
     const key = `${row.bank_name}|${currency}`
     if (seen.has(key)) continue
@@ -613,12 +642,14 @@ export async function getCashPosition(): Promise<CashPosition> {
       balance: Number(row.balance_after),
       as_of: row.transaction_date,
     }
-    // An account whose type is unknown is NOT assumed to be cash — it is reported as
-    // a liability so it is visible and questioned, rather than silently inflating the
-    // headline number.
+    // An account whose type is unknown is NOT assumed to be cash — it is reported as a
+    // liability so it is visible and questioned, rather than silently inflating cash.
     if (row.account_type && CASH_ACCOUNT_TYPES.includes(row.account_type)) accounts.push(entry)
     else liabilities.push(entry)
   }
+
+  accounts.sort((a, z) => z.balance - a.balance)
+  liabilities.sort((a, z) => z.balance - a.balance)
 
   const totals: Record<string, number> = {}
   for (const a of accounts) totals[a.currency] = (totals[a.currency] ?? 0) + a.balance
@@ -715,6 +746,25 @@ export interface FilingSummary {
  *  exception lapsed. A named constant so the day it changes there is one place to change. */
 export const MEALS_NONDEDUCTIBLE_SHARE = 0.5
 
+/** Costs paid at a property closing that are DEDUCTIBLE in the year of purchase, rather
+ * than added to the property's cost or spread over the loan.
+ *
+ * These sit here rather than in the ledger because the bank shows one wire — 29,032.53 to
+ * the title company — and splitting that row into pieces would break the tie-out to the
+ * statement, which is the evidence base for the whole year. The split lives in the closing
+ * disclosure, and this is where the return reads it.
+ *
+ * From file 25-1079, 10225 Ulmerton Road 3D, closed 22 May 2025:
+ *   HOA dues for June and July ............ 871.22   periods the company owned the unit
+ *   HOA 22-31 May reimbursed to the seller . 130.68
+ * The other 6,188.77 of that closing is NOT here on purpose: 4,398.00 of loan costs spread
+ * over the loan's life, and 1,790.77 is added to what the property cost.
+ *
+ * WHEN THIS BECOMES WRONG: it is a fact about ONE transaction in ONE year, hardcoded. The
+ * moment real asset tracking exists, closing costs belong there as data per property, and
+ * this constant should be deleted rather than extended with a second purchase. */
+const CLOSING_COSTS_DEDUCTIBLE_2025 = 1001.90
+
 export function computeFilingSummary(
   txs: OwnerTransaction[],
   pnl: OwnerPnL,
@@ -757,6 +807,15 @@ export function computeFilingSummary(
     })
   }
 
+  // CLOSING COSTS the company may deduct now. Reduces profit, so it is negative here.
+  if (pnl.year === 2025 && CLOSING_COSTS_DEDUCTIBLE_2025 > 0) {
+    adjustments.push({
+      label: 'Deductible closing costs on the office purchase',
+      amount: -CLOSING_COSTS_DEDUCTIBLE_2025,
+      why: 'HOA dues for periods the company owned the unit, paid at the closing. The bank shows one wire, so this part of it is claimed here rather than by splitting the transaction.',
+    })
+  }
+
   // PROPERTY. Already parked outside profit when the books were built, so there is
   // nothing to adjust — but it must be VISIBLE, or the depreciation it is owed is
   // simply forgotten and the deduction is lost every year thereafter.
@@ -783,4 +842,141 @@ export function computeFilingSummary(
 export async function getFilingSummary(year: number): Promise<FilingSummary> {
   const [txs, pnl] = await Promise.all([getOwnerTransactions(year), getOwnerPnL(year)])
   return computeFilingSummary(txs, pnl)
+}
+
+/** One account as the registry describes it — what the system knows about it. */
+export interface OwnerAccount {
+  bank_name: string
+  institution: string | null
+  account_number: string | null
+  account_type: string
+  sign_convention: string
+  is_clearing: boolean
+  currency: string
+  opening_balance: number | null
+  opening_date: string | null
+  closing_balance: number | null
+  closing_date: string | null
+  /** Where the closing figure came from: a statement, a provider's report, or derived. */
+  closing_source: string | null
+  notes: string | null
+}
+
+/** Every account, with its verified balances and where each figure came from.
+ *
+ * Returns [] — never throws — when the registry table does not exist. It was created in
+ * sandbox and is not yet in production, and a page that renders the whole owner dashboard
+ * must not go blank because one supporting table is absent. Callers treat an empty
+ * registry as "nothing known" and fall back to deriving from the transactions. */
+export async function getAccountRegistry(): Promise<OwnerAccount[]> {
+  const { data, error } = await supabaseAdmin
+    .from('td_books_accounts' as never)
+    .select('bank_name, institution, account_number, account_type, sign_convention, is_clearing, currency, opening_balance, opening_date, closing_balance, closing_date, closing_source, notes')
+    .eq('entity_id', TD_ENTITY_ID)
+    .order('bank_name')
+  if (error) return []
+  return (data ?? []) as unknown as OwnerAccount[]
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * THE BALANCE SHEET — what the company OWNS and OWES.
+ *
+ * There was none. The books could say what the year earned but never what the company
+ * was worth at the end of it, which is the second statement any accountant asks for and
+ * the only place the office purchase can appear at all: 35,032.53 correctly kept out of
+ * profit, and therefore invisible everywhere else.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export interface BalanceSheetLine {
+  label: string
+  amount: number
+  /** Where the figure came from, so a reader can weigh it. */
+  source?: string | null
+}
+
+export interface BalanceSheet {
+  year: number
+  as_of: string
+  currency: string
+  cash: BalanceSheetLine[]
+  other_assets: BalanceSheetLine[]
+  total_assets: number
+  liabilities: BalanceSheetLine[]
+  total_liabilities: number
+  /** Assets less liabilities — what the company is worth on paper. */
+  equity: number
+  /** Balances held in a currency other than the reporting one, listed not converted. */
+  foreign: Array<{ currency: string; label: string; amount: number }>
+  notes: string[]
+}
+
+export function computeBalanceSheet(
+  registry: OwnerAccount[],
+  txs: OwnerTransaction[],
+  year: number,
+): BalanceSheet {
+  const REPORTING = 'USD'
+  const cash: BalanceSheetLine[] = []
+  const liabilities: BalanceSheetLine[] = []
+  const foreign: BalanceSheet['foreign'] = []
+
+  for (const a of registry) {
+    if (a.closing_balance === null || a.closing_balance === undefined) continue
+    const line = { label: a.bank_name, amount: Number(a.closing_balance), source: a.closing_source }
+    if ((a.currency || REPORTING) !== REPORTING) {
+      // NEVER converted into the total. A balance sheet that silently mixes currencies
+      // states a number nobody can trace back to an account.
+      foreign.push({ currency: a.currency, label: a.bank_name, amount: line.amount })
+      continue
+    }
+    if (CASH_ACCOUNT_TYPES.includes(a.account_type)) cash.push(line)
+    else liabilities.push(line)
+  }
+
+  // Property the company bought. Parked out of profit when the books were built, which
+  // is right — and means this is the ONLY place it appears.
+  const propertyTotal = txs
+    .filter(t => t.subcategory === 'fixed_asset_office_purchase')
+    .reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+  const other_assets: BalanceSheetLine[] = propertyTotal > 0
+    ? [{ label: 'Office property (at cost)', amount: propertyTotal, source: 'purchase payments' }]
+    : []
+
+  cash.sort((a, z) => z.amount - a.amount)
+  liabilities.sort((a, z) => z.amount - a.amount)
+
+  const total_assets = cash.reduce((s, l) => s + l.amount, 0) + other_assets.reduce((s, l) => s + l.amount, 0)
+  const total_liabilities = liabilities.reduce((s, l) => s + l.amount, 0)
+
+  const notes: string[] = []
+  if (propertyTotal > 0) {
+    notes.push(
+      `Office property is shown at what was paid for it. No depreciation has been recorded — ` +
+      `a building is written off over years, and that has not been set up yet.`,
+    )
+  }
+  if (foreign.length > 0) {
+    notes.push(
+      `Balances in ${Array.from(new Set(foreign.map(f => f.currency))).join(', ')} are listed separately and are ` +
+      `NOT included in the totals above — a balance sheet that mixes currencies states a number ` +
+      `nobody can trace back to an account.`,
+    )
+  }
+  if (registry.length === 0) {
+    notes.push('No account records found — this balance sheet is empty because nothing describes the accounts.')
+  }
+
+  return {
+    year, as_of: `${year}-12-31`, currency: REPORTING,
+    cash, other_assets, total_assets,
+    liabilities, total_liabilities,
+    equity: total_assets - total_liabilities,
+    foreign, notes,
+  }
+}
+
+/** Server helper: the balance sheet for a year. */
+export async function getBalanceSheet(year: number): Promise<BalanceSheet> {
+  const [registry, txs] = await Promise.all([getAccountRegistry(), getOwnerTransactions(year)])
+  return computeBalanceSheet(registry, txs, year)
 }
