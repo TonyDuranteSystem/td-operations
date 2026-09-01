@@ -40,6 +40,19 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
 
+  /** The cash figure comes from the account registry, which holds ONE closing balance per
+   *  account with no year dimension. Under a year header with no date it reads as THAT
+   *  year's cash — the same year-blindness that produced a fabricated balance sheet until
+   *  QA caught it. So: always say when the balances were struck, and say plainly when that
+   *  is not the year on screen. */
+  const cashDates = [...cash.accounts, ...cash.liabilities].map(a => a.as_of).filter(Boolean).sort()
+  const struckOn = cashDates.length > 0 ? cashDates[cashDates.length - 1] : null
+  const struckYear = struckOn ? Number(struckOn.slice(0, 4)) : null
+  const struckLabel = struckOn
+    ? new Date(struckOn + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })
+    : null
+  const cashIsAnotherYear = struckYear !== null && struckYear !== year
+
   const cashEntries = Object.entries(cash.totals)
   const usdCash = cash.totals.USD ?? 0
   const nonUsdCash = cashEntries.filter(([cur]) => cur !== 'USD')
@@ -57,9 +70,11 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
         <KpiCard
           label="Cash Position"
           value={fmt(usdCash)}
-          sub={nonUsdCash.length > 0
-            ? `USD only — plus ${nonUsdCash.map(([cur, v]) => fmtIn(cur)(v)).join(', ')}`
-            : `${cash.accounts.length} account${cash.accounts.length !== 1 ? 's' : ''}`}
+          sub={[
+            nonUsdCash.length > 0 ? `USD only — plus ${nonUsdCash.map(([cur, v]) => fmtIn(cur)(v)).join(', ')}` : null,
+            struckLabel ? `as at ${struckLabel}` : null,
+          ].filter(Boolean).join(' · ')}
+          warn={cashIsAnotherYear}
         />
         <KpiCard
           label="Uncategorized"
@@ -70,6 +85,13 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
         />
         <KpiCard label="Distributions" value={fmt(usd.distributions)} sub={`${year} YTD`} />
       </div>
+
+      {cashIsAnotherYear && (
+        <p className="text-xs text-orange-700">
+          The cash figure above was last struck in {struckYear}, not {year}. It is the current
+          position of the accounts, not this year&apos;s closing balance.
+        </p>
+      )}
 
       {/* Non-USD activity — never mixed into the USD numbers above */}
       {others.length > 0 && (

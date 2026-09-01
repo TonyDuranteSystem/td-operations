@@ -145,7 +145,7 @@ export function OwnerDashboard({
         <BalanceSheetTab bs={balanceSheet} />
       )}
       {currentTab === 'accounts' && (
-        <AccountsTab accounts={accounts} />
+        <AccountsTab accounts={accounts} year={year} />
       )}
       {currentTab === 'cashflow' && (
         <CashFlowTab year={year} monthly={usd?.monthly ?? []} cash={cash} />

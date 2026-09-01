@@ -30,6 +30,8 @@ const isCash = (a: OwnerAccount) => CASH_ACCOUNT_TYPES.includes(a.account_type)
 
 interface AccountsTabProps {
   accounts: OwnerAccount[]
+  /** The year on the page header, so the screen can say when these are not its balances. */
+  year: number
 }
 
 /**
@@ -41,7 +43,7 @@ interface AccountsTabProps {
  * the screen rather than left for the reader to discover, because the same year-blindness
  * silently produced a wrong balance sheet until QA caught it.
  */
-export function AccountsTab({ accounts }: AccountsTabProps) {
+export function AccountsTab({ accounts, year }: AccountsTabProps) {
   if (accounts.length === 0) {
     return (
       <div className="rounded-lg border border-orange-200 bg-orange-50 p-6 text-sm text-orange-900">
@@ -81,6 +83,7 @@ export function AccountsTab({ accounts }: AccountsTabProps) {
     : dates[0].slice(0, 7) === dates[dates.length - 1].slice(0, 7)
       ? `as at ${asDate(dates[dates.length - 1])}`
       : `struck between ${asDate(dates[0])} and ${asDate(dates[dates.length - 1])}`
+  const anotherYear = dates.length > 0 && !dates.some(d => Number(d.slice(0, 4)) === year)
 
   return (
     <div className="space-y-6">
@@ -91,9 +94,17 @@ export function AccountsTab({ accounts }: AccountsTabProps) {
       </div>
 
       {struckRange && (
-        <p className="text-xs text-zinc-500">
-          These are the balances as last struck, not a position for the year in the header above.
-        </p>
+        anotherYear ? (
+          <div className="rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800">
+            These balances were last struck in {Array.from(new Set(dates.map(d => d.slice(0, 4)))).join(', ')}, not {year}.
+            They are the current position of the accounts — the Balance Sheet will not state a
+            position for {year} for exactly this reason.
+          </div>
+        ) : (
+          <p className="text-xs text-zinc-500">
+            These are the balances as last struck, not a position for the year in the header above.
+          </p>
+        )
       )}
 
       {missing.length > 0 && (
