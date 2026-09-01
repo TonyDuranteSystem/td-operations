@@ -17,7 +17,7 @@ const money = (n: number, currency?: string | null) => {
 
 const SOURCE_WORDS: Record<string, string> = {
   statement: "the account's own statement",
-  derived: 'the transactions, worked out',
+  derived: 'the transactions',
   provider_report: "the provider's own report",
   unknown: 'an unrecorded source',
 }
