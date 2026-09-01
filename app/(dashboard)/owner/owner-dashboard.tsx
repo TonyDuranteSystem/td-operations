@@ -127,7 +127,7 @@ export function OwnerDashboard({
         <DashboardTab pnl={pnl} cash={cash} uncategorizedCount={uncategorizedCount} year={year} onTabSwitch={switchTab} />
       )}
       {currentTab === 'transactions' && (
-        <TransactionsTab year={year} initialRows={initialTransactions} initialTotal={initialTransactionTotal} focus={focus} />
+        <TransactionsTab year={year} initialRows={initialTransactions} initialTotal={initialTransactionTotal} focus={focus} onBack={() => switchTab('pnl')} />
       )}
       {currentTab === 'pnl' && (
         <PnLTab year={year} pnl={pnl} onDrillDown={(category, subcategory) => switchTab('transactions', { category, subcategory })} />

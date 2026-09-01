@@ -108,6 +108,8 @@ interface TransactionsTabProps {
   initialTotal: number
   /** A P&L line the user clicked: open showing exactly the rows behind that figure. */
   focus?: { category: string; subcategory: string } | null
+  /** Return to the report this was opened from. Present ONLY when arrival was a drill-down. */
+  onBack?: () => void
 }
 
 interface ModalState {
@@ -129,7 +131,7 @@ interface ModalState {
   saveRule: boolean
 }
 
-export function TransactionsTab({ year, initialRows, initialTotal, focus }: TransactionsTabProps) {
+export function TransactionsTab({ year, initialRows, initialTotal, focus, onBack }: TransactionsTabProps) {
   const [rows, setRows] = useState<OwnerTransaction[]>(initialRows)
   const [total, setTotal] = useState(initialTotal)
   const [loading, setLoading] = useState(false)
@@ -625,6 +627,19 @@ export function TransactionsTab({ year, initialRows, initialTotal, focus }: Tran
         </label>
         <span className="text-xs text-zinc-500">CSV or PDF, any bank — lands uncategorized, nothing is guessed</span>
       </div>
+
+      {/* THE WAY BACK. Clicking a P&L line opens this tab filtered to that line, and until
+          now there was no route home — Antonio's words: "when I click on it another page
+          open and there is no way to go back". Clearing the chip widened the list but still
+          left him on the wrong screen. Shown only when arrival WAS a drill-down. */}
+      {focus && onBack && (
+        <button
+          onClick={onBack}
+          className="inline-flex items-center gap-1.5 self-start rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
+        >
+          <span aria-hidden="true">&larr;</span> Back to the P&amp;L
+        </button>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
