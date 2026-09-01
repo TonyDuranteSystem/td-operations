@@ -643,6 +643,18 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     result.steps.push(step("form_reviewed", "skipped", "No submission_id"))
   } else {
   try {
+    // Captured BEFORE this pass's own write, so it reflects whether a
+    // PRIOR pass already reviewed this exact row (dev job 9a9c5cf5, round
+    // 5) — mirrors tax-form-setup.ts's reviewStatusPriorToThisSubmission.
+    // A non-null status here means this is a genuine resubmission of the
+    // SAME row (stable token), not the row's first pass through this step.
+    const { data: priorSub } = await supabaseAdmin
+      .from("formation_submissions")
+      .select("status")
+      .eq("id", p.submission_id)
+      .maybeSingle()
+    const wasAlreadyReviewed = !!(priorSub?.status && priorSub.status !== "completed")
+
     const { error: formErr } = await supabaseAdmin
       .from("formation_submissions")
       .update({
@@ -661,6 +673,34 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       result.steps.push(step("form_reviewed", "error", formErr.message))
     } else {
       result.steps.push(step("form_reviewed", "ok", "Form → reviewed"))
+    }
+
+    // ─── 3b. STAFF WHAT'S NEW ALERT (dev job 9a9c5cf5, round 5) ───
+    // Before this, formation had NO dedicated "client submitted the
+    // wizard" event at all — staff relied entirely on the unconditional
+    // email below and the ONE-TIME payment note, which is routinely
+    // dismissed before the wizard is even started (real incident:
+    // Francesco Lussignoli). Gated on formStatusWrite (already true in
+    // this branch) so a refused/ambiguous re-submit — deliberately silent
+    // by Antonio's ruling, dev job ca788354 — never fires this either.
+    if (!formErr && p.contact_id) {
+      try {
+        const { emitFormationWizardSubmittedEvent, retireFormationWizardSubmittedNote } =
+          await import("@/lib/portal/chat-events")
+        if (wasAlreadyReviewed) {
+          await retireFormationWizardSubmittedNote({ formationSubmissionId: p.submission_id })
+        }
+        const chat = await emitFormationWizardSubmittedEvent({
+          formation_submission_id: p.submission_id,
+          contact_id: p.contact_id,
+          is_resubmission: wasAlreadyReviewed,
+        })
+        result.steps.push(
+          step("staff_whats_new_alert", chat.emitted ? "ok" : "skipped", chat.reason ?? "client chat event emitted"),
+        )
+      } catch (e) {
+        result.steps.push(step("staff_whats_new_alert", "error", e instanceof Error ? e.message : String(e)))
+      }
     }
   } catch (e) {
     result.steps.push(step("form_reviewed", "error", e instanceof Error ? e.message : String(e)))
