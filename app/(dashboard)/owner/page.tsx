@@ -23,8 +23,16 @@ export default async function OwnerPage({
   const { data: { user } } = await supabase.auth.getUser()
   if (!user || !isOwnerOnly(user)) redirect('/')
 
-  const year = parseInt(searchParams.year ?? String(new Date().getFullYear()), 10)
-  const activeTab = searchParams.tab ?? 'dashboard'
+  /* `?year=` (present but empty) is not nullish, so the default never applied and parseInt
+   * returned NaN — which reached PostgREST as `tax_year=eq.NaN` and came back a 500. A URL
+   * is user input, including a hand-edited or truncated one. */
+  const parsedYear = parseInt(searchParams.year ?? '', 10)
+  const year = Number.isInteger(parsedYear) && parsedYear >= 2000 && parsedYear <= 2100
+    ? parsedYear
+    : new Date().getFullYear()
+
+  const TABS = ['dashboard', 'pnl', 'balance', 'accounts', 'cashflow', 'transactions', 'bookkeeper', 'tax']
+  const activeTab = TABS.includes(searchParams.tab ?? '') ? (searchParams.tab as string) : 'dashboard'
 
   const [pnl, cash, uncategorized, txResult, filing, accounts, balanceSheet] = await Promise.all([
     getOwnerPnL(year),

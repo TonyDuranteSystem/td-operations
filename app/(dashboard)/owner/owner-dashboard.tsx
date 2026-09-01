@@ -73,7 +73,16 @@ export function OwnerDashboard({
     router.push(`${pathname}?tab=${id}&year=${year}`, { scroll: false })
     // Opening a drill-down kept the P&L's scroll position, which dropped the reader into
     // the middle of the transaction list with the way back off-screen ABOVE them.
-    if (nextFocus) window.scrollTo({ top: 0 })
+    /* The dashboard shell is height-locked (`h-screen`) and <main> is what scrolls, so the
+     * page body never exceeds the viewport and window.scrollTo is a no-op here. Drilling
+     * from a category deep in the P&L landed mid-list with the "Back to the P&L" button
+     * above the fold — the same "another page opened and there's no way back" that this
+     * button was added to answer. Scroll the real container. */
+    if (nextFocus) {
+      const scroller = document.querySelector('main')
+      if (scroller) scroller.scrollTo({ top: 0 })
+      else window.scrollTo({ top: 0 })
+    }
   }
 
   return (

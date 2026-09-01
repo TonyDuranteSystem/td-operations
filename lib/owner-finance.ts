@@ -595,13 +595,20 @@ export async function getCashPosition(): Promise<CashPosition> {
    * The old derivation stays as a FALLBACK for an account with no registry row, and the
    * whole registry read is wrapped: the table does not exist in production yet, and a
    * missing table must degrade to the old behaviour rather than take the page down. */
-  const registry = await getAccountRegistry()
+  /* CLOSED ACCOUNTS ARE READ HERE ON PURPOSE. Reporting only ever uses the active ones,
+   * but the fallback below rebuilds any account the registry does not "claim" from its
+   * last statement row — so filtering a closed account out of the read would have handed
+   * it straight back to the fallback, which would resurrect it into Cash Position for
+   * ever. It would have disappeared from the Balance Sheet and the Accounts list while
+   * still propping up the headline cash figure. It is claimed, then not reported. */
+  const registry = await getAccountRegistry({ includeInactive: true })
 
   const accounts: CashAccountBalance[] = []
   const liabilities: CashAccountBalance[] = []
   const claimed = new Set<string>()
 
   for (const a of registry) {
+    if (a.is_active === false) { claimed.add(a.bank_name); continue }
     if (a.closing_balance === null || a.closing_balance === undefined) continue
     claimed.add(a.bank_name)
     const entry: CashAccountBalance = {
@@ -874,16 +881,21 @@ export interface OwnerAccount {
  * sandbox and is not yet in production, and a page that renders the whole owner dashboard
  * must not go blank because one supporting table is absent. Callers treat an empty
  * registry as "nothing known" and fall back to deriving from the transactions. */
-export async function getAccountRegistry(): Promise<OwnerAccount[]> {
-  const { data, error } = await supabaseAdmin
+export async function getAccountRegistry(
+  /** Closed accounts, included ONLY by a caller that needs to know they exist in order to
+   *  keep them out — see getCashPosition's fallback. Never for reporting. */
+  opts: { includeInactive?: boolean } = {},
+): Promise<OwnerAccount[]> {
+  let q = supabaseAdmin
     .from('td_books_accounts' as never)
     .select('bank_name, institution, account_number, account_type, sign_convention, is_clearing, currency, opening_balance, opening_date, closing_balance, closing_date, closing_source, notes, is_active')
     .eq('entity_id', TD_ENTITY_ID)
-    // A closed account must stop reporting its final balance. The table declares the
-    // column and indexes on it; the query used to ignore it, so a closed account would
-    // have sat in Cash held and in equity forever with no way to remove it.
-    .eq('is_active', true)
     .order('bank_name')
+  // A closed account must stop reporting its final balance. The table declares the column
+  // and indexes on it; the query used to ignore it, so a closed account would have sat in
+  // Cash held and in equity forever with no way to remove it.
+  if (!opts.includeInactive) q = q.eq('is_active', true)
+  const { data, error } = await q
   if (error) return []
   return (data ?? []) as unknown as OwnerAccount[]
 }
@@ -920,14 +932,14 @@ export interface BalanceSheet {
   /** Balances held in a currency other than the reporting one, listed not converted. */
   foreign: Array<{ currency: string; label: string; amount: number }>
   notes: string[]
-  /** FALSE when no account has a closing balance dated in this year.
+  /** FALSE when the accounts cannot support a complete position for this year.
    *
    *  Without this the screen cannot tell "the company owns nothing" from "we hold no
    *  balances for this year", and it rendered the second as the first: a full statement
    *  of 31-Dec-2025 balances headed with whatever year was selected, and — with no
    *  registry at all — POSITIVE equity and no liabilities, because the office property
    *  alone was enough to make the page think it had something to say. */
-  has_account_balances: boolean
+  can_state: boolean
 }
 
 export function computeBalanceSheet(
@@ -939,24 +951,34 @@ export function computeBalanceSheet(
   const cash: BalanceSheetLine[] = []
   const liabilities: BalanceSheetLine[] = []
   const foreign: BalanceSheet['foreign'] = []
-  /** Accounts that exist but cannot be stated — named, never silently dropped. */
+  /** Accounts that exist but cannot be placed in this year — named, never silently dropped.
+   *  Every account lands in EXACTLY ONE bucket, so no account is named twice and, more
+   *  importantly, none is named nowhere. */
   const unknownBalance: string[] = []
-  let matchedYear = 0
+  const otherYear: Array<{ name: string; year: string }> = []
+  const matchedDates: string[] = []
 
   for (const a of registry) {
-    // A balance belongs to the year it was STRUCK, not to whatever year is on screen.
-    // The registry holds ONE closing figure per account with no year dimension, so
-    // without this the same 31-Dec-2025 balances rendered under every year's heading.
-    const balanceYear = a.closing_date ? Number(a.closing_date.slice(0, 4)) : null
-    if (balanceYear !== year) continue
-    matchedYear++
-
+    // ORDER MATTERS: the balance check runs FIRST. It used to sit after the year filter,
+    // which made it unreachable for the accounts it exists for — an account with no
+    // balance also has no date, so it failed the year test and was dropped before
+    // anything could name it. A card with an unknown balance vanished in silence.
     if (a.closing_balance === null || a.closing_balance === undefined) {
       // Dropping this silently understates what is OWED and overstates equity by an
       // unknown amount — the one direction a balance sheet must never be wrong in.
       unknownBalance.push(a.bank_name)
       continue
     }
+
+    // A balance belongs to the year it was STRUCK, not to whatever year is on screen.
+    // The registry holds ONE closing figure per account with no year dimension, so
+    // without this the same 31-Dec-2025 balances rendered under every year's heading.
+    const balanceYear = a.closing_date ? Number(a.closing_date.slice(0, 4)) : null
+    if (balanceYear !== year) {
+      otherYear.push({ name: a.bank_name, year: a.closing_date?.slice(0, 4) ?? 'no date' })
+      continue
+    }
+    matchedDates.push(a.closing_date as string)
 
     const line: BalanceSheetLine = {
       label: a.bank_name,
@@ -974,7 +996,22 @@ export function computeBalanceSheet(
     else liabilities.push(line)
   }
 
-  const has_account_balances = matchedYear > 0
+  /* A STATEMENT IS ALL THE ACCOUNTS OR IT IS NOTHING (2026-09-01).
+   *
+   * The first version of this guard asked only "did ANY account match the year". One
+   * match was enough to print a confident, complete-looking statement built from a
+   * subset — and the accounts left out were mentioned nowhere, because the note block
+   * below only fired when NOTHING matched. That is not a hypothetical: closing a year
+   * means updating accounts one at a time, so the moment the first 2026 balance is
+   * entered, "2026" has one matching account and twelve missing ones. It would have
+   * printed total assets of one bank account, "None recorded" against liabilities, and
+   * positive equity, for a company carrying a mortgage — the exact failure the year
+   * check was written to kill, moved from "none match" to "some match".
+   *
+   * So the bar is completeness: every account in the registry must have a balance, and
+   * every one of those balances must be dated in the year asked for. Anything less is
+   * refused and the reason is named account by account. */
+  const can_state = matchedDates.length > 0 && unknownBalance.length === 0 && otherYear.length === 0
 
   // Property the company bought. Parked out of profit when the books were built, which
   // is right — and means this is the ONLY place it appears. Signed sum THEN abs: a
@@ -995,20 +1032,35 @@ export function computeBalanceSheet(
   const total_liabilities = liabilities.reduce((s, l) => s + l.amount, 0)
 
   const notes: string[] = []
-  if (!has_account_balances) {
+  if (registry.length === 0) {
+    notes.push(`No account records exist, so no balances can be stated for ${year}.`)
+  }
+  if (otherYear.length > 0) {
+    const years = Array.from(new Set(otherYear.map(a => a.year))).sort().join(', ')
     notes.push(
-      registry.length === 0
-        ? `No account records exist, so no balances can be stated for ${year}.`
-        : `No account has a closing balance dated in ${year}. The accounts on file were ` +
-          `last struck in ${Array.from(new Set(registry.map(a => a.closing_date?.slice(0, 4)).filter(Boolean))).sort().join(', ') || 'no year'}, ` +
-          `and a balance from another year is not this year's position.`,
+      matchedDates.length === 0
+        ? `No account has a closing balance dated in ${year}. The ${otherYear.length} account` +
+          `${otherYear.length === 1 ? '' : 's'} on file ${otherYear.length === 1 ? 'was' : 'were'} last struck in ` +
+          `${years}, and a balance from another year is not this year's position.`
+        : `${otherYear.length} account${otherYear.length === 1 ? '' : 's'} still ` +
+          `${otherYear.length === 1 ? 'carries a balance' : 'carry balances'} from ${years} rather than ${year} — ` +
+          `${otherYear.map(a => a.name).join(', ')}. Until ${otherYear.length === 1 ? 'it is' : 'they are'} closed ` +
+          `off for ${year}, only part of the company would be on the page.`,
     )
   }
   if (unknownBalance.length > 0) {
     notes.push(
       `${unknownBalance.join(', ')} ${unknownBalance.length === 1 ? 'has' : 'have'} no closing balance on file ` +
-      `and ${unknownBalance.length === 1 ? 'is' : 'are'} NOT included above. If ${unknownBalance.length === 1 ? 'it is' : 'they are'} ` +
-      `a card or a loan, the total owed is understated and equity is overstated by that amount.`,
+      `at all. If ${unknownBalance.length === 1 ? 'it is' : 'they are'} a card or a loan, any position stated ` +
+      `without ${unknownBalance.length === 1 ? 'it' : 'them'} understates what is owed and overstates equity.`,
+    )
+  }
+  if (can_state && new Set(matchedDates).size > 1) {
+    const sorted = Array.from(new Set(matchedDates)).sort()
+    notes.push(
+      `The balances above were not all struck on the same day — they run from ${sorted[0]} to ` +
+      `${sorted[sorted.length - 1]}. Each line shows its own date. Money moving between accounts ` +
+      `in the gap would be counted twice or not at all.`,
     )
   }
   if (propertyTotal > 0) {
@@ -1026,11 +1078,16 @@ export function computeBalanceSheet(
   }
 
   return {
-    year, as_of: `${year}-12-31`, currency: REPORTING,
+    year,
+    // The date the balances were ACTUALLY struck, not 31 December by assertion. Dating a
+    // 30-June balance as a year-end position is the same error as dating a 2025 balance
+    // 2026 — smaller, and just as untrue.
+    as_of: matchedDates.length > 0 ? Array.from(matchedDates).sort()[matchedDates.length - 1] : `${year}-12-31`,
+    currency: REPORTING,
     cash, other_assets, total_assets,
     liabilities, total_liabilities,
     equity: total_assets - total_liabilities,
-    foreign, notes, has_account_balances,
+    foreign, notes, can_state,
   }
 }
 

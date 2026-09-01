@@ -208,8 +208,11 @@ function PnLCurrencyTable({ year, block, prior, primary, onDrillDown }: {
           <tbody>
             <PnLSection label="Income" cols={showPrior ? 4 : 2} />
             <PnLRow fmt={fmt} label="Income from the invoice ledger" value={block.invoice_income} prior={prior?.invoice_income} variancePct={showPrior ? pct(block.invoice_income, prior?.invoice_income) : undefined} indent />
+            {/* "Other income" is what the Transactions tab, the Overview and the filed
+                return all call this category. Three surfaces naming one thing three
+                different ways is how a reader concludes there are three things. */}
             {(block.other_income !== 0 || (prior?.other_income ?? 0) !== 0) && (
-              <PnLRow fmt={fmt} label="Income recorded in the books" value={block.other_income} prior={prior?.other_income} indent />
+              <PnLRow fmt={fmt} label="Other income" value={block.other_income} prior={prior?.other_income} indent />
             )}
             <PnLSection label="Cost of Goods Sold" cols={showPrior ? 4 : 2} />
             <PnLRow fmt={fmt} label="Contractors / COGS" value={-block.cogs} prior={prior ? -prior.cogs : undefined} indent />

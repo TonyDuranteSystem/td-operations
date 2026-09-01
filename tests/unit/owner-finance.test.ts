@@ -609,7 +609,12 @@ const makeAccount = (overrides: Partial<OwnerAccount> = {}): OwnerAccount => ({
  *  account closed 2025-12-31 into a 2024 balance sheet and asserted the label read 2024 —
  *  which pinned the defect in place instead of catching it. Live QA found it: the page
  *  defaults to the CURRENT year, so simply opening it produced a complete, confident,
- *  wrong statement. */
+ *  wrong statement.
+ *
+ *  THE SECOND RULE, added after the SAME defect came back in a smaller shape: the year
+ *  check alone was not enough. It asked "does ANY account match the year", so one matching
+ *  account printed a complete-looking statement out of a subset — with the mortgage simply
+ *  absent and nothing on the page saying so. A statement is every account or it is none. */
 describe('computeBalanceSheet', () => {
   it('splits accounts into cash and liabilities by type, and nets equity', () => {
     const bs = computeBalanceSheet([
@@ -620,7 +625,7 @@ describe('computeBalanceSheet', () => {
       makeAccount({ bank_name: 'FCB loan', account_type: 'loan', closing_balance: 140246.52 }),
     ], [], 2025)
 
-    expect(bs.has_account_balances).toBe(true)
+    expect(bs.can_state).toBe(true)
     expect(bs.cash.map(l => l.label)).toEqual(['Chase', 'Stripe', 'Amex savings'])
     expect(bs.liabilities.map(l => l.label)).toEqual(['FCB loan', 'Amex card'])
     expect(bs.total_assets).toBeCloseTo(21317.06, 2)
@@ -634,7 +639,7 @@ describe('computeBalanceSheet', () => {
     const accounts = [makeAccount({ closing_balance: 41138.64, closing_date: '2025-12-31' })]
     const bs = computeBalanceSheet(accounts, [], 2026)
 
-    expect(bs.has_account_balances).toBe(false)
+    expect(bs.can_state).toBe(false)
     expect(bs.cash).toHaveLength(0)
     expect(bs.total_assets).toBe(0)
     expect(bs.total_liabilities).toBe(0)
@@ -644,14 +649,43 @@ describe('computeBalanceSheet', () => {
   it('states the year it DOES hold balances for', () => {
     const accounts = [makeAccount({ closing_balance: 41138.64, closing_date: '2025-06-30' })]
     const bs = computeBalanceSheet(accounts, [], 2025)
-    expect(bs.has_account_balances).toBe(true)
+    expect(bs.can_state).toBe(true)
     expect(bs.total_assets).toBeCloseTo(41138.64, 2)
     expect(bs.cash[0].as_of).toBe('2025-06-30')
+    // Dated by what the accounts say, NOT asserted as 31 December. An earlier version
+    // hardcoded `${year}-12-31`, so a balance struck at midsummer was presented as the
+    // year-end position — the same untruth as the year mix-up, at month scale.
+    expect(bs.as_of).toBe('2025-06-30')
+  })
+
+  it('REFUSES a partial statement — one account in the year is not the company', () => {
+    // The real shape of a year-end close: balances are updated ONE ACCOUNT AT A TIME.
+    // The moment the first 2026 figure is entered, 2026 has one match and the rest are
+    // still on 2025. That used to print total assets of a single bank account, "None
+    // recorded" against liabilities and POSITIVE equity — for a company carrying a
+    // 140,246.52 mortgage that was simply not on the page.
+    const bs = computeBalanceSheet([
+      makeAccount({ bank_name: 'Chase', closing_balance: 17832.23, closing_date: '2026-12-31' }),
+      makeAccount({ bank_name: 'FCB loan', account_type: 'loan', closing_balance: 140246.52, closing_date: '2025-12-31' }),
+    ], [], 2026)
+
+    expect(bs.can_state).toBe(false)
+    expect(bs.notes.some(n => n.includes('FCB loan') && n.includes('2025'))).toBe(true)
+  })
+
+  it('says so when the balances were not all struck on the same day', () => {
+    const bs = computeBalanceSheet([
+      makeAccount({ bank_name: 'Chase', closing_date: '2025-12-31' }),
+      makeAccount({ bank_name: 'Relay', closing_date: '2025-06-30' }),
+    ], [], 2025)
+
+    expect(bs.can_state).toBe(true)
+    expect(bs.notes.some(n => n.includes('2025-06-30') && n.includes('2025-12-31'))).toBe(true)
   })
 
   it('an account with no closing DATE cannot be placed in any year', () => {
     const bs = computeBalanceSheet([makeAccount({ closing_date: null })], [], 2025)
-    expect(bs.has_account_balances).toBe(false)
+    expect(bs.can_state).toBe(false)
     expect(bs.total_assets).toBe(0)
   })
 
@@ -681,9 +715,13 @@ describe('computeBalanceSheet', () => {
       makeAccount({ bank_name: 'Amex card', account_type: 'credit_card', closing_balance: null }),
     ], [], 2025)
 
-    expect(bs.cash.map(l => l.label)).toEqual(['Known'])
-    expect(bs.total_assets).toBe(250)
-    expect(bs.notes.some(n => n.includes('Amex card') && n.includes('overstated'))).toBe(true)
+    // It must be NAMED — and the note has to be reachable. The balance check used to run
+    // AFTER the year filter, and an account with no balance has no date either, so it was
+    // dropped by the year test before anything could name it: a card with an unknown
+    // balance vanished in total silence.
+    expect(bs.notes.some(n => n.includes('Amex card') && n.includes('overstates'))).toBe(true)
+    // And it blocks the statement: what is owed is unknown, so equity is unknowable.
+    expect(bs.can_state).toBe(false)
   })
 
   it('carries the property purchase — the one place it appears, since profit excludes it', () => {
@@ -712,7 +750,7 @@ describe('computeBalanceSheet', () => {
       makeTx({ subcategory: 'fixed_asset_office_purchase', amount: -35032.53 }),
     ], 2025)
 
-    expect(bs.has_account_balances).toBe(false)
+    expect(bs.can_state).toBe(false)
     expect(bs.liabilities).toHaveLength(0)
     expect(bs.notes.some(n => n.includes('No account records exist'))).toBe(true)
   })

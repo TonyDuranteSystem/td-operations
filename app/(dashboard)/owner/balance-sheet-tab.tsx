@@ -53,7 +53,10 @@ interface BalanceSheetTabProps {
 export function BalanceSheetTab({ bs }: BalanceSheetTabProps) {
   const cashTotal = bs.cash.reduce((s, l) => s + l.amount, 0)
 
-  if (!bs.has_account_balances) {
+  if (!bs.can_state) {
+    /* Deliberately listed WITHOUT any total. These are the parts of the year that are
+     * known; a subtotal over them would be the partial statement this screen refuses. */
+    const known = [...bs.cash, ...bs.liabilities, ...bs.other_assets]
     return (
       <div className="space-y-4">
         <div className="rounded-lg border border-orange-200 bg-orange-50 p-5">
@@ -64,21 +67,25 @@ export function BalanceSheetTab({ bs }: BalanceSheetTabProps) {
             {bs.notes.map((n, i) => <p key={i}>{n}</p>)}
           </div>
           <p className="mt-3 text-xs text-orange-800">
-            A balance sheet is a position on one date. Showing another year&apos;s balances under
-            this year&apos;s heading would be a statement the accounts do not support.
+            A balance sheet is a position on one date, covering every account. Part of the
+            company under a whole-company heading reads as the whole company — which is how a
+            page shows healthy equity for a business that owes money on a mortgage.
           </p>
         </div>
 
-        {bs.other_assets.length > 0 && (
+        {known.length > 0 && (
           <div className="rounded-lg border border-zinc-200 bg-white p-4">
             <h3 className="text-sm font-medium text-zinc-700">Known for {bs.year}, on its own</h3>
             <p className="mb-2 mt-0.5 text-xs text-zinc-500">
-              Recorded from the transactions. Not a balance sheet — there is nothing to set it against.
+              Listed with no totals on purpose — there is nothing to set them against yet.
             </p>
-            {bs.other_assets.map(l => (
+            {known.map(l => (
               <div key={l.label} className="flex items-baseline justify-between gap-3 py-1 text-sm">
-                <span className="text-zinc-600">{l.label}</span>
-                <span className="tabular-nums text-zinc-800">{money(l.amount)}</span>
+                <span className="min-w-0 break-words text-zinc-600">
+                  {l.label}
+                  {l.as_of && <span className="block text-xs text-zinc-400">at {asDate(l.as_of)}</span>}
+                </span>
+                <span className="shrink-0 tabular-nums text-zinc-800">{money(l.amount)}</span>
               </div>
             ))}
           </div>
