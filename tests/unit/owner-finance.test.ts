@@ -9,6 +9,8 @@ import {
   OWNER_ACCOUNT_ID,
   TD_ENTITY_ID,
   type InvoiceIncomeRow,
+  computeBalanceSheet,
+  type OwnerAccount,
   type OwnerTransaction,
   type VendorRule,
 } from '@/lib/owner-finance'
@@ -575,5 +577,103 @@ describe('computeFilingSummary — deductible closing costs', () => {
     const txs = [makeTx({ tax_year: 2026, category: 'income', subcategory: 'client_payment', amount: 100000 })]
     const f = computeFilingSummary(txs, computeOwnerPnL(txs, computeInvoiceIncome([], 2026), 2026))
     expect(f.adjustments.some(a => a.label.includes('closing costs'))).toBe(false)
+  })
+})
+
+const makeAccount = (overrides: Partial<OwnerAccount> = {}): OwnerAccount => ({
+  bank_name: 'Test Checking',
+  institution: 'Test Bank',
+  account_number: '0001',
+  account_type: 'checking',
+  sign_convention: 'natural',
+  is_clearing: false,
+  currency: 'USD',
+  opening_balance: null,
+  opening_date: null,
+  closing_balance: 1000,
+  closing_date: '2025-12-31',
+  closing_source: 'December statement',
+  notes: null,
+  ...overrides,
+})
+
+/** The balance sheet shipped without any tests. It is the only place the office purchase
+ *  appears at all, and the only independent check on the cash the P&L implies — so the
+ *  rules it encodes (what counts as cash, what never gets converted, what is skipped)
+ *  are worth pinning before a screen is built on top of them. */
+describe('computeBalanceSheet', () => {
+  it('splits accounts into cash and liabilities by type, and nets equity', () => {
+    const bs = computeBalanceSheet([
+      makeAccount({ bank_name: 'Chase', account_type: 'checking', closing_balance: 17832.23 }),
+      makeAccount({ bank_name: 'Amex savings', account_type: 'savings', closing_balance: 602.73 }),
+      makeAccount({ bank_name: 'Stripe', account_type: 'processor', closing_balance: 2882.10 }),
+      makeAccount({ bank_name: 'Amex card', account_type: 'credit_card', closing_balance: 1991.63 }),
+      makeAccount({ bank_name: 'FCB loan', account_type: 'loan', closing_balance: 140246.52 }),
+    ], [], 2025)
+
+    expect(bs.cash.map(l => l.label)).toEqual(['Chase', 'Stripe', 'Amex savings'])
+    expect(bs.liabilities.map(l => l.label)).toEqual(['FCB loan', 'Amex card'])
+    expect(bs.total_assets).toBeCloseTo(21317.06, 2)
+    expect(bs.total_liabilities).toBeCloseTo(142238.15, 2)
+    expect(bs.equity).toBeCloseTo(21317.06 - 142238.15, 2)
+  })
+
+  it('a processor balance counts as cash — it is the company money, just in transit', () => {
+    const bs = computeBalanceSheet([makeAccount({ account_type: 'processor', closing_balance: 500 })], [], 2025)
+    expect(bs.cash).toHaveLength(1)
+    expect(bs.total_assets).toBe(500)
+  })
+
+  it('NEVER converts a foreign balance into the totals — it is listed separately', () => {
+    const bs = computeBalanceSheet([
+      makeAccount({ bank_name: 'Chase', closing_balance: 100 }),
+      makeAccount({ bank_name: 'Airwallex EUR', currency: 'EUR', closing_balance: 4258.76 }),
+    ], [], 2025)
+
+    expect(bs.total_assets).toBe(100)
+    expect(bs.cash.map(l => l.label)).toEqual(['Chase'])
+    expect(bs.foreign).toEqual([{ currency: 'EUR', label: 'Airwallex EUR', amount: 4258.76 }])
+    expect(bs.notes.some(n => n.includes('EUR'))).toBe(true)
+  })
+
+  it('skips an account with no closing balance rather than treating it as zero', () => {
+    const bs = computeBalanceSheet([
+      makeAccount({ bank_name: 'Known', closing_balance: 250 }),
+      makeAccount({ bank_name: 'Unknown', closing_balance: null }),
+    ], [], 2025)
+    expect(bs.cash.map(l => l.label)).toEqual(['Known'])
+    expect(bs.total_assets).toBe(250)
+  })
+
+  it('carries the property purchase — the one place it appears, since profit excludes it', () => {
+    const bs = computeBalanceSheet([], [
+      makeTx({ subcategory: 'fixed_asset_office_purchase', amount: -29032.53 }),
+      makeTx({ subcategory: 'fixed_asset_office_purchase', amount: -6000 }),
+    ], 2025)
+
+    expect(bs.other_assets).toEqual([
+      { label: 'Office property (at cost)', amount: 35032.53, source: 'purchase payments' },
+    ])
+    expect(bs.total_assets).toBeCloseTo(35032.53, 2)
+    expect(bs.notes.some(n => n.includes('depreciation'))).toBe(true)
+  })
+
+  it('says plainly when there are no account records at all', () => {
+    const bs = computeBalanceSheet([], [], 2025)
+    expect(bs.total_assets).toBe(0)
+    expect(bs.equity).toBe(0)
+    expect(bs.notes.some(n => n.includes('No account records'))).toBe(true)
+  })
+
+  it('reports as at the year end, in USD', () => {
+    const bs = computeBalanceSheet([makeAccount()], [], 2024)
+    expect(bs.as_of).toBe('2024-12-31')
+    expect(bs.year).toBe(2024)
+    expect(bs.currency).toBe('USD')
+  })
+
+  it('keeps the source of each balance so a reader can weigh it', () => {
+    const bs = computeBalanceSheet([makeAccount({ closing_source: 'provider report' })], [], 2025)
+    expect(bs.cash[0].source).toBe('provider report')
   })
 })

@@ -9,12 +9,16 @@ import { PnLTab } from './pnl-tab'
 import { CashFlowTab } from './cashflow-tab'
 import { TaxTab } from './tax-tab'
 import { BookkeeperTab } from './bookkeeper-tab'
-import type { OwnerTransaction, OwnerPnL, CashPosition , FilingSummary } from '@/lib/owner-finance'
+import { BalanceSheetTab } from './balance-sheet-tab'
+import { AccountsTab } from './accounts-tab'
+import type { OwnerTransaction, OwnerPnL, CashPosition, FilingSummary, OwnerAccount, BalanceSheet } from '@/lib/owner-finance'
 
 const TABS = [
   { id: 'dashboard', label: 'Overview' },
   { id: 'transactions', label: 'Transactions' },
   { id: 'pnl', label: 'P&L' },
+  { id: 'balance', label: 'Balance Sheet' },
+  { id: 'accounts', label: 'Accounts' },
   { id: 'cashflow', label: 'Cash Flow' },
   { id: 'tax', label: 'Tax' },
   { id: 'bookkeeper', label: 'Bookkeeper' },
@@ -29,6 +33,8 @@ interface OwnerDashboardProps {
   initialTransactions: OwnerTransaction[]
   initialTransactionTotal: number
   filing: FilingSummary
+  accounts: OwnerAccount[]
+  balanceSheet: BalanceSheet
 }
 
 export function OwnerDashboard({
@@ -40,6 +46,8 @@ export function OwnerDashboard({
   initialTransactions,
   initialTransactionTotal,
   filing,
+  accounts,
+  balanceSheet,
 }: OwnerDashboardProps) {
   const usd = pnl.blocks.find(b => b.currency === 'USD')
   const router = useRouter()
@@ -60,8 +68,8 @@ export function OwnerDashboard({
   }
 
   return (
-    <div className="p-6">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="p-4 sm:p-6">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-zinc-900">My Finances</h1>
           <p className="text-sm text-zinc-500 mt-0.5">Tony Durante LLC — {year}</p>
@@ -88,13 +96,17 @@ export function OwnerDashboard({
       )}
 
       <div className="mb-6 border-b border-zinc-200">
-        <nav className="-mb-px flex gap-6">
+        {/* Antonio runs this as a phone app at ~380px. Eight tabs cannot fit on one line,
+            so the strip scrolls sideways rather than wrapping into a second row that
+            pushes the content down or overflowing the page and dragging the whole
+            layout with it. */}
+        <nav className="-mb-px flex gap-5 overflow-x-auto whitespace-nowrap sm:gap-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {TABS.map(tab => (
             <button
               key={tab.id}
               onClick={() => switchTab(tab.id)}
               className={cn(
-                'pb-3 text-sm font-medium border-b-2 transition-colors',
+                'shrink-0 pb-3 text-sm font-medium border-b-2 transition-colors',
                 currentTab === tab.id
                   ? 'border-zinc-900 text-zinc-900'
                   : 'border-transparent text-zinc-500 hover:text-zinc-700'
@@ -119,6 +131,12 @@ export function OwnerDashboard({
       )}
       {currentTab === 'pnl' && (
         <PnLTab year={year} pnl={pnl} onDrillDown={(category, subcategory) => switchTab('transactions', { category, subcategory })} />
+      )}
+      {currentTab === 'balance' && (
+        <BalanceSheetTab bs={balanceSheet} />
+      )}
+      {currentTab === 'accounts' && (
+        <AccountsTab accounts={accounts} />
       )}
       {currentTab === 'cashflow' && (
         <CashFlowTab year={year} monthly={usd?.monthly ?? []} cash={cash} />
