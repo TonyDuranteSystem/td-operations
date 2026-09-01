@@ -36,17 +36,34 @@ export function CashFlowTab({ year, monthly, cash }: CashFlowTabProps) {
   const nonUsdCash = Object.entries(cash.totals).filter(([cur]) => cur !== 'USD')
   const runway = burnRate > 0 ? usdCash / burnRate : null
 
+  /* The registry holds ONE closing balance per account with no year dimension, so this
+   * figure belongs to whenever it was last struck — not to the year in the page header.
+   * Undated under a year heading it reads as that year's closing cash, which is the same
+   * year-blindness that made the balance sheet state a position it could not support.
+   * Fixed on the Overview and the Accounts list; this tab was missed, and at 2023 it
+   * showed $41,139 of 2025 money with nothing on screen saying so. */
+  const cashDates = [...cash.accounts, ...cash.liabilities].map(a => a.as_of).filter(Boolean).sort()
+  const struckOn = cashDates.length > 0 ? cashDates[cashDates.length - 1] : null
+  const struckYear = struckOn ? Number(struckOn.slice(0, 4)) : null
+  const struckLabel = struckOn
+    ? new Date(struckOn + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })
+    : null
+  const cashIsAnotherYear = struckYear !== null && struckYear !== year
+
   return (
     <div className="space-y-6">
       {/* Metric cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="rounded-lg border border-zinc-200 bg-white p-4">
+        <div className={`rounded-lg border bg-white p-4 ${cashIsAnotherYear ? 'border-orange-300' : 'border-zinc-200'}`}>
           <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Cash Position</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums text-zinc-900">{fmt(usdCash)}</p>
-          <p className="mt-0.5 text-xs text-zinc-400">
-            {nonUsdCash.length > 0
-              ? `USD only — plus ${nonUsdCash.map(([cur, v]) => fmtIn(cur)(v)).join(', ')}`
-              : `across ${cash.accounts.length} account${cash.accounts.length !== 1 ? 's' : ''}`}
+          <p className="mt-0.5 break-words text-xs text-zinc-400">
+            {[
+              nonUsdCash.length > 0
+                ? `USD only — plus ${nonUsdCash.map(([cur, v]) => fmtIn(cur)(v)).join(', ')}`
+                : `across ${cash.accounts.length} account${cash.accounts.length !== 1 ? 's' : ''}`,
+              struckLabel ? `as at ${struckLabel}` : null,
+            ].filter(Boolean).join(' · ')}
           </p>
         </div>
         <div className="rounded-lg border border-zinc-200 bg-white p-4">
@@ -62,6 +79,14 @@ export function CashFlowTab({ year, monthly, cash }: CashFlowTabProps) {
           <p className="mt-0.5 text-xs text-zinc-400">at current burn</p>
         </div>
       </div>
+
+      {cashIsAnotherYear && (
+        <p className="text-sm text-orange-700">
+          The cash figure above was last struck in {struckYear}, not {year} — it is the current
+          position of the accounts, not this year&apos;s closing balance. The runway divides it by
+          {' '}{year}&apos;s spending, so it answers a question about today, not about {year}.
+        </p>
+      )}
 
       {/* Monthly bar chart */}
       <div className="rounded-lg border border-zinc-200 bg-white p-4">
