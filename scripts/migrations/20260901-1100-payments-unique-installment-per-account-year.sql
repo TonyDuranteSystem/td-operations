@@ -43,11 +43,19 @@
 -- comment about IF NOT EXISTS warns against).
 DROP INDEX IF EXISTS uq_payments_installment_per_account_year;
 
+-- payments.status is the enum type payment_status (invoice_status is plain text). Two dead
+-- ends hit applying this to sandbox (2026-09-01): COALESCE(status, '') raises "invalid input
+-- value for enum payment_status: ''" (an enum can't COALESCE with a bare string literal), and
+-- casting to text (status::text) raises "functions in index predicate must be marked
+-- IMMUTABLE" (enum-to-text casts aren't immutable to Postgres). IS DISTINCT FROM against an
+-- explicit enum literal avoids both — a plain equality/inequality operator over the enum type
+-- is immutable, and IS DISTINCT FROM treats a null status as live, matching how a null
+-- invoice_status is already treated below.
 CREATE UNIQUE INDEX uq_payments_installment_per_account_year
   ON payments (account_id, payment_category, year)
   WHERE payment_category IN ('installment_1', 'installment_2')
     AND COALESCE(invoice_status, '') NOT IN ('Cancelled', 'Voided', 'Credit')
-    AND COALESCE(status, '') <> 'Cancelled'
+    AND status IS DISTINCT FROM 'Cancelled'::payment_status
     AND total > 0;
 
 COMMENT ON INDEX uq_payments_installment_per_account_year IS
