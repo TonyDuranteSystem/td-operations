@@ -383,6 +383,29 @@ export default async function PortalDashboardPage() {
         .limit(1)
         .maybeSingle()
       wizardSubmitted = !!wp
+      // FALLBACK (dev job 9a9c5cf5): a wizard_progress write can fail
+      // silently (2026-08-27 missing-column incident), leaving a client who
+      // genuinely submitted stuck on "Complete Setup" forever. Check both
+      // submission tables directly as independent proof.
+      if (!wizardSubmitted) {
+        const [{ data: fs }, { data: os }] = await Promise.all([
+          supabaseAdmin
+            .from('formation_submissions')
+            .select('id')
+            .eq('contact_id', contactId)
+            .in('status', ['completed', 'reviewed'])
+            .limit(1)
+            .maybeSingle(),
+          supabaseAdmin
+            .from('onboarding_submissions')
+            .select('id')
+            .eq('contact_id', contactId)
+            .in('status', ['completed', 'reviewed'])
+            .limit(1)
+            .maybeSingle(),
+        ])
+        wizardSubmitted = !!fs || !!os
+      }
     }
 
     // Pending actions for clients who have a portal account but no active
@@ -586,6 +609,29 @@ export default async function PortalDashboardPage() {
         .limit(1)
         .maybeSingle()
       wizardSubmitted = !!wp
+      // FALLBACK (dev job 9a9c5cf5): a wizard_progress write can fail
+      // silently (2026-08-27 missing-column incident), leaving a client who
+      // genuinely submitted stuck on "Complete Setup" forever. Check both
+      // submission tables directly as independent proof.
+      if (!wizardSubmitted) {
+        const [{ data: fs }, { data: os }] = await Promise.all([
+          supabaseAdmin
+            .from('formation_submissions')
+            .select('id')
+            .eq('contact_id', contactId)
+            .in('status', ['completed', 'reviewed'])
+            .limit(1)
+            .maybeSingle(),
+          supabaseAdmin
+            .from('onboarding_submissions')
+            .select('id')
+            .eq('contact_id', contactId)
+            .in('status', ['completed', 'reviewed'])
+            .limit(1)
+            .maybeSingle(),
+        ])
+        wizardSubmitted = !!fs || !!os
+      }
     }
 
     // Pending actions (signatures, invoices, wizards) for pre-active tier clients.

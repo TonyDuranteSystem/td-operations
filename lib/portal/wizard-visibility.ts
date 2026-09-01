@@ -107,7 +107,21 @@ export async function computeHasWizardPending(
           .in("wizard_type", [...PERSON_OWNED_WIZARD_TYPES])
           .eq("status", "submitted")
           .limit(1)
-        if (!submittedItin?.length) return true
+        let alreadySubmitted = !!submittedItin?.length
+        // FALLBACK (dev job 9a9c5cf5): a wizard_progress write can fail
+        // silently (2026-08-27 missing-column incident) leaving a client
+        // who genuinely submitted still nagged forever. The submission's
+        // own table is independent proof.
+        if (!alreadySubmitted) {
+          const { data: itinSub } = await supabaseAdmin
+            .from("itin_submissions")
+            .select("id")
+            .eq("contact_id", contactId)
+            .in("status", ["completed", "reviewed"])
+            .limit(1)
+          alreadySubmitted = !!itinSub?.length
+        }
+        if (!alreadySubmitted) return true
       }
       if (stillPending.length > 0) return true
     }
@@ -120,7 +134,22 @@ export async function computeHasWizardPending(
       .eq("contact_id", contactId)
       .eq("status", "submitted")
       .limit(1)
-    if (!submitted?.length) return true
+    let alreadySubmitted = !!submitted?.length
+    // FALLBACK (dev job 9a9c5cf5): same missing-write hazard as above — a
+    // formation/onboarding client who genuinely submitted must not see this
+    // nag forever just because their tracking row failed to write. Check
+    // the tier-matching submission table directly as independent proof.
+    if (!alreadySubmitted) {
+      const table = portalTier === "formation" ? "formation_submissions" : "onboarding_submissions"
+      const { data: sub } = await supabaseAdmin
+        .from(table)
+        .select("id")
+        .eq("contact_id", contactId)
+        .in("status", ["completed", "reviewed"])
+        .limit(1)
+      alreadySubmitted = !!sub?.length
+    }
+    if (!alreadySubmitted) return true
   }
 
   return false

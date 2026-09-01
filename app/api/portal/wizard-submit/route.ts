@@ -41,6 +41,7 @@ import {
 } from '@/lib/tax/wizard-eligibility'
 import { buildReviewHistoryEntry, type ReviewStatus } from '@/lib/tax/review-status'
 import { verifyClosureServiceDelivery } from '@/lib/portal/closure-subject'
+import { reportSystemError } from '@/lib/system-errors'
 
 /** Extract file upload paths from wizard data.
  * All wizard uploads follow the pattern: {wizardType}/{identifier}/{fieldName}_{unique}_{filename}
@@ -249,28 +250,48 @@ export async function POST(req: NextRequest) {
     //   short-circuiting at the step-1 dedup.
     // All other wizard types: mark submitted immediately (existing behavior).
     if (wizard_type !== 'company_info' && wizard_type !== 'td_communication') {
-      if (progress_id) {
-        await supabaseAdmin
-          .from('wizard_progress')
-          .update({
-            data,
-            status: 'submitted',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', progress_id)
-      } else {
-        await supabaseAdmin
-          .from('wizard_progress')
-          .insert({
-            wizard_type,
-            data,
-            account_id: account_id || null,
-            contact_id: contact_id || null,
-            lead_id: lead_id || null,
-            service_delivery_id: closureServiceDeliveryId,
-            status: 'submitted',
-            current_step: 99,
-          })
+      const wpResult = progress_id
+        ? await supabaseAdmin
+            .from('wizard_progress')
+            .update({
+              data,
+              status: 'submitted',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', progress_id)
+        : await supabaseAdmin
+            .from('wizard_progress')
+            .insert({
+              wizard_type,
+              data,
+              account_id: account_id || null,
+              contact_id: contact_id || null,
+              lead_id: lead_id || null,
+              service_delivery_id: closureServiceDeliveryId,
+              status: 'submitted',
+              current_step: 99,
+            })
+
+      if (wpResult.error) {
+        // Do NOT silently continue. A failed write here means the client's
+        // "you're done" record never exists, which every downstream stage
+        // gate and lock-screen check reads as "not submitted yet" forever
+        // (dev job 9a9c5cf5 — a schema-drift class of bug where this exact
+        // silent swallow left a real formation stuck at "Payment Confirmed"
+        // for days while the client saw a normal success response). Fail
+        // loudly so the client retries and the failure is visible.
+        console.error('[wizard-submit] wizard_progress write failed:', wpResult.error.message)
+        reportSystemError({
+          source: 'server',
+          route: '/api/portal/wizard-submit',
+          method: 'POST',
+          message: `wizard_progress write failed for wizard_type=${wizard_type}: ${wpResult.error.message}`,
+          context: { wizard_type, contact_id, account_id, progress_id: progress_id || null },
+        }).catch(() => {})
+        return NextResponse.json(
+          { error: 'Failed to save your progress. Please try submitting again.' },
+          { status: 500 },
+        )
       }
     }
 
@@ -871,23 +892,34 @@ export async function POST(req: NextRequest) {
         })
 
         // Enrollment write succeeded → now mark wizard_progress submitted.
-        if (progress_id) {
-          await supabaseAdmin
-            .from('wizard_progress')
-            .update({ data, status: 'submitted', updated_at: new Date().toISOString() })
-            .eq('id', progress_id)
-        } else {
-          await supabaseAdmin
-            .from('wizard_progress')
-            .insert({
-              wizard_type,
-              data,
-              account_id: account_id || null,
-              contact_id: contact_id || null,
-              lead_id: lead_id || null,
-              status: 'submitted',
-              current_step: 99,
-            })
+        const tdWpResult = progress_id
+          ? await supabaseAdmin
+              .from('wizard_progress')
+              .update({ data, status: 'submitted', updated_at: new Date().toISOString() })
+              .eq('id', progress_id)
+          : await supabaseAdmin
+              .from('wizard_progress')
+              .insert({
+                wizard_type,
+                data,
+                account_id: account_id || null,
+                contact_id: contact_id || null,
+                lead_id: lead_id || null,
+                status: 'submitted',
+                current_step: 99,
+              })
+        if (tdWpResult.error) {
+          // The enrollment itself already succeeded — don't fail the
+          // client's submission over the tracking row, but don't let it
+          // vanish silently either (dev job 9a9c5cf5).
+          console.error('[wizard-submit] TD Comm wizard_progress write failed:', tdWpResult.error.message)
+          reportSystemError({
+            source: 'server',
+            route: '/api/portal/wizard-submit',
+            method: 'POST',
+            message: `wizard_progress write failed for wizard_type=td_communication (enrollment ${enrollmentId} still succeeded): ${tdWpResult.error.message}`,
+            context: { wizard_type, contact_id, account_id, enrollment_id: enrollmentId },
+          }).catch(() => {})
         }
 
         // action_log for the CRM Recent Activity feed (mirror banking).
@@ -999,27 +1031,38 @@ export async function POST(req: NextRequest) {
       // company_info scoped reorder: mark wizard_progress as submitted AFTER job enqueue succeeds.
       // If enqueue failed (threw above), this never runs — portal shows company_info wizard for retry.
       if (wizard_type === 'company_info') {
-        if (progress_id) {
-          await supabaseAdmin
-            .from('wizard_progress')
-            .update({
-              data,
-              status: 'submitted',
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', progress_id)
-        } else {
-          await supabaseAdmin
-            .from('wizard_progress')
-            .insert({
-              wizard_type,
-              data,
-              account_id: account_id || null,
-              contact_id: contact_id || null,
-              lead_id: lead_id || null,
-              status: 'submitted',
-              current_step: 99,
-            })
+        const ciWpResult = progress_id
+          ? await supabaseAdmin
+              .from('wizard_progress')
+              .update({
+                data,
+                status: 'submitted',
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', progress_id)
+          : await supabaseAdmin
+              .from('wizard_progress')
+              .insert({
+                wizard_type,
+                data,
+                account_id: account_id || null,
+                contact_id: contact_id || null,
+                lead_id: lead_id || null,
+                status: 'submitted',
+                current_step: 99,
+              })
+        if (ciWpResult.error) {
+          // The job is already enqueued at this point — don't fail the
+          // client's submission over the tracking row, but don't let it
+          // vanish silently either (dev job 9a9c5cf5).
+          console.error('[wizard-submit] company_info wizard_progress write failed:', ciWpResult.error.message)
+          reportSystemError({
+            source: 'server',
+            route: '/api/portal/wizard-submit',
+            method: 'POST',
+            message: `wizard_progress write failed for wizard_type=company_info (job ${jobId} still enqueued): ${ciWpResult.error.message}`,
+            context: { wizard_type, contact_id, account_id, job_id: jobId },
+          }).catch(() => {})
         }
       }
     }

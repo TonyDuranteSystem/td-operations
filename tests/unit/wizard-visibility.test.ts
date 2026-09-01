@@ -25,6 +25,9 @@ interface WizardRow { id: string }
 let sdAccountFixture: SDRow[] = []
 let sdContactFixture: SDRow[] = []
 let wizardProgressFixture: WizardRow[] = []
+let itinSubmissionsFixture: WizardRow[] = []
+let formationSubmissionsFixture: WizardRow[] = []
+let onboardingSubmissionsFixture: WizardRow[] = []
 
 // Track query shape so we can route the fixture per branch.
 let lastFromTable = ""
@@ -57,6 +60,15 @@ vi.mock("@/lib/supabase-admin", () => ({
           if (lastFromTable === "wizard_progress") {
             return Promise.resolve({ data: wizardProgressFixture, error: null })
           }
+          if (lastFromTable === "itin_submissions") {
+            return Promise.resolve({ data: itinSubmissionsFixture, error: null })
+          }
+          if (lastFromTable === "formation_submissions") {
+            return Promise.resolve({ data: formationSubmissionsFixture, error: null })
+          }
+          if (lastFromTable === "onboarding_submissions") {
+            return Promise.resolve({ data: onboardingSubmissionsFixture, error: null })
+          }
           return Promise.resolve({ data: [], error: null })
         }),
       }
@@ -71,6 +83,9 @@ beforeEach(() => {
   sdAccountFixture = []
   sdContactFixture = []
   wizardProgressFixture = []
+  itinSubmissionsFixture = []
+  formationSubmissionsFixture = []
+  onboardingSubmissionsFixture = []
   lastFromTable = ""
   chainState = { isAccountQuery: false, isContactQuery: false }
 })
@@ -245,6 +260,76 @@ describe("computeHasWizardPending — person-owned ITIN with a company selected"
     sdAccountFixture = []
     sdContactFixture = [{ service_type: "ITIN" }, { service_type: "Company Closure" }]
     wizardProgressFixture = [{ id: "wp-itin" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "acc-1",
+      portalTier: "active",
+    })
+    expect(result).toBe(true)
+  })
+})
+
+// ─── Fallback (dev job 9a9c5cf5): submission-table proof when
+// wizard_progress silently failed to write ───
+
+describe("computeHasWizardPending — submission-table fallback when wizard_progress is missing", () => {
+  it("tier fallback: does NOT nag when wizard_progress is empty but formation_submissions shows completed", async () => {
+    sdAccountFixture = []
+    sdContactFixture = []
+    wizardProgressFixture = []
+    formationSubmissionsFixture = [{ id: "fs-1" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "",
+      portalTier: "formation",
+    })
+    expect(result).toBe(false)
+  })
+
+  it("tier fallback: does NOT nag when wizard_progress is empty but onboarding_submissions shows reviewed", async () => {
+    sdAccountFixture = []
+    sdContactFixture = []
+    wizardProgressFixture = []
+    onboardingSubmissionsFixture = [{ id: "os-1" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "",
+      portalTier: "onboarding",
+    })
+    expect(result).toBe(false)
+  })
+
+  it("tier fallback: still nags when NEITHER wizard_progress NOR the submission table shows a completion", async () => {
+    sdAccountFixture = []
+    sdContactFixture = []
+    wizardProgressFixture = []
+    formationSubmissionsFixture = []
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "",
+      portalTier: "formation",
+    })
+    expect(result).toBe(true)
+  })
+
+  it("ITIN fallback: does NOT nag when wizard_progress is empty but itin_submissions shows completed", async () => {
+    sdAccountFixture = []
+    sdContactFixture = [{ service_type: "ITIN" }]
+    wizardProgressFixture = []
+    itinSubmissionsFixture = [{ id: "itin-1" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "acc-1",
+      portalTier: "active",
+    })
+    expect(result).toBe(false)
+  })
+
+  it("ITIN fallback: still nags when neither wizard_progress nor itin_submissions shows a completion", async () => {
+    sdAccountFixture = []
+    sdContactFixture = [{ service_type: "ITIN" }]
+    wizardProgressFixture = []
+    itinSubmissionsFixture = []
     const result = await computeHasWizardPending({
       contactId: "contact-1",
       selectedAccountId: "acc-1",

@@ -86,6 +86,8 @@ function install(cfg: {
   offer?: Record<string, unknown> | null
   /** Whether a submitted formation wizard_progress exists (drives the advance). */
   submittedWizard?: boolean
+  /** formation_submissions fallback row (dev job 9a9c5cf5), keyed by this job's own submission_id. */
+  fallbackSubmission?: Record<string, unknown> | false
 }): Recorded {
   const rec: Recorded = { contactUpdates: [], submissionUpdates: [], taskInserts: [], sdSelectFilters: [] }
   const formations = cfg.formations ?? []
@@ -157,7 +159,12 @@ function install(cfg: {
         },
         select: () => chain,
         eq: () => chain,
-        maybeSingle: () => Promise.resolve({ data: null, error: null }),
+        in: () => chain,
+        maybeSingle: () =>
+          Promise.resolve({
+            data: cfg.fallbackSubmission === false ? null : (cfg.fallbackSubmission ?? null),
+            error: null,
+          }),
       }
       return chain
     }
@@ -343,6 +350,56 @@ describe('re-submit against a FINISHED formation (the Turcanu shape)', () => {
     const result = await handleFormationSetup(job())
     const names = result.steps.map((s) => s.name)
     expect(names).toContain('formation_resubmit_refused')
+  })
+})
+
+/** Francesco Lussignoli's shape: active, unfinished, still at Payment Confirmed. */
+const UNFINISHED_FORMATION = {
+  id: 'SD-UNFINISHED',
+  contact_id: CONTACT_ID,
+  account_id: null,
+  service_type: 'Company Formation',
+  stage: 'Payment Confirmed',
+  status: 'active',
+  source_offer_token: OFFER_TOKEN,
+}
+
+describe('stage-advance fallback when wizard_progress silently failed to write (dev job 9a9c5cf5)', () => {
+  it('still advances the stage when wizard_progress is missing but this job\'s own submission is completed/reviewed', async () => {
+    install({
+      formations: [UNFINISHED_FORMATION],
+      offer: { token: OFFER_TOKEN },
+      submittedWizard: false,
+      fallbackSubmission: { id: SUBMISSION_ID, status: 'reviewed' },
+    })
+    await handleFormationSetup(job())
+    expect(advanceServiceDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ delivery_id: 'SD-UNFINISHED', target_stage: 'Wizard Submitted' }),
+    )
+  })
+
+  it('does NOT advance when wizard_progress is missing and there is no fallback submission either', async () => {
+    install({
+      formations: [UNFINISHED_FORMATION],
+      offer: { token: OFFER_TOKEN },
+      submittedWizard: false,
+      fallbackSubmission: false,
+    })
+    await handleFormationSetup(job())
+    expect(advanceServiceDelivery).not.toHaveBeenCalled()
+  })
+
+  it('prefers the real wizard_progress row when it exists, without needing the fallback', async () => {
+    install({
+      formations: [UNFINISHED_FORMATION],
+      offer: { token: OFFER_TOKEN },
+      submittedWizard: true,
+      fallbackSubmission: false,
+    })
+    await handleFormationSetup(job())
+    expect(advanceServiceDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ delivery_id: 'SD-UNFINISHED', target_stage: 'Wizard Submitted' }),
+    )
   })
 })
 
