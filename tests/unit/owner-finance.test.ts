@@ -958,6 +958,19 @@ describe('isAccountCovered', () => {
     expect(isAccountCovered(registry, '')).toBe(false)
     expect(isAccountCovered(registry, '   ')).toBe(false)
   })
+
+  it('one account name that happens to PREFIX another still resolves the exact one exactly', () => {
+    // Nothing stops an operator from naming two accounts such that one full name is a
+    // genuine prefix of the other (no DB constraint enforces otherwise). The space
+    // boundary in the ambiguity check must not let this collide: a bare label matching
+    // one account exactly must win outright rather than being treated as ambiguous with
+    // an unrelated account that merely starts the same way.
+    const registry = [
+      makeAccount({ bank_name: 'Mercury checking 4517' }),
+      makeAccount({ bank_name: 'Mercury checking 4517A', account_type: 'savings' }),
+    ]
+    expect(isAccountCovered(registry, 'Mercury checking 4517')).toBe(true)
+  })
 })
 
 /** `computeBalanceSheet`'s two account-matching questions — "is this a described

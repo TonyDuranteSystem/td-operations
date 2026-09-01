@@ -585,6 +585,15 @@ export const CASH_ACCOUNT_TYPES = ['checking', 'savings', 'processor']
  *  function, everywhere the question is asked, so it cannot happen a third time. */
 const normBankName = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
 
+/** Is `bankName` the EXACT name of an account in `pool` (case/spacing aside) — active or
+ *  closed, either counts. The one comparison used by both `isAccountCovered` (does the
+ *  cash summary already have this row) and `computeBalanceSheet`'s stricter `covers` (can
+ *  a legal statement place this row) — pulled out once so it cannot be retyped slightly
+ *  differently in a future edit, which is exactly how this file's naming bugs kept
+ *  recurring: the same question, answered by two separately-written comparisons. */
+const isExactAccountMatch = (pool: OwnerAccount[], bankName: string) =>
+  pool.some(a => normBankName(a.bank_name) === normBankName(bankName))
+
 /** Does this books row already belong to an account the registry describes — a PURE
  *  function so the rule is unit-testable without a database.
  *
@@ -616,7 +625,7 @@ export function isAccountCovered(registry: OwnerAccount[], bankName: string): bo
   if (!target) return false
   // The exact account, active OR closed — a closed account must still be recognised so
   // the fallback below cannot resurrect it into Cash Position forever.
-  if (registry.some(a => normBankName(a.bank_name) === target)) return true
+  if (isExactAccountMatch(registry, bankName)) return true
   // A bare institution label. Only an ACTIVE account counts toward the ambiguity check —
   // a closed sibling must not block a live account from being recognised by its short name.
   const matches = registry.filter(a => a.is_active !== false && normBankName(a.bank_name).startsWith(`${target} `))
@@ -1122,8 +1131,7 @@ export function computeBalanceSheet(
    * The note says that plainly and does NOT tell anyone to add a matching registry row —
    * a row literally named "Mercury" would be claimed alongside "Mercury checking 4517" and
    * double-count the cash. */
-  const covers = (pool: OwnerAccount[], bookName: string) =>
-    pool.some(a => norm(a.bank_name) === norm(bookName))
+  const covers = isExactAccountMatch
 
   const bookNames = Array.from(new Set(txs.map(t => t.bank_name).filter((n): n is string => !!n && !!n.trim())))
   /* Named separately from "not in the registry at all", because a CLOSED account is
