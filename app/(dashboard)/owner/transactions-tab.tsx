@@ -108,6 +108,8 @@ interface TransactionsTabProps {
   initialTotal: number
   /** A P&L line the user clicked: open showing exactly the rows behind that figure. */
   focus?: { category: string; subcategory: string } | null
+  /** Drop the drill-down from the page URL too, so dismissing it actually sticks. */
+  onClearFocus?: () => void
   /** Return to the report this was opened from. Present ONLY when arrival was a drill-down. */
   onBack?: () => void
 }
@@ -131,7 +133,7 @@ interface ModalState {
   saveRule: boolean
 }
 
-export function TransactionsTab({ year, initialRows, initialTotal, focus, onBack }: TransactionsTabProps) {
+export function TransactionsTab({ year, initialRows, initialTotal, focus, onBack, onClearFocus }: TransactionsTabProps) {
   const [rows, setRows] = useState<OwnerTransaction[]>(initialRows)
   const [total, setTotal] = useState(initialTotal)
   const [loading, setLoading] = useState(false)
@@ -683,7 +685,10 @@ export function TransactionsTab({ year, initialRows, initialTotal, focus, onBack
             showing only <span className="capitalize">{filterSubcategory.replace(/_/g, ' ')}</span>
             <FastTooltip label="Show everything again">
               <button
-                onClick={() => { setFilterSubcategory(''); load(0, filterCategory, search, '') }}
+                /* Also drops it from the address bar. Clearing it only in local state left
+                   the URL still carrying the drill-down, so a reload, a back gesture or a
+                   year change silently re-applied the filter the reader had just dismissed. */
+                onClick={() => { setFilterSubcategory(''); load(0, filterCategory, search, ''); onClearFocus?.() }}
                 className="ml-0.5 rounded-full px-1 text-blue-500 hover:bg-blue-100"
                 aria-label="Show everything again"
               >×</button>

@@ -655,7 +655,11 @@ describe('computeBalanceSheet', () => {
 
   it('states the year it DOES hold balances for', () => {
     const accounts = [makeAccount({ closing_balance: 41138.64, closing_date: '2025-06-30' })]
-    const bs = computeBalanceSheet(accounts, [], 2025)
+    // NOT an empty ledger. This is the test that pins `as_of` at the year end for a balance
+    // struck at midsummer, and the ONLY thing justifying that is the post-date-activity
+    // check — which passes for free when there are no transactions to check against. The
+    // row here is dated BEFORE the balance, so the check genuinely runs and genuinely holds.
+    const bs = computeBalanceSheet(accounts, [makeTx({ bank_name: 'Test Checking', transaction_date: '2025-05-02' })], 2025)
     expect(bs.can_state).toBe(true)
     expect(bs.total_assets).toBeCloseTo(41138.64, 2)
     expect(bs.cash[0].as_of).toBe('2025-06-30')
@@ -688,7 +692,22 @@ describe('computeBalanceSheet', () => {
       2025,
     )
     expect(bs.can_state).toBe(false)
-    expect(bs.notes.some(n => n.includes('Mercury') && n.includes('registry does not describe'))).toBe(true)
+    expect(bs.notes.some(n => n.includes('Mercury') && n.includes('registry does not cover'))).toBe(true)
+  })
+
+  it('an institution-only label from the bank feed IS covered by its registry account', () => {
+    // The two writers name accounts differently: the bank feed labels a row by its
+    // INSTITUTION ("Mercury"), the registry and the statement importer by the account
+    // ("Mercury checking 4517"). Verified in sandbox: all 78 rows in 2026 carry the bare
+    // label. Treating that as an undescribed account refused the year — the DEFAULT year
+    // on page load — with no screen anywhere that could clear it.
+    const bs = computeBalanceSheet(
+      [makeAccount({ bank_name: 'Mercury checking 4517', closing_balance: 15044.08 })],
+      [makeTx({ bank_name: 'Mercury' })],
+      2025,
+    )
+    expect(bs.can_state).toBe(true)
+    expect(bs.notes.some(n => n.includes('does not cover'))).toBe(false)
   })
 
   it('REFUSES when a registry name DRIFTS from the name the books use', () => {

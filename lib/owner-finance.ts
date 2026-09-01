@@ -903,7 +903,13 @@ export async function getAccountRegistry(
      * — silently drops the whole registry, which makes the balance sheet announce "no
      * account records exist" (a false statement about the data) and sends the cash figure
      * back to deriving from running balances, understating it by about 18,000 and hiding
-     * three cards. Loud in the log rather than a quiet wrong number on screen. */
+     * three cards.
+     *
+     * WHAT THIS DOES AND DOES NOT DO: it makes the failure LOGGED instead of invisible. It
+     * does NOT yet change either screen — both still degrade as though the registry were
+     * empty, so the false "no account records exist" line and the understated cash figure
+     * remain until a read-failure state is plumbed through to the tabs. Recorded as open in
+     * docs/systems/td-books.md rather than described here as fixed. */
     const missingTable = error.code === '42P01' || error.code === 'PGRST205'
     if (!missingTable) console.error('getAccountRegistry: registry read FAILED, reporting no accounts —', error.code, error.message)
     return []
@@ -957,6 +963,11 @@ export function computeBalanceSheet(
   registry: OwnerAccount[],
   txs: OwnerTransaction[],
   year: number,
+  /** Every account INCLUDING closed ones. Reporting uses `registry` (active only); this is
+   *  read solely to tell "the registry has never heard of this" apart from "this account
+   *  was closed" — two states that need opposite words on screen. Defaults to `registry`
+   *  so existing callers keep working. */
+  allAccounts: OwnerAccount[] = registry,
 ): BalanceSheet {
   const REPORTING = 'USD'
   const cash: BalanceSheetLine[] = []
@@ -1035,10 +1046,44 @@ export function computeBalanceSheet(
    * is_active being switched off — which has no time dimension, so closing the loan in
    * 2026 would otherwise erase 140,246.52 from the 2025 statement retroactively and move
    * equity by the same amount, in silence. */
-  const registered = new Set(registry.map(a => a.bank_name))
-  const unregistered = Array.from(
-    new Set(txs.map(t => t.bank_name).filter((n): n is string => !!n && !registered.has(n))),
-  ).sort()
+  /* THE BOOKS NAME ACCOUNTS TWO DIFFERENT WAYS, and an exact-string test cannot see it.
+   * The bank feed labels a row by its INSTITUTION — `BANK_LABELS[feed.source]` gives
+   * "Mercury", "Relay", "Airwallex" — while the registry and the statement importer use a
+   * per-account label, "Mercury checking 4517". Verified in sandbox: every one of the 78
+   * rows in 2026 carries a bare label, and none of the 2,993 rows in 2025 does.
+   *
+   * An exact test therefore reported all three 2026 accounts as undescribed, which is not
+   * true — they ARE described, under a longer name — and refused the year with no way for
+   * Antonio to clear it from any screen. Worse, the note told him to add a registry row
+   * matching the name exactly, and a row literally called "Mercury" would then be claimed
+   * ALONGSIDE "Mercury checking 4517" and double-count the cash. Advice that breaks the
+   * thing it is trying to fix is worse than no advice.
+   *
+   * So coverage is asked as a question about the ACCOUNT, not the string: an institution
+   * label covers the registry accounts that begin with it. A name that merely resembles
+   * another — "FirstCitizens loan 7363" against "Firstcitizenbank loan 7363" — is still
+   * NOT covered, and must not be: that is a genuine second account as far as every join
+   * here is concerned, and quietly accepting it would hide the double-count it causes. */
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
+  const covers = (pool: OwnerAccount[], bookName: string) => {
+    const n = norm(bookName)
+    return pool.some(a => { const r = norm(a.bank_name); return r === n || r.startsWith(`${n} `) })
+  }
+
+  const bookNames = Array.from(new Set(txs.map(t => t.bank_name).filter((n): n is string => !!n && !!n.trim())))
+  /* Named separately from "not in the registry at all", because a CLOSED account is
+   * described — telling Antonio to add an account that already exists, on a page that
+   * also hides it, is a false statement pointing at a row he cannot find. */
+  const closedAccount = bookNames
+    .filter(n => !covers(registry, n) && covers(allAccounts, n))
+    .sort()
+  const unregistered = bookNames
+    .filter(n => !covers(registry, n) && !covers(allAccounts, n))
+    .sort()
+  /* Money in the books belonging to no account at all. `bank_name` is nullable and the
+   * JSON import path writes it through unchanged, and such a row is invisible to the cash
+   * fallback too — the one hole left in "every account or nothing". */
+  const unattributed = txs.filter(t => !t.bank_name || !t.bank_name.trim()).length
 
   /* A STATEMENT IS ALL THE ACCOUNTS OR IT IS NOTHING (2026-09-01).
    *
@@ -1056,7 +1101,8 @@ export function computeBalanceSheet(
    * every one of those balances must be dated in the year asked for. Anything less is
    * refused and the reason is named account by account. */
   const can_state = matchedDates.length > 0 && unknownBalance.length === 0
-    && otherYear.length === 0 && staleBalance.length === 0 && unregistered.length === 0
+    && otherYear.length === 0 && staleBalance.length === 0
+    && unregistered.length === 0 && closedAccount.length === 0 && unattributed === 0
 
   // Property the company bought. Parked out of profit when the books were built, which
   // is right — and means this is the ONLY place it appears. Signed sum THEN abs: a
@@ -1101,10 +1147,24 @@ export function computeBalanceSheet(
   }
   if (unregistered.length > 0) {
     notes.push(
-      `The books hold money in ${unregistered.length} account${unregistered.length === 1 ? '' : 's'} the ` +
-      `registry does not describe — ${unregistered.join(', ')}. ${unregistered.length === 1 ? 'It has' : 'They have'} ` +
-      `no verified closing balance, so ${unregistered.length === 1 ? 'it' : 'they'} would be missing from any ` +
-      `position stated here. Check the name matches the registry exactly before adding ${unregistered.length === 1 ? 'it' : 'them'}.`,
+      `The books hold money under ${unregistered.length} account name${unregistered.length === 1 ? '' : 's'} the ` +
+      `registry does not cover — ${unregistered.join(', ')}. Either ${unregistered.length === 1 ? 'that account is' : 'those accounts are'} ` +
+      `genuinely missing from the registry, or the name differs from the one already on file, ` +
+      `in which case the same account is being counted twice.`,
+    )
+  }
+  if (closedAccount.length > 0) {
+    notes.push(
+      `${closedAccount.join(', ')} ${closedAccount.length === 1 ? 'is' : 'are'} marked closed in the registry, ` +
+      `but the books still record money in ${closedAccount.length === 1 ? 'it' : 'them'} during ${year}. A closed ` +
+      `account stops being reported from the day it closes — it does not stop having been open earlier, and ` +
+      `dropping it from a year it was live in would move equity by whatever it held.`,
+    )
+  }
+  if (unattributed > 0) {
+    notes.push(
+      `${unattributed} transaction${unattributed === 1 ? '' : 's'} in ${year} ${unattributed === 1 ? 'has' : 'have'} ` +
+      `no account recorded at all, so ${unattributed === 1 ? 'it belongs' : 'they belong'} to no balance here.`,
     )
   }
   if (unknownBalance.length > 0) {
@@ -1161,6 +1221,10 @@ export function computeBalanceSheet(
 
 /** Server helper: the balance sheet for a year. */
 export async function getBalanceSheet(year: number): Promise<BalanceSheet> {
-  const [registry, txs] = await Promise.all([getAccountRegistry(), getOwnerTransactions(year)])
-  return computeBalanceSheet(registry, txs, year)
+  const [registry, allAccounts, txs] = await Promise.all([
+    getAccountRegistry(),
+    getAccountRegistry({ includeInactive: true }),
+    getOwnerTransactions(year),
+  ])
+  return computeBalanceSheet(registry, txs, year, allAccounts)
 }
