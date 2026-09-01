@@ -220,41 +220,45 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     if (existing) return existing
   }
 
-  // 0a. Soft duplicate-installment check (2026-08-31, ShoppyVerse LLC investigation).
+  // 0a. Duplicate-installment check (2026-08-31, ShoppyVerse LLC investigation).
   // Same identity as the installment badge on the account page (account + payment_category
   // + year, via isInstallment) — deliberately the ONE shared definition of "same
-  // installment", never a second independently-derived check. A WARNING, not a block: staff
-  // occasionally need to raise a genuine second document (e.g. correcting a voided one), and
-  // this function has no way to know which of two matches is the mistake — that judgment
-  // belongs to whoever sees the warning. Only fires when the caller actually supplied a
-  // structured identity to check (installment/payment_category resolves to an installment
-  // category, a year, and an account) — a caller that omits these (most manual/generic
-  // invoices) gets no check, same as before.
+  // installment", never a second independently-derived check.
   //
-  // Excludes $0 / no-invoice-number rows, and a Voided/Credit invoice, on top of isInstallment's
-  // own live check (which only treats Cancelled as dead). Production has a legitimate pattern
-  // (Partner Alliance LLC + Morgan & Taylor International LLC, consolidated first-installment
-  // billing) of a $0 companion record stamped on the non-billed account so cron eligibility still
-  // recognizes "installment paid" — isInstallment must keep counting that for the cron; it is not
-  // a second REAL invoice. And re-issuing after voiding is exactly what the database-level
-  // duplicate guard (uq_payments_installment_per_account_year) is built to allow, so this warning
-  // must agree — verified live in sandbox (2026-09-01) that a Voided row was still triggering a
-  // false "duplicate" here until this exclusion was added.
+  // This is advisory, NOT the actual enforcement — the database-level partial unique index
+  // (uq_payments_installment_per_account_year) is the real backstop and WILL reject a genuine
+  // second live insert outright. This check exists to give a FRIENDLY message computed before
+  // the write is attempted, since by the time the DB rejects it the caller only has a raw
+  // Postgres error to show (handled below, in the insert retry loop, by turning that specific
+  // constraint violation into this same friendly text). Re-issuing after voiding the original
+  // is NOT blocked by either layer — isInstallment excludes Voided/Credit — so that stays a
+  // genuinely non-blocking case; a REAL duplicate is not.
+  //
+  // Excludes $0 / no-invoice-number rows on top of isInstallment's own live check (which now
+  // correctly excludes Cancelled/Voided/Credit — widened 2026-09-01, bug-hunter council review
+  // — so a separate Voided/Credit filter here would just drift from that one definition again).
+  // Production has a legitimate pattern (Partner Alliance LLC + Morgan & Taylor International
+  // LLC, consolidated first-installment billing) of a $0 companion record stamped on the
+  // non-billed account so CRON ELIGIBILITY still recognizes "installment paid" via
+  // isInstallment — that must keep counting for the cron, but it is not a second REAL invoice.
   let duplicateWarning: string | undefined
   if (account_id && year != null && (resolvedCategory === 'installment_1' || resolvedCategory === 'installment_2')) {
     const n = resolvedCategory === 'installment_1' ? 1 : 2
+    // Filtered server-side by the same category+year being checked — an account with a large
+    // payment history should never rely on an unbounded, client-side-filtered fetch (senior-
+    // engineer finding).
     const { data: existingRows } = await supabaseAdmin
       .from('payments')
       .select('id, invoice_number, payment_category, year, status, invoice_status, total')
       .eq('account_id', account_id)
+      .eq('payment_category', resolvedCategory)
+      .eq('year', year)
     const liveMatches = (existingRows || []).filter((p) =>
       isInstallment(p, n, { year }) &&
       (Number(p.total) || 0) > 0 &&
       !!p.invoice_number &&
       p.invoice_number !== '1.0' &&
-      p.invoice_number !== '2.0' &&
-      p.invoice_status !== 'Voided' &&
-      p.invoice_status !== 'Credit'
+      p.invoice_number !== '2.0'
     )
     duplicateWarning = buildDuplicateInstallmentWarning(liveMatches, n, year)
   }
@@ -500,6 +504,22 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
       }
       // Unlikely fall-through: the winning row disappeared before we could read it.
       // Break out and let the caller see the error.
+    }
+
+    // A genuine duplicate slipped past the advisory check above (a race, or the caller
+    // ignored it) and the database constraint (uq_payments_installment_per_account_year) is
+    // now the one actually rejecting it. Turn that into the same friendly text the advisory
+    // warning would have shown, instead of a raw Postgres constraint-violation string reaching
+    // the user (bug-hunter + ai-architect + senior-engineer council finding, 2026-09-01).
+    if (isUniqueViolation(error, 'uq_payments_installment_per_account_year')) {
+      if (appliedCredit && appliedCredit.appliedTotal > 0) {
+        await unwindCreditClaims(appliedCredit, claimToken, supabaseAdmin)
+      }
+      const n = resolvedCategory === 'installment_1' ? 1 : 2
+      throw new Error(
+        `An Installment ${n} (${year}) invoice already exists on this account and is still live — ` +
+        `void it first if this one is meant to replace it, or check the account page for the existing invoice.`
+      )
     }
 
     // Any other error — bubble up, releasing our claims first (WS-A unwind).

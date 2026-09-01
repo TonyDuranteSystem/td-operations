@@ -188,6 +188,20 @@ export function adjustSingleServiceLineForTotal(
   const target = Math.round((Number(newTotal) - creditTotal) * 100) / 100
   const line = adjustable[0]
   const qty = Number(line.quantity) || 1
+  // Refuse rather than guess when quantity doesn't divide the target evenly to the cent
+  // (finance-auditor council finding, 2026-09-01): rounding unit_price independently of
+  // amount, unguarded, could leave quantity × unit_price off by a cent from the line's own
+  // amount — a self-inconsistent figure on the actual invoice document (both are rendered as
+  // separate columns on the PDF). Every real correction this was built for (ShoppyVerse,
+  // Growly, Achievers Group) has quantity 1, so this only blocks the genuinely ambiguous case.
+  const targetCents = Math.round(target * 100)
+  if (qty !== 1 && targetCents % qty !== 0) {
+    return {
+      items: safeItems,
+      ok: false,
+      reason: `The corrected total doesn't divide evenly across this line's quantity (${qty}) — edit the line items directly instead of the total alone.`,
+    }
+  }
   const adjustedLine: RebuildLineItem = {
     description: line.description,
     quantity: qty,

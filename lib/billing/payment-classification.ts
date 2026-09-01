@@ -16,6 +16,8 @@
  * three with one structured check.
  */
 
+import { DEAD_INVOICE_STATUSES } from '@/lib/offers/payment-plan-state'
+
 /** The known payment categories. Single code-side source of truth — kept in
  *  sync with the CHECK constraint on payments.payment_category. Adding a value
  *  = add it here + a one-line CHECK migration. */
@@ -71,15 +73,30 @@ export function categoryFromInstallmentLabel(label: string | null | undefined): 
 export interface ClassifiablePayment {
   payment_category: string | null
   year: number | null
-  /** Optional lifecycle guards — a Cancelled row is never a live classification. */
+  /** Optional lifecycle guards — a dead-status row is never a live classification. */
   status?: string | null
   invoice_status?: string | null
 }
 
-/** A payment is "live" (counts for classification) when it is not cancelled by
- *  either the payment status or the invoice status. */
+/**
+ * A payment is "live" (counts for classification) when neither the payment status nor
+ * the invoice status is one of the DEAD statuses (Cancelled/Voided/Credit).
+ *
+ * Widened from "Cancelled only" to the full shared DEAD_INVOICE_STATUSES set (2026-09-01,
+ * bug-hunter council review of the installment-badge fix). Before this, a Voided installment
+ * invoice still counted as "live" here — so the annual-installments cron's duplicate guard
+ * (hasExistingSecondInstallment) treated a voided-and-never-reissued invoice as proof the
+ * client was already billed, and silently stopped billing them for that installment forever.
+ * DEAD_INVOICE_STATUSES is imported (not restated) for the same reason the tranche index
+ * comment gives: two independently-typed dead-lists WILL drift, and did — this is exactly the
+ * drift that motivated importing it here instead of a fourth hand-rolled copy. Confirmed safe
+ * for every existing caller: the tax-reactivation gate (lib/tax/reactivation.ts) already
+ * pre-filters to status='Paid' before classifying, and a Voided row can never have
+ * status='Paid' (voidInvoice sets status='Waived'), so this widening changes nothing there.
+ */
 export function isLivePayment(p: ClassifiablePayment): boolean {
-  return p.status !== 'Cancelled' && p.invoice_status !== 'Cancelled'
+  const dead = DEAD_INVOICE_STATUSES as readonly string[]
+  return !dead.includes(p.status ?? '') && !dead.includes(p.invoice_status ?? '')
 }
 
 /** True if `value` is one of the known categories (runtime guard for raw DB text). */

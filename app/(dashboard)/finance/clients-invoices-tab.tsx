@@ -678,9 +678,9 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
             mark_as_paid: input.mark_as_paid,
             installment: input.installment,
           })
-          if (result.success && result.data?.duplicate_warning) {
-            toast.warning(result.data.duplicate_warning, { duration: 30000 })
-          }
+          // duplicate_warning is toasted once, centrally, by InvoiceDialog's own
+          // handleSubmit — toasting it here too produced a stacked double warning
+          // (bug-hunter finding, 2026-09-01).
           return result
         }}
         onSendInvoice={async (paymentId) => {

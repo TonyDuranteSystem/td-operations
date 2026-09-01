@@ -223,4 +223,24 @@ describe("adjustSingleServiceLineForTotal", () => {
     expect(r.ok).toBe(true)
     expect(r.items[0].amount).toBeCloseTo(333.34, 2)
   })
+
+  it("refuses when quantity doesn't divide the corrected total evenly to the cent (finance-auditor finding)", () => {
+    // qty 3 against $1000 → unit_price would round to 333.33, and 333.33 × 3 = 999.99 ≠ 1000.00
+    const r = adjustSingleServiceLineForTotal(
+      [{ description: "Retainer", quantity: 3, unit_price: 333.33, amount: 999.99 }],
+      1000,
+    )
+    expect(r.ok).toBe(false)
+    expect(r.reason).toMatch(/doesn't divide evenly/i)
+    expect(r.items).toHaveLength(1) // unchanged, returned as-is
+  })
+
+  it("still succeeds when quantity divides the corrected total evenly", () => {
+    const r = adjustSingleServiceLineForTotal(
+      [{ description: "Retainer", quantity: 4, unit_price: 100, amount: 400 }],
+      800,
+    )
+    expect(r.ok).toBe(true)
+    expect(r.items[0]).toMatchObject({ quantity: 4, unit_price: 200, amount: 800 })
+  })
 })
