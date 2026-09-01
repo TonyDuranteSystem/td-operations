@@ -207,9 +207,9 @@ function PnLCurrencyTable({ year, block, prior, primary, onDrillDown }: {
           </thead>
           <tbody>
             <PnLSection label="Income" cols={showPrior ? 4 : 2} />
-            <PnLRow fmt={fmt} label="Client invoices (payments ledger)" value={block.invoice_income} prior={prior?.invoice_income} variancePct={showPrior ? pct(block.invoice_income, prior?.invoice_income) : undefined} indent />
+            <PnLRow fmt={fmt} label="Income from the invoice ledger" value={block.invoice_income} prior={prior?.invoice_income} variancePct={showPrior ? pct(block.invoice_income, prior?.invoice_income) : undefined} indent />
             {(block.other_income !== 0 || (prior?.other_income ?? 0) !== 0) && (
-              <PnLRow fmt={fmt} label="Other income (rewards, bonuses)" value={block.other_income} prior={prior?.other_income} indent />
+              <PnLRow fmt={fmt} label="Income recorded in the books" value={block.other_income} prior={prior?.other_income} indent />
             )}
             <PnLSection label="Cost of Goods Sold" cols={showPrior ? 4 : 2} />
             <PnLRow fmt={fmt} label="Contractors / COGS" value={-block.cogs} prior={prior ? -prior.cogs : undefined} indent />

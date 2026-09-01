@@ -2,8 +2,30 @@
 
 import type { BalanceSheet, BalanceSheetLine } from '@/lib/owner-finance'
 
-const money = (n: number, currency = 'USD') =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency, minimumFractionDigits: 2 }).format(n)
+/** A currency code from the database is not guaranteed to be a valid ISO code — the column
+ *  has no CHECK and the registry is populated by hand. An empty or bad code makes
+ *  Intl.NumberFormat THROW, which would blank the whole page rather than one figure. */
+const money = (n: number, currency?: string | null) => {
+  const code = (currency || 'USD').trim().toUpperCase()
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: code, minimumFractionDigits: 2 }).format(n)
+  } catch {
+    return `${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2 }).format(n)} ${code}`
+  }
+}
+
+/** The database stores provenance as a short code. Printing it raw produced the line
+ *  "Balance from derived." — the reader is owed a sentence, not a column value. */
+const SOURCE_WORDS: Record<string, string> = {
+  statement: "from the account's own statement",
+  derived: 'worked out from the transactions',
+  provider_report: "from the provider's own report",
+  unknown: 'source not recorded',
+}
+const sourceWords = (s?: string | null) => (s ? SOURCE_WORDS[s] ?? s.replace(/_/g, ' ') : null)
+
+const asDate = (d?: string | null) =>
+  d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }) : null
 
 interface BalanceSheetTabProps {
   bs: BalanceSheet
@@ -12,26 +34,55 @@ interface BalanceSheetTabProps {
 /**
  * What the company OWNS and OWES at the year end.
  *
- * The engine has produced this since the closing was recorded, but nothing displayed it —
- * so the office purchase, which is correctly kept OUT of profit, appeared nowhere in the
- * CRM at all, and the cash figure on the Overview had no visible support.
+ * THE RULE THIS SCREEN ENFORCES: a balance sheet may only be stated for a year the books
+ * actually hold balances for. Two ways it used to break that, both caught in QA:
  *
- * Every balance here is a closing figure from an account's own statement, carried through
- * from the registry with the source shown. Nothing on this screen is derived by summing
- * transactions, which is the whole point: it is the independent check on the P&L.
+ *  - The registry holds ONE closing figure per account with no year dimension, so the
+ *    31-Dec-2025 balances rendered under whatever year was selected. The default year is
+ *    the CURRENT one, so simply opening the page produced a confident, complete, wrong
+ *    statement — and at 2026 the office property dropped out too, moving equity from
+ *    -70,325.51 to -105,358.04 with nothing on screen contradicting the heading.
+ *  - With no registry at all (production, where the table does not exist yet) the office
+ *    property alone was enough to make the page think it had something to say: it printed
+ *    total assets 35,032.53, "None recorded" liabilities and POSITIVE equity, for a
+ *    company that owes 146,496.68 including a mortgage.
+ *
+ * So: no account balances for the year => no statement. Say why, show what IS known, and
+ * never print a total that a reader could mistake for the company's position.
  */
 export function BalanceSheetTab({ bs }: BalanceSheetTabProps) {
   const cashTotal = bs.cash.reduce((s, l) => s + l.amount, 0)
-  const empty = bs.cash.length === 0 && bs.other_assets.length === 0 && bs.liabilities.length === 0
 
-  if (empty) {
+  if (!bs.has_account_balances) {
     return (
-      <div className="rounded-lg border border-zinc-200 bg-white p-6 text-sm text-zinc-600">
-        <p className="font-medium text-zinc-800">Nothing to show yet</p>
-        <p className="mt-1">
-          A balance sheet is built from the account records — their closing balances and where each one
-          came from. None are on file for {bs.year}, so there is nothing to state.
-        </p>
+      <div className="space-y-4">
+        <div className="rounded-lg border border-orange-200 bg-orange-50 p-5">
+          <h3 className="text-sm font-semibold text-orange-900">
+            No balance sheet can be stated for {bs.year}
+          </h3>
+          <div className="mt-2 space-y-2 text-sm text-orange-900">
+            {bs.notes.map((n, i) => <p key={i}>{n}</p>)}
+          </div>
+          <p className="mt-3 text-xs text-orange-800">
+            A balance sheet is a position on one date. Showing another year&apos;s balances under
+            this year&apos;s heading would be a statement the accounts do not support.
+          </p>
+        </div>
+
+        {bs.other_assets.length > 0 && (
+          <div className="rounded-lg border border-zinc-200 bg-white p-4">
+            <h3 className="text-sm font-medium text-zinc-700">Known for {bs.year}, on its own</h3>
+            <p className="mb-2 mt-0.5 text-xs text-zinc-500">
+              Recorded from the transactions. Not a balance sheet — there is nothing to set it against.
+            </p>
+            {bs.other_assets.map(l => (
+              <div key={l.label} className="flex items-baseline justify-between gap-3 py-1 text-sm">
+                <span className="text-zinc-600">{l.label}</span>
+                <span className="tabular-nums text-zinc-800">{money(l.amount)}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     )
   }
@@ -119,11 +170,17 @@ function SubHead({ children, className = '' }: { children: React.ReactNode; clas
 }
 
 function Line({ line, negative = false }: { line: BalanceSheetLine; negative?: boolean }) {
+  const words = sourceWords(line.source)
+  const on = asDate(line.as_of)
   return (
     <div className="flex items-baseline justify-between gap-3 py-1 pl-3 text-sm">
       <span className="min-w-0 text-zinc-600">
         <span className="break-words">{line.label}</span>
-        {line.source && <span className="block text-xs text-zinc-400">{line.source}</span>}
+        {(words || on) && (
+          <span className="block text-xs text-zinc-400">
+            {[on && `at ${on}`, words].filter(Boolean).join(' · ')}
+          </span>
+        )}
       </span>
       <span className={`shrink-0 tabular-nums ${negative ? 'text-red-600' : 'text-zinc-800'}`}>
         {money(line.amount)}

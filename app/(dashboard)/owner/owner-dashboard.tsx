@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter, usePathname } from 'next/navigation'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { DashboardTab } from './dashboard-tab'
 import { TransactionsTab } from './transactions-tab'
@@ -61,10 +61,19 @@ export function OwnerDashboard({
    *  gets bookmarked and later mistaken for the whole year. */
   const [focus, setFocus] = useState<{ category: string; subcategory: string } | null>(null)
 
+  /** The phone's back gesture changes the URL but does NOT remount this component, so the
+   *  tab state has to follow the address bar or the page renders one tab while the URL
+   *  claims another — and the year selector then pushes the stale value forward. Antonio's
+   *  first instinct on a PWA is the system back gesture; it used to do visibly nothing. */
+  useEffect(() => { setCurrentTab(activeTab) }, [activeTab])
+
   function switchTab(id: string, nextFocus?: { category: string; subcategory: string }) {
     setCurrentTab(id)
     setFocus(nextFocus ?? null)
     router.push(`${pathname}?tab=${id}&year=${year}`, { scroll: false })
+    // Opening a drill-down kept the P&L's scroll position, which dropped the reader into
+    // the middle of the transaction list with the way back off-screen ABOVE them.
+    if (nextFocus) window.scrollTo({ top: 0 })
   }
 
   return (

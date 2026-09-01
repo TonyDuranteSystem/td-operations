@@ -594,13 +594,22 @@ const makeAccount = (overrides: Partial<OwnerAccount> = {}): OwnerAccount => ({
   closing_date: '2025-12-31',
   closing_source: 'December statement',
   notes: null,
+  is_active: true,
   ...overrides,
 })
 
 /** The balance sheet shipped without any tests. It is the only place the office purchase
  *  appears at all, and the only independent check on the cash the P&L implies — so the
- *  rules it encodes (what counts as cash, what never gets converted, what is skipped)
- *  are worth pinning before a screen is built on top of them. */
+ *  rules it encodes are pinned here.
+ *
+ *  THE RULE THAT MATTERS MOST, and the one an earlier version of this file got WRONG:
+ *  a balance is a position on a DATE. The registry holds one closing figure per account,
+ *  so unless the balance's own year is checked, the same figures render under every year's
+ *  heading. An earlier test here asserted exactly that broken behaviour — it fed an
+ *  account closed 2025-12-31 into a 2024 balance sheet and asserted the label read 2024 —
+ *  which pinned the defect in place instead of catching it. Live QA found it: the page
+ *  defaults to the CURRENT year, so simply opening it produced a complete, confident,
+ *  wrong statement. */
 describe('computeBalanceSheet', () => {
   it('splits accounts into cash and liabilities by type, and nets equity', () => {
     const bs = computeBalanceSheet([
@@ -611,11 +620,39 @@ describe('computeBalanceSheet', () => {
       makeAccount({ bank_name: 'FCB loan', account_type: 'loan', closing_balance: 140246.52 }),
     ], [], 2025)
 
+    expect(bs.has_account_balances).toBe(true)
     expect(bs.cash.map(l => l.label)).toEqual(['Chase', 'Stripe', 'Amex savings'])
     expect(bs.liabilities.map(l => l.label)).toEqual(['FCB loan', 'Amex card'])
     expect(bs.total_assets).toBeCloseTo(21317.06, 2)
     expect(bs.total_liabilities).toBeCloseTo(142238.15, 2)
     expect(bs.equity).toBeCloseTo(21317.06 - 142238.15, 2)
+  })
+
+  it('REFUSES to state a balance sheet for a year it holds no balances for', () => {
+    // The exact live defect: 2025 balances rendered under the 2026 heading, on the
+    // DEFAULT page load, because the year was used only to build the label.
+    const accounts = [makeAccount({ closing_balance: 41138.64, closing_date: '2025-12-31' })]
+    const bs = computeBalanceSheet(accounts, [], 2026)
+
+    expect(bs.has_account_balances).toBe(false)
+    expect(bs.cash).toHaveLength(0)
+    expect(bs.total_assets).toBe(0)
+    expect(bs.total_liabilities).toBe(0)
+    expect(bs.notes.some(n => n.includes('2026') && n.includes('2025'))).toBe(true)
+  })
+
+  it('states the year it DOES hold balances for', () => {
+    const accounts = [makeAccount({ closing_balance: 41138.64, closing_date: '2025-06-30' })]
+    const bs = computeBalanceSheet(accounts, [], 2025)
+    expect(bs.has_account_balances).toBe(true)
+    expect(bs.total_assets).toBeCloseTo(41138.64, 2)
+    expect(bs.cash[0].as_of).toBe('2025-06-30')
+  })
+
+  it('an account with no closing DATE cannot be placed in any year', () => {
+    const bs = computeBalanceSheet([makeAccount({ closing_date: null })], [], 2025)
+    expect(bs.has_account_balances).toBe(false)
+    expect(bs.total_assets).toBe(0)
   })
 
   it('a processor balance counts as cash — it is the company money, just in transit', () => {
@@ -636,44 +673,53 @@ describe('computeBalanceSheet', () => {
     expect(bs.notes.some(n => n.includes('EUR'))).toBe(true)
   })
 
-  it('skips an account with no closing balance rather than treating it as zero', () => {
+  it('NAMES an account whose balance is unknown instead of dropping it silently', () => {
+    // Dropping it understates what is OWED and overstates equity — the one direction a
+    // balance sheet must never be wrong in.
     const bs = computeBalanceSheet([
       makeAccount({ bank_name: 'Known', closing_balance: 250 }),
-      makeAccount({ bank_name: 'Unknown', closing_balance: null }),
+      makeAccount({ bank_name: 'Amex card', account_type: 'credit_card', closing_balance: null }),
     ], [], 2025)
+
     expect(bs.cash.map(l => l.label)).toEqual(['Known'])
     expect(bs.total_assets).toBe(250)
+    expect(bs.notes.some(n => n.includes('Amex card') && n.includes('overstated'))).toBe(true)
   })
 
   it('carries the property purchase — the one place it appears, since profit excludes it', () => {
-    const bs = computeBalanceSheet([], [
+    const bs = computeBalanceSheet([makeAccount()], [
       makeTx({ subcategory: 'fixed_asset_office_purchase', amount: -29032.53 }),
       makeTx({ subcategory: 'fixed_asset_office_purchase', amount: -6000 }),
     ], 2025)
 
-    expect(bs.other_assets).toEqual([
-      { label: 'Office property (at cost)', amount: 35032.53, source: 'purchase payments' },
-    ])
-    expect(bs.total_assets).toBeCloseTo(35032.53, 2)
+    expect(bs.other_assets[0]).toMatchObject({ label: 'Office property (at cost)', amount: 35032.53 })
     expect(bs.notes.some(n => n.includes('depreciation'))).toBe(true)
   })
 
-  it('says plainly when there are no account records at all', () => {
-    const bs = computeBalanceSheet([], [], 2025)
-    expect(bs.total_assets).toBe(0)
-    expect(bs.equity).toBe(0)
-    expect(bs.notes.some(n => n.includes('No account records'))).toBe(true)
+  it('a credit tagged to the purchase REDUCES what the property cost', () => {
+    const bs = computeBalanceSheet([makeAccount()], [
+      makeTx({ subcategory: 'fixed_asset_office_purchase', amount: -35032.53 }),
+      makeTx({ subcategory: 'fixed_asset_office_purchase', amount: 5000 }),
+    ], 2025)
+    expect(bs.other_assets[0].amount).toBeCloseTo(30032.53, 2)
   })
 
-  it('reports as at the year end, in USD', () => {
-    const bs = computeBalanceSheet([makeAccount()], [], 2024)
-    expect(bs.as_of).toBe('2024-12-31')
-    expect(bs.year).toBe(2024)
-    expect(bs.currency).toBe('USD')
+  it('with NO registry it reports it cannot state a position, property or not', () => {
+    // Production's state. The property alone used to be enough to make the screen print
+    // total assets, "None recorded" liabilities and POSITIVE equity for a company that
+    // owes a mortgage.
+    const bs = computeBalanceSheet([], [
+      makeTx({ subcategory: 'fixed_asset_office_purchase', amount: -35032.53 }),
+    ], 2025)
+
+    expect(bs.has_account_balances).toBe(false)
+    expect(bs.liabilities).toHaveLength(0)
+    expect(bs.notes.some(n => n.includes('No account records exist'))).toBe(true)
   })
 
-  it('keeps the source of each balance so a reader can weigh it', () => {
-    const bs = computeBalanceSheet([makeAccount({ closing_source: 'provider report' })], [], 2025)
-    expect(bs.cash[0].source).toBe('provider report')
+  it('keeps the source and the date of each balance so a reader can weigh it', () => {
+    const bs = computeBalanceSheet([makeAccount({ closing_source: 'provider_report' })], [], 2025)
+    expect(bs.cash[0].source).toBe('provider_report')
+    expect(bs.cash[0].as_of).toBe('2025-12-31')
   })
 })

@@ -571,7 +571,11 @@ const CASH_PAGE = 1000
  * sitting at Stripe is the company's money, held by someone else — an asset, not a debt.
  * Excluding it once pushed it into the "Owed" list, which reads as though the company
  * owed Stripe money. Cards and loans are the only genuine liabilities. */
-const CASH_ACCOUNT_TYPES = ['checking', 'savings', 'processor']
+/** Account types whose balance is money the company HAS. Everything else is money it owes.
+ *  EXPORTED so a screen can never keep its own copy: a second list would put the same
+ *  account under Assets on one tab and under Liabilities on the next, silently, the day
+ *  a new type is added. */
+export const CASH_ACCOUNT_TYPES = ['checking', 'savings', 'processor']
 
 export async function getCashPosition(): Promise<CashPosition> {
   /* THE REGISTRY IS THE SOURCE OF TRUTH, not the statement rows (2026-08-31).
@@ -860,6 +864,8 @@ export interface OwnerAccount {
   /** Where the closing figure came from: a statement, a provider's report, or derived. */
   closing_source: string | null
   notes: string | null
+  /** A closed account. Its last balance must NOT keep reporting forever. */
+  is_active: boolean
 }
 
 /** Every account, with its verified balances and where each figure came from.
@@ -871,8 +877,12 @@ export interface OwnerAccount {
 export async function getAccountRegistry(): Promise<OwnerAccount[]> {
   const { data, error } = await supabaseAdmin
     .from('td_books_accounts' as never)
-    .select('bank_name, institution, account_number, account_type, sign_convention, is_clearing, currency, opening_balance, opening_date, closing_balance, closing_date, closing_source, notes')
+    .select('bank_name, institution, account_number, account_type, sign_convention, is_clearing, currency, opening_balance, opening_date, closing_balance, closing_date, closing_source, notes, is_active')
     .eq('entity_id', TD_ENTITY_ID)
+    // A closed account must stop reporting its final balance. The table declares the
+    // column and indexes on it; the query used to ignore it, so a closed account would
+    // have sat in Cash held and in equity forever with no way to remove it.
+    .eq('is_active', true)
     .order('bank_name')
   if (error) return []
   return (data ?? []) as unknown as OwnerAccount[]
@@ -892,6 +902,8 @@ export interface BalanceSheetLine {
   amount: number
   /** Where the figure came from, so a reader can weigh it. */
   source?: string | null
+  /** The date the balance was struck. A statement must show WHEN, not just how much. */
+  as_of?: string | null
 }
 
 export interface BalanceSheet {
@@ -908,6 +920,14 @@ export interface BalanceSheet {
   /** Balances held in a currency other than the reporting one, listed not converted. */
   foreign: Array<{ currency: string; label: string; amount: number }>
   notes: string[]
+  /** FALSE when no account has a closing balance dated in this year.
+   *
+   *  Without this the screen cannot tell "the company owns nothing" from "we hold no
+   *  balances for this year", and it rendered the second as the first: a full statement
+   *  of 31-Dec-2025 balances headed with whatever year was selected, and — with no
+   *  registry at all — POSITIVE equity and no liabilities, because the office property
+   *  alone was enough to make the page think it had something to say. */
+  has_account_balances: boolean
 }
 
 export function computeBalanceSheet(
@@ -919,10 +939,31 @@ export function computeBalanceSheet(
   const cash: BalanceSheetLine[] = []
   const liabilities: BalanceSheetLine[] = []
   const foreign: BalanceSheet['foreign'] = []
+  /** Accounts that exist but cannot be stated — named, never silently dropped. */
+  const unknownBalance: string[] = []
+  let matchedYear = 0
 
   for (const a of registry) {
-    if (a.closing_balance === null || a.closing_balance === undefined) continue
-    const line = { label: a.bank_name, amount: Number(a.closing_balance), source: a.closing_source }
+    // A balance belongs to the year it was STRUCK, not to whatever year is on screen.
+    // The registry holds ONE closing figure per account with no year dimension, so
+    // without this the same 31-Dec-2025 balances rendered under every year's heading.
+    const balanceYear = a.closing_date ? Number(a.closing_date.slice(0, 4)) : null
+    if (balanceYear !== year) continue
+    matchedYear++
+
+    if (a.closing_balance === null || a.closing_balance === undefined) {
+      // Dropping this silently understates what is OWED and overstates equity by an
+      // unknown amount — the one direction a balance sheet must never be wrong in.
+      unknownBalance.push(a.bank_name)
+      continue
+    }
+
+    const line: BalanceSheetLine = {
+      label: a.bank_name,
+      amount: Number(a.closing_balance),
+      source: a.closing_source,
+      as_of: a.closing_date,
+    }
     if ((a.currency || REPORTING) !== REPORTING) {
       // NEVER converted into the total. A balance sheet that silently mixes currencies
       // states a number nobody can trace back to an account.
@@ -933,13 +974,18 @@ export function computeBalanceSheet(
     else liabilities.push(line)
   }
 
+  const has_account_balances = matchedYear > 0
+
   // Property the company bought. Parked out of profit when the books were built, which
-  // is right — and means this is the ONLY place it appears.
-  const propertyTotal = txs
+  // is right — and means this is the ONLY place it appears. Signed sum THEN abs: a
+  // seller credit or a corrective reversal tagged to the purchase must REDUCE what the
+  // property cost, not add to it (the same per-row-abs defect fixed twice before).
+  const propertySigned = txs
     .filter(t => t.subcategory === 'fixed_asset_office_purchase')
-    .reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+    .reduce((s, t) => s + Number(t.amount), 0)
+  const propertyTotal = Math.abs(propertySigned)
   const other_assets: BalanceSheetLine[] = propertyTotal > 0
-    ? [{ label: 'Office property (at cost)', amount: propertyTotal, source: 'purchase payments' }]
+    ? [{ label: 'Office property (at cost)', amount: propertyTotal, source: 'purchase payments', as_of: null }]
     : []
 
   cash.sort((a, z) => z.amount - a.amount)
@@ -949,6 +995,22 @@ export function computeBalanceSheet(
   const total_liabilities = liabilities.reduce((s, l) => s + l.amount, 0)
 
   const notes: string[] = []
+  if (!has_account_balances) {
+    notes.push(
+      registry.length === 0
+        ? `No account records exist, so no balances can be stated for ${year}.`
+        : `No account has a closing balance dated in ${year}. The accounts on file were ` +
+          `last struck in ${Array.from(new Set(registry.map(a => a.closing_date?.slice(0, 4)).filter(Boolean))).sort().join(', ') || 'no year'}, ` +
+          `and a balance from another year is not this year's position.`,
+    )
+  }
+  if (unknownBalance.length > 0) {
+    notes.push(
+      `${unknownBalance.join(', ')} ${unknownBalance.length === 1 ? 'has' : 'have'} no closing balance on file ` +
+      `and ${unknownBalance.length === 1 ? 'is' : 'are'} NOT included above. If ${unknownBalance.length === 1 ? 'it is' : 'they are'} ` +
+      `a card or a loan, the total owed is understated and equity is overstated by that amount.`,
+    )
+  }
   if (propertyTotal > 0) {
     notes.push(
       `Office property is shown at what was paid for it. No depreciation has been recorded — ` +
@@ -962,16 +1024,13 @@ export function computeBalanceSheet(
       `nobody can trace back to an account.`,
     )
   }
-  if (registry.length === 0) {
-    notes.push('No account records found — this balance sheet is empty because nothing describes the accounts.')
-  }
 
   return {
     year, as_of: `${year}-12-31`, currency: REPORTING,
     cash, other_assets, total_assets,
     liabilities, total_liabilities,
     equity: total_assets - total_liabilities,
-    foreign, notes,
+    foreign, notes, has_account_balances,
   }
 }
 
