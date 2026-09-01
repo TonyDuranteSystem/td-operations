@@ -39,13 +39,12 @@ export interface FinancialsView {
   providedBalances: Array<{ bank_key: string; currency: string; opening_balance: number | null; closing_balance: number | null; source: "client" | "staff" }>
 }
 
-/** Pull member rows out of the wizard's flattened repeater keys
- *  (member_{idx}_member_first_name / _member_company_name / _member_ownership_pct).
- *  Exported for tests. */
-export function extractWizardMembers(submittedData: Record<string, unknown>): OwnershipSource[] {
+/** Group the wizard's flattened member repeater keys (member_{idx}_member_*)
+ *  by member index. member_count is authoritative when present — indexed
+ *  keys above it are leftovers from removed members and must NOT become
+ *  partners. Shared by every extractor below so they can't drift apart. */
+function groupWizardMemberFields(submittedData: Record<string, unknown>): Map<number, Record<string, unknown>> {
   const byIdx = new Map<number, Record<string, unknown>>()
-  // member_count is authoritative when present — indexed keys above it are
-  // leftovers from removed members and must NOT become partners.
   const countRaw = Number(submittedData.member_count)
   const maxIdx = Number.isFinite(countRaw) && countRaw > 0 ? countRaw - 1 : Infinity
   for (const [key, value] of Object.entries(submittedData)) {
@@ -56,14 +55,60 @@ export function extractWizardMembers(submittedData: Record<string, unknown>): Ow
     if (!byIdx.has(idx)) byIdx.set(idx, {})
     byIdx.get(idx)![m[2]] = value
   }
+  return byIdx
+}
+
+/** A member's `type` field is the ONLY signal that decides whether their
+ *  `company_name` field means anything — a company_name value must never
+ *  win for an individual member, no matter how it got there. Shared so a
+ *  future reader can't reintroduce the ungated check by hand. Donato Ciardo
+ *  (2026-09-01): his individual member entry carried a stray company_name
+ *  (the LLC's own name) alongside real first/last names; the ungated check
+ *  used it as the member's name, dropping him from his own K-1 and crediting
+ *  the LLC itself with 99% ownership. */
+function isCompanyMember(fields: Record<string, unknown>): boolean {
+  return String(fields.type ?? "") === "company"
+}
+
+/** Pull member rows out of the wizard's flattened repeater keys
+ *  (member_{idx}_member_first_name / _member_company_name / _member_ownership_pct).
+ *  Exported for tests. */
+export function extractWizardMembers(submittedData: Record<string, unknown>): OwnershipSource[] {
+  const byIdx = groupWizardMemberFields(submittedData)
   const out: OwnershipSource[] = []
   for (const [, fields] of Array.from(byIdx.entries()).sort((a, b) => a[0] - b[0])) {
-    const name = fields.company_name
+    const name = isCompanyMember(fields) && fields.company_name
       ? String(fields.company_name)
       : `${fields.first_name ?? ""} ${fields.last_name ?? ""}`.trim()
     if (!name) continue
     const pctRaw = Number(fields.ownership_pct)
     out.push({ name, pct: Number.isFinite(pctRaw) && fields.ownership_pct !== "" && fields.ownership_pct !== null && fields.ownership_pct !== undefined ? pctRaw : null })
+  }
+  if (out.length > 0) return out
+
+  // The LEGACY standalone tax form (still live, app/tax-form/[token]) sends
+  // additional co-members as an `additional_members` array — a completely
+  // different shape from the flat member_{idx}_… keys above, which this
+  // function's regex cannot match at all. Before this fallback existed, any
+  // account submitted through that form silently lost every co-member from
+  // ownership resolution (not merely misnamed — absent). Confirmed live on
+  // 2 real accounts (2026-09-01): PlayLover International LLC and Easy
+  // English LLC, both 50/50 MMLLCs whose second partner was invisible to
+  // K-1/capital-account resolution. Each row already carries a ready-made
+  // full name + pct (member_name / member_ownership_pct) — no company/
+  // individual ambiguity to gate on, unlike the flat-key shape above. The
+  // submitting owner (owner_first_name/owner_last_name) is NOT itself one of
+  // these rows, same as the flat-key path's caller-side fallback below.
+  const additionalMembers = submittedData.additional_members
+  if (Array.isArray(additionalMembers) && additionalMembers.length > 0) {
+    const owner = extractWizardOwner(submittedData)
+    if (owner) out.push(owner)
+    for (const raw of additionalMembers as Array<Record<string, unknown>>) {
+      const name = String(raw?.member_name ?? "").trim()
+      if (!name) continue
+      const pctRaw = Number(raw?.member_ownership_pct)
+      out.push({ name, pct: Number.isFinite(pctRaw) && raw?.member_ownership_pct !== "" && raw?.member_ownership_pct !== null && raw?.member_ownership_pct !== undefined ? pctRaw : null })
+    }
   }
   return out
 }
@@ -87,23 +132,12 @@ export interface WizardMemberResidence {
  *  not a member's address — each member declares where they actually live in
  *  their own tax-wizard step, not in the OA/CRM record. Exported for tests. */
 export function extractWizardMemberResidences(submittedData: Record<string, unknown>): WizardMemberResidence[] {
-  const byIdx = new Map<number, Record<string, unknown>>()
-  const countRaw = Number(submittedData.member_count)
-  const maxIdx = Number.isFinite(countRaw) && countRaw > 0 ? countRaw - 1 : Infinity
-  for (const [key, value] of Object.entries(submittedData)) {
-    const m = key.match(/^member_(\d+)_member_(.+)$/)
-    if (!m) continue
-    const idx = Number(m[1])
-    if (idx > maxIdx) continue
-    if (!byIdx.has(idx)) byIdx.set(idx, {})
-    byIdx.get(idx)![m[2]] = value
-  }
+  const byIdx = groupWizardMemberFields(submittedData)
   const out: WizardMemberResidence[] = []
   for (const [, fields] of Array.from(byIdx.entries()).sort((a, b) => a[0] - b[0])) {
     const pctRaw = Number(fields.ownership_pct)
     const pct = Number.isFinite(pctRaw) && fields.ownership_pct !== "" && fields.ownership_pct !== null && fields.ownership_pct !== undefined ? pctRaw : null
-    const isCompany = String(fields.type ?? "") === "company"
-    const residenceCountry = isCompany || !fields.residence_country ? null : String(fields.residence_country)
+    const residenceCountry = isCompanyMember(fields) || !fields.residence_country ? null : String(fields.residence_country)
     out.push({ pct, residenceCountry })
   }
   return out
