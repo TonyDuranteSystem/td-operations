@@ -956,6 +956,8 @@ export function computeBalanceSheet(
    *  importantly, none is named nowhere. */
   const unknownBalance: string[] = []
   const otherYear: Array<{ name: string; year: string }> = []
+  /** Balances the year's own transactions contradict — money moved after the figure was struck. */
+  const staleBalance: Array<{ name: string; date: string; rows: number }> = []
   const matchedDates: string[] = []
 
   for (const a of registry) {
@@ -979,6 +981,16 @@ export function computeBalanceSheet(
       continue
     }
     matchedDates.push(a.closing_date as string)
+    /* A BALANCE THE BOOKS THEMSELVES CONTRADICT. Six of the thirteen accounts carry a
+     * closing balance dated mid-December, because the figure was derived from the last
+     * row that published a running balance. That is fine ONLY while nothing moved
+     * afterwards — and whether anything moved is knowable, right here, from the year's
+     * transactions. Comparing dates alone would cry wolf over every one of those six;
+     * comparing against actual later activity catches the case that is genuinely wrong. */
+    const movedAfter = txs.filter(
+      t => t.bank_name === a.bank_name && t.transaction_date > (a.closing_date as string),
+    ).length
+    if (movedAfter > 0) staleBalance.push({ name: a.bank_name, date: a.closing_date as string, rows: movedAfter })
 
     const line: BalanceSheetLine = {
       label: a.bank_name,
@@ -1011,7 +1023,8 @@ export function computeBalanceSheet(
    * So the bar is completeness: every account in the registry must have a balance, and
    * every one of those balances must be dated in the year asked for. Anything less is
    * refused and the reason is named account by account. */
-  const can_state = matchedDates.length > 0 && unknownBalance.length === 0 && otherYear.length === 0
+  const can_state = matchedDates.length > 0 && unknownBalance.length === 0
+    && otherYear.length === 0 && staleBalance.length === 0
 
   // Property the company bought. Parked out of profit when the books were built, which
   // is right — and means this is the ONLY place it appears. Signed sum THEN abs: a
@@ -1030,6 +1043,12 @@ export function computeBalanceSheet(
 
   const total_assets = cash.reduce((s, l) => s + l.amount, 0) + other_assets.reduce((s, l) => s + l.amount, 0)
   const total_liabilities = liabilities.reduce((s, l) => s + l.amount, 0)
+
+  /** Matched balances struck before the year end — disclosed, not warned about. */
+  const earlyDates = registry
+    .filter(a => a.closing_balance !== null && a.closing_balance !== undefined
+      && a.closing_date && a.closing_date.startsWith(String(year)) && a.closing_date !== `${year}-12-31`)
+    .map(a => a.bank_name)
 
   const notes: string[] = []
   if (registry.length === 0) {
@@ -1055,12 +1074,18 @@ export function computeBalanceSheet(
       `without ${unknownBalance.length === 1 ? 'it' : 'them'} understates what is owed and overstates equity.`,
     )
   }
-  if (can_state && new Set(matchedDates).size > 1) {
-    const sorted = Array.from(new Set(matchedDates)).sort()
+  if (staleBalance.length > 0) {
     notes.push(
-      `The balances above were not all struck on the same day — they run from ${sorted[0]} to ` +
-      `${sorted[sorted.length - 1]}. Each line shows its own date. Money moving between accounts ` +
-      `in the gap would be counted twice or not at all.`,
+      `${staleBalance.map(a => `${a.name} (balance struck ${a.date}, ${a.rows} later transaction${a.rows === 1 ? '' : 's'})`).join('; ')} ` +
+      `— the books record money moving in ${staleBalance.length === 1 ? 'this account' : 'these accounts'} AFTER the ` +
+      `balance was struck, so the balance is no longer what the account holds.`,
+    )
+  } else if (can_state && earlyDates.length > 0) {
+    notes.push(
+      `${earlyDates.join(', ')} ${earlyDates.length === 1 ? 'was' : 'were'} last struck before 31 December — ` +
+      `the figure comes from the final transaction that published a running balance. The books record no ` +
+      `movement in ${earlyDates.length === 1 ? 'it' : 'them'} afterwards, so the balance carries to the year end. ` +
+      `Each line shows its own date.`,
     )
   }
   if (propertyTotal > 0) {
@@ -1082,7 +1107,10 @@ export function computeBalanceSheet(
     // The date the balances were ACTUALLY struck, not 31 December by assertion. Dating a
     // 30-June balance as a year-end position is the same error as dating a 2025 balance
     // 2026 — smaller, and just as untrue.
-    as_of: matchedDates.length > 0 ? Array.from(matchedDates).sort()[matchedDates.length - 1] : `${year}-12-31`,
+    // The year-end position. Legitimate even where a line's own balance is dated earlier:
+    // nothing moved after it (checked above — otherwise the statement is refused), so the
+    // figure carries forward unchanged. Every line still shows the date it was struck.
+    as_of: `${year}-12-31`,
     currency: REPORTING,
     cash, other_assets, total_assets,
     liabilities, total_liabilities,

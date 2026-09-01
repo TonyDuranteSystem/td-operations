@@ -652,10 +652,22 @@ describe('computeBalanceSheet', () => {
     expect(bs.can_state).toBe(true)
     expect(bs.total_assets).toBeCloseTo(41138.64, 2)
     expect(bs.cash[0].as_of).toBe('2025-06-30')
-    // Dated by what the accounts say, NOT asserted as 31 December. An earlier version
-    // hardcoded `${year}-12-31`, so a balance struck at midsummer was presented as the
-    // year-end position — the same untruth as the year mix-up, at month scale.
-    expect(bs.as_of).toBe('2025-06-30')
+    // A midsummer balance with NO later movement in the books still holds at the year
+    // end, so the statement is a year-end one — but the line keeps its own date, and a
+    // note says which accounts were struck early. What would NOT be legitimate is money
+    // moving after the figure was struck; that case is refused (next test).
+    expect(bs.as_of).toBe('2025-12-31')
+    expect(bs.notes.some(n => n.includes('before 31 December'))).toBe(true)
+  })
+
+  it('REFUSES a balance the books themselves contradict — money moved after it was struck', () => {
+    const bs = computeBalanceSheet(
+      [makeAccount({ bank_name: 'Chase', closing_balance: 1000, closing_date: '2025-12-15' })],
+      [makeTx({ bank_name: 'Chase', transaction_date: '2025-12-28', amount: -400 })],
+      2025,
+    )
+    expect(bs.can_state).toBe(false)
+    expect(bs.notes.some(n => n.includes('Chase') && n.includes('AFTER'))).toBe(true)
   })
 
   it('REFUSES a partial statement — one account in the year is not the company', () => {
@@ -673,14 +685,18 @@ describe('computeBalanceSheet', () => {
     expect(bs.notes.some(n => n.includes('FCB loan') && n.includes('2025'))).toBe(true)
   })
 
-  it('says so when the balances were not all struck on the same day', () => {
+  it('names the accounts struck before the year end WITHOUT crying wolf over them', () => {
+    // Six of the thirteen real accounts are like this: the balance is derived from the
+    // last row that published a running balance, mid-December. Nothing moved afterwards,
+    // so the figure is right. Warning on the date alone would flag all six every year and
+    // train the reader to ignore the notes.
     const bs = computeBalanceSheet([
       makeAccount({ bank_name: 'Chase', closing_date: '2025-12-31' }),
-      makeAccount({ bank_name: 'Relay', closing_date: '2025-06-30' }),
-    ], [], 2025)
+      makeAccount({ bank_name: 'Relay', closing_date: '2025-12-15' }),
+    ], [makeTx({ bank_name: 'Relay', transaction_date: '2025-12-10' })], 2025)
 
     expect(bs.can_state).toBe(true)
-    expect(bs.notes.some(n => n.includes('2025-06-30') && n.includes('2025-12-31'))).toBe(true)
+    expect(bs.notes.some(n => n.includes('Relay') && n.includes('carries to the year end'))).toBe(true)
   })
 
   it('an account with no closing DATE cannot be placed in any year', () => {
