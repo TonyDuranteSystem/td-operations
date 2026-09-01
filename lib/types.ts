@@ -202,6 +202,7 @@ export interface Payment {
   payment_method: string | null
   invoice_number: string | null
   installment: string | null
+  payment_category: string | null
   amount_paid: number | null
   amount_due: number | null
   followup_stage: string | null

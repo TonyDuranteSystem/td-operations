@@ -15,7 +15,7 @@ import { dbWrite, dbWriteSafe } from '@/lib/db'
 import { syncTDInvoiceMirror } from '@/lib/portal/td-invoice-mirror'
 import { generateInvoiceNumber, generateCreditNoteNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
 import { computeCreditApplication, consumeCredits, releaseStaleCreditClaims, claimCredits, confirmCreditClaims, unwindCreditClaims } from '@/lib/operations/credit-netting'
-import { categoryFromInstallmentLabel } from '@/lib/billing/payment-classification'
+import { categoryFromInstallmentLabel, isInstallment } from '@/lib/billing/payment-classification'
 import { DEAD_INVOICE_STATUSES } from '@/lib/offers/payment-plan-state'
 import { resolveCreationCardFeeRate } from '@/lib/payments/card-fee-config'
 import { getOfficeDateString } from '@/lib/portal/office-hours'
@@ -128,12 +128,43 @@ export interface TDInvoiceInput {
   tranche_seq?: number
 }
 
+/**
+ * Pure message builder for the soft duplicate-installment warning — split out
+ * from createTDInvoice so the wording/pluralization is unit-testable without
+ * mocking Supabase. `matches` is the set of OTHER live invoices already found
+ * for this account+category+year; an empty set means no warning.
+ */
+export function buildDuplicateInstallmentWarning(
+  matches: Array<{ invoice_number: string | null }>,
+  n: 1 | 2,
+  year: number,
+): string | undefined {
+  if (matches.length === 0) return undefined
+  const nums = matches.map((m) => m.invoice_number).filter(Boolean).join(', ')
+  return (
+    `This account already has ${matches.length === 1 ? 'an' : matches.length} invoice${matches.length > 1 ? 's' : ''} ` +
+    `for Installment ${n} (${year})${nums ? ` (${nums})` : ''} — check before sending this one, it may be a duplicate.`
+  )
+}
+
 export interface TDInvoiceResult {
   paymentId: string
   expenseId: string
   invoiceNumber: string
   total: number
   status: string
+  /**
+   * Set when this invoice is installment_1/installment_2 for a year that
+   * already has another LIVE (non-cancelled) invoice of the same category on
+   * this account — e.g. the ShoppyVerse LLC duplicate that this field exists
+   * to catch going forward. A SOFT warning, not a block: the write still
+   * happens (createTDInvoice never invents an opinion about which of two
+   * invoices is the "real" one), the caller surfaces it to the staff member
+   * who can then void whichever one is wrong. Never set for a caller that
+   * omits `installment`/`payment_category` or `year` — those invoices carry
+   * no structured identity to check against.
+   */
+  duplicate_warning?: string
 }
 
 // ─── Create TD Invoice ─────────────────────────────
@@ -187,6 +218,49 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   if (idempotency_key) {
     const existing = await findByIdempotencyKey(idempotency_key)
     if (existing) return existing
+  }
+
+  // 0a. Duplicate-installment check (2026-08-31, ShoppyVerse LLC investigation).
+  // Same identity as the installment badge on the account page (account + payment_category
+  // + year, via isInstallment) — deliberately the ONE shared definition of "same
+  // installment", never a second independently-derived check.
+  //
+  // This is advisory, NOT the actual enforcement — the database-level partial unique index
+  // (uq_payments_installment_per_account_year) is the real backstop and WILL reject a genuine
+  // second live insert outright. This check exists to give a FRIENDLY message computed before
+  // the write is attempted, since by the time the DB rejects it the caller only has a raw
+  // Postgres error to show (handled below, in the insert retry loop, by turning that specific
+  // constraint violation into this same friendly text). Re-issuing after voiding the original
+  // is NOT blocked by either layer — isInstallment excludes Voided/Credit — so that stays a
+  // genuinely non-blocking case; a REAL duplicate is not.
+  //
+  // Excludes $0 / no-invoice-number rows on top of isInstallment's own live check (which now
+  // correctly excludes Cancelled/Voided/Credit — widened 2026-09-01, bug-hunter council review
+  // — so a separate Voided/Credit filter here would just drift from that one definition again).
+  // Production has a legitimate pattern (Partner Alliance LLC + Morgan & Taylor International
+  // LLC, consolidated first-installment billing) of a $0 companion record stamped on the
+  // non-billed account so CRON ELIGIBILITY still recognizes "installment paid" via
+  // isInstallment — that must keep counting for the cron, but it is not a second REAL invoice.
+  let duplicateWarning: string | undefined
+  if (account_id && year != null && (resolvedCategory === 'installment_1' || resolvedCategory === 'installment_2')) {
+    const n = resolvedCategory === 'installment_1' ? 1 : 2
+    // Filtered server-side by the same category+year being checked — an account with a large
+    // payment history should never rely on an unbounded, client-side-filtered fetch (senior-
+    // engineer finding).
+    const { data: existingRows } = await supabaseAdmin
+      .from('payments')
+      .select('id, invoice_number, payment_category, year, status, invoice_status, total')
+      .eq('account_id', account_id)
+      .eq('payment_category', resolvedCategory)
+      .eq('year', year)
+    const liveMatches = (existingRows || []).filter((p) =>
+      isInstallment(p, n, { year }) &&
+      (Number(p.total) || 0) > 0 &&
+      !!p.invoice_number &&
+      p.invoice_number !== '1.0' &&
+      p.invoice_number !== '2.0'
+    )
+    duplicateWarning = buildDuplicateInstallmentWarning(liveMatches, n, year)
   }
 
   // 0b. Resolve is_test — the invoice always inherits the flag from who it's
@@ -432,6 +506,22 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
       // Break out and let the caller see the error.
     }
 
+    // A genuine duplicate slipped past the advisory check above (a race, or the caller
+    // ignored it) and the database constraint (uq_payments_installment_per_account_year) is
+    // now the one actually rejecting it. Turn that into the same friendly text the advisory
+    // warning would have shown, instead of a raw Postgres constraint-violation string reaching
+    // the user (bug-hunter + ai-architect + senior-engineer council finding, 2026-09-01).
+    if (isUniqueViolation(error, 'uq_payments_installment_per_account_year')) {
+      if (appliedCredit && appliedCredit.appliedTotal > 0) {
+        await unwindCreditClaims(appliedCredit, claimToken, supabaseAdmin)
+      }
+      const n = resolvedCategory === 'installment_1' ? 1 : 2
+      throw new Error(
+        `An Installment ${n} (${year}) invoice already exists on this account and is still live — ` +
+        `void it first if this one is meant to replace it, or check the account page for the existing invoice.`
+      )
+    }
+
     // Any other error — bubble up, releasing our claims first (WS-A unwind).
     if (appliedCredit && appliedCredit.appliedTotal > 0) {
       await unwindCreditClaims(appliedCredit, claimToken, supabaseAdmin)
@@ -527,7 +617,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   // Only a REAL credit note (negative gross) skips the mirror. A zero-total
   // invoice is still a document the client should see (hunter minor 9).
   if (grossTotal < 0) {
-    return { paymentId, expenseId: '', invoiceNumber, total, status: invoiceStatus }
+    return { paymentId, expenseId: '', invoiceNumber, total, status: invoiceStatus, duplicate_warning: duplicateWarning }
   }
 
   const { data: expense, error: expErr } = await dbWriteSafe(
@@ -572,6 +662,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
       invoiceNumber,
       total,
       status: invoiceStatus,
+      duplicate_warning: duplicateWarning,
     }
   }
 
@@ -596,6 +687,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     invoiceNumber,
     total,
     status: invoiceStatus,
+    duplicate_warning: duplicateWarning,
   }
 }
 

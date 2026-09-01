@@ -19,7 +19,16 @@ export async function createUnifiedInvoiceDraft(input: {
   bank_preference?: string
   items: Array<{ description: string; quantity: number; unit_price: number; amount: number; sort_order: number }>
   mark_as_paid?: boolean
-}): Promise<ActionResult<{ id: string; invoice_number: string }>> {
+  /**
+   * The New Invoice dialog's installment dropdown was being collected and
+   * silently discarded — this function never forwarded it, so an invoice
+   * staff explicitly labeled "Installment 2 (Jun)" landed with no
+   * payment_category and no year, invisible to the account-page badge, the
+   * annual-installments cron's duplicate guard, and this same function's own
+   * duplicate check below (2026-08-31, ShoppyVerse LLC investigation).
+   */
+  installment?: string
+}): Promise<ActionResult<{ id: string; invoice_number: string; duplicate_warning?: string }>> {
   return safeAction(async () => {
     const { createTDInvoice } = await import('@/lib/portal/td-invoice')
     const { getBankDetailsByPreference } = await import('@/app/offer/[token]/contract/bank-defaults')
@@ -82,11 +91,18 @@ export async function createUnifiedInvoiceDraft(input: {
       payment_method: paymentMethod === 'card' ? 'Card' : paymentMethod === 'bank_transfer' ? `Wire Transfer (${bankLabel})` : `Wire Transfer (${bankLabel}) / Card`,
       bank_preference: bankPref,
       mark_as_paid: input.mark_as_paid || false,
+      installment: input.installment || undefined,
+      // Derived from the issue date — this dialog has no separate year field.
+      // Falls back to the office's own "today" (not the server's UTC clock) to
+      // match createTDInvoice's own issue_date default exactly.
+      year: input.installment
+        ? Number((input.issue_date || (await import('@/lib/portal/office-hours')).getOfficeDateString()).slice(0, 4))
+        : undefined,
     })
 
     revalidatePath('/finance')
     revalidatePath('/payments')
-    return { id: result.paymentId, invoice_number: result.invoiceNumber }
+    return { id: result.paymentId, invoice_number: result.invoiceNumber, duplicate_warning: result.duplicate_warning }
   }, {
     action_type: 'create',
     table_name: 'payments',
@@ -900,11 +916,107 @@ export async function updateInvoice(
     if (updates.due_date !== undefined) payUpdates.due_date = updates.due_date || null
     if (updates.notes !== undefined) payUpdates.notes = updates.notes || null
     if (updates.message !== undefined) payUpdates.message = updates.message
+
+    // A total edit used to write ONLY payments.total/amount/subtotal/amount_due,
+    // leaving payment_items (the actual invoice document/PDF line items) showing
+    // the pre-edit figure forever — the root cause of the 2026-08-31 ShoppyVerse/
+    // Growly investigation (12 real invoices found with a stale line item vs a
+    // corrected total). Now the one adjustable service line is corrected in the
+    // SAME operation — see adjustSingleServiceLineForTotal's doc comment for why
+    // it refuses rather than guessing on an invoice with more than one line.
     if (updates.total !== undefined) {
+      const { adjustSingleServiceLineForTotal } = await import('@/lib/portal/invoice-regenerate')
+      const { syncClientExpenseItemsMirror } = await import('@/lib/portal/td-invoice-mirror')
+
+      // Guarded (finance-auditor council finding, 2026-09-01): an unchecked failure here
+      // used to silently fall back to amountPaid=0, which reopens an already-Paid invoice's
+      // FULL balance instead of the correct partial remainder — reproducing the exact bug
+      // this whole block exists to fix. Abort loudly instead.
+      const { data: currentPay, error: currentPayErr } = await supabaseAdmin
+        .from('payments')
+        .select('amount_paid, invoice_status')
+        .eq('id', paymentId)
+        .single()
+      if (currentPayErr || !currentPay) {
+        throw new Error(`Could not read this invoice's current paid amount — total was NOT changed. ${currentPayErr?.message || ''}`.trim())
+      }
+      const amountPaid = Math.max(Number(currentPay.amount_paid) || 0, 0)
+      const wasPaid = currentPay.invoice_status === 'Paid'
+
+      const { data: itemRows, error: itemRowsErr } = await supabaseAdmin
+        .from('payment_items')
+        .select('description, quantity, unit_price, amount, sort_order, item_type')
+        .eq('payment_id', paymentId)
+        .order('sort_order', { ascending: true })
+      if (itemRowsErr) {
+        throw new Error(`Could not read this invoice's current line items — total was NOT changed. ${itemRowsErr.message}`)
+      }
+      const currentItems = (itemRows ?? []).map((i) => ({
+        description: (i as unknown as { description: string }).description,
+        quantity: Number((i as unknown as { quantity: number | null }).quantity) || 1,
+        unit_price: Number((i as unknown as { unit_price: number | null }).unit_price) || 0,
+        amount: Number((i as unknown as { amount: number | null }).amount) || 0,
+        // item_type is newer than the generated Supabase types (same gap as
+        // credit-netting.ts's identical cast) — see the codebase-wide pattern there.
+        item_type: (i as unknown as { item_type?: string | null }).item_type === 'fee' ? 'fee' : 'service',
+      }))
+
+      const adjustment = adjustSingleServiceLineForTotal(currentItems, updates.total)
+      if (!adjustment.ok) {
+        throw new Error(adjustment.reason || 'Could not adjust this invoice’s total safely.')
+      }
+
+      // Guarded delete + insert (finance-auditor council finding): an unchecked failure here
+      // used to proceed straight to writing the new header total anyway, silently leaving a
+      // real invoice with a correct total and ZERO line items. Both steps now throw on error,
+      // before the payments.total write below ever runs — not a full DB transaction (still a
+      // real gap: if the LATER payments.update fails, these two writes are not rolled back),
+      // but this closes the specific "insert fails, total still gets written" failure mode.
+      // eslint-disable-next-line no-restricted-syntax -- in-place line-item correction alongside the total edit below, same shape as credit-netting.ts's proven delete+reinsert
+      const { error: deleteItemsErr } = await supabaseAdmin.from('payment_items').delete().eq('payment_id', paymentId)
+      if (deleteItemsErr) {
+        throw new Error(`Could not clear this invoice's line items — total was NOT changed. ${deleteItemsErr.message}`)
+      }
+      if (adjustment.items.length > 0) {
+        // eslint-disable-next-line no-restricted-syntax -- see above
+        const { error: insertItemsErr } = await supabaseAdmin.from('payment_items').insert(
+          adjustment.items.map((item, i) => ({
+            payment_id: paymentId,
+            description: item.description,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            amount: item.amount,
+            sort_order: i,
+            item_type: item.item_type === 'fee' ? 'fee' : 'service',
+          })),
+        )
+        if (insertItemsErr) {
+          throw new Error(`This invoice's line items were cleared but could not be rewritten — it may now show no line items. Re-open it and try again, or contact dev. ${insertItemsErr.message}`)
+        }
+      }
+      await syncClientExpenseItemsMirror(paymentId, adjustment.items.map((item, i) => ({ ...item, sort_order: i })))
+
       payUpdates.total = updates.total
       payUpdates.amount = updates.total
       payUpdates.subtotal = updates.total
-      payUpdates.amount_due = updates.total
+      // Real cash already paid still counts — a correction on an already-Paid
+      // invoice must not reopen its balance. (Pre-existing bug independent of
+      // the line-item fix above: the prior code always set amount_due to the
+      // FULL new total, so correcting the total on any already-paid invoice —
+      // ShoppyVerse's/Growly's exact shape — would have wrongly reopened it.)
+      const newAmountDue = Math.max(Math.round((updates.total - amountPaid) * 100) / 100, 0)
+      payUpdates.amount_due = newAmountDue
+      // If the correction reopens a balance on an invoice that was previously fully Paid,
+      // the status must say so too — otherwise every list/badge that reads invoice_status
+      // keeps showing "Paid" while amount_due is now positive (finance-auditor finding).
+      // payments.status has no 'Partial' value on production (confirmed live: Pending, Paid,
+      // Overdue, Waived, Not Invoiced, Cancelled only) — 'Partial' exists only on
+      // invoice_status. status falls back to 'Pending' either way, matching createTDInvoice's
+      // own paid/Pending-only status convention.
+      if (wasPaid && newAmountDue > 0) {
+        payUpdates.invoice_status = amountPaid > 0 ? 'Partial' : 'Sent'
+        payUpdates.status = 'Pending'
+      }
     }
 
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c

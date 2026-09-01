@@ -112,3 +112,48 @@ export async function syncTDInvoiceMirror(
   // which is exactly the signal the admin button and CLI sweep want to see.
   return { changed: mirrorDiffers(before as never, after), before: before as MirrorSnapshot, after }
 }
+
+/**
+ * The ONE thing the 20260823 trigger + this module's diagnostic pass do NOT
+ * cover: `client_expense_items`, the line-item detail behind a `client_expenses`
+ * mirror row. It is written exactly once, at invoice creation
+ * (`td-invoice.ts`'s `createTDInvoice`), and nothing anywhere in this codebase
+ * has ever updated it since — confirmed by a full-repo audit, 2026-09-01
+ * (ShoppyVerse/Growly investigation). Every post-creation edit to
+ * `payment_items` (a credit application, a staff total correction) leaves this
+ * table showing the ORIGINAL line items forever, even though the header total
+ * it sits under is correctly kept in sync by the trigger. Call this any time
+ * `payment_items` changes after creation, alongside whatever wrote the new
+ * items — it is not automatic.
+ *
+ * No-op (returns `synced: false`) when the invoice has no `client_expenses`
+ * mirror row at all (a contact-only invoice, or one that predates the portal
+ * mirror), matching `syncTDInvoiceMirror`'s own no-mirror behavior above.
+ */
+export async function syncClientExpenseItemsMirror(
+  paymentId: string,
+  items: Array<{ description: string; quantity: number; unit_price: number; amount: number; sort_order?: number }>,
+): Promise<{ synced: boolean }> {
+  const db = supabaseAdmin
+  const { data: expense } = await db
+    .from('client_expenses')
+    .select('id')
+    .eq('td_payment_id', paymentId)
+    .maybeSingle()
+  if (!expense) return { synced: false }
+
+  await db.from('client_expense_items').delete().eq('expense_id', expense.id)
+  if (items.length > 0) {
+    await db.from('client_expense_items').insert(
+      items.map((item, i) => ({
+        expense_id: expense.id,
+        description: item.description,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        amount: item.amount,
+        sort_order: item.sort_order ?? i,
+      })),
+    )
+  }
+  return { synced: true }
+}

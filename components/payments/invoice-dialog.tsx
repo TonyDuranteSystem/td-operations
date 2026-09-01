@@ -57,7 +57,7 @@ interface InvoiceDialogProps {
   /** Pre-fill fields when opened from a specific context (e.g. installment button). */
   defaultValues?: InvoiceDialogDefaults
   /** Override the default createInvoice action (e.g. to use createUnifiedInvoice) */
-  onCreateInvoice?: (input: CreateInvoiceInput) => Promise<{ success: boolean; error?: string; data?: { id: string; invoice_number: string } }>
+  onCreateInvoice?: (input: CreateInvoiceInput) => Promise<{ success: boolean; error?: string; data?: { id: string; invoice_number: string; duplicate_warning?: string } }>
   /** Called after creation to send the invoice via email. Receives the payment ID. */
   onSendInvoice?: (paymentId: string) => Promise<{ success: boolean; error?: string }>
 }
@@ -305,6 +305,9 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
           ? await onCreateInvoice(input)
           : await createInvoice(input)
         if (result.success) {
+          if (result.data?.duplicate_warning) {
+            toast.warning(result.data.duplicate_warning, { duration: 30000 })
+          }
           if (markAsPaid) {
             toast.success(`Invoice ${result.data?.invoice_number} created as Paid`)
           } else if (sendMode && onSendInvoice && result.data?.id) {

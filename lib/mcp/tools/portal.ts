@@ -1395,8 +1395,10 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
       message: z.string().optional().describe("Payment terms visible to customer on invoice"),
       mark_as_paid: z.boolean().optional().describe("If true, create as Paid with today's date (invoices are receipts per rule P6)"),
       paid_date: z.string().optional().describe("Override paid date (YYYY-MM-DD) if different from today"),
+      installment: z.enum(["Setup Fee", "Installment 1 (Jan)", "Installment 2 (Jun)", "Annual Payment", "One-Time Service", "Custom"]).optional().describe("Set this for an annual installment invoice — required for the account-page badge and the duplicate-invoice warning to see it. Omit for setup fees / one-off invoices."),
+      year: z.number().optional().describe("Billing year this invoice is FOR (not necessarily the year it's created in). Required alongside installment='Installment 1 (Jan)'/'Installment 2 (Jun)' for the duplicate-invoice warning to check this account."),
     },
-    async ({ contact_id, account_id, line_items, currency, due_date, notes, message, mark_as_paid, paid_date }) => {
+    async ({ contact_id, account_id, line_items, currency, due_date, notes, message, mark_as_paid, paid_date, installment, year }) => {
       try {
         if (!contact_id && !account_id) {
           return { content: [{ type: "text" as const, text: "Error: At least one of contact_id or account_id is required. Contact = person (pre-account). Account = company." }] }
@@ -1462,6 +1464,8 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
             message: message || undefined,
             mark_as_paid: mark_as_paid || false,
             paid_date: paid_date || undefined,
+            installment: installment || undefined,
+            year: year || undefined,
           })
         } catch (err) {
           return { content: [{ type: "text" as const, text: `Failed to create invoice: ${err instanceof Error ? err.message : String(err)}` }] }
@@ -1554,6 +1558,7 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
               resolvedContactId ? `- Contact: ${resolvedContactId}` : "",
               resolvedAccountId ? `- Account: ${resolvedAccountId}` : "",
               whopUrl ? `- Card payment: ${whopUrl} (${csym}${cardAmount} with 5% fee)` : "",
+              result.duplicate_warning ? `\n⚠ ${result.duplicate_warning}` : "",
               ``,
               mark_as_paid ? "Marked as paid." : "Use portal_invoice_send to email the invoice to the client.",
             ].filter(Boolean).join("\n"),
