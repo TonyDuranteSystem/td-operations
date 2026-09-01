@@ -545,7 +545,27 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
           .limit(1)
           .maybeSingle()
 
-        if (submittedWp) {
+        // FALLBACK (dev job 9a9c5cf5): a wizard_progress write can fail
+        // silently for reasons unrelated to whether the client actually
+        // submitted (the 2026-08-27 missing-column incident being one).
+        // THIS job's own submission record (p.submission_id) is
+        // independent proof the wizard was genuinely submitted — and,
+        // unlike a contact-wide lookup, it can never cross-link a
+        // DIFFERENT company's submission for a repeat client, because
+        // it's pinned to the exact submission this job was dispatched
+        // for.
+        let hasProof = !!submittedWp
+        if (!hasProof && p.submission_id) {
+          const { data: fallbackSub } = await supabaseAdmin
+            .from("formation_submissions")
+            .select("id, status")
+            .eq("id", p.submission_id)
+            .in("status", ["completed", "reviewed"])
+            .maybeSingle()
+          hasProof = !!fallbackSub
+        }
+
+        if (hasProof) {
           try {
             const adv = await advanceServiceDelivery({
               delivery_id: sdId,
@@ -565,7 +585,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
             result.steps.push(step("service_delivery_advance", "error", e instanceof Error ? e.message : String(e)))
           }
         } else {
-          result.steps.push(step("service_delivery_advance", "skipped", "Formation wizard_progress not 'submitted' yet"))
+          result.steps.push(step("service_delivery_advance", "skipped", "Neither wizard_progress nor the formation_submissions fallback shows this submission as submitted yet"))
         }
       }
     } else {

@@ -25,6 +25,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWriteSafe } from "@/lib/db"
 import { createSD } from "@/lib/operations/service-delivery"
 import type { Json } from "@/lib/database.types"
+import { reportSystemError } from "@/lib/system-errors"
 
 export async function POST(req: NextRequest) {
   try {
@@ -390,12 +391,26 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
     // next retry re-evaluates isGenuineChange against the OLD hash, which is
     // still correct (worst case, one extra correctly-deduped retry).
     if (dedupeKey) {
-      try {
-        await supabaseAdmin
-          .from("closure_submissions")
-          .update({ last_processed_hash: dedupeKey })
-          .eq("id", submission_id)
-      } catch { /* non-blocking, see above */ }
+      // supabase-js resolves with { error } rather than throwing, so a bare
+      // try/catch here never actually catches a failed write (dev job
+      // 9a9c5cf5 — this exact shape let last_processed_hash silently never
+      // get set for days after a missing-column deploy, defeating the
+      // isGenuineChange dedup above on every retry). Still deliberately
+      // non-blocking, but the failure must be visible.
+      const { error: hashErr } = await supabaseAdmin
+        .from("closure_submissions")
+        .update({ last_processed_hash: dedupeKey })
+        .eq("id", submission_id)
+      if (hashErr) {
+        console.error('[closure-form-completed] last_processed_hash write failed:', hashErr.message)
+        reportSystemError({
+          source: 'server',
+          route: '/api/closure-form-completed',
+          method: 'POST',
+          message: `closure_submissions.last_processed_hash write failed for submission ${submission_id}: ${hashErr.message}`,
+          context: { submission_id, dedupe_key: dedupeKey },
+        }).catch(() => {})
+      }
     }
 
     // ---- STEP 6: Update service delivery ----

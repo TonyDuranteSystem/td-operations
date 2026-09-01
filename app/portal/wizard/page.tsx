@@ -643,6 +643,33 @@ export default async function WizardPage({
     }
   }
 
+  // FALLBACK for formation clients whose wizard_progress row never got
+  // created (dev job 9a9c5cf5 — the 2026-08-27 missing-column incident: the
+  // client's submission was saved fine, but the "you're done" tracking row
+  // silently failed to write). Without this, wizardSubmitStatus stays null
+  // forever, isLocked below never fires, and the client sees a blank,
+  // unlocked form with no sign they already submitted — a resubmit then
+  // gets silently discarded server-side while only staff are emailed.
+  // Scoped to THIS specific formation via formationLeadId (matches how the
+  // isLocked block right below already keys per-company), never a bare
+  // contact_id lookup — a repeat client's other company's submission must
+  // never be picked up here.
+  if (wizardType === 'formation' && contactId && !progressId && formationLeadId) {
+    const { data: fallbackSub } = await supabaseAdmin
+      .from('formation_submissions')
+      .select('submitted_data, status')
+      .eq('contact_id', contactId)
+      .eq('lead_id', formationLeadId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (fallbackSub?.submitted_data && (fallbackSub.status === 'completed' || fallbackSub.status === 'reviewed')) {
+      savedData = fallbackSub.submitted_data as Record<string, unknown>
+      savedStep = 99
+      wizardSubmitStatus = 'submitted'
+    }
+  }
+
   // For submitted tax wizards: lock based on the REVIEW state (Slice 2), not the
   // old sent_to_accountant flag. Editable while submitted / revision_requested /
   // approved / reopened; LOCKED while staff are actively reviewing (under_review)
