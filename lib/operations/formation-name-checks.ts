@@ -179,7 +179,25 @@ export async function getOrInitNameChecks(sdId: string): Promise<NameCheck[]> {
       .order('updated_at', { ascending: false })
       .limit(1)
       .maybeSingle()
-    checks = initNameChecksFromWizard((wp?.data ?? null) as Record<string, unknown> | null)
+    let wizardData = (wp?.data ?? null) as Record<string, unknown> | null
+    // FALLBACK (dev job 9a9c5cf5): a wizard_progress write can fail
+    // silently (2026-08-27 missing-column incident being the proven
+    // case — Francesco Lussignoli, live production: this left the LLC
+    // Name Approval panel with NO candidate names at all, blocking
+    // staff from taking the very next action). formation_submissions
+    // carries the same llc_name_1/2/3 fields independently.
+    if (!wizardData) {
+      const { data: sub } = await supabaseAdmin
+        .from('formation_submissions')
+        .select('submitted_data')
+        .eq('contact_id', row.contact_id)
+        .in('status', ['completed', 'reviewed'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      wizardData = (sub?.submitted_data ?? null) as Record<string, unknown> | null
+    }
+    checks = initNameChecksFromWizard(wizardData)
   }
   if (checks.length > 0) await writeNameChecks(sdId, checks)
   return checks
