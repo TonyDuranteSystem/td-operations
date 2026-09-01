@@ -696,7 +696,11 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
             bank_preference: input.bank_preference,
             items: input.items,
             mark_as_paid: input.mark_as_paid,
+            installment: input.installment,
           })
+          if (result.success && result.data?.duplicate_warning) {
+            toast.warning(result.data.duplicate_warning, { duration: 30000 })
+          }
           return result
         }}
         onSendInvoice={async (paymentId) => {

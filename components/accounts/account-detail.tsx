@@ -60,6 +60,7 @@ import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import { differenceInDays, parseISO, format } from 'date-fns'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 import { resolveExtensionDeadline, type TaxReturnType } from '@/lib/tax/extension-deadline'
+import { isInstallment } from '@/lib/billing/payment-classification'
 
 const TABS = [
   { key: 'overview', label: 'Overview', icon: Building2, adminOnly: false },
@@ -1254,20 +1255,18 @@ function InstallmentsSection({ account, payments, makeAccountSaver }: { account:
 
   const year = new Date().getFullYear()
 
-  // Resolve 1st installment invoice first
+  // Resolve invoices by the same structured identity the write-side guard uses
+  // (account + payment_category + year) — never by amount/description matching.
+  // See findInstallmentInvoice below for why this can return more than one match.
   const inst1Amount = account.installment_1_amount
   const inst1Currency = (account.installment_1_currency ?? 'USD') as 'USD' | 'EUR'
-  const inst1Match = inst1Amount
-    ? findInstallmentInvoice(payments, inst1Amount, inst1Currency, 'Installment 1 (Jan)', year, [])
-    : null
+  const inst1Matches = inst1Amount ? findInstallmentInvoice(payments, 1, year) : []
+  const inst1Match = inst1Matches[0] ?? null
 
-  // Resolve 2nd installment, excluding the 1st match to avoid double-counting
   const inst2Amount = account.installment_2_amount
   const inst2Currency = (account.installment_2_currency ?? 'USD') as 'USD' | 'EUR'
-  const excludeIds = inst1Match ? [inst1Match.id] : []
-  const inst2Match = inst2Amount
-    ? findInstallmentInvoice(payments, inst2Amount, inst2Currency, 'Installment 2 (Jun)', year, excludeIds)
-    : null
+  const inst2Matches = inst2Amount ? findInstallmentInvoice(payments, 2, year) : []
+  const inst2Match = inst2Matches[0] ?? null
 
   const dialogDefaults: InvoiceDialogDefaults | undefined = openForInst === 1
     ? {
@@ -1321,10 +1320,10 @@ function InstallmentsSection({ account, payments, makeAccountSaver }: { account:
         <div className="grid gap-3 text-sm">
           <EditableField icon={CreditCard} label="1st Installment" value={inst1Amount?.toString() ?? ''} onSave={makeAccountSaver('installment_1_amount')} />
           <EditableField icon={Globe} label="1st Currency" value={inst1Currency} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_1_currency')} />
-          {inst1Amount && <InstallmentBadge match={inst1Match} onInvoice={inst1Match ? undefined : () => setOpenForInst(1)} />}
+          {inst1Amount && <InstallmentBadge matches={inst1Matches} onInvoice={inst1Match ? undefined : () => setOpenForInst(1)} />}
           <EditableField icon={CreditCard} label="2nd Installment" value={inst2Amount?.toString() ?? ''} onSave={makeAccountSaver('installment_2_amount')} />
           <EditableField icon={Globe} label="2nd Currency" value={inst2Currency} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_2_currency')} />
-          {inst2Amount && <InstallmentBadge match={inst2Match} onInvoice={inst2Match ? undefined : () => setOpenForInst(2)} />}
+          {inst2Amount && <InstallmentBadge matches={inst2Matches} onInvoice={inst2Match ? undefined : () => setOpenForInst(2)} />}
         </div>
       </div>
 
@@ -1341,27 +1340,38 @@ function InstallmentsSection({ account, payments, makeAccountSaver }: { account:
   )
 }
 
-function findInstallmentInvoice(
-  payments: Payment[],
-  amount: number,
-  currency: string,
-  installmentLabel: 'Installment 1 (Jan)' | 'Installment 2 (Jun)',
-  year: number,
-  excludeIds: string[],
-): Payment | null {
-  const yearStr = String(year)
-  return payments.find(p => {
-    if (excludeIds.includes(p.id)) return false
-    if (p.installment !== installmentLabel) return false
-    if (!p.description?.includes(yearStr)) return false
-    const invTotal = Number(p.total) || p.amount || 0
-    const invCurr = p.amount_currency || 'USD'
-    return Math.abs(invTotal - amount) < 2 && invCurr === currency && p.invoice_number && p.invoice_number !== '1.0' && p.invoice_number !== '2.0'
-  }) ?? null
+/**
+ * Which invoice(s) is this account's installment N for `year`? Uses the same
+ * structured identity (account + payment_category + year, via isInstallment)
+ * as the write-side duplicate guard in createTDInvoice — never amount or
+ * description text, which is how the ShoppyVerse duplicate went unnoticed.
+ *
+ * Returns EVERY REAL match, not just one: when a duplicate invoice exists for
+ * the same installment+year (the exact shape this fix is closing off going
+ * forward, and the shape ShoppyVerse was already in), silently picking the
+ * first one would hide the duplicate from staff instead of surfacing it.
+ *
+ * "Real" excludes a $0 / no-invoice-number row on top of isInstallment's own
+ * live check. Production has a legitimate pattern (Partner Alliance LLC +
+ * Morgan & Taylor International LLC, consolidated first-installment billing,
+ * 2026-08-31 investigation) of a $0 companion record on the non-billed
+ * account so cron eligibility still sees "installment paid" — isInstallment
+ * must keep counting that (the cron's job), but it is not a second REAL
+ * invoice and must never trigger the duplicate warning here.
+ * `payments` is already scoped to this account by the caller's query.
+ */
+function findInstallmentInvoice(payments: Payment[], n: 1 | 2, year: number): Payment[] {
+  return payments.filter(p =>
+    isInstallment(p, n, { year }) &&
+    (Number(p.total) || 0) > 0 &&
+    !!p.invoice_number &&
+    p.invoice_number !== '1.0' &&
+    p.invoice_number !== '2.0'
+  )
 }
 
-function InstallmentBadge({ match, onInvoice }: { match: Payment | null; onInvoice?: () => void }) {
-  if (!match) {
+function InstallmentBadge({ matches, onInvoice }: { matches: Payment[]; onInvoice?: () => void }) {
+  if (matches.length === 0) {
     return (
       <div className="flex items-center gap-2 pl-6 text-xs">
         <span className="px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-500">Not invoiced</span>
@@ -1377,6 +1387,29 @@ function InstallmentBadge({ match, onInvoice }: { match: Payment | null; onInvoi
       </div>
     )
   }
+  if (matches.length > 1) {
+    return (
+      <div className="flex flex-col gap-1 pl-6 text-xs">
+        <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 w-fit font-medium">
+          ⚠ {matches.length} invoices found — resolve duplicate
+        </span>
+        {matches.map(m => {
+          const status = m.invoice_status ?? m.status ?? ''
+          const isPaid = status === 'Paid'
+          return (
+            <div key={m.id} className="flex items-center gap-2">
+              <span className="font-mono text-blue-600">{m.invoice_number}</span>
+              <span className={cn('px-1.5 py-0.5 rounded', isPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')}>
+                {isPaid ? 'Paid' : status}
+              </span>
+              {m.paid_date && <span className="text-muted-foreground">{formatDate(m.paid_date)}</span>}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+  const match = matches[0]
   const status = match.invoice_status ?? match.status ?? ''
   const isPaid = status === 'Paid'
   return (
