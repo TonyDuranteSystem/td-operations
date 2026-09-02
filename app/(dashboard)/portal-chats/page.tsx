@@ -866,16 +866,59 @@ export default function PortalChatsPage() {
       toast.error("Couldn't find that message — it may be much older or deleted.")
       return
     }
-    didScrollToTargetRef.current = true
     setAdminActiveTopic(target.topic ?? null)
-    const flash = window.setTimeout(() => {
+    // didScrollToTargetRef flips to "resolved" only once the scroll actually
+    // HAPPENS — never on a bare attempt. Two bugs lived in the old single
+    // "set true, then look up the element" shape:
+    //  1. Flipping it BEFORE scheduling the scroll let the jump-to-latest
+    //     effect's own deep-link guard see "resolved" up to 120ms before any
+    //     scroll had happened, so a messages update landing in that window (a
+    //     realtime sync or the near-simultaneous background refetch that
+    //     already fires on a fresh load) could jump to the bottom first, and
+    //     this timeout then had nothing left to override.
+    //  2. Flipping it INSIDE the timeout but before checking the element
+    //     existed meant a transient miss (the message list re-rendering at
+    //     that exact 120ms mark — very plausible on a fresh load with the
+    //     same near-simultaneous refetch above) gave up FOREVER with no retry
+    //     and no error, since the "not found" toast only covers the separate
+    //     not-in-combinedMessages case above.
+    // Both silently reproduced "opens the chat, not that specific message"
+    // (Antonio, 2026-09-02). Verified live: a bare retry-on-next-data-change
+    // wasn't enough either — on a genuinely fresh load the element doesn't
+    // reliably exist within ~2s (a busy account's list, hydration, and the
+    // topic-switch re-render all compete for that window), but nothing else
+    // changes `combinedMessages` in that window to retry a one-shot miss.
+    // POLL for the element with a generous ceiling instead of guessing a delay.
+    // A found-and-scrolled element is NOT trusted blindly: right after the
+    // topic-switch re-render, getElementById can return a transient/duplicate
+    // node from a reconciliation pass that's discarded a moment later — the
+    // scroll silently lands on a node nobody keeps, so a NEXT-FRAME check
+    // confirms the target actually ended up on screen before giving up on it.
+    let attempts = 0
+    const tryScroll = () => {
       const el = document.getElementById(`pc-msg-${targetMessageId}`)
-      if (!el) return
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      setHighlightedMessageId(targetMessageId)
-      window.setTimeout(() => setHighlightedMessageId(null), 2800)
-    }, 120) // let the topic switch re-render the list first
-    return () => window.clearTimeout(flash)
+      if (el) {
+        el.scrollIntoView({ behavior: 'instant', block: 'center' })
+        requestAnimationFrame(() => {
+          const check = document.getElementById(`pc-msg-${targetMessageId}`)
+          const rect = check?.getBoundingClientRect()
+          const onScreen = rect && rect.bottom > 0 && rect.top < window.innerHeight
+          if (check && onScreen) {
+            didScrollToTargetRef.current = true
+            setHighlightedMessageId(targetMessageId)
+            setTimeout(() => setHighlightedMessageId(null), 2800)
+            return
+          }
+          attempts += 1
+          if (attempts < 75) timer = setTimeout(tryScroll, 200) // ~15s ceiling
+        })
+        return
+      }
+      attempts += 1
+      if (attempts < 75) timer = setTimeout(tryScroll, 200) // ~15s ceiling
+    }
+    let timer = setTimeout(tryScroll, 120) // let the topic switch re-render the list first
+    return () => clearTimeout(timer)
   }, [targetMessageId, combinedMessages, hasMoreOlder, loadingOlder, loadOlderMessages])
 
   // Unread count per topic tab (client + system messages not yet read by admin).
@@ -1764,6 +1807,19 @@ export default function PortalChatsPage() {
     const threadKey = selectedAccountId ?? selectedContactId ?? null
     const isThreadSwitch = scrollThreadKeyRef.current !== threadKey
     scrollThreadKeyRef.current = threadKey
+    // A ?message= deep link OWNS the scroll position for this page view, full
+    // stop — not just "until resolved". Gating only on unresolved was still
+    // wrong: once the deep-link scroll succeeded, this effect's own guard
+    // opened back up, and the very next unrelated `messages` update (the
+    // mark-as-read POST's own refetch fires within a second of opening the
+    // thread) hit the unconditional smooth-scroll-to-bottom below and yanked
+    // the view away from the message that was just centered — silently
+    // landing back at the newest message instead of the linked one (Antonio,
+    // 2026-09-02: "it opens the chat, not that specific message"). It's also
+    // the right product behaviour regardless of the bug: someone who followed
+    // a link to one historical message is reading history, not asking to be
+    // snapped to "latest" the moment any background refetch lands.
+    if (targetMessageId) return
     if (isThreadSwitch) {
       // Two frames + a short fallback so late layout (images, tabs) can't strand
       // the view above the last message.
@@ -1773,7 +1829,7 @@ export default function PortalChatsPage() {
       return () => clearTimeout(t)
     }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [messages, selectedAccountId, selectedContactId])
+  }, [messages, selectedAccountId, selectedContactId, targetMessageId])
 
   // Auto-grow textareas
   useEffect(() => {
