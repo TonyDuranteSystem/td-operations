@@ -1379,8 +1379,8 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         result.steps.push(step("portal_welcome_chat", "skipped", "Welcome chat already sent for this account — not duplicating"))
       } else {
         const welcomeMsg = company_name
-          ? `Welcome to Tony Durante LLC! We've received everything for ${company_name}.\n\nYour Operating Agreement and Lease Agreement are ready for your signature — you'll find them in your portal dashboard. Your Banking setup (Relay USD + Payset EUR) is also available whenever you're ready.\n\nIf you have any questions, just reply here.`
-          : `Welcome to Tony Durante LLC! We've received your onboarding data.\n\nYour Operating Agreement and Lease Agreement are ready for your signature — you'll find them in your portal dashboard. Your Banking setup is also available whenever you're ready.\n\nIf you have any questions, just reply here.`
+          ? `Welcome to Tony Durante LLC! We've received everything for ${company_name}.\n\nIf you have any questions, just reply here.`
+          : `Welcome to Tony Durante LLC! We've received your onboarding data.\n\nIf you have any questions, just reply here.`
         const { error: chatErr } = await supabaseAdmin
           .from("portal_messages")
           .insert({
