@@ -23,6 +23,7 @@ import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 import { safeOriginPath, describeOrigin } from '@/lib/notes/note-origin'
 import { latestReplyOf, type NoteReplyRow } from '@/lib/notes/staff-notes'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { LinkifiedText } from '@/components/dashboard/note-linkified-text'
 
 interface Note {
   id: string
@@ -368,7 +369,7 @@ function NoteCardBody({ note, members, meId, onChange, onOpen }: { note: Note; m
           title="Open"
           className="cursor-pointer whitespace-pre-wrap break-words text-sm leading-snug line-clamp-6 hover:underline"
         >
-          {note.body}
+          <LinkifiedText text={note.body} />
         </p>
         <FastTooltip label="Done">
           <button data-no-drag onClick={() => act({ action: 'archive' })} disabled={busy}
