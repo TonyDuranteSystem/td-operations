@@ -683,13 +683,25 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     // Francesco Lussignoli). Gated on formStatusWrite (already true in
     // this branch) so a refused/ambiguous re-submit — deliberately silent
     // by Antonio's ruling, dev job ca788354 — never fires this either.
+    //
+    // Deliberately NEVER retires an existing note here (bug-hunter finding,
+    // round 6): `wasAlreadyReviewed` reflects this row's `status` column,
+    // which this SAME job attempt just flipped to "reviewed" a few lines
+    // up — so if a LATER step in this same pass throws (e.g. the
+    // updateJobProgress call below hits a transient error) and the job
+    // queue retries the whole handler, the retry would see `status`
+    // already "reviewed" from its own prior (successful) attempt and
+    // misread that as a genuine client resubmission — retiring the
+    // correct, already-emitted note and replacing it with a false
+    // "Client resubmitted..." one, plus re-stamping reviewed_at/
+    // completed_at. Relying on emitClientChatEvent's own marker dedup
+    // instead means a retry safely no-ops (reason: "already_emitted"),
+    // and a GENUINE resubmission still gets counted — just without the
+    // "resubmitted" wording variant, which needs a content-based signal
+    // (not available for formation_submissions today) to do safely.
     if (!formErr && p.contact_id) {
       try {
-        const { emitFormationWizardSubmittedEvent, retireFormationWizardSubmittedNote } =
-          await import("@/lib/portal/chat-events")
-        if (wasAlreadyReviewed) {
-          await retireFormationWizardSubmittedNote({ formationSubmissionId: p.submission_id })
-        }
+        const { emitFormationWizardSubmittedEvent } = await import("@/lib/portal/chat-events")
         const chat = await emitFormationWizardSubmittedEvent({
           formation_submission_id: p.submission_id,
           contact_id: p.contact_id,

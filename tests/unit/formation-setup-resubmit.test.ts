@@ -439,16 +439,21 @@ describe('staff What\'s New alert on wizard submission (dev job 9a9c5cf5, round 
     expect(retireFormationWizardSubmittedNote).not.toHaveBeenCalled()
   })
 
-  it('retires the old note and marks it a resubmission when the row was already reviewed', async () => {
+  it('marks it a resubmission in the wording when the row was already reviewed, WITHOUT retiring the existing note (bug-hunter finding, round 6)', async () => {
+    // The old behavior (retire-then-refire keyed on the row's own status)
+    // let a mid-job crash-and-retry — this job's own PRIOR successful
+    // attempt already flipped status to "reviewed" — misread itself as a
+    // genuine client resubmission and DELETE the correct, already-emitted
+    // note. Retiring must never happen automatically from this signal
+    // alone; emitClientChatEvent's own marker dedup is what protects a
+    // retry from creating a duplicate/false note.
     install({
       formations: [UNFINISHED_FORMATION],
       offer: { token: OFFER_TOKEN },
       priorSubmissionStatus: 'reviewed',
     })
     await handleFormationSetup(job())
-    expect(retireFormationWizardSubmittedNote).toHaveBeenCalledWith(
-      expect.objectContaining({ formationSubmissionId: SUBMISSION_ID }),
-    )
+    expect(retireFormationWizardSubmittedNote).not.toHaveBeenCalled()
     expect(emitFormationWizardSubmittedEvent).toHaveBeenCalledWith(
       expect.objectContaining({ is_resubmission: true }),
     )
