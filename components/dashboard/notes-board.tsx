@@ -12,6 +12,7 @@ import { Loader2, Lock, Share2, Users, Building2, Clock, RotateCcw, Check, List,
 import { noteClientName } from '@/components/dashboard/sticky-notes-layer'
 import { NotesCalendar } from '@/components/dashboard/notes-calendar'
 import { NoteEditor, type EditableNote, type Member } from '@/components/dashboard/note-editor'
+import { LinkifiedText } from '@/components/dashboard/note-linkified-text'
 import { isArchivedFor, isSnoozedFor, noteStateFor, noteActivityAt, latestReplyOf, otherPersonState, otherViewersOf, type NoteReplyRow } from '@/lib/notes/staff-notes'
 
 interface Note {
@@ -323,7 +324,7 @@ function Card({ n, onAct, showDone, showUnsnooze, showRestore, footer, onOpen, m
         onClick={() => onOpen?.(n)}
         title="Open"
         className="cursor-pointer whitespace-pre-wrap break-words text-sm leading-snug hover:underline"
-      >{n.body}</p>
+      ><LinkifiedText text={n.body} /></p>
 
       {latest && (
         <p className={`mt-1 truncate rounded px-1.5 py-0.5 text-xs ${

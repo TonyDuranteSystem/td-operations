@@ -22,6 +22,7 @@ import {
   type CalendarNoteLike,
 } from '@/lib/notes/note-calendar'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { LinkifiedText } from '@/components/dashboard/note-linkified-text'
 
 export interface CalendarNote extends CalendarNoteLike {
   body: string
@@ -152,15 +153,21 @@ export function NotesCalendar({ notes, onOpen }: { notes: CalendarNote[]; onOpen
                 </span>
                 <div className="mt-1 flex flex-col gap-0.5">
                   {dayNotes.slice(0, 3).map((n) => (
+                    // A real <a> from LinkifiedText can't nest inside a <button> (invalid
+                    // HTML — same reason the day CELL itself stopped being a <button>,
+                    // see the comment above), so this is a keyboard-accessible div instead.
                     <FastTooltip key={n.id} label="Open this note">
-                      <button
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={(e) => { e.stopPropagation(); onOpen?.(n) }}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onOpen?.(n) } }}
                         aria-label="Open this note"
-                        className="flex w-full items-center gap-1 truncate rounded text-left text-[11px] leading-tight hover:bg-black/10"
+                        className="flex w-full cursor-pointer items-center gap-1 truncate rounded text-left text-[11px] leading-tight hover:bg-black/10"
                       >
                         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT[n.color] || DOT.yellow}`} />
-                        <span className="truncate">{n.body}</span>
-                      </button>
+                        <span className="truncate"><LinkifiedText text={n.body} /></span>
+                      </div>
                     </FastTooltip>
                   ))}
                   {dayNotes.length > 3 && (
@@ -223,7 +230,7 @@ function NoteMini({ n, now, onOpen }: { n: CalendarNote; now: Date; onOpen?: (n:
         onClick={() => onOpen?.(n)}
         title="Open"
         className="cursor-pointer whitespace-pre-wrap break-words text-sm leading-snug hover:underline"
-      >{n.body}</p>
+      ><LinkifiedText text={n.body} /></p>
       {client && (
         <p className="mt-1 flex items-center gap-1 text-xs font-medium opacity-80">
           <Building2 className="h-3 w-3 shrink-0" /><span className="truncate">{client}</span>

@@ -29,36 +29,31 @@ import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 import { safeOriginPath, describeOrigin, splitLinkSegments } from '@/lib/notes/note-origin'
 import { isArchivedFor, sortReplies, type NoteReplyRow } from '@/lib/notes/staff-notes'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { LinkifiedText } from '@/components/dashboard/note-linkified-text'
 
 /**
- * Note/reply text with pasted URLs rendered as real links (Antonio, 2026-07-29:
- * a copied message link pasted into a note must be clickable for the reader).
- * Pure text-splitting into React nodes — no HTML injection possible; http(s)
- * only. Anchors stop propagation (the surrounding card/editor blocks have their
- * own click handlers) and carry data-no-drag for the floating card.
+ * Real, clickable links extracted from the AUTHOR's own (editable) note text.
+ * The textarea can't render an `<a>`, so this is the author's only way to open
+ * a link they pasted into their own note — dead below "This mirrors it as real
+ * clickable links below" comment. Recomputed live from `text` as they type.
  */
-function LinkifiedText({ text }: { text: string }) {
-  const segments = splitLinkSegments(text)
-  if (segments.length === 1 && segments[0].type === 'text') return <>{text}</>
+function NoteLinks({ text }: { text: string }) {
+  const links = splitLinkSegments(text).filter((s) => s.type === 'link')
+  if (links.length === 0) return null
   return (
-    <>
-      {segments.map((s, i) =>
-        s.type === 'link' ? (
-          <a
-            key={i}
-            href={s.value}
-            data-no-drag
-            onClick={(e) => e.stopPropagation()}
-            rel="noopener noreferrer"
-            className="break-all text-blue-700 underline hover:text-blue-900"
-          >
-            {s.value}
-          </a>
-        ) : (
-          <span key={i}>{s.value}</span>
-        ),
-      )}
-    </>
+    <div className="mb-3 flex flex-col gap-1">
+      {links.map((l, i) => (
+        <a
+          key={i}
+          href={l.value}
+          rel="noopener noreferrer"
+          className="flex items-center gap-1 truncate rounded border border-blue-300 bg-blue-50 px-2 py-1 text-xs text-blue-700 hover:bg-blue-100"
+        >
+          <ExternalLink className="h-3 w-3 shrink-0" />
+          <span className="truncate">{l.value}</span>
+        </a>
+      ))}
+    </div>
   )
 }
 
@@ -361,11 +356,18 @@ export function NoteEditor({
           {isCreate || isAuthor ? 'Note' : `Note — by ${note.author_name || 'teammate'}`}
         </label>
         {canEditBody ? (
-          <textarea
-            autoFocus value={body} onChange={(e) => setBody(e.target.value)} maxLength={4000}
-            placeholder="e.g. call IRS about the EIN"
-            className="mb-3 h-32 w-full resize-none rounded border border-amber-300 bg-white p-2 text-sm text-amber-950 outline-none focus:border-amber-500"
-          />
+          <>
+            <textarea
+              autoFocus value={body} onChange={(e) => setBody(e.target.value)} maxLength={4000}
+              placeholder="e.g. call IRS about the EIN"
+              className="mb-1 h-32 w-full resize-none rounded border border-amber-300 bg-white p-2 text-sm text-amber-950 outline-none focus:border-amber-500"
+            />
+            {/* The textarea itself can't linkify (it's an input) — a pasted URL would
+                otherwise be dead text for the AUTHOR forever, even after saving
+                (Antonio bug report, 2026-09-02: "when we open that link... it will
+                open just the note"). This mirrors it as real clickable links below. */}
+            <NoteLinks text={body} />
+          </>
         ) : (
           <div className="mb-3 max-h-40 w-full overflow-y-auto whitespace-pre-wrap break-words rounded border border-amber-300 bg-amber-100/60 p-2 text-sm text-amber-950">
             <LinkifiedText text={body} />
