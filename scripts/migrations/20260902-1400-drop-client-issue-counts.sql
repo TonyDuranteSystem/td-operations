@@ -1,0 +1,18 @@
+-- Removes the cache table behind the Diagnose panel / Portal Chats Issues tab,
+-- which Antonio decided to retire outright (2026-09-02) rather than fix: it was
+-- unused (diagnose_account_fix: 0 uses ever in action_log; diagnose_contact_fix:
+-- 11 uses total, all in a 2-day window in April, none since), had confirmed
+-- correctness bugs in its own checks (see dev_task 525e0e67 — a payment-received
+-- false positive on multi-member accounts, still live at deletion time), and its
+-- one-click "fix" buttons wrote money/tier fields directly, bypassing the
+-- canonical writers (applyMoneyToInvoice, syncTier) — the same disease already
+-- fixed today in the three "Mark as Paid" buttons (dev_task 5817969a).
+--
+-- All application code that read/wrote this table (the diagnose-account and
+-- diagnose-contact routes, the two diagnostic dialogs, the Portal Chats Issues
+-- tab and its per-thread/list warning badges, and the daily refresh cron) was
+-- deleted from the codebase in the same change. Nothing else reads this table —
+-- verified before writing this file (grep across app/ and lib/ for
+-- client_issue_counts found only the cron and the two API routes that are now
+-- deleted).
+DROP TABLE IF EXISTS client_issue_counts;

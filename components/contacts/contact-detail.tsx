@@ -60,7 +60,7 @@ const TABS = [
   { key: 'emails', label: 'Emails', icon: Mail, tooltip: 'All Gmail with this contact — auto-matched by their addresses plus manually linked emails.' },
   { key: 'chat', label: 'Chat', icon: MessageSquare, tooltip: 'All communication — portal messages and email threads in one timeline.' },
   { key: 'portal', label: 'Portal', icon: KeyRound, tooltip: 'Client portal access — login status, tier, and portal settings.' },
-  { key: 'health', label: 'Health', icon: Stethoscope, tooltip: 'One-screen view of every audit check for this contact — diagnostic + chain audit together.' },
+  { key: 'health', label: 'Health', icon: Stethoscope, tooltip: 'Chain audit — lead, offer, activation, account, services, portal, and profile completeness.' },
   { key: 'activity', label: 'Activity', icon: MessageSquare, tooltip: 'Account communications timeline — grouped by channel.' },
   { key: 'conversations', label: 'Conversations', icon: MessageSquare, tooltip: 'Slack client conversations tagged to this contact — topic, date, and the full thread.' },
   { key: 'journey', label: 'Journey', icon: GitBranch, tooltip: 'Full client journey — offers, payments, activations, services, wizards, documents, tasks, and portal messages in one feed.' },

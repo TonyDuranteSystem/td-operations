@@ -1,6 +1,16 @@
 # Portal Chats (staff composer)
 
-_Last verified against code: 2026-08-30 — Claude (portal-chats topic-scoped read fix)_
+_Last verified against code: 2026-09-02 — Claude (removed the Issues tab)_
+
+_2026-09-02 — the per-thread "Issues" tab (and the ⚠️ warning badges next to each
+conversation in the list) were REMOVED — Antonio's call, not a bug fix. Both read
+from the diagnose-account engine (also behind the account/contact page "Diagnose" /
+"Health" panels), which had near-zero real usage, confirmed correctness bugs, and
+one-click fixes that wrote money/portal-tier fields bypassing the canonical writers.
+The whole engine — diagnose-account, diagnose-contact, the two diagnostic dialogs,
+this Issues tab, the list badges, the `client_issue_counts` cache table, and its
+daily refresh cron — was deleted in the same change. The panel tab list here is now
+Messages / What's New / To Do / Email / Worker._
 
 ## What it is
 
