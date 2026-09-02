@@ -650,10 +650,25 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     // SAME row (stable token), not the row's first pass through this step.
     const { data: priorSub } = await supabaseAdmin
       .from("formation_submissions")
-      .select("status")
+      .select("status, reviewed_at")
       .eq("id", p.submission_id)
       .maybeSingle()
     const wasAlreadyReviewed = !!(priorSub?.status && priorSub.status !== "completed")
+    // A GENUINE resubmission (round 7 bug-hunter finding) must still be
+    // able to retire the stale note and fire a fresh one — formation has
+    // no content-hash column to prove "the data actually changed" (unlike
+    // closure_submissions.last_processed_hash), so this uses TIME as the
+    // available signal instead: a job-queue retry of THIS SAME attempt
+    // reruns within seconds to a few minutes; a real client editing and
+    // resubmitting realistically takes much longer. Anything reviewed
+    // more than RETRY_WINDOW_MS ago is treated as a genuinely separate,
+    // later submission event, safe to retire-and-refire. Imperfect (a
+    // client who resubmits within the window still gets no fresh alert),
+    // but strictly better than never retiring at all.
+    const RETRY_WINDOW_MS = 15 * 60 * 1000
+    const reviewedAtMs = priorSub?.reviewed_at ? new Date(priorSub.reviewed_at).getTime() : null
+    const isGenuineResubmission =
+      wasAlreadyReviewed && reviewedAtMs !== null && Date.now() - reviewedAtMs > RETRY_WINDOW_MS
 
     // TOCTOU guard (bug-hunter finding, round 7): only transition
     // completed → reviewed. Without `.eq("status","completed")` here, this
@@ -701,28 +716,28 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     // this branch) so a refused/ambiguous re-submit — deliberately silent
     // by Antonio's ruling, dev job ca788354 — never fires this either.
     //
-    // Deliberately NEVER retires an existing note here (bug-hunter finding,
-    // round 6): `wasAlreadyReviewed` reflects this row's `status` column,
-    // which this SAME job attempt just flipped to "reviewed" a few lines
-    // up — so if a LATER step in this same pass throws (e.g. the
-    // updateJobProgress call below hits a transient error) and the job
-    // queue retries the whole handler, the retry would see `status`
-    // already "reviewed" from its own prior (successful) attempt and
-    // misread that as a genuine client resubmission — retiring the
-    // correct, already-emitted note and replacing it with a false
-    // "Client resubmitted..." one, plus re-stamping reviewed_at/
-    // completed_at. Relying on emitClientChatEvent's own marker dedup
-    // instead means a retry safely no-ops (reason: "already_emitted"),
-    // and a GENUINE resubmission still gets counted — just without the
-    // "resubmitted" wording variant, which needs a content-based signal
-    // (not available for formation_submissions today) to do safely.
+    // Retires the existing note ONLY for a genuinely separate, later
+    // resubmission (`isGenuineResubmission`, time-gated above) — NEVER for
+    // a bare "row already reviewed" signal (bug-hunter finding, round 6:
+    // that alone can't be trusted, since THIS SAME job attempt just
+    // flipped it a few lines up, and a later step throwing would put the
+    // job back in the retry queue, making a mere retry look identical to
+    // a resubmission from the row's status alone). Round 7's follow-up
+    // finding: never retiring at all (the round-6 fix) silently broke
+    // genuine resubmissions too — every one after the first was swallowed
+    // forever by emitClientChatEvent's own dedup, since nothing ever
+    // unblocked it. Retire is now gated on the time-based signal instead.
     if (!formErr && p.contact_id) {
       try {
-        const { emitFormationWizardSubmittedEvent } = await import("@/lib/portal/chat-events")
+        const { emitFormationWizardSubmittedEvent, retireFormationWizardSubmittedNote } =
+          await import("@/lib/portal/chat-events")
+        if (isGenuineResubmission) {
+          await retireFormationWizardSubmittedNote({ formationSubmissionId: p.submission_id })
+        }
         const chat = await emitFormationWizardSubmittedEvent({
           formation_submission_id: p.submission_id,
           contact_id: p.contact_id,
-          is_resubmission: wasAlreadyReviewed,
+          is_resubmission: isGenuineResubmission,
         })
         result.steps.push(
           step("staff_whats_new_alert", chat.emitted ? "ok" : "skipped", chat.reason ?? "client chat event emitted"),

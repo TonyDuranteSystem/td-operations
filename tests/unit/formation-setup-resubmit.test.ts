@@ -95,6 +95,8 @@ function install(cfg: {
   fallbackSubmission?: Record<string, unknown> | false
   /** formation_submissions.status BEFORE this pass's own write (round 5 notification gate). Defaults to 'completed' (first pass, never reviewed yet). Pass null for "row not found". */
   priorSubmissionStatus?: string | null
+  /** formation_submissions.reviewed_at BEFORE this pass's own write (round 8 genuine-vs-retry signal) — an ISO string. */
+  priorReviewedAt?: string | null
 }): Recorded {
   const rec: Recorded = { contactUpdates: [], submissionUpdates: [], taskInserts: [], sdSelectFilters: [] }
   const formations = cfg.formations ?? []
@@ -160,22 +162,38 @@ function install(cfg: {
 
     if (table === 'formation_submissions') {
       let lastSelect = ''
-      // Mirrors the real TOCTOU guard (round 7): the form-reviewed UPDATE
-      // chains .eq('id',...).eq('status','completed').select('id') — only
-      // "applies" (affects a row) when the row's CURRENT status is still
-      // 'completed', same rule cfg.priorSubmissionStatus already encodes
-      // for the prior-status read above.
+      // Simulated row state — the mock's own "database" for this one row,
+      // so the UPDATE's `.eq()` filters can be checked against something
+      // real instead of trusted blindly (bug-hunter finding, round 8: the
+      // original version of this mock ignored the update chain's `.eq()`
+      // arguments entirely and decided "applies?" purely from cfg, so a
+      // mutation deleting the real `.eq("status","completed")` filter
+      // would NOT have failed any test).
       const priorStatus = cfg.priorSubmissionStatus === undefined ? 'completed' : cfg.priorSubmissionStatus
+      const priorReviewedAt = cfg.priorReviewedAt === undefined ? null : cfg.priorReviewedAt
       const chain: Record<string, unknown> = {
         update: (row: Record<string, unknown>) => {
           rec.submissionUpdates.push(row)
+          const updateFilters: Array<[string, unknown]> = []
           const updateChain = {
-            eq: () => updateChain,
-            select: () =>
-              Promise.resolve({
-                data: priorStatus === 'completed' ? [{ id: SUBMISSION_ID }] : [],
+            eq: (col: string, val: unknown) => {
+              updateFilters.push([col, val])
+              return updateChain
+            },
+            select: () => {
+              // Genuinely evaluate the filters the code actually chained —
+              // an update "applies" only if every .eq() the code sent
+              // matches the simulated row's real current values.
+              const applies = updateFilters.every(([col, val]) => {
+                if (col === 'id') return val === SUBMISSION_ID
+                if (col === 'status') return val === priorStatus
+                return true
+              })
+              return Promise.resolve({
+                data: applies ? [{ id: SUBMISSION_ID }] : [],
                 error: null,
-              }),
+              })
+            },
           }
           return updateChain
         },
@@ -186,13 +204,19 @@ function install(cfg: {
         eq: () => chain,
         in: () => chain,
         maybeSingle: () => {
-          // .select('status') = the prior-status read before form_reviewed
-          // (dev job 9a9c5cf5, round 5) — distinct from .select('id, status'),
-          // the stage-advance fallback read (round 3). Same table, two
-          // different callers; distinguish by the columns actually asked for.
-          if (lastSelect === 'status') {
+          // .select('status, reviewed_at') = the prior-status read before
+          // form_reviewed (dev job 9a9c5cf5, rounds 5+8) — distinct from
+          // .select('id, status'), the stage-advance fallback read (round
+          // 3). Same table, different callers; distinguish by the columns
+          // actually asked for.
+          if (lastSelect === 'status, reviewed_at') {
             return Promise.resolve({
-              data: cfg.priorSubmissionStatus === undefined ? { status: 'completed' } : (cfg.priorSubmissionStatus === null ? null : { status: cfg.priorSubmissionStatus }),
+              data:
+                cfg.priorSubmissionStatus === undefined
+                  ? { status: 'completed', reviewed_at: null }
+                  : cfg.priorSubmissionStatus === null
+                    ? null
+                    : { status: cfg.priorSubmissionStatus, reviewed_at: priorReviewedAt },
               error: null,
             })
           }
@@ -453,21 +477,44 @@ describe('staff What\'s New alert on wizard submission (dev job 9a9c5cf5, round 
     expect(retireFormationWizardSubmittedNote).not.toHaveBeenCalled()
   })
 
-  it('marks it a resubmission in the wording when the row was already reviewed, WITHOUT retiring the existing note (bug-hunter finding, round 6)', async () => {
-    // The old behavior (retire-then-refire keyed on the row's own status)
-    // let a mid-job crash-and-retry — this job's own PRIOR successful
-    // attempt already flipped status to "reviewed" — misread itself as a
-    // genuine client resubmission and DELETE the correct, already-emitted
-    // note. Retiring must never happen automatically from this signal
-    // alone; emitClientChatEvent's own marker dedup is what protects a
-    // retry from creating a duplicate/false note.
+  it('a row reviewed moments ago (job-retry timing) does NOT retire the existing note (bug-hunter finding, round 6)', async () => {
+    // The old behavior (retire-then-refire keyed on the row's own status
+    // ALONE) let a mid-job crash-and-retry — this job's own PRIOR
+    // successful attempt already flipped status to "reviewed" seconds
+    // ago — misread itself as a genuine client resubmission and DELETE
+    // the correct, already-emitted note. A retry reruns within seconds
+    // to minutes; treat anything that recent as "probably my own retry."
     install({
       formations: [UNFINISHED_FORMATION],
       offer: { token: OFFER_TOKEN },
       priorSubmissionStatus: 'reviewed',
+      priorReviewedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(), // 5 min ago
     })
     await handleFormationSetup(job())
     expect(retireFormationWizardSubmittedNote).not.toHaveBeenCalled()
+    expect(emitFormationWizardSubmittedEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ is_resubmission: false }),
+    )
+  })
+
+  it('a row reviewed well in the past DOES retire and refire as a genuine resubmission (bug-hunter finding, round 7)', async () => {
+    // Round 6's fix (never retire) went too far the other way: a REAL
+    // client resubmission during the editable window — the exact flow
+    // Antonio designed formation's "correct a wrong passport before we
+    // file" window for — was ALSO silently swallowed forever by
+    // emitClientChatEvent's own dedup, since nothing ever unblocked it.
+    // A gap this large (well outside any realistic retry timing) must be
+    // treated as a genuinely separate, later submission event.
+    install({
+      formations: [UNFINISHED_FORMATION],
+      offer: { token: OFFER_TOKEN },
+      priorSubmissionStatus: 'reviewed',
+      priorReviewedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(), // 1 hour ago
+    })
+    await handleFormationSetup(job())
+    expect(retireFormationWizardSubmittedNote).toHaveBeenCalledWith(
+      expect.objectContaining({ formationSubmissionId: SUBMISSION_ID }),
+    )
     expect(emitFormationWizardSubmittedEvent).toHaveBeenCalledWith(
       expect.objectContaining({ is_resubmission: true }),
     )
