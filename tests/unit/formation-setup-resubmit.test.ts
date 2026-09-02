@@ -160,10 +160,24 @@ function install(cfg: {
 
     if (table === 'formation_submissions') {
       let lastSelect = ''
+      // Mirrors the real TOCTOU guard (round 7): the form-reviewed UPDATE
+      // chains .eq('id',...).eq('status','completed').select('id') — only
+      // "applies" (affects a row) when the row's CURRENT status is still
+      // 'completed', same rule cfg.priorSubmissionStatus already encodes
+      // for the prior-status read above.
+      const priorStatus = cfg.priorSubmissionStatus === undefined ? 'completed' : cfg.priorSubmissionStatus
       const chain: Record<string, unknown> = {
         update: (row: Record<string, unknown>) => {
           rec.submissionUpdates.push(row)
-          return { eq: () => Promise.resolve({ error: null }) }
+          const updateChain = {
+            eq: () => updateChain,
+            select: () =>
+              Promise.resolve({
+                data: priorStatus === 'completed' ? [{ id: SUBMISSION_ID }] : [],
+                error: null,
+              }),
+          }
+          return updateChain
         },
         select: (cols: string) => {
           lastSelect = cols
@@ -464,6 +478,46 @@ describe('staff What\'s New alert on wizard submission (dev job 9a9c5cf5, round 
     await handleFormationSetup(job())
     expect(emitFormationWizardSubmittedEvent).not.toHaveBeenCalled()
     expect(retireFormationWizardSubmittedNote).not.toHaveBeenCalled()
+  })
+})
+
+describe('form-reviewed timestamps never get re-stamped on a repeat pass (dev job 9a9c5cf5, round 7)', () => {
+  it('stamps reviewed_at/completed_at on a genuine first pass (row still "completed")', async () => {
+    const rec = install({
+      formations: [UNFINISHED_FORMATION],
+      offer: { token: OFFER_TOKEN },
+      priorSubmissionStatus: 'completed',
+    })
+    const result = await handleFormationSetup(job())
+    const reviewedStep = result.steps.find((s) => s.name === 'form_reviewed')
+    expect(reviewedStep?.status).toBe('ok')
+    expect(rec.submissionUpdates.some((u) => u.status === 'reviewed')).toBe(true)
+  })
+
+  it('does NOT re-stamp reviewed_at/completed_at when the row is already reviewed — a job retry of its own prior success must be a safe no-op', async () => {
+    // This is the exact bug-hunter repro: the row's status is already
+    // "reviewed" (either from this same job's own earlier, since-retried
+    // attempt, OR a genuine resubmit the route already preserved as
+    // "reviewed" per preserveReviewedStatus/ca788354) — the write must be
+    // a provable no-op, never re-stamp to "now" again.
+    install({
+      formations: [UNFINISHED_FORMATION],
+      offer: { token: OFFER_TOKEN },
+      priorSubmissionStatus: 'reviewed',
+    })
+    const result = await handleFormationSetup(job())
+    const reviewedStep = result.steps.find((s) => s.name === 'form_reviewed')
+    expect(reviewedStep?.status).toBe('skipped')
+  })
+
+  it('still fires the staff alert even when the timestamp re-stamp is skipped (dedup, not the write, gates the notification)', async () => {
+    install({
+      formations: [UNFINISHED_FORMATION],
+      offer: { token: OFFER_TOKEN },
+      priorSubmissionStatus: 'reviewed',
+    })
+    await handleFormationSetup(job())
+    expect(emitFormationWizardSubmittedEvent).toHaveBeenCalled()
   })
 })
 

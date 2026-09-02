@@ -655,7 +655,20 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       .maybeSingle()
     const wasAlreadyReviewed = !!(priorSub?.status && priorSub.status !== "completed")
 
-    const { error: formErr } = await supabaseAdmin
+    // TOCTOU guard (bug-hunter finding, round 7): only transition
+    // completed → reviewed. Without `.eq("status","completed")` here, this
+    // write ran EVERY pass through this step — including a job-queue retry
+    // of an already-succeeded attempt (see the 3b comment below) and a
+    // genuine resubmit, where the wizard-submit route deliberately
+    // PRESERVES "reviewed" status (preserveReviewedStatus, dev job
+    // ca788354) rather than resetting it — re-stamping reviewed_at/
+    // completed_at to "now" in either case is the identical 17-days-adrift
+    // defect ca788354 fixed on the route side but never closed here on the
+    // handler side. Guarding on the row's OWN current status (not a value
+    // read moments earlier, which the update below could itself race
+    // against) makes a no-op retry/resubmit provably safe: 0 rows affected,
+    // timestamps untouched.
+    const { data: updatedRows, error: formErr } = await supabaseAdmin
       .from("formation_submissions")
       .update({
         status: "reviewed",
@@ -668,9 +681,13 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
         reviewed_by: p.source === "portal_wizard" ? "portal_auto" : "claude",
       })
       .eq("id", p.submission_id)
+      .eq("status", "completed")
+      .select("id")
 
     if (formErr) {
       result.steps.push(step("form_reviewed", "error", formErr.message))
+    } else if (!updatedRows || updatedRows.length === 0) {
+      result.steps.push(step("form_reviewed", "skipped", "Already reviewed — reviewed_at/completed_at left untouched"))
     } else {
       result.steps.push(step("form_reviewed", "ok", "Form → reviewed"))
     }
