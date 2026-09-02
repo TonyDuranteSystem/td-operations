@@ -26,10 +26,15 @@ export type OwnerCategory =
   | 'refund'
   /** Owner money INTO the company — equity, never income (the S-corp roll-forward needs it). */
   | 'contribution'
-  /** Money moving BETWEEN TD's own accounts — Stripe payouts (Stripe = clearing account,
-   * the CPA's own Schedule L practice) and bank-to-bank moves. NEVER in the P&L: the
-   * income behind a Stripe payout is recognized from the INVOICE ledger, so counting the
-   * payout too would double-count. */
+  /** Money moving BETWEEN accounts the company already owns: bank-to-bank moves, and
+   * payouts from ANY payment processor (the processor is a clearing account — the CPA's
+   * own Schedule L practice). Also covers paying down a credit card or a loan from a bank
+   * account: that is settling a liability, not spending.
+   * NEVER in the P&L. The income behind a processor payout is recognized from the INVOICE
+   * ledger, so counting the payout too would double-count it; and a card payment is
+   * already represented by the individual charges on the card.
+   * Deliberately NOT named after a provider (Antonio, 2026-08-30) — the accounting is
+   * identical whichever processor is in use, and a vendor name here ages badly. */
   | 'transfer'
   | 'uncategorized'
 
@@ -86,6 +91,20 @@ export interface PnLBlock {
   uncategorized_expense: number
   by_subcategory: Record<string, number>
   monthly: MonthlyBreakdown[]
+  /** For a NON-USD block: the rate the company ACTUALLY ACHIEVED converting this currency
+   * during the year, derived from its own conversion rows (dollars bought ÷ currency sold).
+   *
+   * WHY DERIVED RATHER THAN LOOKED UP (2026-08-31). A US return must be filed in dollars,
+   * and this screen deliberately never mixes currencies — correct, but it left the euro
+   * block with no dollar figure at all, so the P&L on screen was not the whole company and
+   * could not be handed to anyone. A published table rate would be a guess; the rate the
+   * company genuinely got is in the books already, in the conversion rows.
+   *
+   * NULL when it cannot be derived honestly: no conversions, or MORE THAN ONE non-USD
+   * currency converting, because the dollars bought cannot then be attributed to one
+   * source currency. A wrong rate silently misstates revenue, so no rate is the safer
+   * failure. The UI must show the block unconverted in that case, not a fabricated total. */
+  usd_rate: number | null
 }
 
 export interface OwnerPnL {
@@ -158,8 +177,12 @@ export interface CashAccountBalance {
 
 /** Per-currency cash totals — NEVER a single cross-currency number (council rule). */
 export interface CashPosition {
+  /** CASH ONLY — checking and savings. Cards and loans are debts, never cash. */
   totals: Record<string, number>
   accounts: CashAccountBalance[]
+  /** Cards and loans, reported SEPARATELY as what they are: money owed. */
+  liabilities: CashAccountBalance[]
+  liabilityTotals: Record<string, number>
 }
 
 export interface VendorRule {
@@ -176,41 +199,77 @@ export async function getOwnerTransactions(
   year: number,
   category?: OwnerCategory
 ): Promise<OwnerTransaction[]> {
-  let q = supabaseAdmin
-    .from('td_books_transactions')
-    .select('*')
-    .eq('entity_id', TD_ENTITY_ID)
-    .eq('tax_year', year)
-    .order('transaction_date', { ascending: false })
+  // PAGED. An un-ranged select is silently capped at 1000 rows by PostgREST with NO
+  // error — the same trap already documented and paged around for getInvoiceIncome
+  // below (INCOME_FETCH_PAGE). This function feeds getOwnerPnL, and through it the
+  // P&L tab, the dashboard KPIs, the Tax tab and the cash-flow chart, so the cap
+  // would silently compute every headline figure from only the newest 1000 rows
+  // while the Transactions tab — which is correctly ranged and uses count:'exact' —
+  // reported the true total. Two surfaces disagreeing on the same year, no error.
+  // A single real year of statements clears 1000 rows comfortably.
+  // Ordered by (date, id) so paging is deterministic: date alone has ties on any
+  // real statement, and an unstable sort would repeat some rows across pages and
+  // skip others entirely.
+  const PAGE = 1000
+  const all: OwnerTransaction[] = []
 
-  if (category) q = q.eq('category', category)
+  for (let offset = 0; ; offset += PAGE) {
+    let q = supabaseAdmin
+      .from('td_books_transactions')
+      .select('*')
+      .eq('entity_id', TD_ENTITY_ID)
+      .eq('tax_year', year)
+      .order('transaction_date', { ascending: false })
+      .order('id', { ascending: false })
+      .range(offset, offset + PAGE - 1)
 
-  const { data, error } = await q
-  if (error) throw new Error(`getOwnerTransactions: ${error.message}`)
-  return (data ?? []) as OwnerTransaction[]
+    if (category) q = q.eq('category', category)
+
+    const { data, error } = await q
+    if (error) throw new Error(`getOwnerTransactions: ${error.message}`)
+    const page = (data ?? []) as OwnerTransaction[]
+    all.push(...page)
+    if (page.length < PAGE) break
+  }
+
+  return all
 }
 
 export async function getOwnerTransactionsPaginated(
   year: number,
   options: {
     category?: OwnerCategory
+    /** The P&L's own line names (payroll, rent, state_filing_fees…). Added 2026-08-31 so
+     * every figure on the P&L can be opened and the rows behind it read — without it the
+     * only way to check a number was to trust it. Deliberately paired with `category`
+     * rather than replacing it: two categories can carry the same subcategory name
+     * (income/client_payment and cogs/client_service_cost both being "client"-ish), so a
+     * subcategory alone is not a unique line on the report. */
+    subcategory?: string
     search?: string
     bank?: string
     limit?: number
     offset?: number
   } = {}
 ): Promise<{ rows: OwnerTransaction[]; total: number }> {
-  const { category, search, bank, limit = 50, offset = 0 } = options
+  const { category, subcategory, search, bank, limit = 50, offset = 0 } = options
 
   let q = supabaseAdmin
     .from('td_books_transactions')
     .select('*', { count: 'exact' })
     .eq('entity_id', TD_ENTITY_ID)
     .eq('tax_year', year)
+    // (date, id) — a tie-break is required, not cosmetic. Many rows share a date on
+    // a real statement, and Postgres gives no stable order for ties across separate
+    // queries, so date-only paging shows some rows on two pages and NEVER shows an
+    // equal number of others — rows that would then sit uncategorized forever while
+    // the "Showing 51–100 of N" counter claims otherwise.
     .order('transaction_date', { ascending: false })
+    .order('id', { ascending: false })
     .range(offset, offset + limit - 1)
 
   if (category) q = q.eq('category', category)
+  if (subcategory) q = q.eq('subcategory', subcategory)
   if (bank) q = q.eq('bank_name', bank)
   if (search) {
     q = q.or(`description.ilike.%${search}%,counterparty.ilike.%${search}%`)
@@ -310,12 +369,21 @@ export async function getInvoiceIncome(year: number): Promise<InvoiceIncome> {
   return computeInvoiceIncome(rows, year)
 }
 
-/** Categories that never enter the P&L: transfers between TD's own accounts (incl. Stripe
- * payouts — income is recognized from the invoice ledger, so the payout landing in the
- * bank is the SAME money), FX conversions, refund pass-throughs, and equity movements
- * (distribution/contribution — shown separately, never in profit). */
-const NON_PNL_CATEGORIES: ReadonlySet<string> = new Set([
-  'transfer', 'conversion', 'refund', 'distribution', 'contribution',
+/** The ONLY categories that belong in a panel headed "Expenses by Subcategory".
+ *
+ * WHY THIS EXISTS (2026-08-31). The breakdown used to be built by EXCLUDING the non-P&L
+ * categories (transfer/conversion/refund/distribution/contribution), which let `income`
+ * through — so the panel listed client_payment alongside payroll and rent, as a cost. On
+ * the real 2025 books that renders $426,946.58 of client revenue and $22,951.05 of bank
+ * rewards under the word "Expenses". Because the panel takes the absolute value of every
+ * row, the mistake is invisible: revenue looks exactly like a very large expense, and the
+ * largest line on the screen is the one that is not an expense at all.
+ *
+ * An allowlist rather than another exclusion: a new SPENDING category must be added here
+ * deliberately, whereas a new income-like category added to the enum would silently leak
+ * back in under a denylist. */
+const EXPENSE_BREAKDOWN_CATEGORIES: ReadonlySet<string> = new Set([
+  'cogs', 'expense', 'fee',
 ])
 
 /**
@@ -344,6 +412,7 @@ export function computeOwnerPnL(
         uncategorized_income: 0,
         uncategorized_expense: 0,
         by_subcategory: {},
+        usd_rate: null,
         monthly: Array.from({ length: 12 }, (_, i) => ({
           month: i + 1, income: 0, cogs: 0, expenses: 0, net: 0,
         })),
@@ -388,6 +457,27 @@ export function computeOwnerPnL(
       case 'contribution':
         b.contributions += Math.abs(amt)
         break
+      case 'refund':
+        // A refund REVERSES something that already hit the P&L, so it must reduce
+        // that thing — not vanish. Previously it fell through with no effect at all,
+        // which OVERSTATED whatever it reversed.
+        //
+        // Direction decides which side it reverses, and it is unambiguous:
+        //   money coming IN  reverses a payment we made      -> reduce expenses
+        //   money going OUT  reverses money we received      -> reduce income
+        //
+        // Found on real data (2026-08-30): two Airwallex payouts to a provider were
+        // reversed and the money came back, but the books still showed the full
+        // €2,155 of professional services instead of the €2,020 actually spent.
+        // Refunds are rare here today and will be common on the card statements.
+        if (amt > 0) {
+          b.expenses -= amt
+          b.monthly[month].expenses -= amt
+        } else {
+          b.other_income -= Math.abs(amt)
+          b.monthly[month].income -= Math.abs(amt)
+        }
+        break
       case 'uncategorized':
         // Uncategorized cash reaches BOTH the annual net and the monthly series — the
         // chart's monthly nets must sum to the Net Profit KPI (they diverged before).
@@ -399,11 +489,18 @@ export function computeOwnerPnL(
           b.monthly[month].expenses += Math.abs(amt)
         }
         break
-      // 'transfer' / 'conversion' / 'refund': deliberately no P&L effect
+      // 'transfer' / 'conversion': deliberately no P&L effect — own money moving.
     }
 
-    if (!NON_PNL_CATEGORIES.has(tx.category)) {
-      b.by_subcategory[sub] = (b.by_subcategory[sub] ?? 0) + Math.abs(amt)
+    // Spending categories ONLY — see EXPENSE_BREAKDOWN_CATEGORIES. Using the
+    // NON_PNL exclusion here let income into a panel headed "Expenses".
+    if (EXPENSE_BREAKDOWN_CATEGORIES.has(tx.category)) {
+      // Keyed "category/subcategory", not the bare name: the UI turns each line into a
+      // link to the transactions behind it, and a subcategory name is NOT unique across
+      // categories — filtering on the name alone would show rows from a different line
+      // of the report and quietly contradict the total the reader just clicked.
+      const key = `${tx.category}/${sub}`
+      b.by_subcategory[key] = (b.by_subcategory[key] ?? 0) + Math.abs(amt)
     }
   }
 
@@ -411,6 +508,28 @@ export function computeOwnerPnL(
     b.gross_profit = b.invoice_income + b.other_income - b.cogs
     b.net_profit = b.gross_profit - b.expenses + b.uncategorized_income - b.uncategorized_expense
     for (const mb of b.monthly) mb.net = mb.income - mb.cogs - mb.expenses
+  }
+
+  // THE ACHIEVED FX RATE. Every conversion has two legs in the books: the foreign
+  // currency leaving (negative, in that currency) and the dollars arriving (positive,
+  // in USD). Dividing one by the other gives the rate the company actually got, which
+  // is a fact about the year rather than a table lookup. See PnLBlock.usd_rate.
+  const soldByCurrency: Record<string, number> = {}
+  let dollarsBought = 0
+  for (const tx of txs) {
+    if (tx.category !== 'conversion') continue
+    const amt = Number(tx.amount)
+    const cur = tx.currency || 'USD'
+    if (cur === 'USD') { if (amt > 0) dollarsBought += amt; continue }
+    if (amt < 0) soldByCurrency[cur] = (soldByCurrency[cur] ?? 0) + Math.abs(amt)
+  }
+  // Only attributable when a SINGLE non-USD currency was converted. With two, the
+  // dollars bought cannot be split between them without inventing a split.
+  const sources = Object.keys(soldByCurrency).filter(c => soldByCurrency[c] > 0)
+  if (sources.length === 1 && dollarsBought > 0) {
+    const only = sources[0]
+    const block = blocks[only]
+    if (block) block.usd_rate = dollarsBought / soldByCurrency[only]
   }
 
   // A currency whose only rows are non-P&L (transfers/conversions/refunds) would render
@@ -443,39 +562,163 @@ export async function getOwnerPnL(year: number): Promise<OwnerPnL> {
   return computeOwnerPnL(txs, invoiceIncome, year)
 }
 
+/** Account types that hold CASH. A card or a loan balance is money OWED — adding it
+ *  into cash reports debt as an asset. Measured: the First Citizens loan alone would
+ *  have inflated cash by roughly $140,000, and three credit cards sit beside it. */
+const CASH_PAGE = 1000
+
+/* What counts as MONEY THE COMPANY HAS. A processor balance belongs here: the 2,882.10
+ * sitting at Stripe is the company's money, held by someone else — an asset, not a debt.
+ * Excluding it once pushed it into the "Owed" list, which reads as though the company
+ * owed Stripe money. Cards and loans are the only genuine liabilities. */
+/** Account types whose balance is money the company HAS. Everything else is money it owes.
+ *  EXPORTED so a screen can never keep its own copy: a second list would put the same
+ *  account under Assets on one tab and under Liabilities on the next, silently, the day
+ *  a new type is added. */
+export const CASH_ACCOUNT_TYPES = ['checking', 'savings', 'processor']
+
+/** Account names compared case- and spacing-insensitively — that much IS the same account
+ *  written carelessly ("Firstcitizenbank" vs "firstcitizenbank"). MODULE-LEVEL on purpose:
+ *  `computeBalanceSheet`'s coverage and staleness checks and `getCashPosition`'s claimed-set
+ *  test all answer the same question — does this books row belong to a known account — and
+ *  a balance was once certified as unmoved because two of them used different keys. One
+ *  function, everywhere the question is asked, so it cannot happen a third time. */
+const normBankName = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
+
+/** Is `bankName` the EXACT name of an account in `pool` (case/spacing aside) — active or
+ *  closed, either counts. The one comparison used by both `isAccountCovered` (does the
+ *  cash summary already have this row) and `computeBalanceSheet`'s stricter `covers` (can
+ *  a legal statement place this row) — pulled out once so it cannot be retyped slightly
+ *  differently in a future edit, which is exactly how this file's naming bugs kept
+ *  recurring: the same question, answered by two separately-written comparisons. */
+const isExactAccountMatch = (pool: OwnerAccount[], bankName: string) =>
+  pool.some(a => normBankName(a.bank_name) === normBankName(bankName))
+
+/** Does this books row already belong to an account the registry describes — a PURE
+ *  function so the rule is unit-testable without a database.
+ *
+ *  The registry names an account by itself ("Mercury checking 4517"); the bank feed
+ *  labels its own rows by bare institution ("Mercury", or "Banking Circle" — the one
+ *  multi-word institution this file writes). Case/whitespace matching alone cannot see
+ *  those as the same account, so a feed row would fall through `getCashPosition`'s
+ *  fallback and be added a SECOND time — doubling the cash figure the moment a feed row
+ *  starts publishing its own running balance (verified live: none does today, so this
+ *  was not yet firing when found).
+ *
+ *  A FIRST VERSION guessed "the institution" by splitting an account name on its first
+ *  space, which is wrong for any institution whose own name has more than one word —
+ *  "Banking Circle checking 001" split to "banking", not "banking circle", so a bare
+ *  "Banking Circle" feed row never matched it. No such account exists in the registry
+ *  yet, so it never fired — but the webhook that would feed it is live production
+ *  infrastructure, not a hypothetical. Splitting on a fixed number of words is the wrong
+ *  shape for a name of unknown length.
+ *
+ *  So this asks the question directly instead of guessing: is `bankName` a PREFIX of
+ *  exactly one active account's name? Any number of words, no institution list to keep
+ *  in sync. Claimed by prefix ONLY when it is unambiguous — Mercury and Relay resolve to
+ *  one account each today; Chase and Airwallex do not (three and two accounts
+ *  respectively), and a bare label there genuinely cannot say which one it belongs to.
+ *  That is a real ambiguity, not a bug to paper over — `computeBalanceSheet` refuses the
+ *  year outright for the identical reason. */
+export function isAccountCovered(registry: OwnerAccount[], bankName: string): boolean {
+  const target = normBankName(bankName)
+  if (!target) return false
+  // The exact account, active OR closed — a closed account must still be recognised so
+  // the fallback below cannot resurrect it into Cash Position forever.
+  if (isExactAccountMatch(registry, bankName)) return true
+  // A bare institution label. Only an ACTIVE account counts toward the ambiguity check —
+  // a closed sibling must not block a live account from being recognised by its short name.
+  const matches = registry.filter(a => a.is_active !== false && normBankName(a.bank_name).startsWith(`${target} `))
+  return matches.length === 1
+}
+
 export async function getCashPosition(): Promise<CashPosition> {
-  const { data, error } = await supabaseAdmin
-    .from('td_books_transactions')
-    .select('bank_name, currency, balance_after, transaction_date')
-    .eq('entity_id', TD_ENTITY_ID)
-    .not('balance_after', 'is', null)
-    .not('bank_name', 'is', null)
-    .order('transaction_date', { ascending: false })
+  /* THE REGISTRY IS THE SOURCE OF TRUTH, not the statement rows (2026-08-31).
+   *
+   * This used to build every balance from `balance_after` on the newest transaction. That
+   * silently DROPS any account whose export carries no running-balance column — and five
+   * of Antonio's nine cash-and-card accounts do not publish one. The screen showed
+   * 23,212.46 of cash while 41,138.64 was actually held: Mercury (15,044.08) and Stripe
+   * (2,882.10) were simply absent, and "Owed" listed the loan alone while three cards
+   * worth 6,250.16 were missing. Nothing errored. An account you do not have a statement
+   * column for just ceased to exist.
+   *
+   * `td_books_accounts` holds a reconciled closing balance for every account, each with
+   * its provenance (statement / derived / provider report). Those figures were proven
+   * against the banks themselves. Read them.
+   *
+   * The old derivation stays as a FALLBACK for an account with no registry row, and the
+   * whole registry read is wrapped: the table does not exist in production yet, and a
+   * missing table must degrade to the old behaviour rather than take the page down. */
+  /* CLOSED ACCOUNTS ARE READ HERE ON PURPOSE. Reporting only ever uses the active ones,
+   * but the fallback below rebuilds any account the registry does not "claim" from its
+   * last statement row — so filtering a closed account out of the read would have handed
+   * it straight back to the fallback, which would resurrect it into Cash Position for
+   * ever. It would have disappeared from the Balance Sheet and the Accounts list while
+   * still propping up the headline cash figure. It is claimed, then not reported. */
+  const registry = await getAccountRegistry({ includeInactive: true })
 
-  if (error) throw new Error(`getCashPosition: ${error.message}`)
-
-  // Latest balance per (bank, currency) — a bank holding USD and EUR is two balances,
-  // and the totals stay per-currency (never a $-labeled EUR+USD sum).
-  const seen = new Set<string>()
   const accounts: CashAccountBalance[] = []
+  const liabilities: CashAccountBalance[] = []
+  for (const a of registry) {
+    if (a.is_active === false) continue
+    if (a.closing_balance === null || a.closing_balance === undefined) continue
+    const entry: CashAccountBalance = {
+      bank_name: a.bank_name,
+      currency: a.currency || 'USD',
+      balance: Number(a.closing_balance),
+      as_of: a.closing_date ?? '',
+    }
+    if (CASH_ACCOUNT_TYPES.includes(a.account_type)) accounts.push(entry)
+    else liabilities.push(entry)
+  }
 
-  for (const row of data ?? []) {
+  // Fallback for anything the registry does not describe: the previous behaviour.
+  const rows: Array<{ bank_name: string; currency: string | null; balance_after: number | null; transaction_date: string; account_type: string | null }> = []
+  for (let from = 0; ; from += CASH_PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from('td_books_transactions')
+      .select('bank_name, currency, balance_after, transaction_date, account_type')
+      .eq('entity_id', TD_ENTITY_ID)
+      .not('balance_after', 'is', null)
+      .not('bank_name', 'is', null)
+      // id is the TIE-BREAK, not decoration: several rows commonly share the closing
+      // date and Postgres gives no stable order among ties.
+      .order('transaction_date', { ascending: false })
+      .order('id', { ascending: false })
+      .range(from, from + CASH_PAGE - 1)
+    if (error) throw new Error(`getCashPosition: ${error.message}`)
+    rows.push(...(data ?? []))
+    if ((data?.length ?? 0) < CASH_PAGE) break
+  }
+
+  const seen = new Set<string>()
+  for (const row of rows) {
+    if (isAccountCovered(registry, row.bank_name)) continue  // already reported from the registry above
     const currency = row.currency || 'USD'
     const key = `${row.bank_name}|${currency}`
-    if (!seen.has(key)) {
-      seen.add(key)
-      accounts.push({
-        bank_name: row.bank_name,
-        currency,
-        balance: Number(row.balance_after),
-        as_of: row.transaction_date,
-      })
+    if (seen.has(key)) continue
+    seen.add(key)
+    const entry: CashAccountBalance = {
+      bank_name: row.bank_name,
+      currency,
+      balance: Number(row.balance_after),
+      as_of: row.transaction_date,
     }
+    // An account whose type is unknown is NOT assumed to be cash — it is reported as a
+    // liability so it is visible and questioned, rather than silently inflating cash.
+    if (row.account_type && CASH_ACCOUNT_TYPES.includes(row.account_type)) accounts.push(entry)
+    else liabilities.push(entry)
   }
+
+  accounts.sort((a, z) => z.balance - a.balance)
+  liabilities.sort((a, z) => z.balance - a.balance)
 
   const totals: Record<string, number> = {}
   for (const a of accounts) totals[a.currency] = (totals[a.currency] ?? 0) + a.balance
-  return { totals, accounts }
+  const liabilityTotals: Record<string, number> = {}
+  for (const a of liabilities) liabilityTotals[a.currency] = (liabilityTotals[a.currency] ?? 0) + a.balance
+  return { totals, accounts, liabilities, liabilityTotals }
 }
 
 export async function getUncategorizedCount(year: number): Promise<number> {
@@ -517,3 +760,542 @@ export function applyVendorRules(
 // arithmetic and WRONG for this S-corp (filed 1120-S: cash method, W-2 officer comp,
 // distributions, AAA roll-forward — no SE tax on flow-through profit). Do NOT re-add a
 // flat-rate estimate; owner-level tax comes from the CPA via K-1 + W-2 withholding.
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * THE FILING SUMMARY — the books, with tax treatment applied on top.
+ *
+ * WHY THIS IS A SEPARATE LAYER AND NOT AN EDIT TO THE BOOKS (Antonio, 2026-08-31).
+ * The three adjustments below are real and must reach the return. The tempting move is
+ * to change the rows — halve the meals, convert the euro income, strike the property.
+ * That would be wrong, and expensively so:
+ *
+ *   - The books were just proven, row by row, against every bank's own running balance
+ *     (818 rows, no unexplained steps). Halving a meal breaks that tie-out permanently,
+ *     and the tie-out is the whole evidence base for saying these numbers are real.
+ *   - The company genuinely spent $2,927.51 on meals and genuinely earned €144,770.90.
+ *     Those are facts about the year. "Only half a meal is deductible" is a fact about
+ *     the tax code, and the two do not belong in the same column.
+ *   - Prior bookkeeping failed in exactly this direction — tax treatment baked into the
+ *     ledger until nobody could tell what had actually happened from what someone had
+ *     decided about it.
+ *
+ * So: books stay as recorded, this computes what the return needs, and every adjustment
+ * is named and reversible.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export interface FilingAdjustment {
+  label: string
+  amount: number
+  /** Plain-English reason, written for whoever files — not for us. */
+  why: string
+}
+
+export interface FilingSummary {
+  year: number
+  /** Profit as the books report it, USD block only. */
+  books_net_usd: number
+  /** Foreign-currency profit converted at the rate the company actually achieved. */
+  foreign: Array<{ currency: string; net: number; rate: number | null; net_usd: number | null }>
+  adjustments: FilingAdjustment[]
+  /** What the return should show. */
+  taxable_income: number
+  /** Property bought this year — already OUT of profit, needs depreciation set up. */
+  capitalized: Array<{ label: string; amount: number }>
+  /** Anything that could not be converted honestly and must be handled by hand. */
+  warnings: string[]
+}
+
+/** The share of a business meal that is NOT deductible. 50% since the 2021-22 restaurant
+ *  exception lapsed. A named constant so the day it changes there is one place to change. */
+export const MEALS_NONDEDUCTIBLE_SHARE = 0.5
+
+/** Costs paid at a property closing that are DEDUCTIBLE in the year of purchase, rather
+ * than added to the property's cost or spread over the loan.
+ *
+ * These sit here rather than in the ledger because the bank shows one wire — 29,032.53 to
+ * the title company — and splitting that row into pieces would break the tie-out to the
+ * statement, which is the evidence base for the whole year. The split lives in the closing
+ * disclosure, and this is where the return reads it.
+ *
+ * From file 25-1079, 10225 Ulmerton Road 3D, closed 22 May 2025:
+ *   HOA dues for June and July ............ 871.22   periods the company owned the unit
+ *   HOA 22-31 May reimbursed to the seller . 130.68
+ * The other 6,188.77 of that closing is NOT here on purpose: 4,398.00 of loan costs spread
+ * over the loan's life, and 1,790.77 is added to what the property cost.
+ *
+ * WHEN THIS BECOMES WRONG: it is a fact about ONE transaction in ONE year, hardcoded. The
+ * moment real asset tracking exists, closing costs belong there as data per property, and
+ * this constant should be deleted rather than extended with a second purchase. */
+const CLOSING_COSTS_DEDUCTIBLE_2025 = 1001.90
+
+export function computeFilingSummary(
+  txs: OwnerTransaction[],
+  pnl: OwnerPnL,
+): FilingSummary {
+  const usdBlock = pnl.blocks.find(b => b.currency === 'USD')
+  const books_net_usd = usdBlock?.net_profit ?? 0
+  const warnings: string[] = []
+
+  const foreign = pnl.blocks.filter(b => b.currency !== 'USD').map(b => {
+    if (b.usd_rate === null) {
+      warnings.push(
+        `${b.currency} activity could not be converted: no single achieved rate exists for it. ` +
+        `Its net of ${b.net_profit.toFixed(2)} ${b.currency} must be converted by hand before filing.`,
+      )
+      return { currency: b.currency, net: b.net_profit, rate: null, net_usd: null }
+    }
+    return { currency: b.currency, net: b.net_profit, rate: b.usd_rate, net_usd: b.net_profit * b.usd_rate }
+  })
+
+  const adjustments: FilingAdjustment[] = []
+
+  // MEALS. The books hold what was spent; the return may deduct only half, so the other
+  // half is added back to profit. Counted across every currency, converted where needed.
+  let mealsAddBack = 0
+  for (const b of pnl.blocks) {
+    const meals = b.by_subcategory['expense/meals'] ?? 0
+    if (meals === 0) continue
+    const rate = b.currency === 'USD' ? 1 : b.usd_rate
+    if (rate === null) {
+      warnings.push(`${b.currency} meals of ${meals.toFixed(2)} could not be converted — add back half by hand.`)
+      continue
+    }
+    mealsAddBack += meals * MEALS_NONDEDUCTIBLE_SHARE * rate
+  }
+  if (mealsAddBack > 0) {
+    adjustments.push({
+      label: 'Half of business meals added back',
+      amount: mealsAddBack,
+      why: 'A business meal is only 50% deductible. The books record the full amount actually spent; this adds the non-deductible half back to profit.',
+    })
+  }
+
+  // CLOSING COSTS the company may deduct now. Reduces profit, so it is negative here.
+  if (pnl.year === 2025 && CLOSING_COSTS_DEDUCTIBLE_2025 > 0) {
+    adjustments.push({
+      label: 'Deductible closing costs on the office purchase',
+      amount: -CLOSING_COSTS_DEDUCTIBLE_2025,
+      why: 'HOA dues for periods the company owned the unit, paid at the closing. The bank shows one wire, so this part of it is claimed here rather than by splitting the transaction.',
+    })
+  }
+
+  // PROPERTY. Already parked outside profit when the books were built, so there is
+  // nothing to adjust — but it must be VISIBLE, or the depreciation it is owed is
+  // simply forgotten and the deduction is lost every year thereafter.
+  const capitalized = Object.entries(
+    txs.filter(t => t.subcategory === 'fixed_asset_office_purchase')
+       .reduce<Record<string, number>>((acc, t) => {
+         acc['Office property purchased'] = (acc['Office property purchased'] ?? 0) + Math.abs(Number(t.amount))
+         return acc
+       }, {}),
+  ).map(([label, amount]) => ({ label, amount }))
+
+  const taxable_income =
+    books_net_usd
+    + foreign.reduce((s, f) => s + (f.net_usd ?? 0), 0)
+    + adjustments.reduce((s, a) => s + a.amount, 0)
+
+  return { year: pnl.year, books_net_usd, foreign, adjustments, taxable_income, capitalized, warnings }
+}
+
+/** Server helper: the filing summary for a year, straight from the books.
+ *  Reads the FULL year (getOwnerTransactions pages, so no 1000-row cap) because the
+ *  adjustments are whole-year facts — a summary computed from one page of transactions
+ *  would understate the return and look perfectly reasonable doing it. */
+export async function getFilingSummary(year: number): Promise<FilingSummary> {
+  const [txs, pnl] = await Promise.all([getOwnerTransactions(year), getOwnerPnL(year)])
+  return computeFilingSummary(txs, pnl)
+}
+
+/** One account as the registry describes it — what the system knows about it. */
+export interface OwnerAccount {
+  bank_name: string
+  institution: string | null
+  account_number: string | null
+  account_type: string
+  sign_convention: string
+  is_clearing: boolean
+  currency: string
+  opening_balance: number | null
+  opening_date: string | null
+  closing_balance: number | null
+  closing_date: string | null
+  /** Where the closing figure came from: a statement, a provider's report, or derived. */
+  closing_source: string | null
+  notes: string | null
+  /** A closed account. Its last balance must NOT keep reporting forever. */
+  is_active: boolean
+}
+
+/** Every account, with its verified balances and where each figure came from.
+ *
+ * Returns [] — never throws — when the registry table does not exist. It was created in
+ * sandbox and is not yet in production, and a page that renders the whole owner dashboard
+ * must not go blank because one supporting table is absent. Callers treat an empty
+ * registry as "nothing known" and fall back to deriving from the transactions. */
+export async function getAccountRegistry(
+  /** Closed accounts, included ONLY by a caller that needs to know they exist in order to
+   *  keep them out — see getCashPosition's fallback. Never for reporting. */
+  opts: { includeInactive?: boolean } = {},
+): Promise<OwnerAccount[]> {
+  let q = supabaseAdmin
+    .from('td_books_accounts' as never)
+    .select('bank_name, institution, account_number, account_type, sign_convention, is_clearing, currency, opening_balance, opening_date, closing_balance, closing_date, closing_source, notes, is_active')
+    .eq('entity_id', TD_ENTITY_ID)
+    .order('bank_name')
+  // A closed account must stop reporting its final balance. The table declares the column
+  // and indexes on it; the query used to ignore it, so a closed account would have sat in
+  // Cash held and in equity forever with no way to remove it.
+  if (!opts.includeInactive) q = q.eq('is_active', true)
+  const { data, error } = await q
+  if (error) {
+    /* A MISSING TABLE and a FAILED READ need opposite handling, and returning [] for both
+     * made them indistinguishable. The table genuinely does not exist in production yet,
+     * so that case must degrade quietly. Any other error — RLS, timeout, a renamed column
+     * — silently drops the whole registry, which makes the balance sheet announce "no
+     * account records exist" (a false statement about the data) and sends the cash figure
+     * back to deriving from running balances, understating it by about 18,000 and hiding
+     * three cards.
+     *
+     * WHAT THIS DOES AND DOES NOT DO: it makes the failure LOGGED instead of invisible. It
+     * does NOT yet change either screen — both still degrade as though the registry were
+     * empty, so the false "no account records exist" line and the understated cash figure
+     * remain until a read-failure state is plumbed through to the tabs. Recorded as open in
+     * docs/systems/td-books.md rather than described here as fixed. */
+    const missingTable = error.code === '42P01' || error.code === 'PGRST205'
+    if (!missingTable) console.error('getAccountRegistry: registry read FAILED, reporting no accounts —', error.code, error.message)
+    return []
+  }
+  return (data ?? []) as unknown as OwnerAccount[]
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * THE BALANCE SHEET — what the company OWNS and OWES.
+ *
+ * There was none. The books could say what the year earned but never what the company
+ * was worth at the end of it, which is the second statement any accountant asks for and
+ * the only place the office purchase can appear at all: 35,032.53 correctly kept out of
+ * profit, and therefore invisible everywhere else.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export interface BalanceSheetLine {
+  label: string
+  amount: number
+  /** Where the figure came from, so a reader can weigh it. */
+  source?: string | null
+  /** The date the balance was struck. A statement must show WHEN, not just how much. */
+  as_of?: string | null
+}
+
+export interface BalanceSheet {
+  year: number
+  as_of: string
+  currency: string
+  cash: BalanceSheetLine[]
+  other_assets: BalanceSheetLine[]
+  total_assets: number
+  liabilities: BalanceSheetLine[]
+  total_liabilities: number
+  /** Assets less liabilities — what the company is worth on paper. */
+  equity: number
+  /** Balances held in a currency other than the reporting one, listed not converted. */
+  foreign: Array<{ currency: string; label: string; amount: number }>
+  notes: string[]
+  /** FALSE when the accounts cannot support a complete position for this year.
+   *
+   *  Without this the screen cannot tell "the company owns nothing" from "we hold no
+   *  balances for this year", and it rendered the second as the first: a full statement
+   *  of 31-Dec-2025 balances headed with whatever year was selected, and — with no
+   *  registry at all — POSITIVE equity and no liabilities, because the office property
+   *  alone was enough to make the page think it had something to say. */
+  can_state: boolean
+}
+
+export function computeBalanceSheet(
+  registry: OwnerAccount[],
+  txs: OwnerTransaction[],
+  year: number,
+  /** Every account INCLUDING closed ones. Reporting uses `registry` (active only); this is
+   *  read solely to tell "the registry has never heard of this" apart from "this account
+   *  was closed" — two states that need opposite words on screen. Defaults to `registry`
+   *  so existing callers keep working. */
+  allAccounts: OwnerAccount[] = registry,
+): BalanceSheet {
+  const REPORTING = 'USD'
+  const norm = normBankName
+  const cash: BalanceSheetLine[] = []
+  const liabilities: BalanceSheetLine[] = []
+  const foreign: BalanceSheet['foreign'] = []
+  /** Accounts that exist but cannot be placed in this year — named, never silently dropped.
+   *  Every account lands in EXACTLY ONE bucket, so no account is named twice and, more
+   *  importantly, none is named nowhere. */
+  const unknownBalance: string[] = []
+  const otherYear: Array<{ name: string; year: string }> = []
+  /** Balances the year's own transactions contradict — money moved after the figure was struck. */
+  const staleBalance: Array<{ name: string; date: string; rows: number }> = []
+  const matchedDates: string[] = []
+
+  for (const a of registry) {
+    // ORDER MATTERS: the balance check runs FIRST. It used to sit after the year filter,
+    // which made it unreachable for the accounts it exists for — an account with no
+    // balance also has no date, so it failed the year test and was dropped before
+    // anything could name it. A card with an unknown balance vanished in silence.
+    if (a.closing_balance === null || a.closing_balance === undefined) {
+      // Dropping this silently understates what is OWED and overstates equity by an
+      // unknown amount — the one direction a balance sheet must never be wrong in.
+      unknownBalance.push(a.bank_name)
+      continue
+    }
+
+    // A balance belongs to the year it was STRUCK, not to whatever year is on screen.
+    // The registry holds ONE closing figure per account with no year dimension, so
+    // without this the same 31-Dec-2025 balances rendered under every year's heading.
+    const balanceYear = a.closing_date ? Number(a.closing_date.slice(0, 4)) : null
+    if (balanceYear !== year) {
+      otherYear.push({ name: a.bank_name, year: a.closing_date?.slice(0, 4) ?? 'no date' })
+      continue
+    }
+    matchedDates.push(a.closing_date as string)
+    /* A BALANCE THE BOOKS THEMSELVES CONTRADICT. Six of the thirteen accounts carry a
+     * closing balance dated mid-December, because the figure was derived from the last
+     * row that published a running balance. That is fine ONLY while nothing moved
+     * afterwards — and whether anything moved is knowable, right here, from the year's
+     * transactions. Comparing dates alone would cry wolf over every one of those six;
+     * comparing against actual later activity catches the case that is genuinely wrong. */
+    const movedAfter = txs.filter(
+      // SAME key as the coverage test above, deliberately. When these two disagreed, a
+      // balance could be certified as "nothing moved afterwards" by a join that matched
+      // nothing at all.
+      t => !!t.bank_name && norm(t.bank_name) === norm(a.bank_name)
+        && t.transaction_date > (a.closing_date as string),
+    ).length
+    if (movedAfter > 0) staleBalance.push({ name: a.bank_name, date: a.closing_date as string, rows: movedAfter })
+
+    const line: BalanceSheetLine = {
+      label: a.bank_name,
+      amount: Number(a.closing_balance),
+      source: a.closing_source,
+      as_of: a.closing_date,
+    }
+    if ((a.currency || REPORTING) !== REPORTING) {
+      // NEVER converted into the total. A balance sheet that silently mixes currencies
+      // states a number nobody can trace back to an account.
+      foreign.push({ currency: a.currency, label: a.bank_name, amount: line.amount })
+      continue
+    }
+    if (CASH_ACCOUNT_TYPES.includes(a.account_type)) cash.push(line)
+    else liabilities.push(line)
+  }
+
+  /* ...AND "ALL THE ACCOUNTS" MEANS THE BOOKS' ACCOUNTS, NOT THE REGISTRY'S (2026-09-01).
+   *
+   * The completeness check above walks the registry, so it can only ever be complete over
+   * the accounts the registry already knows. An account with money in the books and no
+   * registry row lands in none of the buckets, cannot make the statement refuse, and
+   * cannot be named in a note — it is simply not there. That is live today, not
+   * hypothetical: the 2026 books carry Mercury, Relay and Airwallex rows under names the
+   * registry has never held, because nothing in the app writes a registry row and an
+   * uploaded statement invents its account label from the file name.
+   *
+   * It also catches the two ways an account can leave: a name that drifts (the app tells
+   * the operator to save the loan as "FirstCitizens…" while the registry says
+   * "Firstcitizenbank…", and a drifted name silently becomes a second account), and
+   * is_active being switched off — which has no time dimension, so closing the loan in
+   * 2026 would otherwise erase 140,246.52 from the 2025 statement retroactively and move
+   * equity by the same amount, in silence. */
+  /* THE BOOKS NAME ACCOUNTS TWO DIFFERENT WAYS, and no string test can bridge it safely.
+   * The bank feed labels a row by its INSTITUTION — "Mercury", "Relay", "Airwallex",
+   * "Chase", and "Other" for a manual entry — while the registry and the statement importer
+   * use a per-account label, "Mercury checking 4517". Verified live: every one of the 78
+   * rows in 2026 carries a bare label, none of the 2,993 rows in 2025 does.
+   *
+   * A PREVIOUS ATTEMPT TREATED AN INSTITUTION LABEL AS COVERING ANY ACCOUNT THAT STARTS
+   * WITH IT. That was wrong in three ways, and the first turned a refusal into a confident
+   * wrong statement:
+   *  - Coverage went fuzzy while the "did money move after this balance" test three lines
+   *    below stayed exact. So entering a mid-2026 balance for "Mercury checking 4517" while
+   *    the feed kept writing "Mercury" rows after it produced NO movement, NO refusal, a
+   *    complete statement six months stale, and a note affirmatively stating the books
+   *    record no movement afterwards. Two checks on one question must share one key.
+   *  - Four of the six institutions here have SEVERAL accounts — Chase has a checking and
+   *    two credit cards. A bare "Chase" is satisfied by any one of them, so closing the
+   *    card would leave its debt out of a year it was live in with nothing said.
+   *  - It answers the wrong question. "Does some registry name begin with this word" is not
+   *    "is this money in an account whose balance I hold". Only attribution — each row
+   *    resolved to exactly one account — answers that, and the rows do not carry it yet.
+   *
+   * So the key is strict, and it is the SAME key the staleness test uses. Case and spacing
+   * are normalised because those are the same account written carelessly; nothing else is.
+   * A year whose rows are institution-labelled therefore cannot have a balance sheet, which
+   * is the truth: the books cannot say which of the two Airwallex accounts a row belongs to.
+   * The note says that plainly and does NOT tell anyone to add a matching registry row —
+   * a row literally named "Mercury" would be claimed alongside "Mercury checking 4517" and
+   * double-count the cash. */
+  const covers = isExactAccountMatch
+
+  const bookNames = Array.from(new Set(txs.map(t => t.bank_name).filter((n): n is string => !!n && !!n.trim())))
+  /* Named separately from "not in the registry at all", because a CLOSED account is
+   * described — telling Antonio to add an account that already exists, on a page that
+   * also hides it, is a false statement pointing at a row he cannot find. */
+  const closedAccount = bookNames
+    .filter(n => !covers(registry, n) && covers(allAccounts, n))
+    .sort()
+  const unregistered = bookNames
+    .filter(n => !covers(registry, n) && !covers(allAccounts, n))
+    .sort()
+  /* Money in the books belonging to no account at all. `bank_name` is nullable and the
+   * JSON import path writes it through unchanged, and such a row is invisible to the cash
+   * fallback too — the one hole left in "every account or nothing". */
+  const unattributed = txs.filter(t => !t.bank_name || !t.bank_name.trim()).length
+
+  /* A STATEMENT IS ALL THE ACCOUNTS OR IT IS NOTHING (2026-09-01).
+   *
+   * The first version of this guard asked only "did ANY account match the year". One
+   * match was enough to print a confident, complete-looking statement built from a
+   * subset — and the accounts left out were mentioned nowhere, because the note block
+   * below only fired when NOTHING matched. That is not a hypothetical: closing a year
+   * means updating accounts one at a time, so the moment the first 2026 balance is
+   * entered, "2026" has one matching account and twelve missing ones. It would have
+   * printed total assets of one bank account, "None recorded" against liabilities, and
+   * positive equity, for a company carrying a mortgage — the exact failure the year
+   * check was written to kill, moved from "none match" to "some match".
+   *
+   * So the bar is completeness: every account in the registry must have a balance, and
+   * every one of those balances must be dated in the year asked for. Anything less is
+   * refused and the reason is named account by account. */
+  const can_state = matchedDates.length > 0 && unknownBalance.length === 0
+    && otherYear.length === 0 && staleBalance.length === 0
+    && unregistered.length === 0 && closedAccount.length === 0 && unattributed === 0
+
+  // Property the company bought. Parked out of profit when the books were built, which
+  // is right — and means this is the ONLY place it appears. Signed sum THEN abs: a
+  // seller credit or a corrective reversal tagged to the purchase must REDUCE what the
+  // property cost, not add to it (the same per-row-abs defect fixed twice before).
+  const propertySigned = txs
+    .filter(t => t.subcategory === 'fixed_asset_office_purchase')
+    .reduce((s, t) => s + Number(t.amount), 0)
+  const propertyTotal = Math.abs(propertySigned)
+  const other_assets: BalanceSheetLine[] = propertyTotal > 0
+    ? [{ label: 'Office property (at cost)', amount: propertyTotal, source: 'purchase payments', as_of: null }]
+    : []
+
+  cash.sort((a, z) => z.amount - a.amount)
+  liabilities.sort((a, z) => z.amount - a.amount)
+
+  const total_assets = cash.reduce((s, l) => s + l.amount, 0) + other_assets.reduce((s, l) => s + l.amount, 0)
+  const total_liabilities = liabilities.reduce((s, l) => s + l.amount, 0)
+
+  /** Matched balances struck before the year end — disclosed, not warned about. */
+  const earlyDates = registry
+    .filter(a => a.closing_balance !== null && a.closing_balance !== undefined
+      && a.closing_date && a.closing_date.startsWith(String(year)) && a.closing_date !== `${year}-12-31`)
+    .map(a => a.bank_name)
+
+  const notes: string[] = []
+  if (registry.length === 0) {
+    notes.push(`No account records exist, so no balances can be stated for ${year}.`)
+  }
+  if (otherYear.length > 0) {
+    const years = Array.from(new Set(otherYear.map(a => a.year))).sort().join(', ')
+    notes.push(
+      matchedDates.length === 0
+        ? `No account has a closing balance dated in ${year}. The ${otherYear.length} account` +
+          `${otherYear.length === 1 ? '' : 's'} on file ${otherYear.length === 1 ? 'was' : 'were'} last struck in ` +
+          `${years}, and a balance from another year is not this year's position.`
+        : `${otherYear.length} account${otherYear.length === 1 ? '' : 's'} still ` +
+          `${otherYear.length === 1 ? 'carries a balance' : 'carry balances'} from ${years} rather than ${year} — ` +
+          `${otherYear.map(a => a.name).join(', ')}. Until ${otherYear.length === 1 ? 'it is' : 'they are'} closed ` +
+          `off for ${year}, only part of the company would be on the page.`,
+    )
+  }
+  if (unregistered.length > 0) {
+    notes.push(
+      `${unregistered.length} account name${unregistered.length === 1 ? '' : 's'} in the books ` +
+      `${unregistered.length === 1 ? 'does' : 'do'} not match any account on file — ${unregistered.join(', ')}. ` +
+      `Bank-feed rows are labelled by the bank rather than by the account, so a row can say ` +
+      `"Airwallex" while the company holds two Airwallex accounts, and the books cannot say ` +
+      `which balance it belongs to. Do NOT add an account under the short name to clear this: ` +
+      `it would sit alongside the real one and count the same money twice. The rows need to ` +
+      `carry their account, which is a change to how they are recorded.`,
+    )
+  }
+  if (closedAccount.length > 0) {
+    notes.push(
+      `${closedAccount.join(', ')} ${closedAccount.length === 1 ? 'is' : 'are'} marked closed in the registry, ` +
+      `but the books still record money in ${closedAccount.length === 1 ? 'it' : 'them'} during ${year}. A closed ` +
+      `account stops being reported from the day it closes — it does not stop having been open earlier, and ` +
+      `dropping it from a year it was live in would move equity by whatever it held.`,
+    )
+  }
+  if (unattributed > 0) {
+    notes.push(
+      `${unattributed} transaction${unattributed === 1 ? '' : 's'} in ${year} ${unattributed === 1 ? 'has' : 'have'} ` +
+      `no account recorded at all, so ${unattributed === 1 ? 'it belongs' : 'they belong'} to no balance here.`,
+    )
+  }
+  if (unknownBalance.length > 0) {
+    notes.push(
+      `${unknownBalance.join(', ')} ${unknownBalance.length === 1 ? 'has' : 'have'} no closing balance on file ` +
+      `at all. If ${unknownBalance.length === 1 ? 'it is' : 'they are'} a card or a loan, any position stated ` +
+      `without ${unknownBalance.length === 1 ? 'it' : 'them'} understates what is owed and overstates equity.`,
+    )
+  }
+  if (staleBalance.length > 0) {
+    notes.push(
+      `${staleBalance.map(a => `${a.name} (balance struck ${a.date}, ${a.rows} later transaction${a.rows === 1 ? '' : 's'})`).join('; ')} ` +
+      `— the books record money moving in ${staleBalance.length === 1 ? 'this account' : 'these accounts'} AFTER the ` +
+      `balance was struck, so the balance is no longer what the account holds.`,
+    )
+  } else if (can_state && earlyDates.length > 0) {
+    notes.push(
+      `${earlyDates.join(', ')} ${earlyDates.length === 1 ? 'was' : 'were'} last struck before 31 December — ` +
+      `the figure comes from the final transaction that published a running balance. The books record no ` +
+      `movement in ${earlyDates.length === 1 ? 'it' : 'them'} afterwards, so the balance carries to the year end. ` +
+      `Each line shows its own date.`,
+    )
+  }
+  if (propertyTotal > 0) {
+    notes.push(
+      `Office property is shown at what was paid for it. No depreciation has been recorded — ` +
+      `a building is written off over years, and that has not been set up yet.`,
+    )
+  }
+  if (foreign.length > 0) {
+    notes.push(
+      `Balances in ${Array.from(new Set(foreign.map(f => f.currency))).join(', ')} are listed separately and are ` +
+      `NOT included in the totals above — a balance sheet that mixes currencies states a number ` +
+      `nobody can trace back to an account.`,
+    )
+  }
+
+  return {
+    year,
+    // The date the balances were ACTUALLY struck, not 31 December by assertion. Dating a
+    // 30-June balance as a year-end position is the same error as dating a 2025 balance
+    // 2026 — smaller, and just as untrue.
+    // The year-end position. Legitimate even where a line's own balance is dated earlier:
+    // nothing moved after it (checked above — otherwise the statement is refused), so the
+    // figure carries forward unchanged. Every line still shows the date it was struck.
+    as_of: `${year}-12-31`,
+    currency: REPORTING,
+    cash, other_assets, total_assets,
+    liabilities, total_liabilities,
+    equity: total_assets - total_liabilities,
+    foreign, notes, can_state,
+  }
+}
+
+/** Server helper: the balance sheet for a year. */
+export async function getBalanceSheet(year: number): Promise<BalanceSheet> {
+  /* ONE read, split in code. Two independent reads of the same table can fail
+   * independently: if the active-only read failed and the other succeeded, every account
+   * was reported as "marked closed" AND as "no account records exist" in the same panel —
+   * two contradictory statements, both false, from a transient timeout, and the advice
+   * pointed at a destructive fix. */
+  const [allAccounts, txs] = await Promise.all([
+    getAccountRegistry({ includeInactive: true }),
+    getOwnerTransactions(year),
+  ])
+  const registry = allAccounts.filter(a => a.is_active !== false)
+  return computeBalanceSheet(registry, txs, year, allAccounts)
+}

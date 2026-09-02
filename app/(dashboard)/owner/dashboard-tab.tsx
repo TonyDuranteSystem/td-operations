@@ -13,6 +13,7 @@ const EMPTY_BLOCK: PnLBlock = {
   currency: 'USD', invoice_income: 0, other_income: 0, cogs: 0, gross_profit: 0,
   expenses: 0, net_profit: 0, distributions: 0, contributions: 0,
   uncategorized_income: 0, uncategorized_expense: 0, by_subcategory: {},
+  usd_rate: null,
   monthly: Array.from({ length: 12 }, (_, i) => ({ month: i + 1, income: 0, cogs: 0, expenses: 0, net: 0 })),
 }
 
@@ -39,6 +40,19 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
 
+  /** The cash figure comes from the account registry, which holds ONE closing balance per
+   *  account with no year dimension. Under a year header with no date it reads as THAT
+   *  year's cash — the same year-blindness that produced a fabricated balance sheet until
+   *  QA caught it. So: always say when the balances were struck, and say plainly when that
+   *  is not the year on screen. */
+  const cashDates = [...cash.accounts, ...cash.liabilities].map(a => a.as_of).filter(Boolean).sort()
+  const struckOn = cashDates.length > 0 ? cashDates[cashDates.length - 1] : null
+  const struckYear = struckOn ? Number(struckOn.slice(0, 4)) : null
+  const struckLabel = struckOn
+    ? new Date(struckOn + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })
+    : null
+  const cashIsAnotherYear = struckYear !== null && struckYear !== year
+
   const cashEntries = Object.entries(cash.totals)
   const usdCash = cash.totals.USD ?? 0
   const nonUsdCash = cashEntries.filter(([cur]) => cur !== 'USD')
@@ -56,9 +70,11 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
         <KpiCard
           label="Cash Position"
           value={fmt(usdCash)}
-          sub={nonUsdCash.length > 0
-            ? `USD only — plus ${nonUsdCash.map(([cur, v]) => fmtIn(cur)(v)).join(', ')}`
-            : `${cash.accounts.length} account${cash.accounts.length !== 1 ? 's' : ''}`}
+          sub={[
+            nonUsdCash.length > 0 ? `USD only — plus ${nonUsdCash.map(([cur, v]) => fmtIn(cur)(v)).join(', ')}` : null,
+            struckLabel ? `as at ${struckLabel}` : null,
+          ].filter(Boolean).join(' · ')}
+          warn={cashIsAnotherYear}
         />
         <KpiCard
           label="Uncategorized"
@@ -69,6 +85,13 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
         />
         <KpiCard label="Distributions" value={fmt(usd.distributions)} sub={`${year} YTD`} />
       </div>
+
+      {cashIsAnotherYear && (
+        <p className="text-xs text-orange-700">
+          The cash figure above was last struck in {struckYear}, not {year}. It is the current
+          position of the accounts, not this year&apos;s closing balance.
+        </p>
+      )}
 
       {/* Non-USD activity — never mixed into the USD numbers above */}
       {others.length > 0 && (
@@ -95,6 +118,26 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
               <div key={`${a.bank_name}|${a.currency}`} className="flex items-center justify-between text-sm">
                 <span className="text-zinc-600">{a.bank_name}{a.currency !== 'USD' ? ` (${a.currency})` : ''}</span>
                 <span className="font-medium tabular-nums">{fmtIn(a.currency)(a.balance)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Cards and loans — shown SEPARATELY as money owed.
+          These used to be added into the Cash total, which reported roughly $140,000
+          of loan principal and three credit-card balances as though they were cash.
+          Filtering them out of cash without showing them here would be the opposite
+          mistake — the debts would simply disappear from the screen. */}
+      {cash.liabilities.length > 0 && (
+        <div className="rounded-lg border border-zinc-200 bg-white p-4">
+          <h3 className="mb-1 text-sm font-medium text-zinc-700">Owed by Account</h3>
+          <p className="mb-3 text-xs text-zinc-400">Cards and loans — money owed, never counted as cash.</p>
+          <div className="space-y-2">
+            {cash.liabilities.map(a => (
+              <div key={`${a.bank_name}|${a.currency}`} className="flex items-center justify-between text-sm">
+                <span className="text-zinc-600">{a.bank_name}{a.currency !== 'USD' ? ` (${a.currency})` : ''}</span>
+                <span className="font-medium tabular-nums text-red-600">{fmtIn(a.currency)(a.balance)}</span>
               </div>
             ))}
           </div>
@@ -141,7 +184,8 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
             <div className="space-y-2">
               {topSubcategories.map(([name, amount]) => (
                 <div key={name} className="flex items-center justify-between text-sm">
-                  <span className="capitalize text-zinc-600">{name.replace(/_/g, ' ')}</span>
+                  {/* keys are "category/subcategory" — show only the name */}
+                  <span className="capitalize text-zinc-600">{name.split('/').pop()!.replace(/_/g, ' ')}</span>
                   <span className="font-medium tabular-nums text-zinc-800">{fmt(amount)}</span>
                 </div>
               ))}

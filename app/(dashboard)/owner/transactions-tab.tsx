@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { applyVendorRulesTo, normalizeVendorKey, type VendorRule } from '@/lib/owner-vendor-match'
 import type { OwnerTransaction, OwnerCategory } from '@/lib/owner-finance'
@@ -14,7 +14,12 @@ const CATEGORY_LABELS: Record<string, string> = {
   expense: 'Operating Expense',
   distribution: 'Owner Distribution',
   contribution: 'Owner Contribution',
-  transfer: 'Transfer (own accounts / Stripe payout)',
+  // Vendor-NEUTRAL on purpose (Antonio, 2026-08-30): this used to read
+  // "Stripe payout". A payout from ANY processor into a bank account is the same
+  // accounting event — money moving between accounts the company already owns —
+  // so naming one provider in the label ages badly the day the processor changes.
+  // The stored value has always been the generic 'transfer'; only wording changed.
+  transfer: 'Transfer (between your own accounts, incl. processor payouts)',
   fee: 'Bank / Processing Fee',
   conversion: 'Currency Conversion',
   refund: 'Refund',
@@ -101,6 +106,12 @@ interface TransactionsTabProps {
   year: number
   initialRows: OwnerTransaction[]
   initialTotal: number
+  /** A P&L line the user clicked: open showing exactly the rows behind that figure. */
+  focus?: { category: string; subcategory: string } | null
+  /** Drop the drill-down from the page URL too, so dismissing it actually sticks. */
+  onClearFocus?: () => void
+  /** Return to the report this was opened from. Present ONLY when arrival was a drill-down. */
+  onBack?: () => void
 }
 
 interface ModalState {
@@ -122,12 +133,15 @@ interface ModalState {
   saveRule: boolean
 }
 
-export function TransactionsTab({ year, initialRows, initialTotal }: TransactionsTabProps) {
+export function TransactionsTab({ year, initialRows, initialTotal, focus, onBack, onClearFocus }: TransactionsTabProps) {
   const [rows, setRows] = useState<OwnerTransaction[]>(initialRows)
   const [total, setTotal] = useState(initialTotal)
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [filterCategory, setFilterCategory] = useState<OwnerCategory | ''>('uncategorized')
+  /** Set only by a click on the P&L. Cleared the moment the operator touches the category
+   *  filter or the search box, so a narrowed view can never be mistaken for the full list. */
+  const [filterSubcategory, setFilterSubcategory] = useState('')
   const [offset, setOffset] = useState(0)
   const [modal, setModal] = useState<ModalState | null>(null)
   const [saving, setSaving] = useState(false)
@@ -137,6 +151,7 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
   const [bulkCategory, setBulkCategory] = useState<OwnerCategory>('expense')
   const [bulkSubcategory, setBulkSubcategory] = useState('')
   const [rules, setRules] = useState<VendorRule[]>([])
+  const [uploading, setUploading] = useState<{ done: number; total: number } | null>(null)
   const LIMIT = 50
 
   const loadRules = useCallback(() => {
@@ -181,11 +196,12 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
     }
   }
 
-  const load = useCallback(async (newOffset = 0, cat = filterCategory, q = search) => {
+  const load = useCallback(async (newOffset = 0, cat = filterCategory, q = search, sub = filterSubcategory) => {
     setLoading(true)
     try {
       const params = new URLSearchParams({ year: String(year), limit: String(LIMIT), offset: String(newOffset) })
       if (cat) params.set('category', cat)
+      if (sub) params.set('subcategory', sub)
       if (q) params.set('search', q)
       const res = await fetch(`/api/owner/transactions?${params}`)
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Load failed') }
@@ -198,7 +214,74 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
     } finally {
       setLoading(false)
     }
-  }, [year, filterCategory, search])
+  }, [year, filterCategory, search, filterSubcategory])
+
+  /**
+   * Re-fetch when the YEAR changes.
+   *
+   * The year <select> does a router.push, which re-renders the server component
+   * and delivers fresh props — but this tab is NOT remounted, and `rows` was
+   * seeded with useState(initialRows), which React does not re-initialise on a
+   * prop change. Without this effect the previous year's rows stay on screen
+   * under the new year's heading. Observed 2026-08-30: switching to 2025 kept all
+   * 78 rows of 2026 data visible while the header read 2025.
+   *
+   * That is not merely cosmetic here. The modal, the bulk bar and "apply to all
+   * like this" all act on the rows currently in state, so categorizing from a
+   * stale list writes to the OTHER year's records while the page says otherwise —
+   * which would break the hard rule that 2025 and 2026 stay separate.
+   *
+   * Deliberately calls load() rather than re-seeding from initialRows: the server
+   * always fetches category='uncategorized', while this tab owns the live filter.
+   * Re-seeding would silently drop the operator's chosen filter and show an
+   * uncategorized-only list under a filter chip claiming something else.
+   *
+   * The ref skips the first run — on mount the server props ARE the current year,
+   * and firing here would duplicate the initial fetch on every page load.
+   */
+  /* A P&L line was clicked. Set BOTH filters and fetch: the category alone is too broad
+     (all expenses), the subcategory alone is not unique across categories. Passing them
+     into load() rather than relying on the state we just set — setState is async, and
+     reading it here would fetch with the PREVIOUS filter and show the wrong rows under
+     the right heading. */
+  const seenFocusRef = useRef<string | null>(null)
+  useEffect(() => {
+    const key = focus ? `${focus.category}/${focus.subcategory}` : null
+    if (key === seenFocusRef.current) return
+    const hadFocus = seenFocusRef.current !== null
+    seenFocusRef.current = key
+    if (!focus) {
+      /* A drill-down being TAKEN AWAY has to clear the filter it put there. Returning
+       * early left the rows filtered to the old line while the parent had already
+       * dropped the focus — so "N uncategorized — click to review" changed nothing
+       * except removing the way back, and changing the year showed an empty list under
+       * a chip nobody could explain. Only on a real transition: a tab that simply never
+       * had a drill-down must not have the reader's own filter wiped. */
+      if (hadFocus) {
+        setFilterCategory('uncategorized')
+        setFilterSubcategory('')
+        setSearch('')
+        load(0, 'uncategorized', '', '')
+      }
+      return
+    }
+    const cat = focus.category as OwnerCategory | ''
+    setFilterCategory(cat)
+    setFilterSubcategory(focus.subcategory)
+    setSearch('')
+    load(0, cat, '', focus.subcategory)
+  }, [focus, load])
+
+  const seenYearRef = useRef(year)
+  useEffect(() => {
+    if (seenYearRef.current === year) return
+    seenYearRef.current = year
+    // Nothing from the previous year may survive into an action on this one.
+    setSelected(new Set())
+    setModal(null)
+    setOffset(0)
+    load(0)
+  }, [year, load])
 
   function openModal(tx: OwnerTransaction) {
     setModal({ tx, category: tx.category, subcategory: tx.subcategory ?? '', notes: tx.notes ?? '', similar: null, applyToAll: false, saveRule: false })
@@ -309,6 +392,86 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
     }
   }
 
+  /**
+   * Statement upload — ONE FILE PER REQUEST (see the route's own comment for
+   * why), sent sequentially so a slow PDF doesn't block the others and each
+   * file's real outcome (imported / quarantined / no transactions found /
+   * error) is reported honestly rather than collapsed into one pass/fail.
+   * Nothing gets categorized here — every row lands uncategorized, same rule
+   * as everywhere else in this table.
+   */
+  async function uploadFiles(files: FileList) {
+    const list = Array.from(files)
+    setUploading({ done: 0, total: list.length })
+    let totalImported = 0
+    let totalAlreadyBooked = 0
+    const problems: string[] = []
+    // Parser warnings are NOT cosmetic and must never be swallowed. The reader
+    // raises "Ambiguous date format — assumed M/D/Y (US)" when a statement gives it
+    // no way to tell 05/03 apart; guess wrong on a European statement and every
+    // date shifts, and near a year boundary rows land in the WRONG TAX YEAR, since
+    // the year is derived from that same date. This warning existed, was returned
+    // by the server, and was being dropped on the floor here.
+    const warnings: string[] = []
+
+    for (let i = 0; i < list.length; i++) {
+      const file = list[i]
+      try {
+        const body = new FormData()
+        body.append('file', file)
+        // The year currently being viewed IS the year being loaded. Rows outside
+        // it are skipped server-side and reported — a loan export carrying 2026
+        // activity previously leaked 17 rows into an off-limits year.
+        body.append('tax_year', String(year))
+        const res = await fetch('/api/owner/transactions/upload', { method: 'POST', body })
+        const d = await res.json().catch(() => ({}))
+        if (!res.ok || d.error) {
+          problems.push(`${file.name}: ${d.error || 'upload failed'}`)
+        } else if (typeof d.imported === 'number') {
+          totalImported += d.imported
+          totalAlreadyBooked += d.skipped_already_booked ?? 0
+          if (d.skipped_out_of_year > 0) {
+            warnings.push(`${file.name}: ${d.skipped_out_of_year} transaction(s) dated outside ${year} were skipped — load those with that year selected.`)
+          }
+          if (d.imported === 0 && d.parsed_count > 0) {
+            problems.push(`${file.name}: found ${d.parsed_count} transaction(s), all already in your books`)
+          }
+        }
+        if (Array.isArray(d.warnings)) {
+          for (const w of d.warnings) warnings.push(`${file.name}: ${w}`)
+        }
+        if (Array.isArray(d.duplicate_samples) && d.duplicate_samples.length > 0) {
+          warnings.push(
+            `${file.name}: ${d.skipped_already_booked} transaction(s) were already in your books from another source — e.g. ${d.duplicate_samples[0]}`
+          )
+        }
+      } catch {
+        problems.push(`${file.name}: upload failed`)
+      }
+      setUploading({ done: i + 1, total: list.length })
+    }
+
+    setUploading(null)
+    if (totalImported > 0) {
+      const dupNote = totalAlreadyBooked > 0 ? ` · ${totalAlreadyBooked} skipped as already booked` : ''
+      toast.success(`Imported ${totalImported} new transaction(s) from ${list.length} file(s)${dupNote}`)
+    }
+    if (problems.length > 0) {
+      toast.error(problems.length === 1 ? problems[0] : `${problems.length} file(s) need attention: ${problems.join(' | ')}`)
+    } else if (totalImported === 0) {
+      toast.error('Nothing new to import from those file(s)')
+    }
+    // Shown separately and persistently — a warning buried behind a green success
+    // toast is a warning nobody reads, and these can mean money in the wrong year.
+    for (const w of warnings.slice(0, 5)) {
+      toast.warning(w, { duration: 15000 })
+    }
+    if (warnings.length > 5) {
+      toast.warning(`…and ${warnings.length - 5} more parse warning(s).`, { duration: 15000 })
+    }
+    load(offset)
+  }
+
   const uncategorizedCount = rows.filter(r => r.category === 'uncategorized').length
 
   return (
@@ -316,15 +479,36 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
       {/* Categorize modal */}
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
-          <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-xl">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-zinc-200 bg-white p-6 shadow-xl">
             <h3 className="mb-1 text-base font-semibold text-zinc-900">Categorize Transaction</h3>
-            <p className="mb-4 text-sm text-zinc-500 truncate">{modal.tx.counterparty ?? modal.tx.description}</p>
+            {modal.tx.counterparty && (
+              <p className="mb-2 text-sm font-medium text-zinc-700">{modal.tx.counterparty}</p>
+            )}
 
             <div className="mb-3 flex items-center justify-between rounded-lg bg-zinc-50 px-3 py-2">
-              <span className="text-sm text-zinc-500">{modal.tx.transaction_date} · {modal.tx.bank_name}</span>
+              <span className="text-sm text-zinc-500">
+                {modal.tx.transaction_date} · {modal.tx.bank_name}
+                {modal.tx.balance_after !== null && modal.tx.balance_after !== undefined && (
+                  <> · balance {fmtRow(modal.tx.balance_after, modal.tx.currency)}</>
+                )}
+              </span>
               <span className={`text-sm font-semibold tabular-nums ${modal.tx.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
                 {modal.tx.amount < 0 ? '-' : '+'}{fmtRow(modal.tx.amount, modal.tx.currency)}
               </span>
+            </div>
+
+            {/* THE FULL BANK LINE, never truncated.
+                241 of the 2025 rows run past 200 characters and the longest is 358, while
+                the list column fits roughly 30 — so three different Airwallex sweeps look
+                identical there. What tells them apart (the originator id, the entry
+                description, the trace number) lives in the hidden part, which made this
+                screen unusable for the one decision it exists for. Selectable on purpose:
+                a trace number is worth copying. */}
+            <div className="mb-3">
+              <label className="mb-1 block text-xs font-medium text-zinc-600">Full bank description</label>
+              <p className="max-h-40 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-white px-3 py-2 font-mono text-xs leading-relaxed text-zinc-700">
+                {modal.tx.description}
+              </p>
             </div>
 
             <div className="space-y-3">
@@ -445,6 +629,35 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
         </div>
       )}
 
+      {/* Statement upload */}
+      <div className="flex items-center gap-3">
+        <label className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-50 ${uploading ? 'pointer-events-none opacity-60' : ''}`}>
+          {uploading ? `Uploading ${uploading.done}/${uploading.total}…` : 'Upload statements'}
+          <input
+            type="file"
+            multiple
+            accept=".csv,.pdf"
+            className="hidden"
+            disabled={!!uploading}
+            onChange={e => { if (e.target.files && e.target.files.length > 0) uploadFiles(e.target.files); e.target.value = '' }}
+          />
+        </label>
+        <span className="text-xs text-zinc-500">CSV or PDF, any bank — lands uncategorized, nothing is guessed</span>
+      </div>
+
+      {/* THE WAY BACK. Clicking a P&L line opens this tab filtered to that line, and until
+          now there was no route home — Antonio's words: "when I click on it another page
+          open and there is no way to go back". Clearing the chip widened the list but still
+          left him on the wrong screen. Shown only when arrival WAS a drill-down. */}
+      {focus && onBack && (
+        <button
+          onClick={onBack}
+          className="inline-flex items-center gap-1.5 self-start rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
+        >
+          <span aria-hidden="true">&larr;</span> Back to the P&amp;L
+        </button>
+      )}
+
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
         <input
@@ -456,13 +669,43 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
         />
         <select
           value={filterCategory}
-          onChange={e => { setFilterCategory(e.target.value as OwnerCategory | ''); load(0, e.target.value as OwnerCategory | '', search) }}
+          onChange={e => {
+            const next = e.target.value as OwnerCategory | ''
+            setFilterCategory(next); setFilterSubcategory('')
+            load(0, next, search, '')
+          }}
           className="rounded-md border border-zinc-200 px-2 py-1.5 text-sm"
         >
           <option value="">All categories</option>
           {CATEGORIES.map(c => <option key={c} value={c}>{CATEGORY_LABELS[c] ?? c}</option>)}
         </select>
         <span className="text-xs text-zinc-500">{total} transactions</span>
+        {filterSubcategory && (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+            showing only <span className="capitalize">{filterSubcategory.replace(/_/g, ' ')}</span>
+            <FastTooltip label="Show everything again">
+              <button
+                /* Reports the change upward and stops — do not ALSO reset and reload here.
+                 * Telling the parent fires focus back down as null, and the effect above
+                 * already does the full, correct reset on that transition. Doing it twice
+                 * meant two requests in flight at once — one asking for this line, one
+                 * asking for everything — and whichever answered last decided what the
+                 * reader saw, sometimes leaving the category selector reading
+                 * "Uncategorized" over rows that were not, with the total from the other
+                 * request still showing on the page. One instruction, one place that
+                 * carries it out. Falls back to the old local reset only if there is
+                 * nowhere to report to (arrival was never a drill-down). */
+                onClick={() => {
+                  if (onClearFocus) { onClearFocus(); return }
+                  setFilterSubcategory('')
+                  load(0, filterCategory, search, '')
+                }}
+                className="ml-0.5 rounded-full px-1 text-blue-500 hover:bg-blue-100"
+                aria-label="Show everything again"
+              >×</button>
+            </FastTooltip>
+          </span>
+        )}
         {filterCategory === 'uncategorized' && uncategorizedCount > 0 && (
           <span className="rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-medium text-orange-700">
             {uncategorizedCount} need review
@@ -527,8 +770,20 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
           </thead>
           <tbody>
             {rows.map(tx => (
-              <tr key={tx.id} className="border-b border-zinc-50 hover:bg-zinc-50">
-                <td className="px-3 py-2.5">
+              /* The whole row opens the transaction. The old design put the only way in
+                 on a small button at the far right, which on a phone meant scrolling a
+                 wide table sideways to reach it. Interactive children below stop the
+                 click from bubbling — that is the classic bug in this pattern, where
+                 ticking a checkbox also opens the panel. */
+              <tr
+                key={tx.id}
+                onClick={() => openModal(tx)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openModal(tx) } }}
+                className="cursor-pointer border-b border-zinc-50 hover:bg-zinc-50 focus:bg-zinc-50 focus:outline-none"
+              >
+                <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
                   <input
                     type="checkbox"
                     checked={selected.has(tx.id)}
@@ -541,9 +796,12 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                 </td>
                 <td className="px-3 py-2.5 text-xs text-zinc-500 whitespace-nowrap">{tx.transaction_date}</td>
                 <td className="px-3 py-2.5 text-xs text-zinc-400">{tx.bank_name}</td>
-                <td className="px-3 py-2.5 max-w-[200px]">
+                {/* Two lines, wrapped at word boundaries, instead of one hard-cut line.
+                    It still will not show a 358-character bank line in full — that is what
+                    opening the row is for — but it shows enough to recognise one. */}
+                <td className="min-w-[280px] max-w-[460px] px-3 py-2.5">
                   <div className="truncate font-medium text-zinc-800">{tx.counterparty ?? '—'}</div>
-                  <div className="truncate text-xs text-zinc-400">{tx.description}</div>
+                  <div className="line-clamp-2 break-words text-xs leading-snug text-zinc-400">{tx.description}</div>
                 </td>
                 <td className={`px-3 py-2.5 text-right font-mono text-xs font-medium tabular-nums ${tx.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
                   {tx.amount < 0 ? '-' : '+'}{fmtRow(tx.amount, tx.currency)}
@@ -557,7 +815,7 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                     return s ? (
                       <FastTooltip label="Suggested by your saved rule — click to apply">
                         <button
-                          onClick={() => acceptSuggestion(tx)}
+                          onClick={e => { e.stopPropagation(); acceptSuggestion(tx) }}
                           aria-label="Suggested by your saved rule — click to apply"
                           className="ml-1.5 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
                         >
@@ -569,18 +827,12 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                 </td>
                 <td className="px-3 py-2.5 text-xs text-zinc-500">{tx.subcategory?.replace(/_/g, ' ') ?? '—'}</td>
                 <td className="px-3 py-2.5 text-xs text-zinc-400 max-w-[120px] truncate">{tx.notes ?? ''}</td>
-                <td className="px-3 py-2.5">
+                {/* No Categorize button any more — the ROW opens the transaction, so a
+                    button beside it was a second, smaller target for the same action, and
+                    on a phone it sat off the right edge of a wide table. What stays here is
+                    the bank-feed escape hatch, which does something different. */}
+                <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
                   <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={() => openModal(tx)}
-                      className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
-                        tx.category === 'uncategorized'
-                          ? 'bg-orange-50 text-orange-700 hover:bg-orange-100 border border-orange-200'
-                          : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-100'
-                      }`}
-                    >
-                      {tx.category === 'uncategorized' ? 'Categorize ↗' : 'Edit'}
-                    </button>
                     {/* Only a row that CAME from the bank feed can go back to it. This is the
                         escape hatch: anything the system could not identify as a client
                         payment lands here, and one click returns it to the Bank Feed. */}

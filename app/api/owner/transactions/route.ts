@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isAdmin } from '@/lib/auth'
+import { isOwnerOnly } from '@/lib/auth'
 import { NextResponse } from 'next/server'
 import { getOwnerTransactionsPaginated, isOwnerCategory, TD_ENTITY_ID, type OwnerCategory } from '@/lib/owner-finance'
 
@@ -9,13 +9,14 @@ export const dynamic = 'force-dynamic'
 export async function GET(req: Request) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) {
+  if (!user || !isOwnerOnly(user)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
   const { searchParams } = new URL(req.url)
   const year = parseInt(searchParams.get('year') ?? String(new Date().getFullYear()), 10)
   const category = searchParams.get('category') as OwnerCategory | null
+  const subcategory = searchParams.get('subcategory') ?? undefined
   const search = searchParams.get('search') ?? undefined
   const bank = searchParams.get('bank') ?? undefined
   const limit = parseInt(searchParams.get('limit') ?? '50', 10)
@@ -23,6 +24,7 @@ export async function GET(req: Request) {
 
   const result = await getOwnerTransactionsPaginated(year, {
     category: category ?? undefined,
+    subcategory,
     search,
     bank,
     limit,
@@ -35,7 +37,7 @@ export async function GET(req: Request) {
 export async function PATCH(req: Request) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) {
+  if (!user || !isOwnerOnly(user)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 

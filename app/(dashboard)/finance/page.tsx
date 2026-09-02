@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isMatchableInvoice } from '@/lib/finance/invoice-matchability'
-import { isDashboardUser, isAdmin } from '@/lib/auth'
+import { isDashboardUser, isAdmin, isOwnerOnly } from '@/lib/auth'
 import { isCardFeeEnabled, getConfiguredCardFeeRate } from '@/lib/payments/card-fee-config'
 import { redirect } from 'next/navigation'
 import { FinanceDashboard } from './finance-dashboard'
@@ -26,6 +26,13 @@ export default async function FinancePage({
   // Antonio's requirement (2026-07-27) is the opposite: staff work invoices in Finance and
   // must not see TD's own business activity. Fixed 2026-07-27.
   const userIsAdmin = isAdmin(user)
+
+  // TD's own vendor bills are OWNER-private, not merely admin-only — same rule as
+  // the rest of My Finances. The write actions (expense-actions.ts) were tightened
+  // to isOwnerOnly on 2026-08-29 but the READ was left at isAdmin, so a non-owner
+  // admin could still see Antonio's outgoing money and only discovered the limit
+  // as a raw "Forbidden" when editing. Reading and writing now agree.
+  const userIsOwner = isOwnerOnly(user)
 
   // Card-fee master switch — visible ONLY to true admins. The server action re-checks the
   // role independently; this gate only controls whether the card renders.
@@ -343,10 +350,11 @@ export default async function FinancePage({
     .order('created_at', { ascending: false })
     .limit(500)
 
-  // The Expenses tab is admin-only, and until now that was enforced only by hiding the tab —
-  // the vendor bills themselves were still sent to every staff browser. Non-admins now get an
-  // empty list, so what TD spends is not in the page they receive at all.
-  const tdExpenses = userIsAdmin
+  // The Expenses tab is OWNER-only (was admin-only until 2026-08-30), and that is enforced
+  // here rather than only by hiding the tab — otherwise the vendor bills are still sent to
+  // every admin's browser. A non-owner gets an empty list, so what TD spends is not in the
+  // page they receive at all.
+  const tdExpenses = userIsOwner
     ? (tdExpensesRaw ?? []).map(e => ({
         ...e,
         accounts: e.accounts as unknown as { company_name: string } | null,
@@ -389,6 +397,7 @@ export default async function FinancePage({
         allInvoicesFlat={allInvoicesFlat}
         tdExpenses={tdExpenses}
         isAdmin={userIsAdmin}
+        isOwner={userIsOwner}
         cardFee={cardFee}
         recurringTemplates={recurringTemplates}
       />

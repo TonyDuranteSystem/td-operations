@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isAdmin } from '@/lib/auth'
+import { isOwnerOnly } from '@/lib/auth'
 import { NextResponse } from 'next/server'
 import { isOwnerCategory, TD_ENTITY_ID } from '@/lib/owner-finance'
 
@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic'
 export async function POST(req: Request) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) {
+  if (!user || !isOwnerOnly(user)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 

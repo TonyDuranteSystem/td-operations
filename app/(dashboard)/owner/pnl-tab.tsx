@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { OwnerPnL, PnLBlock } from '@/lib/owner-finance'
 
 const fmtIn = (currency: string) => (n: number) =>
@@ -9,12 +9,29 @@ const fmtIn = (currency: string) => (n: number) =>
 interface PnLTabProps {
   year: number
   pnl: OwnerPnL
+  /** Open the Transactions tab filtered to one line of this report. */
+  onDrillDown?: (category: string, subcategory: string) => void
 }
 
-export function PnLTab({ year, pnl }: PnLTabProps) {
+export function PnLTab({ year, pnl, onDrillDown }: PnLTabProps) {
   const [compare, setCompare] = useState(false)
   const [priorPnl, setPriorPnl] = useState<OwnerPnL | null>(null)
   const [loading, setLoading] = useState(false)
+
+  /**
+   * Drop the comparison when the YEAR changes.
+   *
+   * priorPnl is fetched against the year at click time, and this tab is not
+   * remounted when the year <select> navigates. Leaving it in place shows the
+   * PREVIOUS request's figures beside the new year — and the toggle relabels
+   * itself from the new `year`, so a 2025 comparison would sit under a button
+   * reading "Hide 2024 comparison". Wrong year, wrong label, on money.
+   * Turning it off is the honest reset: one click re-fetches for the new year.
+   */
+  useEffect(() => {
+    setCompare(false)
+    setPriorPnl(null)
+  }, [year])
 
   async function toggleCompare() {
     if (compare) { setCompare(false); return }
@@ -79,6 +96,7 @@ export function PnLTab({ year, pnl }: PnLTabProps) {
           block={block}
           prior={compare ? priorPnl?.blocks.find(b => b.currency === block.currency) ?? null : null}
           primary={block === pnl.blocks[0]}
+          onDrillDown={onDrillDown}
         />
       ))}
 
@@ -93,6 +111,7 @@ export function PnLTab({ year, pnl }: PnLTabProps) {
             block={emptyBlockFor(pb.currency)}
             prior={pb}
             primary={false}
+            onDrillDown={onDrillDown}
           />
         ))}
 
@@ -100,7 +119,7 @@ export function PnLTab({ year, pnl }: PnLTabProps) {
         Each currency is reported separately — amounts are never converted or mixed.
         Income comes from paid client invoices; bank transactions cover expenses and other income.
         Stripe&apos;s own processing fees are not booked yet (planned for a later phase).
-        Transfers between TD&apos;s own accounts (including Stripe payouts) are excluded — that money is already counted when the invoice was paid.
+        Transfers between your own accounts — including payouts from a payment processor — are excluded, because that money is already counted when the invoice was paid.
       </p>
     </div>
   )
@@ -111,15 +130,17 @@ function emptyBlockFor(currency: string): PnLBlock {
     currency, invoice_income: 0, other_income: 0, cogs: 0, gross_profit: 0,
     expenses: 0, net_profit: 0, distributions: 0, contributions: 0,
     uncategorized_income: 0, uncategorized_expense: 0, by_subcategory: {},
+    usd_rate: null,
     monthly: Array.from({ length: 12 }, (_, i) => ({ month: i + 1, income: 0, cogs: 0, expenses: 0, net: 0 })),
   }
 }
 
-function PnLCurrencyTable({ year, block, prior, primary }: {
+function PnLCurrencyTable({ year, block, prior, primary, onDrillDown }: {
   year: number
   block: PnLBlock
   prior: PnLBlock | null
   primary: boolean
+  onDrillDown?: (category: string, subcategory: string) => void
 }) {
   const fmt = fmtIn(block.currency)
   const hasUncategorized = block.uncategorized_income > 0 || block.uncategorized_expense > 0
@@ -131,6 +152,34 @@ function PnLCurrencyTable({ year, block, prior, primary }: {
     <div className="space-y-3">
       {!primary && (
         <h3 className="text-sm font-medium text-zinc-700">{block.currency} activity (unconverted)</h3>
+      )}
+
+      {/* THE DOLLAR VALUE OF A FOREIGN-CURRENCY YEAR.
+          This screen never mixes currencies, which is right — but it left the euro block
+          with no dollar figure at all, so the P&L shown was not the whole company and
+          could not be handed to whoever files. The rate here is not a lookup: it is the
+          rate the company ACTUALLY ACHIEVED converting this currency, taken from its own
+          conversion rows. Shown as a separate, clearly-labelled panel rather than merged
+          into the table, so the source figures stay in their own currency and the reader
+          can always see which number is converted and at what rate. */}
+      {!primary && block.usd_rate !== null && (
+        <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+            <span className="text-zinc-600">
+              In dollars, at the rate you actually achieved this year
+              {' '}({block.usd_rate.toFixed(4)} USD per {block.currency})
+            </span>
+            <span className="font-medium tabular-nums text-zinc-900">
+              income {fmtIn('USD')((block.invoice_income + block.other_income) * block.usd_rate)}
+              {' · '}
+              net {fmtIn('USD')(block.net_profit * block.usd_rate)}
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-zinc-400">
+            Derived from this year&apos;s own conversions, not a published table. A US return must be
+            filed in dollars, so this is the figure that carries across — the amounts above stay in {block.currency}.
+          </p>
+        </div>
       )}
 
       {hasUncategorized && (
@@ -158,9 +207,12 @@ function PnLCurrencyTable({ year, block, prior, primary }: {
           </thead>
           <tbody>
             <PnLSection label="Income" cols={showPrior ? 4 : 2} />
-            <PnLRow fmt={fmt} label="Client invoices (payments ledger)" value={block.invoice_income} prior={prior?.invoice_income} variancePct={showPrior ? pct(block.invoice_income, prior?.invoice_income) : undefined} indent />
+            <PnLRow fmt={fmt} label="Income from the invoice ledger" value={block.invoice_income} prior={prior?.invoice_income} variancePct={showPrior ? pct(block.invoice_income, prior?.invoice_income) : undefined} indent />
+            {/* "Other income" is what the Transactions tab, the Overview and the filed
+                return all call this category. Three surfaces naming one thing three
+                different ways is how a reader concludes there are three things. */}
             {(block.other_income !== 0 || (prior?.other_income ?? 0) !== 0) && (
-              <PnLRow fmt={fmt} label="Other income (rewards, bonuses)" value={block.other_income} prior={prior?.other_income} indent />
+              <PnLRow fmt={fmt} label="Other income" value={block.other_income} prior={prior?.other_income} indent />
             )}
             <PnLSection label="Cost of Goods Sold" cols={showPrior ? 4 : 2} />
             <PnLRow fmt={fmt} label="Contractors / COGS" value={-block.cogs} prior={prior ? -prior.cogs : undefined} indent />
@@ -192,14 +244,32 @@ function PnLCurrencyTable({ year, block, prior, primary }: {
         <div className="rounded-lg border border-zinc-200 bg-white p-4">
           <h3 className="mb-3 text-sm font-medium text-zinc-700">Expenses by Subcategory</h3>
           <div className="grid grid-cols-2 gap-x-8 gap-y-1.5 lg:grid-cols-3">
+            {/* Every line opens the transactions inside it. Before this the panel was
+                plain text: a total could be read but never checked, so each figure had to
+                be taken on trust. The category is carried alongside the subcategory
+                because a subcategory name is not unique across categories. */}
             {Object.entries(block.by_subcategory)
               .sort((a, b) => b[1] - a[1])
-              .map(([name, amount]) => (
-                <div key={name} className="flex justify-between text-sm">
-                  <span className="capitalize text-zinc-600">{name.replace(/_/g, ' ')}</span>
-                  <span className="tabular-nums text-zinc-800">{fmt(amount)}</span>
-                </div>
-              ))}
+              .map(([key, amount]) => {
+                const [category, subcategory] = key.includes('/') ? key.split('/') : ['', key]
+                const clickable = Boolean(onDrillDown && subcategory)
+                return (
+                  <div
+                    key={key}
+                    className={`flex justify-between text-sm ${clickable ? 'cursor-pointer rounded px-1 -mx-1 hover:bg-zinc-50' : ''}`}
+                    onClick={clickable ? () => onDrillDown!(category, subcategory) : undefined}
+                    role={clickable ? 'button' : undefined}
+                    tabIndex={clickable ? 0 : undefined}
+                    onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onDrillDown!(category, subcategory) } } : undefined}
+                    title={clickable ? 'Open these transactions' : undefined}
+                  >
+                    <span className={`capitalize ${clickable ? 'text-blue-600 hover:underline' : 'text-zinc-600'}`}>
+                      {subcategory.replace(/_/g, ' ')}
+                    </span>
+                    <span className="tabular-nums text-zinc-800">{fmt(amount)}</span>
+                  </div>
+                )
+              })}
           </div>
         </div>
       )}

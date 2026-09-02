@@ -48,6 +48,7 @@ docs/systems/td-communication.md|scripts/migrations/20260627-1400-comm-conversat
 docs/systems/pwa.md|public/dashboard-sw.js,public/portal-sw.js,public/manifest.webmanifest,public/portal/manifest.webmanifest,lib/push/,lib/hooks/use-sw-update.ts,components/dashboard/sw-register.tsx,components/shared/update-banner.tsx,components/dashboard/push-toggle.tsx,components/portal/portal-sw-register.tsx,app/offline/
 docs/systems/staff-notes.md|lib/notes/,app/api/crm/staff-notes/,components/dashboard/sticky-notes-layer.tsx,components/dashboard/notes-board.tsx,components/dashboard/notes-calendar.tsx,app/(dashboard)/notes/
 docs/systems/td-books.md|lib/owner-finance.ts,app/api/owner/,app/(dashboard)/owner/
+docs/systems/td-books-ledger-plan.md|lib/owner-books-rules.ts,lib/owner-statement-import.ts,scripts/load-owner-statement.ts,scripts/apply-owner-books-rules.ts
 docs/systems/research-console.md|lib/research/,components/research/,app/api/research/,app/(dashboard)/research/,scripts/migrations/20260817-1900-research-saved-searches.sql,scripts/migrations/20260817-2118-research-saved-searches-multi-entity.sql
 docs/systems/portal-chat-unread.md|app/api/portal/chat/read/route.ts,lib/portal/mark-thread-read.ts
 docs/systems/portal-chats.md|app/(dashboard)/portal-chats/page.tsx

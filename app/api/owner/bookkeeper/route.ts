@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isAdmin } from '@/lib/auth'
+import { isOwnerOnly } from '@/lib/auth'
 import { NextResponse } from 'next/server'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic'
 export async function GET(req: Request) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) {
+  if (!user || !isOwnerOnly(user)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
@@ -28,8 +28,19 @@ export async function GET(req: Request) {
     return NextResponse.json({ items: itemData ?? [] })
   }
 
+  // Optional year filter. The /owner page has a year selector that governs every
+  // other tab; without this the Bookkeeper tab ignored it entirely and always
+  // returned every review from every year — a control that looked like it
+  // filtered and did nothing. An unparseable/absent year means NO filter (the
+  // previous behaviour), never an accidental year 0 that would match nothing.
+  const yearParam = searchParams.get('year')
+  const year = yearParam !== null && /^\d{4}$/.test(yearParam) ? Number(yearParam) : null
+
+  let reviewsQuery = db.from('bookkeeper_reviews').select('*').order('tax_year', { ascending: false })
+  if (year !== null) reviewsQuery = reviewsQuery.eq('tax_year', year)
+
   const [reviewsRes, countsRes] = await Promise.all([
-    db.from('bookkeeper_reviews').select('*').order('tax_year', { ascending: false }),
+    reviewsQuery,
     db.from('bookkeeper_review_items').select('review_id, status'),
   ])
 
@@ -53,7 +64,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) {
+  if (!user || !isOwnerOnly(user)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
