@@ -68,7 +68,6 @@ const WAKE_QUERY_KEYS = [
   // Portal chats — the thread list AND the conversation currently on screen.
   'portal-chat-threads',
   'portal-chat-messages',
-  'portal-chat-issue-counts',
   'portal-chat-whats-new-counts',
   'portal-chat-thread-tasks',
   // Team workspace — the DM list AND the open thread.

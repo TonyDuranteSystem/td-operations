@@ -8,7 +8,7 @@ import {
   ArrowLeft, Building2, User, Users, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
-  Pencil, Plus, Search, Loader2, Stethoscope, X, Activity, BadgeCheck, Send,
+  Pencil, Plus, Search, Loader2, X, Activity, BadgeCheck, Send,
   Rocket, Upload, Hash, DollarSign, ListOrdered, Bell,
 } from 'lucide-react'
 import { ACCOUNT_TYPE } from '@/lib/constants'
@@ -35,7 +35,6 @@ import { AccountEmailsCard } from './account-emails-card'
 import type { ResolvedFlow } from '@/lib/flows/resolve-flows'
 import { DeactivateServiceButton, ReactivateServiceButton } from './service-status-actions'
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
-import { ClientDiagnosticDialog } from '@/app/(dashboard)/accounts/[id]/components/client-diagnostic-dialog'
 import { FileManager } from './file-manager'
 import { AccountDocumentsList } from './account-documents-list'
 import { CorrespondenceUpload } from './correspondence-upload'
@@ -625,7 +624,6 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
     termEndDate?: string | null
   } | null>(null)
   const [showPlaceClient, setShowPlaceClient] = useState(false)
-  const [showDiagnostic, setShowDiagnostic] = useState(false)
   const [showStatusDialog, setShowStatusDialog] = useState(false)
   const [showEINReceived, setShowEINReceived] = useState(false)
   const [promoting, setPromoting] = useState(false)
@@ -702,13 +700,6 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
               }
               linkLabel={account.company_name}
             />
-            <button
-              onClick={() => setShowDiagnostic(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
-            >
-              <Stethoscope className="h-3.5 w-3.5" />
-              Diagnose
-            </button>
             <WorkflowIssuesLink accountId={account.id} />
             <button
               onClick={() => setShowPlaceClient(true)}
@@ -862,12 +853,6 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
         contactName={primaryContact?.full_name || ''}
         ein={account.ein_number}
         formationDate={account.formation_date}
-      />
-      <ClientDiagnosticDialog
-        open={showDiagnostic}
-        onClose={() => setShowDiagnostic(false)}
-        accountId={account.id}
-        companyName={account.company_name}
       />
       <StatusChangeDialog
         open={showStatusDialog}
