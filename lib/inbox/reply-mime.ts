@@ -1,5 +1,5 @@
 import { encodeAddressHeader } from "@/lib/gmail"
-import { escapeHtml } from "@/lib/inbox/email-quote"
+import { escapeHtml, splitQuotedText } from "@/lib/inbox/email-quote"
 
 export interface ReplyMimeAttachment {
   /** Already sanitized/RFC 2047-encoded by the staging loader — safe in headers. */
@@ -9,11 +9,30 @@ export interface ReplyMimeAttachment {
   contentType?: string
 }
 
+/** One prior message in the thread, for `quoteMode: 'thread'`. Ordered oldest-first by the caller. */
+export interface ThreadQuoteEntry {
+  /** Raw From header of the message (attribution author) */
+  from: string
+  /** Raw Date header ('' when unknown) */
+  date: string
+  /** Plain-text body, already stripped of its OWN nested quoted history
+   *  (lib/inbox/email-quote.ts's splitQuotedText) — otherwise each message's
+   *  raw body already contains every message before it, and stacking N raw
+   *  bodies duplicates most of the thread's content. */
+  body: string
+}
+
 export interface BuildReplyMimeInput {
   /** Sending mailbox address (From) */
   asUser: string
-  /** Raw To value (decoded, as returned by the Gmail API) */
-  replyTo: string
+  /**
+   * Recipient(s). A single string keeps the exact historical behavior
+   * (display name preserved via RFC 2047, one address). An array is the new
+   * multi-recipient case (replying to a sent message that went to more than
+   * one person) — bare lowercase addresses only, joined like Cc, no
+   * per-address name encoding to get wrong.
+   */
+  replyTo: string | string[]
   /** Final subject (already Re:-prefixed) */
   subject: string
   /** Message-ID of the message being replied to */
@@ -28,6 +47,14 @@ export interface BuildReplyMimeInput {
   lastDate: string
   /** Raw From header of the last message (for the attribution line) */
   lastFrom: string
+  /**
+   * 'message' (default, when omitted) — quote only lastBody, today's
+   * behavior. 'thread' — quote every entry in `threadQuotes` instead (whole
+   * conversation). 'none' — no quote block at all, regardless of lastBody.
+   */
+  quoteMode?: "message" | "thread" | "none"
+  /** Required when quoteMode is 'thread'; ignored otherwise. Oldest-first. */
+  threadQuotes?: ThreadQuoteEntry[]
   /** Boundary override for deterministic tests */
   boundary?: string
   /** Staged file attachments (loaded server-side from the private bucket). */
@@ -53,6 +80,32 @@ export interface BuildReplyMimeInput {
   cc?: string[]
 }
 
+/** A single "On <date>, <author> wrote:" + blockquote block, plain + HTML. */
+function buildQuoteBlock(from: string, date: string, body: string): { plain: string; html: string } {
+  const quoteDate = date
+    ? new Date(date).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })
+    : ""
+  const attribution = `On ${quoteDate}, ${from} wrote:`
+  const plain =
+    `\r\n\r\n${attribution}\r\n` +
+    body
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\r\n")
+  const html =
+    `<div class="gmail_quote" style="margin-top:16px">` +
+    `<div style="color:#5f6368">${escapeHtml(attribution)}</div>` +
+    `<blockquote style="margin:0 0 0 0.8ex;border-left:1px solid #ccc;padding-left:1ex;color:#5f6368">` +
+    escapeHtml(body).replace(/\r?\n/g, "<br />") +
+    `</blockquote></div>`
+  return { plain, html }
+}
+
+/** Total characters across every quoted body in 'thread' mode — a long
+ *  back-and-forth must not build an unbounded MIME payload. Per-message cap
+ *  (10,000 chars) is enforced by the caller, same as 'message' mode today. */
+const THREAD_QUOTE_TOTAL_CHAR_CAP = 40_000
+
 /**
  * Build the raw RFC 2822 reply exactly the way Gmail composes one:
  * multipart/alternative (text/plain with "> "-quoted history + text/html
@@ -74,29 +127,34 @@ export function buildReplyMime(input: BuildReplyMimeInput): string {
     lastFrom,
   } = input
 
+  const quoteMode = input.quoteMode ?? "message"
   let quotedPlain = ""
   let quotedHtml = ""
-  if (lastBody) {
-    const quoteDate = lastDate
-      ? new Date(lastDate).toLocaleString("en-US", {
-          dateStyle: "medium",
-          timeStyle: "short",
-        })
-      : ""
-    const attribution = `On ${quoteDate}, ${lastFrom} wrote:`
-    quotedPlain =
-      `\r\n\r\n${attribution}\r\n` +
-      lastBody
-        .split("\n")
-        .map((line) => `> ${line}`)
-        .join("\r\n")
-    quotedHtml =
-      `<div class="gmail_quote" style="margin-top:16px">` +
-      `<div style="color:#5f6368">${escapeHtml(attribution)}</div>` +
-      `<blockquote style="margin:0 0 0 0.8ex;border-left:1px solid #ccc;padding-left:1ex;color:#5f6368">` +
-      escapeHtml(lastBody).replace(/\r?\n/g, "<br />") +
-      `</blockquote></div>`
+  if (quoteMode === "message" && lastBody) {
+    const block = buildQuoteBlock(lastFrom, lastDate, lastBody)
+    quotedPlain = block.plain
+    quotedHtml = block.html
+  } else if (quoteMode === "thread" && input.threadQuotes?.length) {
+    let remaining = THREAD_QUOTE_TOTAL_CHAR_CAP
+    for (const entry of input.threadQuotes) {
+      if (remaining <= 0) break
+      // Strip each entry's OWN nested quoted history — enforced HERE,
+      // internally, rather than trusting every caller to pre-strip: an
+      // ordinary mail client's reply body already embeds everything before
+      // it, so a caller that forgets this (as the reply route originally
+      // did for the target message's own entry — dev job 208f39ad,
+      // bug-hunter pass) would otherwise duplicate most of the thread.
+      // Idempotent on an already-stripped entry — splitQuotedText just
+      // finds nothing further to split off.
+      const stripped = splitQuotedText(entry.body).main.trimEnd()
+      const body = stripped.length > remaining ? stripped.slice(0, remaining) : stripped
+      remaining -= body.length
+      const block = buildQuoteBlock(entry.from, entry.date, body)
+      quotedPlain += block.plain
+      quotedHtml += block.html
+    }
   }
+  // quoteMode === "none" -> both stay empty regardless of lastBody.
 
   // The signature is pre-built HTML from lib/email/signature.ts, NOT user
   // input, so it is concatenated rather than escaped — unlike `message`,
@@ -128,7 +186,7 @@ export function buildReplyMime(input: BuildReplyMimeInput): string {
 
   const headers = [
     `From: ${input.fromName ? `${input.fromName} <${asUser}>` : asUser}`,
-    `To: ${encodeAddressHeader(replyTo)}`,
+    `To: ${Array.isArray(replyTo) ? replyTo.join(", ") : encodeAddressHeader(replyTo)}`,
     ...(input.cc && input.cc.length > 0 ? [`Cc: ${input.cc.join(", ")}`] : []),
     `Subject: ${encodedSubject}`,
     `In-Reply-To: ${inReplyTo}`,

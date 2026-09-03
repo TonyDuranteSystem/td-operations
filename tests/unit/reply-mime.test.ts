@@ -185,3 +185,116 @@ describe('buildReplyMime — Reply-All Cc', () => {
     expect(ccIdx).toBeLessThan(subjectIdx)
   })
 })
+
+describe('buildReplyMime — multi-recipient To (replying to our own sent message)', () => {
+  it('a single-string replyTo keeps the exact historical encoded shape, byte-for-byte', () => {
+    // Regression guard: the array branch must be additive, never change the
+    // existing single-recipient path used by every ordinary inbound reply.
+    expect(buildReplyMime(base)).toBe(buildReplyMime({ ...base, replyTo: base.replyTo }))
+  })
+
+  it('an array of addresses joins them plainly in To, like Cc — no per-address encoding to get wrong', () => {
+    const raw = buildReplyMime({ ...base, replyTo: ['dragos@payset.io', 'jane@example.com'] })
+    const headerBlock = raw.slice(0, raw.indexOf('\r\n\r\n'))
+    expect(headerBlock).toContain('To: dragos@payset.io, jane@example.com')
+  })
+
+  it('a single-element array still works (just no display-name encoding, unlike the string form)', () => {
+    const raw = buildReplyMime({ ...base, replyTo: ['dragos@payset.io'] })
+    const headerBlock = raw.slice(0, raw.indexOf('\r\n\r\n'))
+    expect(headerBlock).toContain('To: dragos@payset.io')
+  })
+})
+
+describe('buildReplyMime — quoteMode', () => {
+  it('omitting quoteMode behaves exactly like "message" (default, unchanged)', () => {
+    expect(buildReplyMime(base)).toBe(buildReplyMime({ ...base, quoteMode: 'message' }))
+  })
+
+  it('"none" produces no quote block even though lastBody is set', () => {
+    const raw = buildReplyMime({ ...base, quoteMode: 'none' })
+    const plain = decodePart(raw, 'text/plain')
+    expect(plain).not.toContain('wrote:')
+    expect(plain).not.toContain(base.lastBody)
+    const html = decodePart(raw, 'text/html')
+    expect(html).not.toContain('gmail_quote')
+  })
+
+  it('"thread" quotes every entry in threadQuotes, oldest-first, each with its own attribution', () => {
+    const raw = buildReplyMime({
+      ...base,
+      quoteMode: 'thread',
+      threadQuotes: [
+        { from: 'Client One <client1@x.com>', date: 'Mon, 1 Sep 2026 09:00:00 -0400', body: 'First message.' },
+        { from: 'support@tonydurante.us', date: 'Mon, 1 Sep 2026 10:00:00 -0400', body: 'Our reply.' },
+        { from: base.lastFrom, date: base.lastDate, body: base.lastBody },
+      ],
+    })
+    const plain = decodePart(raw, 'text/plain')
+    // All three appear, in order (first message's index precedes the others').
+    const iFirst = plain.indexOf('First message.')
+    const iOurReply = plain.indexOf('Our reply.')
+    // lastBody is multi-line and gets "> "-prefixed per line by the quote
+    // builder, so its ORIGINAL (unprefixed) text is no longer a literal
+    // substring — search for its distinctive single-line tail instead.
+    const iLast = plain.indexOf('Could you explain the difference?')
+    expect(iFirst).toBeGreaterThan(-1)
+    expect(iOurReply).toBeGreaterThan(iFirst)
+    expect(iLast).toBeGreaterThan(iOurReply)
+    // Each has its own attribution line.
+    expect(plain).toContain('Client One <client1@x.com> wrote:')
+    expect(plain).toContain('support@tonydurante.us wrote:')
+  })
+
+  it('"thread" with an empty threadQuotes array quotes nothing (defensive — caller should pass "none" instead, but must not crash or fall back to lastBody)', () => {
+    const raw = buildReplyMime({ ...base, quoteMode: 'thread', threadQuotes: [] })
+    const plain = decodePart(raw, 'text/plain')
+    expect(plain).not.toContain('wrote:')
+  })
+
+  it('"thread" mode caps total quoted length across all entries so a very long conversation cannot build an unbounded payload', () => {
+    const huge = 'x'.repeat(30_000)
+    const raw = buildReplyMime({
+      ...base,
+      quoteMode: 'thread',
+      threadQuotes: [
+        { from: 'a@x.com', date: '', body: huge },
+        { from: 'b@x.com', date: '', body: huge },
+      ],
+    })
+    const plain = decodePart(raw, 'text/plain')
+    // Second entry's body must have been truncated well short of a full 30,000 chars.
+    const secondBodyStart = plain.indexOf('b@x.com wrote:')
+    expect(secondBodyStart).toBeGreaterThan(-1)
+    expect(plain.length).toBeLessThan(90_000) // well under 2x30,000+overhead
+  })
+
+  // dev job 208f39ad, bug-hunter pass: a caller (the reply route) originally
+  // appended the target message's OWN raw body as the final thread-quote
+  // entry without stripping ITS nested quote first — every other entry was
+  // stripped, that one wasn't, duplicating most of the thread. Fixed by
+  // stripping unconditionally inside buildReplyMime itself so no caller can
+  // forget it.
+  it('strips EVERY thread-quote entry\'s own nested quoted history, including one a caller forgot to pre-strip — the earlier content it embeds must not be duplicated', () => {
+    // A realistic mail-client reply body: fresh text on top, then that
+    // message's OWN embedded quote of everything before it — exactly the
+    // shape splitQuotedText exists to detect and remove.
+    const alreadyNested =
+      'Thanks for the update.\n\nOn Mon, 1 Sep 2026, Someone wrote:\n> Earlier message content that must not appear twice.'
+    const raw = buildReplyMime({
+      ...base,
+      quoteMode: 'thread',
+      threadQuotes: [
+        { from: 'client@x.com', date: 'Mon, 1 Sep 2026 09:00:00 -0400', body: alreadyNested },
+      ],
+    })
+    const plain = decodePart(raw, 'text/plain')
+    // The fresh part of the message survives.
+    expect(plain).toContain('Thanks for the update.')
+    // The embedded quote of earlier content is REMOVED, not carried through
+    // — a caller passing an unstripped body must not ship duplicated
+    // history (the exact bug: appending it raw repeated earlier messages a
+    // second time, nested inside this one).
+    expect(plain).not.toContain('Earlier message content that must not appear twice.')
+  })
+})

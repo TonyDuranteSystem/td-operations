@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
     const denied = await requireStaffRoute()
     if (denied) return denied
 
-    const { conversationId, message, mailbox, signature_variant, messageId: targetMessageId, mode } =
+    const { conversationId, message, mailbox, signature_variant, messageId: targetMessageId, mode, to: toOverrideRaw } =
       (await req.json()) as {
         conversationId?: string
         message?: string
@@ -46,6 +46,7 @@ export async function POST(req: NextRequest) {
         signature_variant?: string
         messageId?: string
         mode?: "reply" | "replyAll"
+        to?: string[]
       }
 
     if (!conversationId?.startsWith("gmail:") || !message?.trim()) {
@@ -53,6 +54,20 @@ export async function POST(req: NextRequest) {
         { error: "conversationId (gmail) and message are required" },
         { status: 400 }
       )
+    }
+
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    const toOverride = Array.isArray(toOverrideRaw)
+      ? toOverrideRaw.map((a) => String(a).trim().toLowerCase()).filter(Boolean)
+      : undefined
+    if (toOverride) {
+      if (toOverride.length === 0) {
+        return NextResponse.json({ error: "At least one recipient is required." }, { status: 400 })
+      }
+      const bad = toOverride.find((a) => !EMAIL_RE.test(a))
+      if (bad) {
+        return NextResponse.json({ error: `"${bad}" doesn't look like a valid email address.` }, { status: 400 })
+      }
     }
 
     // Same admin-only gate as reply/compose: antonio@ is his PERSONAL mailbox.
@@ -75,14 +90,15 @@ export async function POST(req: NextRequest) {
     // draft and its eventual send must target the identical message.
     let target
     try {
-      target = await resolveReplyTarget({ threadId, messageId: targetMessageId, mode, asUser })
+      target = await resolveReplyTarget({ threadId, messageId: targetMessageId, mode, asUser, toOverride })
     } catch (err) {
       if (err instanceof ReplyTargetError) {
         return NextResponse.json({ error: err.message }, { status: err.status })
       }
       throw err
     }
-    const { from, subject, messageIdHeader: messageId, references, cc } = target
+    const { replyToAddresses, quotedFrom, subject, messageIdHeader: messageId, references, cc } = target
+    const replyTo = replyToAddresses.length === 1 ? replyToAddresses[0] : replyToAddresses
 
     const signatureSender = signatureSenderForAddress(asUser)
     const signatureVariant = parseSignatureVariant(
@@ -102,14 +118,14 @@ export async function POST(req: NextRequest) {
     // is opened in its own composer, and doubling it reads broken.
     const raw = buildReplyMime({
       asUser,
-      replyTo: from,
+      replyTo,
       subject: subject.startsWith("Re:") ? subject : `Re: ${subject}`,
       inReplyTo: messageId,
       references,
       message,
       lastBody: "",
       lastDate: "",
-      lastFrom: from,
+      lastFrom: quotedFrom,
       signature,
       fromName: signatureFromName(signatureSender),
       cc,
