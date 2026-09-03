@@ -437,6 +437,46 @@ describe('computeOwnerPnL — the expenses breakdown is expenses only', () => {
   })
 })
 
+describe('computeOwnerPnL — a refund reconciles the subcategory breakdown, not just the total', () => {
+  const income: InvoiceIncomeRow[] = []
+
+  it('nets a refund into its OWN honest line, so the breakdown sums back to the total', () => {
+    const pnl = computeOwnerPnL([
+      makeTx({ category: 'expense', subcategory: 'office_improvement', amount: -1196.66 }),
+      makeTx({ category: 'refund', subcategory: 'vendor_refund', amount: 890.87 }),
+    ], computeInvoiceIncome(income, 2025), 2025)
+    const b = pnl.blocks[0]
+    // The aggregate total was already correct before this fix.
+    expect(b.expenses).toBeCloseTo(1196.66 - 890.87, 2)
+    // What was missing: the refund's own line, signed so it reduces the sum.
+    expect(b.by_subcategory['refund/vendor_refund']).toBeCloseTo(-890.87, 2)
+    expect(b.by_subcategory['expense/office_improvement']).toBeCloseTo(1196.66, 2)
+    const breakdownSum = Object.values(b.by_subcategory).reduce((s, v) => s + v, 0)
+    expect(breakdownSum).toBeCloseTo(b.cogs + b.expenses, 2)
+  })
+
+  it('does not touch by_subcategory when a refund reduces INCOME instead of expenses', () => {
+    // amt < 0 reverses money received, not a payment made — outside the Expenses
+    // by Subcategory panel entirely, same as before this fix.
+    const pnl = computeOwnerPnL([
+      makeTx({ category: 'refund', subcategory: 'client_refund', amount: -500 }),
+    ], computeInvoiceIncome(income, 2025), 2025)
+    const b = pnl.blocks[0]
+    expect(b.other_income).toBeCloseTo(-500, 2)
+    expect(b.by_subcategory).toEqual({})
+  })
+
+  it('keeps two different refund subcategories on their own separate lines', () => {
+    const pnl = computeOwnerPnL([
+      makeTx({ category: 'refund', subcategory: 'vendor_refund', amount: 53.49 }),
+      makeTx({ category: 'refund', subcategory: 'merchant_refund', amount: 150 }),
+    ], computeInvoiceIncome(income, 2025), 2025)
+    const b = pnl.blocks[0]
+    expect(b.by_subcategory['refund/vendor_refund']).toBeCloseTo(-53.49, 2)
+    expect(b.by_subcategory['refund/merchant_refund']).toBeCloseTo(-150, 2)
+  })
+})
+
 describe('computeOwnerPnL — the achieved FX rate', () => {
   const income: InvoiceIncomeRow[] = []
   const conv = (cur: string, amt: number) =>
