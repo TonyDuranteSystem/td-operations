@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { applyVendorRulesTo, normalizeVendorKey, type VendorRule } from '@/lib/owner-vendor-match'
-import type { OwnerTransaction, OwnerCategory } from '@/lib/owner-finance'
+import { formatOwnerCurrency, type OwnerTransaction, type OwnerCategory } from '@/lib/owner-finance'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const CATEGORIES: OwnerCategory[] = ['income', 'cogs', 'expense', 'distribution', 'contribution', 'transfer', 'fee', 'conversion', 'refund', 'uncategorized']
@@ -100,7 +100,7 @@ const SUBCATEGORIES: Record<string, { value: string; label: string }[]> = {
 
 /** Row amounts render in the ROW's currency — a €500 line must never display as $500. */
 const fmtRow = (n: number, currency: string | null) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: currency || 'USD', maximumFractionDigits: 0 }).format(Math.abs(n))
+  formatOwnerCurrency(Math.abs(n), currency, { maximumFractionDigits: 0 })
 
 interface TransactionsTabProps {
   year: number

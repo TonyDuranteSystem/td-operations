@@ -1,19 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { CASH_ACCOUNT_TYPES, type OwnerAccount } from '@/lib/owner-finance'
+import { CASH_ACCOUNT_TYPES, formatOwnerCurrency, type OwnerAccount } from '@/lib/owner-finance'
 
-/** A currency code from the database is not guaranteed to be valid ISO — the column has no
- *  CHECK and the registry is written by hand. A bad code makes Intl throw, which would
- *  blank the entire tab rather than one figure. */
-const money = (n: number, currency?: string | null) => {
-  const code = (currency || 'USD').trim().toUpperCase()
-  try {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: code, minimumFractionDigits: 2 }).format(n)
-  } catch {
-    return `${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2 }).format(n)} ${code}`
-  }
-}
+const money = (n: number, currency?: string | null) =>
+  formatOwnerCurrency(n, currency, { minimumFractionDigits: 2 })
 
 const SOURCE_WORDS: Record<string, string> = {
   statement: "the account's own statement",

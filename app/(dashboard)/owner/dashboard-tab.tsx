@@ -1,12 +1,11 @@
 'use client'
 
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
-import type { OwnerPnL, PnLBlock, CashPosition } from '@/lib/owner-finance'
+import { formatOwnerCurrency, type OwnerPnL, type PnLBlock, type CashPosition } from '@/lib/owner-finance'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-const fmtIn = (currency: string) => (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(n)
+const fmtIn = (currency: string) => (n: number) => formatOwnerCurrency(n, currency, { maximumFractionDigits: 0 })
 const fmt = fmtIn('USD')
 
 const EMPTY_BLOCK: PnLBlock = {
