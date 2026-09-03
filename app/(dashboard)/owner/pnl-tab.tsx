@@ -1,10 +1,9 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import type { OwnerPnL, PnLBlock } from '@/lib/owner-finance'
+import { formatOwnerCurrency, type OwnerPnL, type PnLBlock } from '@/lib/owner-finance'
 
-const fmtIn = (currency: string) => (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(n)
+const fmtIn = (currency: string) => (n: number) => formatOwnerCurrency(n, currency, { maximumFractionDigits: 0 })
 
 interface PnLTabProps {
   year: number

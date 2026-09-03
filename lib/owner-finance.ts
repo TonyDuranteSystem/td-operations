@@ -291,6 +291,25 @@ function yearOf(dateStr: string): number {
 }
 
 /**
+ * Format an amount as currency without ever throwing. A currency code from the
+ * database has no CHECK constraint and the account/transaction registries are
+ * populated by hand, so an empty or malformed code must fall back to a plain
+ * number plus the raw code string — not crash whichever tab renders it.
+ */
+export function formatOwnerCurrency(
+  amount: number,
+  currency: string | null | undefined,
+  options?: Intl.NumberFormatOptions
+): string {
+  const code = (currency || 'USD').trim().toUpperCase()
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: code, ...options }).format(amount)
+  } catch {
+    return `${new Intl.NumberFormat('en-US', options).format(amount)} ${code}`
+  }
+}
+
+/**
  * Income from the payments/invoice ledger — PURE, unit-tested. Cash method: money counts
  * in the year/month it was RECEIVED (paid_date). Rules:
  * - only real cash: amount_paid > 0, test rows excluded by the caller's query

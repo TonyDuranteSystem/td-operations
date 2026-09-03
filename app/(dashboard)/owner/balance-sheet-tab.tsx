@@ -1,18 +1,9 @@
 'use client'
 
-import type { BalanceSheet, BalanceSheetLine } from '@/lib/owner-finance'
+import { formatOwnerCurrency, type BalanceSheet, type BalanceSheetLine } from '@/lib/owner-finance'
 
-/** A currency code from the database is not guaranteed to be a valid ISO code — the column
- *  has no CHECK and the registry is populated by hand. An empty or bad code makes
- *  Intl.NumberFormat THROW, which would blank the whole page rather than one figure. */
-const money = (n: number, currency?: string | null) => {
-  const code = (currency || 'USD').trim().toUpperCase()
-  try {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: code, minimumFractionDigits: 2 }).format(n)
-  } catch {
-    return `${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2 }).format(n)} ${code}`
-  }
-}
+const money = (n: number, currency?: string | null) =>
+  formatOwnerCurrency(n, currency, { minimumFractionDigits: 2 })
 
 /** The database stores provenance as a short code. Printing it raw produced the line
  *  "Balance from derived." — the reader is owed a sentence, not a column value. */
