@@ -6,7 +6,7 @@
  * provenance taxonomy, and a deliberately-broken draft (invariant must fail).
  */
 import { describe, it, expect } from 'vitest'
-import { buildValidationBreakdown, classifyProvenance, type ValidationRow } from '@/lib/tax/validation-breakdown'
+import { buildValidationBreakdown, classifyProvenance, matchesMemberName, type ValidationRow } from '@/lib/tax/validation-breakdown'
 import { buildFinancialDraft, type DraftTransaction } from '@/lib/tax/financials-engine'
 import type { PriorReturnCaseRecord } from '@/lib/tax/prior-return-case'
 import type { OwnershipResolution } from '@/lib/tax/ownership-resolution'
@@ -38,6 +38,35 @@ function build(rows: Array<ValidationRow & DraftTransaction>, fxRates?: Record<s
   const breakdown = buildValidationBreakdown({ rows, draft, fxRates, priorReturn: prior, ownership: NO_OWNERS, memberNames: [] })
   return { draft, breakdown }
 }
+
+/**
+ * REGRESSION (2026-09-03). matchesMemberName's own docstring says it must
+ * mirror the categorizer's decision exactly, "or rows leak between the two
+ * views" — so it has to change in lockstep with the categorizer's
+ * corporate-card fix, using the same matchMemberForTransaction.
+ */
+describe('matchesMemberName — must mirror the categorizer exactly', () => {
+  it('does NOT exclude a corporate-card purchase as a related-party/owner row', () => {
+    expect(matchesMemberName(
+      { description: 'FBC Consulting & Services | Spend | business service - Sent By Donato Ciardo', counterparty: 'FBC Consulting & Services' },
+      ['Donato Ciardo'],
+    )).toBe(false)
+  })
+
+  it('still excludes a genuine wire made out to the member', () => {
+    expect(matchesMemberName(
+      { description: 'Wire transfer', counterparty: 'Donato Renato Berini' },
+      ['Donato Renato Berini'],
+    )).toBe(true)
+  })
+
+  it('still excludes a blank-counterparty plain wire naming the member in the description', () => {
+    expect(matchesMemberName(
+      { description: 'Peter Czegle', counterparty: '' },
+      ['Peter Czegle'],
+    )).toBe(true)
+  })
+})
 
 describe('classifyProvenance (marker taxonomy)', () => {
   const cases: Array<[string | null, string, string]> = [

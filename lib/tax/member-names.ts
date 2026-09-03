@@ -209,9 +209,22 @@ function containsWholePhrase(hay: string, needle: string): boolean {
 }
 
 /**
- * Markers separating the PAYEE from the payment reference. A member's name
- * after one of these describes what the payment was FOR, not who received it.
+ * Markers separating the PAYEE from a payment reference. A member's name
+ * after one of these describes what the payment was for, not who received it.
  * Normalised form (lowercase, no punctuation), matched on word boundaries.
+ *
+ * DELIBERATELY NOT WHERE THE RELAY CARD-TYPE LABEL LIVES (2026-09-03,
+ * bug-hunter finding, second round): an earlier version of this fix added
+ * bare words "spend"/"receive" here. Unlike every marker below — technical
+ * reference-field labels a person never types in a sentence — "spend" and
+ * "receive" are ordinary English verbs. TD's client base writes wire memos in
+ * plain, often non-native English, so a genuine inflow like "To receive
+ * urgent funds from Marco Rossi" with no counterparty to fall back on would
+ * have its payee cut away by a bare word-boundary marker — reopening the
+ * exact 2026-07-07 Dynamiq failure (a real member payment silently missed)
+ * this whole mechanism exists to prevent. See stripRelayCardLabel below for
+ * where that case is actually handled: on the RAW, un-normalised structural
+ * shape, not as a word in this list.
  */
 const REFERENCE_MARKERS = [
   "with reference", "reference", "ref", "causale", "concepto", "concept",
@@ -219,12 +232,40 @@ const REFERENCE_MARKERS = [
 ]
 
 /**
+ * Relay's own card-transaction shape: "{Vendor} | Spend | ..." or
+ * "{Vendor} | Receive | ...". A member's name after this label is whoever
+ * held the card, never the payee — the real vendor is always the text before
+ * it (confirmed against 281 real rows across three companies: FBC Consulting
+ * & Services, Airbnb, TikTok, Wolt, dozens of everyday merchants — every one
+ * had a clean, distinct vendor name in the counterparty field already).
+ *
+ * MATCHED ON THE LITERAL PIPE STRUCTURE, NOT AS A BARE WORD (2026-09-03,
+ * bug-hunter finding, second round) — "|" survives on the raw text handed in
+ * here but is destroyed by normalizeForMatch (collapsed to a space) before
+ * payeePart ever runs its marker search, so this check MUST happen first, on
+ * un-normalised text. Requiring the literal "|...|" bracketing means this can
+ * only fire on Relay's actual card-export template — never on an ordinary
+ * sentence that happens to contain the English word "spend" or "receive",
+ * and never on a real vendor whose own name happens to start with either word
+ * ("Spend Club | Spend | ..." still keeps "Spend Club" as the vendor half,
+ * because the match anchors on the SECOND occurrence, the pipe-bounded one).
+ */
+const RELAY_CARD_LABEL = /\|\s*(spend|receive)\s*\|/i
+
+/** Cuts Relay's card-type label (and everything after it) off the RAW text, before normalisation. */
+function stripRelayCardLabel(text: string): string {
+  const at = text.search(RELAY_CARD_LABEL)
+  return at === -1 ? text : text.slice(0, at)
+}
+
+/**
  * The part of the line that identifies WHO was paid — everything before the
- * first payment-reference marker. Returns the whole normalised line when there
- * is no marker (the common case: "Sent money to Enrico Berini").
+ * first payment-reference marker (and before Relay's own card-type label, if
+ * present). Returns the whole normalised line when there is no marker (the
+ * common case: "Sent money to Enrico Berini").
  */
 export function payeePart(text: string | null | undefined): string {
-  const hay = normalizeForMatch(text)
+  const hay = normalizeForMatch(text ? stripRelayCardLabel(text) : text)
   if (!hay) return ""
   let cut = hay.length
   for (const marker of REFERENCE_MARKERS) {
@@ -240,6 +281,32 @@ export function payeePart(text: string | null | undefined): string {
   // With no payee half to read, search the WHOLE line: the worst case is one
   // extra question for the client, against a wrong number nobody sees.
   return head || hay
+}
+
+/**
+ * THE ONE PLACE that decides whether a transaction belongs to a member — for
+ * categorisation (bank-statement-parser.ts) AND for the related-party
+ * exclusion (validation-breakdown.ts), which must reach the same answer or
+ * rows leak between the two views.
+ *
+ * The counterparty is checked RAW, never stripped through payeePart: a wire
+ * genuinely made out to a member must always be caught even with nothing else
+ * to go on (2026-07-07 Dynamiq incident — 35 plain wires sat unbooked because
+ * the old rule required the word "dividend" in the text; this whole mechanism
+ * exists to keep catching those). The description is checked only through
+ * payeePart, because banks routinely name a member in the description for a
+ * reason that has nothing to do with who was paid — a payment reference, or
+ * (2026-09-03) a corporate card-holder / wire-initiator label — while the
+ * counterparty field already correctly named the real vendor. Checking cp raw
+ * first means a genuine wire (member IS the counterparty) always wins over a
+ * coincidental name in the description.
+ */
+export function matchMemberForTransaction(
+  description: string | null | undefined,
+  counterparty: string | null | undefined,
+  memberNames: string[],
+): string | null {
+  return matchMemberName(counterparty, memberNames) ?? matchMemberName(payeePart(description), memberNames)
 }
 
 /**
