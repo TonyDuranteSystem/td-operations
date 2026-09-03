@@ -473,6 +473,22 @@ export function computeOwnerPnL(
         if (amt > 0) {
           b.expenses -= amt
           b.monthly[month].expenses -= amt
+          // The aggregate total above is now correct, but without this the
+          // "Expenses by Subcategory" panel never reflects the reduction — it only
+          // accumulates rows in EXPENSE_BREAKDOWN_CATEGORIES ('cogs'/'expense'/'fee'),
+          // and 'refund' is deliberately not in that set (see EXPENSE_BREAKDOWN_CATEGORIES'
+          // own comment: an allowlist, not a denylist). That left the two panels
+          // disagreeing by the refund's amount on every real screen.
+          //
+          // There is no reliable way to know which original expense line a refund
+          // reverses — the data does not carry that link, and guessing risks crediting
+          // the WRONG category, which is worse than the gap this closes. So a refund
+          // gets its own honest, negative line instead: 'refund/<subcategory>', signed
+          // (not Math.abs'd), so sum(by_subcategory) === cogs + expenses again for
+          // every currency block, and the line still opens its real transactions via
+          // the same category/subcategory drill-down every other line uses.
+          const refundKey = `refund/${sub}`
+          b.by_subcategory[refundKey] = (b.by_subcategory[refundKey] ?? 0) - amt
         } else {
           b.other_income -= Math.abs(amt)
           b.monthly[month].income -= Math.abs(amt)
