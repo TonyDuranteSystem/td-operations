@@ -1,9 +1,8 @@
 'use client'
 
-import type { OwnerPnL, PnLBlock, FilingSummary } from '@/lib/owner-finance'
+import { formatOwnerCurrency, type OwnerPnL, type PnLBlock, type FilingSummary } from '@/lib/owner-finance'
 
-const fmtIn = (currency: string) => (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(n)
+const fmtIn = (currency: string) => (n: number) => formatOwnerCurrency(n, currency, { maximumFractionDigits: 0 })
 const fmt = fmtIn('USD')
 
 interface TaxTabProps {
@@ -23,8 +22,7 @@ export function TaxTab({ year, pnl, filing }: TaxTabProps) {
   const usd: PnLBlock | undefined = pnl.blocks.find(b => b.currency === 'USD')
   const others = pnl.blocks.filter(b => b.currency !== 'USD')
 
-  const money = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n)
+  const money = (n: number) => formatOwnerCurrency(n, 'USD')
 
   return (
     <div className="space-y-6">

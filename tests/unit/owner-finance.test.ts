@@ -4,6 +4,7 @@ import {
   computeInvoiceIncome,
   computeFilingSummary,
   computeOwnerPnL,
+  formatOwnerCurrency,
   isSimilarVendor,
   normalizeVendorKey,
   OWNER_ACCOUNT_ID,
@@ -174,6 +175,30 @@ describe('normalizeVendorKey / isSimilarVendor', () => {
 describe('TD_ENTITY_ID', () => {
   it('equals the historical owner sentinel (ids were preserved across the migration)', () => {
     expect(TD_ENTITY_ID).toBe(OWNER_ACCOUNT_ID)
+  })
+})
+
+describe('formatOwnerCurrency — never throws, even on bad data', () => {
+  it('formats a valid ISO currency normally', () => {
+    expect(formatOwnerCurrency(1234.5, 'USD', { maximumFractionDigits: 0 })).toBe('$1,235')
+    expect(formatOwnerCurrency(1234.5, 'eur', { maximumFractionDigits: 0 })).toBe('€1,235')
+  })
+
+  it('falls back to a plain number plus the raw code, instead of throwing, on a bad code', () => {
+    expect(() => formatOwnerCurrency(100, 'NOTACODE')).not.toThrow()
+    expect(formatOwnerCurrency(100, 'NOTACODE')).toBe('100 NOTACODE')
+    expect(() => formatOwnerCurrency(100, '')).not.toThrow()
+    expect(() => formatOwnerCurrency(100, '123')).not.toThrow()
+  })
+
+  it('defaults to USD when currency is missing', () => {
+    expect(formatOwnerCurrency(100, null)).toBe('$100.00')
+    expect(formatOwnerCurrency(100, undefined)).toBe('$100.00')
+  })
+
+  it('respects the fraction-digit options in both the normal and fallback paths', () => {
+    expect(formatOwnerCurrency(100, 'USD', { maximumFractionDigits: 0 })).toBe('$100')
+    expect(formatOwnerCurrency(100, 'BADCODE', { maximumFractionDigits: 0 })).toBe('100 BADCODE')
   })
 })
 

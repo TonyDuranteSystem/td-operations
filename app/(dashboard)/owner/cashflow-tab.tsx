@@ -1,13 +1,11 @@
 'use client'
 
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
-import type { MonthlyBreakdown, CashPosition } from '@/lib/owner-finance'
+import { formatOwnerCurrency, type MonthlyBreakdown, type CashPosition } from '@/lib/owner-finance'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-const fmt = (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n)
-const fmtIn = (currency: string) => (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(n)
+const fmt = (n: number) => formatOwnerCurrency(n, 'USD', { maximumFractionDigits: 0 })
+const fmtIn = (currency: string) => (n: number) => formatOwnerCurrency(n, currency, { maximumFractionDigits: 0 })
 
 interface CashFlowTabProps {
   year: number
