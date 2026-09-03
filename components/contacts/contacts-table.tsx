@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { useState, useTransition } from 'react'
+import { useEffect, useRef, useState, useTransition } from 'react'
 import { Search, ChevronRight, ChevronLeft, User, Building2, Shield } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ContactListItem } from '@/lib/types'
@@ -32,11 +32,30 @@ export function ContactsTable({ items, query, statusFilter, stats, currentPage, 
   const router = useRouter()
   const [search, setSearch] = useState(query)
   const [isPending, startTransition] = useTransition()
+  // The filter values we've actually told the server about — updated
+  // synchronously the instant we act, NOT after the async navigation
+  // resolves, covering EVERY filter (not just search — a fast, DIFFERENT
+  // filter fired before a prior one resolves would otherwise silently drop
+  // it, since it would fall back to a still-stale prop). See
+  // leads-table.tsx for the full detail (found by adversarial review,
+  // 2026-09-02/03).
+  const lastFiltersRef = useRef({ q: query, status: statusFilter })
+
+  // Resync when the URL changed for a reason OTHER than our own action —
+  // browser back/forward, or a link elsewhere setting these params. See
+  // leads-table.tsx for why this is guarded on the ref, not a plain
+  // "prop changed" check.
+  useEffect(() => {
+    if (query !== lastFiltersRef.current.q || statusFilter !== lastFiltersRef.current.status) {
+      lastFiltersRef.current = { q: query, status: statusFilter }
+      setSearch(query)
+    }
+  }, [query, statusFilter])
 
   function buildParams(overrides: Record<string, string> = {}) {
     const params = new URLSearchParams()
-    const q = overrides.q ?? query
-    const s = overrides.status ?? statusFilter
+    const q = overrides.q ?? lastFiltersRef.current.q
+    const s = overrides.status ?? lastFiltersRef.current.status
     const p = overrides.page ?? ''
     if (q) params.set('q', q)
     if (s && s !== 'all') params.set('status', s)
@@ -44,7 +63,8 @@ export function ContactsTable({ items, query, statusFilter, stats, currentPage, 
     return params.toString()
   }
 
-  function updateFilter(key: string, value: string) {
+  function updateFilter(key: 'q' | 'status', value: string) {
+    lastFiltersRef.current = { ...lastFiltersRef.current, [key]: value }
     startTransition(() => {
       router.push(`/contacts?${buildParams({ [key]: value, page: '1' })}`)
     })
@@ -61,6 +81,18 @@ export function ContactsTable({ items, query, statusFilter, stats, currentPage, 
     updateFilter('q', search)
   }
 
+  // Typing only searches on submit (below), but CLEARING the box must reset
+  // immediately — otherwise backspacing to empty, or a phone keyboard's own
+  // clear control, leaves the list stuck on the last search with no visible
+  // way to get back to the full list (same defect found on Leads, 2026-09-02).
+  function handleSearchChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const value = e.target.value
+    setSearch(value)
+    if (value === '' && lastFiltersRef.current.q !== '') {
+      updateFilter('q', '')
+    }
+  }
+
   return (
     <div className="space-y-4">
       {/* Filters */}
@@ -70,7 +102,7 @@ export function ContactsTable({ items, query, statusFilter, stats, currentPage, 
           <input
             type="text"
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={handleSearchChange}
             placeholder="Search name or email..."
             className="w-full pl-9 pr-4 py-2 rounded-lg border bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
