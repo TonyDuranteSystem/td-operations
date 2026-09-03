@@ -4,6 +4,7 @@
  * safe to unit-test / import anywhere.
  */
 import { validateTeamCard } from '@/lib/team/workspace'
+import type { ChatAttachment } from '@/lib/types'
 
 export const TEAM_MESSAGE_MAX = 5000
 
@@ -41,5 +42,28 @@ export function validateTeamPostMessage(message: string, card?: unknown): string
   if (m.length > TEAM_MESSAGE_MAX) return `Message too long (max ${TEAM_MESSAGE_MAX} characters).`
   const cardErr = validateTeamCard(card ?? null)
   if (cardErr) return cardErr
+  return null
+}
+
+/**
+ * Validate optional attachments. Mirrors the human send route's own guard
+ * (app/api/team/threads/[id]/messages/route.ts): every attachment must live
+ * on our own Storage host — never an arbitrary off-site URL — plus a name.
+ * `allowedUrlPrefix` is passed in (never read from env here) so this stays a
+ * pure, unit-testable function like its siblings above.
+ */
+export function validateTeamPostAttachments(
+  attachments: ChatAttachment[] | null | undefined,
+  allowedUrlPrefix: string,
+): string | null {
+  if (!attachments || attachments.length === 0) return null
+  for (const a of attachments) {
+    const url = (a?.url ?? '').toString().trim()
+    if (!url) return 'Each attachment needs a url.'
+    if (allowedUrlPrefix && !url.startsWith(allowedUrlPrefix)) {
+      return 'Invalid attachment URL — must be hosted on our own Storage.'
+    }
+    if (!a?.name) return 'Each attachment needs a name.'
+  }
   return null
 }
