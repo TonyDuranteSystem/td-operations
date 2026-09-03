@@ -423,6 +423,42 @@ export function encodeAddressHeader(value: string): string {
   return `=?utf-8?B?${Buffer.from(rawName, "utf-8").toString("base64")}?= <${email}>`
 }
 
+/** Our own mailboxes — a reply must never target one of these as a recipient. */
+export const OWN_MAILBOX_ADDRESSES = [
+  "support@tonydurante.us",
+  "antonio.durante@tonydurante.us",
+] as const
+
+export function isOwnMailboxAddress(address: string): boolean {
+  const bare = address.toLowerCase().trim()
+  return OWN_MAILBOX_ADDRESSES.some((a) => bare.includes(a))
+}
+
+/**
+ * Extract EVERY email address out of a raw To/Cc header value — which may
+ * hold several "Name" <addr> entries, some with a comma INSIDE the display
+ * name ("Popescu, Dragos" <dragos@payset.io>). Splitting on "," first (as
+ * lib/email-index/sync.ts does today) breaks exactly that case; matching the
+ * address pattern directly sidesteps it — comma placement never matters.
+ * Returns lowercase, deduplicated bare addresses (no display names) in the
+ * order they first appear.
+ */
+export function extractAllEmailAddresses(headerValue: string): string[] {
+  if (!headerValue) return []
+  const matches = headerValue.match(/[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+/g)
+  if (!matches) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const m of matches) {
+    const addr = m.toLowerCase()
+    if (!seen.has(addr)) {
+      seen.add(addr)
+      out.push(addr)
+    }
+  }
+  return out
+}
+
 /**
  * Extract email body as plain text (strips HTML tags).
  * Used for snippets, forwarding, and non-HTML contexts.

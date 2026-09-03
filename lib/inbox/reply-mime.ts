@@ -44,6 +44,13 @@ export interface BuildReplyMimeInput {
   signature?: { html: string; text: string }
   /** Display name for the From header. Omitted -> bare address, as before. */
   fromName?: string
+  /**
+   * Reply-All recipients (besides `replyTo`). Bare lowercase addresses only —
+   * no display names, so there's no per-address RFC 2047 encoding to get
+   * wrong here (see encodeAddressHeader's single-address assumption). Omit
+   * or pass [] for a plain Reply.
+   */
+  cc?: string[]
 }
 
 /**
@@ -122,6 +129,7 @@ export function buildReplyMime(input: BuildReplyMimeInput): string {
   const headers = [
     `From: ${input.fromName ? `${input.fromName} <${asUser}>` : asUser}`,
     `To: ${encodeAddressHeader(replyTo)}`,
+    ...(input.cc && input.cc.length > 0 ? [`Cc: ${input.cc.join(", ")}`] : []),
     `Subject: ${encodedSubject}`,
     `In-Reply-To: ${inReplyTo}`,
     `References: ${references ? references + " " : ""}${inReplyTo}`,

@@ -165,3 +165,23 @@ describe('buildReplyMime — signature', () => {
     ).toContain('From: Antonio Noel Durante <antonio.durante@tonydurante.us>')
   })
 })
+
+describe('buildReplyMime — Reply-All Cc', () => {
+  it('omits the Cc header entirely for a plain reply (cc omitted or empty)', () => {
+    expect(buildReplyMime(base)).not.toContain('Cc:')
+    expect(buildReplyMime({ ...base, cc: [] })).not.toContain('Cc:')
+  })
+
+  it('adds a Cc header, joined, right after To — bare addresses only, no encoding needed', () => {
+    const raw = buildReplyMime({ ...base, cc: ['dragos@payset.io', 'jane@example.com'] })
+    const headerBlock = raw.slice(0, raw.indexOf('\r\n\r\n'))
+    expect(headerBlock).toContain('Cc: dragos@payset.io, jane@example.com')
+    // Right after To, before Subject — order matters for a real MIME parser.
+    const lines = headerBlock.split('\r\n')
+    const toIdx = lines.findIndex((l) => l.startsWith('To:'))
+    const ccIdx = lines.findIndex((l) => l.startsWith('Cc:'))
+    const subjectIdx = lines.findIndex((l) => l.startsWith('Subject:'))
+    expect(ccIdx).toBe(toIdx + 1)
+    expect(ccIdx).toBeLessThan(subjectIdx)
+  })
+})

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
-import { gmailGet, gmailPost, getHeader, type GmailAPIMessage } from "@/lib/gmail"
+import { gmailPost } from "@/lib/gmail"
 import { buildReplyMime } from "@/lib/inbox/reply-mime"
+import { resolveReplyTarget, ReplyTargetError } from "@/lib/inbox/reply-target"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import {
   buildSignature,
@@ -37,12 +38,14 @@ export async function POST(req: NextRequest) {
     const denied = await requireStaffRoute()
     if (denied) return denied
 
-    const { conversationId, message, mailbox, signature_variant } =
+    const { conversationId, message, mailbox, signature_variant, messageId: targetMessageId, mode } =
       (await req.json()) as {
         conversationId?: string
         message?: string
         mailbox?: string
         signature_variant?: string
+        messageId?: string
+        mode?: "reply" | "replyAll"
       }
 
     if (!conversationId?.startsWith("gmail:") || !message?.trim()) {
@@ -68,17 +71,18 @@ export async function POST(req: NextRequest) {
         : "support@tonydurante.us"
 
     const threadId = conversationId.replace("gmail:", "")
-    const thread = (await gmailGet(
-      `/threads/${threadId}`,
-      { format: "metadata", metadataHeaders: "From,Subject,Message-ID,References" },
-      asUser
-    )) as { messages: GmailAPIMessage[] }
-
-    const lastMsg = thread.messages[thread.messages.length - 1]
-    const from = getHeader(lastMsg.payload.headers, "From")
-    const subject = getHeader(lastMsg.payload.headers, "Subject")
-    const messageId = getHeader(lastMsg.payload.headers, "Message-ID")
-    const references = getHeader(lastMsg.payload.headers, "References")
+    // Same resolution as the real send path (lib/inbox/reply-target.ts) — a
+    // draft and its eventual send must target the identical message.
+    let target
+    try {
+      target = await resolveReplyTarget({ threadId, messageId: targetMessageId, mode, asUser })
+    } catch (err) {
+      if (err instanceof ReplyTargetError) {
+        return NextResponse.json({ error: err.message }, { status: err.status })
+      }
+      throw err
+    }
+    const { from, subject, messageIdHeader: messageId, references, cc } = target
 
     const signatureSender = signatureSenderForAddress(asUser)
     const signatureVariant = parseSignatureVariant(
@@ -108,6 +112,7 @@ export async function POST(req: NextRequest) {
       lastFrom: from,
       signature,
       fromName: signatureFromName(signatureSender),
+      cc,
     })
 
     const result = (await gmailPost(

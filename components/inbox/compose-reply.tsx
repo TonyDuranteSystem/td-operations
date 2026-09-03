@@ -14,16 +14,32 @@ import {
   type SignatureVariant,
 } from '@/lib/email/signature'
 import type { InboxConversation } from '@/lib/types'
+import type { ReplyTarget } from './message-thread'
 
 interface ComposeReplyProps {
   conversation: InboxConversation
   /** Which Gmail mailbox the user is viewing ('support' | 'antonio') — the
    *  reply must be fetched from and sent through the SAME mailbox. */
   mailbox?: string
+  /** Staff explicitly clicked "Reply"/"Reply All" on a message card — wins
+   *  over the default immediately, even mid-draft. Null = no explicit pick. */
+  explicitReplyTarget?: ReplyTarget | null
+  /** Reads a FRESH snapshot of "who would an untargeted reply go to right
+   *  now" (skips our own messages) — called only at the moment a target is
+   *  frozen, never on every render, so the parent's 15s poll can't silently
+   *  retarget an in-progress reply out from under the person composing it. */
+  getDefaultReplyTarget?: () => Omit<ReplyTarget, 'mode'> | null
 }
 
-export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
+export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDefaultReplyTarget }: ComposeReplyProps) {
   const [message, setMessage] = useState('')
+  // The target THIS compose session actually uses — resolved once when
+  // composing starts (never re-derived from a background poll afterward),
+  // and re-resolved immediately on a genuine explicit pick (a real click is
+  // never "silent"). Cleared after a successful send/draft-save so the next
+  // reply starts fresh. lib/inbox/reply-target.ts is the server's mirror of
+  // this same "skip our own messages" default.
+  const [frozenTarget, setFrozenTarget] = useState<ReplyTarget | null>(null)
   const [signatureVariant, setSignatureVariant] = useState<SignatureVariant>(
     DEFAULT_REPLY_SIGNATURE_VARIANT
   )
@@ -47,8 +63,33 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
   const sendingRef = useRef(false)
   const queryClient = useQueryClient()
   const attachments = useEmailAttachments()
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const isEmail = conversation.channel === 'gmail'
+
+  // An explicit pick (a real click on a message card) always wins
+  // immediately, mid-draft or not — typed text is preserved, but the
+  // indicator below re-renders so the change is impossible to miss before
+  // sending. Also opens the composer and focuses it, since picking a target
+  // is itself the intent to reply.
+  useEffect(() => {
+    if (!explicitReplyTarget) return
+    setFrozenTarget(explicitReplyTarget)
+    setComposing(true)
+    textareaRef.current?.focus()
+  }, [explicitReplyTarget])
+
+  // The untargeted default is resolved exactly ONCE per compose session, at
+  // the moment real composing starts — not live-recomputed on every
+  // background poll (message-thread.tsx's 15s refetch), which would let a
+  // client's follow-up message silently swap the target out from under
+  // typed text about an entirely different message (bug-hunter finding,
+  // dev job ec61a2ae pass 3).
+  useEffect(() => {
+    if (!composing || frozenTarget || explicitReplyTarget) return
+    const def = getDefaultReplyTarget?.()
+    if (def) setFrozenTarget({ ...def, mode: 'reply' })
+  }, [composing, frozenTarget, explicitReplyTarget, getDefaultReplyTarget])
 
   // Belt-and-braces to the key={conversation.id} at both mount sites: staged
   // attachments must NEVER survive a thread switch (council blocker
@@ -86,6 +127,7 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
           channel: conversation.channel,
           mailbox,
           signature_variant: signatureVariant,
+          ...(frozenTarget && { messageId: frozenTarget.messageId, mode: frozenTarget.mode }),
           ...(staged.length > 0 && { attachments: staged }),
         }),
       })
@@ -105,6 +147,7 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
       setPreviewOpen(false)
       setDraftNotice(null)
       setSignatureVariant(DEFAULT_REPLY_SIGNATURE_VARIANT)
+      setFrozenTarget(null)
       const refetch = () => {
         queryClient.invalidateQueries({
           queryKey: ['inbox-messages', conversation.id],
@@ -132,6 +175,7 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
           message: text,
           mailbox,
           signature_variant: signatureVariant,
+          ...(frozenTarget && { messageId: frozenTarget.messageId, mode: frozenTarget.mode }),
         }),
       })
       if (!res.ok) {
@@ -144,6 +188,7 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
       setMessage('')
       setComposing(false)
       setPreviewOpen(false)
+      setFrozenTarget(null)
       setSignatureVariant(DEFAULT_REPLY_SIGNATURE_VARIANT)
       setDraftNotice('Draft saved — find it in Drafts (here and in Gmail).')
     },
@@ -195,13 +240,26 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
   const handleAiSuggest = async () => {
     if (aiLoading) return
     setAiLoading(true)
+    // AI Suggest is reachable before the textarea's ever been focused (it
+    // sits next to Attach, not gated behind `composing`), so the usual
+    // freeze-on-composing effect may not have run yet. Resolve synchronously
+    // here too — same target the reply will actually be sent to.
+    let target = frozenTarget
+    if (!target) {
+      target = explicitReplyTarget ?? (() => {
+        const def = getDefaultReplyTarget?.()
+        return def ? { ...def, mode: 'reply' as const } : null
+      })()
+      if (target) setFrozenTarget(target)
+      setComposing(true)
+    }
     try {
       // Extract threadId from conversation.id (format: "gmail:threadId")
       const threadId = conversation.id.replace('gmail:', '')
       const res = await fetch('/api/inbox/ai-suggest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ threadId }),
+        body: JSON.stringify({ threadId, ...(target && { messageId: target.messageId }) }),
       })
       if (!res.ok) {
         const err = await res.json()
@@ -235,6 +293,17 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
         }
       }}
     >
+      {/* Who this reply actually goes to — shown for EVERY reply, not just an
+          explicit per-message pick, so a wrong target is visible before
+          sending rather than only when staff remembers to check (the exact
+          gap that let both real incidents happen: an ordinary reply whose
+          untargeted default silently resolved to our own mailbox). */}
+      {isEmail && frozenTarget && (
+        <p className="text-xs text-zinc-500 mb-2">
+          Replying{frozenTarget.mode === 'replyAll' ? ' All' : ''} to:{' '}
+          <span className="font-medium text-zinc-700">{frozenTarget.sender}</span>
+        </p>
+      )}
       {sendMutation.isError && (
         <p className="text-xs text-red-500 mb-2">
           Failed to send: {sendMutation.error.message}
@@ -288,6 +357,7 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
 
       <div className="flex items-end gap-2">
         <textarea
+          ref={textareaRef}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onFocus={() => {
