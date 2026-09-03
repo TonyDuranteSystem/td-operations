@@ -153,6 +153,11 @@ export async function POST(req: NextRequest) {
         if (quoteMode === "thread") {
           threadQuotes = await buildThreadQuotes(threadId, asUser, lastMsg.id)
           lastBody = extractBody(lastMsg.payload).slice(0, 10000).trimEnd()
+          // buildReplyMime strips each thread-quote entry's OWN nested
+          // quoted history internally — this one included, even though
+          // it's passed raw here (defense in depth: the guarantee lives in
+          // the one shared MIME builder, not in every caller remembering to
+          // pre-strip).
           threadQuotes.push({ from: quotedFrom, date: lastDate, body: lastBody })
         } else if (quoteMode === "message") {
           lastBody = extractBody(lastMsg.payload).slice(0, 10000).trimEnd()

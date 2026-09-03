@@ -1,5 +1,5 @@
 import { encodeAddressHeader } from "@/lib/gmail"
-import { escapeHtml } from "@/lib/inbox/email-quote"
+import { escapeHtml, splitQuotedText } from "@/lib/inbox/email-quote"
 
 export interface ReplyMimeAttachment {
   /** Already sanitized/RFC 2047-encoded by the staging loader — safe in headers. */
@@ -138,7 +138,16 @@ export function buildReplyMime(input: BuildReplyMimeInput): string {
     let remaining = THREAD_QUOTE_TOTAL_CHAR_CAP
     for (const entry of input.threadQuotes) {
       if (remaining <= 0) break
-      const body = entry.body.length > remaining ? entry.body.slice(0, remaining) : entry.body
+      // Strip each entry's OWN nested quoted history — enforced HERE,
+      // internally, rather than trusting every caller to pre-strip: an
+      // ordinary mail client's reply body already embeds everything before
+      // it, so a caller that forgets this (as the reply route originally
+      // did for the target message's own entry — dev job 208f39ad,
+      // bug-hunter pass) would otherwise duplicate most of the thread.
+      // Idempotent on an already-stripped entry — splitQuotedText just
+      // finds nothing further to split off.
+      const stripped = splitQuotedText(entry.body).main.trimEnd()
+      const body = stripped.length > remaining ? stripped.slice(0, remaining) : stripped
       remaining -= body.length
       const block = buildQuoteBlock(entry.from, entry.date, body)
       quotedPlain += block.plain

@@ -268,4 +268,33 @@ describe('buildReplyMime — quoteMode', () => {
     expect(secondBodyStart).toBeGreaterThan(-1)
     expect(plain.length).toBeLessThan(90_000) // well under 2x30,000+overhead
   })
+
+  // dev job 208f39ad, bug-hunter pass: a caller (the reply route) originally
+  // appended the target message's OWN raw body as the final thread-quote
+  // entry without stripping ITS nested quote first — every other entry was
+  // stripped, that one wasn't, duplicating most of the thread. Fixed by
+  // stripping unconditionally inside buildReplyMime itself so no caller can
+  // forget it.
+  it('strips EVERY thread-quote entry\'s own nested quoted history, including one a caller forgot to pre-strip — the earlier content it embeds must not be duplicated', () => {
+    // A realistic mail-client reply body: fresh text on top, then that
+    // message's OWN embedded quote of everything before it — exactly the
+    // shape splitQuotedText exists to detect and remove.
+    const alreadyNested =
+      'Thanks for the update.\n\nOn Mon, 1 Sep 2026, Someone wrote:\n> Earlier message content that must not appear twice.'
+    const raw = buildReplyMime({
+      ...base,
+      quoteMode: 'thread',
+      threadQuotes: [
+        { from: 'client@x.com', date: 'Mon, 1 Sep 2026 09:00:00 -0400', body: alreadyNested },
+      ],
+    })
+    const plain = decodePart(raw, 'text/plain')
+    // The fresh part of the message survives.
+    expect(plain).toContain('Thanks for the update.')
+    // The embedded quote of earlier content is REMOVED, not carried through
+    // — a caller passing an unstripped body must not ship duplicated
+    // history (the exact bug: appending it raw repeated earlier messages a
+    // second time, nested inside this one).
+    expect(plain).not.toContain('Earlier message content that must not appear twice.')
+  })
 })

@@ -163,12 +163,42 @@ export async function resolveReplyTarget(opts: {
   } else {
     replyToAddresses = [from]
   }
+  // The client always sends its current To list once one resolves (even
+  // when staff never touched it — compose-reply.tsx seeds and re-sends the
+  // same list it was given), so "an override was sent" is NOT the same as
+  // "staff actually changed something." Only compare-and-differ counts as a
+  // real edit — sending back the exact list we'd have resolved anyway must
+  // not disable Reply-All's Cc. Compared as BARE addresses on both sides:
+  // the natural single-recipient case can still be a full "Name <addr>"
+  // display string (unchanged historical shape), while toOverride is always
+  // bare — a raw string comparison would treat every ordinary unedited
+  // single-recipient resend as "edited" and silently kill its auto-Cc too.
+  const naturallyResolvedBare = new Set(
+    replyToAddresses.flatMap((a) => extractAllEmailAddresses(a))
+  )
+  const genuinelyEdited =
+    !!opts.toOverride &&
+    opts.toOverride.length > 0 &&
+    (opts.toOverride.length !== naturallyResolvedBare.size ||
+      !opts.toOverride.every((a) => naturallyResolvedBare.has(a.toLowerCase())))
   if (opts.toOverride && opts.toOverride.length > 0) {
     replyToAddresses = opts.toOverride
   }
 
+  // Reply-All's Cc is auto-computed from the ORIGINAL message's To/Cc
+  // headers — but the UI today only shows and edits the primary To chips,
+  // with no Cc chips at all (dev job 208f39ad — flagged as a follow-up, not
+  // built yet). If staff genuinely edited the To list, recomputing Cc from
+  // the untouched original headers would silently re-add whoever they just
+  // removed (they're no longer "primary", so the loop below would file them
+  // under Cc instead) — the chip visibly disappears while the person still
+  // gets the email. A genuine edit is therefore treated as complete and
+  // authoritative: no auto-Cc at all once staff has actually changed the
+  // recipients (bug-hunter pass, caught before shipping — fails toward LESS
+  // delivery, never silently more). An unedited resend still gets the
+  // normal auto-Cc, so ordinary Reply-All is unaffected.
   const cc: string[] = []
-  if (mode === "replyAll") {
+  if (mode === "replyAll" && !genuinelyEdited) {
     const to = getHeader(message.payload.headers, "To")
     const ccHeader = getHeader(message.payload.headers, "Cc")
     const primary = new Set(replyToAddresses)

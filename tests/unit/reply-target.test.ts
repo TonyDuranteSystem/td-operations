@@ -185,6 +185,61 @@ describe("resolveReplyTarget — Reply-All Cc list", () => {
     // Neither primary recipient reappears in cc — only the genuinely-extra filip@.
     expect(target.cc).toEqual(["filip@payset.io"])
   })
+
+  // BLOCKER caught by the bug-hunter pass (dev job 208f39ad): the UI always
+  // re-sends its current recipient list as toOverride, even when staff never
+  // touched it — so "an override was sent" must NOT by itself disable the
+  // normal auto-Cc, or Reply-All's Cc silently stops working on every
+  // ordinary send, not just edited ones.
+  it("an UNCHANGED toOverride (identical to what would have resolved naturally) still gets the normal auto-Cc", async () => {
+    vi.mocked(gmailGet).mockResolvedValue(multiParty)
+    const target = await resolveReplyTarget({
+      threadId: THREAD_ID,
+      messageId: "m-multi",
+      mode: "replyAll",
+      asUser: ASUSER,
+      toOverride: ["dragos@payset.io"], // exactly what the server would resolve on its own
+    })
+    expect(target.cc.sort()).toEqual(["filip@payset.io", "jane@example.com"])
+  })
+
+  // The actual blocker: removing a recipient from the visible To chips must
+  // not silently re-add them via the auto-computed Cc — that would make the
+  // chip disappear on screen while the person still receives the email.
+  it("a GENUINELY edited toOverride (a recipient actually removed) suppresses auto-Cc entirely, rather than silently re-adding the removed person via Cc", async () => {
+    const ownMultiCc = msg("m-own-cc2", THREAD_ID, {
+      From: ASUSER,
+      To: "dragos@payset.io, jane@example.com",
+      Cc: "filip@payset.io",
+      Subject: "Update",
+    })
+    vi.mocked(gmailGet).mockResolvedValue(ownMultiCc)
+    // Staff removed jane@example.com from the To chips before Reply-All.
+    const target = await resolveReplyTarget({
+      threadId: THREAD_ID,
+      messageId: "m-own-cc2",
+      mode: "replyAll",
+      asUser: ASUSER,
+      toOverride: ["dragos@payset.io"],
+    })
+    expect(target.replyToAddresses).toEqual(["dragos@payset.io"])
+    // jane@ must NOT reappear in cc (that would defeat the removal), and
+    // filip@ — a genuine Cc nobody touched — is also withheld rather than
+    // guessed at, since there is no way today to show/edit Cc separately.
+    expect(target.cc).toEqual([])
+  })
+
+  it("a genuinely edited toOverride on a plain (non-replyAll) reply has no Cc either way — nothing to suppress", async () => {
+    vi.mocked(gmailGet).mockResolvedValue(multiParty)
+    const target = await resolveReplyTarget({
+      threadId: THREAD_ID,
+      messageId: "m-multi",
+      mode: "reply",
+      asUser: ASUSER,
+      toOverride: ["someone-else@example.com"],
+    })
+    expect(target.cc).toEqual([])
+  })
 })
 
 describe("buildThreadQuotes", () => {
