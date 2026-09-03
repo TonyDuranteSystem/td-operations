@@ -35,7 +35,7 @@ import { toUsd, type FxRates } from "./fx"
 import type { FinancialDraft } from "./financials-engine"
 import type { PriorReturnCaseRecord } from "./prior-return-case"
 import type { OwnershipResolution } from "./ownership-resolution"
-import { matchMemberName, suspectedMemberFromNotes } from "./member-names"
+import { matchMemberForTransaction, suspectedMemberFromNotes } from "./member-names"
 
 /** The row fields validation needs — a superset of what the draft consumes. */
 export interface ValidationRow {
@@ -168,7 +168,7 @@ export interface BuildValidationInput {
  *  panel. One implementation, imported. */
 export function matchesMemberName(row: Pick<ValidationRow, "description" | "counterparty">, memberNames: string[]): boolean {
   if (memberNames.length === 0) return false
-  return matchMemberName(`${row.description ?? ""} ${row.counterparty ?? ""}`, memberNames) !== null
+  return matchMemberForTransaction(row.description, row.counterparty, memberNames) !== null
 }
 
 export function buildValidationBreakdown(input: BuildValidationInput): ValidationBreakdown {
