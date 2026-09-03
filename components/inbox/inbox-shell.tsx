@@ -31,9 +31,10 @@ import {
 } from '@/lib/inbox/conversation-reconcile'
 import { ORIGIN_UNKNOWN, viewKey, isInstantSearchQuery, type RowAction, type ViewScope } from '@/lib/inbox/view-query'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
-import type { InboxConversation, InboxChannel, InboxAttachment } from '@/lib/types'
+import type { InboxConversation, InboxChannel, InboxAttachment, InboxMessage } from '@/lib/types'
 import { openMarkReadSettled } from '@/lib/inbox/pending-mark-read'
 import { insertLineBreaksForBlockTags } from '@/lib/inbox/email-html'
+import { pickNewestNonOwnMessage } from '@/lib/inbox/default-reply-target'
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
   gmail: Mail,
@@ -1099,8 +1100,13 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       const params = activeMailbox ? `?mailbox=${activeMailbox}` : ''
       const res = await fetch(`/api/inbox/messages/${encodeURIComponent(selected.id)}${params}`)
       const data = await res.json()
-      const messages = data?.messages || []
-      const lastMsg = messages[messages.length - 1]
+      const messages: InboxMessage[] = data?.messages || []
+      // Forward the message staff was actually looking at, not just
+      // whichever is newest — the same "our own reply happens to be last"
+      // trap Reply had (dev job ec61a2ae): forwarding a client's document
+      // must not silently forward our own reply's text/attachments instead.
+      // Falls back to the literal newest only when every message is ours.
+      const lastMsg = pickNewestNonOwnMessage(messages)
 
       const plainText = stripEmailHtml(lastMsg?.content || '') || selected.preview || ''
 
@@ -1827,6 +1833,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                       mailbox={activeMailbox}
                       explicitReplyTarget={explicitReplyTarget}
                       getDefaultReplyTarget={() => defaultReplyTargetRef.current?.() ?? null}
+                      onTargetConsumed={() => setExplicitReplyTarget(null)}
                     />
                   </div>
                   {/* WorkerChatPanel is KEYED PER CONVERSATION, like ComposeReply above.

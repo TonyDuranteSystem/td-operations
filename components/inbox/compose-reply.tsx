@@ -29,9 +29,19 @@ interface ComposeReplyProps {
    *  frozen, never on every render, so the parent's 15s poll can't silently
    *  retarget an in-progress reply out from under the person composing it. */
   getDefaultReplyTarget?: () => Omit<ReplyTarget, 'mode'> | null
+  /** Tells the parent an explicit pick was just used (sent or saved as a
+   *  draft) so it can clear `explicitReplyTarget`. Without this, the picked
+   *  target outlives the send: the default-resolution effect below stays
+   *  permanently blocked for the rest of the conversation, AND a later
+   *  AI-Suggest click falls back to this same stale target and re-freezes
+   *  onto it — an old message's sender, not the current one, could then be
+   *  what a follow-up reply actually goes out to (bug-hunter pass 3,
+   *  dev job ec61a2ae — verified against a real explicitReplyTarget that
+   *  only ever reset on a conversation switch, never after a send). */
+  onTargetConsumed?: () => void
 }
 
-export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDefaultReplyTarget }: ComposeReplyProps) {
+export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDefaultReplyTarget, onTargetConsumed }: ComposeReplyProps) {
   const [message, setMessage] = useState('')
   // The target THIS compose session actually uses — resolved once when
   // composing starts (never re-derived from a background poll afterward),
@@ -148,6 +158,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
       setDraftNotice(null)
       setSignatureVariant(DEFAULT_REPLY_SIGNATURE_VARIANT)
       setFrozenTarget(null)
+      onTargetConsumed?.()
       const refetch = () => {
         queryClient.invalidateQueries({
           queryKey: ['inbox-messages', conversation.id],
@@ -189,6 +200,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
       setComposing(false)
       setPreviewOpen(false)
       setFrozenTarget(null)
+      onTargetConsumed?.()
       setSignatureVariant(DEFAULT_REPLY_SIGNATURE_VARIANT)
       setDraftNotice('Draft saved — find it in Drafts (here and in Gmail).')
     },

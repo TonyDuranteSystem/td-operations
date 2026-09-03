@@ -10,6 +10,7 @@ import { emailSnippet } from '@/lib/inbox/email-html'
 import { splitQuotedText } from '@/lib/inbox/email-quote'
 import { printEmailThread } from '@/lib/inbox/print-email'
 import { resolveAttachmentType, shouldOpenInTab } from '@/lib/inbox/attachment-open'
+import { pickNewestNonOwnMessage } from '@/lib/inbox/default-reply-target'
 import { EmailHtmlFrame } from './email-html-frame'
 import { NoteQuickCreate } from '@/components/dashboard/note-quick-create'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -415,13 +416,8 @@ export function MessageThread({ conversation, mailbox, registerPrint, onReplyTo,
       return
     }
     registerDefaultReplyTarget(() => {
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].direction === 'inbound') return { messageId: msgs[i].id, sender: msgs[i].sender }
-      }
-      // Every message is ours (a fresh outbound email, no reply yet) —
-      // nothing else to target; the literal newest is the only choice.
-      const last = msgs[msgs.length - 1]
-      return { messageId: last.id, sender: last.sender }
+      const picked = pickNewestNonOwnMessage(msgs)
+      return picked ? { messageId: picked.id, sender: picked.sender } : null
     })
     return () => registerDefaultReplyTarget(null)
   }, [data, registerDefaultReplyTarget])

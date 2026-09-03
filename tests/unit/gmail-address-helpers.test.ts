@@ -7,6 +7,16 @@ describe("isOwnMailboxAddress", () => {
     expect(isOwnMailboxAddress("antonio.durante@tonydurante.us")).toBe(true)
   })
 
+  // office@ and compliance@ are real Gmail send-as ALIASES on the support@
+  // mailbox (confirmed in live client threads, 2026-09-03) — a message sent
+  // under either one used to be misclassified as "the client" by every
+  // reader of this list, the same self-reply misdirect this list exists to
+  // prevent, just under a different address (dev job ec61a2ae bug-hunter pass 3).
+  it("recognizes the support@ mailbox's send-as aliases", () => {
+    expect(isOwnMailboxAddress("office@tonydurante.us")).toBe(true)
+    expect(isOwnMailboxAddress("compliance@tonydurante.us")).toBe(true)
+  })
+
   it("recognizes a display-name-wrapped own address", () => {
     expect(isOwnMailboxAddress('"Tony Durante LLC" <support@tonydurante.us>')).toBe(true)
   })

@@ -423,10 +423,20 @@ export function encodeAddressHeader(value: string): string {
   return `=?utf-8?B?${Buffer.from(rawName, "utf-8").toString("base64")}?= <${email}>`
 }
 
-/** Our own mailboxes — a reply must never target one of these as a recipient. */
+/**
+ * Our own mailboxes — a reply must never target one of these as a recipient.
+ * Includes send-as ALIASES on the support@ mailbox (office@, compliance@),
+ * confirmed live in real client threads (2026-09-03) — a message sent under
+ * either alias was previously misclassified as "the client" by every reader
+ * of this list, which is the same self-reply misdirect this list exists to
+ * prevent, just under a different address. Dormant since ~Feb 2026 but still
+ * genuinely ours; a retired alias staying on this list costs nothing.
+ */
 export const OWN_MAILBOX_ADDRESSES = [
   "support@tonydurante.us",
   "antonio.durante@tonydurante.us",
+  "office@tonydurante.us",
+  "compliance@tonydurante.us",
 ] as const
 
 export function isOwnMailboxAddress(address: string): boolean {
