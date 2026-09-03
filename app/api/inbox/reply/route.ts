@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
-import { gmailGet, gmailPost, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
+import { gmailPost, extractBody } from "@/lib/gmail"
 import { buildReplyMime, type ReplyMimeAttachment } from "@/lib/inbox/reply-mime"
+import { resolveReplyTarget, ReplyTargetError } from "@/lib/inbox/reply-target"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import {
   parseStagedAttachmentInputs,
@@ -28,13 +29,18 @@ export async function POST(req: NextRequest) {
     if (denied) return denied
 
     const body = await req.json()
-    const { conversationId, message, channel, mailbox, signature_variant } = body as {
+    const { conversationId, message, channel, mailbox, signature_variant, messageId: targetMessageId, mode } = body as {
       conversationId: string
       message: string
       channel: "whatsapp" | "telegram" | "gmail"
       mailbox?: string
       /** "gala" | "hat" | "text". Replies default to text-only. */
       signature_variant?: string
+      /** Which specific Gmail message this replies to — always sent by the
+       *  current UI (explicit pick, or its own frozen default). Omitted only
+       *  by an older client; see resolveReplyTarget's fallback. */
+      messageId?: string
+      mode?: "reply" | "replyAll"
     }
 
     if (!conversationId || !message) {
@@ -97,20 +103,26 @@ export async function POST(req: NextRequest) {
         ? "antonio.durante@tonydurante.us"
         : "support@tonydurante.us"
 
-      // Get the last message in thread to reply to (full — we quote its body)
-      const thread = (await gmailGet(`/threads/${threadId}`, {
-        format: "full",
-      }, asUser)) as { messages: GmailAPIMessage[] }
-
-      const lastMsg = thread.messages[thread.messages.length - 1]
-      const from = getHeader(lastMsg.payload.headers, "From")
-      const subject = getHeader(lastMsg.payload.headers, "Subject")
-      const messageId = getHeader(lastMsg.payload.headers, "Message-ID")
-      const references = getHeader(lastMsg.payload.headers, "References")
-      const lastDate = getHeader(lastMsg.payload.headers, "Date")
+      // Resolve the ONE message this reply is actually answering — the
+      // client's explicit pick, its own frozen default (skip our own
+      // messages), or (older client only) the server's same default.
+      // Every field below (recipient, subject, threading headers, quoted
+      // body, Reply-All Cc list) comes from THIS message alone — never a
+      // mix with the thread's literal newest message, which would reach
+      // the right person but thread/quote incorrectly in Gmail.
+      let target
+      try {
+        target = await resolveReplyTarget({ threadId, messageId: targetMessageId, mode, asUser })
+      } catch (err) {
+        if (err instanceof ReplyTargetError) {
+          return NextResponse.json({ error: err.message }, { status: err.status })
+        }
+        throw err
+      }
+      const { message: lastMsg, from, subject, messageIdHeader: messageId, references, date: lastDate, cc } = target
 
       // Build RFC 2822 reply
-      const replyTo = from // Reply to whoever sent last message
+      const replyTo = from
       const replySubject = subject.startsWith("Re:") ? subject : `Re: ${subject}`
 
       // Quoting is best-effort — never block the reply on it
@@ -158,6 +170,7 @@ export async function POST(req: NextRequest) {
         attachments,
         signature,
         fromName: signatureFromName(signatureSender),
+        cc,
       })
       const encodedRaw = Buffer.from(raw).toString("base64url")
 

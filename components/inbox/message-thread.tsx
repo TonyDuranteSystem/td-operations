@@ -10,10 +10,11 @@ import { emailSnippet } from '@/lib/inbox/email-html'
 import { splitQuotedText } from '@/lib/inbox/email-quote'
 import { printEmailThread } from '@/lib/inbox/print-email'
 import { resolveAttachmentType, shouldOpenInTab } from '@/lib/inbox/attachment-open'
+import { pickNewestNonOwnMessage } from '@/lib/inbox/default-reply-target'
 import { EmailHtmlFrame } from './email-html-frame'
 import { NoteQuickCreate } from '@/components/dashboard/note-quick-create'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
-import { Link2, Printer } from 'lucide-react'
+import { Link2, Printer, Reply, ReplyAll } from 'lucide-react'
 import { trackOpenMarkRead } from '@/lib/inbox/pending-mark-read'
 
 type ThreadAttachment = NonNullable<InboxMessage['attachments']>[number]
@@ -174,12 +175,29 @@ function PlainEmailBody({ content }: { content: string }) {
   )
 }
 
+export interface ReplyTarget {
+  messageId: string
+  sender: string
+  mode: 'reply' | 'replyAll'
+}
+
 interface MessageThreadProps {
   conversation: InboxConversation
   /** Optional: receives a Print/Save-as-PDF handler for the loaded email thread
    *  (null while unavailable). Lets a parent toolbar trigger printing the thread
    *  it doesn't itself hold the bodies for. Omitted by the portal-chats reuse. */
   registerPrint?: (fn: (() => void) | null) => void
+  /** Staff explicitly clicked "Reply" or "Reply All" on one message card. */
+  onReplyTo?: (target: ReplyTarget) => void
+  /**
+   * Same registration pattern as registerPrint: exposes a GETTER (not a
+   * pushed value) for "which message would an untargeted reply go to right
+   * now" — the newest message NOT sent by us, recomputed as messages load —
+   * so the composer can read a fresh snapshot at the moment it freezes its
+   * target, without this component's own re-renders/polls forcing the
+   * composer to re-render too.
+   */
+  registerDefaultReplyTarget?: (fn: (() => Omit<ReplyTarget, 'mode'> | null) | null) => void
 }
 
 interface ThreadResponse {
@@ -202,7 +220,7 @@ function formatMessageTime(dateStr: string) {
   })
 }
 
-export function MessageThread({ conversation, mailbox, registerPrint }: MessageThreadProps & { mailbox?: string }) {
+export function MessageThread({ conversation, mailbox, registerPrint, onReplyTo, registerDefaultReplyTarget }: MessageThreadProps & { mailbox?: string }) {
   const queryClient = useQueryClient()
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -386,6 +404,24 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
     return () => registerPrint(null)
   }, [data, registerPrint])
 
+  // Same registration pattern as Print above. A GETTER, not a pushed value —
+  // this component's own 15s poll must not force the composer to re-render
+  // (or worse, silently re-resolve its already-frozen target) on every tick;
+  // the composer reads a fresh snapshot only at the moment it needs one.
+  useEffect(() => {
+    if (!registerDefaultReplyTarget) return
+    const msgs = data?.channel === 'gmail' ? data?.messages : undefined
+    if (!msgs || msgs.length === 0) {
+      registerDefaultReplyTarget(null)
+      return
+    }
+    registerDefaultReplyTarget(() => {
+      const picked = pickNewestNonOwnMessage(msgs)
+      return picked ? { messageId: picked.id, sender: picked.sender } : null
+    })
+    return () => registerDefaultReplyTarget(null)
+  }, [data, registerDefaultReplyTarget])
+
   if (isLoading) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -539,6 +575,37 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
                     </span>
                   </button>
                 </FastTooltip>
+                {/* Reply / Reply All to THIS specific message — never on one of
+                    our own (opening an older card to answer a point made
+                    earlier is a normal action; replying to it would address
+                    the mail back to ourselves). Sets the composer's target
+                    explicitly, overriding whatever it would otherwise
+                    default to (Antonio, 2026-09-02 — the Inbox reply-target
+                    bug). */}
+                {!isOutbound && onReplyTo && (
+                  <>
+                    <FastTooltip label="Reply to this message">
+                      <button
+                        type="button"
+                        onClick={() => onReplyTo({ messageId: msg.id, sender: msg.sender, mode: 'reply' })}
+                        aria-label="Reply to this message"
+                        className="shrink-0 p-1.5 rounded text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200/60"
+                      >
+                        <Reply className="h-3.5 w-3.5" />
+                      </button>
+                    </FastTooltip>
+                    <FastTooltip label="Reply All to this message">
+                      <button
+                        type="button"
+                        onClick={() => onReplyTo({ messageId: msg.id, sender: msg.sender, mode: 'replyAll' })}
+                        aria-label="Reply All to this message"
+                        className="shrink-0 p-1.5 rounded text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200/60"
+                      >
+                        <ReplyAll className="h-3.5 w-3.5" />
+                      </button>
+                    </FastTooltip>
+                  </>
+                )}
                 <FastTooltip label="Print this email">
                   <button
                     type="button"

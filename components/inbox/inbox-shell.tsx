@@ -9,7 +9,7 @@ import { InboxHeader } from './inbox-header'
 import { InboxSidebar } from './inbox-sidebar'
 import { ConversationList } from './conversation-list'
 import { SearchSuggestDropdown, type SearchSuggestion } from './search-suggest-dropdown'
-import { MessageThread } from './message-thread'
+import { MessageThread, type ReplyTarget } from './message-thread'
 import { WhatsappThread } from './whatsapp-thread'
 import { ComposeReply } from './compose-reply'
 import { ComposeDialog, type PrefillAttachmentSource } from './compose-dialog'
@@ -31,9 +31,10 @@ import {
 } from '@/lib/inbox/conversation-reconcile'
 import { ORIGIN_UNKNOWN, viewKey, isInstantSearchQuery, type RowAction, type ViewScope } from '@/lib/inbox/view-query'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
-import type { InboxConversation, InboxChannel, InboxAttachment } from '@/lib/types'
+import type { InboxConversation, InboxChannel, InboxAttachment, InboxMessage } from '@/lib/types'
 import { openMarkReadSettled } from '@/lib/inbox/pending-mark-read'
 import { insertLineBreaksForBlockTags } from '@/lib/inbox/email-html'
+import { pickNewestNonOwnMessage } from '@/lib/inbox/default-reply-target'
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
   gmail: Mail,
@@ -206,6 +207,21 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   // Print/Save-as-PDF handler registered by the open MessageThread (it holds the
   // email bodies; the toolbar only holds the conversation metadata).
   const printRef = useRef<(() => void) | null>(null)
+
+  // Which message an explicit "Reply"/"Reply All" click targeted — MUST be
+  // cleared on every conversation switch (the effect below), or a target
+  // picked while viewing thread A could silently ride into a send under
+  // thread B (bug-hunter, three-pass review of dev job ec61a2ae — the same
+  // state-leak class already fixed twice in this file for staged
+  // attachments and the WorkerChatPanel confirm card, see the comments at
+  // the ComposeReply/WorkerChatPanel mount sites below).
+  const [explicitReplyTarget, setExplicitReplyTarget] = useState<ReplyTarget | null>(null)
+  useEffect(() => { setExplicitReplyTarget(null) }, [selected?.id])
+  // Same registration pattern as printRef: a GETTER for "who would an
+  // untargeted reply go to right now" (skips our own messages), read by
+  // ComposeReply only at the moment it freezes a target — never pushed, so
+  // MessageThread's 15s poll can't force a re-render here.
+  const defaultReplyTargetRef = useRef<(() => Omit<ReplyTarget, 'mode'> | null) | null>(null)
 
   const isWhatsApp = activeChannel === 'whatsapp'
   const isGmail = selected?.channel === 'gmail'
@@ -1084,8 +1100,13 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       const params = activeMailbox ? `?mailbox=${activeMailbox}` : ''
       const res = await fetch(`/api/inbox/messages/${encodeURIComponent(selected.id)}${params}`)
       const data = await res.json()
-      const messages = data?.messages || []
-      const lastMsg = messages[messages.length - 1]
+      const messages: InboxMessage[] = data?.messages || []
+      // Forward the message staff was actually looking at, not just
+      // whichever is newest — the same "our own reply happens to be last"
+      // trap Reply had (dev job ec61a2ae): forwarding a client's document
+      // must not silently forward our own reply's text/attachments instead.
+      // Falls back to the literal newest only when every message is ours.
+      const lastMsg = pickNewestNonOwnMessage(messages)
 
       const plainText = stripEmailHtml(lastMsg?.content || '') || selected.preview || ''
 
@@ -1795,12 +1816,25 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                       conversation={selected}
                       mailbox={activeMailbox}
                       registerPrint={(fn) => { printRef.current = fn }}
+                      onReplyTo={setExplicitReplyTarget}
+                      registerDefaultReplyTarget={(fn) => { defaultReplyTargetRef.current = fn }}
                     />
                     {/* Keyed for the same reason as MessageThread — staged
                         attachments and draft text must NEVER survive a thread
                         switch (a passport staged on thread A must not ride a
-                        reply to thread B — council blocker 2026-07-29). */}
-                    <ComposeReply key={selected.id} conversation={selected} mailbox={activeMailbox} />
+                        reply to thread B — council blocker 2026-07-29).
+                        explicitReplyTarget/getDefaultReplyTarget are NOT part
+                        of the key — they're reset separately above so an
+                        explicit pick still updates a composer instance that
+                        is already mounted and (possibly) mid-draft. */}
+                    <ComposeReply
+                      key={selected.id}
+                      conversation={selected}
+                      mailbox={activeMailbox}
+                      explicitReplyTarget={explicitReplyTarget}
+                      getDefaultReplyTarget={() => defaultReplyTargetRef.current?.() ?? null}
+                      onTargetConsumed={() => setExplicitReplyTarget(null)}
+                    />
                   </div>
                   {/* WorkerChatPanel is KEYED PER CONVERSATION, like ComposeReply above.
                       Without the key it keeps the previous email's state across a thread
