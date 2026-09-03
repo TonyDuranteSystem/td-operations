@@ -125,8 +125,17 @@ export async function recategorizeWorkspace(
     // categorise any row carrying the mark, so the row was permanently stuck
     // with no pass able to resolve it.
     const notesChanged = u.notes !== undefined && u.notes !== ((orig.notes as string) ?? "")
-    if (!catChanged && !notesChanged && u.ai_lean === undefined && u.ai_bucket === undefined) continue
+    // is_related_party must travel with category here too (2026-09-03,
+    // caught live in a real workspace end-to-end test, THIRD sibling of the
+    // same gap fixed in categorization-engine.ts's recategorizeAccountYear):
+    // dropping it here means a workspace row corrected off a stale member
+    // category keeps a stale is_related_party=true forever, wrongly
+    // reappearing as a related-party transaction once matchesMemberName is
+    // recomputed correctly.
+    const relatedPartyChanged = u.is_related_party !== undefined && u.is_related_party !== Boolean(orig.is_related_party)
+    if (!catChanged && !notesChanged && !relatedPartyChanged && u.ai_lean === undefined && u.ai_bucket === undefined) continue
     const payload: Record<string, unknown> = { category: nextCategory, subcategory: nextSub }
+    if (u.is_related_party !== undefined) payload.is_related_party = u.is_related_party
     if (u.notes !== undefined) payload.notes = u.notes
     if (u.ai_lean !== undefined) payload.ai_lean = u.ai_lean
     if (u.ai_bucket !== undefined) payload.ai_bucket = u.ai_bucket
