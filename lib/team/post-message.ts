@@ -31,10 +31,13 @@ import { findOrCreateDm } from '@/lib/team/dm'
 import { sendPushToAdminUsers } from '@/lib/portal/web-push'
 import { sendPushToStaffExcept } from '@/lib/team/notify'
 import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/team/channel-notify'
-import { validateTeamPostTarget, validateTeamPostMessage } from '@/lib/team/post-message-validate'
+import { validateTeamPostTarget, validateTeamPostMessage, validateTeamPostAttachments } from '@/lib/team/post-message-validate'
 import { resolveActingUser } from '@/lib/team/acting-user'
+import type { ChatAttachment } from '@/lib/types'
 
-export { validateTeamPostTarget, validateTeamPostMessage, TEAM_MESSAGE_MAX } from '@/lib/team/post-message-validate'
+export { validateTeamPostTarget, validateTeamPostMessage, validateTeamPostAttachments, TEAM_MESSAGE_MAX } from '@/lib/team/post-message-validate'
+
+const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/$/, '')
 
 export interface PostTeamMessageInput {
   /** Channel slug or name (or "general" for the general room). */
@@ -53,6 +56,13 @@ export interface PostTeamMessageInput {
   message: string
   /** Optional rich card (validated via validateTeamCard). */
   card?: unknown
+  /**
+   * Optional file attachments — same shape portal chat uses. Every url must be
+   * hosted on our own Storage (validateTeamPostAttachments enforces this), so
+   * a caller must first land the file there (e.g. portal_chat_attach_file, or
+   * any tool that returns a Storage-hosted url) before passing it here.
+   */
+  attachments?: ChatAttachment[] | null
   /**
    * The STAFF user (auth uuid or email) who dictated this message, when the
    * calling surface knows it for certain. Stamped on the row so that person is
@@ -137,6 +147,8 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
   if (targetErr) throw new Error(targetErr)
   const msgErr = validateTeamPostMessage(input.message, input.card)
   if (msgErr) throw new Error(msgErr)
+  const attachErr = validateTeamPostAttachments(input.attachments, SUPABASE_URL)
+  if (attachErr) throw new Error(attachErr)
 
   const target = await resolveTargetThread(input)
   if (!target) throw new Error('Target thread not found (check the channel slug/name, thread id, or user id).')
@@ -204,6 +216,7 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
     root_id: rootId,
     reply_to_id: rootId,
     card: input.card ?? null,
+    attachments: input.attachments ?? null,
     mentions: mentions.matchedHandles.length ? mentions.matchedHandles : [],
     mentioned_user_ids: mentions.userIds,
     read_at: now,
@@ -258,7 +271,8 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
   // a real user; the ACTING user (who dictated this message) is excluded from
   // every branch exactly as if they had typed it themselves.
   try {
-    const preview = message.slice(0, 120) || (input.card ? '📇 Shared a card' : 'New message')
+    const preview = message.slice(0, 120)
+      || (input.attachments?.length ? `📎 ${input.attachments[0].name}` : input.card ? '📇 Shared a card' : 'New message')
     const url = `/team-chat?thread=${target.thread_id}${rootId ? `&root=${rootId}` : ''}`
     // Per-thread tag so two bugs don't replace each other on the lock screen.
     const tag = rootId ? `team-thread-${rootId}` : `team-thread-${target.thread_id}`
