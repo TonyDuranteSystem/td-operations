@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { gmailPost, extractBody } from "@/lib/gmail"
 import { buildReplyMime, type ReplyMimeAttachment } from "@/lib/inbox/reply-mime"
-import { resolveReplyTarget, ReplyTargetError } from "@/lib/inbox/reply-target"
+import { resolveReplyTarget, buildThreadQuotes, ReplyTargetError } from "@/lib/inbox/reply-target"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import {
   parseStagedAttachmentInputs,
@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
     if (denied) return denied
 
     const body = await req.json()
-    const { conversationId, message, channel, mailbox, signature_variant, messageId: targetMessageId, mode } = body as {
+    const { conversationId, message, channel, mailbox, signature_variant, messageId: targetMessageId, mode, to: toOverrideRaw, quoteMode: quoteModeRaw } = body as {
       conversationId: string
       message: string
       channel: "whatsapp" | "telegram" | "gmail"
@@ -41,7 +41,25 @@ export async function POST(req: NextRequest) {
        *  by an older client; see resolveReplyTarget's fallback. */
       messageId?: string
       mode?: "reply" | "replyAll"
+      /** Staff edited the To field — replaces the resolved recipient(s) outright. */
+      to?: string[]
+      /** 'message' (default) | 'thread' | 'none' — how much to quote below the reply. */
+      quoteMode?: string
     }
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    const toOverride = Array.isArray(toOverrideRaw)
+      ? toOverrideRaw.map((a) => String(a).trim().toLowerCase()).filter(Boolean)
+      : undefined
+    if (toOverride) {
+      if (toOverride.length === 0) {
+        return NextResponse.json({ error: "At least one recipient is required." }, { status: 400 })
+      }
+      const bad = toOverride.find((a) => !EMAIL_RE.test(a))
+      if (bad) {
+        return NextResponse.json({ error: `"${bad}" doesn't look like a valid email address.` }, { status: 400 })
+      }
+    }
+    const quoteMode = quoteModeRaw === "thread" || quoteModeRaw === "none" ? quoteModeRaw : "message"
 
     if (!conversationId || !message) {
       return NextResponse.json(
@@ -112,25 +130,36 @@ export async function POST(req: NextRequest) {
       // the right person but thread/quote incorrectly in Gmail.
       let target
       try {
-        target = await resolveReplyTarget({ threadId, messageId: targetMessageId, mode, asUser })
+        target = await resolveReplyTarget({ threadId, messageId: targetMessageId, mode, asUser, toOverride })
       } catch (err) {
         if (err instanceof ReplyTargetError) {
           return NextResponse.json({ error: err.message }, { status: err.status })
         }
         throw err
       }
-      const { message: lastMsg, from, subject, messageIdHeader: messageId, references, date: lastDate, cc } = target
+      const { message: lastMsg, replyToAddresses, quotedFrom, subject, messageIdHeader: messageId, references, date: lastDate, cc } = target
 
       // Build RFC 2822 reply
-      const replyTo = from
+      const replyTo = replyToAddresses.length === 1 ? replyToAddresses[0] : replyToAddresses
       const replySubject = subject.startsWith("Re:") ? subject : `Re: ${subject}`
 
-      // Quoting is best-effort — never block the reply on it
+      // Quoting is best-effort — never block the reply on it. 'thread' mode
+      // pulls every OTHER message in the conversation (oldest-first); the
+      // target message itself is excluded from that list since it's already
+      // the single-message quote below/instead.
       let lastBody = ""
+      let threadQuotes: Awaited<ReturnType<typeof buildThreadQuotes>> | undefined
       try {
-        lastBody = extractBody(lastMsg.payload).slice(0, 10000).trimEnd()
+        if (quoteMode === "thread") {
+          threadQuotes = await buildThreadQuotes(threadId, asUser, lastMsg.id)
+          lastBody = extractBody(lastMsg.payload).slice(0, 10000).trimEnd()
+          threadQuotes.push({ from: quotedFrom, date: lastDate, body: lastBody })
+        } else if (quoteMode === "message") {
+          lastBody = extractBody(lastMsg.payload).slice(0, 10000).trimEnd()
+        }
       } catch {
         lastBody = ""
+        threadQuotes = undefined
       }
 
       // Gmail-parity MIME: multipart/alternative (plain + HTML), quoted
@@ -166,7 +195,9 @@ export async function POST(req: NextRequest) {
         message,
         lastBody,
         lastDate,
-        lastFrom: from,
+        lastFrom: quotedFrom,
+        quoteMode,
+        threadQuotes,
         attachments,
         signature,
         fromName: signatureFromName(signatureSender),

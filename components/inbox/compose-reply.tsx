@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Send, Sparkles, Loader2, Paperclip } from 'lucide-react'
+import { Send, Sparkles, Loader2, Paperclip, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
@@ -15,6 +15,33 @@ import {
 } from '@/lib/email/signature'
 import type { InboxConversation } from '@/lib/types'
 import type { ReplyTarget } from './message-thread'
+
+/**
+ * Pull every bare email address out of a display string like
+ * `"Dragos Popescu" <dragos@payset.io>, "Jane Smith" <jane@x.com>` — used to
+ * seed the editable To chips from a resolved target's display sender. A
+ * small client-safe duplicate of lib/gmail.ts's extractAllEmailAddresses
+ * (same regex, comma-inside-a-display-name safe) rather than importing that
+ * file client-side, which also pulls in its server-only Google-auth code.
+ */
+function parseAddressesFromDisplay(value: string): string[] {
+  const matches = value.match(/[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+/g)
+  if (!matches) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const m of matches) {
+    const addr = m.toLowerCase()
+    if (!seen.has(addr)) {
+      seen.add(addr)
+      out.push(addr)
+    }
+  }
+  return out
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+type QuoteMode = 'message' | 'thread' | 'none'
 
 interface ComposeReplyProps {
   conversation: InboxConversation
@@ -50,6 +77,18 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   // reply starts fresh. lib/inbox/reply-target.ts is the server's mirror of
   // this same "skip our own messages" default.
   const [frozenTarget, setFrozenTarget] = useState<ReplyTarget | null>(null)
+  // Editable recipient chips, seeded from frozenTarget the moment it
+  // resolves — visible and editable BEFORE send (Antonio, 2026-09-03: "I
+  // want to see the from and to addresses... option to see them and delete
+  // one or add if needed"). Sending with an edited list overrides the
+  // server's own resolution outright (lib/inbox/reply-target.ts's
+  // toOverride) — the server still validates every address looks real.
+  const [toAddresses, setToAddresses] = useState<string[]>([])
+  const [toInput, setToInput] = useState('')
+  // 'message' (default) quotes just the message being answered, matching
+  // Gmail's own ordinary reply. 'thread' quotes the whole conversation.
+  // 'none' quotes nothing. Antonio, 2026-09-03.
+  const [quoteMode, setQuoteMode] = useState<QuoteMode>('message')
   const [signatureVariant, setSignatureVariant] = useState<SignatureVariant>(
     DEFAULT_REPLY_SIGNATURE_VARIANT
   )
@@ -101,6 +140,18 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
     if (def) setFrozenTarget({ ...def, mode: 'reply' })
   }, [composing, frozenTarget, explicitReplyTarget, getDefaultReplyTarget])
 
+  // Seed the editable To chips the moment a target freezes — every time it
+  // (re)freezes, never live-recomputed afterward (same "frozen, not
+  // re-derived" discipline as the target itself, so typed edits here can't
+  // be silently overwritten by anything else re-rendering).
+  useEffect(() => {
+    if (!frozenTarget) {
+      setToAddresses([])
+      return
+    }
+    setToAddresses(parseAddressesFromDisplay(frozenTarget.sender))
+  }, [frozenTarget])
+
   // Belt-and-braces to the key={conversation.id} at both mount sites: staged
   // attachments must NEVER survive a thread switch (council blocker
   // 2026-07-29 — a passport staged on thread A must not ride a reply to B).
@@ -138,6 +189,8 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
           mailbox,
           signature_variant: signatureVariant,
           ...(frozenTarget && { messageId: frozenTarget.messageId, mode: frozenTarget.mode }),
+          ...(isEmail && toAddresses.length > 0 && { to: toAddresses }),
+          ...(isEmail && { quoteMode }),
           ...(staged.length > 0 && { attachments: staged }),
         }),
       })
@@ -158,6 +211,8 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
       setDraftNotice(null)
       setSignatureVariant(DEFAULT_REPLY_SIGNATURE_VARIANT)
       setFrozenTarget(null)
+      setToInput('')
+      setQuoteMode('message')
       onTargetConsumed?.()
       const refetch = () => {
         queryClient.invalidateQueries({
@@ -187,6 +242,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
           mailbox,
           signature_variant: signatureVariant,
           ...(frozenTarget && { messageId: frozenTarget.messageId, mode: frozenTarget.mode }),
+          ...(toAddresses.length > 0 && { to: toAddresses }),
         }),
       })
       if (!res.ok) {
@@ -200,6 +256,8 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
       setComposing(false)
       setPreviewOpen(false)
       setFrozenTarget(null)
+      setToInput('')
+      setQuoteMode('message')
       onTargetConsumed?.()
       setSignatureVariant(DEFAULT_REPLY_SIGNATURE_VARIANT)
       setDraftNotice('Draft saved — find it in Drafts (here and in Gmail).')
@@ -214,6 +272,9 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   const handleSend = () => {
     const text = message.trim()
     if (!text || sendMutation.isPending || sendingRef.current) return
+    // The empty-To warning is already visible above the textarea — no
+    // recipient means nothing safe to send.
+    if (isEmail && frozenTarget && toAddresses.length === 0) return
     // Never send while a file is mid-upload or silently drop one that failed —
     // the staff member attached it because the recipient needs it. Per-file
     // pending check, NOT the uploading boolean (which races across batches).
@@ -305,16 +366,88 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
         }
       }}
     >
-      {/* Who this reply actually goes to — shown for EVERY reply, not just an
-          explicit per-message pick, so a wrong target is visible before
-          sending rather than only when staff remembers to check (the exact
-          gap that let both real incidents happen: an ordinary reply whose
-          untargeted default silently resolved to our own mailbox). */}
+      {/* Who this reply actually goes to — shown and now EDITABLE for every
+          reply, not just an explicit per-message pick, so a wrong target is
+          visible (and fixable) before sending rather than only when staff
+          remembers to check (the exact gap that let both real incidents
+          happen: an ordinary reply whose untargeted default silently
+          resolved to our own mailbox). Antonio, 2026-09-03: "I want to see
+          the from and to addresses... option to see them and delete one or
+          add if needed." An edited list overrides the server's own
+          resolution outright — the server re-validates every address. */}
       {isEmail && frozenTarget && (
-        <p className="text-xs text-zinc-500 mb-2">
-          Replying{frozenTarget.mode === 'replyAll' ? ' All' : ''} to:{' '}
-          <span className="font-medium text-zinc-700">{frozenTarget.sender}</span>
-        </p>
+        <div className="mb-2 space-y-1">
+          <div className="flex items-center gap-1.5 flex-wrap text-xs">
+            <span className="text-zinc-500 shrink-0">
+              {frozenTarget.mode === 'replyAll' ? 'Reply All to' : 'To'}:
+            </span>
+            {toAddresses.map((addr) => (
+              <span
+                key={addr}
+                className="inline-flex items-center gap-1 rounded-full bg-zinc-100 pl-2 pr-1 py-0.5 text-zinc-700"
+              >
+                {addr}
+                <button
+                  type="button"
+                  onClick={() => setToAddresses((prev) => prev.filter((a) => a !== addr))}
+                  aria-label={`Remove ${addr}`}
+                  className="rounded-full p-0.5 hover:bg-zinc-300/60 text-zinc-500 hover:text-zinc-700"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+            <input
+              value={toInput}
+              onChange={(e) => setToInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter' && e.key !== ',') return
+                e.preventDefault()
+                const candidate = toInput.trim().replace(/,$/, '')
+                if (candidate && EMAIL_RE.test(candidate) && !toAddresses.includes(candidate.toLowerCase())) {
+                  setToAddresses((prev) => [...prev, candidate.toLowerCase()])
+                }
+                setToInput('')
+              }}
+              placeholder={toAddresses.length ? 'add another…' : 'add a recipient…'}
+              className="min-w-[100px] flex-1 bg-transparent outline-none text-zinc-700 placeholder:text-zinc-400 py-0.5"
+            />
+          </div>
+          {toAddresses.length === 0 && (
+            <p className="text-xs text-amber-600">At least one recipient is required.</p>
+          )}
+          <p className="text-xs text-zinc-400">
+            {/* frozenTarget.sender is the RECIPIENT for one of our own
+                messages (the message card shows "To: X"), not always an
+                author — "replying to the message from X" read backwards on
+                that card, so this stays direction-agnostic. */}
+            From: {mailbox === 'antonio' ? 'antonio.durante@tonydurante.us' : 'support@tonydurante.us'} · replying to the message shown above
+          </p>
+        </div>
+      )}
+      {isEmail && composing && (
+        <div className="mb-2 flex items-center gap-1.5 text-xs">
+          <span className="text-zinc-500 shrink-0">Quote:</span>
+          {([
+            ['message', 'This message'],
+            ['thread', 'Whole conversation'],
+            ['none', 'None'],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setQuoteMode(value)}
+              className={cn(
+                'rounded-full px-2.5 py-1 transition-colors',
+                quoteMode === value
+                  ? 'bg-blue-100 text-blue-700 font-medium'
+                  : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200'
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       )}
       {sendMutation.isError && (
         <p className="text-xs text-red-500 mb-2">
@@ -471,7 +604,8 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
           disabled={
             !message.trim() ||
             sendMutation.isPending ||
-            attachments.files.some((f) => !f.path && !f.error)
+            attachments.files.some((f) => !f.path && !f.error) ||
+            (isEmail && !!frozenTarget && toAddresses.length === 0)
           }
           className="shrink-0 p-2.5 rounded-xl bg-blue-500 text-white hover:bg-blue-600
             disabled:opacity-40 disabled:cursor-not-allowed transition-colors"

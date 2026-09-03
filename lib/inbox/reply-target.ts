@@ -1,4 +1,6 @@
-import { gmailGet, getHeader, isOwnMailboxAddress, extractAllEmailAddresses, type GmailAPIMessage } from "@/lib/gmail"
+import { gmailGet, getHeader, extractBody, isOwnMailboxAddress, extractAllEmailAddresses, type GmailAPIMessage } from "@/lib/gmail"
+import { splitQuotedText } from "@/lib/inbox/email-quote"
+import type { ThreadQuoteEntry } from "@/lib/inbox/reply-mime"
 
 /**
  * Resolve which Gmail message a reply/draft is actually targeting — the
@@ -8,6 +10,15 @@ import { gmailGet, getHeader, isOwnMailboxAddress, extractAllEmailAddresses, typ
  * reply where our own prior message simply happened to be newest — not the
  * rarer "staff deliberately opens an old message" case — so the untargeted
  * DEFAULT skips our own messages too, not just the explicit picker.
+ *
+ * UPDATED 2026-09-03 (dev job 208f39ad): explicitly picking one of OUR OWN
+ * sent messages is now ALLOWED (it used to be hard-rejected) — Antonio
+ * wanted Reply/Reply-All/Forward available on every message, including
+ * sent ones, to add something to a point already made. Replying to our own
+ * message now correctly addresses that message's own original recipient(s),
+ * never back to us — see `replyToAddresses` vs `quotedFrom` below; collapsing
+ * those into one field was the reason outbound messages had to be blocked in
+ * the first place, not a mistake to route around.
  *
  * Used by both /api/inbox/reply and /api/inbox/draft — they must resolve
  * identically or a reply and its saved-draft twin could target different
@@ -25,13 +36,66 @@ export class ReplyTargetError extends Error {
 export interface ResolvedReplyTarget {
   /** The single Gmail message every header/body field is derived from. */
   message: GmailAPIMessage
-  from: string
+  /**
+   * Who the new email is addressed to — bare lowercase addresses, always
+   * at least one. For an inbound target this is just the sender. For an
+   * OUTBOUND target (one of our own messages) this is that message's own
+   * recipient(s), never the message's own From (which is us) — replying
+   * to something we sent must go back to whoever we sent it to, not to
+   * ourselves (dev job 208f39ad, 2026-09-03: buttons + this fix now cover
+   * our own sent messages too, not just the client's).
+   */
+  replyToAddresses: string[]
+  /**
+   * Who WROTE the message being quoted underneath the reply — always that
+   * message's own From header. Deliberately separate from
+   * `replyToAddresses`: for an outbound target those two differ (the quote
+   * must still say WE wrote it, even though the new mail addresses the
+   * client), and collapsing them into one field was the original design
+   * flaw that made outbound messages unsafe to reply to at all.
+   */
+  quotedFrom: string
   subject: string
   messageIdHeader: string
   references: string
   date: string
-  /** Reply-All recipients besides `from` — bare lowercase addresses, our own mailboxes and `from` itself excluded. Empty for a plain reply. */
+  /** Reply-All recipients besides `replyToAddresses` — bare lowercase addresses, our own mailboxes and the primary recipient(s) excluded. Empty for a plain reply. */
   cc: string[]
+}
+
+/**
+ * One thread message's quotable content, oldest-first — the input to
+ * buildReplyMime's 'thread' quote mode: "the conversation so far," i.e.
+ * every message STRICTLY BEFORE `excludeMessageId` chronologically (never
+ * anything after it — a reply continues from the point it's answering, not
+ * messages that logically haven't happened yet relative to it). The caller
+ * appends the target message's own quote last, in its correct chronological
+ * slot. Body is pre-stripped of its own nested quote via splitQuotedText and
+ * capped per-message, mirroring the existing single-message cap. Sorted by
+ * internalDate explicitly — the Gmail API's own message order is not
+ * guaranteed (the live-fetch message-list route sorts for the same reason).
+ */
+export async function buildThreadQuotes(threadId: string, asUser: string, excludeMessageId: string): Promise<ThreadQuoteEntry[]> {
+  const thread = (await gmailGet(`/threads/${threadId}`, { format: "full" }, asUser)) as { messages: GmailAPIMessage[] }
+  const sorted = [...(thread.messages ?? [])].sort(
+    (a, b) => parseInt(a.internalDate || "0") - parseInt(b.internalDate || "0")
+  )
+  const targetIdx = sorted.findIndex((m) => m.id === excludeMessageId)
+  const before = targetIdx >= 0 ? sorted.slice(0, targetIdx) : sorted.filter((m) => m.id !== excludeMessageId)
+  return before.map((m) => {
+    // extractBody (not extractBodyWithType) — it strips HTML down to plain
+    // text when the body is HTML, matching what the single-message quote
+    // path already does (app/api/inbox/reply/route.ts). Using the
+    // HTML-preserving variant here shipped raw `<div>`/`<p>` tags into a
+    // real sandbox-verified send before this was caught (dev job 208f39ad).
+    const raw = extractBody(m.payload)
+    const body = splitQuotedText(raw).main.slice(0, 10_000).trimEnd()
+    return {
+      from: getHeader(m.payload.headers, "From"),
+      date: getHeader(m.payload.headers, "Date"),
+      body,
+    }
+  })
 }
 
 /**
@@ -39,21 +103,21 @@ export interface ResolvedReplyTarget {
  *   current UI). When omitted (older client, or a defensive fallback),
  *   the newest NON-outbound message in the thread is used instead of the
  *   thread's literal newest message.
+ * @param toOverride Staff edited the To field directly (added/removed a
+ *   recipient) before sending — replaces the resolved addresses outright.
+ *   Must be non-empty; validated by the caller route, not here.
  */
 export async function resolveReplyTarget(opts: {
   threadId: string
   messageId?: string | null
   mode?: "reply" | "replyAll"
   asUser: string
+  toOverride?: string[]
 }): Promise<ResolvedReplyTarget> {
   const { threadId, messageId, asUser } = opts
   const mode = opts.mode === "replyAll" ? "replyAll" : "reply"
 
   let message: GmailAPIMessage
-  // Fetched only in the "no explicit messageId" branch below — reused by
-  // the own-address check afterward so a legitimate all-outbound thread
-  // doesn't pay for a second Gmail call.
-  let threadMessages: GmailAPIMessage[] | null = null
 
   if (messageId) {
     message = (await gmailGet(`/messages/${messageId}`, { format: "full" }, asUser)) as GmailAPIMessage
@@ -68,7 +132,6 @@ export async function resolveReplyTarget(opts: {
   } else {
     const thread = (await gmailGet(`/threads/${threadId}`, { format: "full" }, asUser)) as { messages: GmailAPIMessage[] }
     if (!thread.messages?.length) throw new ReplyTargetError("Conversation not found.", 404)
-    threadMessages = thread.messages
     const nonOwn = [...thread.messages].reverse().find(
       (m) => !isOwnMailboxAddress(getHeader(m.payload.headers, "From"))
     )
@@ -80,34 +143,40 @@ export async function resolveReplyTarget(opts: {
   }
 
   const from = getHeader(message.payload.headers, "From")
-  // A card for one of OUR OWN messages is a normal thing to open (scroll up,
-  // reply to a point made earlier) — replying to it would address the mail
-  // back to ourselves instead of the client. Only a real problem when some
-  // OTHER, non-own message exists in this thread that should have been
-  // targeted instead: if literally everything here is ours, this IS the
-  // legitimate default fallback above, not a mistake, and must be allowed.
-  if (isOwnMailboxAddress(from)) {
-    const messages = threadMessages ?? (
-      (await gmailGet(`/threads/${threadId}`, { format: "full" }, asUser)) as { messages: GmailAPIMessage[] }
-    ).messages
-    const hasAlternative = messages?.some(
-      (m) => m.id !== message.id && !isOwnMailboxAddress(getHeader(m.payload.headers, "From"))
-    )
-    if (hasAlternative) {
-      throw new ReplyTargetError("That message was sent by us — pick a message from the client to reply to.")
+  const isOwnMessage = isOwnMailboxAddress(from)
+
+  // Who the reply goes to: an inbound message's own sender (unchanged), or
+  // — for one of our own messages — that message's own recipient(s), so a
+  // reply never addresses back to us. If we somehow cc'd ourselves on our
+  // own outgoing mail, our own addresses are stripped from the candidate
+  // list too.
+  let replyToAddresses: string[]
+  if (isOwnMessage) {
+    const to = getHeader(message.payload.headers, "To")
+    replyToAddresses = extractAllEmailAddresses(to).filter((a) => !isOwnMailboxAddress(a))
+    if (replyToAddresses.length === 0) {
+      // Nothing but us on this message (an internal-only send, or a thread
+      // where every participant is one of our own aliases) — no real
+      // "someone else" to address; only correct fallback left is us.
+      replyToAddresses = [from]
     }
+  } else {
+    replyToAddresses = [from]
+  }
+  if (opts.toOverride && opts.toOverride.length > 0) {
+    replyToAddresses = opts.toOverride
   }
 
   const cc: string[] = []
   if (mode === "replyAll") {
     const to = getHeader(message.payload.headers, "To")
     const ccHeader = getHeader(message.payload.headers, "Cc")
-    const fromAddr = extractAllEmailAddresses(from)[0]
+    const primary = new Set(replyToAddresses)
     const combined = [...extractAllEmailAddresses(to), ...extractAllEmailAddresses(ccHeader)]
     const seen = new Set<string>()
     for (const addr of combined) {
       if (isOwnMailboxAddress(addr)) continue
-      if (fromAddr && addr === fromAddr) continue // already the primary To
+      if (primary.has(addr)) continue // already a primary recipient
       if (seen.has(addr)) continue
       seen.add(addr)
       cc.push(addr)
@@ -116,7 +185,8 @@ export async function resolveReplyTarget(opts: {
 
   return {
     message,
-    from,
+    replyToAddresses,
+    quotedFrom: from,
     subject: getHeader(message.payload.headers, "Subject"),
     messageIdHeader: getHeader(message.payload.headers, "Message-ID"),
     references: getHeader(message.payload.headers, "References"),
