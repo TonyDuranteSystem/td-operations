@@ -38,6 +38,23 @@ const ACTION_STAGES: Record<string, ActionStageConfig> = {
     },
     link: '/portal/wizard',
   },
+  // The client hasn't started the ITIN wizard yet — this is the SD's stage
+  // at creation, so it's never reached via advanceServiceDelivery and never
+  // dispatches the action-required email/chat/bell package on its own; it's
+  // registered here so the client-portal stepper (flow-progress.ts) can find
+  // it and glow, matching the "your turn" treatment ITIN::Client Signing
+  // already gets further down the journey.
+  'ITIN::Data Collection': {
+    title: {
+      en: 'Complete your ITIN application',
+      it: 'Completa la tua domanda ITIN',
+    },
+    message: {
+      en: 'It’s time to start your ITIN application. Please open your portal and complete the ITIN questionnaire — it takes about 10 minutes. We need this information to prepare your W-7 and 1040-NR forms.',
+      it: 'È il momento di iniziare la tua domanda ITIN. Accedi al portale e compila il questionario ITIN — ci vogliono circa 10 minuti. Abbiamo bisogno di queste informazioni per preparare i moduli W-7 e 1040-NR.',
+    },
+    link: '/portal/wizard?type=itin',
+  },
   // The client must print, wet-ink sign, and mail the ITIN package. Migrated
   // from the bespoke 8c block in service-delivery.ts (2026-06-25) onto the
   // shared rail — copy preserved verbatim.
