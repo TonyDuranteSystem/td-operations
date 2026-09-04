@@ -13,6 +13,7 @@ import { buildChatQueryPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
 import { decideAdminSendScope, isContactLinkedToAccount, resolveAdminReplyContact } from '@/lib/portal/admin-send-scope'
 import { contactThreadOrFilter, multiMemberAccountIds } from '@/lib/portal/thread-scope'
+import { resolveAccountMembersForChat } from '@/lib/portal/addressed-to'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -206,7 +207,7 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json()
-  const { account_id, contact_id: bodyContactId, sender_context: rawSenderContext, topic: rawTopic, message, attachment_url, attachment_name, attachments, reply_to_id } = body
+  const { account_id, contact_id: bodyContactId, sender_context: rawSenderContext, topic: rawTopic, message, attachment_url, attachment_name, attachments, reply_to_id, addressed_to_contact_id: rawAddressedToContactId } = body
 
   if (!account_id && !bodyContactId && !getClientContactId(user)) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
@@ -373,6 +374,27 @@ export async function POST(request: NextRequest) {
       }
     }
   }
+  // "Addressed to" member label (dev job 08a8be62) — display metadata only,
+  // deliberately NOT part of decideAdminSendScope's contract above. Only
+  // meaningful for a staff send into an account-level (multi-member) thread.
+  // Validated against the account's REAL member roster (lib/portal/addressed-to.ts,
+  // the `members` table, not account_contacts) so a stale/wrong value never
+  // reaches storage — but an invalid value is dropped, never blocks the send:
+  // this is a label, not a gate.
+  let addressedToContactId: string | null = null
+  if (typeof rawAddressedToContactId === 'string' && rawAddressedToContactId && senderType === 'admin' && account_id) {
+    try {
+      const roster = await resolveAccountMembersForChat(account_id)
+      if (roster.some(o => o.resolvable && o.contactId === rawAddressedToContactId)) {
+        addressedToContactId = rawAddressedToContactId
+      } else {
+        console.warn('[portal/chat] addressed_to_contact_id not in the account\'s resolved member roster, dropped:', rawAddressedToContactId, account_id)
+      }
+    } catch (err) {
+      console.error('[portal/chat] addressed_to_contact_id validation failed, dropped (non-fatal):', err)
+    }
+  }
+
   const { data, error } = await insertSurface
     .from('portal_messages')
     .insert({
@@ -388,6 +410,7 @@ export async function POST(request: NextRequest) {
       attachment_name: attachment_name || null,
       attachments: Array.isArray(attachments) ? attachments : [],
       reply_to_id: reply_to_id || null,
+      addressed_to_contact_id: addressedToContactId,
       ...(inheritedServiceDeliveryId ? { service_delivery_id: inheritedServiceDeliveryId } : {}),
     })
     .select('*, contacts:contact_id(full_name)')
