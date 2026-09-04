@@ -296,6 +296,17 @@ export default function PortalChatsPage() {
   // account's roster must never silently carry into this one.
   const [selectedAddressedToContactId, setSelectedAddressedToContactId] = useState<string | null>(null)
   const [addressedToJustChanged, setAddressedToJustChanged] = useState(false)
+  // Pre-send confirmation pop-up (Antonio, 2026-09-04 — explicit, deliberate
+  // override of the council's ambient-indicator recommendation, made AFTER
+  // seeing the ambient version live and rejecting it: "I want a pop-up...
+  // Even in a single-member LLC, there is a personal and a company"). Opens
+  // on EVERY send, every conversation shape, no exceptions — the modal reads
+  // and edits the SAME live selection state the ambient chips already used
+  // (selectedCompanyId / selectedAddressedToContactId / adminActiveTopic), so
+  // there is no separate copy of the choice to keep in sync; it is captured
+  // at "Confirm & Send" time, mirroring the existing capture-before-await
+  // discipline (dev job c3bb4abc) one step later than before.
+  const [sendConfirmOpen, setSendConfirmOpen] = useState(false)
   const [selectedName, setSelectedName] = useState<{ company: string; contact?: string } | null>(null)
   // Company CONTEXT for read-only side panels (AI assistant, Issues, To-Do
   // cards, notes, the solo-company realtime arm): the explicit chip selection
@@ -2009,7 +2020,13 @@ export default function PortalChatsPage() {
     ? (currentThreadForGuard?.company_name ?? 'This company')
     : (selectedClosedCompany?.name ?? 'This company')
 
-  const handleSend = async () => {
+  // Opens the pre-send confirmation pop-up (Antonio, 2026-09-04) instead of
+  // sending directly. Every guard that used to gate the send itself still
+  // gates opening the pop-up — an empty message, a closed account, or an
+  // in-flight send never gets as far as the modal. The actual send only
+  // happens from performSend(), fired by the modal's own "Confirm & Send"
+  // button, never from here.
+  const handleSend = () => {
     if ((!replyText.trim() && pendingAdminFiles.length === 0) || (!selectedAccountId && !selectedContactId) || sendMutation.isPending || uploadingAdminFile) return
     if (sendingToClosedAccount) {
       toast.error(`${closedTargetName} is closed — the client can't see messages here. Pick an active company or "Personal".`)
@@ -2017,8 +2034,31 @@ export default function PortalChatsPage() {
     }
     if (isRecording) stopRecording()
     if (inputRef.current) inputRef.current.style.height = 'auto'
+    setSendConfirmOpen(true)
+  }
 
-    // Captured now, at click time, before any upload/network await — this is
+  // Fires the actual send, exactly as handleSend used to do inline — the only
+  // change is WHEN this runs: after "Confirm & Send" inside the pop-up,
+  // instead of immediately on the composer's Send button. The capture-before-
+  // await discipline is unchanged and just as necessary here: the modal can
+  // sit open for as long as staff takes to decide, which is a longer window
+  // than the old attachment-upload await this pattern was originally built
+  // for (dev job c3bb4abc).
+  const performSend = async () => {
+    // Guard against a fast double-click on "Confirm & Send" firing twice
+    // before the modal's own re-render closes it — mirrors handleSend's
+    // original isPending guard, now needed here since the modal can sit
+    // open indefinitely and the click is a second, later event.
+    if (sendMutation.isPending || uploadingAdminFile) return
+    // Re-check the closed-account guard: staff could switch the company chip
+    // to a closed one WHILE the modal was open, after handleSend's own check
+    // already passed.
+    if (sendingToClosedAccount) {
+      toast.error(`${closedTargetName} is closed — the client can't see messages here. Pick an active company or "Personal".`)
+      return
+    }
+    setSendConfirmOpen(false)
+    // Captured now, at confirm-click time, before any upload/network await — this is
     // the conversation the send is actually FOR, regardless of where staff
     // is looking by the time it completes. Dev job c3bb4abc.
     //
@@ -4750,6 +4790,193 @@ export default function PortalChatsPage() {
                 className="flex items-center gap-1 text-sm font-medium bg-violet-600 text-white rounded px-3 py-1.5 disabled:opacity-40"
               >
                 <Plus className="h-3.5 w-3.5" /> {addTodoMutation.isPending ? 'Adding…' : 'Add to board'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pre-send confirmation pop-up (dev job 08a8be62; Antonio, 2026-09-04 —
+          explicit override of the earlier ambient-only design, made AFTER
+          seeing that version live on a real single-member LLC and rejecting
+          it: "I want a pop-up... Even in a single-member LLC, there is a
+          personal and a company"). Opens on EVERY send, every conversation
+          shape, no exceptions — reads and writes the SAME live selection
+          state the ambient chips above the composer already use, so there is
+          no second copy of the choice to keep in sync. Deliberately does NOT
+          rebuild the catalog-driven topic-template picker (the tab bar above
+          the message list) — it reuses the same underlying adminActiveTopic
+          state via the simpler existing-topics-as-chips + free-text
+          mechanism, which fully covers "an existing topic, or a new one"
+          without a second topic-selection implementation to keep in sync. */}
+      {sendConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setSendConfirmOpen(false)}>
+          <div className="w-full max-w-md rounded-lg bg-white shadow-xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0">
+              <Send className="h-4 w-4 text-blue-500" />
+              <h3 className="text-sm font-semibold text-zinc-800">Before you send</h3>
+              <button onClick={() => setSendConfirmOpen(false)} className="ml-auto p-1 rounded hover:bg-zinc-100 text-zinc-400">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4 overflow-y-auto">
+              {/* Personal vs company (+ which company, if the contact has more
+                  than one) — only when this dimension exists at all for this
+                  thread. An account-level thread (selectedAccountId set) is
+                  always company-scoped by construction; there is no ambient
+                  "personal" path out of it today, so this section correctly
+                  does not appear there. */}
+              {selectedThreadCompanies.length > 0 && !selectedAccountId && (
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500 mb-1.5">Send as</label>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {selectedThreadCompanies.map(c => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setSelectedCompanyId(c.id)}
+                        className={cn(
+                          'px-3 py-1.5 text-sm rounded-full border transition-colors max-w-[220px] truncate',
+                          c.closed
+                            ? (selectedCompanyId === c.id ? 'bg-red-600 text-white border-red-600' : 'border-red-200 text-red-600 hover:bg-red-50')
+                            : (selectedCompanyId === c.id ? 'bg-blue-600 text-white border-blue-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50')
+                        )}
+                      >
+                        {c.name}{c.closed ? ' (closed)' : ''}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCompanyId(null)}
+                      className={cn(
+                        'px-3 py-1.5 text-sm rounded-full border transition-colors',
+                        !selectedCompanyId ? 'bg-zinc-900 text-white border-zinc-900' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                      )}
+                    >
+                      Personal
+                    </button>
+                  </div>
+                  {!sendingToClosedAccount && !!audienceTargetId && audienceTotal > 1 && (
+                    <p className="text-[11px] text-amber-700 mt-1.5">
+                      Visible to everyone in {audienceTargetName}: {sendAudience?.contact_count ?? 0} member{(sendAudience?.contact_count ?? 0) === 1 ? '' : 's'}
+                      {(sendAudience?.chat_teammate_count ?? 0) > 0 ? ` + ${sendAudience?.chat_teammate_count} portal teammate${(sendAudience?.chat_teammate_count ?? 0) === 1 ? '' : 's'}` : ''}.
+                    </p>
+                  )}
+                  {sendingToClosedAccount && (
+                    <p className="text-[11px] text-red-600 mt-1.5">
+                      {closedTargetName} is closed — the client can&apos;t see messages here. Pick an active company or &quot;Personal&quot;.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Which member — only for multi-member account threads. Label
+                  only (lib/portal/admin-send-scope.ts unchanged): the message
+                  stays visible to the whole company thread regardless. */}
+              {selectedAccountId && selectedThreadMembers.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500 mb-1.5">Addressed to</label>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {addressedToOptions.length === 0 && (
+                      <p className="text-xs text-zinc-400">No members on file for this company yet.</p>
+                    )}
+                    {addressedToOptions.map(opt => (
+                      opt.resolvable ? (
+                        <button
+                          key={opt.memberId}
+                          type="button"
+                          onClick={() => setSelectedAddressedToContactId(opt.contactId)}
+                          className={cn(
+                            'px-3 py-1.5 text-sm rounded-full border transition-colors',
+                            effectiveAddressedToContactId === opt.contactId ? 'bg-teal-600 text-white border-teal-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                          )}
+                        >
+                          {opt.name}
+                        </button>
+                      ) : (
+                        <FastTooltip key={opt.memberId} label="No linked contact on file for this member yet — can't be addressed individually.">
+                          <span className="px-3 py-1.5 text-sm rounded-full border border-zinc-200 text-zinc-300 cursor-not-allowed">{opt.name}</span>
+                        </FastTooltip>
+                      )
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-zinc-400 mt-1.5">Label only — the whole company still sees this message.</p>
+                </div>
+              )}
+
+              {/* Topic — existing topics from this thread as chips, or free-text a new one. */}
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 mb-1.5">Topic</label>
+                <div className="flex gap-1.5 flex-wrap items-center">
+                  <button
+                    type="button"
+                    onClick={() => setAdminActiveTopic(null)}
+                    className={cn(
+                      'px-3 py-1.5 text-sm rounded-full border transition-colors',
+                      !adminActiveTopic ? 'bg-zinc-900 text-white border-zinc-900' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                    )}
+                  >
+                    General
+                  </button>
+                  {adminTopics.map(t => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setAdminActiveTopic(t)}
+                      className={cn(
+                        'px-3 py-1.5 text-sm rounded-full border transition-colors max-w-[160px] truncate',
+                        adminActiveTopic === t ? 'bg-blue-600 text-white border-blue-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                      )}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                  {adminCreatingTopic ? (
+                    <input
+                      autoFocus
+                      type="text"
+                      value={adminNewTopicInput}
+                      onChange={e => setAdminNewTopicInput(e.target.value.slice(0, 100))}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && adminNewTopicInput.trim()) {
+                          setAdminActiveTopic(adminNewTopicInput.trim())
+                          setAdminNewTopicInput('')
+                          setAdminCreatingTopic(false)
+                        } else if (e.key === 'Escape') {
+                          setAdminNewTopicInput('')
+                          setAdminCreatingTopic(false)
+                        }
+                      }}
+                      onBlur={() => {
+                        if (adminNewTopicInput.trim()) setAdminActiveTopic(adminNewTopicInput.trim())
+                        setAdminNewTopicInput('')
+                        setAdminCreatingTopic(false)
+                      }}
+                      placeholder="Topic name…"
+                      className="px-3 py-1.5 text-sm rounded-full border border-blue-300 outline-none w-32"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setAdminCreatingTopic(true)}
+                      className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-full border border-dashed border-zinc-300 text-zinc-500 hover:text-zinc-700 hover:border-zinc-400 transition-colors"
+                    >
+                      <Plus className="h-3.5 w-3.5" /> New topic
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 px-4 py-3 border-t shrink-0">
+              <button onClick={() => setSendConfirmOpen(false)} className="text-sm text-zinc-600 border rounded px-3 py-1.5">Cancel</button>
+              <button
+                disabled={sendingToClosedAccount || sendMutation.isPending || uploadingAdminFile}
+                onClick={performSend}
+                className="flex items-center gap-1.5 text-sm font-medium bg-blue-600 text-white rounded px-4 py-1.5 disabled:opacity-40"
+              >
+                <Send className="h-3.5 w-3.5" /> {(sendMutation.isPending || uploadingAdminFile) ? 'Sending…' : 'Confirm & Send'}
               </button>
             </div>
           </div>
