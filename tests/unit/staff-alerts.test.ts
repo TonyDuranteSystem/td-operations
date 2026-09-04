@@ -39,13 +39,14 @@ describe("computeNoteAlerts — note_reply", () => {
     expect(alerts[0].title).toBe("Luca replied to a note")
   })
 
-  it("never alerts the replier about their own reply", () => {
+  it("never alerts the replier about their own reply (a separate note_update fires for the fresh share itself — not what this test checks)", () => {
     const note = baseNote({
       staff_note_replies: [
         { id: "r1", author_user_id: LUCA, author_name: "Luca", body: "on it", created_at: "2026-09-02T10:00:00.000Z" },
       ],
     })
-    expect(computeNoteAlerts([note], [], LUCA, NOW)).toHaveLength(0)
+    const replyAlerts = computeNoteAlerts([note], [], LUCA, NOW).filter((a) => a.kind === "note_reply")
+    expect(replyAlerts).toHaveLength(0)
   })
 
   it("never alerts a note's own author about their own note existing", () => {
@@ -86,11 +87,15 @@ describe("computeNoteAlerts — note_reply", () => {
         { id: "r1", author_user_id: LUCA, author_name: "Luca", body: "reply", created_at: "2026-09-02T10:00:00.000Z" },
       ],
     })
-    expect(computeNoteAlerts([note], [], OTHER, NOW)).toHaveLength(1)
+    expect(computeNoteAlerts([note], [], OTHER, NOW).filter((a) => a.kind === "note_reply")).toHaveLength(1)
     // Antonio authored this note — he still hears about Luca's reply to it, the main
     // case this feature exists for. Only the replier is excluded from their own reply.
     expect(computeNoteAlerts([note], [], ANTONIO, NOW)).toHaveLength(1)
-    expect(computeNoteAlerts([note], [], LUCA, NOW)).toHaveLength(0)
+    // Luca is excluded from his OWN reply, but he's still a team-note viewer who isn't the
+    // author, so the fresh-share note_update fires for him too (his reply doesn't cancel it).
+    const lucaAlerts = computeNoteAlerts([note], [], LUCA, NOW)
+    expect(lucaAlerts.filter((a) => a.kind === "note_reply")).toHaveLength(0)
+    expect(lucaAlerts.filter((a) => a.kind === "note_update")).toHaveLength(1)
   })
 
   it("suppresses a reply alert while the note is snoozed for this viewer — matches replyNotifyTargets", () => {
@@ -105,16 +110,22 @@ describe("computeNoteAlerts — note_reply", () => {
 })
 
 describe("computeNoteAlerts — note_update", () => {
-  it("fires when the note changed since it was created (a share or an edit)", () => {
+  it("fires, worded as an edit, when the note changed after it was created", () => {
     const note = baseNote({ updated_at: "2026-09-02T10:00:00.000Z" })
     const alerts = computeNoteAlerts([note], [], LUCA, NOW)
     expect(alerts).toHaveLength(1)
     expect(alerts[0].kind).toBe("note_update")
+    expect(alerts[0].title).toContain("updated a note")
   })
 
-  it("does NOT fire on a brand-new, never-edited note", () => {
-    const note = baseNote() // updated_at === created_at
-    expect(computeNoteAlerts([note], [], LUCA, NOW)).toHaveLength(0)
+  it("FIRES, worded as a share, on a brand-new note shared at creation and never touched since — " +
+     "the exact bug found live in production: 'I sent a note to Luca and he didn't receive anything' " +
+     "(a fresh share has updated_at === created_at, which the original gate wrongly excluded)", () => {
+    const note = baseNote() // updated_at === created_at — shared at birth, never edited
+    const alerts = computeNoteAlerts([note], [], LUCA, NOW)
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].kind).toBe("note_update")
+    expect(alerts[0].title).toContain("shared a note")
   })
 
   it("a dismissal hides it; a LATER change resurfaces it (timestamp-compared, not existence)", () => {
@@ -139,7 +150,9 @@ describe("computeNoteAlerts — ordering and shape", () => {
   it("sorts newest first across mixed notes and kinds", () => {
     const older = baseNote({
       id: "note-old",
-      updated_at: "2026-09-01T09:00:00.000Z", // == created_at, so no note_update; reply carries the timestamp
+      // == created_at, so its OWN note_update alert carries the note's original share
+      // timestamp — oldest of the three; the reply on it carries a separately later timestamp.
+      updated_at: "2026-09-01T09:00:00.000Z",
       staff_note_replies: [
         { id: "r-old", author_user_id: OTHER, author_name: "Someone Else", body: "old", created_at: "2026-09-02T08:00:00.000Z" },
       ],
@@ -149,7 +162,13 @@ describe("computeNoteAlerts — ordering and shape", () => {
       updated_at: "2026-09-03T08:00:00.000Z",
     })
     const alerts = computeNoteAlerts([older, newer], [], LUCA, NOW)
-    expect(alerts.map((a) => a.note_id)).toEqual(["note-new", "note-old"])
+    // 3 alerts total: note-new's update, note-old's reply, note-old's own (fresh-share) update —
+    // in that chronological order (2026-09-03 > 2026-09-02 > 2026-09-01).
+    expect(alerts.map((a) => `${a.note_id}:${a.kind}`)).toEqual([
+      "note-new:note_update",
+      "note-old:note_reply",
+      "note-old:note_update",
+    ])
   })
 
   it("carries a client name through from the nested account/contact select", () => {
