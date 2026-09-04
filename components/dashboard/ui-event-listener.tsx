@@ -25,10 +25,12 @@ import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
 const UI_EVENT_QUERY_KEYS: Record<string, string[]> = {
   todo: ['open-message-actions', 'action-board-columns', 'portal-chat-whats-new-counts'],
   tasks: ['portal-chat-thread-tasks'],
-  // BOTH note feeds. 'staff-notes-active' alone left the Notes page (which reads
-  // 'staff-notes-all') stale on a change made in another tab or by a teammate —
-  // local mutations invalidated both by hand, the bus only the first.
-  notes: ['staff-notes-active', 'staff-notes-all'],
+  // BOTH note feeds, plus Staff Alerts (a read computed FROM the same notes/replies —
+  // no separate emit needed, it rides the existing 'notes' kind for free).
+  // 'staff-notes-active' alone left the Notes page (which reads 'staff-notes-all')
+  // stale on a change made in another tab or by a teammate — local mutations
+  // invalidated both by hand, the bus only the first.
+  notes: ['staff-notes-active', 'staff-notes-all', 'staff-alerts'],
 }
 
 /** kinds that also refresh server-rendered pages (throttled) */
@@ -82,9 +84,10 @@ const WAKE_QUERY_KEYS = [
   'entity-summary-whatsnew',
   'entity-summary-workflow',
   'thread-whats-new',
-  // Staff sticky notes (both feeds — see the note on UI_EVENT_QUERY_KEYS).
+  // Staff sticky notes (both feeds — see the note on UI_EVENT_QUERY_KEYS) + Staff Alerts.
   'staff-notes-active',
   'staff-notes-all',
+  'staff-alerts',
   // WhatsApp thread messages (stored in our DB, not fetched live).
   'whatsapp-messages',
 ]
