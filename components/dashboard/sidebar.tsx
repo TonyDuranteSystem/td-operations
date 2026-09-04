@@ -64,6 +64,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { DashboardPushToggle } from '@/components/dashboard/push-toggle'
+import { StaffAlertsBell } from '@/components/dashboard/staff-alerts-bell'
 import { GlobalBackButton } from '@/components/dashboard/global-back-button'
 import { MfaSettingsDialog } from '@/components/dashboard/mfa-settings-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -611,6 +612,7 @@ export function Sidebar({
         </button>
         <GlobalBackButton className="ml-1" />
         <span className="ml-2 font-semibold flex-1">TD Operations</span>
+        <StaffAlertsBell compact />
         <DashboardPushToggle compact refreshOnMount />
         <button
           onClick={() => document.dispatchEvent(new CustomEvent('open-command-palette'))}
