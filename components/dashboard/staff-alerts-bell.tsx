@@ -18,8 +18,10 @@ import { useRouter } from 'next/navigation'
 import { MessageSquare, X, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { requestOpenNote } from '@/lib/notes/open-note'
+import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 
-interface StaffAlert {
+interface NoteStaffAlert {
   kind: 'note_reply' | 'note_update'
   note_id: string
   reply_id: string | null
@@ -32,8 +34,27 @@ interface StaffAlert {
   created_at: string
 }
 
-function alertKey(a: Pick<StaffAlert, 'kind' | 'note_id' | 'reply_id'>): string {
-  return `${a.kind}:${a.note_id}:${a.reply_id ?? ''}`
+/** A DM / @mention / channel-post alert — Open + Dismiss only, no reply/mark-done
+ *  (those stay note-only; a chat alert clears by reading the thread, see the PATCH
+ *  handler on /api/crm/staff-alerts). */
+interface ChatStaffAlert {
+  kind: 'chat_mention' | 'chat_dm' | 'chat_channel'
+  thread_id: string
+  title: string
+  body: string
+  url: string
+  tag: string
+  created_at: string
+}
+
+type StaffAlert = NoteStaffAlert | ChatStaffAlert
+
+function isNoteAlert(a: StaffAlert): a is NoteStaffAlert {
+  return a.kind === 'note_reply' || a.kind === 'note_update'
+}
+
+function alertKey(a: StaffAlert): string {
+  return isNoteAlert(a) ? `${a.kind}:${a.note_id}:${a.reply_id ?? ''}` : `${a.kind}:${a.thread_id}`
 }
 
 function timeAgo(iso: string): string {
@@ -51,12 +72,15 @@ function timeAgo(iso: string): string {
 // violation server-side. The optimistic removal already happened; invalidateQueries (in
 // dismissMany's finally) will bring the alert back on the next fetch if the write really
 // failed, so silence here would read as "I dismissed it and it came back" with no explanation.
-async function dismissOnServer(a: Pick<StaffAlert, 'kind' | 'note_id' | 'reply_id'>) {
+async function dismissOnServer(a: StaffAlert) {
   try {
+    const payload = isNoteAlert(a)
+      ? { kind: a.kind, note_id: a.note_id, reply_id: a.reply_id }
+      : { kind: a.kind, thread_id: a.thread_id }
     const res = await fetch('/api/crm/staff-alerts', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: a.kind, note_id: a.note_id, reply_id: a.reply_id }),
+      body: JSON.stringify(payload),
     })
     if (!res.ok) {
       const d = await res.json().catch(() => ({}))
@@ -124,7 +148,7 @@ export function StaffAlertsBell({ compact = false }: { compact?: boolean }) {
 
   const dismissOne = useCallback((a: StaffAlert) => dismissMany([a]), [dismissMany])
   const dismissNote = useCallback(
-    (noteId: string) => dismissMany(alerts.filter((a) => a.note_id === noteId)),
+    (noteId: string) => dismissMany(alerts.filter((a): a is NoteStaffAlert => isNoteAlert(a) && a.note_id === noteId)),
     [dismissMany, alerts],
   )
 
@@ -143,9 +167,19 @@ export function StaffAlertsBell({ compact = false }: { compact?: boolean }) {
     if (confirmDiscardIfDirty()) setOpen(false)
   }, [confirmDiscardIfDirty])
 
+  // Open IN PLACE whenever the target surface can show it — never lose the page
+  // you were working on for a click that's just "look at this" (Antonio,
+  // 2026-09-04). Both request* helpers return false when their layer isn't
+  // mounted or can't find the thing (e.g. a snoozed/archived-for-me note, or a
+  // thread the floating chat bails on because you're already on /team-chat);
+  // only then do we fall back to navigating to the full page.
   const openAlert = useCallback((a: StaffAlert) => {
     if (!confirmDiscardIfDirty()) return
     setOpen(false)
+    const handled = isNoteAlert(a)
+      ? requestOpenNote({ noteId: a.note_id })
+      : requestOpenTeamChat({ threadId: a.thread_id })
+    if (handled) return
     router.push(a.url)
   }, [router, confirmDiscardIfDirty])
 
@@ -255,7 +289,7 @@ function AlertRow({ alert, onOpen, onDismiss, onDismissNote, onDirtyChange }: {
   }, [key, replying, replyText])
 
   const submitReply = useCallback(async () => {
-    if (!replyText.trim()) return
+    if (!isNoteAlert(alert) || !replyText.trim()) return
     setSending(true)
     setError(null)
     try {
@@ -277,6 +311,7 @@ function AlertRow({ alert, onOpen, onDismiss, onDismissNote, onDirtyChange }: {
   }, [alert, replyText, onDismiss])
 
   const markDone = useCallback(async () => {
+    if (!isNoteAlert(alert)) return
     setSending(true)
     setError(null)
     try {
@@ -304,7 +339,7 @@ function AlertRow({ alert, onOpen, onDismiss, onDismissNote, onDirtyChange }: {
           <p className="text-sm font-medium text-zinc-800">{alert.title}</p>
           <p className="text-sm text-zinc-500 line-clamp-2">{alert.body}</p>
           <p className="mt-0.5 text-xs text-zinc-400 truncate">
-            {alert.client_name ? `${alert.client_name} · ` : ''}
+            {isNoteAlert(alert) && alert.client_name ? `${alert.client_name} · ` : ''}
             {timeAgo(alert.created_at)}
           </p>
         </button>
@@ -317,7 +352,7 @@ function AlertRow({ alert, onOpen, onDismiss, onDismissNote, onDirtyChange }: {
         </button>
       </div>
 
-      {!replying ? (
+      {!isNoteAlert(alert) ? null : !replying ? (
         <div className="mt-2 flex gap-2">
           <button
             onClick={() => setReplying(true)}
