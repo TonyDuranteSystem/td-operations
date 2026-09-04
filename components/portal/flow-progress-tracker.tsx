@@ -21,11 +21,14 @@ export function FlowProgressTracker({
   title,
   steps,
   href,
+  isNew = false,
 }: {
   title: string
   steps: FlowStep[]
   /** When set, the title links to the flow detail page with a "details" chevron. */
   href?: string
+  /** Shows a "NEW" tag next to the title — this service delivery was created recently. */
+  isNew?: boolean
 }) {
   const currentRef = useRef<HTMLLIElement | null>(null)
   const { t } = useLocale()
@@ -34,6 +37,12 @@ export function FlowProgressTracker({
     currentRef.current?.scrollIntoView({ block: 'nearest', inline: 'center' })
   }, [])
 
+  const newBadge = isNew && (
+    <span className="h-5 px-2 inline-flex items-center justify-center rounded-full bg-violet-600 text-white text-[10px] font-semibold normal-case tracking-normal">
+      {t('flows.new')}
+    </span>
+  )
+
   return (
     <div className="bg-white rounded-xl border shadow-sm p-5">
       {href ? (
@@ -41,12 +50,16 @@ export function FlowProgressTracker({
           href={href}
           className="group mb-4 flex items-center justify-between gap-2 text-sm font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-800"
         >
-          <span>{title}</span>
+          <span className="flex items-center gap-2">
+            {title}
+            {newBadge}
+          </span>
           <ChevronRight className="h-4 w-4 text-zinc-400 group-hover:text-zinc-700" />
         </Link>
       ) : (
-        <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide mb-4">
+        <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide mb-4 flex items-center gap-2">
           {title}
+          {newBadge}
         </h2>
       )}
       <div className="overflow-x-auto pb-2 -mx-1 px-1">

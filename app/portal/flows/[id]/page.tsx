@@ -16,6 +16,7 @@ import { buildFlowSteps, buildJourneySteps, type FlowStageRow } from '@/lib/flow
 import { deriveFlowYear, buildFlowTopic, ALL_FLOW_TYPES, CONTACT_FLOW_TYPES } from '@/lib/flows/resolve-flows'
 import { isClientSafeFlowDoc } from '@/lib/flows/flow-doc-visibility'
 import { MAILING_DESTINATION_LINES } from '@/lib/td-address'
+import { isWithinNewBadgeWindow } from '@/lib/portal/queries'
 
 export const dynamic = 'force-dynamic'
 
@@ -285,7 +286,11 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
           shipping={shipping}
         />
       ) : steps ? (
-        <FlowProgressTracker title={t('flowDetail.progress', locale, translations)} steps={steps} />
+        <FlowProgressTracker
+          title={t('flowDetail.progress', locale, translations)}
+          steps={steps}
+          isNew={isWithinNewBadgeWindow(sd.created_at as string)}
+        />
       ) : (
         <div className="bg-white rounded-xl border shadow-sm p-5">
           <span className="text-sm text-zinc-600">{t('flowDetail.serviceActive', locale, translations)}</span>
