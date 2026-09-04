@@ -180,6 +180,16 @@ export function StaffAlertsBell({ compact = false }: { compact?: boolean }) {
       ? requestOpenNote({ noteId: a.note_id })
       : requestOpenTeamChat({ threadId: a.thread_id })
     if (handled) return
+    // Verified live (2026-09-04): a soft client-side push to the SAME page you're
+    // already on (e.g. clicking a chat alert while sitting on /team-chat itself)
+    // does not reliably re-run that page's own ?thread=/?note= deep-link effect —
+    // the URL updates but the view doesn't follow, which reads as a dead click.
+    // A full navigation always remounts and picks the deep link up correctly.
+    const targetPath = a.url.split('?')[0]
+    if (typeof window !== 'undefined' && window.location.pathname === targetPath) {
+      window.location.href = a.url
+      return
+    }
     router.push(a.url)
   }, [router, confirmDiscardIfDirty])
 
