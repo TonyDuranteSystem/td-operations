@@ -15,14 +15,12 @@
  * DashboardPushToggle's own compact/full split, for visual consistency.
  */
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { useRouter } from 'next/navigation'
 import { Camera, Images } from 'lucide-react'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { useCapture } from '@/components/captures/capture-provider'
 
 export function CaptureButton({ compact = false }: { compact?: boolean }) {
-  const { open } = useCapture()
-  const router = useRouter()
+  const { open, openBrowse } = useCapture()
 
   const triggerClassName = compact
     ? 'p-2 rounded-md text-zinc-500 hover:bg-zinc-100 transition-colors'
@@ -55,7 +53,7 @@ export function CaptureButton({ compact = false }: { compact?: boolean }) {
           </DropdownMenu.Item>
           <DropdownMenu.Item
             className="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-xs text-zinc-700 outline-none hover:bg-zinc-50"
-            onSelect={() => router.push('/captures')}
+            onSelect={openBrowse}
           >
             <Images className="h-3.5 w-3.5 text-zinc-400" />
             My captures

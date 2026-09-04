@@ -10,12 +10,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { Loader2, MessageSquare, Search } from 'lucide-react'
 import { sendCaptureToTeamChat } from '@/lib/captures/share-actions'
 import { addRecentDestination } from '@/lib/captures/recent-destinations'
+import { teamThreadDisplayLabel, type TeamThreadLabelInput } from '@/lib/captures/team-thread-label'
 
-interface TeamThread {
-  id: string
-  label: string
-  thread_type: string
-}
+type TeamThread = TeamThreadLabelInput
 
 export function TeamChatDestinationPicker({
   captureId,
@@ -49,7 +46,7 @@ export function TeamChatDestinationPicker({
     if (!threads) return []
     const q = query.trim().toLowerCase()
     if (!q) return threads
-    return threads.filter((t) => (t.label || '').toLowerCase().includes(q))
+    return threads.filter((t) => teamThreadDisplayLabel(t).toLowerCase().includes(q))
   }, [threads, query])
 
   const sendTo = async (threadId: string, label: string) => {
@@ -93,11 +90,11 @@ export function TeamChatDestinationPicker({
           {filtered.map((t) => (
             <button
               key={t.id}
-              onClick={() => void sendTo(t.id, t.label || t.id)}
+              onClick={() => void sendTo(t.id, teamThreadDisplayLabel(t))}
               disabled={busy}
               className="truncate rounded-md border border-zinc-200 px-3 py-2 text-left text-sm hover:bg-zinc-50 disabled:opacity-40"
             >
-              {t.label || t.id}
+              {teamThreadDisplayLabel(t)}
             </button>
           ))}
         </div>
