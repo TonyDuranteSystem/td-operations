@@ -32,7 +32,15 @@ export function TaxTab({ year, pnl, filing }: TaxTabProps) {
           exactly which figures are facts about the year and which are decisions about the
           rules, and disagree with the second without touching the first. */}
       <div className="rounded-lg border border-zinc-300 bg-white p-4">
-        <h3 className="mb-1 text-sm font-medium text-zinc-800">For the {filing.year} return</h3>
+        <div className="mb-1 flex items-start justify-between gap-3">
+          <h3 className="text-sm font-medium text-zinc-800">For the {filing.year} return</h3>
+          <a
+            href={`/api/owner/export?year=${filing.year}`}
+            className="shrink-0 rounded border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+          >
+            Export for accountant
+          </a>
+        </div>
         <p className="mb-3 text-xs text-zinc-500">
           The books, with tax treatment applied. Nothing here changes a transaction —
           the ledger keeps recording what actually happened.
