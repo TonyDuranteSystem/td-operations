@@ -36,7 +36,7 @@ export interface StaffNoteInput {
  * copy that would go stale when a company is renamed.
  */
 export const NOTE_COLUMNS =
-  "id, body, color, author_user_id, author_name, visibility, shared_with_user_id, shared_with_name, account_id, contact_id, origin_url, snoozed_until, archived_at, created_at, updated_at, accounts(company_name), contacts(full_name), staff_note_state(user_id, archived_at, snoozed_until), staff_note_replies(id, author_user_id, author_name, body, created_at)"
+  "id, body, color, author_user_id, author_name, visibility, shared_with_user_id, shared_with_name, account_id, contact_id, origin_url, snoozed_until, archived_at, created_at, updated_at, attachment_url, attachment_name, attachment_mime_type, attachment_size_bytes, accounts(company_name), contacts(full_name), staff_note_state(user_id, archived_at, snoozed_until), staff_note_replies(id, author_user_id, author_name, body, created_at)"
 
 /** Table accessor for replies — same generated-types escape hatch as notesTable(). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -394,6 +394,21 @@ export async function listAllNotesForUser(userId: string) {
     .or(visibleToOrClause(userId))
     .order("created_at", { ascending: false })
     .limit(500)
+}
+
+/**
+ * Notes AUTHORED by U — strictly narrower than "visible to U" (which also
+ * includes shared/team notes someone else wrote). The Capture/Share feature's
+ * "pick one of my own notes" destination picker needs exactly this: no
+ * existing reader filtered to authorship alone before this (UX review,
+ * 2026-09-04 — "no ready-made screen to reuse").
+ */
+export async function listMyNotesForUser(userId: string) {
+  return notesTable()
+    .select(NOTE_COLUMNS)
+    .eq("author_user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(200)
 }
 
 /** Notes visible to U and live FOR U, attached to a given account (the on-company-page widget). */

@@ -20,6 +20,7 @@ import {
   notesTable,
   NOTE_COLUMNS,
   listAllNotesForUser,
+  listMyNotesForUser,
   listActiveNotesForUser,
   listNotesForAccount,
   listNotesForContact,
@@ -34,6 +35,7 @@ import {
   validateReplyBody,
   replyNotifyTargets,
 } from "@/lib/notes/staff-notes"
+import { capturesTable } from "@/lib/captures/db"
 import type { User } from "@supabase/supabase-js"
 
 export const dynamic = "force-dynamic"
@@ -102,6 +104,14 @@ export async function GET(req: NextRequest) {
         .filter((m) => (m.role === "admin" || m.role === "team") && m.id !== user.id)
         .map((m) => ({ id: m.id, name: m.name }))
       return NextResponse.json({ me: { id: user.id, name: getUserDisplayName(user) }, members })
+    }
+    // scope=mine → notes I authored, any state (the Capture/Share "pick one of
+    // my own notes" destination picker — deliberately narrower than "all",
+    // which also includes notes others shared/teamed to me).
+    if (sp.get("scope") === "mine") {
+      const res = await listMyNotesForUser(user.id)
+      if (res.error) return fail(res.error.message || "Could not load notes.", 500)
+      return NextResponse.json({ notes: res.data ?? [] })
     }
     // scope=all → the Notes page (everything visible to me, incl. snoozed + done)
     // otherwise → the floating feed (live, not snoozed)
@@ -298,6 +308,52 @@ export async function PATCH(req: NextRequest) {
 
     emitUiEvent("notes")
     // Return the fresh row (replies embedded) so the editor can show the thread at once.
+    const { data: freshNote } = await notesTable().select(NOTE_COLUMNS).eq("id", id).single()
+    return NextResponse.json({ note: freshNote ?? note })
+  }
+
+  // ATTACH A CAPTURE — its own branch, same shape as reply: no generic patch
+  // tail. Attaching is treated exactly like editing the note's own text — the
+  // AUTHOR alone, via the identical mayEditBody gate (Antonio, 2026-09-04:
+  // "same rule that already governs editing a note's text").
+  if (action === "attach_capture") {
+    if (!mayEditBody(note, user.id)) {
+      return fail(
+        `Only ${note.author_name || "the author"} can attach something to this note. ` +
+          "Write your answer in the Reply box instead.",
+        403,
+      )
+    }
+    const captureId = typeof p.capture_id === "string" ? p.capture_id : ""
+    if (!captureId) return fail("Which picture?")
+
+    const { data: capture, error: captureErr } = await capturesTable()
+      .select("id, image_url, image_name, mime_type, size_bytes, captured_by_user_id")
+      .eq("id", captureId)
+      .single()
+    if (captureErr || !capture) return fail("That capture is gone. Please try again.", 404)
+    // Defense in depth: the id only ever comes from this same user's own
+    // just-completed capture flow, but never trust a client-supplied id blindly.
+    if (capture.captured_by_user_id !== user.id) return fail("That isn't your capture.", 403)
+
+    const { error: attachErr } = await notesTable()
+      .update({
+        attachment_url: capture.image_url,
+        attachment_name: capture.image_name,
+        attachment_mime_type: capture.mime_type,
+        attachment_size_bytes: capture.size_bytes,
+      })
+      .eq("id", id)
+    if (attachErr) return fail(attachErr.message || "Could not attach the picture.", 500)
+
+    // Best-effort — the note attach above is the write that actually matters;
+    // if this one fails, only the capture folder's "where it went" label goes
+    // stale, the note attachment itself is already saved and correct.
+    await capturesTable()
+      .update({ destination: { type: "sticky_note", id, label: note.body.slice(0, 60) } })
+      .eq("id", captureId)
+
+    emitUiEvent("notes")
     const { data: freshNote } = await notesTable().select(NOTE_COLUMNS).eq("id", id).single()
     return NextResponse.json({ note: freshNote ?? note })
   }
