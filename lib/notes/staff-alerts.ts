@@ -88,10 +88,15 @@ function dismissedAtMsFor(
  *
  *  - note_reply: one per reply from someone else, cleared per-reply. Suppressed while the note
  *    is snoozed for this person — same as replyNotifyTargets does for the push.
- *  - note_update: the note was shared with this person or edited since they last dismissed it —
- *    one live alert per note, timestamp-compared so a fresh change after a dismiss reappears.
- *    NOT suppressed by snooze — editNotifyTargets never checked snooze either; carried over on
- *    purpose rather than invented, so this list can never disagree with what already pushed.
+ *  - note_update: the note is visible to this person and they haven't dismissed its CURRENT
+ *    state — one live alert per note, timestamp-compared so a fresh edit/re-share after a
+ *    dismiss reappears. Deliberately NOT gated on "changed since creation": a brand-new note
+ *    shared with someone at birth (created_at === updated_at, the single most common way a note
+ *    reaches a second person) was missing this alert entirely until this fix — found live in
+ *    production (Antonio: "I sent a note to Luca and he didn't receive anything"), because the
+ *    original version only fired on an edit/re-share AFTER creation. NOT suppressed by snooze —
+ *    editNotifyTargets never checked snooze either; carried over on purpose rather than invented,
+ *    so this list can never disagree with what already pushed.
  *
  * A note's OWN author never gets an alert from it.
  */
@@ -133,22 +138,24 @@ export function computeNoteAlerts(
     // own note would only ever be about my own action — skip it for the author entirely.
     if (note.author_user_id !== userId) {
       const updatedMs = parsedMs(note.updated_at)
-      if (updatedMs > parsedMs(note.created_at)) {
-        const dismissedMs = dismissedAtMsFor(dismissals, note.id, null)
-        if (dismissedMs == null || dismissedMs < updatedMs) {
-          out.push({
-            kind: "note_update",
-            note_id: note.id,
-            reply_id: null,
-            author_name: note.author_name,
-            title: `${note.author_name || "Someone"} updated a note`,
-            body: note.body.slice(0, 160),
-            url: `/notes?note=${note.id}`,
-            tag: `staff-alert-update-${note.id}`,
-            client_name: clientName,
-            created_at: note.updated_at,
-          })
-        }
+      const dismissedMs = dismissedAtMsFor(dismissals, note.id, null)
+      if (dismissedMs == null || dismissedMs < updatedMs) {
+        // Wording only, never a gate: a note whose updated_at never moved past created_at
+        // was shared with this person at birth and never touched since; one that did move
+        // was actually edited or re-shared after the fact.
+        const isFreshShare = updatedMs <= parsedMs(note.created_at)
+        out.push({
+          kind: "note_update",
+          note_id: note.id,
+          reply_id: null,
+          author_name: note.author_name,
+          title: `${note.author_name || "Someone"} ${isFreshShare ? "shared a note" : "updated a note"}`,
+          body: note.body.slice(0, 160),
+          url: `/notes?note=${note.id}`,
+          tag: `staff-alert-update-${note.id}`,
+          client_name: clientName,
+          created_at: note.updated_at,
+        })
       }
     }
   }
