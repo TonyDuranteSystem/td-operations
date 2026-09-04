@@ -15,6 +15,17 @@ const CMRA_STAGES: FlowStageRow[] = [
   { stage_name: 'Lease Created', stage_order: 1, client_label: null, client_label_it: null },
 ]
 
+// ITIN dashboard-stepper fixture — unlike ITIN_SANDBOX/ITIN_PROD below (built
+// for buildJourneySteps, which needs client_description not client_label),
+// this one carries client_label so buildFlowSteps includes it in the
+// labelled journey, covering both of ITIN's real action-stage-registry
+// entries (Data Collection, Client Signing).
+const ITIN_PROD_LABELLED: FlowStageRow[] = [
+  { stage_name: 'Data Collection', stage_order: 1, client_label: 'Completing ITIN wizard', client_label_it: null },
+  { stage_name: 'Document Preparation', stage_order: 2, client_label: 'Documents being prepared', client_label_it: null },
+  { stage_name: 'Client Signing', stage_order: 3, client_label: 'Print, sign & mail documents', client_label_it: null },
+]
+
 describe('computeFlowProgress', () => {
   it('counts labelled stages and resolves the current EN label', () => {
     const p = computeFlowProgress(TAX_STAGES, 'Wizard Available', 'en')
@@ -64,7 +75,7 @@ describe('computeFlowProgress', () => {
 
 describe('buildFlowSteps', () => {
   it('returns one step per labelled stage with completed/current/future states', () => {
-    const steps = buildFlowSteps(TAX_STAGES, 'Wizard Available', 'en')
+    const steps = buildFlowSteps(TAX_STAGES, 'Wizard Available', 'en', 'Tax Return', 'sd-1')
     expect(steps).not.toBeNull()
     expect(steps!.map(s => s.label)).toEqual([
       'Extension Due', 'Complete Your Tax Form', 'Under Review', 'Completed',
@@ -73,30 +84,67 @@ describe('buildFlowSteps', () => {
   })
 
   it('resolves IT labels with EN fallback', () => {
-    const steps = buildFlowSteps(TAX_STAGES, 'Extension Due', 'it')!
+    const steps = buildFlowSteps(TAX_STAGES, 'Extension Due', 'it', 'Tax Return', 'sd-1')!
     expect(steps[0].label).toBe('Proroga')
     expect(steps[2].label).toBe('Under Review') // no IT label → EN fallback
   })
 
   it('keeps the previous labelled step current on an internal stage', () => {
-    const steps = buildFlowSteps(TAX_STAGES, 'Data Received', 'en')!
+    const steps = buildFlowSteps(TAX_STAGES, 'Data Received', 'en', 'Tax Return', 'sd-1')!
     expect(steps.find(s => s.state === 'current')?.label).toBe('Complete Your Tax Form')
   })
 
   it('marks all steps future when not yet started / unknown stage', () => {
-    const steps = buildFlowSteps(TAX_STAGES, 'Some Legacy Stage', 'en')!
+    const steps = buildFlowSteps(TAX_STAGES, 'Some Legacy Stage', 'en', 'Tax Return', 'sd-1')!
     expect(steps.every(s => s.state === 'future')).toBe(true)
   })
 
   it('returns null for a flow with no client-facing stages (CMRA)', () => {
-    expect(buildFlowSteps(CMRA_STAGES, 'Lease Created', 'en')).toBeNull()
+    expect(buildFlowSteps(CMRA_STAGES, 'Lease Created', 'en', 'CMRA Mailing Address', 'sd-1')).toBeNull()
   })
 
   it('carries the catalog icon through when present', () => {
     const withIcon: FlowStageRow[] = [
       { stage_name: 'A', stage_order: 10, client_label: 'Step A', client_label_it: null, icon: '📝' },
     ]
-    expect(buildFlowSteps(withIcon, 'A', 'en')![0].icon).toBe('📝')
+    expect(buildFlowSteps(withIcon, 'A', 'en', 'Some Service', 'sd-1')![0].icon).toBe('📝')
+  })
+
+  // ── isActionRequired / actionHref: the dashboard-stepper "your turn" glow ──
+  // Drawn from the SAME registry (action-stage-registry.ts) that already
+  // drives the client email/chat/bell dispatch, so both surfaces agree on
+  // what counts as "your turn" — and a stage NOT in that registry (most of
+  // them — TD or the IRS working) must never glow, even while current.
+  it('flags the current stage as action-required when the registry has it, with its link', () => {
+    const steps = buildFlowSteps(TAX_STAGES, 'Wizard Available', 'en', 'Tax Return', 'sd-1')!
+    const wizardStep = steps.find(s => s.stageName === 'Wizard Available')!
+    expect(wizardStep.isActionRequired).toBe(true)
+    expect(wizardStep.actionHref).toBe('/portal/wizard')
+  })
+
+  it('does not flag a current stage the registry has no entry for (TD/IRS working, not the client)', () => {
+    const steps = buildFlowSteps(TAX_STAGES, 'Under Review', 'en', 'Tax Return', 'sd-1')!
+    const step = steps.find(s => s.stageName === 'Under Review')!
+    expect(step.isActionRequired).toBe(false)
+    expect(step.actionHref).toBeNull()
+  })
+
+  it('interpolates {sd_id} into the action link (ITIN Client Signing)', () => {
+    const steps = buildFlowSteps(ITIN_PROD_LABELLED, 'Client Signing', 'en', 'ITIN', 'sd-abc-123')!
+    const step = steps.find(s => s.stageName === 'Client Signing')!
+    expect(step.isActionRequired).toBe(true)
+    expect(step.actionHref).toBe('/portal/flows/sd-abc-123')
+  })
+
+  it('never flags a COMPLETED step, even if its stage is a registered action stage', () => {
+    // Data Collection is registered ('ITIN::Data Collection') but the SD has
+    // already moved past it — a client already at Client Signing must not see
+    // "your turn" glowing on a step they already finished.
+    const steps = buildFlowSteps(ITIN_PROD_LABELLED, 'Client Signing', 'en', 'ITIN', 'sd-1')!
+    const dataCollection = steps.find(s => s.stageName === 'Data Collection')!
+    expect(dataCollection.state).toBe('completed')
+    expect(dataCollection.isActionRequired).toBe(false)
+    expect(dataCollection.actionHref).toBeNull()
   })
 })
 

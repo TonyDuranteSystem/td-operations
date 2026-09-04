@@ -743,7 +743,7 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it', con
     const serviceType = sd.service_type ?? ''
     const stages = stagesByType.get(serviceType) ?? []
     const progress = computeFlowProgress(stages, sd.stage ?? null, locale)
-    const steps = buildFlowSteps(stages, sd.stage ?? null, locale)
+    const steps = buildFlowSteps(stages, sd.stage ?? null, locale, serviceType, sd.id as string)
     const year = deriveFlowYear(sd)
     const title = buildFlowTopic(serviceType, year) || sd.service_name || serviceType || 'Service'
     return {
@@ -1551,12 +1551,21 @@ export async function getPortalActionItems(
 
   // ── SD-driven "Start <Wizard>" cards ──
   // For each active wizard-eligible SD on the account (and contact-scoped
-  // flexible-type SDs like Company Closure) where the client hasn't started
-  // the wizard yet (no in_progress wizard_progress for that type, and no
-  // submitted one either), surface a card linking directly to that wizard.
+  // flexible-type SDs like Company Closure and ITIN) where the client hasn't
+  // started the wizard yet (no in_progress wizard_progress for that type, and
+  // no submitted one either), surface a card linking directly to that wizard.
   // This is what makes Closure (or any newly-attached SD) reachable from the
   // home page without the client needing to know the URL.
-  const FLEXIBLE_SDS_TO_CHECK = ['Company Closure']
+  //
+  // ITIN was in SD_WIZARD_TYPE_BY_SERVICE_TYPE from the start but never
+  // actually reachable here: its SDs always carry account_id=null (ITIN
+  // belongs to the person, not the company — service-delivery.ts's Phase 1
+  // rule), so the account-scoped query above never finds them, and this
+  // contact-scoped query didn't check for ITIN either. A client whose ITIN
+  // wizard was never started got no action-item card at all — the page fell
+  // through to "All caught up" while the wizard genuinely sat unstarted.
+  // ITIN Renewal shares the same architecture, so it's included too.
+  const FLEXIBLE_SDS_TO_CHECK = ['Company Closure', 'ITIN', 'ITIN Renewal']
   const SD_TYPES_TO_SURFACE = Object.keys(SD_WIZARD_TYPE_BY_SERVICE_TYPE)
 
   const [accountSdsRes, contactFlexibleSdsRes, submittedWizardRes] = await Promise.all([
