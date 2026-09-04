@@ -147,6 +147,9 @@ interface ChatMessage {
   // PR 2 Step 6 (2026-05-05): tag chosen by sender. NULL = legacy
   // untagged message (pre-PR 2). Renders without a badge.
   sender_context?: 'person' | 'company' | null
+  // "Addressed to" label (dev job 08a8be62) — resolved name of the member this
+  // company-scoped staff message was addressed to, when set. Staff-facing only.
+  addressed_to_name?: string | null
   created_at: string
   attachment_url?: string
   attachment_name?: string
@@ -3777,6 +3780,20 @@ export default function PortalChatsPage() {
                         {selectedThreadMembers.length > 0 && !isAdmin && msg.sender_name && (
                           <span className="inline-block text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded mb-0.5 bg-purple-100 text-purple-700">
                             {msg.sender_name}
+                          </span>
+                        )}
+                        {/* "Addressed to" badge (dev job 08a8be62) — for account-level
+                            threads, show who a STAFF message was addressed to, so it
+                            stays visible when scrolling back later, not just at the
+                            moment of sending. Deliberately a different color (teal)
+                            from the purple "who wrote this" badge above — same page,
+                            different meaning, must not be confused (Erika Hall,
+                            council pass 2). Staff-side only — this label is not sent
+                            to the client (msg.addressed_to_name is populated by the
+                            admin-only GET query path; see route.ts). */}
+                        {selectedThreadMembers.length > 0 && isAdmin && msg.addressed_to_name && (
+                          <span className="inline-block text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded mb-0.5 bg-teal-500/30 text-teal-50">
+                            For {msg.addressed_to_name}
                           </span>
                         )}
                         {/* Company badge — show on every message with an account_id when viewing a contact-level unified thread */}

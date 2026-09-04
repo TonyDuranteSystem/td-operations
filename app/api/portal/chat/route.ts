@@ -108,7 +108,7 @@ export async function GET(request: NextRequest) {
 
   let query = supabaseAdmin
     .from('portal_messages')
-    .select('*, contacts:contact_id(full_name)')
+    .select('*, contacts:contact_id(full_name), addressed_to_contact:addressed_to_contact_id(full_name)')
     .order('created_at', { ascending: false })
     .limit(limit)
 
@@ -185,12 +185,19 @@ export async function GET(request: NextRequest) {
   // Flatten contact name into sender_name for display
   const messages = (data ?? []).map(msg => {
     const contact = msg.contacts as unknown as { full_name: string } | null
-    const { contacts: _contacts, ...rest } = msg
+    const addressedToContact = msg.addressed_to_contact as unknown as { full_name: string } | null
+    const { contacts: _contacts, addressed_to_contact: _addressedToContact, ...rest } = msg
     return {
       ...rest,
       // Contact name for client/owner messages; stored sender_name (the teammate's
       // display name) when there's no contact; null → UI shows its generic label.
       sender_name: pickChatSenderName(contact?.full_name, (rest as { sender_name?: string | null }).sender_name),
+      // "Addressed to" label (dev job 08a8be62) — staff-facing display of who a
+      // company-scoped message was addressed to. Resolved here (not client-side)
+      // so it survives even if the addressed member later drops out of
+      // selectedThreadMembers (e.g. removed from the roster) — the historical
+      // record still shows who it was FOR at send time.
+      addressed_to_name: addressedToContact?.full_name ?? null,
     }
   }).reverse()
 
