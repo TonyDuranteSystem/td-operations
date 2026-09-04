@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Truck, ExternalLink, Loader2, Pencil } from 'lucide-react'
 import { COURIERS, courierTrackingUrl } from '@/lib/flows/courier'
-import { confirmItinMailed } from '@/app/portal/itin-documents/actions'
+import { confirmItinMailed } from '@/lib/portal/itin-mailing'
 import { useLocale } from '@/lib/portal/use-locale'
 
 /**

@@ -1,10 +1,8 @@
 'use server'
 
 /**
- * Server actions for /portal/itin-documents.
- *
- * confirmItinMailed advances the contact's ITIN flow when the client clicks
- * "I have mailed the documents":
+ * confirmItinMailed advances the contact's ITIN flow when the client confirms
+ * they've mailed their signed documents:
  *   - Workflow path (Slice 5+): finds the active itin_await_client_mailing
  *     workflow task for the contact, marks it Done, fires the catalog
  *     transition (spawns itin_caa_certify_and_mail + advances SD to
@@ -15,6 +13,11 @@
  *
  * Authorization: the SD and / or task must belong to the authenticated
  * portal contact. Both paths verify ownership before mutating.
+ *
+ * Moved out of the (now-removed) standalone /portal/itin-documents page into
+ * this page-agnostic module — components/portal/itin-shipping-form.tsx (the
+ * live confirmation flow embedded in the /portal/flows/[id] workspace) is
+ * the real caller; the standalone page was a pre-workspace duplicate.
  */
 
 import { createClient } from '@/lib/supabase/server'
@@ -160,7 +163,6 @@ async function runWorkflowMailedAction(task: TaskRow): Promise<ConfirmItinMailed
     }
   }
 
-  revalidatePath('/portal/itin-documents')
   revalidatePath('/portal')
   return { success: true, path: 'workflow' }
 }
@@ -194,7 +196,6 @@ async function runLegacyMailedAction(contactId: string): Promise<ConfirmItinMail
     return { success: false, error: result.error || 'Failed to advance ITIN service.', path: 'legacy' }
   }
 
-  revalidatePath('/portal/itin-documents')
   revalidatePath('/portal')
   return { success: true, path: 'legacy' }
 }

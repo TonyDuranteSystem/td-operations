@@ -666,6 +666,23 @@ export interface PortalFlow {
   dueDate: string | null
   /** Ordered visual-stepper steps; null for flows with no client-facing stages. */
   steps: FlowStep[] | null
+  /** True for the first NEW_FLOW_BADGE_DAYS after the service delivery was
+   *  created — drives a "NEW" tag on the card so a client notices a
+   *  just-added service instead of scrolling past it unannounced. */
+  isNew: boolean
+}
+
+/** How many days a freshly-created service keeps its "NEW" tag. */
+const NEW_FLOW_BADGE_DAYS = 7
+
+/**
+ * True for the first NEW_FLOW_BADGE_DAYS after a service delivery was
+ * created. Strictly-less-than: a flow created exactly NEW_FLOW_BADGE_DAYS
+ * ago has already had its full window — the previous `<=` kept the tag
+ * visible for a full 8th day (off-by-one, council review 2026-09-04).
+ */
+export function isWithinNewBadgeWindow(createdAt: string): boolean {
+  return daysSince(createdAt) < NEW_FLOW_BADGE_DAYS
 }
 
 export async function getPortalFlows(accountId: string, locale: 'en' | 'it', contactId?: string | null): Promise<PortalFlow[]> {
@@ -755,6 +772,7 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it', con
       totalStages: progress.totalStages,
       dueDate: (sd.due_date as string | null) ?? null,
       steps,
+      isNew: isWithinNewBadgeWindow(sd.created_at as string),
     }
   })
 }
@@ -785,6 +803,29 @@ export async function getPortalPayments(accountId: string) {
   // Unsent drafts (Draft + Pending) are staff-internal until reviewed and
   // sent — never show them to the client (Kasabi incident, 2026-07-04).
   return (data ?? []).filter(isClientVisiblePayment)
+}
+
+/**
+ * Count of unpaid TD invoices (what the client owes TD, not their own sales
+ * invoices) — drives the sidebar TD Billing tab pulse + count, same mechanism
+ * as getToSignCount. Same "Sent, Overdue, or Partial" definition
+ * getPortalActionItems now uses for its own unpaid-invoice card, so the two
+ * never disagree (a partially-paid invoice still has a real balance due —
+ * council review 2026-09-04 found the Sent/Overdue-only check silently
+ * missed it everywhere, including the payment-plan/tranche case).
+ * `isClientVisiblePayment`'s only exclusion is Draft+Pending, which this
+ * status filter already excludes, so it isn't re-applied here — a head-count
+ * query fetches no row data to filter. Routed through countOrFailOpen so a
+ * transient read error shows the alert rather than silently hiding a real
+ * unpaid invoice.
+ */
+export async function getUnpaidInvoiceCount(accountId: string): Promise<number> {
+  if (!accountId) return 0
+  return countOrFailOpen('unpaid-invoices', supabaseAdmin
+    .from('payments')
+    .select('id', { count: 'exact', head: true })
+    .eq('account_id', accountId)
+    .in('invoice_status', ['Sent', 'Overdue', 'Partial']))
 }
 
 /**
@@ -930,130 +971,6 @@ export interface PortalNavVisibility {
   customers: boolean      // same as invoices
   pendingSignatures: boolean  // has unsigned OA or Lease agreements
   documentGenerator: boolean  // can generate distribution resolutions and tax statements
-  itinAtClientSigning: boolean // contact has an active ITIN SD at "Client Signing" stage
-}
-
-/**
- * Phase C (ITIN Chain Fix 2026-05-11): true iff the contact has an active ITIN
- * SD currently at "Client Signing" stage. ITIN SDs are contact-only by Phase 1
- * rule (account_id is forced to null), so this is queried by contact_id.
- *
- * Drives the conditional "ITIN Documents" sidebar entry and the
- * /portal/itin-documents page guard.
- */
-export async function hasItinAtClientSigning(contactId: string): Promise<boolean> {
-  const { count } = await supabaseAdmin
-    .from('service_deliveries')
-    .select('id', { count: 'exact', head: true })
-    .eq('contact_id', contactId)
-    .eq('service_type', 'ITIN')
-    .eq('stage', 'Client Signing')
-    .eq('status', 'active')
-  return (count ?? 0) > 0
-}
-
-export interface ItinAtClientSigningView {
-  sdId: string
-  serviceName: string
-  documents: Array<{
-    id: string
-    file_name: string
-    document_type_name: string | null
-    drive_file_id: string | null
-  }>
-}
-
-/**
- * Fetch the ITIN SD at "Client Signing" for a contact, along with its W-7 +
- * 1040-NR + Schedule OI PDFs from the documents table. Returns null when the
- * contact has no such SD (caller is expected to redirect).
- *
- * Documents may be filed either contact-scoped (pure contact-only ITIN, no
- * LLC) or account-scoped (contact also owns an LLC — autoSaveDocument files
- * under the account so other members of the account can see them too). We
- * query both shapes restricted to the contact's accessible accounts and the
- * known ITIN document_type_name values written by itin-form-completed.
- */
-export async function getItinAtClientSigning(contactId: string): Promise<ItinAtClientSigningView | null> {
-  const { data: sd } = await supabaseAdmin
-    .from('service_deliveries')
-    .select('id, service_name')
-    .eq('contact_id', contactId)
-    .eq('service_type', 'ITIN')
-    .eq('stage', 'Client Signing')
-    .eq('status', 'active')
-    .order('updated_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (!sd) return null
-
-  // The PDF rows written by app/api/itin-form-completed/route.ts use these
-  // document_type_name values (R093: verified at lines 332-335 of that file).
-  const ITIN_DOC_TYPES = ['ITIN W-7', 'ITIN 1040-NR', 'ITIN Schedule OI']
-
-  // Account-linked ITINs save docs under the contact's account(s). Look those
-  // up so we don't miss them.
-  const { data: links } = await supabaseAdmin
-    .from('account_contacts')
-    .select('account_id')
-    .eq('contact_id', contactId)
-  const accountIds = (links ?? []).map(l => l.account_id).filter((id): id is string => typeof id === 'string')
-
-  // Build the OR filter: contact-scoped docs (contact_id=this contact AND
-  // account_id IS NULL) OR account-scoped docs (account_id IN this contact's
-  // accounts). Supabase's .or() doesn't compose .and() inline cleanly, so we
-  // do two queries and merge.
-  const contactScopedQ = supabaseAdmin
-    .from('documents')
-    .select('id, file_name, document_type_name, drive_file_id, created_at')
-    .is('account_id', null)
-    .eq('contact_id', contactId)
-    .in('document_type_name', ITIN_DOC_TYPES)
-    .eq('portal_visible', true)
-
-  const accountScopedQ = accountIds.length
-    ? supabaseAdmin
-        .from('documents')
-        .select('id, file_name, document_type_name, drive_file_id, created_at')
-        .in('account_id', accountIds)
-        .in('document_type_name', ITIN_DOC_TYPES)
-        .eq('portal_visible', true)
-    : Promise.resolve({ data: [] as Array<{ id: string; file_name: string; document_type_name: string | null; drive_file_id: string | null; created_at: string }> })
-
-  const [contactDocsRes, accountDocsRes] = await Promise.all([contactScopedQ, accountScopedQ])
-
-  // Dedup by document id (in case any row qualifies via both filters) and
-  // sort W-7 → 1040-NR → Schedule OI for a stable reading order. Fall back
-  // to filename comparison for unknowns.
-  const ORDER = new Map([
-    ['ITIN W-7', 0],
-    ['ITIN 1040-NR', 1],
-    ['ITIN Schedule OI', 2],
-  ])
-  const merged = new Map<string, { id: string; file_name: string; document_type_name: string | null; drive_file_id: string | null }>()
-  for (const d of [...(contactDocsRes.data ?? []), ...(accountDocsRes.data ?? [])]) {
-    if (!merged.has(d.id)) {
-      merged.set(d.id, {
-        id: d.id,
-        file_name: d.file_name,
-        document_type_name: d.document_type_name,
-        drive_file_id: d.drive_file_id,
-      })
-    }
-  }
-  const documents = Array.from(merged.values()).sort((a, b) => {
-    const ao = ORDER.get(a.document_type_name ?? '') ?? 99
-    const bo = ORDER.get(b.document_type_name ?? '') ?? 99
-    if (ao !== bo) return ao - bo
-    return a.file_name.localeCompare(b.file_name)
-  })
-
-  return {
-    sdId: sd.id,
-    serviceName: sd.service_name || 'ITIN',
-    documents,
-  }
 }
 
 /**
@@ -1087,7 +1004,7 @@ export async function countOrFailOpen(
   }
 }
 
-export async function getPortalNavVisibility(accountId: string, contactId?: string): Promise<PortalNavVisibility> {
+export async function getPortalNavVisibility(accountId: string): Promise<PortalNavVisibility> {
   // Run all checks in parallel
   const [
     serviceDeliveries,
@@ -1166,10 +1083,6 @@ export async function getPortalNavVisibility(accountId: string, contactId?: stri
 
   const hasTaxSD = (taxSDs ?? []).length > 0
 
-  // ITIN visibility is contact-scoped (SDs are contact-only by Phase 1 rule),
-  // not account-scoped. Skip the lookup if the caller didn't pass contactId.
-  const itinAtClientSigning = contactId ? await hasItinAtClientSigning(contactId) : false
-
   return {
     services: serviceDeliveries.count > 0,
     billing: billingCount > 0,
@@ -1180,7 +1093,6 @@ export async function getPortalNavVisibility(accountId: string, contactId?: stri
     customers: true,      // always visible — tier-config gates access (active/full only)
     pendingSignatures: unsignedDocCount > 0,
     documentGenerator: true, // always visible — tier-config gates access (active/full only)
-    itinAtClientSigning,
   }
 }
 
@@ -1226,13 +1138,8 @@ export async function getPortalRoleByContact(contactId: string): Promise<string 
 /**
  * Nav visibility for contacts WITHOUT any account (e.g., ITIN-only clients).
  * Only contact-level features are visible.
- *
- * Phase C (2026-05-11): accepts optional contactId so the ITIN-at-Client-Signing
- * flag can light up for pure contact-only ITIN clients. When contactId is
- * omitted, falls back to the legacy hardcoded shape.
  */
-export async function getContactOnlyNavVisibility(contactId?: string): Promise<PortalNavVisibility> {
-  const itinAtClientSigning = contactId ? await hasItinAtClientSigning(contactId) : false
+export async function getContactOnlyNavVisibility(): Promise<PortalNavVisibility> {
   return {
     services: true,
     billing: false,
@@ -1243,7 +1150,6 @@ export async function getContactOnlyNavVisibility(contactId?: string): Promise<P
     customers: false,
     pendingSignatures: false,
     documentGenerator: false,
-    itinAtClientSigning,
   }
 }
 
@@ -1428,14 +1334,17 @@ export async function getPortalActionItems(
           .limit(10)
       : Promise.resolve({ data: [] as Array<{ id: string; wizard_type: string; created_at: string; updated_at: string }> }),
 
-    // 2. Unpaid invoices (Sent or Overdue)
+    // 2. Unpaid invoices (Sent, Overdue, or Partial — a partially-paid
+    // invoice still has a real balance due; council review 2026-09-04). No
+    // limit: getUnpaidInvoiceCount uses this identical filter with no cap, so
+    // this list must stay uncapped too or the sidebar badge and this card
+    // list can disagree for a client with more than 10 unpaid invoices.
     supabaseAdmin
       .from('payments')
       .select('id, invoice_number, total, amount_currency, due_date, invoice_status, created_at')
       .eq('account_id', accountId)
-      .in('invoice_status', ['Sent', 'Overdue'])
-      .order('due_date', { ascending: true })
-      .limit(10),
+      .in('invoice_status', ['Sent', 'Overdue', 'Partial'])
+      .order('due_date', { ascending: true }),
 
     // 3. Unsigned OA (includes partially_signed for MMLLC)
     supabaseAdmin
@@ -1845,14 +1754,15 @@ export async function getPortalActionItemsByContact(contactId: string): Promise<
       .eq('status', 'in_progress')
       .eq('contact_id', contactId)
       .limit(10),
+    // Unpaid invoices (Sent, Overdue, or Partial — see getPortalActionItems'
+    // matching comment). No limit, for the same reason.
     supabaseAdmin
       .from('payments')
       .select('id, invoice_number, total, amount_currency, due_date, invoice_status, created_at')
       .eq('contact_id', contactId)
       .is('account_id', null)
-      .in('invoice_status', ['Sent', 'Overdue'])
-      .order('due_date', { ascending: true })
-      .limit(10),
+      .in('invoice_status', ['Sent', 'Overdue', 'Partial'])
+      .order('due_date', { ascending: true }),
   ])
 
   const items: ActionItem[] = []
