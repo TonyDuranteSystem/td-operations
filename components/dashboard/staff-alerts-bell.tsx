@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { MessageSquare, X, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface StaffAlert {
@@ -45,12 +46,25 @@ function timeAgo(iso: string): string {
   return `${Math.floor(hr / 24)}d ago`
 }
 
+// R099: surface a failed dismiss instead of swallowing it — e.g. the note was hard-deleted
+// between this tab's last fetch and the click, so the dismiss-row insert hits a foreign-key
+// violation server-side. The optimistic removal already happened; invalidateQueries (in
+// dismissMany's finally) will bring the alert back on the next fetch if the write really
+// failed, so silence here would read as "I dismissed it and it came back" with no explanation.
 async function dismissOnServer(a: Pick<StaffAlert, 'kind' | 'note_id' | 'reply_id'>) {
-  await fetch('/api/crm/staff-alerts', {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ kind: a.kind, note_id: a.note_id, reply_id: a.reply_id }),
-  }).catch(() => {})
+  try {
+    const res = await fetch('/api/crm/staff-alerts', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: a.kind, note_id: a.note_id, reply_id: a.reply_id }),
+    })
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}))
+      throw new Error(d.error || 'Could not update that alert — it may reappear.')
+    }
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Could not update that alert — it may reappear.')
+  }
 }
 
 export function StaffAlertsBell({ compact = false }: { compact?: boolean }) {
@@ -114,10 +128,26 @@ export function StaffAlertsBell({ compact = false }: { compact?: boolean }) {
     [dismissMany, alerts],
   )
 
+  // The dirty-keys pin (above) only protects a row that stays MOUNTED while the server
+  // stops listing it. Closing the panel itself unmounts every row unconditionally — found
+  // by an adversarial review of the shipped code: a stray tap on the backdrop (very easy at
+  // 380px, where the sheet covers most of the screen) silently wiped an in-progress reply
+  // with no confirmation, the exact class of bug this file's own comment claimed to prevent.
+  // Every close path (backdrop, the mobile X, re-tapping the bell, navigating via Open) now
+  // goes through this one guard instead of a bare setOpen(false).
+  const confirmDiscardIfDirty = useCallback(() => {
+    return dirtyKeys.size === 0 || confirm('You have an unsent reply here — close and lose it?')
+  }, [dirtyKeys])
+
+  const requestClose = useCallback(() => {
+    if (confirmDiscardIfDirty()) setOpen(false)
+  }, [confirmDiscardIfDirty])
+
   const openAlert = useCallback((a: StaffAlert) => {
+    if (!confirmDiscardIfDirty()) return
     setOpen(false)
     router.push(a.url)
-  }, [router])
+  }, [router, confirmDiscardIfDirty])
 
   const count = alerts.length
 
@@ -139,11 +169,11 @@ export function StaffAlertsBell({ compact = false }: { compact?: boolean }) {
           </button>
         </FastTooltip>
         {open && (
-          <div className="lg:hidden fixed inset-0 z-[46] flex flex-col justify-end bg-black/30" onClick={() => setOpen(false)}>
+          <div className="lg:hidden fixed inset-0 z-[46] flex flex-col justify-end bg-black/30" onClick={requestClose}>
             <div className="max-h-[75vh] overflow-y-auto rounded-t-xl bg-zinc-50 p-3" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between px-1 pb-2">
                 <span className="text-sm font-semibold text-zinc-700">Staff Alerts</span>
-                <button onClick={() => setOpen(false)} className="p-1 text-zinc-400" aria-label="Close">
+                <button onClick={requestClose} className="p-1 text-zinc-400" aria-label="Close">
                   <X className="h-5 w-5" />
                 </button>
               </div>
@@ -159,7 +189,7 @@ export function StaffAlertsBell({ compact = false }: { compact?: boolean }) {
     <div className="relative">
       <FastTooltip label="Staff Alerts">
         <button
-          onClick={() => setOpen((v) => !v)}
+          onClick={() => (open ? requestClose() : setOpen(true))}
           className={`relative flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-colors border ${
             count > 0
               ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
@@ -173,7 +203,7 @@ export function StaffAlertsBell({ compact = false }: { compact?: boolean }) {
       </FastTooltip>
       {open && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="fixed inset-0 z-40" onClick={requestClose} />
           <div className="absolute right-0 top-full mt-2 z-50 w-96 max-h-[70vh] overflow-y-auto rounded-lg border bg-white shadow-lg">
             <div className="flex items-center justify-between border-b px-3 py-2">
               <span className="text-sm font-semibold text-zinc-700">Staff Alerts</span>
@@ -273,7 +303,7 @@ function AlertRow({ alert, onOpen, onDismiss, onDismissNote, onDirtyChange }: {
         <button className="flex-1 min-w-0 text-left" onClick={() => onOpen(alert)}>
           <p className="text-sm font-medium text-zinc-800">{alert.title}</p>
           <p className="text-sm text-zinc-500 line-clamp-2">{alert.body}</p>
-          <p className="mt-0.5 text-xs text-zinc-400">
+          <p className="mt-0.5 text-xs text-zinc-400 truncate">
             {alert.client_name ? `${alert.client_name} · ` : ''}
             {timeAgo(alert.created_at)}
           </p>
