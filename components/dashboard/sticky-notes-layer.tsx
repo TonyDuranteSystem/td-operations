@@ -20,6 +20,7 @@ import { NoteEditor } from '@/components/dashboard/note-editor'
 import { useDraggableFab } from '@/components/ui/use-draggable-fab'
 import { FAB_KEYS } from '@/lib/ui/draggable-fab'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
+import { OPEN_NOTE_EVENT, type OpenNoteDetail } from '@/lib/notes/open-note'
 import { safeOriginPath, describeOrigin } from '@/lib/notes/note-origin'
 import { latestReplyOf, type NoteReplyRow } from '@/lib/notes/staff-notes'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -146,6 +147,35 @@ function StickyNotesInner() {
   }, [notes, qc])
 
   useEffect(() => { prunePositions(notes.map((n) => n.id)) }, [notes])
+
+  /**
+   * External "open this note" — lets another surface (the Staff Alerts bell)
+   * open a specific note here instead of navigating away, the same way
+   * "Discuss this note" opens the floating chat by event (mirrors
+   * FloatingChatInner's OPEN_TEAM_CHAT_EVENT handler exactly).
+   *
+   * SYNCHRONOUS ONLY, on purpose: preventDefault only affects the dispatcher's
+   * return value if called before dispatchEvent returns, so this can only claim
+   * a note already sitting in the loaded (active) feed. A note that's snoozed
+   * or archived-for-me but still alerting (note_update isn't gated on either)
+   * won't be here — we let the event go unhandled and the caller falls back to
+   * navigating to /notes?note=<id>, which shows every note, not just active
+   * ones. Never a dead click, just an honest degrade for a rare case.
+   */
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const detail = (e as CustomEvent).detail as OpenNoteDetail | undefined
+      const noteId = detail?.noteId
+      if (!noteId) return
+      const found = notes.find((n) => n.id === noteId)
+      if (!found) return
+      e.preventDefault()
+      setSheetOpen(false)
+      setEditing(found)
+    }
+    document.addEventListener(OPEN_NOTE_EVENT, onOpen)
+    return () => document.removeEventListener(OPEN_NOTE_EVENT, onOpen)
+  }, [notes])
 
   const invalidate = useCallback(() => qc.invalidateQueries({ queryKey: ['staff-notes-active'] }), [qc])
 
