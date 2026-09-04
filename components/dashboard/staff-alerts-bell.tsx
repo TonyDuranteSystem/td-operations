@@ -98,6 +98,14 @@ export function StaffAlertsBell({ compact = false }: { compact?: boolean }) {
   const knownAlertsRef = useRef<Map<string, StaffAlert>>(new Map())
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set())
 
+  // Polled, not just event-driven: opening a chat alert marks its thread read
+  // through the SAME floating-chat / full-page mechanisms Team Chat's own UI
+  // uses, neither of which knows this query exists to invalidate it (found
+  // live, 2026-09-04 — the bell kept showing an alert for a thread already
+  // read). The explicit invalidate in openAlert below covers the common case
+  // immediately; this interval is the guarantee for whatever it misses,
+  // matching the same-purpose interval sticky-notes-layer.tsx and
+  // floating-chat.tsx already poll on.
   const { data } = useQuery<{ alerts: StaffAlert[] }>({
     queryKey: ['staff-alerts'],
     queryFn: async () => {
@@ -105,6 +113,7 @@ export function StaffAlertsBell({ compact = false }: { compact?: boolean }) {
       if (!res.ok) throw new Error('Could not load alerts')
       return res.json()
     },
+    refetchInterval: 60_000,
   })
 
   const serverAlerts = useMemo(() => data?.alerts ?? [], [data])
@@ -179,6 +188,15 @@ export function StaffAlertsBell({ compact = false }: { compact?: boolean }) {
     const handled = isNoteAlert(a)
       ? requestOpenNote({ noteId: a.note_id })
       : requestOpenTeamChat({ threadId: a.thread_id })
+    if (!isNoteAlert(a)) {
+      // Opening a chat alert marks its thread read somewhere downstream
+      // (the floating chat's own markRead, or the full team-chat page's
+      // default GET) — neither knows THIS query exists to invalidate it, so
+      // the badge/row would otherwise sit stale until the 60s poll. Best-
+      // effort immediate refresh, timed after the mark-read write has had a
+      // moment to land; the poll (above) is the actual guarantee.
+      setTimeout(() => qc.invalidateQueries({ queryKey: ['staff-alerts'] }), 800)
+    }
     if (handled) return
     // Verified live (2026-09-04): a soft client-side push to the SAME page you're
     // already on (e.g. clicking a chat alert while sitting on /team-chat itself)
@@ -191,7 +209,7 @@ export function StaffAlertsBell({ compact = false }: { compact?: boolean }) {
       return
     }
     router.push(a.url)
-  }, [router, confirmDiscardIfDirty])
+  }, [router, confirmDiscardIfDirty, qc])
 
   const count = alerts.length
 
