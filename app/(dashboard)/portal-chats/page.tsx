@@ -2075,6 +2075,16 @@ export default function PortalChatsPage() {
       toast.error(`${closedTargetName} is closed — the client can't see messages here. Pick an active company or "Personal".`)
       return
     }
+    // A pending free-text topic (staff typed a new one but clicked Confirm &
+    // Send instead of pressing Enter) does NOT reliably commit via the
+    // input's onBlur before this click fires — the newly-appearing topic
+    // chip shifts the layout, so the blur-then-click sequence can land the
+    // click just off the button. Commit it here directly rather than trust
+    // that ordering: this is the one value read from modal-local state
+    // instead of the shared adminActiveTopic, precisely because relying on
+    // the shared value would be relying on the same unreliable blur.
+    const pendingTopic = modalCreatingTopic && modalNewTopicInput.trim() ? modalNewTopicInput.trim() : null
+    if (pendingTopic) setAdminActiveTopic(pendingTopic)
     closeSendConfirm()
     // Captured now, at confirm-click time, before any upload/network await — this is
     // the conversation the send is actually FOR, regardless of where staff
@@ -2092,7 +2102,7 @@ export default function PortalChatsPage() {
     const targetAccountId = selectedAccountId
     const targetContactId = selectedContactId
     const targetCompanyId = selectedCompanyId
-    const targetTopic = adminActiveTopic
+    const targetTopic = pendingTopic ?? adminActiveTopic
     // "Addressed to" label (dev job 08a8be62) — same capture-before-await
     // discipline as the four values above (dev job c3bb4abc): must be
     // frozen here, at click time, never re-read from live state inside
