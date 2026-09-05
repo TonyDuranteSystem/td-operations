@@ -45,10 +45,19 @@
  * `ever_mentioned` (below) is what he actually described: has he EVER been
  * @mentioned in this conversation, regardless of read state. Computed
  * server-side in app/api/team/threads/route.ts. Verified against his real
- * account before shipping: 122 discussion threads → 1. Nothing is hidden
- * forever: any client's conversation remains reachable on purpose through
- * "New chat" (search by company), and this list only ever grows when someone
- * actually types his name into one.
+ * account before shipping: 122 discussion threads → 1. Any client's
+ * conversation also remains reachable on purpose through "New chat" (search
+ * by company) regardless of this list's state.
+ *
+ * (3) SAME DAY, follow-up: "in the floating chat, after reading a message I
+ * want the option to mark it done and disappear from the list" — confirmed it
+ * should REAPPEAR on a fresh mention, not hide forever. So `ever_mentioned` is
+ * no longer a permanent-once-true fact: the server compares each mention's
+ * timestamp against the caller's own dismissal stamp for that thread
+ * (internal_thread_mention_dismissals, set via POST
+ * .../threads/[id]/dismiss-mention) and only counts mentions newer than it.
+ * The "mark done" button lives in the open-thread header, not the list row,
+ * per Antonio's own placement choice.
  */
 
 /** A staff member who may be picked in the person switcher. */
@@ -180,6 +189,72 @@ export function openConversations(
     .slice()
     .sort((a, b) => (b.last_activity_at ?? '').localeCompare(a.last_activity_at ?? ''))
     .slice(0, limit)
+}
+
+/** A raw mention: some message in a thread that names the viewer. */
+export interface MentionRow {
+  threadId: string
+  createdAt: string
+}
+
+/** A viewer's "mark done" for a thread — see app/api/team/threads/[id]/dismiss-mention. */
+export interface MentionDismissalRow {
+  threadId: string
+  dismissedAt: string
+}
+
+/**
+ * Which threads still count as "ever_mentioned" after "mark done" dismissals.
+ *
+ * Extracted as its own pure function (2026-09-05) specifically so this
+ * comparison — the exact kind of timestamp logic that got "mine" wrong twice
+ * already today — is unit-tested directly rather than trusted inline in the
+ * route. A thread counts if it has ANY mention with no dismissal recorded for
+ * it, OR a mention newer than its most recent dismissal. Dismissing does not
+ * touch other threads, and a mention that arrives AFTER a dismissal brings
+ * the thread back — "mark done" is a personal snooze on mentions-so-far, not
+ * a permanent hide.
+ */
+export function everMentionedThreadIds(
+  mentions: readonly MentionRow[] | null | undefined,
+  dismissals: readonly MentionDismissalRow[] | null | undefined,
+): Set<string> {
+  const dismissedAt = new Map<string, number>()
+  for (const d of dismissals ?? []) {
+    if (!d?.threadId || !d.dismissedAt) continue
+    const t = new Date(d.dismissedAt).getTime()
+    if (Number.isNaN(t)) continue
+    dismissedAt.set(d.threadId, t)
+  }
+  const result = new Set<string>()
+  for (const m of mentions ?? []) {
+    if (!m?.threadId || !m.createdAt) continue
+    const mentionedAt = new Date(m.createdAt).getTime()
+    if (Number.isNaN(mentionedAt)) continue
+    const cutoff = dismissedAt.get(m.threadId)
+    if (cutoff === undefined || mentionedAt > cutoff) result.add(m.threadId)
+  }
+  return result
+}
+
+/**
+ * What "mark done" should actually stamp as dismissed_at.
+ *
+ * Prefers the CLIENT's own timestamp — captured at the moment of the click,
+ * before the request even goes out — over the server's "now" at the moment
+ * this request happens to be processed (bug-hunter, 2026-09-05: server
+ * queueing/processing latency was extra room for a mention sent just before
+ * the click to lose the race against a dismissal timestamped after it). Only
+ * trusted if it parses AND is not in the future relative to the server's own
+ * clock — a bad, missing, or (clock-skewed / tampered) future client value
+ * falls back to the server's own "now" rather than being used as-is.
+ */
+export function resolveDismissedAt(clientAsOf: unknown, serverNowMs: number): string {
+  if (typeof clientAsOf === 'string') {
+    const t = new Date(clientAsOf).getTime()
+    if (!Number.isNaN(t) && t <= serverNowMs) return new Date(t).toISOString()
+  }
+  return new Date(serverNowMs).toISOString()
 }
 
 /** A conversation's display name, preferring what the server already resolved. */

@@ -30,6 +30,8 @@ import {
   openConversations,
   conversationLabel,
   windowUnreadCount,
+  everMentionedThreadIds,
+  resolveDismissedAt,
   type ChatMember,
   type ChatThreadRow,
 } from '@/lib/team/chat-window-threads'
@@ -233,6 +235,102 @@ describe('openConversations — the client chats the window can open', () => {
       }
       expect(openConversations([autoSeeded])).toEqual([])
     })
+  })
+})
+
+// Same day, follow-up ask: "in the floating chat, after reading a message I
+// want the option to mark it done and disappear from the list" — confirmed
+// it should REAPPEAR on a fresh mention, not hide forever. This is the exact
+// comparison the server uses (app/api/team/threads/route.ts) to decide
+// ever_mentioned once a "mark done" dismissal exists for a thread.
+describe('everMentionedThreadIds — "mark done" resets on a fresh mention', () => {
+  it('counts a mention when there is no dismissal at all — matches the original ever_mentioned behaviour', () => {
+    const mentions = [{ threadId: 'c1', createdAt: '2026-09-04T10:00:00Z' }]
+    expect(everMentionedThreadIds(mentions, [])).toEqual(new Set(['c1']))
+  })
+
+  it('drops a thread whose only mention is BEFORE its dismissal', () => {
+    const mentions = [{ threadId: 'c1', createdAt: '2026-09-04T10:00:00Z' }]
+    const dismissals = [{ threadId: 'c1', dismissedAt: '2026-09-05T08:00:00Z' }]
+    expect(everMentionedThreadIds(mentions, dismissals)).toEqual(new Set())
+  })
+
+  it('brings a thread back when a NEW mention lands after the dismissal — the whole point of "mark done"', () => {
+    const mentions = [
+      { threadId: 'c1', createdAt: '2026-09-04T10:00:00Z' }, // old, dismissed
+      { threadId: 'c1', createdAt: '2026-09-05T09:00:00Z' }, // fresh, after dismissal
+    ]
+    const dismissals = [{ threadId: 'c1', dismissedAt: '2026-09-05T08:00:00Z' }]
+    expect(everMentionedThreadIds(mentions, dismissals)).toEqual(new Set(['c1']))
+  })
+
+  it('a dismissal on one thread never affects another thread\'s mentions', () => {
+    const mentions = [
+      { threadId: 'c1', createdAt: '2026-09-04T10:00:00Z' },
+      { threadId: 'c2', createdAt: '2026-09-04T10:00:00Z' },
+    ]
+    const dismissals = [{ threadId: 'c1', dismissedAt: '2026-09-05T08:00:00Z' }]
+    expect(everMentionedThreadIds(mentions, dismissals)).toEqual(new Set(['c2']))
+  })
+
+  it('a mention exactly at the dismissal timestamp does NOT count — dismissing covers everything up to and including that instant', () => {
+    const mentions = [{ threadId: 'c1', createdAt: '2026-09-05T08:00:00Z' }]
+    const dismissals = [{ threadId: 'c1', dismissedAt: '2026-09-05T08:00:00Z' }]
+    expect(everMentionedThreadIds(mentions, dismissals)).toEqual(new Set())
+  })
+
+  it('re-dismissing advances the cutoff — a second "mark done" also clears mentions made between the two dismissals', () => {
+    const mentions = [{ threadId: 'c1', createdAt: '2026-09-05T08:30:00Z' }]
+    // Simulates the upsert overwriting dismissed_at to the later timestamp.
+    const dismissals = [{ threadId: 'c1', dismissedAt: '2026-09-05T09:00:00Z' }]
+    expect(everMentionedThreadIds(mentions, dismissals)).toEqual(new Set())
+  })
+
+  it('tolerates malformed or missing rows without throwing — fails closed (empty), never crashes the sidebar', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const badMentions = [{ threadId: 'c1', createdAt: 'not-a-date' }, { threadId: '', createdAt: '2026-09-04T10:00:00Z' }, null] as any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const badDismissals = [{ threadId: 'c1', dismissedAt: 'also-not-a-date' }, null] as any
+    expect(() => everMentionedThreadIds(badMentions, badDismissals)).not.toThrow()
+    expect(everMentionedThreadIds(badMentions, badDismissals)).toEqual(new Set())
+  })
+
+  it('tolerates null/undefined lists entirely', () => {
+    expect(everMentionedThreadIds(null, null)).toEqual(new Set())
+    expect(everMentionedThreadIds(undefined, undefined)).toEqual(new Set())
+  })
+})
+
+// Bug-hunter, 2026-09-05: server "now" left room for a mention sent just
+// before a "mark done" click to still lose the race once server-processing
+// latency was added on top of network latency. This is the clamp that closes
+// that slice of the window — see the dismiss-mention route for the caller.
+describe('resolveDismissedAt — prefers the click\'s own clock over server "now"', () => {
+  const NOW = new Date('2026-09-05T12:00:00Z').getTime()
+
+  it('uses the client-supplied timestamp when it is valid and not in the future', () => {
+    expect(resolveDismissedAt('2026-09-05T11:59:00Z', NOW)).toBe('2026-09-05T11:59:00.000Z')
+  })
+
+  it('falls back to server "now" when no value is supplied', () => {
+    expect(resolveDismissedAt(undefined, NOW)).toBe(new Date(NOW).toISOString())
+  })
+
+  it('falls back to server "now" for a malformed date string — never trusts garbage as-is', () => {
+    expect(resolveDismissedAt('not-a-date', NOW)).toBe(new Date(NOW).toISOString())
+  })
+
+  it('falls back to server "now" for a non-string value — a tampered/wrong-typed body must not crash or pass through', () => {
+    expect(resolveDismissedAt(12345, NOW)).toBe(new Date(NOW).toISOString())
+    expect(resolveDismissedAt({ not: 'a string' }, NOW)).toBe(new Date(NOW).toISOString())
+  })
+
+  it('rejects a client timestamp in the future — clock skew or tampering must not let a dismissal outrun the server', () => {
+    expect(resolveDismissedAt('2026-09-05T12:01:00Z', NOW)).toBe(new Date(NOW).toISOString())
+  })
+
+  it('accepts a client timestamp exactly equal to server "now"', () => {
+    expect(resolveDismissedAt(new Date(NOW).toISOString(), NOW)).toBe(new Date(NOW).toISOString())
   })
 })
 
