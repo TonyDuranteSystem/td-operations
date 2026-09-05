@@ -4937,7 +4937,7 @@ export default function PortalChatsPage() {
                   >
                     General
                   </button>
-                  {adminTopics.map(t => (
+                  {(adminActiveTopic && !adminTopics.includes(adminActiveTopic) ? [...adminTopics, adminActiveTopic] : adminTopics).map(t => (
                     <button
                       key={t}
                       type="button"
