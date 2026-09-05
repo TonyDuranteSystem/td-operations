@@ -1,10 +1,15 @@
 'use client'
 
 /**
- * Makes a floating button draggable — desktop and touch.
+ * Makes a floating button (or, generically, any element — see the type
+ * parameter below) draggable — desktop and touch.
  *
  * One hook, used by the green chat launcher and the amber notes pill, so the
- * two behave identically and a fix lands in both.
+ * two behave identically and a fix lands in both. Also reused (2026-09-04,
+ * Antonio: "can the popup page be moved?") as the drag handle for the My
+ * Captures popup's header bar — a <div>, not a <button> — via the generic
+ * type parameter (`useDraggableFab<HTMLDivElement>(key)`), which defaults to
+ * `HTMLButtonElement` so neither existing caller needed a single change.
  *
  * The three things that make touch-dragging a button safe, all handled here:
  *
@@ -41,8 +46,8 @@ const store = {
   },
 }
 
-export function useDraggableFab(storageKey: string) {
-  const ref = useRef<HTMLButtonElement | null>(null)
+export function useDraggableFab<T extends HTMLElement = HTMLButtonElement>(storageKey: string) {
+  const ref = useRef<T | null>(null)
   const [pos, setPos] = useState<FabPos | null>(null)
   const drag = useRef<{ dx: number; dy: number; startX: number; startY: number; moved: boolean } | null>(null)
   /**
@@ -87,7 +92,7 @@ export function useDraggableFab(storageKey: string) {
     }
   }, [])
 
-  const onPointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+  const onPointerDown = useCallback((e: React.PointerEvent<T>) => {
     const el = ref.current
     if (!el) return
     const rect = el.getBoundingClientRect()
@@ -102,7 +107,7 @@ export function useDraggableFab(storageKey: string) {
     try { el.setPointerCapture(e.pointerId) } catch { /* not all pointers capture */ }
   }, [])
 
-  const onPointerMove = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+  const onPointerMove = useCallback((e: React.PointerEvent<T>) => {
     const d = drag.current
     if (!d) return
     if (!d.moved && !isDragGesture(e.clientX - d.startX, e.clientY - d.startY)) return
