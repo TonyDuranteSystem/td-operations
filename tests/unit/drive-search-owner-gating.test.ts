@@ -13,6 +13,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { runWithMcpAuthContext } from "@/lib/mcp/auth-context"
 
+// As of the multi-key change, a bare { method: "static" } with no email is
+// unresolved and denies — the route always attaches a real email before this
+// context exists. This is the email Antonio's own real key resolves to.
+const STATIC_OWNER_CONTEXT = { method: "static" as const, email: "antonio.durante@tonydurante.us" }
+
 const searchFiles = vi.fn()
 const searchOwnerDriveFiles = vi.fn()
 
@@ -107,15 +112,25 @@ describe("drive_search owner-folder gating", () => {
   })
 
   it("includes the owner folder for the static-key (Claude Code) caller", async () => {
-    await runWithMcpAuthContext({ method: "static" }, callDriveSearch)
+    await runWithMcpAuthContext(STATIC_OWNER_CONTEXT, callDriveSearch)
     expect(searchOwnerDriveFiles).toHaveBeenCalledTimes(1)
+  })
+
+  it("does NOT query the owner folder for a DIFFERENT person's static key — the exact gap the multi-key change closes", async () => {
+    const text = await runWithMcpAuthContext(
+      { method: "static", email: "luca@tonydurante.us" },
+      callDriveSearch,
+    )
+    expect(searchOwnerDriveFiles).not.toHaveBeenCalled()
+    expect(text).not.toContain("Relay 2025-01-01")
+    expect(text).not.toContain("personal accounting")
   })
 
   it("still returns client results when the owner-folder search fails", async () => {
     // An outage on his private folder must not take down client search, which
     // every other operator depends on.
     searchOwnerDriveFiles.mockRejectedValue(new Error("owner drive unavailable"))
-    const text = await runWithMcpAuthContext({ method: "static" }, callDriveSearch)
+    const text = await runWithMcpAuthContext(STATIC_OWNER_CONTEXT, callDriveSearch)
     expect(text).toContain("bank_accounts_0_statements_CLIENT_Relay.csv")
     expect(text).toContain("could not be searched")
     expect(text).toContain("owner drive unavailable")
