@@ -21,10 +21,13 @@ interface MyNote {
 
 export function NoteDestinationPicker({
   captureId,
+  resend,
   onAttached,
   onError,
 }: {
   captureId: string
+  /** True for a deliberate re-share of a capture already sent once — see share-actions.ts. */
+  resend?: boolean
   onAttached: () => void
   onError: (message: string) => void
 }) {
@@ -57,7 +60,7 @@ export function NoteDestinationPicker({
   const attachTo = async (noteId: string, label: string) => {
     setBusy(true)
     try {
-      await attachCaptureToNote(captureId, noteId)
+      await attachCaptureToNote(captureId, noteId, resend)
       addRecentDestination({ type: 'sticky_note', id: noteId, label })
       onAttached()
     } catch (err) {

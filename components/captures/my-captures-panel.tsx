@@ -9,7 +9,8 @@
  * (heading, max-width) here on purpose — each consumer supplies its own.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { Search, X, ImageOff } from 'lucide-react'
+import { Search, X, ImageOff, Send, Copy, Check } from 'lucide-react'
+import { ShareExistingModal } from '@/components/captures/share-existing-modal'
 
 interface CaptureRow {
   id: string
@@ -34,6 +35,8 @@ export function MyCapturesPanel() {
   const [query, setQuery] = useState('')
   const [openId, setOpenId] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
+  const [sharingId, setSharingId] = useState<string | null>(null)
+  const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle')
 
   // A failed load used to collapse into the SAME "You haven't captured
   // anything yet." empty state as genuinely having nothing (R099 violation,
@@ -71,6 +74,27 @@ export function MyCapturesPanel() {
   }, [captures, query])
 
   const openCapture = filtered.find((c) => c.id === openId) ?? null
+
+  // Copies the actual picture (not a link to it) to the clipboard, so it can
+  // be pasted straight into an email, a chat, anywhere — for a capture
+  // that's NOT going through any of the three built-in destinations
+  // (Antonio, 2026-09-05: "to copy it"). PNG is universally supported by the
+  // Clipboard API's image-write; every capture this tool produces is one
+  // (canvasToPngFile), so there's no format branch to get wrong here.
+  const handleCopy = async (captureId: string) => {
+    setCopyState('copying')
+    try {
+      const res = await fetch(`/api/captures/${captureId}/image`)
+      if (!res.ok) throw new Error('load failed')
+      const blob = await res.blob()
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
+      setCopyState('copied')
+      setTimeout(() => setCopyState('idle'), 1500)
+    } catch {
+      setCopyState('error')
+      setTimeout(() => setCopyState('idle'), 2500)
+    }
+  }
 
   return (
     <div>
@@ -137,9 +161,27 @@ export function MyCapturesPanel() {
                 <p className="text-sm font-medium">{openCapture.title}</p>
                 {openCapture.note && <p className="text-xs text-zinc-300">{openCapture.note}</p>}
               </div>
-              <button onClick={() => setOpenId(null)} className="rounded-full p-1.5 hover:bg-white/10" aria-label="Close">
-                <X className="h-5 w-5" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setSharingId(openCapture.id)}
+                  className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-white hover:bg-white/10"
+                  aria-label="Share"
+                >
+                  <Send className="h-4 w-4" />
+                  Share
+                </button>
+                <button
+                  onClick={() => void handleCopy(openCapture.id)}
+                  className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-white hover:bg-white/10"
+                  aria-label="Copy picture"
+                >
+                  {copyState === 'copied' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  {copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Could not copy' : 'Copy'}
+                </button>
+                <button onClick={() => setOpenId(null)} className="rounded-full p-1.5 hover:bg-white/10" aria-label="Close">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
             </div>
             {/* eslint-disable-next-line @next/next/no-img-element -- server-proxied private image */}
             <img
@@ -149,6 +191,19 @@ export function MyCapturesPanel() {
             />
           </div>
         </div>
+      )}
+
+      {sharingId && (
+        <ShareExistingModal
+          captureId={sharingId}
+          imageUrl={`/api/captures/${sharingId}/image`}
+          onClose={() => {
+            setSharingId(null)
+            // Refresh so the gallery's "Not sent yet" / destination label
+            // reflects a just-completed share without a manual reload.
+            setReloadToken((n) => n + 1)
+          }}
+        />
       )}
 
       {captures !== null && captures.length === 0 && (

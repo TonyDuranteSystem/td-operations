@@ -53,6 +53,12 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   const body = await request.json().catch(() => ({}))
   const contactId = typeof body.contact_id === "string" ? body.contact_id : ""
   const accountId = typeof body.account_id === "string" && body.account_id ? body.account_id : null
+  // True only for a deliberate re-share of a picture already sent once, from
+  // the My Captures gallery's own "Share" button (2026-09-05) — see
+  // lib/captures/share-actions.ts's header comment for the full reasoning.
+  // The ORIGINAL post-capture flow never sends this, so its idempotency stays
+  // exactly as strict as before.
+  const resend = body.resend === true
   if (!contactId) return NextResponse.json({ error: "Who is this going to?" }, { status: 400 })
 
   const { data: capture, error: captureErr } = await capturesTable()
@@ -63,9 +69,10 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   if (capture.captured_by_user_id !== user.id) {
     return NextResponse.json({ error: "That isn't your capture." }, { status: 403 })
   }
-  if (capture.destination) {
+  if (capture.destination && !resend) {
     return NextResponse.json({ error: "This was already shared." }, { status: 409 })
   }
+  const priorDestination = capture.destination ?? null
 
   // Validate the send BEFORE touching Storage — see header comment.
   const { data: contact } = await supabaseAdmin
@@ -107,13 +114,21 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   // (not a placeholder) and rolls back to NULL via rollbackClaim() below on
   // any failure past this point, so a failed send is still retriable rather
   // than permanently stuck "already shared."
+  //
+  // A resend can't use that same "must currently be NULL" gate — it's
+  // sending BECAUSE `destination` is already set. The atomic claim only
+  // exists to stop the exact same request from racing itself; for a resend,
+  // that protection is deliberately lighter (the picker's own busy-guard,
+  // already proven reliable for a real double-tap), not because it's a
+  // lesser concern but because this path is a slow, multi-step, deliberately
+  // reopened action, not the "one already-visible button, network hiccup"
+  // pattern the atomic claim exists to close. Rollback restores the PRIOR
+  // destination on a resend (there's a real previous send to preserve), not
+  // NULL (which would erase it).
   const message = (capture.note?.trim() || capture.title || "Shared a screenshot").slice(0, 5000)
   const destinationValue = { type: "portal_chat", id: contactId, account_id: accountId, label: message.slice(0, 60) }
-  const { data: claimed, error: claimErr } = await capturesTable()
-    .update({ destination: destinationValue })
-    .eq("id", captureId)
-    .is("destination", null)
-    .select("id")
+  const claimQuery = capturesTable().update({ destination: destinationValue }).eq("id", captureId)
+  const { data: claimed, error: claimErr } = await (resend ? claimQuery : claimQuery.is("destination", null)).select("id")
   if (claimErr) {
     console.error("[captures/share-portal-chat] claim error:", claimErr)
     return NextResponse.json({ error: "Could not share the picture. Please try again." }, { status: 500 })
@@ -122,7 +137,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     return NextResponse.json({ error: "This was already shared." }, { status: 409 })
   }
   const rollbackClaim = async () => {
-    await capturesTable().update({ destination: null }).eq("id", captureId)
+    await capturesTable().update({ destination: priorDestination }).eq("id", captureId)
   }
 
   // Copy: download from the private bucket, upload into the SAME public

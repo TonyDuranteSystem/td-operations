@@ -33,22 +33,16 @@
  * (Antonio, confirmed earlier: single destination, not a broadcast).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Camera, Crop, Loader2, MessageSquare, Send, StickyNote, X } from 'lucide-react'
+import { Camera, Crop, Loader2, X } from 'lucide-react'
 import { useCapture } from '@/components/captures/capture-provider'
 import { captureWholePage, captureRegion, canvasToPngFile, generateCaptureTitle, CAPTURE_TOOL_IGNORE_ATTR } from '@/lib/captures/render'
 import { rectFromTwoPoints, isSelectionLargeEnough, type Point, type CaptureRect } from '@/lib/captures/selection'
 import { uploadCapture } from '@/lib/captures/upload'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { MarkupEditor } from '@/components/captures/markup-editor'
-import { NoteDestinationPicker } from '@/components/captures/note-destination-picker'
-import { TeamChatDestinationPicker } from '@/components/captures/team-chat-destination-picker'
-import { PortalChatDestinationPicker } from '@/components/captures/portal-chat-destination-picker'
-import { attachCaptureToNote, sendCaptureToTeamChat } from '@/lib/captures/share-actions'
-import { getRecentDestinations, addRecentDestination, REQUIRES_CONFIRMATION, type RecentDestination } from '@/lib/captures/recent-destinations'
+import { DestinationFlow } from '@/components/captures/destination-flow'
 
 type Stage = 'mode' | 'selecting' | 'capturing' | 'markup' | 'uploading' | 'destination' | 'done' | 'error'
-type DestinationChoice = 'sticky_note' | 'team_chat' | 'portal_chat' | null
-type PortalChatPrefill = { contactId: string; accountId: string | null; label: string }
 
 export default function CaptureLayer() {
   const { isOpen, close, pendingExternalFile, clearPendingExternalFile } = useCapture()
@@ -67,12 +61,8 @@ export default function CaptureLayer() {
   const [captureGeneration, setCaptureGeneration] = useState(0)
   const [note, setNote] = useState('')
   const [uploadedCaptureId, setUploadedCaptureId] = useState<string | null>(null)
-  const [destinationChoice, setDestinationChoice] = useState<DestinationChoice>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [recents, setRecents] = useState<RecentDestination[]>([])
-  const [quickSending, setQuickSending] = useState(false)
   const [doneMessage, setDoneMessage] = useState<string | null>(null)
-  const [portalChatPrefill, setPortalChatPrefill] = useState<PortalChatPrefill | null>(null)
   const [extraFilesNotice, setExtraFilesNotice] = useState(false)
   // Bumped every time a NEW file starts its journey through this stage
   // machine (a fresh capture, a paste, or a drop) — handleMarkupDone reads it
@@ -103,11 +93,8 @@ export default function CaptureLayer() {
     setCapturedFile(null)
     setNote('')
     setUploadedCaptureId(null)
-    setDestinationChoice(null)
     setErrorMessage(null)
-    setQuickSending(false)
     setDoneMessage(null)
-    setPortalChatPrefill(null)
     setExtraFilesNotice(false)
   }, [])
 
@@ -263,10 +250,6 @@ export default function CaptureLayer() {
         const capture = await uploadCapture({ file: finalFile, title: generateCaptureTitle(), note })
         if (uploadTokenRef.current !== token) return
         setUploadedCaptureId(capture.id)
-        // Loaded fresh on arrival at the destination step, not once at open —
-        // a share completed earlier in this SAME session (recent-then-retake)
-        // must already be reflected in the shortcut list.
-        setRecents(getRecentDestinations())
         setStage('destination')
       } catch (err) {
         if (uploadTokenRef.current !== token) return
@@ -290,47 +273,6 @@ export default function CaptureLayer() {
     setErrorMessage(message)
     setStage('error')
   }, [])
-
-  // Step 8 — one tap on a remembered destination does exactly what picking
-  // it from the full picker does: the same request, the same "move to
-  // front" bump, the same success/failure handling. The one exception is a
-  // destination REQUIRES_CONFIRMATION marks true (today: only portal_chat,
-  // the client-facing one) — a quick-tap there pre-fills the picker with
-  // this exact target instead of sending, so it still lands on the same
-  // mandatory confirmation screen a fresh search would. Consulting the map
-  // here, rather than hardcoding which types skip confirmation, is
-  // deliberate: the natural way to wire a new type into this function is a
-  // same-shaped extra branch, which is exactly how an earlier draft of this
-  // change would have silently instant-sent the one destination that must
-  // never skip confirmation (bug-hunter finding, council pass 2026-09-04).
-  const handleQuickSend = useCallback(
-    async (dest: RecentDestination) => {
-      if (!uploadedCaptureId) return
-      if (REQUIRES_CONFIRMATION[dest.type]) {
-        if (dest.type === 'portal_chat') {
-          setPortalChatPrefill({ contactId: dest.contactId, accountId: dest.accountId, label: dest.label })
-          setDestinationChoice('portal_chat')
-        }
-        return
-      }
-      setQuickSending(true)
-      setErrorMessage(null)
-      try {
-        if (dest.type === 'sticky_note') {
-          await attachCaptureToNote(uploadedCaptureId, dest.id)
-        } else if (dest.type === 'team_chat') {
-          await sendCaptureToTeamChat(uploadedCaptureId, dest.id)
-        }
-        addRecentDestination(dest)
-        handleAttached()
-      } catch (err) {
-        setQuickSending(false)
-        setErrorMessage(err instanceof Error ? err.message : 'Could not send it there. Please try again.')
-        setStage('error')
-      }
-    },
-    [uploadedCaptureId, handleAttached],
-  )
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -452,70 +394,15 @@ export default function CaptureLayer() {
               </div>
             )}
 
-            {stage === 'destination' && uploadedCaptureId && destinationChoice === null && (
-              <div className="flex flex-col gap-3">
-                {recents.length > 0 && (
-                  <div className="flex flex-col gap-1">
-                    <p className="text-xs text-zinc-400">Send to the same place again:</p>
-                    <div className="flex flex-col gap-1">
-                      {recents.map((r) => {
-                        const Icon = r.type === 'sticky_note' ? StickyNote : r.type === 'team_chat' ? MessageSquare : Send
-                        const key = r.type === 'portal_chat' ? `portal_chat-${r.contactId}-${r.accountId ?? ''}` : `${r.type}-${r.id}`
-                        return (
-                          <button
-                            key={key}
-                            onClick={() => void handleQuickSend(r)}
-                            disabled={quickSending}
-                            className="flex items-center gap-2 truncate rounded-md border border-zinc-200 px-3 py-2 text-left text-sm hover:bg-zinc-50 disabled:opacity-40"
-                          >
-                            <Icon className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-                            <span className="truncate">{r.label}</span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-                <div className="flex flex-col gap-2">
-                  <button
-                    onClick={() => setDestinationChoice('sticky_note')}
-                    className="flex items-center gap-2 rounded-md border border-zinc-200 px-4 py-3 text-left text-sm hover:bg-zinc-50"
-                  >
-                    <StickyNote className="h-4 w-4 text-zinc-500" />
-                    {recents.length > 0 ? 'A different sticky note' : 'A sticky note'}
-                  </button>
-                  <button
-                    onClick={() => setDestinationChoice('team_chat')}
-                    className="flex items-center gap-2 rounded-md border border-zinc-200 px-4 py-3 text-left text-sm hover:bg-zinc-50"
-                  >
-                    <MessageSquare className="h-4 w-4 text-zinc-500" />
-                    {recents.length > 0 ? 'A different team chat conversation' : 'A team chat conversation'}
-                  </button>
-                  <button
-                    onClick={() => setDestinationChoice('portal_chat')}
-                    className="flex items-center gap-2 rounded-md border border-zinc-200 px-4 py-3 text-left text-sm hover:bg-zinc-50"
-                  >
-                    <Send className="h-4 w-4 text-zinc-500" />
-                    A client portal chat
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {stage === 'destination' && uploadedCaptureId && destinationChoice === 'sticky_note' && (
-              <NoteDestinationPicker captureId={uploadedCaptureId} onAttached={() => handleAttached()} onError={handleDestinationError} />
-            )}
-
-            {stage === 'destination' && uploadedCaptureId && destinationChoice === 'team_chat' && (
-              <TeamChatDestinationPicker captureId={uploadedCaptureId} onSent={() => handleAttached()} onError={handleDestinationError} />
-            )}
-
-            {stage === 'destination' && uploadedCaptureId && destinationChoice === 'portal_chat' && (
-              <PortalChatDestinationPicker
+            {stage === 'destination' && uploadedCaptureId && (
+              // No `resend` here — this is the ORIGINAL post-capture send,
+              // the one time this exact capture is genuinely new. The
+              // share-existing-modal.tsx caller (an already-sent picture
+              // from the gallery) is the one that passes resend: true.
+              <DestinationFlow
                 captureId={uploadedCaptureId}
                 imageFile={capturedFile}
-                prefilled={portalChatPrefill}
-                onSent={(label) => handleAttached(label)}
+                onDone={(message) => handleAttached(message)}
                 onError={handleDestinationError}
               />
             )}
@@ -528,10 +415,7 @@ export default function CaptureLayer() {
               <div className="flex flex-col gap-3">
                 <p className="text-sm text-red-600">{errorMessage}</p>
                 <button
-                  onClick={() => {
-                    setDestinationChoice(null)
-                    setStage(uploadedCaptureId ? 'destination' : 'mode')
-                  }}
+                  onClick={() => setStage(uploadedCaptureId ? 'destination' : 'mode')}
                   className="rounded-md border border-zinc-200 px-4 py-2 text-sm hover:bg-zinc-50"
                 >
                   Try again

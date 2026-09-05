@@ -72,17 +72,34 @@ export function MarkupEditor({
   // forever with no error shown, and Continue/Retake stayed clickable
   // regardless — Continue would then export whatever was already on the
   // untouched, default-sized canvas as a blank, real, SENDABLE picture.
+  //
+  // `cancelled` guards BOTH callbacks against a STALE image from a
+  // SUPERSEDED effect run (found live, 2026-09-05, testing against a
+  // development build specifically — the exact class of bug this codebase's
+  // Strict Mode double-invoke traps exist to catch, and why local dev is
+  // tested, not just production deploys): Strict Mode's dev-only
+  // double-invoke tears down the first effect run's Image immediately,
+  // revoking its blob URL before that Image has actually decoded. If that
+  // torn-down Image's `onerror` fires LATE — after the second, real
+  // invocation's Image has already loaded successfully and set ready=true —
+  // it would set loadError=true on top of a genuinely successful load,
+  // visibly showing the correct picture while leaving Continue disabled for
+  // a reason the user can't see. Checking `cancelled` (set true the instant
+  // THIS run's own cleanup fires) means only the CURRENT attempt's callbacks
+  // can ever change state.
   useEffect(() => {
     const canvas = baseCanvasRef.current
     const preview = previewCanvasRef.current
     if (!canvas || !preview) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    let cancelled = false
     setReady(false)
     setLoadError(false)
     const url = URL.createObjectURL(imageFile)
     const img = new Image()
     img.onload = () => {
+      if (cancelled) return
       canvas.width = img.naturalWidth
       canvas.height = img.naturalHeight
       preview.width = img.naturalWidth
@@ -90,9 +107,15 @@ export function MarkupEditor({
       ctx.drawImage(img, 0, 0)
       setReady(true)
     }
-    img.onerror = () => setLoadError(true)
+    img.onerror = () => {
+      if (cancelled) return
+      setLoadError(true)
+    }
     img.src = url
-    return () => URL.revokeObjectURL(url)
+    return () => {
+      cancelled = true
+      URL.revokeObjectURL(url)
+    }
   }, [imageFile])
 
   const pushUndoSnapshot = useCallback(() => {

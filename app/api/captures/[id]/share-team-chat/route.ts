@@ -59,6 +59,9 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   const captureId = params.id
   const body = await request.json().catch(() => ({}))
   const threadId = typeof body.thread_id === "string" ? body.thread_id : ""
+  // True only for a deliberate re-share from the My Captures gallery's own
+  // "Share" button (2026-09-05) — see lib/captures/share-actions.ts.
+  const resend = body.resend === true
   if (!threadId) return NextResponse.json({ error: "Which conversation?" }, { status: 400 })
 
   const { data: capture, error: captureErr } = await capturesTable()
@@ -69,9 +72,10 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   if (capture.captured_by_user_id !== user.id) {
     return NextResponse.json({ error: "That isn't your capture." }, { status: 403 })
   }
-  if (capture.destination) {
+  if (capture.destination && !resend) {
     return NextResponse.json({ error: "This was already shared." }, { status: 409 })
   }
+  const priorDestination = capture.destination ?? null
 
   // Thread must exist (same cheap guard the existing team upload-url route uses).
   const { data: thread } = await supabaseAdmin.from("internal_threads").select("id").eq("id", threadId).single()
@@ -84,13 +88,13 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   // only catches the common, sequential case; this conditional UPDATE is
   // the one step Postgres itself makes atomic, so at most one concurrent
   // request can ever win it. Claims with the real, final label up front and
-  // rolls back to NULL via rollbackClaim() on any failure past this point.
+  // rolls back to the PRIOR destination (or NULL, for the original,
+  // never-sent case) via rollbackClaim() on any failure past this point. A
+  // resend skips the "must currently be NULL" gate — see
+  // share-portal-chat/route.ts's own comment on this same shape.
   const message = (capture.note?.trim() || capture.title || "Shared a screenshot").slice(0, 5000)
-  const { data: claimed, error: claimErr } = await capturesTable()
-    .update({ destination: { type: "team_chat", id: threadId, label: message.slice(0, 60) } })
-    .eq("id", captureId)
-    .is("destination", null)
-    .select("id")
+  const claimQuery = capturesTable().update({ destination: { type: "team_chat", id: threadId, label: message.slice(0, 60) } }).eq("id", captureId)
+  const { data: claimed, error: claimErr } = await (resend ? claimQuery : claimQuery.is("destination", null)).select("id")
   if (claimErr) {
     console.error("[captures/share-team-chat] claim error:", claimErr)
     return NextResponse.json({ error: "Could not share the picture. Please try again." }, { status: 500 })
@@ -99,7 +103,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     return NextResponse.json({ error: "This was already shared." }, { status: 409 })
   }
   const rollbackClaim = async () => {
-    await capturesTable().update({ destination: null }).eq("id", captureId)
+    await capturesTable().update({ destination: priorDestination }).eq("id", captureId)
   }
 
   // Copy: download from the private bucket, upload into the public one team

@@ -326,6 +326,9 @@ export async function PATCH(req: NextRequest) {
     }
     const captureId = typeof p.capture_id === "string" ? p.capture_id : ""
     if (!captureId) return fail("Which picture?")
+    // True only for a deliberate re-share from the My Captures gallery's own
+    // "Share" button (2026-09-05) — see lib/captures/share-actions.ts.
+    const resend = p.resend === true
 
     const { data: capture, error: captureErr } = await capturesTable()
       .select("id, image_url, image_name, mime_type, size_bytes, captured_by_user_id, destination")
@@ -335,7 +338,8 @@ export async function PATCH(req: NextRequest) {
     // Defense in depth: the id only ever comes from this same user's own
     // just-completed capture flow, but never trust a client-supplied id blindly.
     if (capture.captured_by_user_id !== user.id) return fail("That isn't your capture.", 403)
-    if (capture.destination) return fail("This was already shared.", 409)
+    if (capture.destination && !resend) return fail("This was already shared.", 409)
+    const priorDestination = capture.destination ?? null
 
     // Idempotency — CLAIM the capture atomically before touching the note,
     // same fix as the other two destinations' share routes (bug-hunter
@@ -344,12 +348,12 @@ export async function PATCH(req: NextRequest) {
     // write below), the one gap of the three the original pass missed.
     // Lower stakes than the other two (nothing external, no copied file —
     // worst case was the same picture attached to two different notes), but
-    // the same fix applies cleanly. Rolled back if the note update fails.
-    const { data: claimed, error: claimErr } = await capturesTable()
-      .update({ destination: { type: "sticky_note", id, label: note.body.slice(0, 60) } })
-      .eq("id", captureId)
-      .is("destination", null)
-      .select("id")
+    // the same fix applies cleanly. A resend skips the "must currently be
+    // NULL" gate (see share-portal-chat/route.ts's comment on this same
+    // shape) and rolls back to the PRIOR destination, not NULL, if the note
+    // update fails — there's a real previous send to preserve.
+    const claimQuery = capturesTable().update({ destination: { type: "sticky_note", id, label: note.body.slice(0, 60) } }).eq("id", captureId)
+    const { data: claimed, error: claimErr } = await (resend ? claimQuery : claimQuery.is("destination", null)).select("id")
     if (claimErr) return fail(claimErr.message || "Could not attach the picture.", 500)
     if (!claimed || claimed.length === 0) return fail("This was already shared.", 409)
 
@@ -362,7 +366,7 @@ export async function PATCH(req: NextRequest) {
       })
       .eq("id", id)
     if (attachErr) {
-      await capturesTable().update({ destination: null }).eq("id", captureId)
+      await capturesTable().update({ destination: priorDestination }).eq("id", captureId)
       return fail(attachErr.message || "Could not attach the picture.", 500)
     }
 

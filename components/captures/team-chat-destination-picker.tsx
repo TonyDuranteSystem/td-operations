@@ -16,10 +16,13 @@ type TeamThread = TeamThreadLabelInput
 
 export function TeamChatDestinationPicker({
   captureId,
+  resend,
   onSent,
   onError,
 }: {
   captureId: string
+  /** True for a deliberate re-share of a capture already sent once — see share-actions.ts. */
+  resend?: boolean
   onSent: () => void
   onError: (message: string) => void
 }) {
@@ -60,7 +63,7 @@ export function TeamChatDestinationPicker({
   const sendTo = async (threadId: string, label: string) => {
     setBusy(true)
     try {
-      await sendCaptureToTeamChat(captureId, threadId)
+      await sendCaptureToTeamChat(captureId, threadId, resend)
       addRecentDestination({ type: 'team_chat', id: threadId, label })
       onSent()
     } catch (err) {

@@ -63,13 +63,20 @@ function toConfirmTarget(c: PortalDestinationCandidate): ConfirmTarget {
 
 export function PortalChatDestinationPicker({
   captureId,
-  imageFile,
+  imageFile = null,
+  imageUrl,
+  resend,
   prefilled,
   onSent,
   onError,
 }: {
   captureId: string
-  imageFile: File | null
+  /** A real local File — only ever available right after a fresh capture. */
+  imageFile?: File | null
+  /** The existing capture's own image URL — for a re-share, which has no local File. */
+  imageUrl?: string
+  /** True for a deliberate re-share of a capture already sent once — see share-actions.ts. */
+  resend?: boolean
   prefilled: PrefilledTarget | null
   onSent: (label: string) => void
   onError: (message: string) => void
@@ -88,8 +95,17 @@ export function PortalChatDestinationPicker({
   // leaving img.src pointing at a syntactically valid but dead blob URL
   // (complete=true, naturalWidth=0) — caught by live testing, not by the
   // council's plan review, since it's an implementation-only bug.
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  // `imageUrl` (a re-share's existing, already-uploaded picture) is used
+  // AS-IS — it's a real URL already, nothing to create or revoke. Only the
+  // `imageFile` branch (a fresh local File) needs a blob URL, and that one
+  // still must be created AND revoked inside this SAME effect — see the
+  // comment above about the Strict Mode double-invoke trap this avoids.
+  const [previewUrl, setPreviewUrl] = useState<string | null>(imageUrl ?? null)
   useEffect(() => {
+    if (imageUrl) {
+      setPreviewUrl(imageUrl)
+      return
+    }
     if (!imageFile) {
       setPreviewUrl(null)
       return
@@ -97,7 +113,7 @@ export function PortalChatDestinationPicker({
     const url = URL.createObjectURL(imageFile)
     setPreviewUrl(url)
     return () => URL.revokeObjectURL(url)
-  }, [imageFile])
+  }, [imageFile, imageUrl])
 
   useEffect(() => {
     if (target) return // already on the confirm step (prefilled from a recent)
@@ -145,7 +161,7 @@ export function PortalChatDestinationPicker({
     if (!target || sending) return
     setSending(true)
     try {
-      await sendCaptureToPortalChat(captureId, { contact_id: target.contactId, account_id: target.accountId })
+      await sendCaptureToPortalChat(captureId, { contact_id: target.contactId, account_id: target.accountId }, resend)
       addRecentDestination({ type: 'portal_chat', contactId: target.contactId, accountId: target.accountId, label: target.displayLabel })
       onSent(`Sent to ${target.displayLabel}.`)
     } catch (err) {
