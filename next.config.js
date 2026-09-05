@@ -5,7 +5,15 @@ const nextConfig = {
   experimental: {
     // Prevent webpack from bundling OpenTelemetry packages as vendor chunks
     // (Sentry injects OTel instrumentation which fails to chunk correctly in dev)
-    serverComponentsExternalPackages: ['@opentelemetry/api', '@opentelemetry/core', '@opentelemetry/sdk-trace-base'],
+    serverComponentsExternalPackages: [
+      '@opentelemetry/api', '@opentelemetry/core', '@opentelemetry/sdk-trace-base',
+      // @sparticuz/chromium ships its Chromium binary as a file it locates relative to
+      // its own package folder at runtime. Webpack bundling relocates/rewrites the
+      // package and breaks that lookup ("input directory .../bin does not exist") —
+      // marking it (and puppeteer-core, which drives it) external keeps both untouched
+      // so the traced output preserves their real node_modules layout.
+      '@sparticuz/chromium', 'puppeteer-core',
+    ],
     // Ship the repo SOURCE into the serverless functions that expose the
     // read-only codebase_read / codebase_search tools so they can read it at
     // runtime. Source is code, not secrets; the tools block .env/secrets/deps.
