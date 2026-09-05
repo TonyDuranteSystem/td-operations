@@ -21,11 +21,12 @@
  *    silently rewrote the recipient slot and made the note vanish for them.
  */
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { X, Loader2, Check, Lock, Share2, Users, RotateCcw, MessageSquare, Trash2, ExternalLink, Send } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
+import { isDragGesture } from '@/lib/ui/draggable-fab'
 import { safeOriginPath, describeOrigin, splitLinkSegments } from '@/lib/notes/note-origin'
 import { isArchivedFor, sortReplies, type NoteReplyRow } from '@/lib/notes/staff-notes'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -337,15 +338,55 @@ export function NoteEditor({
     router.push(origin)
   }
 
+  /**
+   * Drag-to-reposition, desktop only (sm: and up) — the mobile layout is a full-width
+   * bottom sheet where dragging sideways would just clip against the screen edge, and
+   * mobile dragging is a deliberate non-goal for this pass (Antonio's ask was about the
+   * desktop view). Offset is a transform on the panel rather than the fractional
+   * position system the notes use, since this modal is centered by flexbox, not
+   * absolutely positioned. Clamped to keep it reachable, same invariant as every other
+   * draggable element in this subsystem (lib/notes/note-position.ts, lib/ui/draggable-fab.ts).
+   */
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
+  const headerDrag = useRef<{ dx: number; dy: number; startX: number; startY: number; moved: boolean } | null>(null)
+  const onHeaderPointerDown = (e: React.PointerEvent) => {
+    if (window.innerWidth < 640) return
+    if ((e.target as HTMLElement).closest('[data-no-drag]')) return
+    headerDrag.current = { dx: dragOffset.x, dy: dragOffset.y, startX: e.clientX, startY: e.clientY, moved: false }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+  const onHeaderPointerMove = (e: React.PointerEvent) => {
+    const d = headerDrag.current
+    if (!d) return
+    const dx = e.clientX - d.startX
+    const dy = e.clientY - d.startY
+    if (!d.moved && !isDragGesture(dx, dy)) return
+    d.moved = true
+    const maxX = Math.max(0, window.innerWidth / 2 - 80)
+    const maxY = Math.max(0, window.innerHeight / 2 - 80)
+    setDragOffset({
+      x: Math.min(Math.max(d.dx + dx, -maxX), maxX),
+      y: Math.min(Math.max(d.dy + dy, -maxY), maxY),
+    })
+  }
+  const onHeaderPointerUp = () => { headerDrag.current = null }
+
   return (
     <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={backdropClose}>
       <div
         className="max-h-[90vh] w-full overflow-y-auto rounded-t-xl bg-amber-50 p-4 shadow-2xl sm:max-w-md sm:rounded-xl"
+        style={{ transform: `translate(${dragOffset.x}px, ${dragOffset.y}px)` }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-3 flex items-center justify-between">
+        <div
+          onPointerDown={onHeaderPointerDown}
+          onPointerMove={onHeaderPointerMove}
+          onPointerUp={onHeaderPointerUp}
+          onPointerCancel={onHeaderPointerUp}
+          className="mb-3 flex items-center justify-between sm:touch-none sm:cursor-grab sm:active:cursor-grabbing"
+        >
           <span className="text-sm font-semibold text-amber-950">{isCreate ? 'New note' : 'Note'}</span>
-          <button onClick={onClose} className="rounded p-1 hover:bg-black/10" aria-label="Close">
+          <button data-no-drag onClick={onClose} className="rounded p-1 hover:bg-black/10" aria-label="Close">
             <X className="h-4 w-4" />
           </button>
         </div>
