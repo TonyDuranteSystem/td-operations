@@ -1,6 +1,41 @@
 # Portal Chats (staff composer)
 
-_Last verified against code: 2026-09-04d — Claude (**pre-send confirmation pop-up —
+_Last verified against code: 2026-09-05 — Claude (**"Addressed to" can now explicitly mean
+the whole company, not just a specific member** — dev job 08a8be62, found by Antonio live,
+minutes after the send-confirmation pop-up shipped, testing a real multi-member LLC (PTBT
+Holding LLC): the picker (both the ambient one and the pop-up's own copy) only ever offered
+individual members. There was no way to say "this is for the whole company" as a deliberate
+choice — the closest thing was leaving the picker untouched, which produced the exact same
+saved state (`addressed_to_contact_id: null`) as a message where staff never engaged with
+the control at all. Since the whole point of this feature is making who a message is for
+legible later, that gap defeated it for precisely this case. **What changed:** a new
+`portal_messages.addressed_to_company` boolean (migration
+`20260905-0949-portal-messages-addressed-to-company.sql`), mutually exclusive with
+`addressed_to_contact_id` via a CHECK constraint — enforced at the database level, not just
+in the application, so a bug in the write path cannot produce a message that is somehow
+both. "Whole company" is now a real, explicit item in both pickers, alongside the actual
+members — never guessed or defaulted to (unlike a member pick, which can come from
+`pickAddressedToGuess`'s reply-to-author/last-sender/primary/first cascade): the entire
+point is that staff meant it. The staff-facing badge on a sent message now shows "For the
+whole company" when this flag is set, distinct from both "For {member name}" and no badge
+at all (still nobody having set anything — the pre-existing, unchanged meaning of
+`addressed_to_contact_id` being null). **A subtler gap found while wiring this up:** the
+existing "guess a likely member" fallback (`effectiveAddressedToContactId =
+selectedAddressedToContactId ?? addressedToData?.guessContactId ?? null`) doesn't know
+about the new company flag — clicking "Whole company" sets `selectedAddressedToContactId`
+to `null` explicitly, which is exactly the condition that `??` fallback exists for, so
+without a fix the guessed member's id would have ridden along in the very same request as
+the explicit company flag. The server already independently enforces the exclusivity
+before anything reaches storage (same file, `app/api/portal/chat/route.ts`), so this could
+not actually have reached a saved row either way — but `performSend` now also forces
+`targetAddressedToContactId` to `null` whenever `targetAddressedToCompany` is true, so the
+request itself is never self-contradictory, not just the row that lands from it. Same
+capture-before-await point as everything else in `performSend` (dev job c3bb4abc's
+discipline, applied one more time). No new unit tests — this is a passthrough of an
+existing validated pattern (mirrors `addressed_to_contact_id`'s own validation and
+mutual-exclusivity handling), not new pure logic; verified via lint + full suite (10,456
+tests, no new flake) + build + live sandbox QA before shipping.)_
+_Prior: 2026-09-04d — Claude (**pre-send confirmation pop-up —
 supersedes the 2026-09-04 "no pop-up" call below, at Antonio's explicit direction after
 testing the ambient version live** — dev job 08a8be62. The 2026-09-04 entry recorded
 every reviewer independently rejecting a hard per-send confirmation as a safety
@@ -122,6 +157,11 @@ only the read/unread badge logic, not the composer.
   existing contact-scoped "person" thread does this today, just not reachable from
   inside the account view) — parked, not decided against, if it's ever wanted.
   Staff-side only so far: nothing shows this label to the client yet (fast-follow).
+  **"Whole company" (2026-09-05) is a THIRD, explicit state** alongside a specific
+  member and "nobody set anything" — `portal_messages.addressed_to_company`, mutually
+  exclusive with `addressed_to_contact_id` via a CHECK constraint. Also label-only,
+  same as a member pick — never guessed/defaulted, only ever set by staff explicitly
+  choosing it.
 
 ## How it's built
 
