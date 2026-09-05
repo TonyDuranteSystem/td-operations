@@ -185,10 +185,6 @@
       "schedule": "*/10 * * * *"
     },
     {
-      "path": "/api/cron/tax-restale-sweep",
-      "schedule": "0 */4 * * *"
-    },
-    {
       "path": "/api/cron/plan-referrer-notify",
       "schedule": "*/15 * * * *"
     },
