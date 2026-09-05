@@ -122,6 +122,21 @@ only the read/unread badge logic, not the composer.
 
 ## Gotchas, invariants & past bugs
 
+- **Never share an ephemeral "am I in create-mode" toggle between two simultaneously-
+  mounted widgets, even if they read the same underlying value on commit (2026-09-04d,
+  dev job 08a8be62).** The send-confirmation modal's "New topic" free-text input
+  originally reused the ambient tab bar's `adminCreatingTopic`/`adminNewTopicInput`
+  pair. The modal is an OVERLAY, not a replacement — the ambient tab bar stays fully
+  mounted behind its backdrop. Toggling the shared boolean therefore mounted BOTH
+  inputs at once, each with `autoFocus`; the second one stealing focus fired the
+  first one's `onBlur`, which reset the shared flag back to `false` before a single
+  keystroke landed — the input never stayed open long enough to type into. Fixed by
+  giving the modal its own private `modalCreatingTopic`/`modalNewTopicInput`, which
+  still commits to the same shared `adminActiveTopic` on Enter/blur (that value is
+  correctly meant to be shared — it's what a message actually posts under). The
+  general rule: sharing the RESULT of a UI interaction across two surfaces is fine;
+  sharing the transient "which mode is this ONE widget in right now" state that
+  drives that interaction is not, once both surfaces can be on screen together.
 - **Per-conversation draft memory (added 2026-08-29, dev job c3bb4abc; extended
   2026-08-30).** The reply text, quoted-reply pointer, and staged attachments used to
   be one shared piece of page-wide state — switching the selected client left a draft
