@@ -78,11 +78,17 @@ export async function POST(request: NextRequest) {
   // into the public bucket — including as the stored Content-Type served
   // back to a client. Running the SAME check the upload step already passed
   // means the two can never disagree.
-  if (imageName || mimeType || sizeBytes != null) {
-    const validationError = validateChatAttachment(imageName || "", sizeBytes ?? 0, mimeType || "")
-    if (validationError) {
-      return NextResponse.json({ error: validationError }, { status: 400 })
-    }
+  //
+  // Runs UNCONDITIONALLY, not gated behind "were any of these three fields
+  // sent at all" (bug-hunter finding, 2026-09-04, second pass) — that gate
+  // treated a lone empty-string mime_type as "nothing sent," skipping
+  // validation for a value that was, in fact, sent. validateChatAttachment
+  // on all-default inputs ("", 0, "") already returns null (no error) on its
+  // own, so dropping the gate changes nothing for a caller who sends
+  // nothing — it only closes the empty-string gap.
+  const validationError = validateChatAttachment(imageName || "", sizeBytes ?? 0, mimeType || "")
+  if (validationError) {
+    return NextResponse.json({ error: validationError }, { status: 400 })
   }
 
   const { data, error } = await capturesTable()

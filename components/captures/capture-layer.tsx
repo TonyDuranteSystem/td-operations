@@ -56,6 +56,15 @@ export default function CaptureLayer() {
   const [firstPoint, setFirstPoint] = useState<Point | null>(null)
   const [livePoint, setLivePoint] = useState<Point | null>(null)
   const [capturedFile, setCapturedFile] = useState<File | null>(null)
+  // Set alongside capturedFile on every load, from the same counter as
+  // uploadTokenRef — used ONLY as MarkupEditor's `key`. File name+size+
+  // lastModified looked unique enough but genuinely isn't: dropping or
+  // pasting the SAME unmodified file twice in a row produces an identical
+  // key, so React reused the same editor instance instead of remounting,
+  // leaving the second attempt's Undo pointing at snapshots from the first
+  // (bug-hunter finding, 2026-09-04, second pass). A monotonic counter
+  // can't collide between two loads no matter how identical the files are.
+  const [captureGeneration, setCaptureGeneration] = useState(0)
   const [note, setNote] = useState('')
   const [uploadedCaptureId, setUploadedCaptureId] = useState<string | null>(null)
   const [destinationChoice, setDestinationChoice] = useState<DestinationChoice>(null)
@@ -71,9 +80,23 @@ export default function CaptureLayer() {
   // still the current one, not a superseded one resolving late. A ref, not
   // state, because it must be readable synchronously inside an async closure
   // without becoming a dependency the callback has to be rebuilt around.
+  //
+  // ALSO bumped by reset() itself (bug-hunter finding, 2026-09-04, second
+  // pass) — the original version only bumped this when a NEW file arrived,
+  // never when the tool was simply CLOSED. Closing mid-upload (a normal
+  // thing to do on a flaky connection) left the in-flight upload's token
+  // untouched; if the user then reopened the tool and left it sitting on the
+  // mode screen, the abandoned upload could resolve later, find its token
+  // still current, and silently jump the FRESH session straight to "choose a
+  // destination" for the picture the user had already discarded — with no
+  // picture to preview, since capturedFile had already been cleared, yet
+  // Send still worked. Bumping it in reset() means closing (or reopening)
+  // the tool always invalidates whatever was in flight, matching what the
+  // UI already visually promises ("closing this discards it").
   const uploadTokenRef = useRef(0)
 
   const reset = useCallback(() => {
+    uploadTokenRef.current += 1
     setStage('mode')
     setFirstPoint(null)
     setLivePoint(null)
@@ -106,6 +129,7 @@ export default function CaptureLayer() {
       const canvas = await fn()
       const file = await canvasToPngFile(canvas, `capture-${Date.now()}.png`)
       uploadTokenRef.current += 1
+      setCaptureGeneration(uploadTokenRef.current)
       setCapturedFile(file)
       setStage('markup')
     } catch (err) {
@@ -143,6 +167,7 @@ export default function CaptureLayer() {
       return
     }
     uploadTokenRef.current += 1
+    setCaptureGeneration(uploadTokenRef.current)
     setCapturedFile(file)
     setStage('markup')
   }, [])
@@ -399,14 +424,19 @@ export default function CaptureLayer() {
 
             {stage === 'markup' && capturedFile && (
               // key forces a fresh editor instance (fresh canvas ref, fresh
-              // undo stack) whenever the underlying file actually changes,
-              // instead of React reusing the same instance across two
-              // different pictures (bug-hunter finding, 2026-09-04 — belt
-              // and suspenders alongside the mutual-exclusion guard above;
-              // without either, a second file loading over a first left
-              // stale undo snapshots at the wrong canvas size).
+              // undo stack) every time a NEW file starts its journey, instead
+              // of React reusing the same instance across two different
+              // loads (bug-hunter finding, 2026-09-04 — belt and suspenders
+              // alongside the mutual-exclusion guard above). Keyed on the
+              // same monotonic counter as uploadTokenRef, NOT on the file's
+              // own name/size/lastModified — those looked unique but aren't:
+              // the identical file dropped or pasted twice produces the same
+              // key from its own properties, which left a second attempt's
+              // Undo pointing at snapshots from the first (second bug-hunter
+              // pass, same date). A counter that bumps on every load can't
+              // collide no matter how identical the files are.
               <MarkupEditor
-                key={`${capturedFile.name}-${capturedFile.lastModified}-${capturedFile.size}`}
+                key={captureGeneration}
                 imageFile={capturedFile}
                 note={note}
                 onNoteChange={setNote}

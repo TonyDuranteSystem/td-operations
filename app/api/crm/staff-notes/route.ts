@@ -328,13 +328,30 @@ export async function PATCH(req: NextRequest) {
     if (!captureId) return fail("Which picture?")
 
     const { data: capture, error: captureErr } = await capturesTable()
-      .select("id, image_url, image_name, mime_type, size_bytes, captured_by_user_id")
+      .select("id, image_url, image_name, mime_type, size_bytes, captured_by_user_id, destination")
       .eq("id", captureId)
       .single()
     if (captureErr || !capture) return fail("That capture is gone. Please try again.", 404)
     // Defense in depth: the id only ever comes from this same user's own
     // just-completed capture flow, but never trust a client-supplied id blindly.
     if (capture.captured_by_user_id !== user.id) return fail("That isn't your capture.", 403)
+    if (capture.destination) return fail("This was already shared.", 409)
+
+    // Idempotency — CLAIM the capture atomically before touching the note,
+    // same fix as the other two destinations' share routes (bug-hunter
+    // finding, 2026-09-04, second pass) — this one had NEITHER half of that
+    // fix (no destination in the select above until now, no guard on the
+    // write below), the one gap of the three the original pass missed.
+    // Lower stakes than the other two (nothing external, no copied file —
+    // worst case was the same picture attached to two different notes), but
+    // the same fix applies cleanly. Rolled back if the note update fails.
+    const { data: claimed, error: claimErr } = await capturesTable()
+      .update({ destination: { type: "sticky_note", id, label: note.body.slice(0, 60) } })
+      .eq("id", captureId)
+      .is("destination", null)
+      .select("id")
+    if (claimErr) return fail(claimErr.message || "Could not attach the picture.", 500)
+    if (!claimed || claimed.length === 0) return fail("This was already shared.", 409)
 
     const { error: attachErr } = await notesTable()
       .update({
@@ -344,14 +361,10 @@ export async function PATCH(req: NextRequest) {
         attachment_size_bytes: capture.size_bytes,
       })
       .eq("id", id)
-    if (attachErr) return fail(attachErr.message || "Could not attach the picture.", 500)
-
-    // Best-effort — the note attach above is the write that actually matters;
-    // if this one fails, only the capture folder's "where it went" label goes
-    // stale, the note attachment itself is already saved and correct.
-    await capturesTable()
-      .update({ destination: { type: "sticky_note", id, label: note.body.slice(0, 60) } })
-      .eq("id", captureId)
+    if (attachErr) {
+      await capturesTable().update({ destination: null }).eq("id", captureId)
+      return fail(attachErr.message || "Could not attach the picture.", 500)
+    }
 
     emitUiEvent("notes")
     const { data: freshNote } = await notesTable().select(NOTE_COLUMNS).eq("id", id).single()

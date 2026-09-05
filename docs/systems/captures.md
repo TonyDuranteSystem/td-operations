@@ -1,6 +1,6 @@
 # Capture / Share (screenshot tool)
-_Last verified against code: 2026-09-04e — Claude (**Full bug-hunt pass on the whole feature** — two independent adversarial reviews (server/security + client/React), 11 real findings, all fixed same-day: a mutual-exclusion guard + an upload generation-token + a `key` on the markup editor close off a real "wrong picture gets sent" race between an in-progress capture and a dropped file; both share routes gained an idempotency guard (no more double-send on a slow click) and the client-facing one also re-checks the account's status right before sending and forwards the caller's IP so its rate limit isn't shared across every staff member; the capture endpoint now validates the declared file name/type instead of trusting it blindly; the phone/tablet Cancel button during area-selection actually cancels now instead of registering a stray tap; a non-image drop no longer hangs silently or lets a blank picture through; four "no results" screens now tell the difference between "nothing here" and "the request failed"; the My Captures popup's saved position gets re-clamped against the real screen size instead of only once, before it ever had anything to measure. See Gotchas below for the exact mechanism of each.)_
-_Prior: 2026-09-04 — Claude (**Built end to end, Phase 1 (internal destinations) + Phase 2 (client-facing portal chat), council-reviewed before Phase 2, sandbox-verified live for every destination.** Antonio's ask: select part of the CRM page or the whole page, mark it up, attach a note, and send it to exactly ONE destination at a time — never a broadcast. One top-bar button ("Capture", next to the notification bell) offers "New capture" or "My captures".)_
+_Last verified against code: 2026-09-05 — Claude (**Second bug-hunt pass, specifically re-verifying the first pass's own fixes** — end-to-end QA combining live simulation on a real deployed copy with a fresh adversarial review of the fix commit itself. Confirmed by ACTUALLY DOING IT (not just reading code) that the touch-cancel fix, the non-image rejection, the mutual-exclusion guard, and all four error-vs-empty screens genuinely work. Also found, live, that firing two sends of the same picture a fraction of a second apart both went through — the first pass's idempotency check only closed the sequential case. The re-review separately found a second, more serious gap in the SAME area: closing the tool while a picture is still uploading never invalidated that upload, so it could resolve later and silently jump a freshly-reopened session straight to "choose a destination" for a picture with no preview to show. Both fixed this round, along with three smaller ones. See Gotchas below.)_
+_Prior: 2026-09-04e — Claude (**Full bug-hunt pass on the whole feature** — two independent adversarial reviews (server/security + client/React), 11 real findings, all fixed same-day: a mutual-exclusion guard + an upload generation-token + a `key` on the markup editor close off a real "wrong picture gets sent" race between an in-progress capture and a dropped file; both share routes gained an idempotency guard (no more double-send on a slow click) and the client-facing one also re-checks the account's status right before sending and forwards the caller's IP so its rate limit isn't shared across every staff member; the capture endpoint now validates the declared file name/type instead of trusting it blindly; the phone/tablet Cancel button during area-selection actually cancels now instead of registering a stray tap; a non-image drop no longer hangs silently or lets a blank picture through; four "no results" screens now tell the difference between "nothing here" and "the request failed"; the My Captures popup's saved position gets re-clamped against the real screen size instead of only once, before it ever had anything to measure. See Gotchas below for the exact mechanism of each.)_
 
 ## What it is
 A screenshot tool built into the CRM dashboard: select a region or capture the whole page, draw
@@ -98,6 +98,44 @@ while deciding where to send it.
   two real clients can share a name.
 
 ## Gotchas, invariants & past bugs
+
+### Second pass (2026-09-05)
+- **Closing the tool must invalidate whatever upload was in flight — not just hide it.** The
+  generation-token guard from the first bug-hunt pass (below) only got bumped when a NEW file
+  started its journey; it was never bumped by simply closing/resetting the tool. Found in the
+  second pass: close the tool while "Saving..." is showing (a normal thing to do on a bad
+  connection), reopen it fresh, and leave it sitting on the picker — the abandoned upload could
+  resolve later, find its token still current, and silently jump the FRESH session straight to
+  "choose a destination" for the picture that was supposedly discarded, with no picture left to
+  preview (it had already been cleared) yet Send still worked. Fixed by bumping the token inside
+  `reset()` itself, so closing OR reopening always invalidates anything still in flight.
+- **A file's own name+size+lastModified is not a safe React `key` for "is this actually a new
+  picture" — two loads of the literal same file collide.** The `MarkupEditor` `key` from the first
+  pass used exactly those three fields; dropping or pasting the SAME unmodified file twice in a
+  row produces an identical key, so React reused the same editor instance and its Undo history
+  carried over from the first attempt. Fixed by keying on the same monotonic load-counter the
+  upload-generation guard already uses — a counter can't collide no matter how identical two files
+  are.
+- **An idempotency check-then-write is NOT the same as an atomic claim — confirmed by actually
+  reproducing it.** The first pass's fix (check `destination` is null, act, then write it
+  conditionally) closes the common, sequential case, but live-firing two sends of the same capture
+  roughly 30ms apart proved both requests still passed the upfront check before either had written
+  anything — both downloaded, both uploaded, both sent, and two separate messages landed in the
+  real chat. All three destinations now CLAIM the capture with a single conditional `UPDATE ...
+  WHERE destination IS NULL` BEFORE doing any of the real work (download/upload/send), checking
+  whether that update actually affected a row — Postgres itself makes that one step atomic, so at
+  most one concurrent request can ever win it. A failed send after a successful claim rolls the
+  claim back to `NULL` so the capture stays retriable rather than getting permanently stuck
+  "already shared." This is the correct fix; the earlier "check first, write conditionally at the
+  end" shape only ever protected the label from being clobbered, not the send itself from
+  happening twice — a real gap between what the code's own comment claimed and what it actually
+  did, worth remembering as a pattern: a plain check before an action is never enough against a
+  genuine race, only a single atomic conditional write is.
+- **The re-check right before sending only covered the company branch — a personal send had no
+  equivalent freshness check at all.** Fixed by adding the same last-second re-check of the
+  contact's own portal-access fields, mirroring the account-status re-check.
+
+### First pass (2026-09-04)
 - **`isOpen` (the capture flow) and `isBrowseOpen` (the My Captures popup) are mutually
   exclusive, enforced in `CaptureProvider` itself** — `open()`/`openBrowse()` each force the OTHER
   closed, not just flip their own flag. Found via a full bug-hunt pass, 2026-09-04: the capture

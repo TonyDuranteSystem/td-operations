@@ -69,11 +69,6 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   if (capture.captured_by_user_id !== user.id) {
     return NextResponse.json({ error: "That isn't your capture." }, { status: 403 })
   }
-  // Idempotency — same bug-hunter finding as share-portal-chat/route.ts: a
-  // slow request plus an impatient second click previously re-copied and
-  // re-sent the same screenshot. Team chat is internal-only, so the stakes
-  // are lower than the client-facing route, but the fix is identical and
-  // free to apply here too.
   if (capture.destination) {
     return NextResponse.json({ error: "This was already shared." }, { status: 409 })
   }
@@ -82,12 +77,38 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   const { data: thread } = await supabaseAdmin.from("internal_threads").select("id").eq("id", threadId).single()
   if (!thread) return NextResponse.json({ error: "That conversation is gone. Please try again." }, { status: 404 })
 
+  // Idempotency — CLAIM the capture atomically before doing any real work,
+  // same fix and same reason as share-portal-chat/route.ts (bug-hunter
+  // finding, 2026-09-04, second pass, confirmed by live testing there: two
+  // sends ~30ms apart both succeeded). The `destination` check above alone
+  // only catches the common, sequential case; this conditional UPDATE is
+  // the one step Postgres itself makes atomic, so at most one concurrent
+  // request can ever win it. Claims with the real, final label up front and
+  // rolls back to NULL via rollbackClaim() on any failure past this point.
+  const message = (capture.note?.trim() || capture.title || "Shared a screenshot").slice(0, 5000)
+  const { data: claimed, error: claimErr } = await capturesTable()
+    .update({ destination: { type: "team_chat", id: threadId, label: message.slice(0, 60) } })
+    .eq("id", captureId)
+    .is("destination", null)
+    .select("id")
+  if (claimErr) {
+    console.error("[captures/share-team-chat] claim error:", claimErr)
+    return NextResponse.json({ error: "Could not share the picture. Please try again." }, { status: 500 })
+  }
+  if (!claimed || claimed.length === 0) {
+    return NextResponse.json({ error: "This was already shared." }, { status: 409 })
+  }
+  const rollbackClaim = async () => {
+    await capturesTable().update({ destination: null }).eq("id", captureId)
+  }
+
   // Copy: download from the private bucket, upload into the public one team
   // chat already uses — same download-then-upload shape as this codebase's
   // one other cross-bucket copy (lib/td-communication/copy-to-public.ts).
   const { data: blob, error: dlErr } = await supabaseAdmin.storage.from(WORKER_UPLOAD_BUCKET).download(capture.image_url)
   if (dlErr || !blob) {
     console.error("[captures/share-team-chat] download error:", dlErr)
+    await rollbackClaim()
     return NextResponse.json({ error: "Could not read the picture. Please try again." }, { status: 500 })
   }
   const buffer = Buffer.from(await blob.arrayBuffer())
@@ -98,13 +119,13 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     .upload(assetsPath, buffer, { contentType: capture.mime_type || "image/png", upsert: false })
   if (upErr) {
     console.error("[captures/share-team-chat] upload error:", upErr)
+    await rollbackClaim()
     return NextResponse.json({ error: "Could not share the picture. Please try again." }, { status: 500 })
   }
   const { data: urlData } = supabaseAdmin.storage.from("assets").getPublicUrl(assetsPath)
 
   // Deliver through the real human send route — same identity, push, and
   // mention handling every other team-chat message already gets.
-  const message = (capture.note?.trim() || capture.title || "Shared a screenshot").slice(0, 5000)
   let sendRes: Response
   try {
     sendRes = await fetch(`${request.nextUrl.origin}/api/team/threads/${threadId}/messages`, {
@@ -124,22 +145,15 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     })
   } catch (err) {
     console.error("[captures/share-team-chat] send route unreachable:", err)
+    await rollbackClaim()
     return NextResponse.json({ error: "Could not reach team chat. Please try again." }, { status: 500 })
   }
   if (!sendRes.ok) {
     const d = await sendRes.json().catch(() => ({}))
+    await rollbackClaim()
     return NextResponse.json({ error: d.error || "Could not send to team chat." }, { status: sendRes.status })
   }
   const sendData = await sendRes.json().catch(() => ({}))
-
-  // Best-effort — the message above is what actually matters; a failure here
-  // only leaves the capture folder's "where it went" label stale. Guarded on
-  // "still NULL" for the same genuinely-simultaneous-double-click reason as
-  // share-portal-chat/route.ts.
-  await capturesTable()
-    .update({ destination: { type: "team_chat", id: threadId, label: message.slice(0, 60) } })
-    .eq("id", captureId)
-    .is("destination", null)
 
   return NextResponse.json({ ok: true, message_id: sendData.message?.id ?? null })
 }

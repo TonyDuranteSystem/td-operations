@@ -63,13 +63,6 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   if (capture.captured_by_user_id !== user.id) {
     return NextResponse.json({ error: "That isn't your capture." }, { status: 403 })
   }
-  // Idempotency — a bug-hunter-flagged gap (2026-09-04): nothing previously
-  // stopped a slow request + an impatient second click (or a reload-and-retry)
-  // from downloading, re-uploading, and re-sending the SAME screenshot twice,
-  // leaving two independent, permanent copies of it sitting in the public
-  // bucket. This is the common, everyday case; a genuinely simultaneous
-  // double-request is closed off below by making the final label-write
-  // conditional, not by this check alone.
   if (capture.destination) {
     return NextResponse.json({ error: "This was already shared." }, { status: 409 })
   }
@@ -99,11 +92,45 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     }
   }
 
+  // Idempotency — CLAIM the capture atomically before doing any real work,
+  // rather than just checking `destination` above and writing it at the end
+  // (bug-hunter finding, 2026-09-04, second pass, confirmed by live testing:
+  // firing two sends ~30ms apart both returned success and both messages
+  // actually landed in the client's chat). The check above alone only
+  // catches the common, sequential case — a genuinely concurrent pair of
+  // requests can both pass it before either has written anything. This
+  // conditional UPDATE is the only step in the whole request that Postgres
+  // itself makes atomic: at most one concurrent caller can ever flip
+  // `destination` from NULL here, so `.select()` coming back empty means
+  // someone else won the race, and THIS request stops before ever touching
+  // Storage or sending anything. Claims with the real, final label up front
+  // (not a placeholder) and rolls back to NULL via rollbackClaim() below on
+  // any failure past this point, so a failed send is still retriable rather
+  // than permanently stuck "already shared."
+  const message = (capture.note?.trim() || capture.title || "Shared a screenshot").slice(0, 5000)
+  const destinationValue = { type: "portal_chat", id: contactId, account_id: accountId, label: message.slice(0, 60) }
+  const { data: claimed, error: claimErr } = await capturesTable()
+    .update({ destination: destinationValue })
+    .eq("id", captureId)
+    .is("destination", null)
+    .select("id")
+  if (claimErr) {
+    console.error("[captures/share-portal-chat] claim error:", claimErr)
+    return NextResponse.json({ error: "Could not share the picture. Please try again." }, { status: 500 })
+  }
+  if (!claimed || claimed.length === 0) {
+    return NextResponse.json({ error: "This was already shared." }, { status: 409 })
+  }
+  const rollbackClaim = async () => {
+    await capturesTable().update({ destination: null }).eq("id", captureId)
+  }
+
   // Copy: download from the private bucket, upload into the SAME public
   // bucket + path convention the existing proxy route already expects.
   const { data: blob, error: dlErr } = await supabaseAdmin.storage.from(WORKER_UPLOAD_BUCKET).download(capture.image_url)
   if (dlErr || !blob) {
     console.error("[captures/share-portal-chat] download error:", dlErr)
+    await rollbackClaim()
     return NextResponse.json({ error: "Could not read the picture. Please try again." }, { status: 500 })
   }
   const buffer = Buffer.from(await blob.arrayBuffer())
@@ -115,18 +142,28 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     .upload(objectPath, buffer, { contentType: capture.mime_type || "image/png", upsert: false })
   if (upErr) {
     console.error("[captures/share-portal-chat] upload error:", upErr)
+    await rollbackClaim()
     return NextResponse.json({ error: "Could not share the picture. Please try again." }, { status: 500 })
   }
   const attachmentUrl = `${PORTAL_BASE_URL}/api/portal/chat/attachment?path=${encodeURIComponent(objectPath)}`
 
-  // Re-check the account's status right before sending, not just at the top
-  // of this request (bug-hunter finding, 2026-09-04) — the download+upload
-  // above is the only real gap between the two checks, so re-running this
-  // cheap query narrows that window to as little as it can be without
-  // restructuring the shared /api/portal/chat send route itself.
+  // Re-check the account's status (and, symmetrically, the contact's own
+  // portal-access fields for a personal send — bug-hunter finding,
+  // 2026-09-04, second pass: the original only re-checked the company
+  // branch) right before sending, not just at the top of this request — the
+  // download+upload above is the only real gap between the two checks, so
+  // re-running these cheap queries narrows that window to as little as it
+  // can be without restructuring the shared /api/portal/chat send route
+  // itself.
+  const { data: freshContact } = await supabaseAdmin.from("contacts").select("email, portal_email_sent_at").eq("id", contactId).maybeSingle()
+  if (!freshContact?.email || !freshContact.portal_email_sent_at) {
+    await rollbackClaim()
+    return NextResponse.json({ error: "This person doesn't have portal access yet. Please try again." }, { status: 400 })
+  }
   if (accountId) {
     const { data: freshAccount } = await supabaseAdmin.from("accounts").select("status").eq("id", accountId).maybeSingle()
     if (!freshAccount || !ACTIVE_ACCOUNT_STATUSES.has(freshAccount.status)) {
+      await rollbackClaim()
       return NextResponse.json({ error: "That company's account is closed — nothing was sent." }, { status: 400 })
     }
   }
@@ -138,7 +175,6 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   // shared across everyone using this feature (bug-hunter finding,
   // 2026-09-04 — without this every hairpin call here looked like the same
   // caller to that check).
-  const message = (capture.note?.trim() || capture.title || "Shared a screenshot").slice(0, 5000)
   const forwardedFor = request.headers.get("x-forwarded-for")
   const realIp = request.headers.get("x-real-ip")
   let sendRes: Response
@@ -162,25 +198,15 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     })
   } catch (err) {
     console.error("[captures/share-portal-chat] send route unreachable:", err)
+    await rollbackClaim()
     return NextResponse.json({ error: "Could not reach the client's chat. Please try again." }, { status: 500 })
   }
   if (!sendRes.ok) {
     const d = await sendRes.json().catch(() => ({}))
+    await rollbackClaim()
     return NextResponse.json({ error: d.error || "Could not send to the client." }, { status: sendRes.status })
   }
   const sendData = await sendRes.json().catch(() => ({}))
-
-  // Best-effort — the message above is what actually matters; a failure here
-  // only leaves the capture folder's "where it went" label stale. Guarded on
-  // "still NULL" so two requests that both slipped past the early check
-  // above (a genuinely simultaneous double-click, not just an impatient
-  // second one) don't have the second one's write silently clobber the
-  // first's — same shape as this codebase's other reviewed_at IS NULL
-  // guards elsewhere.
-  await capturesTable()
-    .update({ destination: { type: "portal_chat", id: contactId, account_id: accountId, label: message.slice(0, 60) } })
-    .eq("id", captureId)
-    .is("destination", null)
 
   // Instant alert: every send through this new, client-facing path pings
   // staff immediately (project-director review, 2026-09-04) — even a caught
