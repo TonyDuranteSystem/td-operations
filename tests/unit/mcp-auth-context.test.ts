@@ -30,6 +30,26 @@ describe('parseAdditionalStaticKeys', () => {
     expect(parseAdditionalStaticKeys('"just a string"')).toEqual({})
     expect(parseAdditionalStaticKeys('42')).toEqual({})
   })
+
+  it('drops an entry mapped to the owner\'s own email — Council finding: must never create a second, untracked credential for full owner access', () => {
+    expect(parseAdditionalStaticKeys(`{"${OWNER_EMAIL}":"some-other-secret","luca@tonydurante.us":"lucas-secret"}`)).toEqual({
+      'luca@tonydurante.us': 'lucas-secret',
+    })
+  })
+
+  it("drops the owner entry case- and whitespace-insensitively", () => {
+    expect(parseAdditionalStaticKeys('{"  Antonio.Durante@TonyDurante.us  ":"x"}')).toEqual({})
+  })
+
+  it('drops an entry with a blank or whitespace-only email — Council finding: fixed at the source instead of relying on the route\'s falsy check', () => {
+    expect(parseAdditionalStaticKeys('{"":"secret-1","  ":"secret-2","luca@tonydurante.us":"secret-3"}')).toEqual({
+      'luca@tonydurante.us': 'secret-3',
+    })
+  })
+
+  it('drops a non-string key value instead of ever comparing against it', () => {
+    expect(parseAdditionalStaticKeys('{"luca@tonydurante.us": 12345}')).toEqual({})
+  })
 })
 
 describe('resolveAdditionalStaticKeyEmail', () => {

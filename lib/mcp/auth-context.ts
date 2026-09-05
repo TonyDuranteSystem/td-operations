@@ -73,17 +73,46 @@ export function resolvePrimaryStaticKeyEmail(): string {
  * so a typo here can never take down the server Antonio's own key depends on.
  * Exported as its own pure function (input in, map out) so this parsing can
  * be unit-tested directly rather than only through a live request.
+ *
+ * Two entry shapes are rejected (warned, dropped, never thrown) rather than
+ * accepted — found in Council review before this shipped, both real gaps in
+ * the SAME direction: a config mistake here must never grant, or ever look
+ * like it might grant, an outsider Antonio's own access.
+ *   - an entry whose email IS the owner's own (case/whitespace-insensitive):
+ *     accepting it would create a second, untracked credential for full
+ *     owner access that rotating TD_MCP_API_KEY does nothing to revoke.
+ *   - an entry with an empty/whitespace-only email: harmless today (it fails
+ *     closed — see resolveAdditionalStaticKeyEmail — a real key with a
+ *     blank name just gets rejected instead of authenticating), but rejecting
+ *     it here, at the source, means route.ts never has to reason about it.
  */
 export function parseAdditionalStaticKeys(raw: string | undefined): Record<string, string> {
   if (!raw) return {}
+  let parsed: unknown
   try {
-    const parsed = JSON.parse(raw)
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
-    console.warn('[MCP] TD_MCP_ADDITIONAL_KEYS is not a JSON object — ignoring it')
+    parsed = JSON.parse(raw)
   } catch (e) {
     console.warn('[MCP] TD_MCP_ADDITIONAL_KEYS is not valid JSON — ignoring it:', e instanceof Error ? e.message : e)
+    return {}
   }
-  return {}
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    console.warn('[MCP] TD_MCP_ADDITIONAL_KEYS is not a JSON object — ignoring it')
+    return {}
+  }
+  const result: Record<string, string> = {}
+  for (const [email, key] of Object.entries(parsed as Record<string, unknown>)) {
+    const trimmedEmail = email.trim()
+    if (!trimmedEmail) {
+      console.warn('[MCP] TD_MCP_ADDITIONAL_KEYS has an entry with a blank email — dropping it')
+      continue
+    }
+    if (trimmedEmail.toLowerCase() === OWNER_EMAIL) {
+      console.warn('[MCP] TD_MCP_ADDITIONAL_KEYS has an entry mapped to the owner\'s own email — dropping it; Antonio\'s access must come from TD_MCP_API_KEY only')
+      continue
+    }
+    if (typeof key === 'string' && key) result[trimmedEmail] = key
+  }
+  return result
 }
 
 /** Which additional-key holder (if any) this Bearer token belongs to. Never
