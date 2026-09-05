@@ -307,6 +307,24 @@ export default function PortalChatsPage() {
   // at "Confirm & Send" time, mirroring the existing capture-before-await
   // discipline (dev job c3bb4abc) one step later than before.
   const [sendConfirmOpen, setSendConfirmOpen] = useState(false)
+  // Modal's OWN "create a new topic" toggle — deliberately NOT the ambient
+  // tab bar's adminCreatingTopic/adminNewTopicInput, even though the modal
+  // reuses that shared pair's OUTPUT (adminActiveTopic) on commit. Found by
+  // testing: the ambient tab bar stays mounted behind the modal's backdrop,
+  // so sharing the toggle meant BOTH inputs rendered at once, both with
+  // autoFocus — the second one stealing focus fired the first one's onBlur,
+  // which reset the (shared) flag back to false before a single character
+  // could be typed. This pair is ephemeral UI state private to one widget at
+  // a time, unlike adminActiveTopic itself, which correctly stays shared.
+  const [modalCreatingTopic, setModalCreatingTopic] = useState(false)
+  const [modalNewTopicInput, setModalNewTopicInput] = useState('')
+  // Single close path so a leftover "typing a new topic" draft never survives
+  // into the next time the modal opens.
+  const closeSendConfirm = () => {
+    setSendConfirmOpen(false)
+    setModalCreatingTopic(false)
+    setModalNewTopicInput('')
+  }
   const [selectedName, setSelectedName] = useState<{ company: string; contact?: string } | null>(null)
   // Company CONTEXT for read-only side panels (AI assistant, Issues, To-Do
   // cards, notes, the solo-company realtime arm): the explicit chip selection
@@ -2057,7 +2075,7 @@ export default function PortalChatsPage() {
       toast.error(`${closedTargetName} is closed — the client can't see messages here. Pick an active company or "Personal".`)
       return
     }
-    setSendConfirmOpen(false)
+    closeSendConfirm()
     // Captured now, at confirm-click time, before any upload/network await — this is
     // the conversation the send is actually FOR, regardless of where staff
     // is looking by the time it completes. Dev job c3bb4abc.
@@ -4810,12 +4828,12 @@ export default function PortalChatsPage() {
           mechanism, which fully covers "an existing topic, or a new one"
           without a second topic-selection implementation to keep in sync. */}
       {sendConfirmOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setSendConfirmOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={closeSendConfirm}>
           <div className="w-full max-w-md rounded-lg bg-white shadow-xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0">
               <Send className="h-4 w-4 text-blue-500" />
               <h3 className="text-sm font-semibold text-zinc-800">Before you send</h3>
-              <button onClick={() => setSendConfirmOpen(false)} className="ml-auto p-1 rounded hover:bg-zinc-100 text-zinc-400">
+              <button onClick={closeSendConfirm} className="ml-auto p-1 rounded hover:bg-zinc-100 text-zinc-400">
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -4932,26 +4950,26 @@ export default function PortalChatsPage() {
                       {t}
                     </button>
                   ))}
-                  {adminCreatingTopic ? (
+                  {modalCreatingTopic ? (
                     <input
                       autoFocus
                       type="text"
-                      value={adminNewTopicInput}
-                      onChange={e => setAdminNewTopicInput(e.target.value.slice(0, 100))}
+                      value={modalNewTopicInput}
+                      onChange={e => setModalNewTopicInput(e.target.value.slice(0, 100))}
                       onKeyDown={e => {
-                        if (e.key === 'Enter' && adminNewTopicInput.trim()) {
-                          setAdminActiveTopic(adminNewTopicInput.trim())
-                          setAdminNewTopicInput('')
-                          setAdminCreatingTopic(false)
+                        if (e.key === 'Enter' && modalNewTopicInput.trim()) {
+                          setAdminActiveTopic(modalNewTopicInput.trim())
+                          setModalNewTopicInput('')
+                          setModalCreatingTopic(false)
                         } else if (e.key === 'Escape') {
-                          setAdminNewTopicInput('')
-                          setAdminCreatingTopic(false)
+                          setModalNewTopicInput('')
+                          setModalCreatingTopic(false)
                         }
                       }}
                       onBlur={() => {
-                        if (adminNewTopicInput.trim()) setAdminActiveTopic(adminNewTopicInput.trim())
-                        setAdminNewTopicInput('')
-                        setAdminCreatingTopic(false)
+                        if (modalNewTopicInput.trim()) setAdminActiveTopic(modalNewTopicInput.trim())
+                        setModalNewTopicInput('')
+                        setModalCreatingTopic(false)
                       }}
                       placeholder="Topic name…"
                       className="px-3 py-1.5 text-sm rounded-full border border-blue-300 outline-none w-32"
@@ -4959,7 +4977,7 @@ export default function PortalChatsPage() {
                   ) : (
                     <button
                       type="button"
-                      onClick={() => setAdminCreatingTopic(true)}
+                      onClick={() => setModalCreatingTopic(true)}
                       className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-full border border-dashed border-zinc-300 text-zinc-500 hover:text-zinc-700 hover:border-zinc-400 transition-colors"
                     >
                       <Plus className="h-3.5 w-3.5" /> New topic
@@ -4970,7 +4988,7 @@ export default function PortalChatsPage() {
             </div>
 
             <div className="flex justify-end gap-2 px-4 py-3 border-t shrink-0">
-              <button onClick={() => setSendConfirmOpen(false)} className="text-sm text-zinc-600 border rounded px-3 py-1.5">Cancel</button>
+              <button onClick={closeSendConfirm} className="text-sm text-zinc-600 border rounded px-3 py-1.5">Cancel</button>
               <button
                 disabled={sendingToClosedAccount || sendMutation.isPending || uploadingAdminFile}
                 onClick={performSend}
