@@ -150,6 +150,10 @@ interface ChatMessage {
   // "Addressed to" label (dev job 08a8be62) — resolved name of the member this
   // company-scoped staff message was addressed to, when set. Staff-facing only.
   addressed_to_name?: string | null
+  // Explicit "addressed to the whole company" (dev job 08a8be62, 2026-09-05) —
+  // a DIFFERENT state from addressed_to_name being null, which just means
+  // nobody set anything. Staff-facing only, same as addressed_to_name.
+  addressed_to_company?: boolean
   created_at: string
   attachment_url?: string
   attachment_name?: string
@@ -295,6 +299,21 @@ export default function PortalChatsPage() {
   // switch, New Chat, mobile Back) since a stale pick from a DIFFERENT
   // account's roster must never silently carry into this one.
   const [selectedAddressedToContactId, setSelectedAddressedToContactId] = useState<string | null>(null)
+  // Explicit "addressed to the whole company" (Antonio, 2026-09-05, dev job
+  // 08a8be62 — found live on a real multi-member account: the picker only
+  // ever offered individual members, with no way to say "the whole company"
+  // itself, and the unset default looked identical to a message nobody had
+  // bothered to label). A SEPARATE boolean, not a sentinel value stuffed
+  // into selectedAddressedToContactId — that field is compared directly
+  // against real contact ids elsewhere (`addressedToOptions.find(o =>
+  // o.contactId === ...)`), and a magic string there risks matching or
+  // breaking that comparison by accident. Mutually exclusive with a
+  // specific member — enforced on every click that sets either one, not
+  // just server-side. Never guessed/defaulted like a member pick can be
+  // (pickAddressedToGuess) — this one is opt-in only, since the entire
+  // point is that staff meant it, not that the system assumed it. Reset
+  // everywhere selectedAddressedToContactId already resets.
+  const [selectedAddressedToCompany, setSelectedAddressedToCompany] = useState(false)
   const [addressedToJustChanged, setAddressedToJustChanged] = useState(false)
   // Pre-send confirmation pop-up (Antonio, 2026-09-04 — explicit, deliberate
   // override of the council's ambient-indicator recommendation, made AFTER
@@ -422,7 +441,7 @@ export default function PortalChatsPage() {
       if (!t) {
         setSelectedName(null); setSelectedThreadContactId(null)
         setSelectedThreadMembers([]); setSelectedThreadCompanies([])
-        if (!isSameConversation) { setSelectedCompanyId(null); setSelectedAddressedToContactId(null) }
+        if (!isSameConversation) { setSelectedCompanyId(null); setSelectedAddressedToContactId(null); setSelectedAddressedToCompany(false) }
         return
       }
       const members = t.members ?? []
@@ -455,6 +474,7 @@ export default function PortalChatsPage() {
       if (!isSameConversation) {
         setSelectedCompanyId(null)
         setSelectedAddressedToContactId(null)
+        setSelectedAddressedToCompany(false)
       }
     },
   )
@@ -1817,7 +1837,7 @@ export default function PortalChatsPage() {
     // from live component state — see the capture comment in handleSend for
     // why (an attachment upload is a real await; live state can point at a
     // different client/company/topic by the time this actually runs).
-    mutationFn: async ({ message, reply_to_id, attachments, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToContactId }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null; targetCompanyId: string | null; targetTopic: string | null; targetAddressedToContactId: string | null }) => {
+    mutationFn: async ({ message, reply_to_id, attachments, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToContactId, targetAddressedToCompany }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null; targetCompanyId: string | null; targetTopic: string | null; targetAddressedToContactId: string | null; targetAddressedToCompany: boolean }) => {
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1833,6 +1853,7 @@ export default function PortalChatsPage() {
                 // own field; the server drops it silently if invalid rather
                 // than blocking the send.
                 ...(targetAddressedToContactId ? { addressed_to_contact_id: targetAddressedToContactId } : {}),
+                ...(targetAddressedToCompany ? { addressed_to_company: true } : {}),
               }
             : {
                 contact_id: targetContactId,
@@ -1922,6 +1943,7 @@ export default function PortalChatsPage() {
   // account's member roster must never carry into this one.
   useEffect(() => {
     setSelectedAddressedToContactId(null)
+    setSelectedAddressedToCompany(false)
   }, [selectedAccountId, selectedContactId])
 
   // Scroll to the latest message. On OPENING a thread we jump instantly to the
@@ -2072,7 +2094,7 @@ export default function PortalChatsPage() {
   const prevAddressedToGuessRef = useRef<string | null>(null)
   useEffect(() => {
     const guess = addressedToData?.guessContactId ?? null
-    if (prevAddressedToGuessRef.current !== null && prevAddressedToGuessRef.current !== guess && selectedAddressedToContactId === null) {
+    if (prevAddressedToGuessRef.current !== null && prevAddressedToGuessRef.current !== guess && selectedAddressedToContactId === null && !selectedAddressedToCompany) {
       setAddressedToJustChanged(true)
       const t = setTimeout(() => setAddressedToJustChanged(false), 1500)
       return () => clearTimeout(t)
@@ -2165,7 +2187,22 @@ export default function PortalChatsPage() {
     // discipline as the four values above (dev job c3bb4abc): must be
     // frozen here, at click time, never re-read from live state inside
     // mutationFn after the attachment-upload await.
-    const targetAddressedToContactId = effectiveAddressedToContactId
+    //
+    // targetAddressedToCompany is captured from selectedAddressedToCompany
+    // directly, NOT effectiveAddressedToContactId's sibling logic — and
+    // when it's set, targetAddressedToContactId is forced to null HERE,
+    // not left to fall through to the guess. effectiveAddressedToContactId
+    // is `selectedAddressedToContactId ?? addressedToData?.guessContactId
+    // ?? null` — clicking "Whole company" sets selectedAddressedToContactId
+    // to null explicitly, which is exactly the case that `??` fallback
+    // exists for, so without this the guessed member would ride along in
+    // the very same payload as the explicit "whole company" flag. The
+    // server independently enforces the same exclusivity (dev job
+    // 08a8be62, app/api/portal/chat/route.ts), so this couldn't reach
+    // storage either way — fixing it here too means the request itself is
+    // never self-contradictory, not just the row that lands from it.
+    const targetAddressedToCompany = selectedAddressedToCompany
+    const targetAddressedToContactId = targetAddressedToCompany ? null : effectiveAddressedToContactId
 
     if (pendingAdminFiles.length > 0) {
       setUploadingAdminFile(true)
@@ -2176,7 +2213,7 @@ export default function PortalChatsPage() {
             contactId: targetAccountId ? undefined : targetContactId,
           })
         ))
-        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToContactId })
+        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToContactId, targetAddressedToCompany })
       } catch (err) {
         toast.error(err instanceof Error && err.message ? err.message : 'Failed to upload file')
       } finally {
@@ -2184,7 +2221,7 @@ export default function PortalChatsPage() {
         if (adminFileRef.current) adminFileRef.current.value = ''
       }
     } else {
-      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToContactId })
+      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToContactId, targetAddressedToCompany })
     }
   }
 
@@ -2490,6 +2527,7 @@ export default function PortalChatsPage() {
                       setSelectedThreadCompanies([])
                       setSelectedCompanyId(null)
                       setSelectedAddressedToContactId(null)
+                      setSelectedAddressedToCompany(false)
                     } else {
                       // Contact-level thread: fetch by contact_id
                       setSelectedName({ company: thread.contact_name || thread.company_name, contact: companies.map(c => c.name).join(' · ') || undefined })
@@ -2507,6 +2545,7 @@ export default function PortalChatsPage() {
                       // panelCompanyId.
                       setSelectedCompanyId(null)
                       setSelectedAddressedToContactId(null)
+                      setSelectedAddressedToCompany(false)
                     }
                     setSidebarView('chats')
                   }}
@@ -2682,6 +2721,7 @@ export default function PortalChatsPage() {
                     setSelectedThreadMembers([])
                     setSelectedCompanyId(null)
                     setSelectedAddressedToContactId(null)
+                    setSelectedAddressedToCompany(false)
                     setSelectedAccountId(acct.id)
                     setChatSearch('')
                   }}
@@ -3106,7 +3146,7 @@ export default function PortalChatsPage() {
             {/* Header */}
             <div className="px-4 py-3 border-b bg-white shrink-0">
               <button
-                onClick={() => { setSelectedAccountId(null); setSelectedContactId(null); setSelectedCompanyId(null); setSelectedThreadCompanies([]); setSelectedThreadMembers([]); setSelectedAddressedToContactId(null) }}
+                onClick={() => { setSelectedAccountId(null); setSelectedContactId(null); setSelectedCompanyId(null); setSelectedThreadCompanies([]); setSelectedThreadMembers([]); setSelectedAddressedToContactId(null); setSelectedAddressedToCompany(false) }}
                 className="lg:hidden text-sm text-blue-600 mb-1"
               >
                 &larr; Back
@@ -3922,6 +3962,17 @@ export default function PortalChatsPage() {
                             For {msg.addressed_to_name}
                           </span>
                         )}
+                        {/* Explicit "whole company" badge (dev job 08a8be62, 2026-09-05) —
+                            a DIFFERENT, distinguishable state from no badge at all
+                            (nobody set anything). Same color/placement as the per-member
+                            badge above; mutually exclusive with it by construction
+                            (addressed_to_name and addressed_to_company are never both
+                            truthy on the same message — enforced server-side). */}
+                        {selectedThreadMembers.length > 0 && isAdmin && msg.addressed_to_company && (
+                          <span className="inline-block text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded mb-0.5 bg-teal-500/30 text-teal-50">
+                            For the whole company
+                          </span>
+                        )}
                         {/* Company badge — show on every message with an account_id when viewing a contact-level unified thread */}
                         {(() => {
                           if (selectedThreadMembers.length > 0) return null // handled above
@@ -4367,6 +4418,23 @@ export default function PortalChatsPage() {
                           align="start"
                           sideOffset={4}
                         >
+                          {/* Explicit "whole company" choice (Antonio, 2026-09-05, dev
+                              job 08a8be62) — found live: this list used to offer ONLY
+                              individual members, with no way to say "the company itself,"
+                              and the unset default looked identical to a message nobody
+                              had bothered to label. This is a genuine, saved choice
+                              (addressed_to_company on the message), not a cosmetic
+                              reset-to-default — see the migration for why that
+                              distinction matters. */}
+                          <DropdownMenu.Item
+                            className={cn(
+                              'px-3 py-1.5 text-sm cursor-pointer outline-none',
+                              selectedAddressedToCompany ? 'bg-teal-50 text-teal-700 font-medium' : 'text-zinc-700 hover:bg-teal-50'
+                            )}
+                            onClick={() => { setSelectedAddressedToCompany(true); setSelectedAddressedToContactId(null) }}
+                          >
+                            Whole company
+                          </DropdownMenu.Item>
                           {addressedToOptions.length === 0 && (
                             <div className="px-3 py-2 text-xs text-zinc-400">No members on file for this company yet.</div>
                           )}
@@ -4375,7 +4443,7 @@ export default function PortalChatsPage() {
                               <DropdownMenu.Item
                                 key={opt.memberId}
                                 className="px-3 py-1.5 text-sm text-zinc-700 hover:bg-teal-50 cursor-pointer outline-none"
-                                onClick={() => setSelectedAddressedToContactId(opt.contactId)}
+                                onClick={() => { setSelectedAddressedToContactId(opt.contactId); setSelectedAddressedToCompany(false) }}
                               >
                                 {opt.name}
                               </DropdownMenu.Item>
@@ -4756,6 +4824,7 @@ export default function PortalChatsPage() {
                           setSelectedThreadMembers([])
                           setSelectedCompanyId(null)
                           setSelectedAddressedToContactId(null)
+                          setSelectedAddressedToCompany(false)
                           setSelectedAccountId(acct.id)
                           setSelectedContactId(null)
                           setSelectedName({ company: acct.company_name, contact: acct.contact_name || undefined })
@@ -4974,6 +5043,22 @@ export default function PortalChatsPage() {
                 <div>
                   <label className="block text-xs font-medium text-zinc-500 mb-1.5">Addressed to</label>
                   <div className="flex gap-1.5 flex-wrap">
+                    {/* Explicit "whole company" choice (Antonio, 2026-09-05, dev job
+                        08a8be62) — found live: this row used to offer ONLY individual
+                        members, no way to say "the company itself," and the unset
+                        default looked identical to a message nobody had bothered to
+                        label. A genuine, saved choice (addressed_to_company on the
+                        message), not a cosmetic reset — see the migration comment. */}
+                    <button
+                      type="button"
+                      onClick={() => { setSelectedAddressedToCompany(true); setSelectedAddressedToContactId(null) }}
+                      className={cn(
+                        'px-3 py-1.5 text-sm rounded-full border transition-colors',
+                        selectedAddressedToCompany ? 'bg-teal-600 text-white border-teal-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                      )}
+                    >
+                      Whole company
+                    </button>
                     {addressedToOptions.length === 0 && (
                       <p className="text-xs text-zinc-400">No members on file for this company yet.</p>
                     )}
@@ -4982,10 +5067,10 @@ export default function PortalChatsPage() {
                         <button
                           key={opt.memberId}
                           type="button"
-                          onClick={() => setSelectedAddressedToContactId(opt.contactId)}
+                          onClick={() => { setSelectedAddressedToContactId(opt.contactId); setSelectedAddressedToCompany(false) }}
                           className={cn(
                             'px-3 py-1.5 text-sm rounded-full border transition-colors',
-                            effectiveAddressedToContactId === opt.contactId ? 'bg-teal-600 text-white border-teal-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                            !selectedAddressedToCompany && effectiveAddressedToContactId === opt.contactId ? 'bg-teal-600 text-white border-teal-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
                           )}
                         >
                           {opt.name}

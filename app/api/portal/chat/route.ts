@@ -214,7 +214,7 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json()
-  const { account_id, contact_id: bodyContactId, sender_context: rawSenderContext, topic: rawTopic, message, attachment_url, attachment_name, attachments, reply_to_id, addressed_to_contact_id: rawAddressedToContactId } = body
+  const { account_id, contact_id: bodyContactId, sender_context: rawSenderContext, topic: rawTopic, message, attachment_url, attachment_name, attachments, reply_to_id, addressed_to_contact_id: rawAddressedToContactId, addressed_to_company: rawAddressedToCompany } = body
 
   if (!account_id && !bodyContactId && !getClientContactId(user)) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
@@ -401,6 +401,17 @@ export async function POST(request: NextRequest) {
       console.error('[portal/chat] addressed_to_contact_id validation failed, dropped (non-fatal):', err)
     }
   }
+  // "Addressed to the whole company" (dev job 08a8be62, 2026-09-05) — a
+  // distinct, explicit label from "nobody set anything," not a synonym for
+  // it (see the migration comment on this column). Same admin/account gate
+  // as the per-member label above. Mutually exclusive with a specific
+  // member — enforced here too, not just by the database CHECK constraint,
+  // so a bad request never even reaches the constraint: if both were
+  // somehow sent together, the explicit "whole company" choice wins and the
+  // member label is dropped, since a client that sent both is confused
+  // about its own state and this is the safer of the two to keep silent.
+  const addressedToCompany = rawAddressedToCompany === true && senderType === 'admin' && !!account_id
+  if (addressedToCompany) addressedToContactId = null
 
   const { data, error } = await insertSurface
     .from('portal_messages')
@@ -418,6 +429,7 @@ export async function POST(request: NextRequest) {
       attachments: Array.isArray(attachments) ? attachments : [],
       reply_to_id: reply_to_id || null,
       addressed_to_contact_id: addressedToContactId,
+      addressed_to_company: addressedToCompany,
       ...(inheritedServiceDeliveryId ? { service_delivery_id: inheritedServiceDeliveryId } : {}),
     })
     .select('*, contacts:contact_id(full_name)')
