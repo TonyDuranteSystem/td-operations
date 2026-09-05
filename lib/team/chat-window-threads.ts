@@ -13,21 +13,34 @@
  * Two honest different numbers beat one dishonest shared one — but they are
  * computed from the SAME rows, so neither can go stale while the other moves.
  *
- * CLIENT CONVERSATIONS ARE SCOPED TO PARTICIPANTS ONLY (Antonio, 2026-09-04):
- * "I don't want to have all that conversations in the floating. it's noise."
- * `openConversations` used to list every live client conversation company-
- * wide, so a colleague's own routine back-and-forth with a client you have no
- * connection to showed up in your own list with its own (real, but not
- * yours) unread count — confirmed live: several production conversations
- * were nothing but one staff member's own exchange with the AI, something
- * the other person had never opened. Filtering on `is_participant` — already
- * the correct, established check three other consumers of this same RPC row
- * use (lib/team/workspace.ts's two notification builders,
- * realtime-notifications.tsx's toast filter) — removes it from the ambient
- * quick-list entirely. Nothing is hidden forever: any client's conversation
- * remains reachable on purpose through "New chat" (search by company), and
- * becomes a participant (and reappears here) the moment you open or post in
- * it, the same way the sidebar's own participant flag already works.
+ * CLIENT CONVERSATIONS ARE SCOPED TO GENUINE ENGAGEMENT ONLY (Antonio,
+ * 2026-09-04): "I don't want to have all that conversations in the floating.
+ * it's noise." `openConversations` used to list every live client
+ * conversation company-wide, so a colleague's own routine back-and-forth with
+ * a client you have no connection to showed up in your own list with its own
+ * (real, but not yours) unread count.
+ *
+ * FIRST FIX SHIPPED WAS WRONG, LEARN FROM IT: the first attempt filtered on
+ * `is_participant` (a row exists in internal_thread_reads) — correct in
+ * theory (it is already the established check three other consumers of this
+ * same RPC row use: lib/team/workspace.ts's two notification builders,
+ * realtime-notifications.tsx's toast filter) but WRONG for this list in
+ * practice, discovered live in production after shipping: `is_participant`
+ * is true the instant a row exists, and TWO existing paths
+ * (findOrCreateConversation on every new client conversation; the share
+ * route's admin-notify fallback) deliberately seed EVERY other staff member
+ * with a row whose `last_read_at` is the epoch (1970-01-01) — on purpose, so
+ * a ring/dot fires for them the first time. That is correct behaviour for
+ * THOSE notification surfaces. It means `is_participant` was true for 120 of
+ * Antonio's 122 live discussion threads — barely a filter at all. Only 47
+ * carried a genuinely later `last_read_at`, i.e. a time he had actually
+ * opened or posted in the thread himself.
+ *
+ * `ever_opened` (below) is that stricter signal, computed server-side in
+ * app/api/team/threads/route.ts specifically for this list. Nothing is
+ * hidden forever: any client's conversation remains reachable on purpose
+ * through "New chat" (search by company), and reappears here — because
+ * `ever_opened` flips true — the moment you actually open or post in it.
  */
 
 /** A staff member who may be picked in the person switcher. */
@@ -53,12 +66,17 @@ export interface ChatThreadRow {
   client_label?: string | null
   resolved_at?: string | null
   archived_at?: string | null
-  /** Does the viewer actually participate in this thread (has an
-   *  internal_thread_reads row — opened or posted at least once)? Computed
-   *  server-side by the SAME get_team_threads RPC row this whole file reads;
-   *  only meaningful for `discussion` threads (channels/dm are scoped some
-   *  other way already). */
+  /** Does a row exist in internal_thread_reads for the viewer? TRUE almost
+   *  always for a live discussion thread — see the file header before using
+   *  this for "is this genuinely mine." Kept only because the RPC still
+   *  returns it and other consumers of these same rows key on it correctly. */
   is_participant?: boolean | null
+  /** Has the viewer genuinely opened or posted in this thread themselves —
+   *  a real last_read_at, not the epoch auto-seed sentinel? Computed
+   *  server-side in app/api/team/threads/route.ts (NOT by get_team_threads
+   *  itself); only meaningful for `discussion` threads. This, not
+   *  `is_participant`, is what "mine" means for this file's quick-list. */
+  ever_opened?: boolean | null
 }
 
 /**
@@ -138,9 +156,10 @@ export function dmUnreadCount(
  * about it.
  *
  * Resolved and archived ones are dropped — the window shows what is live now;
- * the full Team Chat page is where you go digging. NON-PARTICIPANT ones are
- * dropped too (`is_participant` — see the file header): this list is a quick
- * "what's mine" glance, not a company-wide directory of every open client
+ * the full Team Chat page is where you go digging. Ones the viewer has never
+ * genuinely opened or posted in are dropped too (`ever_opened` — see the file
+ * header for why this is NOT `is_participant`): this list is a quick "what's
+ * mine" glance, not a company-wide directory of every open client
  * conversation regardless of who is actually in it.
  */
 export function openConversations(
@@ -148,7 +167,7 @@ export function openConversations(
   limit = 20,
 ): ChatThreadRow[] {
   return (threads ?? [])
-    .filter((t) => t?.thread_type === 'discussion' && !t.resolved_at && !t.archived_at && !!t.is_participant)
+    .filter((t) => t?.thread_type === 'discussion' && !t.resolved_at && !t.archived_at && !!t.ever_opened)
     .slice()
     .sort((a, b) => (b.last_activity_at ?? '').localeCompare(a.last_activity_at ?? ''))
     .slice(0, limit)
