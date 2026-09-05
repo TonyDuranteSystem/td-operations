@@ -31,7 +31,20 @@ import { useDraggableFab } from '@/components/ui/use-draggable-fab'
 export default function MyCapturesOverlay() {
   const { isBrowseOpen, closeBrowse, openWithFile } = useCapture()
   const [dragOver, setDragOver] = useState(false)
-  const { ref, dragProps, style, dragging, hasMoved } = useDraggableFab<HTMLDivElement>('td-fab-pos-my-captures-v1')
+  /**
+   * `fab.dragging` MUST be read as a property access at click time, never
+   * destructured into a local — it's a getter over a ref specifically so a
+   * click right after a drag sees the current value, not a snapshot frozen
+   * at whatever render happened to be current when the drag ended (the ref
+   * flip doesn't itself trigger a re-render, so a destructured copy goes
+   * stale forever and permanently disables the button). Verified live on
+   * sandbox 2026-09-04: destructuring `dragging` reproduced exactly that —
+   * the close button died after every drag. See useDraggableFab's own doc
+   * comment; sticky-notes-layer.tsx and floating-chat.tsx already do this
+   * correctly via dot-access (`deskFab.dragging`, `launcher.dragging`).
+   */
+  const fab = useDraggableFab<HTMLDivElement>('td-fab-pos-my-captures-v1')
+  const { ref, dragProps, style, hasMoved } = fab
   if (!isBrowseOpen) return null
 
   const handleDrop = (e: React.DragEvent) => {
@@ -71,7 +84,7 @@ export default function MyCapturesOverlay() {
           </div>
           <button
             onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => { if (!dragging) closeBrowse() }}
+            onClick={() => { if (!fab.dragging) closeBrowse() }}
             className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100"
             aria-label="Close"
           >
