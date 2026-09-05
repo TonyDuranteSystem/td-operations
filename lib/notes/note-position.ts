@@ -63,14 +63,36 @@ export function prunePositions(liveNoteIds: string[]): void {
   }
 }
 
+/** Two slots close enough to call "the same spot" — loose enough that floating-point
+ *  noise never creates a phantom free slot, tight enough that real cascade slots
+ *  (0.04 apart) never collide with each other. */
+const SLOT_EPSILON = 0.01
+
+function isSlotTaken(candidate: FracPos, occupied: readonly FracPos[]): boolean {
+  return occupied.some((p) => Math.abs(p.x - candidate.x) < SLOT_EPSILON && Math.abs(p.y - candidate.y) < SLOT_EPSILON)
+}
+
 /**
- * Position for a note that has no stored spot yet: a deterministic cascade so a second device
- * doesn't stack every note on the same pixel. Wraps and stays clamped on-screen.
+ * Position for a note that has no stored spot yet: the first cascade slot NOT already
+ * used by another currently-visible note. `occupied` must include every other note's
+ * position already decided in this same pass (stored or freshly cascaded) — walking
+ * the cascade until a free slot is found, rather than trusting the note's array index,
+ * is what a fixed-index version got wrong (Antonio, 2026-09-05: notes were landing
+ * exactly on top of each other). The feed sorts newest-first, so a brand-new note is
+ * always index 0 — every note ever created with no stored position would compute the
+ * identical index-0 slot, because a note already on screen keeps the position it got
+ * at ITS OWN first mount and never recomputes just because a sibling was added.
  */
-export function cascadePos(index: number): FracPos {
+export function cascadePos(occupied: readonly FracPos[]): FracPos {
   const step = 0.04
   const perColumn = 8
-  const col = Math.floor(index / perColumn)
-  const row = index % perColumn
-  return { x: clampFrac(0.04 + col * 0.18), y: clampFrac(0.08 + row * step) }
+  for (let i = 0; i < 500; i++) {
+    const col = Math.floor(i / perColumn)
+    const row = i % perColumn
+    const candidate = { x: clampFrac(0.04 + col * 0.18), y: clampFrac(0.08 + row * step) }
+    if (!isSlotTaken(candidate, occupied)) return candidate
+  }
+  // Exhausted 500 slots (500 simultaneous never-moved notes) — reuse the first
+  // rather than loop forever; dragging is still available to separate them.
+  return { x: clampFrac(0.04), y: clampFrac(0.08) }
 }

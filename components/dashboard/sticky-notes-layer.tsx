@@ -12,13 +12,14 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink, Trash2 } from 'lucide-react'
+import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink, Trash2, Minimize2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
-import { readPositions, writePosition, prunePositions, cascadePos, clampFrac } from '@/lib/notes/note-position'
+import { toast } from 'sonner'
+import { readPositions, writePosition, prunePositions, cascadePos, clampFrac, type FracPos } from '@/lib/notes/note-position'
 import { NoteEditor } from '@/components/dashboard/note-editor'
 // AccountCombobox no longer needed here — the create UI is the full NoteEditor now.
 import { useDraggableFab } from '@/components/ui/use-draggable-fab'
-import { FAB_KEYS } from '@/lib/ui/draggable-fab'
+import { FAB_KEYS, isDragGesture } from '@/lib/ui/draggable-fab'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 import { OPEN_NOTE_EVENT, type OpenNoteDetail } from '@/lib/notes/open-note'
 import { safeOriginPath, describeOrigin } from '@/lib/notes/note-origin'
@@ -63,6 +64,14 @@ const COLORS: Record<string, string> = {
   green: 'bg-emerald-100 border-emerald-300 text-emerald-950',
   purple: 'bg-violet-100 border-violet-300 text-violet-950',
 }
+/** A solid, saturated red — deliberately NOT one of the pastel COLORS above, so "unread"
+ *  can never be confused with a deliberately-chosen pink note. Matches the same red
+ *  already used for the destructive "Delete forever?" bar in this file. */
+const UNREAD_CLASSES = 'bg-red-600 border-red-700 text-white'
+
+function noteBgClasses(note: Note, unread: boolean): string {
+  return unread ? UNREAD_CLASSES : COLORS[note.color] || COLORS.yellow
+}
 
 async function fetchActive(): Promise<ActiveResponse> {
   const res = await fetch(`${API}?scope=active`)
@@ -71,6 +80,21 @@ async function fetchActive(): Promise<ActiveResponse> {
     throw new Error(d.error || 'Could not load your notes.')
   }
   return res.json()
+}
+
+/**
+ * Reuses the Staff Alerts bell's own "have I seen this note" tracking (Antonio,
+ * 2026-09-05: red until read, yellow after — same rule for a fresh reply as for a
+ * fresh share) rather than a second, parallel read-tracker that could disagree with
+ * the bell about the same note. Same query key ('staff-alerts') as
+ * staff-alerts-bell.tsx on purpose — one shared cache, so dismissing here also
+ * clears the bell's badge for this note, and vice versa.
+ */
+interface StaffAlertLite { kind: string; note_id: string; reply_id: string | null }
+async function fetchStaffAlerts(): Promise<{ alerts: StaffAlertLite[] }> {
+  const res = await fetch('/api/crm/staff-alerts')
+  if (!res.ok) return { alerts: [] }
+  return res.json().catch(() => ({ alerts: [] }))
 }
 
 /** Derive the account/contact this page is about, from the URL, so a note captures its subject. */
@@ -113,6 +137,77 @@ function StickyNotesInner() {
   const notes = useMemo(() => data?.notes ?? [], [data])
   const members = useMemo(() => data?.members ?? [], [data])
   const meId = data?.me?.id ?? null
+
+  /**
+   * Every note's starting position — decided ONCE per note, ever, and remembered here
+   * for as long as this layer stays mounted. A `useMemo` alone is not enough: it would
+   * recompute from scratch whenever `notes` changes (a note added or removed), but a
+   * note ALREADY on screen ignores a freshly-recomputed value — its own useState only
+   * reads its initial prop once, at ITS first mount, exactly like this ref only decides
+   * a slot once. Recomputing on every change and expecting already-mounted notes to
+   * "pick up" a new value was the actual bug: two never-moved notes both computed the
+   * identical fresh slot, because the feed sorts newest-first so a brand-new note is
+   * always first, and computing all slots from empty every time gave the EXISTING note
+   * a value its own component then silently ignored (Antonio, 2026-09-05: "they go one
+   * on top of the other and I can't see them unless i move them"). A ref, mutated
+   * idempotently here during render (safe: re-running with the same `notes` re-adds only
+   * already-present entries), is what makes a slot assignment durable across re-renders.
+   */
+  const assignedPositions = useRef<Map<string, FracPos>>(new Map())
+  const notePositions = useMemo(() => {
+    const stored = readPositions()
+    const map = assignedPositions.current
+    const liveIds = new Set(notes.map((n) => n.id))
+    for (const id of Array.from(map.keys())) if (!liveIds.has(id)) map.delete(id)
+    const occupied: FracPos[] = Array.from(map.values())
+    for (const n of notes) {
+      if (map.has(n.id)) continue // already decided — never reassign a note that's already on screen
+      const pos = stored[n.id] ?? cascadePos(occupied)
+      map.set(n.id, pos)
+      occupied.push(pos)
+    }
+    return map
+  }, [notes])
+
+  // Same query key as staff-alerts-bell.tsx — one shared cache for "have I seen this."
+  const { data: alertsData } = useQuery({
+    queryKey: ['staff-alerts'],
+    queryFn: fetchStaffAlerts,
+    refetchInterval: 60_000,
+  })
+  const noteAlerts = useMemo(
+    () => (alertsData?.alerts ?? []).filter((a) => a.kind === 'note_update' || a.kind === 'note_reply'),
+    [alertsData],
+  )
+  const unreadNoteIds = useMemo(() => new Set(noteAlerts.map((a) => a.note_id)), [noteAlerts])
+
+  /** Mark one note read: dismiss every pending alert on it (the share/edit alert AND
+   *  any pending replies), same optimistic-then-invalidate pattern as the bell's own
+   *  dismissMany, so a failed write surfaces instead of silently staying "read." */
+  const dismissNoteAlerts = useCallback(async (noteId: string) => {
+    const mine = noteAlerts.filter((a) => a.note_id === noteId)
+    if (mine.length === 0) return
+    qc.setQueryData<{ alerts: StaffAlertLite[] }>(['staff-alerts'], (old) =>
+      old ? { alerts: old.alerts.filter((a) => a.note_id !== noteId) } : old,
+    )
+    try {
+      await Promise.all(mine.map(async (a) => {
+        const res = await fetch('/api/crm/staff-alerts', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: a.kind, note_id: a.note_id, reply_id: a.reply_id }),
+        })
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}))
+          throw new Error(d.error || 'Could not mark that note read — it may show as new again.')
+        }
+      }))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not mark that note read — it may show as new again.')
+    } finally {
+      qc.invalidateQueries({ queryKey: ['staff-alerts'] })
+    }
+  }, [noteAlerts, qc])
 
   const [composing, setComposing] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -185,8 +280,9 @@ function StickyNotesInner() {
     <>
       {/* DESKTOP: floating draggable notes */}
       <div className="hidden lg:block">
-        {notes.map((n, i) => (
-          <DesktopNote key={n.id} note={n} index={i} members={members} meId={meId} onChange={invalidate} onOpen={setEditing} />
+        {notes.map((n) => (
+          <DesktopNote key={n.id} note={n} initialPos={notePositions.get(n.id)!} members={members} meId={meId} onChange={invalidate} onOpen={setEditing}
+            isUnread={unreadNoteIds.has(n.id)} onRead={() => dismissNoteAlerts(n.id)} />
         ))}
       </div>
 
@@ -230,7 +326,14 @@ function StickyNotesInner() {
         ref={mobileFab.ref}
         {...mobileFab.dragProps}
         style={mobileFab.style}
-        onClick={() => { if (!mobileFab.dragging) setSheetOpen(true) }}
+        onClick={() => {
+          if (mobileFab.dragging) return
+          setSheetOpen(true)
+          // Opening the sheet already reveals every note's full preview text — the phone
+          // has no separate collapsed-icon step to click through, so opening IS reading
+          // (Antonio, 2026-09-05: the phone should behave the same as the desktop icons).
+          for (const n of notes) if (unreadNoteIds.has(n.id)) dismissNoteAlerts(n.id)
+        }}
         className="lg:hidden fixed bottom-24 left-4 z-[45] flex touch-none items-center gap-2 rounded-full bg-amber-400 px-4 py-2 text-sm font-medium text-amber-950 shadow-lg"
       >
         <StickyNote className="h-4 w-4" />
@@ -246,6 +349,7 @@ function StickyNotesInner() {
           onNew={() => { setSheetOpen(false); setComposing(true) }}
           onChange={invalidate}
           onOpen={(n) => { setSheetOpen(false); setEditing(n) }}
+          unreadNoteIds={unreadNoteIds}
         />
       )}
 
@@ -264,47 +368,100 @@ function StickyNotesInner() {
 
 /* ─────────────────────────── desktop draggable note ─────────────────────────── */
 
-function DesktopNote({ note, index, members, meId, onChange, onOpen }: { note: Note; index: number; members: Member[]; meId: string | null; onChange: () => void; onOpen: (n: Note) => void }) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState<{ x: number; y: number }>(() => {
-    const stored = readPositions()[note.id]
-    return stored ?? cascadePos(index)
-  })
-  const drag = useRef<{ dx: number; dy: number } | null>(null)
+/**
+ * Collapsed by default — a small icon, always on screen, draggable anywhere out of the
+ * way. Click expands it in place to the full card; a Minimize button on the card
+ * collapses it back (Antonio, 2026-09-05: "reduce it in icon but always visible to open
+ * when we need" — full cards were landing on top of the sidebar nav, see note-position.ts
+ * cascadePos starting near the top-left corner).
+ *
+ * Click vs. drag uses the same measured-distance threshold as the draggable FAB buttons
+ * (isDragGesture) and the same ref-based (not state-based) click suppression — a past bug
+ * here let a drag also OPEN the thing being dragged because suppression was React state,
+ * captured stale at click time. A ref reads current at call time.
+ */
+function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnread, onRead }: { note: Note; initialPos: FracPos; members: Member[]; meId: string | null; onChange: () => void; onOpen: (n: Note) => void; isUnread: boolean; onRead: () => void }) {
+  const ref = useRef<HTMLElement>(null)
+  // initialPos was already resolved once, for every note together (stored spot, or the
+  // first free cascade slot) — see notePositions in the parent. Only the FIRST value
+  // React sees here matters; later re-renders (including notePositions recomputing when
+  // a sibling note is added) must not silently teleport an already-open note.
+  const [pos, setPos] = useState<{ x: number; y: number }>(initialPos)
+  const [expanded, setExpanded] = useState(false)
+  const drag = useRef<{ dx: number; dy: number; startX: number; startY: number; moved: boolean } | null>(null)
+  const justDragged = useRef(false)
 
   const onPointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).closest('[data-no-drag]')) return
     const rect = ref.current!.getBoundingClientRect()
-    drag.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top }
+    drag.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top, startX: e.clientX, startY: e.clientY, moved: false }
     ref.current!.setPointerCapture(e.pointerId)
   }
   const onPointerMove = (e: React.PointerEvent) => {
-    if (!drag.current) return
-    const x = clampFrac((e.clientX - drag.current.dx) / window.innerWidth)
-    const y = clampFrac((e.clientY - drag.current.dy) / window.innerHeight)
+    const d = drag.current
+    if (!d) return
+    if (!d.moved && !isDragGesture(e.clientX - d.startX, e.clientY - d.startY)) return
+    d.moved = true
+    const x = clampFrac((e.clientX - d.dx) / window.innerWidth)
+    const y = clampFrac((e.clientY - d.dy) / window.innerHeight)
     setPos({ x, y })
   }
   const onPointerUp = () => {
-    if (drag.current) { writePosition(note.id, pos); drag.current = null }
+    const d = drag.current
+    drag.current = null
+    if (d?.moved) {
+      writePosition(note.id, pos)
+      justDragged.current = true
+      // Swallow the click that fires right after releasing a drag — otherwise
+      // dropping the icon also opens it.
+      setTimeout(() => { justDragged.current = false }, 0)
+    }
+  }
+  const onClickCollapsed = () => {
+    if (justDragged.current) return
+    setExpanded(true)
+    // Expanding to the full preview text IS reading it (Antonio, 2026-09-05: red
+    // until read, back to normal once it is) — no separate "mark read" action.
+    if (isUnread) onRead()
+  }
+
+  if (!expanded) {
+    const preview = note.body.replace(/\s+/g, ' ').trim().slice(0, 80)
+    return (
+      <FastTooltip label={isUnread ? `New: ${preview}` : preview} align="left">
+        <button
+          ref={ref as React.RefObject<HTMLButtonElement>}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onClick={onClickCollapsed}
+          style={{ left: `${pos.x * 100}vw`, top: `${pos.y * 100}vh` }}
+          className={`fixed z-[45] flex h-10 w-10 touch-none cursor-grab items-center justify-center rounded-full border shadow-lg active:cursor-grabbing ${noteBgClasses(note, isUnread)}`}
+          aria-label={`${isUnread ? 'New note' : 'Note'}: ${preview}`}
+        >
+          <StickyNote className="h-4 w-4" />
+        </button>
+      </FastTooltip>
+    )
   }
 
   return (
     <div
-      ref={ref}
+      ref={ref as React.RefObject<HTMLDivElement>}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       style={{ left: `${pos.x * 100}vw`, top: `${pos.y * 100}vh` }}
-      className={`fixed z-[45] w-60 cursor-grab active:cursor-grabbing rounded-md border shadow-lg ${COLORS[note.color] || COLORS.yellow}`}
+      className={`fixed z-[45] w-60 cursor-grab active:cursor-grabbing rounded-md border shadow-lg ${noteBgClasses(note, isUnread)}`}
     >
-      <NoteCardBody note={note} members={members} meId={meId} onChange={onChange} onOpen={onOpen} />
+      <NoteCardBody note={note} members={members} meId={meId} onChange={onChange} onOpen={onOpen} onCollapse={() => setExpanded(false)} />
     </div>
   )
 }
 
 /* ─────────────────────────── shared card body + actions ─────────────────────────── */
 
-function NoteCardBody({ note, members, meId, onChange, onOpen }: { note: Note; members: Member[]; meId: string | null; onChange: () => void; onOpen?: (n: Note) => void }) {
+function NoteCardBody({ note, members, meId, onChange, onOpen, onCollapse }: { note: Note; members: Member[]; meId: string | null; onChange: () => void; onOpen?: (n: Note) => void; onCollapse?: () => void }) {
   const router = useRouter()
   // WHO SEES a note is the author's call alone (2026-07-28 share-back incident) — the
   // share menu is hidden, not disabled, for everyone else. Fail-closed when me is unknown.
@@ -473,6 +630,14 @@ function NoteCardBody({ note, members, meId, onChange, onOpen }: { note: Note; m
                 aria-label="Delete this note for everyone"><Trash2 className="h-3.5 w-3.5" /></button>
             </FastTooltip>
           )}
+          {onCollapse && (
+            <FastTooltip label="Minimize to icon">
+              <button data-no-drag onClick={onCollapse}
+                className="rounded p-0.5 hover:bg-black/10" aria-label="Minimize to icon">
+                <Minimize2 className="h-3.5 w-3.5" />
+              </button>
+            </FastTooltip>
+          )}
         </span>
       </div>
 
@@ -547,8 +712,9 @@ function NoteCardBody({ note, members, meId, onChange, onOpen }: { note: Note; m
 /* ─────────────────────────── mobile bottom sheet ─────────────────────────── */
 // (The old mini Composer lived here — creation now opens the FULL NoteEditor instead.)
 
-function MobileSheet({ notes, members, meId, onClose, onNew, onChange, onOpen }: {
+function MobileSheet({ notes, members, meId, onClose, onNew, onChange, onOpen, unreadNoteIds }: {
   notes: Note[]; members: Member[]; meId: string | null; onClose: () => void; onNew: () => void; onChange: () => void; onOpen: (n: Note) => void
+  unreadNoteIds: Set<string>
 }) {
   return (
     <div className="lg:hidden fixed inset-0 z-[46] flex flex-col justify-end bg-black/30" onClick={onClose}>
@@ -562,7 +728,7 @@ function MobileSheet({ notes, members, meId, onClose, onNew, onChange, onOpen }:
         {notes.length === 0 && <p className="py-6 text-center text-sm text-zinc-500">No notes right now.</p>}
         <div className="flex flex-col gap-2">
           {notes.map((n) => (
-            <div key={n.id} className={`rounded-md border ${COLORS[n.color] || COLORS.yellow}`}>
+            <div key={n.id} className={`rounded-md border ${noteBgClasses(n, unreadNoteIds.has(n.id))}`}>
               <NoteCardBody note={n} members={members} meId={meId} onChange={onChange} onOpen={onOpen} />
             </div>
           ))}
