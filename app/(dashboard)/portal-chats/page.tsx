@@ -4933,10 +4933,30 @@ export default function PortalChatsPage() {
                 </div>
               )}
 
-              {/* Topic — existing topics from this thread as chips, or free-text a new one. */}
+              {/* Topic — existing topics from this thread as chips, or free-text a new one.
+                  FIXED height (not just a max — min AND max pinned to the same value) +
+                  its own scroll: a growing thread accumulates topics over time, and —
+                  the actual bug this was built to fix — committing a brand-new topic
+                  adds a chip that can wrap the row onto a second line for the FIRST
+                  time (e.g. a thread with few topics so far, all still fitting on one
+                  line). A plain max-height does NOT stop that specific transition: the
+                  row is still shorter than the cap right up until the new chip lands,
+                  so it grows anyway. Any growth here pushes the Confirm & Send button
+                  down by exactly the height of that new line at the instant it
+                  appears — a click already aimed at the button's pre-wrap position
+                  (mousedown fires, blur commits the topic and the wrap happens,
+                  mouseup/click then resolve against the NEW layout) lands just below
+                  it and hits nothing. Reproduced directly, twice, including after an
+                  earlier fix that made send-time state reading more robust but didn't
+                  touch this: the click was missing the button ENTIRELY, so no code
+                  inside the button's own handler could ever have run. Pinning this
+                  row's height so it NEVER changes, from the very first render,
+                  regardless of topic count, removes the shift at its source —
+                  independent of click/touch timing, blur ordering, or how many
+                  topics a given thread happens to have today. */}
               <div>
                 <label className="block text-xs font-medium text-zinc-500 mb-1.5">Topic</label>
-                <div className="flex gap-1.5 flex-wrap items-center">
+                <div className="flex gap-1.5 flex-wrap items-start content-start h-20 overflow-y-auto">
                   <button
                     type="button"
                     onClick={() => setAdminActiveTopic(null)}
