@@ -7,7 +7,7 @@
  * cases matter more than the "allows" one.
  */
 import { describe, it, expect, afterEach } from "vitest"
-import { runWithMcpAuthContext, callerIsOwner } from "@/lib/mcp/auth-context"
+import { runWithMcpAuthContext, callerIsOwner, resolvePrimaryStaticKeyEmail } from "@/lib/mcp/auth-context"
 
 const OWNER = "antonio.durante@tonydurante.us"
 
@@ -23,12 +23,20 @@ describe("callerIsOwner", () => {
   })
 
   it("allows the static key — the Claude Code surface Antonio works in", () => {
-    expect(runWithMcpAuthContext({ method: "static" }, callerIsOwner)).toBe(true)
+    // As of the multi-key change, a bare { method: "static" } with no email no
+    // longer means anything — the route always resolves a real email BEFORE
+    // building this context (see resolvePrimaryStaticKeyEmail), which is what
+    // this test now simulates rather than shortcutting past it.
+    expect(
+      runWithMcpAuthContext({ method: "static", email: resolvePrimaryStaticKeyEmail() }, callerIsOwner)
+    ).toBe(true)
   })
 
   it("denies the static key once the operator is rotated to someone else", () => {
     process.env.MCP_TEAM_CHAT_ACTOR_EMAIL = "luca@tonydurante.us"
-    expect(runWithMcpAuthContext({ method: "static" }, callerIsOwner)).toBe(false)
+    expect(
+      runWithMcpAuthContext({ method: "static", email: resolvePrimaryStaticKeyEmail() }, callerIsOwner)
+    ).toBe(false)
   })
 
   it("allows an oauth session belonging to the owner", () => {
