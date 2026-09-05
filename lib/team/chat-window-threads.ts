@@ -20,27 +20,35 @@
  * a client you have no connection to showed up in your own list with its own
  * (real, but not yours) unread count.
  *
- * FIRST FIX SHIPPED WAS WRONG, LEARN FROM IT: the first attempt filtered on
- * `is_participant` (a row exists in internal_thread_reads) — correct in
- * theory (it is already the established check three other consumers of this
- * same RPC row use: lib/team/workspace.ts's two notification builders,
- * realtime-notifications.tsx's toast filter) but WRONG for this list in
- * practice, discovered live in production after shipping: `is_participant`
- * is true the instant a row exists, and TWO existing paths
- * (findOrCreateConversation on every new client conversation; the share
- * route's admin-notify fallback) deliberately seed EVERY other staff member
- * with a row whose `last_read_at` is the epoch (1970-01-01) — on purpose, so
- * a ring/dot fires for them the first time. That is correct behaviour for
- * THOSE notification surfaces. It means `is_participant` was true for 120 of
- * Antonio's 122 live discussion threads — barely a filter at all. Only 47
- * carried a genuinely later `last_read_at`, i.e. a time he had actually
- * opened or posted in the thread himself.
+ * TWO WRONG FIXES SHIPPED BEFORE THIS ONE, LEARN FROM BOTH:
  *
- * `ever_opened` (below) is that stricter signal, computed server-side in
- * app/api/team/threads/route.ts specifically for this list. Nothing is
- * hidden forever: any client's conversation remains reachable on purpose
- * through "New chat" (search by company), and reappears here — because
- * `ever_opened` flips true — the moment you actually open or post in it.
+ * (1) Filtered on `is_participant` (a row exists in internal_thread_reads) —
+ * correct in theory (already the established check three other consumers of
+ * this same RPC row use: lib/team/workspace.ts's two notification builders,
+ * realtime-notifications.tsx's toast filter) but WRONG here, discovered live
+ * in production: `is_participant` is true the instant a row exists, and TWO
+ * existing paths (findOrCreateConversation on every new client conversation;
+ * the share route's admin-notify fallback) deliberately seed EVERY other
+ * staff member with a row whose `last_read_at` is the epoch (1970-01-01) —
+ * on purpose, so a ring/dot fires once. Correct for THOSE surfaces; it made
+ * this filter nearly a no-op (120 of Antonio's 122 live discussion threads).
+ *
+ * (2) Filtered on a genuine (non-epoch) `last_read_at` instead — real
+ * engagement, provably better (47 of 122), shipped, STILL wrong: asked
+ * directly why the list was still full, Antonio: "I don't read them at all
+ * unless i have been mentioned. but they are messy because most of them are
+ * luca or claude conversation about the clients." Checked a sample of the 47:
+ * zero messages actually SENT by him in any of them — a genuine last_read_at
+ * only proves he once opened a thread to check on it (a real habit of his,
+ * "I have to know everything"), not that it means anything to him day to day.
+ *
+ * `ever_mentioned` (below) is what he actually described: has he EVER been
+ * @mentioned in this conversation, regardless of read state. Computed
+ * server-side in app/api/team/threads/route.ts. Verified against his real
+ * account before shipping: 122 discussion threads → 1. Nothing is hidden
+ * forever: any client's conversation remains reachable on purpose through
+ * "New chat" (search by company), and this list only ever grows when someone
+ * actually types his name into one.
  */
 
 /** A staff member who may be picked in the person switcher. */
@@ -71,12 +79,13 @@ export interface ChatThreadRow {
    *  this for "is this genuinely mine." Kept only because the RPC still
    *  returns it and other consumers of these same rows key on it correctly. */
   is_participant?: boolean | null
-  /** Has the viewer genuinely opened or posted in this thread themselves —
-   *  a real last_read_at, not the epoch auto-seed sentinel? Computed
-   *  server-side in app/api/team/threads/route.ts (NOT by get_team_threads
-   *  itself); only meaningful for `discussion` threads. This, not
-   *  `is_participant`, is what "mine" means for this file's quick-list. */
-  ever_opened?: boolean | null
+  /** Has the viewer EVER been @mentioned in this thread (any message, any
+   *  time, regardless of read state)? Computed server-side in
+   *  app/api/team/threads/route.ts (NOT by get_team_threads itself); only
+   *  meaningful for `discussion` threads. This — not `is_participant`, not a
+   *  genuine-read timestamp — is what "mine" means for this file's
+   *  quick-list, per Antonio's own words: see the file header. */
+  ever_mentioned?: boolean | null
 }
 
 /**
@@ -157,9 +166,9 @@ export function dmUnreadCount(
  *
  * Resolved and archived ones are dropped — the window shows what is live now;
  * the full Team Chat page is where you go digging. Ones the viewer has never
- * genuinely opened or posted in are dropped too (`ever_opened` — see the file
- * header for why this is NOT `is_participant`): this list is a quick "what's
- * mine" glance, not a company-wide directory of every open client
+ * been @mentioned in are dropped too (`ever_mentioned` — see the file header
+ * for the two other, wrong things this was before): this list is a quick
+ * "what's mine" glance, not a company-wide directory of every open client
  * conversation regardless of who is actually in it.
  */
 export function openConversations(
@@ -167,7 +176,7 @@ export function openConversations(
   limit = 20,
 ): ChatThreadRow[] {
   return (threads ?? [])
-    .filter((t) => t?.thread_type === 'discussion' && !t.resolved_at && !t.archived_at && !!t.ever_opened)
+    .filter((t) => t?.thread_type === 'discussion' && !t.resolved_at && !t.archived_at && !!t.ever_mentioned)
     .slice()
     .sort((a, b) => (b.last_activity_at ?? '').localeCompare(a.last_activity_at ?? ''))
     .slice(0, limit)
