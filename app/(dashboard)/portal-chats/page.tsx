@@ -318,13 +318,33 @@ export default function PortalChatsPage() {
   // a time, unlike adminActiveTopic itself, which correctly stays shared.
   const [modalCreatingTopic, setModalCreatingTopic] = useState(false)
   const [modalNewTopicInput, setModalNewTopicInput] = useState('')
+  // Which conversation the modal was opened FOR (bug-hunter review,
+  // 2026-09-04, before ship). The modal can sit open indefinitely by design
+  // (staff take their time deciding) — but this page also supports switching
+  // conversations via the browser Back button while it's open
+  // (use-selection-history's popstate listener is window-level and isn't
+  // blocked by the modal's backdrop the way a mouse click would be). Without
+  // pinning, the modal keeps re-rendering to reflect whatever conversation is
+  // NOW selected, while still LOOKING like the confirmation staff already
+  // read for the ORIGINAL one — "Confirm & Send" would target a conversation
+  // never actually confirmed. Pinned at open time; the effect below force-
+  // closes the modal the instant the selection drifts away from it, treating
+  // a conversation switch as an implicit cancel — never a silent redirect.
+  const [sendConfirmTargetKey, setSendConfirmTargetKey] = useState<string | null>(null)
   // Single close path so a leftover "typing a new topic" draft never survives
   // into the next time the modal opens.
   const closeSendConfirm = () => {
     setSendConfirmOpen(false)
     setModalCreatingTopic(false)
     setModalNewTopicInput('')
+    setSendConfirmTargetKey(null)
   }
+  useEffect(() => {
+    if (!sendConfirmOpen) return
+    const currentKey = selectedAccountId || selectedContactId || null
+    if (currentKey !== sendConfirmTargetKey) closeSendConfirm()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAccountId, selectedContactId])
   const [selectedName, setSelectedName] = useState<{ company: string; contact?: string } | null>(null)
   // Company CONTEXT for read-only side panels (AI assistant, Issues, To-Do
   // cards, notes, the solo-company realtime arm): the explicit chip selection
@@ -2051,7 +2071,14 @@ export default function PortalChatsPage() {
       return
     }
     if (isRecording) stopRecording()
-    if (inputRef.current) inputRef.current.style.height = 'auto'
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto'
+      // Blur so further typing while the modal is open can't silently
+      // change what's about to be sent (bug-hunter review, 2026-09-04) —
+      // the modal shows no message preview, so drift here would be invisible.
+      inputRef.current.blur()
+    }
+    setSendConfirmTargetKey(selectedAccountId || selectedContactId || null)
     setSendConfirmOpen(true)
   }
 
@@ -4959,7 +4986,19 @@ export default function PortalChatsPage() {
                 <div className="flex gap-1.5 flex-wrap items-start content-start h-20 overflow-y-auto">
                   <button
                     type="button"
-                    onClick={() => setAdminActiveTopic(null)}
+                    onClick={() => {
+                      setAdminActiveTopic(null)
+                      // Picking an EXISTING topic is an explicit, unambiguous choice —
+                      // it must win over a still-open, uncommitted free-text draft
+                      // sitting in the "New topic" box below, not silently lose to it
+                      // at send time (performSend prefers a pending free-text draft
+                      // over adminActiveTopic; onBlur intentionally leaves that draft
+                      // untouched when focus moves elsewhere, see the input's own
+                      // comment). Clearing it HERE, in the same click that sets the
+                      // real selection, is safe and unambiguous, unlike onBlur.
+                      setModalCreatingTopic(false)
+                      setModalNewTopicInput('')
+                    }}
                     className={cn(
                       'px-3 py-1.5 text-sm rounded-full border transition-colors',
                       !adminActiveTopic ? 'bg-zinc-900 text-white border-zinc-900' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
@@ -4971,7 +5010,11 @@ export default function PortalChatsPage() {
                     <button
                       key={t}
                       type="button"
-                      onClick={() => setAdminActiveTopic(t)}
+                      onClick={() => {
+                        setAdminActiveTopic(t)
+                        setModalCreatingTopic(false)
+                        setModalNewTopicInput('')
+                      }}
                       className={cn(
                         'px-3 py-1.5 text-sm rounded-full border transition-colors max-w-[160px] truncate',
                         adminActiveTopic === t ? 'bg-blue-600 text-white border-blue-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
@@ -4996,11 +5039,27 @@ export default function PortalChatsPage() {
                           setModalCreatingTopic(false)
                         }
                       }}
-                      onBlur={() => {
-                        if (modalNewTopicInput.trim()) setAdminActiveTopic(modalNewTopicInput.trim())
-                        setModalNewTopicInput('')
-                        setModalCreatingTopic(false)
-                      }}
+                      // Deliberately no onBlur handler (bug-hunter review, 2026-09-04
+                      // — two bugs found here, in sequence). Losing focus is NOT the
+                      // same as the user deciding anything: clicking a company chip,
+                      // a member chip, or Confirm & Send all blur this input first,
+                      // as an ordinary side effect of moving focus elsewhere — before
+                      // that click's own handler ever runs. An earlier version
+                      // committed the typed text to the shared adminActiveTopic on
+                      // every blur, which meant typing a topic then clicking Cancel,
+                      // the X, the backdrop, or any chip silently changed the
+                      // conversation's active topic even when the user meant to
+                      // cancel or pick something else. The fix-of-that-fix (clearing
+                      // instead of committing) turned out just as wrong: blur fires
+                      // BEFORE Confirm & Send's own click handler, so clearing here
+                      // wiped the exact pending-topic state performSend depends on
+                      // reading, breaking single-click confirm entirely. Leaving the
+                      // draft untouched on blur is the only option that serves every
+                      // path correctly: Enter explicitly commits it (below), Escape
+                      // explicitly discards it (below), closeSendConfirm() discards
+                      // it on Cancel/X/backdrop/a completed send, and it simply
+                      // survives — still open, still showing what was typed — if the
+                      // user clicks some other control first and comes back to it.
                       placeholder="Topic name…"
                       className="px-3 py-1.5 text-sm rounded-full border border-blue-300 outline-none w-32"
                     />
