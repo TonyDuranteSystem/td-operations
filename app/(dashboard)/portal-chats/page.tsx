@@ -339,12 +339,6 @@ export default function PortalChatsPage() {
     setModalNewTopicInput('')
     setSendConfirmTargetKey(null)
   }
-  useEffect(() => {
-    if (!sendConfirmOpen) return
-    const currentKey = selectedAccountId || selectedContactId || null
-    if (currentKey !== sendConfirmTargetKey) closeSendConfirm()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAccountId, selectedContactId])
   const [selectedName, setSelectedName] = useState<{ company: string; contact?: string } | null>(null)
   // Company CONTEXT for read-only side panels (AI assistant, Issues, To-Do
   // cards, notes, the solo-company realtime arm): the explicit chip selection
@@ -410,6 +404,12 @@ export default function PortalChatsPage() {
   useSelectionHistory(
     { account: selectedAccountId, contact: selectedContactId, thread: selectedThreadId, view: sidebarView },
     (v) => {
+      // Bug-hunter review, 2026-09-05 (round 3, before ship): whether this
+      // restore is landing on the SAME client conversation must be captured
+      // BEFORE the setters below overwrite selectedAccountId/selectedContactId
+      // — it's the one fact that decides whether the send-scope reset further
+      // down is safe or a real bug.
+      const isSameConversation = v.account === selectedAccountId && v.contact === selectedContactId
       setSelectedAccountId(v.account)
       setSelectedContactId(v.contact)
       setSelectedThreadId(v.thread)
@@ -421,8 +421,8 @@ export default function PortalChatsPage() {
       const t = threads?.find(x => (v.account ? x.account_id === v.account : v.contact ? x.contact_id === v.contact : false))
       if (!t) {
         setSelectedName(null); setSelectedThreadContactId(null)
-        setSelectedThreadMembers([]); setSelectedThreadCompanies([]); setSelectedCompanyId(null)
-        setSelectedAddressedToContactId(null)
+        setSelectedThreadMembers([]); setSelectedThreadCompanies([])
+        if (!isSameConversation) { setSelectedCompanyId(null); setSelectedAddressedToContactId(null) }
         return
       }
       const members = t.members ?? []
@@ -439,10 +439,41 @@ export default function PortalChatsPage() {
       // The old first-open-company default is how the 2026-08-07 cross-company
       // leak happened (dev job 4bad3094). Company sends now require an explicit
       // chip click; panels derive their own context via panelCompanyId.
-      setSelectedCompanyId(null)
-      setSelectedAddressedToContactId(null)
+      //
+      // BUT that reset must only fire when this restore is actually landing on
+      // a DIFFERENT client conversation — not on every popstate. Before this
+      // guard, clicking the Internal tab to glance at a team thread and clicking
+      // back to Chats (or any Back/Forward step that doesn't change which
+      // client is selected) pushed a history entry that, on restore, silently
+      // reset an already-confirmed "send as Company X" choice back to
+      // Personal — including while the pre-send confirmation pop-up was open
+      // and still showing "Company X" on screen, so staff confirming what they
+      // saw would have actually sent it person-scoped instead. Bug-hunter
+      // review, 2026-09-05 (round 3, before ship). Restoring onto a genuinely
+      // different client still resets both, exactly as the 2026-08-07 fix
+      // requires — this narrows WHEN the reset fires, it doesn't remove it.
+      if (!isSameConversation) {
+        setSelectedCompanyId(null)
+        setSelectedAddressedToContactId(null)
+      }
     },
   )
+  // Force-closes the pre-send confirmation pop-up the instant its pinned
+  // conversation (see sendConfirmTargetKey above) drifts away, OR the client-
+  // chat panel it belongs to gets hidden behind an internal staff thread —
+  // selectedThreadId being set hides this same panel outright (see its
+  // `hidden` toggle a few hundred lines down). Watching only account/contact
+  // missed that second case: switching to an internal thread while staying
+  // on the same client's account/contact left the pop-up floating on top of
+  // the now-hidden client panel instead of closing with it. Bug-hunter
+  // review, 2026-09-05 (round 3, before ship). Placed after selectedThreadId
+  // is declared above — TypeScript block-scoping requires it.
+  useEffect(() => {
+    if (!sendConfirmOpen) return
+    const currentKey = selectedAccountId || selectedContactId || null
+    if (currentKey !== sendConfirmTargetKey || selectedThreadId) closeSendConfirm()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAccountId, selectedContactId, selectedThreadId])
   const [internalReplyText, setInternalReplyText] = useState('')
   const [internalPendingFile, setInternalPendingFile] = useState<PendingAdminFile | null>(null)
   const [internalUploading, setInternalUploading] = useState(false)
@@ -4918,12 +4949,22 @@ export default function PortalChatsPage() {
                       {(sendAudience?.chat_teammate_count ?? 0) > 0 ? ` + ${sendAudience?.chat_teammate_count} portal teammate${(sendAudience?.chat_teammate_count ?? 0) === 1 ? '' : 's'}` : ''}.
                     </p>
                   )}
-                  {sendingToClosedAccount && (
-                    <p className="text-[11px] text-red-600 mt-1.5">
-                      {closedTargetName} is closed — the client can&apos;t see messages here. Pick an active company or &quot;Personal&quot;.
-                    </p>
-                  )}
                 </div>
+              )}
+
+              {/* Closed-account warning — deliberately its OWN block, not nested
+                  inside "Send as" above: sendingToClosedAccount can be true for
+                  an ACCOUNT-scoped thread too (selectedAccountId set), which has
+                  no "Send as" section at all, so a warning nested in there never
+                  rendered for that shape — Confirm & Send was silently disabled
+                  with no explanation anywhere in the pop-up. Bug-hunter review,
+                  2026-09-05 (round 3, before ship). Covers both shapes with one
+                  block instead of duplicating it into each branch. */}
+              {sendingToClosedAccount && (
+                <p className="text-[11px] text-red-600">
+                  {closedTargetName} is closed — the client can&apos;t see messages here.{' '}
+                  {selectedAccountId ? 'This conversation is archived.' : 'Pick an active company or "Personal".'}
+                </p>
               )}
 
               {/* Which member — only for multi-member account threads. Label
